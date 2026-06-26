@@ -111,7 +111,17 @@ impl StreamOrchestrator {
                     tracing::info!("Tool ended");
                 }
                 StreamEvent::RunComplete { summary, .. } => {
-                    let final_text = summary.final_response.as_deref().unwrap_or("");
+                    // Finalize the answer lane with the *deliverable* text: strip
+                    // raw `<think>`/completion markers the model embedded in
+                    // `final_response` via the same single-source sanitizer the
+                    // inbound `ReplyEmitter` uses, so the final Telegram edit
+                    // matches the reasoning-split streamed preview rather than
+                    // leaking the raw assistant text. Falls back to the raw text
+                    // only when sanitization leaves nothing, so a pure-reasoning
+                    // turn never blanks an already-streamed message.
+                    let raw = summary.final_response.as_deref().unwrap_or("");
+                    let cleaned = crate::gateway::reply_emitter::sanitize_final_response(raw);
+                    let final_text = cleaned.as_deref().unwrap_or(raw);
                     if let Err(e) = answer_lane.finalize(final_text).await {
                         tracing::warn!("Failed to finalize answer lane: {}", e);
                     }

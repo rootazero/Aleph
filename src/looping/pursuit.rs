@@ -2,7 +2,7 @@
 //! mutation — the execution engine calls these to decide whether to re-fire a
 //! loop and how long to wait. Mirrors `tasks::goal_pursuit` but clock-gated.
 
-use crate::looping::types::{Cadence, LoopState};
+use crate::looping::types::{fmt_duration_ms, Cadence, LoopState};
 
 /// Has any safety cap been reached? `tokens_now` is the session's current
 /// cumulative-token total; the hook captures the per-loop baseline lazily and
@@ -47,11 +47,42 @@ pub fn tick_delay_ms(state: &LoopState, now_ms: u64) -> u64 {
 }
 
 /// The prompt re-injected each tick: the user's fixed prompt plus a one-line
-/// reminder of the loop controls (so the model can re-pace or stop). Kept tiny
-/// — the intelligence lives in the model, not this scaffold (R9).
+/// reminder of the loop controls (so the model can re-pace or stop) and the
+/// *remaining quota* (ticks left before the cap, time left until the deadline)
+/// so the model can self-pace and wrap up — the intelligence lives in the
+/// prompt, not in deterministic no-progress detection (R7/R9). Mirrors
+/// `goal_pursuit::continuation_prompt`'s pace surfacing. `now_ms` (0 = clock
+/// unavailable) turns an absolute deadline into a relative "time left".
 #[must_use]
-pub fn tick_prompt(state: &LoopState) -> String {
+pub fn tick_prompt(state: &LoopState, now_ms: u64) -> String {
     let n = state.iterations_used.saturating_add(1);
+
+    // This tick (number `n`) is the last one the iteration cap permits when
+    // `n >= max`: the hook will mark the loop exhausted before tick `n + 1`.
+    if state.max_iterations.is_some_and(|max| n >= max) {
+        return format!(
+            "{prompt}\n\n[Timer loop — tick {n}. This is the LAST tick before the \
+             iteration cap; the loop will not fire again. Wrap up and report what \
+             you found so the user can take over.]",
+            prompt = state.prompt,
+        );
+    }
+
+    // Remaining-quota clause so the model can pace itself against the bound it
+    // is running under, exactly as goal pursuit surfaces "N/max".
+    let mut quota = String::new();
+    if let Some(max) = state.max_iterations {
+        quota.push_str(&format!(" {} tick(s) left before the cap.", max - n));
+    }
+    if let Some(deadline) = state.deadline_ms {
+        if now_ms != 0 && deadline > now_ms {
+            quota.push_str(&format!(
+                " ~{} until the time limit.",
+                fmt_duration_ms(deadline - now_ms)
+            ));
+        }
+    }
+
     let pace = match state.cadence {
         Cadence::ModelPaced { .. } => {
             " To change the cadence, call loop(action='update', next_wake='8m')."
@@ -60,7 +91,7 @@ pub fn tick_prompt(state: &LoopState) -> String {
     };
     format!(
         "{prompt}\n\n[Timer loop — tick {n}. This runs on a schedule and will \
-         not self-stop. To end it, call loop(action='stop').{pace}]",
+         not self-stop.{quota} To end it, call loop(action='stop').{pace}]",
         prompt = state.prompt,
     )
 }
@@ -219,9 +250,44 @@ mod tests {
 
     #[test]
     fn tick_prompt_restates_prompt_and_controls() {
-        let p = tick_prompt(&fixed());
+        let p = tick_prompt(&fixed(), 2_000);
         assert!(p.contains("check CI"));
         assert!(p.contains("action='stop'"));
+    }
+
+    #[test]
+    fn tick_prompt_surfaces_remaining_ticks_before_cap() {
+        // max 5, used 1 → this is tick 2, four left after it: "3 tick(s) left".
+        let l = fixed().with_max_iterations(Some(5)).spent_iteration();
+        let p = tick_prompt(&l, 2_000);
+        assert!(p.contains("3 tick(s) left before the cap"), "{p}");
+        assert!(!p.contains("LAST tick"), "{p}");
+    }
+
+    #[test]
+    fn tick_prompt_warns_on_last_tick() {
+        // max 2, used 1 → this is tick 2 == cap: the loop will not fire again.
+        let l = fixed().with_max_iterations(Some(2)).spent_iteration();
+        let p = tick_prompt(&l, 2_000);
+        assert!(p.contains("LAST tick"), "{p}");
+        assert!(p.contains("Wrap up"), "{p}");
+        // No misleading "N tick(s) left" on the final tick.
+        assert!(!p.contains("tick(s) left"), "{p}");
+    }
+
+    #[test]
+    fn tick_prompt_surfaces_deadline_time_left() {
+        let l = fixed().with_deadline_ms(Some(310_000));
+        // now 10_000 → 300_000 ms == 5m left.
+        let p = tick_prompt(&l, 10_000);
+        assert!(p.contains("~5m until the time limit"), "{p}");
+    }
+
+    #[test]
+    fn tick_prompt_uncapped_loop_has_no_quota_clause() {
+        let p = tick_prompt(&fixed(), 2_000);
+        assert!(!p.contains("tick(s) left"), "{p}");
+        assert!(!p.contains("time limit"), "{p}");
     }
 
     #[test]

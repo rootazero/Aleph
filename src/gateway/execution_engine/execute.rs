@@ -132,13 +132,24 @@ where
                     // same-session sibling is running (e.g. cross-session
                     // busy), fall through to plain busy-queue waiting without
                     // cancelling anything.
-                    let target = {
+                    //
+                    // A content-less request (resume-style continuation, or a
+                    // synthetic run that lost the `try_start_run` race and only
+                    // inherited an `Interrupt` busy-input key) must never cancel
+                    // a healthy sibling: there is nothing new to contribute, so
+                    // tearing down in-flight work is pure loss. Symmetric with
+                    // the `Steer` empty-content guard, and the same intrinsic
+                    // protection Hermes gives `internal` events. Past this gate
+                    // the message just waits its turn in the busy queue.
+                    let target = if super::steering::has_steering_content(&request) {
                         let runs = self.active_runs.read().await;
                         super::steering::find_steering_target_id(
                             &runs,
                             &run_id,
                             &request.session_key,
                         )
+                    } else {
+                        None
                     };
                     if let Some(target_id) = target {
                         let _ = self.cancel(&target_id).await;
@@ -1005,7 +1016,8 @@ where
                                 let bumped =
                                     state.clone().spent_iteration().with_next_wake_ms(None);
                                 let delay = crate::looping::pursuit::tick_delay_ms(&state, now_ms);
-                                let prompt = crate::looping::pursuit::tick_prompt(&state);
+                                let prompt =
+                                    crate::looping::pursuit::tick_prompt(&state, now_ms);
                                 loop_reg.put(bumped);
                                 spawn_continuation_run(
                                     cont_deps.registry.clone(),

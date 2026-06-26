@@ -7,6 +7,7 @@ use tracing::info;
 
 use crate::agents::swarm::tasks::acceptance::with_acceptance_criteria;
 use crate::agents::swarm::tasks::retry::with_max_retries;
+use crate::agents::swarm::tasks::timeout::with_task_timeout;
 use crate::agents::swarm::tasks::{CoordTaskStore, NewCoordTask, Priority};
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -50,6 +51,13 @@ pub struct TaskCreateArgs {
     /// dispatcher's default; `0` makes the first failure terminal.
     #[serde(default)]
     pub max_retries: Option<u32>,
+    /// Maximum seconds a single attempt of this task may run before the
+    /// dispatcher aborts it (and applies the retry policy). Use a larger value
+    /// for long, multi-tool subtasks and a smaller one for quick steps that
+    /// should fail fast. Omit to use the team dispatcher's global default
+    /// (`task_timeout_secs`); capped defensively at 24h.
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
     /// Arbitrary metadata JSON
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
@@ -137,12 +145,15 @@ impl AlephTool for TaskCreateTool {
         // Compose the metadata channel: dispatcher marker first, then fold in
         // the acceptance-criteria contract (a no-op when none were supplied, so
         // the row stays byte-identical to the legacy shape).
-        let metadata = with_max_retries(
-            with_acceptance_criteria(
-                with_managed_marker(args.metadata),
-                args.acceptance_criteria.unwrap_or_default(),
+        let metadata = with_task_timeout(
+            with_max_retries(
+                with_acceptance_criteria(
+                    with_managed_marker(args.metadata),
+                    args.acceptance_criteria.unwrap_or_default(),
+                ),
+                args.max_retries,
             ),
-            args.max_retries,
+            args.timeout_secs,
         );
 
         let new_task = NewCoordTask {

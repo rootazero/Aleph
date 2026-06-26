@@ -139,7 +139,17 @@ impl EventEmitter for TeamFanoutEmitter {
             StreamEvent::RunComplete {
                 run_id, summary, ..
             } => {
-                if let Some(text) = summary.final_response.as_ref() {
+                // Publish the *deliverable* bubble text through the same
+                // single-source sanitizer the persisted transcript uses
+                // (`reply_emitter::sanitize_final_response`), so the live Panel
+                // group-chat bubble can never leak raw `<think>`/completion
+                // markers — nor drift from the sanitized transcript row the
+                // broadcaster persists from the very same run.
+                if let Some(text) = summary
+                    .final_response
+                    .as_deref()
+                    .and_then(crate::gateway::reply_emitter::sanitize_final_response)
+                {
                     self.publish(
                         "message",
                         json!({ "run_id": run_id, "text": text, "final": true }),
@@ -270,6 +280,82 @@ mod tests {
             saw_activity,
             "RunComplete must still publish a team.<id>.activity status=done frame"
         );
+    }
+
+    #[tokio::test]
+    async fn test_fanout_sanitizes_reasoning_tags_in_message_text() {
+        // The live Panel bubble must carry the *deliverable* text — raw
+        // `<think>` blocks the run produced are stripped at the fan-out
+        // boundary so the bubble matches the sanitized persisted transcript.
+        let bus = Arc::new(GatewayEventBus::new());
+        let mut rx = bus.subscribe();
+        let emitter = TeamFanoutEmitter::new(bus.clone(), "team-9", "agent-zoe", None);
+
+        emitter
+            .emit(StreamEvent::RunComplete {
+                run_id: "run-9".into(),
+                seq: 0,
+                summary: RunSummary {
+                    final_response: Some("<think>scratch</think>final answer".into()),
+                    ..Default::default()
+                },
+                total_duration_ms: 0,
+            })
+            .await
+            .unwrap();
+
+        let mut saw_clean_message = false;
+        while let Ok(raw) = rx.try_recv() {
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if v.get("topic").and_then(|t| t.as_str()) == Some("team.team-9.message") {
+                assert_eq!(
+                    v.pointer("/data/text").and_then(|t| t.as_str()),
+                    Some("final answer"),
+                    "fan-out must publish sanitized text, not the raw <think> block"
+                );
+                saw_clean_message = true;
+            }
+        }
+        assert!(saw_clean_message, "a message frame should have been published");
+    }
+
+    #[tokio::test]
+    async fn test_fanout_suppresses_message_for_pure_reasoning_turn() {
+        // A turn whose final_response is *only* reasoning sanitizes to empty —
+        // no bubble is published (avoids leaking a `<think>`-only noise message),
+        // but the activity=done lifecycle frame is still emitted.
+        let bus = Arc::new(GatewayEventBus::new());
+        let mut rx = bus.subscribe();
+        let emitter = TeamFanoutEmitter::new(bus.clone(), "team-10", "agent-ivy", None);
+
+        emitter
+            .emit(StreamEvent::RunComplete {
+                run_id: "run-10".into(),
+                seq: 0,
+                summary: RunSummary {
+                    final_response: Some("<think>only thinking, no answer</think>".into()),
+                    ..Default::default()
+                },
+                total_duration_ms: 0,
+            })
+            .await
+            .unwrap();
+
+        let mut saw_message = false;
+        let mut saw_activity = false;
+        while let Ok(raw) = rx.try_recv() {
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            match v.get("topic").and_then(|t| t.as_str()) {
+                Some("team.team-10.message") => saw_message = true,
+                Some("team.team-10.activity") => saw_activity = true,
+                _ => {}
+            }
+        }
+        assert!(
+            !saw_message,
+            "a pure-reasoning turn must not publish a message bubble"
+        );
+        assert!(saw_activity, "activity=done must still fire");
     }
 
     #[tokio::test]

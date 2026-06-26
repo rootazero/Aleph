@@ -25,6 +25,39 @@ pub const TRANSCRIPT_TOKEN_BUDGET: usize = 8000;
 /// 保留 handle:agent 不能 @ 回用户(防自环)。openteams `RESERVED_USER_HANDLE`。
 pub const RESERVED_USER_HANDLE: &str = "user";
 
+/// Operator-tunable storm-prevention guards for group-chat broadcast (§4.5),
+/// the broadcast-side parallel to [`DispatcherConfig`](crate::teams::dispatcher::DispatcherConfig)
+/// (§4.4). The four guards used to be bare `const`s — changing one meant a
+/// rebuild. References all expose these as config (hermes `delegation.*`,
+/// openclaw `agent-limits.ts`, pi constants); this closes that asymmetry.
+///
+/// Defaults are read from the `MAX_*` / `TRANSCRIPT_TOKEN_BUDGET` consts above,
+/// so the authoritative values live in exactly one place and an unconfigured
+/// deployment is byte-identical to prior behaviour. Pure scaffolding — these
+/// caps gate fan-out mechanically and never reason (守 R10).
+#[derive(Debug, Clone)]
+pub struct BroadcastConfig {
+    /// 接话链最大深度(防 A↔B 无限互@)。
+    pub max_chain_depth: u32,
+    /// 单轮最多同时唤醒的 agent 数(防 @all 在大群一次炸开)。
+    pub max_fanout_width: usize,
+    /// 单次用户触发的整棵接话树最多累计唤醒的成员次数(防风暴第三闸)。
+    pub max_total_activations: usize,
+    /// 群 transcript 注入的 token 预算(超出从尾保留最近)。
+    pub transcript_token_budget: usize,
+}
+
+impl Default for BroadcastConfig {
+    fn default() -> Self {
+        Self {
+            max_chain_depth: MAX_CHAIN_DEPTH,
+            max_fanout_width: MAX_FANOUT_WIDTH,
+            max_total_activations: MAX_TOTAL_ACTIVATIONS,
+            transcript_token_budget: TRANSCRIPT_TOKEN_BUDGET,
+        }
+    }
+}
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskStore};
@@ -38,10 +71,10 @@ use crate::sync_primitives::Arc;
 use crate::teams::messages::{MessageStore, MessageType, NewMessage};
 use crate::teams::TeamStore;
 
-/// 是否已达/超过接话深度上限。
+/// 是否已达/超过接话深度上限。`max` 由 [`BroadcastConfig::max_chain_depth`] 提供。
 #[must_use]
-pub fn over_depth(chain_depth: u32) -> bool {
-    chain_depth >= MAX_CHAIN_DEPTH
+pub fn over_depth(chain_depth: u32, max: u32) -> bool {
+    chain_depth >= max
 }
 
 /// 组装被唤醒成员 run 的 metadata。
@@ -105,6 +138,9 @@ pub struct GroupChatBroadcaster {
     /// re-trigger the leader to review fresh submissions. `None` keeps group
     /// chat exactly as before (no re-trigger).
     coord_task_store: Option<Arc<dyn CoordTaskStore>>,
+    /// Operator-tunable storm-prevention guards (§4.5). `Default` reproduces the
+    /// historical hardcoded caps, so an unconfigured deployment is unchanged.
+    config: BroadcastConfig,
 }
 
 impl GroupChatBroadcaster {
@@ -115,6 +151,7 @@ impl GroupChatBroadcaster {
         msg_store: Arc<dyn MessageStore>,
         planner_provider: Option<Arc<dyn crate::providers::AiProvider>>,
         coord_task_store: Option<Arc<dyn CoordTaskStore>>,
+        config: BroadcastConfig,
     ) -> Self {
         Self {
             ctx,
@@ -122,6 +159,7 @@ impl GroupChatBroadcaster {
             msg_store,
             planner_provider,
             coord_task_store,
+            config,
         }
     }
 
@@ -203,7 +241,7 @@ impl GroupChatBroadcaster {
         budget: Arc<AtomicUsize>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(async move {
-            if over_depth(chain_depth) {
+            if over_depth(chain_depth, self.config.max_chain_depth) {
                 self.post_system(&team_id, "讨论已达深度上限,等你接话。")
                     .await;
                 return;
@@ -225,6 +263,7 @@ impl GroupChatBroadcaster {
                 &roster_ids,
                 user_triggered,
                 leader_first,
+                self.config.max_fanout_width,
             );
             if leader_first && user_triggered && content.contains('@') {
                 self.post_system(&team_id, "已交由 leader 统筹:先规划任务分配,再分派给成员。")
@@ -247,8 +286,8 @@ impl GroupChatBroadcaster {
                 // 越界即跳过本成员;恰好跨越上限的那一次(且仅那一次)发一句系统提示
                 // —— `claimed == MAX` 在所有并发分支里只会被命中一次,天然去重不刷屏。
                 let claimed = budget.fetch_add(1, Ordering::Relaxed);
-                if claimed >= MAX_TOTAL_ACTIVATIONS {
-                    if claimed == MAX_TOTAL_ACTIVATIONS {
+                if claimed >= self.config.max_total_activations {
+                    if claimed == self.config.max_total_activations {
                         self.post_system(&team_id, "群聊活动已达单轮上限,等你接话。")
                             .await;
                     }
@@ -318,7 +357,8 @@ impl GroupChatBroadcaster {
             .into_iter()
             .map(|m| (m.from_agent, m.content))
             .collect::<Vec<_>>();
-        let transcript = transcript::format_transcript(&history, TRANSCRIPT_TOKEN_BUDGET);
+        let transcript =
+            transcript::format_transcript(&history, self.config.transcript_token_budget);
 
         let is_leader = agent_id == leader_id;
         let input = member_prompt::build_member_input(
@@ -492,10 +532,22 @@ mod tests {
 
     #[test]
     fn chain_depth_guard_blocks_at_max() {
-        assert!(over_depth(MAX_CHAIN_DEPTH), "到上限应阻断");
-        assert!(over_depth(MAX_CHAIN_DEPTH + 1), "超上限应阻断");
-        assert!(!over_depth(MAX_CHAIN_DEPTH - 1), "未到上限放行");
-        assert!(!over_depth(0), "初始放行");
+        let max = MAX_CHAIN_DEPTH;
+        assert!(over_depth(max, max), "到上限应阻断");
+        assert!(over_depth(max + 1, max), "超上限应阻断");
+        assert!(!over_depth(max - 1, max), "未到上限放行");
+        assert!(!over_depth(0, max), "初始放行");
+    }
+
+    #[test]
+    fn broadcast_config_default_mirrors_legacy_consts() {
+        // Default config must reproduce the historical hardcoded caps exactly,
+        // so an unconfigured deployment is byte-identical to prior behaviour.
+        let c = BroadcastConfig::default();
+        assert_eq!(c.max_chain_depth, MAX_CHAIN_DEPTH);
+        assert_eq!(c.max_fanout_width, MAX_FANOUT_WIDTH);
+        assert_eq!(c.max_total_activations, MAX_TOTAL_ACTIVATIONS);
+        assert_eq!(c.transcript_token_budget, TRANSCRIPT_TOKEN_BUDGET);
     }
 
     #[test]

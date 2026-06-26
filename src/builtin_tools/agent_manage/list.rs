@@ -37,8 +37,10 @@ pub struct AgentListInfo {
     pub workspace_path: String,
     /// LLM model used by this agent
     pub model: String,
-    /// Channel this agent is bound to (if any)
-    pub bound_channel: Option<String>,
+    /// All channels bound to this agent (many-to-one model: N channels → 1 agent)
+    pub bound_channels: Vec<String>,
+    /// True when this is the active agent for the calling conversation's channel.
+    pub active: bool,
 }
 
 /// Output from listing agents.
@@ -51,6 +53,10 @@ pub struct AgentListOutput {
     pub agents: Vec<AgentListInfo>,
     /// Total number of agents
     pub total: usize,
+    /// The agent active for the calling conversation's channel (explicit binding,
+    /// or the registry default when the channel is unbound).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_agent: Option<String>,
 }
 
 impl fmt::Display for AgentListOutput {
@@ -58,10 +64,12 @@ impl fmt::Display for AgentListOutput {
         writeln!(f, "Agents ({} total):", self.total)?;
         writeln!(f)?;
         for agent in &self.agents {
-            writeln!(f, "  {} ({})", agent.name, agent.id)?;
+            let marker = if agent.active { "→ " } else { "  " };
+            let active_tag = if agent.active { " (active)" } else { "" };
+            writeln!(f, "{marker}{} ({}){active_tag}", agent.name, agent.id)?;
             writeln!(f, "    model: {}", agent.model)?;
-            if let Some(ref ch) = agent.bound_channel {
-                writeln!(f, "    bound to: {ch}")?;
+            if !agent.bound_channels.is_empty() {
+                writeln!(f, "    bound to: {}", agent.bound_channels.join(", "))?;
             }
         }
         Ok(())
@@ -103,16 +111,28 @@ impl AlephTool for AgentListTool {
         Some(vec!["agent_list()".to_string()])
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output> {
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         info!("Agent list requested");
 
-        // 1. Get all agent→channel bindings
-        let bindings = self
-            .workspace_mgr
-            .get_all_agent_bindings()
-            .unwrap_or_default();
+        // 1. Get all channels bound to each agent (many-to-one aware).
+        let bindings = self.workspace_mgr.bindings_by_agent().unwrap_or_default();
 
-        // 2. List all agents from registry
+        // 2. Resolve the active agent for the calling conversation. Mirror the
+        //    inbound router: explicit per-channel binding wins, else the registry
+        //    default. This fulfills the tool's promise to "show which one is
+        //    currently active for this conversation" (R8: the model can ask in
+        //    natural language which agent it currently is).
+        let channel = args.__channel.trim();
+        let active_agent: Option<String> = if channel.is_empty() {
+            None
+        } else {
+            match self.workspace_mgr.get_active_agent(channel) {
+                Ok(Some(id)) => Some(id),
+                _ => Some(self.registry.default_agent_id().to_string()),
+            }
+        };
+
+        // 3. List all agents from registry
         let agent_ids = self.registry.list().await;
         let mut agents = Vec::with_capacity(agent_ids.len());
 
@@ -123,7 +143,8 @@ impl AlephTool for AgentListTool {
                     name: instance.display_name().to_string(),
                     workspace_path: instance.workspace().to_string_lossy().to_string(),
                     model: instance.config().model.clone(),
-                    bound_channel: bindings.get(id).cloned(),
+                    bound_channels: bindings.get(id).cloned().unwrap_or_default(),
+                    active: active_agent.as_deref() == Some(id.as_str()),
                 });
             }
         }
@@ -139,6 +160,7 @@ impl AlephTool for AgentListTool {
             display_text: String::new(),
             agents,
             total,
+            active_agent,
         };
         output.display_text = output.to_string();
 
@@ -167,6 +189,27 @@ mod tests {
         Arc::new(AgentEnvStore::new(config).unwrap())
     }
 
+    fn test_instance(agent_id: &str) -> crate::gateway::agent_instance::AgentInstance {
+        use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
+        use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+        let root = tempdir().unwrap().keep();
+        let session_store = Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: root.join("sessions.db"),
+                ..Default::default()
+            })
+            .expect("session manager"),
+        );
+        let config = AgentInstanceConfig {
+            agent_id: agent_id.to_string(),
+            workspace: root.join("workspace"),
+            agent_dir: root.join("state"),
+            model: "claude-sonnet-4-5".to_string(),
+            ..Default::default()
+        };
+        AgentInstance::new(config, session_store).expect("instance")
+    }
+
     #[test]
     fn test_list_tool_definition() {
         let registry = Arc::new(AgentRegistry::new());
@@ -177,5 +220,77 @@ mod tests {
         assert_eq!(def.name, "agent_list");
         assert!(!def.requires_confirmation);
         assert!(def.llm_context.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_list_marks_active_for_bound_channel() {
+        let registry = Arc::new(AgentRegistry::new());
+        for id in ["coder", "trader"] {
+            registry.register(test_instance(id)).await;
+        }
+        let wm = test_workspace_mgr();
+        wm.set_active_agent("telegram", "trader").unwrap();
+        let tool = AgentListTool::new(registry, Arc::clone(&wm));
+
+        let out = tool
+            .call(AgentListArgs {
+                __channel: "telegram".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(out.active_agent.as_deref(), Some("trader"));
+        let trader = out.agents.iter().find(|a| a.id == "trader").unwrap();
+        assert!(trader.active, "bound agent should be marked active");
+        assert_eq!(trader.bound_channels, vec!["telegram".to_string()]);
+        let coder = out.agents.iter().find(|a| a.id == "coder").unwrap();
+        assert!(!coder.active);
+        assert!(out.display_text.contains("(active)"));
+    }
+
+    #[tokio::test]
+    async fn test_list_unbound_channel_falls_back_to_default() {
+        let registry = Arc::new(AgentRegistry::new());
+        registry.register(test_instance("main")).await;
+        let wm = test_workspace_mgr();
+        let tool = AgentListTool::new(registry, wm);
+
+        let out = tool
+            .call(AgentListArgs {
+                __channel: "discord".to_string(),
+            })
+            .await
+            .unwrap();
+
+        // Default registry agent is "main"; an unbound channel resolves to it.
+        assert_eq!(out.active_agent.as_deref(), Some("main"));
+        assert!(out.agents.iter().find(|a| a.id == "main").unwrap().active);
+    }
+
+    #[tokio::test]
+    async fn test_list_reports_all_bound_channels() {
+        let registry = Arc::new(AgentRegistry::new());
+        registry.register(test_instance("trader")).await;
+        let wm = test_workspace_mgr();
+        // Many-to-one: several channels bound to the same agent.
+        wm.set_active_agent("telegram", "trader").unwrap();
+        wm.set_active_agent("discord", "trader").unwrap();
+        let tool = AgentListTool::new(registry, Arc::clone(&wm));
+
+        let out = tool
+            .call(AgentListArgs {
+                __channel: String::new(),
+            })
+            .await
+            .unwrap();
+
+        let trader = out.agents.iter().find(|a| a.id == "trader").unwrap();
+        assert_eq!(
+            trader.bound_channels,
+            vec!["discord".to_string(), "telegram".to_string()],
+            "all bound channels should be surfaced (sorted), not collapsed to one"
+        );
+        // Empty channel context → no active resolution.
+        assert!(out.active_agent.is_none());
     }
 }

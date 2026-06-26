@@ -12,6 +12,7 @@ pub mod dag;
 pub mod retry;
 pub mod store;
 pub mod template;
+pub mod timeout;
 
 // ---------------------------------------------------------------------------
 // Type aliases

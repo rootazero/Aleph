@@ -1462,6 +1462,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // context. Registered here where GatewayContext + team_store both exist, next
             // to the TeamDispatcher that shares the same dep.
             if let Some(ts) = team_store.clone() {
+                use alephcore::teams::broadcast::BroadcastConfig;
                 let chat_ctx = gateway_ctx.clone();
                 let chat_msg_store = message_store.clone();
                 // Resolve a cheap provider (haiku → default) for first-message
@@ -1473,6 +1474,36 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 let chat_team_planner = team_planner_provider.clone();
                 let chat_event_bus = event_bus.clone();
                 let chat_coord_store = coord_store.clone();
+                // Map the optional [team_broadcast] TOML onto the runtime config.
+                // Each field falls back to the live BroadcastConfig::default() (no
+                // default duplication / drift). A `0` for any guard would make a
+                // "born-dead" group chat (blocked at depth 0, nobody ever woken),
+                // so `0` is treated as "use default" (P7 boundary clamp), mirroring
+                // [team_dispatcher]'s zombie-ttl clamp. Parallels §4.4 / §4.5.
+                let chat_broadcast_cfg = {
+                    let d = BroadcastConfig::default();
+                    match &app_config.team_broadcast {
+                        None => d,
+                        Some(t) => BroadcastConfig {
+                            max_chain_depth: t
+                                .max_chain_depth
+                                .filter(|&v| v > 0)
+                                .unwrap_or(d.max_chain_depth),
+                            max_fanout_width: t
+                                .max_fanout_width
+                                .filter(|&v| v > 0)
+                                .unwrap_or(d.max_fanout_width),
+                            max_total_activations: t
+                                .max_total_activations
+                                .filter(|&v| v > 0)
+                                .unwrap_or(d.max_total_activations),
+                            transcript_token_budget: t
+                                .transcript_token_budget
+                                .filter(|&v| v > 0)
+                                .unwrap_or(d.transcript_token_budget),
+                        },
+                    }
+                };
                 server
                     .handlers_mut()
                     .register("teams.chat.send", move |req| {
@@ -1483,6 +1514,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         let planner = chat_team_planner.clone();
                         let bus = chat_event_bus.clone();
                         let coord = chat_coord_store.clone();
+                        let bcast = chat_broadcast_cfg.clone();
                         async move {
                             alephcore::gateway::handlers::teams::handle_chat_send(
                                 req,
@@ -1493,6 +1525,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                                 planner,
                                 Some(bus),
                                 coord,
+                                bcast,
                             )
                             .await
                         }
