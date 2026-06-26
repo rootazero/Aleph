@@ -6,6 +6,7 @@
 
 pub mod community;
 pub mod insights;
+pub mod minhash;
 pub mod relevance;
 #[cfg(test)]
 mod tests;
