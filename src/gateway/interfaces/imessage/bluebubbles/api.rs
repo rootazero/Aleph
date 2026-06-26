@@ -48,21 +48,19 @@ impl BlueBubblesApi {
         format!("{}{}{}password={}", self.server_url, path, sep, encoded)
     }
 
-    // Called in Task 7 (connection probe on channel start).
     pub async fn ping(&self) -> Result<(), BbError> {
         let res = self
             .client
             .get(self.api_url("/api/v1/ping"))
             .send()
             .await
-            .map_err(|e| BbError::Http(e.to_string()))?;
-        res.error_for_status().map_err(|e| BbError::Http(e.to_string()))?;
+            .map_err(|e| BbError::Http(redact_password(e.to_string())))?;
+        res.error_for_status().map_err(|e| BbError::Http(redact_password(e.to_string())))?;
         Ok(())
     }
 
     /// Probe `/server/info` for private-api + helper availability. Failure
     /// degrades to all-false (rich features simply stay off).
-    // Called in Task 7 (capabilities negotiation on channel start).
     pub async fn server_caps(&self) -> ServerCaps {
         #[derive(Deserialize)]
         struct Wrap { data: Option<Info> }
@@ -189,12 +187,12 @@ impl BlueBubblesApi {
         path: &std::path::Path,
         is_audio: bool,
     ) -> Result<String, BbError> {
-        let bytes = tokio::fs::read(path).await.map_err(|e| BbError::Http(e.to_string()))?;
+        let bytes = tokio::fs::read(path).await.map_err(|e| BbError::Http(redact_password(e.to_string())))?;
         let name = crate::gateway::interfaces::imessage::bluebubbles::outbound::attachment::attachment_form_name(path);
         let part = reqwest::multipart::Part::bytes(bytes)
             .file_name(name.clone())
             .mime_str("application/octet-stream")
-            .map_err(|e| BbError::Http(e.to_string()))?;
+            .map_err(|e| BbError::Http(redact_password(e.to_string())))?;
         let mut form = reqwest::multipart::Form::new()
             .text("chatGuid", chat_guid.to_string())
             .text("name", name)
@@ -209,10 +207,10 @@ impl BlueBubblesApi {
             .multipart(form)
             .send()
             .await
-            .map_err(|e| BbError::Http(e.to_string()))?;
-        let res = res.error_for_status().map_err(|e| BbError::Http(e.to_string()))?;
+            .map_err(|e| BbError::Http(redact_password(e.to_string())))?;
+        let res = res.error_for_status().map_err(|e| BbError::Http(redact_password(e.to_string())))?;
         let v: serde_json::Value =
-            res.json().await.map_err(|e| BbError::BadResponse(e.to_string()))?;
+            res.json().await.map_err(|e| BbError::BadResponse(redact_password(e.to_string())))?;
         Ok(v["data"]["guid"].as_str().unwrap_or("ok").to_string())
     }
 
@@ -240,11 +238,11 @@ impl BlueBubblesApi {
             .json(&payload)
             .send()
             .await
-            .map_err(|e| BbError::Http(e.to_string()))?;
+            .map_err(|e| BbError::Http(redact_password(e.to_string())))?;
         let res =
-            res.error_for_status().map_err(|e| BbError::Http(e.to_string()))?;
+            res.error_for_status().map_err(|e| BbError::Http(redact_password(e.to_string())))?;
         let v: serde_json::Value =
-            res.json().await.map_err(|e| BbError::BadResponse(e.to_string()))?;
+            res.json().await.map_err(|e| BbError::BadResponse(redact_password(e.to_string())))?;
         Ok(v["data"]["guid"].as_str().unwrap_or("ok").to_string())
     }
 }
@@ -268,8 +266,8 @@ impl BlueBubblesApi {
             .json(&payload)
             .send()
             .await
-            .map_err(|e| BbError::Http(e.to_string()))?;
-        res.error_for_status().map_err(|e| BbError::Http(e.to_string()))?;
+            .map_err(|e| BbError::Http(redact_password(e.to_string())))?;
+        res.error_for_status().map_err(|e| BbError::Http(redact_password(e.to_string())))?;
         Ok(())
     }
 
@@ -283,8 +281,8 @@ impl BlueBubblesApi {
             .post(self.api_url(&format!("/api/v1/chat/{encoded}/typing")))
             .send()
             .await
-            .map_err(|e| BbError::Http(e.to_string()))?;
-        res.error_for_status().map_err(|e| BbError::Http(e.to_string()))?;
+            .map_err(|e| BbError::Http(redact_password(e.to_string())))?;
+        res.error_for_status().map_err(|e| BbError::Http(redact_password(e.to_string())))?;
         Ok(())
     }
 
@@ -298,8 +296,8 @@ impl BlueBubblesApi {
             .post(self.api_url(&format!("/api/v1/chat/{encoded}/read")))
             .send()
             .await
-            .map_err(|e| BbError::Http(e.to_string()))?;
-        res.error_for_status().map_err(|e| BbError::Http(e.to_string()))?;
+            .map_err(|e| BbError::Http(redact_password(e.to_string())))?;
+        res.error_for_status().map_err(|e| BbError::Http(redact_password(e.to_string())))?;
         Ok(())
     }
 }
@@ -429,6 +427,22 @@ fn mime_to_ext(mime: &str) -> &'static str {
     }
 }
 
+/// Strip any `password=<value>` query value from an error/URL string so the
+/// BlueBubbles server password never reaches logs. The value runs to the next
+/// `&`, `)`, whitespace, or end-of-string.
+fn redact_password(s: String) -> String {
+    let Some(start) = s.find("password=") else { return s };
+    let val_start = start + "password=".len();
+    let end = s[val_start..]
+        .find(|c: char| c == '&' || c == ')' || c.is_whitespace())
+        .map_or(s.len(), |i| val_start + i);
+    let mut out = String::with_capacity(s.len());
+    out.push_str(&s[..val_start]);
+    out.push_str("***");
+    out.push_str(&s[end..]);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,5 +463,16 @@ mod tests {
         let _api = BlueBubblesApi::new("http://h:1".into(), "pw".into());
         let url = super::webhook_callback_url("localhost", 8645, "/bluebubbles-webhook", "pw");
         assert_eq!(url, "http://localhost:8645/bluebubbles-webhook?password=pw");
+    }
+
+    #[test]
+    fn redacts_password_in_error_url() {
+        let s = "error sending request for url (http://h:1/api/v1/ping?password=SECRET)".to_string();
+        let r = redact_password(s);
+        assert!(!r.contains("SECRET"), "password leaked: {r}");
+        assert!(r.contains("password=***"));
+        // value followed by & is also redacted, and non-password strings pass through
+        assert_eq!(redact_password("a=1&password=PW&b=2".into()), "a=1&password=***&b=2");
+        assert_eq!(redact_password("no secret here".into()), "no secret here");
     }
 }

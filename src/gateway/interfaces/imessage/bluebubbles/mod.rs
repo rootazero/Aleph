@@ -153,7 +153,9 @@ impl Channel for BlueBubblesChannel {
             &self.config.webhook_path,
             &self.config.password,
         );
-        self.api.register_webhook(&cb).await;
+        if !self.api.register_webhook(&cb).await {
+            tracing::warn!("BlueBubbles webhook registration failed — realtime inbound may not arrive (catch-up poll still active if configured)");
+        }
 
         self.running.store(true, Ordering::SeqCst);
 

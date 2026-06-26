@@ -123,7 +123,13 @@ impl OnboardingFlow {
         ]
     }
 
-    /// Create iMessage transport options
+    /// Create iMessage transport options.
+    ///
+    /// Seam for future per-channel config persistence: once the wizard `run()`
+    /// gains config-write capability, this selection can drive which transport
+    /// section the wizard writes into TOML. Currently the wizard is a
+    /// non-persisting multi-select stub; BlueBubbles credentials are configured
+    /// via `[imessage.bluebubbles]` TOML directly.
     pub fn imessage_transport_options() -> Vec<WizardOption> {
         vec![
             WizardOption::new(json!("local"), "Local (macOS)")

@@ -81,7 +81,6 @@ pub fn map_webhook_record(payload: &serde_json::Value) -> Option<MappedMessage> 
 }
 
 /// Build an `InboundMessage` from a mapped record (attachments already downloaded).
-#[allow(dead_code)] // consumed in Task 10 (webhook emit)
 pub fn to_inbound(
     m: &MappedMessage,
     attachments: Vec<crate::gateway::channel::Attachment>,
