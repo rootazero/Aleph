@@ -227,8 +227,8 @@
 - **口语关键词**：MCP、外部 server、tools/resources/prompts、OAuth、sampling
 - **代码锚点**：`src/mcp/`——`client.rs`（连接）、`manager/`（生命周期）、`transport`（Stdio/Http/Sse）、`tool_bridge`（动态注册 MCP 工具）、`resources`、`prompts`、`approval.rs`、`context_injector.rs`、`auth/`、`external/`、`preflight.rs`
 - **职责**：标准 MCP 协议联接外部 server，发现并代理 tools/resources/prompts，支持 OAuth/采样/工具过滤/上下文注入/风险批准。
-- **状态**：✅ 已实现（2026-06-17 强化：补齐 MCP **cursor 分页**——`tools/list`·`resources/list`·`prompts/list` 经 `connection.rs::drain_paginated` 跟随 `nextCursor` 翻页直到耗尽，`MAX_PAGES=100` 防呆/防非终止游标；首页不带 `params` 向后兼容旧 server。**修复**：此前三个 list 仅发单次请求，工具数超单页上限的大型 server 会静默丢条目）。
-- **打磨话术**：「MCP 全在 `src/mcp/`；‘MCP 工具如何进 Aleph 工具表’找 tool_bridge；‘外部 server 配置’找 `external/`；‘大型 server 只看到部分工具/资源’= 分页，看 `connection.rs::drain_paginated`（result 类型的 `next_cursor` 在 `protocol.rs`）。」
+- **状态**：✅ 已实现（2026-06-17 强化：补齐 MCP **cursor 分页**——`tools/list`·`resources/list`·`prompts/list` 经 `connection.rs::drain_paginated` 跟随 `nextCursor` 翻页直到耗尽，`MAX_PAGES=100` 防呆/防非终止游标；首页不带 `params` 向后兼容旧 server。**修复**：此前三个 list 仅发单次请求，工具数超单页上限的大型 server 会静默丢条目）。**握手强化（2026-06-26，对标 hermes `mcp_tool.py`）**：① **声明 `sampling` 客户端能力**——`protocol.rs::ClientCapabilities` 新增 `sampling` 字段（空对象 `{}`），`aleph_default()` 无条件声明。此前每条连接（`manager/actor.rs`）都已 `set_sampling_callback` 接到 LLM，但握手从不声明该能力 → 守规范的 server 永不发 `sampling/createMessage`，整个已连线的采样子系统对其形同死代码。② **协议版本协商**——`MCP_PROTOCOL_VERSION` `2024-11-05`→`2025-03-26`（与已实现的 Streamable HTTP transport + audio 内容对齐，旧值自相矛盾）；新增 `McpTransport::set_protocol_version` 钩子，`connection.rs::initialize` 把 server 协商回的版本回写，HTTP transport 后续请求据此发 `MCP-Protocol-Version` 头（降级时不再撒谎），非头部 transport 为 no-op。③ **连线 `max_failures`**——`HealthCheckConfig.max_failures`（默认 3）此前是死字段，`ServerHealth::record_failure` 硬编码阈值 5；现已连线为 unhealthy 阈值（重启节奏不变，`should_restart` 对 Degraded 同样触发）。**熵减**：删除死字段 `restart_delay`（其重启 sleep 早已为保证 actor 循环非阻塞而移除，零 reader）。
+- **打磨话术**：「MCP 全在 `src/mcp/`；‘MCP 工具如何进 Aleph 工具表’找 tool_bridge；‘外部 server 配置’找 `external/`；‘大型 server 只看到部分工具/资源’= 分页，看 `connection.rs::drain_paginated`（result 类型的 `next_cursor` 在 `protocol.rs`）。‘server 不发 sampling 请求’= 检查握手是否声明 `sampling` 能力（`protocol.rs::ClientCapabilities`，2026-06-26 连线）；‘协议版本/降级’看 `MCP_PROTOCOL_VERSION` + `McpTransport::set_protocol_version`（HTTP 回写协商版本）；‘server 多少次失败算 unhealthy’= `HealthCheckConfig.max_failures` → `record_failure`。」
 
 ### 3.10 插件系统 (Plugin System)
 - **口语关键词**：plugins、插件、WASM 插件、MCP 插件、marketplace、plugin.json
@@ -249,8 +249,8 @@
 - **口语关键词**：browser、浏览器、screenshot、Chrome MCP、Playwright、网络策略
 - **代码锚点**：`src/browser/`——`backend.rs`（BrowserBackend trait）、`chrome_mcp_backend.rs`、`playwright_cli_backend.rs`、`manager.rs`、`network_policy.rs`、`tab_registry.rs`、`secret_guard.rs`、`types.rs`
 - **职责**：统一文本优先浏览器接口，双后端（Chrome DevTools MCP / Playwright CLI），截图/点击/导航/填表/JS/网络隔离/凭证过滤。
-- **状态**：✅ 已实现。
-- **打磨话术**：「浏览器双后端在 `backend.rs` trait 下；‘换后端/加操作’改对应 *_backend.rs；‘网络隔离’在 `network_policy.rs`。」
+- **状态**：✅ 已实现。**硬化（2026-06-26）**：① **wait 超时钳制（修 panic）**——`browser_wait_for` 的 `timeout_ms` 此前无界透传两后端：Playwright backend `Instant::now() + Duration::from_millis(timeout_ms)` 在 `u64::MAX` 时**溢出 panic**，Chrome MCP 则把巨值直接喂给 MCP 把 tab 占满整会话；现 `wait_for.rs::clamp_timeout` 在系统边界钳到 `500..=120_000`（对齐 openclaw `resolveActWaitTimeoutMs`，schema doc 同步标注有效区间）；② **截图体积预算（补对称缺口）**——文本读早有 `bound_content` 30k 字符封顶，截图却原始 PNG 字节无界，`full_page` 可数千 px 高 → base64 灌爆模型请求；现 `browser_tools/mod.rs::bound_screenshot_png` 复用 `file_ops/image_read` 已验证的 `image` 0.25 缩放路径，把最长边钳到 `MAX_SCREENSHOT_EDGE=1568`（Anthropic 服务端阈值，超此服务端必缩，多传纯烧 token），保持 PNG 格式契约（vision bridge 仍走 `ImageFormat::Png`），已在预算内/解码失败则**原样返回**（后处理绝不把成功截图变失败）。
+- **打磨话术**：「浏览器双后端在 `backend.rs` trait 下；‘换后端/加操作’改对应 *_backend.rs；‘网络隔离’在 `network_policy.rs`；‘凭证 IN/OUT 双向过滤’在 `secret_guard.rs`（URL 扫描 + 内容脱敏），读时再校验在 `browser_tools/mod.rs::make_backend_and_tab_guarded`。**模型可调的两个预算/超时都在边界钳**：‘wait 超时’= `wait_for.rs::clamp_timeout`（500–120000ms），‘截图像素’= `browser_tools/mod.rs::bound_screenshot_png`（最长边 `MAX_SCREENSHOT_EDGE`），与文本读的 `DEFAULT_CONTENT_MAX_CHARS` 三者同源思路。」
 
 ---
 

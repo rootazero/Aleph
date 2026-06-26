@@ -109,6 +109,17 @@ pub trait McpTransport: Send + Sync + std::any::Any {
         ))
     }
 
+    /// Record the protocol version negotiated during `initialize`.
+    ///
+    /// Per the Streamable HTTP spec (rev 2025-03-26+), every request after the
+    /// handshake must echo the negotiated `MCP-Protocol-Version`, which may be
+    /// older than the revision the client proposed. Header-bearing transports
+    /// (HTTP) override this to capture the value; transports that send no such
+    /// header ignore it.
+    fn set_protocol_version(&self, _version: &str) {
+        // Default no-op; only the Streamable HTTP transport carries the header.
+    }
+
     /// Get a reference to the transport as Any for downcasting
     ///
     /// This enables type-specific operations on transports when needed,
