@@ -302,11 +302,13 @@ impl PimTool {
 
         let policy = self.approval_policy.as_ref()?;
 
+        let target = Self::describe_action(action);
+        let (agent_id, context) = crate::approval::audit_identity("pim", action, &target);
         let request = ActionRequest {
             action_type: ActionType::PimWrite,
-            target: Self::describe_action(action),
-            agent_id: String::new(),
-            context: format!("PIM write action: {action}"),
+            target,
+            agent_id,
+            context,
             timestamp: chrono::Utc::now(),
         };
 

@@ -49,14 +49,15 @@ impl SystemTool {
     async fn check_approval(
         &self,
         action_type: ActionType,
+        action: &str,
         target: String,
-        context: String,
     ) -> Option<SystemOutput> {
         let policy = self.approval_policy.as_ref()?;
+        let (agent_id, context) = crate::approval::audit_identity("system", action, &target);
         let request = ActionRequest {
             action_type,
             target,
-            agent_id: String::new(),
+            agent_id,
             context,
             timestamp: chrono::Utc::now(),
         };
@@ -175,8 +176,10 @@ Examples:
             _ => None,
         };
         if let Some((action_type, target)) = gated {
-            let context = format!("system {}", args.action);
-            if let Some(out) = self.check_approval(action_type, target, context).await {
+            if let Some(out) = self
+                .check_approval(action_type, args.action.as_str(), target)
+                .await
+            {
                 return Ok(out);
             }
         }
