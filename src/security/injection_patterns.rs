@@ -292,12 +292,19 @@ pub fn scan(content: &str, scope: ThreatScope) -> Vec<ThreatHit> {
         .collect()
 }
 
-/// Convenience for paths that block on the first hit (memory writes, skill
-/// installs). Returns a human-readable reason for the first threat found at
-/// the given scope, or `None` when the content is clean.
+/// Convenience for paths that block on the first hit. Returns a human-readable
+/// reason for the first threat found at the given scope, or `None` when the
+/// content is clean.
 ///
-/// Defaults to [`ThreatScope::Strict`] semantics at the call site by
-/// convention — pass the scope the calling surface warrants.
+/// Production consumer: `builtin_tools::note_manage` scans note bodies/facts at
+/// [`ThreatScope::Strict`] before a write lands in long-term memory, closing
+/// the memory-poisoning laundering vector (untrusted content distilled into a
+/// note then replayed as trusted recall). That is the only path that reaches
+/// the Strict-scope persistence patterns — keep this wiring in mind before
+/// declaring them dead.
+///
+/// Pass the scope the calling surface warrants — Strict for user-mediated
+/// writes where a false positive is interactively resolvable.
 #[must_use]
 pub fn first_threat_message(content: &str, scope: ThreatScope) -> Option<String> {
     scan(content, scope).into_iter().next().map(|hit| {
