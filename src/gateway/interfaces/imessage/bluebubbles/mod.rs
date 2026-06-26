@@ -4,6 +4,7 @@
 
 pub mod api;
 pub mod config;
+pub mod inbound;
 pub mod outbound;
 
 pub use config::BlueBubblesConfig;
