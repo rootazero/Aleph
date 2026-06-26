@@ -53,10 +53,9 @@ pub struct GraphIndex<'a> {
     idx_of: HashMap<&'a str, usize>,
     /// Undirected, deduped adjacency by node index.
     pub adj: Vec<HashSet<usize>>,
-    /// Directed out-edges by node index, with per-target metadata.
+    /// Directed out-edges by node index, with per-target metadata. Read by
+    /// `edge_confidence` to weight the direct-link relevance signal.
     pub out: Vec<HashMap<usize, EdgeMeta>>,
-    /// Directed in-edges by node index (backlink traversal).
-    pub inc: Vec<HashMap<usize, EdgeMeta>>,
     /// Source-set per node index (from `source_notes`).
     pub sources: Vec<HashSet<&'a str>>,
     /// Inverted index `source_ref -> node indices citing it`. Two uses in the
@@ -76,7 +75,6 @@ impl<'a> GraphIndex<'a> {
         }
         let mut adj = vec![HashSet::new(); snap.nodes.len()];
         let mut out: Vec<HashMap<usize, EdgeMeta>> = vec![HashMap::new(); snap.nodes.len()];
-        let mut inc: Vec<HashMap<usize, EdgeMeta>> = vec![HashMap::new(); snap.nodes.len()];
         for e in &snap.edges {
             if let (Some(&a), Some(&b)) =
                 (idx_of.get(e.from.as_str()), idx_of.get(e.to.as_str()))
@@ -88,14 +86,6 @@ impl<'a> GraphIndex<'a> {
                     // Keep the strongest if a pair appears twice.
                     out[a]
                         .entry(b)
-                        .and_modify(|m| {
-                            if meta.confidence > m.confidence {
-                                *m = meta.clone();
-                            }
-                        })
-                        .or_insert_with(|| meta.clone());
-                    inc[b]
-                        .entry(a)
                         .and_modify(|m| {
                             if meta.confidence > m.confidence {
                                 *m = meta.clone();
@@ -123,7 +113,6 @@ impl<'a> GraphIndex<'a> {
             idx_of,
             adj,
             out,
-            inc,
             sources,
             source_postings,
         }
@@ -178,10 +167,5 @@ impl<'a> GraphIndex<'a> {
         let f = self.out[a].get(&b).map_or(0.0, |m| m.confidence);
         let r = self.out[b].get(&a).map_or(0.0, |m| m.confidence);
         f.max(r)
-    }
-
-    #[must_use]
-    pub fn out_edges(&self, i: usize) -> &std::collections::HashMap<usize, EdgeMeta> {
-        &self.out[i]
     }
 }

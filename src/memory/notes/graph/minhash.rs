@@ -102,9 +102,14 @@ pub fn similarity_edges(
         });
     }
 
-    // LSH: bucket by band; candidate pairs collide in ≥1 band.
+    // LSH: bucket by band; candidate pairs collide in ≥1 band. Skip empty-body
+    // docs (all-MAX signature) so two content-empty notes never form a spurious
+    // 1.0-similarity edge.
     let mut buckets: HashMap<(usize, u64), Vec<usize>> = HashMap::new();
     for (i, sig) in sigs.iter().enumerate() {
+        if sig.iter().all(|&h| h == u64::MAX) {
+            continue;
+        }
         for band in 0..BANDS {
             let mut h: u64 = 0xcbf29ce484222325;
             for r in 0..ROWS {

@@ -15,6 +15,11 @@ use crate::memory::notes::store::NoteStore;
 
 use super::DreamStage;
 
+/// Minimum MinHash Jaccard estimate for a content-similarity edge.
+const MINHASH_THRESHOLD: f32 = 0.82;
+/// Max MinHash similarity edges materialized per note (hub-explosion guard).
+const MINHASH_MAX_EDGES_PER_NODE: usize = 8;
+
 pub struct GraphRecomputeStage;
 
 #[async_trait]
@@ -57,7 +62,12 @@ impl DreamStage for GraphRecomputeStage {
         let related = if docs.len() >= 2 {
             let mh = tokio::task::spawn_blocking(move || {
                 let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
-                crate::memory::notes::graph::minhash::similarity_edges(&docs, 0.82, 8, threads)
+                crate::memory::notes::graph::minhash::similarity_edges(
+                    &docs,
+                    MINHASH_THRESHOLD,
+                    MINHASH_MAX_EDGES_PER_NODE,
+                    threads,
+                )
             })
             .await
             .map_err(|e| AlephError::other(format!("minhash join: {e}")))?;
