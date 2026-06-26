@@ -192,6 +192,12 @@ impl McpServerConnection {
             "MCP server initialized"
         );
 
+        // Honor the negotiated revision on every subsequent request. The
+        // Streamable HTTP transport echoes it on the `MCP-Protocol-Version`
+        // header; other transports treat this as a no-op.
+        self.transport
+            .set_protocol_version(&init_result.protocol_version);
+
         // Store capabilities
         {
             let mut caps = self.capabilities.write().await;

@@ -288,14 +288,22 @@ impl ServerHealth {
         self.last_error = None;
     }
 
-    /// Record a failure
-    pub fn record_failure(&mut self, error: impl Into<String>) {
+    /// Record a failure.
+    ///
+    /// `max_failures` is the consecutive-failure count at which the server is
+    /// marked [`HealthStatus::Unhealthy`]; below it (but past the first) the
+    /// server is [`HealthStatus::Degraded`]. Both states are restart-eligible
+    /// (see [`Self::should_restart`]), so the threshold governs the label and
+    /// the "fully unhealthy" point rather than the restart cadence.
+    pub fn record_failure(&mut self, error: impl Into<String>, max_failures: u32) {
         self.consecutive_failures += 1;
         self.last_check = Some(Instant::now());
         self.last_error = Some(error.into());
 
-        // Update status based on failure count
-        self.status = if self.consecutive_failures >= 5 {
+        // Keep a Degraded band below the unhealthy threshold so a single blip
+        // does not immediately read as fully unhealthy.
+        let unhealthy_at = max_failures.max(2);
+        self.status = if self.consecutive_failures >= unhealthy_at {
             HealthStatus::Unhealthy
         } else if self.consecutive_failures >= 2 {
             HealthStatus::Degraded {
@@ -847,23 +855,23 @@ mod tests {
             ..ServerHealth::default()
         };
 
-        // First failure - still healthy
-        health.record_failure("error 1");
+        // First failure - still healthy (threshold = 5)
+        health.record_failure("error 1", 5);
         assert_eq!(health.consecutive_failures, 1);
         assert_eq!(health.status, HealthStatus::Healthy);
 
         // Second failure - degraded
-        health.record_failure("error 2");
+        health.record_failure("error 2", 5);
         assert_eq!(health.consecutive_failures, 2);
         assert!(matches!(
             health.status,
             HealthStatus::Degraded { failures: 2 }
         ));
 
-        // More failures - unhealthy
-        health.record_failure("error 3");
-        health.record_failure("error 4");
-        health.record_failure("error 5");
+        // Reaching the threshold - unhealthy
+        health.record_failure("error 3", 5);
+        health.record_failure("error 4", 5);
+        health.record_failure("error 5", 5);
         assert_eq!(health.consecutive_failures, 5);
         assert_eq!(health.status, HealthStatus::Unhealthy);
     }

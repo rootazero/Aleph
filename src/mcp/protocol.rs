@@ -21,10 +21,22 @@ pub struct InitializeParams {
 /// Client capabilities
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClientCapabilities {
-    /// Supported features
+    /// Sampling support. Present (an empty `{}` object) when the client can
+    /// service server-initiated `sampling/createMessage` requests. Aleph wires
+    /// a sampling callback for every connection (see `manager::actor`), so this
+    /// is advertised unconditionally — without it, spec-compliant servers never
+    /// issue sampling requests and the already-wired handler stays dormant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<SamplingCapability>,
+    /// Experimental / non-standard capabilities.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experimental: Option<Value>,
 }
+
+/// Marker for an advertised client capability. MCP signals support with an
+/// empty `{}` object, so this carries no fields.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SamplingCapability {}
 
 /// Client info
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -615,8 +627,12 @@ impl SamplingChunk {
 }
 
 /// MCP protocol revision Aleph speaks. Sent in the `initialize` body and as
-/// the `MCP-Protocol-Version` HTTP header on Streamable HTTP requests.
-pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+/// the `MCP-Protocol-Version` HTTP header on Streamable HTTP requests. Pinned
+/// to `2025-03-26` — the revision that introduced the Streamable HTTP transport
+/// (`transport::http`) and audio content, both of which Aleph implements.
+/// Servers may negotiate this down; the transport then echoes their value (see
+/// `McpTransport::set_protocol_version`).
+pub const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
 
 impl InitializeParams {
     /// Create default initialize params for Aleph
@@ -624,7 +640,10 @@ impl InitializeParams {
     pub fn aleph_default() -> Self {
         Self {
             protocol_version: MCP_PROTOCOL_VERSION.to_string(),
-            capabilities: ClientCapabilities::default(),
+            capabilities: ClientCapabilities {
+                sampling: Some(SamplingCapability::default()),
+                experimental: None,
+            },
             client_info: ClientInfo {
                 name: "Aleph".to_string(),
                 version: env!("ALEPH_VERSION").to_string(),

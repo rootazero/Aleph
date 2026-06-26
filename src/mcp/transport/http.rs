@@ -78,6 +78,12 @@ pub struct HttpTransport {
     alive: RwLock<bool>,
     /// Streamable HTTP session id assigned by the server on `initialize`
     session_id: RwLock<Option<String>>,
+    /// Protocol version negotiated on `initialize`. Once set, it is echoed on
+    /// the `MCP-Protocol-Version` header instead of our proposed default, so a
+    /// server that negotiated an older revision receives the value it chose.
+    /// A `std` lock (not tokio's) because it is written from the sync
+    /// `set_protocol_version` trait method and only held to clone a small string.
+    negotiated_version: std::sync::RwLock<Option<String>>,
     /// Notification handler (stored but not actively used in HTTP transport)
     _notification_handler: RwLock<Option<NotificationCallback>>,
 }
@@ -102,18 +108,28 @@ impl HttpTransport {
             client,
             alive: RwLock::new(true),
             session_id: RwLock::new(None),
+            negotiated_version: std::sync::RwLock::new(None),
             _notification_handler: RwLock::new(None),
         })
     }
 
     /// Build request with protocol and configured headers
     async fn build_request(&self, body: String) -> reqwest::RequestBuilder {
+        // Echo the negotiated revision once `initialize` has settled; until
+        // then (and for servers that never negotiate) fall back to our default.
+        let protocol_version = self
+            .negotiated_version
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_else(|| MCP_PROTOCOL_VERSION.to_string());
+
         let mut req = self
             .client
             .post(&self.config.url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json, text/event-stream")
-            .header("MCP-Protocol-Version", MCP_PROTOCOL_VERSION);
+            .header("MCP-Protocol-Version", protocol_version);
 
         if let Some(session) = self.session_id.read().await.as_deref() {
             req = req.header(SESSION_HEADER, session);
@@ -348,6 +364,17 @@ impl McpTransport for HttpTransport {
         );
         // Could implement polling here in the future
         let _ = handler; // Acknowledge but don't use
+    }
+
+    fn set_protocol_version(&self, version: &str) {
+        let mut slot = self
+            .negotiated_version
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        if slot.as_deref() != Some(version) {
+            tracing::debug!(server = %self.server_name, version, "Captured negotiated MCP protocol version");
+            *slot = Some(version.to_string());
+        }
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

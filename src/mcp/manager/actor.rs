@@ -41,10 +41,9 @@ pub struct HealthCheckConfig {
     pub interval: Duration,
     /// Timeout for health check request
     pub timeout: Duration,
-    /// Number of failures before marking unhealthy
+    /// Consecutive failures before a server is marked unhealthy
+    /// (consumed by `ServerHealth::record_failure`).
     pub max_failures: u32,
-    /// Delay before restart attempt
-    pub restart_delay: Duration,
     /// Maximum restart attempts in window
     pub max_restarts: u32,
     /// Duration of restart window
@@ -57,7 +56,6 @@ impl Default for HealthCheckConfig {
             interval: Duration::from_secs(30),
             timeout: Duration::from_secs(5),
             max_failures: 3,
-            restart_delay: Duration::from_secs(2),
             max_restarts: 3,
             restart_window: Duration::from_secs(300),
         }
@@ -262,7 +260,10 @@ impl McpManagerActor {
             if alive {
                 health.record_success();
             } else {
-                health.record_failure("health probe: transport not alive");
+                health.record_failure(
+                    "health probe: transport not alive",
+                    self.health_config.max_failures,
+                );
                 if health.should_restart(
                     self.health_config.max_restarts,
                     self.health_config.restart_window.as_secs(),
@@ -597,10 +598,11 @@ impl McpManagerActor {
         // Stop the server
         self.stop_server_internal(server_id).await;
 
-        // Start the server immediately — the delay was removed because
-        // `restart_server` is called from `health_check_pass` inside the
-        // actor's `tokio::select!` loop. A sleep here would block the
-        // actor from processing commands for `restart_delay` seconds.
+        // Start the server immediately — a restart delay would have to sleep,
+        // but `restart_server` runs inside the actor's `tokio::select!` loop
+        // (via `health_check_pass`), so blocking here would stall command
+        // processing. The restart-window cap (`max_restarts`) bounds churn
+        // instead.
         self.start_server_internal(&config).await?;
 
         tracing::info!(server_id = %server_id, "Server restarted");
@@ -1071,7 +1073,6 @@ mod tests {
         assert_eq!(config.interval, Duration::from_secs(30));
         assert_eq!(config.timeout, Duration::from_secs(5));
         assert_eq!(config.max_failures, 3);
-        assert_eq!(config.restart_delay, Duration::from_secs(2));
         assert_eq!(config.max_restarts, 3);
         assert_eq!(config.restart_window, Duration::from_secs(300));
     }
