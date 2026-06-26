@@ -83,8 +83,14 @@ pub async fn sync(server_url: &str, kind: &str, json: bool) -> CliResult<()> {
     if json {
         output::print_json(&result);
     } else {
-        let s = result.get("skills").and_then(|v| v.as_bool()).unwrap_or(false);
-        let p = result.get("plugins").and_then(|v| v.as_bool()).unwrap_or(false);
+        let s = result
+            .get("skills")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let p = result
+            .get("plugins")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         println!("Synced official content (skills={s}, plugins={p}).");
     }
     client.close().await?;

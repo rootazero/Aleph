@@ -29,10 +29,10 @@ pub fn category_color(category: &str) -> String {
 pub fn category_rgb(category: &str) -> [f32; 3] {
     // Hex literals → sRGB [0,1] (no gamma correction — matches GPU pipeline).
     match category {
-        "feedback" => hex_rgb(0xa7, 0x8b, 0xfa), // #a78bfa
-        "project" => hex_rgb(0x34, 0xd3, 0x99),  // #34d399
+        "feedback" => hex_rgb(0xa7, 0x8b, 0xfa),  // #a78bfa
+        "project" => hex_rgb(0x34, 0xd3, 0x99),   // #34d399
         "reference" => hex_rgb(0x60, 0xa5, 0xfa), // #60a5fa
-        "user" => hex_rgb(0xfb, 0xbf, 0x24),     // #fbbf24
+        "user" => hex_rgb(0xfb, 0xbf, 0x24),      // #fbbf24
         "error" | "broken" | "contradiction" => hex_rgb(0xf4, 0x43, 0x36), // #f44336
         other => {
             // Same rule as category_color: hsl(hue, 55%, 65%).

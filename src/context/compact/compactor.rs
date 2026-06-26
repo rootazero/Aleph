@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use std::time::Duration;
 
 use super::summary_utils::{
-    build_merge_summary_prompt, build_window_summary_prompt, latest_user_task, strip_analysis_block,
+    build_summary_update_prompt, build_window_summary_prompt, latest_user_task, strip_analysis_block,
 };
 use crate::memory::session_compactor::summary_source::SessionSummarySource;
 use crate::memory::store::MemoryBackend;
@@ -93,6 +93,12 @@ struct CompactionCache {
 /// be folded into the summary once it crosses either bound).
 const CACHE_EXTEND_MIN_MESSAGES: usize = 8;
 const CACHE_EXTEND_MIN_TOKENS: usize = 4096;
+
+/// Prefix marking a message as a compaction summary (vs raw conversation). A
+/// window that begins with this is a *prior* summary being folded into a wider
+/// one, which routes summarization to the incremental "update" prompt instead
+/// of re-summarizing the already-condensed text from scratch.
+const CONTEXT_SUMMARY_PREFIX: &str = "[Context Summary]";
 
 /// LLM-based context compactor.
 ///
@@ -217,7 +223,7 @@ impl ContextCompactor {
 
         // Step 2: idempotency check — skip if already compacted and window is small
         if let Some(first_text) = first_message_text(&messages[0]) {
-            if first_text.starts_with("[Context Summary]") && cut_end <= 2 {
+            if first_text.starts_with(CONTEXT_SUMMARY_PREFIX) && cut_end <= 2 {
                 return Ok(CompactResult {
                     tokens_before: 0,
                     tokens_after: 0,
@@ -255,10 +261,10 @@ impl ContextCompactor {
         // again. If the last compaction's covered range still hashes to the
         // same fingerprint in this rebuild, reapply the cached summary with
         // zero API cost. When the un-summarized gap behind the summary has
-        // grown past the extension threshold, run one LLM merge over
-        // [summary + gap] — the transcript carries the old summary, so the
-        // new one absorbs it (openclaw "merge prior summaries") — and refresh
-        // the cache to cover the wider range.
+        // grown past the extension threshold, run one LLM merge that feeds the
+        // cached summary explicitly as prior state and folds only the new gap
+        // into it (openclaw "merge prior summaries", done incrementally) — and
+        // refresh the cache to cover the wider range.
         let cached = self.cache.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(c) = cached {
             let fits = c.start < c.end && c.end <= cut_end;
@@ -309,7 +315,20 @@ impl ContextCompactor {
         // ("Active Task") / openclaw ("last thing the user requested").
         let token_budget = (tokens_before as f32 * self.config.target_ratio) as usize;
         let focus = latest_user_task(&messages[cut_end..]);
-        let prompt = build_window_summary_prompt(&transcript, token_budget, focus.as_deref());
+        // Incremental inheritance: when the window opens with a prior
+        // `[Context Summary]` (e.g. a persisted child-session seed being
+        // re-compacted), fold the new turns into it via the "update" prompt
+        // instead of re-condensing the already-condensed head from scratch —
+        // preserving structure and avoiding paraphrase-decay across cycles.
+        let prompt = match first_message_text(&messages[window_start])
+            .and_then(strip_context_summary_prefix)
+        {
+            Some(prior) if window_start + 1 < cut_end => {
+                let new_transcript = serialize_transcript(&messages[window_start + 1..cut_end]);
+                build_summary_update_prompt(prior, &new_transcript, token_budget, focus.as_deref())
+            }
+            _ => build_window_summary_prompt(&transcript, token_budget, focus.as_deref()),
+        };
 
         // Step 5–7: attempt LLM call with timeout. The emptiness check runs on
         // the *stripped* output, not the raw LLM text: a model (especially the
@@ -432,28 +451,28 @@ impl ContextCompactor {
             });
         }
 
-        // Extension merge via the preserve-and-extend prompt (openclaw/hermes/pi
-        // iterative-update parity): the prior summary rides as an explicit floor
-        // the model must keep verbatim, and only the un-summarized gap is the NEW
-        // material to fold in. The previous from-scratch path re-summarized
-        // [summary + gap] generically, which re-compressed the already-condensed
-        // prior summary and decayed detail on every merge. The merge window is
-        // small (1 summary + gap), so no max_window re-cap is needed here.
-        let prior_body = c
-            .summary
-            .trim_start_matches("[Context Summary]")
-            .trim()
-            .to_string();
-        let gap_window = &messages[c.start + 1..cut_end_m];
-        let gap_transcript = serialize_transcript(gap_window);
-        // Budget protects the prior summary (must survive verbatim) and adds a
-        // condensed share of the gap — never below the prior summary alone, so
-        // the merge can only grow or hold, never re-compress what was kept.
-        let token_budget = estimate_tokens(&prior_body)
-            + (estimate_tokens(&gap_transcript) as f32 * self.config.target_ratio) as usize;
+        // Extension merge: one LLM call that updates the cached summary with the
+        // new gap (see the incremental-inheritance note below for how the prior
+        // summary is fed). Deterministic truncation mirrors the main path's
+        // failure handling. The merge window is small (1 summary + gap), so no
+        // max_window re-cap is needed here.
+        let merge_window = &messages[c.start..cut_end_m];
+        let transcript = serialize_transcript(merge_window);
+        let merge_tokens = estimate_tokens(&transcript);
+        let token_budget = (merge_tokens as f32 * self.config.target_ratio) as usize;
         let focus = latest_user_task(&messages[cut_end_m..]);
-        let prompt =
-            build_merge_summary_prompt(&prior_body, &gap_transcript, token_budget, focus.as_deref());
+        // Incremental inheritance: feed the cached summary explicitly as the
+        // prior state and fold only the new gap into it, rather than serializing
+        // [summary + gap] together and re-summarizing. Preserves the running
+        // summary's structure and avoids paraphrase-decay on each extension
+        // (hermes `previousSummary` / pi `UPDATE_SUMMARIZATION_PROMPT` parity).
+        let prompt = match strip_context_summary_prefix(&c.summary) {
+            Some(prior) => {
+                let gap_transcript = serialize_transcript(&messages[c.start + 1..cut_end_m]);
+                build_summary_update_prompt(prior, &gap_transcript, token_budget, focus.as_deref())
+            }
+            None => build_window_summary_prompt(&transcript, token_budget, focus.as_deref()),
+        };
 
         let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
         let merged = match llm_result {
@@ -465,19 +484,10 @@ impl ContextCompactor {
         };
         let (body, strategy) = match merged {
             Some(s) => (s, CompactStrategy::LlmSummary),
-            None if self.config.fallback_to_truncation => {
-                // Merge LLM failed: keep the prior summary verbatim and append a
-                // deterministic truncation of only the NEW gap — never collapse
-                // the prior summary itself to first-lines (preserve semantics
-                // hold even on the failure path).
-                let truncated_gap = deterministic_truncation(gap_window);
-                let combined = if truncated_gap.trim().is_empty() {
-                    prior_body.clone()
-                } else {
-                    format!("{prior_body}\n{truncated_gap}")
-                };
-                (combined, CompactStrategy::DeterministicTruncation)
-            }
+            None if self.config.fallback_to_truncation => (
+                deterministic_truncation(merge_window),
+                CompactStrategy::DeterministicTruncation,
+            ),
             None => {
                 // Merge failed and truncation is disabled: keep the reapplied
                 // summary + raw gap. The cache stays on its old (still valid)
@@ -597,6 +607,15 @@ fn first_message_text(msg: &UnifiedMessage) -> Option<&str> {
     msg.content_blocks().first().and_then(|b| b.as_text())
 }
 
+/// If `text` is a prior `[Context Summary]…`, return its body (the summary
+/// without the marker prefix and any leading newline); `None` for raw turns.
+/// `CONTEXT_SUMMARY_PREFIX` is ASCII, so the byte slice lands on a UTF-8
+/// boundary.
+fn strip_context_summary_prefix(text: &str) -> Option<&str> {
+    text.strip_prefix(CONTEXT_SUMMARY_PREFIX)
+        .map(|rest| rest.trim_start_matches('\n'))
+}
+
 /// Per-message character cap applied to the summarizer transcript.
 ///
 /// Old tool results and pasted blobs in the compaction window can each be many
@@ -631,13 +650,15 @@ fn serialize_transcript(messages: &[UnifiedMessage]) -> String {
     for msg in messages {
         let text = msg.text_content();
         let capped = cap_transcript_text(&text);
-        match msg {
-            UnifiedMessage::User { .. } => lines.push(format!("user: {capped}")),
-            UnifiedMessage::Assistant { .. } => lines.push(format!("assistant: {capped}")),
+        let role = match msg {
+            UnifiedMessage::User { .. } => "user",
+            UnifiedMessage::Assistant { .. } => "assistant",
             UnifiedMessage::ToolResult { tool_name, .. } => {
                 lines.push(format!("tool_result({tool_name}): {capped}"));
+                continue;
             }
-        }
+        };
+        lines.push(format!("{role}: {capped}"));
     }
     lines.join("\n")
 }
@@ -903,6 +924,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn re_compaction_over_a_prior_summary_uses_the_update_prompt() {
+        // A window that opens with a persisted prior `[Context Summary]` (e.g. a
+        // child-session seed being re-compacted) must fold the new turns into it
+        // via the incremental update prompt, not re-condense the already-
+        // condensed head from scratch.
+        let provider = Arc::new(CapturingProvider::new(
+            "<summary>\n## Primary Request\nrevised\n</summary>",
+        ));
+        let compactor = ContextCompactor::new(provider.clone(), CompactorConfig::default());
+
+        // index 0 = prior summary; 1..8 = new turns; tail = last 6. total 14,
+        // fresh_tail 6 → cut_end = 8 (> 2, so the idempotency skip never fires),
+        // window_start = 0.
+        let mut messages = vec![UnifiedMessage::user(
+            "[Context Summary]\n## Primary Request\noriginal goal\n## Pending\nstep two",
+        )];
+        for i in 0..13 {
+            messages.push(UnifiedMessage::assistant(format!("turn {i}")));
+        }
+
+        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        assert_eq!(result.strategy_used, CompactStrategy::LlmSummary);
+
+        let prompt = provider.prompt();
+        assert!(
+            prompt.contains("UPDATING an existing running summary"),
+            "must route to the incremental update prompt; got:\n{prompt}"
+        );
+        // Prior summary fenced as authoritative state, marker stripped.
+        assert!(prompt.contains(
+            "<current_summary>\n## Primary Request\noriginal goal\n## Pending\nstep two\n</current_summary>"
+        ));
+        // New turns ride under the NEW TURNS marker, not the from-scratch one.
+        assert!(prompt.contains("---NEW TURNS---"));
+        assert!(
+            !prompt.contains("---TRANSCRIPT---"),
+            "incremental path must not use the from-scratch transcript marker"
+        );
+    }
+
+    #[tokio::test]
     async fn summarize_slice_recovers_on_analysis_only_output() {
         // Same degenerate case for the session-split seed path: an analysis-only
         // response strips to "" and must fall back to deterministic truncation
@@ -968,8 +1030,9 @@ mod tests {
         assert_eq!(provider.call_count(), 1);
 
         // Turn N: the un-summarized gap behind the summary has grown past the
-        // extension threshold → exactly one merge call whose transcript
-        // carries the previous summary (openclaw "merge prior summaries").
+        // extension threshold → exactly one merge call that feeds the previous
+        // summary explicitly as prior state (incremental "update", not a fresh
+        // re-summarization of the already-condensed head).
         let mut turn2 = base.clone();
         for i in 0..(CACHE_EXTEND_MIN_MESSAGES + 2) {
             turn2.push(UnifiedMessage::assistant(format!("extra turn {i}")));
@@ -978,13 +1041,11 @@ mod tests {
 
         assert_eq!(r2.strategy_used, CompactStrategy::LlmSummary);
         assert_eq!(provider.call_count(), 2);
-        // The merge now uses the preserve-and-extend prompt: the prior summary
-        // rides verbatim under the EXISTING SUMMARY fence (marker trimmed) so the
-        // model is told to keep it rather than re-compress it.
+        let merge_prompt = provider.prompt();
         assert!(
-            provider.prompt().contains("---EXISTING SUMMARY---")
-                && provider.prompt().contains("## Primary Request"),
-            "merge prompt must carry the prior summary as the preserve floor"
+            merge_prompt.contains("UPDATING an existing running summary")
+                && merge_prompt.contains("## Primary Request\nmerged"),
+            "merge must feed the previous summary explicitly via the update prompt; got:\n{merge_prompt}"
         );
         let first_text = first_message_text(&turn2[0]).unwrap();
         assert!(first_text.contains("merged"));

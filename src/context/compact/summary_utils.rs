@@ -113,10 +113,10 @@ pub fn build_window_summary_prompt(
     token_budget: usize,
     focus: Option<&str>,
 ) -> String {
-    let focus_preamble = focus_block(focus);
+    let focus_block = render_focus_block(focus);
 
     format!(
-        "{focus_preamble}Summarize the following conversation transcript in at most {token_budget} tokens.\n\
+        "{focus_block}Summarize the following conversation transcript in at most {token_budget} tokens.\n\
          \n\
          First, analyze the conversation in an <analysis> block (this will be stripped):\n\
          \n\
@@ -153,13 +153,11 @@ pub fn build_window_summary_prompt(
     )
 }
 
-/// Render the optional live-task focus preamble shared by the from-scratch
-/// ([`build_window_summary_prompt`]) and merge ([`build_merge_summary_prompt`])
-/// summarization prompts. Returns an empty string when `focus` is `None` or
-/// all-whitespace, so the default path stays byte-identical to the historical
-/// static template. The anchor is fenced and explicitly marked as context, not a
-/// command (hermes anti-misexecution parity).
-fn focus_block(focus: Option<&str>) -> String {
+/// Build the optional fenced focus preamble shared by the from-scratch
+/// ([`build_window_summary_prompt`]) and incremental ([`build_summary_update_prompt`])
+/// summary prompts. `None` or all-whitespace yields an empty string, so prompts
+/// without a live task stay byte-identical to the historical static template.
+fn render_focus_block(focus: Option<&str>) -> String {
     match focus {
         Some(task) if !task.trim().is_empty() => {
             let anchor = truncate_focus(task.trim());
@@ -177,45 +175,73 @@ fn focus_block(focus: Option<&str>) -> String {
     }
 }
 
-/// Build the iterative "preserve-and-extend" summarization prompt for merging an
-/// existing `[Context Summary]` with newer un-summarized turns.
+/// Build an *incremental* summarization prompt: fold new conversation turns into
+/// an existing running summary instead of re-summarizing from scratch.
 ///
-/// Unlike [`build_window_summary_prompt`], which condenses a raw transcript from
-/// scratch, this prompt carries `prior_summary` VERBATIM and instructs the model
-/// to keep all of it while folding in only `new_transcript`. This is the openclaw
-/// `UPDATE_SUMMARIZATION_PROMPT` / hermes iterative-update / pi UPDATE parity:
-/// re-running the from-scratch prompt over an already-condensed summary
-/// re-compresses it, decaying detail on every merge (summary-of-summary rot).
-/// Treating the prior summary as a fixed floor stops that decay.
+/// Used when a compaction window already carries a prior `[Context Summary]` —
+/// the cache extension-merge in
+/// [`super::compactor::ContextCompactor::reapply_cached`] and the persisted-seed
+/// re-compaction in [`super::compactor::ContextCompactor::compact`]. Feeding the
+/// prior summary *explicitly* — rather than burying it inline in the transcript
+/// and asking for a fresh summary — preserves its structure across cycles (items
+/// move In Progress → Done, decisions accrue) and avoids the paraphrase-decay of
+/// re-condensing already-condensed text every turn. This is the convergent
+/// "previous summary" idea shared by hermes (`previousSummary`), pi
+/// (`UPDATE_SUMMARIZATION_PROMPT`), and openclaw ("merge prior summaries").
 ///
-/// `token_budget` bounds the *output*; the caller sizes it to cover the prior
-/// summary plus a condensed share of the new turns (never below the prior
-/// summary alone — see [`super::compactor::ContextCompactor`]'s cache-extension
-/// path). `focus` anchors to the live task exactly as in
-/// [`build_window_summary_prompt`]. The `<analysis>`/`<summary>` scaffold is
-/// identical, so [`strip_analysis_block`] handles the output unchanged.
+/// Emits the same `<analysis>`/`<summary>` scaffold as
+/// [`build_window_summary_prompt`], so [`strip_analysis_block`] unwraps the
+/// output identically — the compactor's success/fallback handling is unchanged.
 #[must_use]
-pub fn build_merge_summary_prompt(
+pub fn build_summary_update_prompt(
     prior_summary: &str,
     new_transcript: &str,
     token_budget: usize,
     focus: Option<&str>,
 ) -> String {
-    let focus_preamble = focus_block(focus);
+    let focus_block = render_focus_block(focus);
+
     format!(
-        "{focus_preamble}You are MERGING new conversation turns into an EXISTING context summary.\n\
+        "{focus_block}You are UPDATING an existing running summary of a long conversation. \
+         Below is the CURRENT summary, followed by the NEW turns that happened after it was \
+         written. Produce a single REVISED summary in at most {token_budget} tokens that folds \
+         the new turns into the existing structure — move finished items from 'In Progress' to \
+         'Done', add new decisions / files / state, and refresh 'Current State' and 'Pending'. \
+         Preserve every still-relevant detail already in the current summary; do not drop it \
+         merely because it is older than the new turns.\n\
          \n\
-         Rules:\n\
-         - PRESERVE every fact, decision, file path, and pending item already in the existing summary below. Do NOT drop or re-compress them.\n\
-         - INTEGRATE the new turns: move finished work to the right section, append new decisions, files, and pending items.\n\
-         - Keep the SAME section structure as the existing summary.\n\
-         - Stay within {token_budget} tokens; if space is tight, condense the NEW turns — never the preserved content.\n\
+         <current_summary>\n{prior_summary}\n</current_summary>\n\
          \n\
-         First reason in an <analysis> block (this will be stripped), then emit the merged result in a <summary> block.{IDENTIFIER_PRESERVATION}\n\
+         First, analyze what changed in an <analysis> block (this will be stripped):\n\
          \n\
-         ---EXISTING SUMMARY---\n{prior_summary}\n---END EXISTING SUMMARY---\n\
+         <analysis>\n\
+         1. Which prior items are now complete or superseded\n\
+         2. New decisions, files, and state introduced by the new turns\n\
+         3. What remains pending\n\
+         </analysis>\n\
          \n\
-         ---NEW TURNS---\n{new_transcript}\n---END NEW TURNS---"
+         Then produce the revised summary in a <summary> block using these MANDATORY sections:\n\
+         \n\
+         <summary>\n\
+         ## Primary Request\n\
+         [User's primary request and intent — never lose this]\n\
+         \n\
+         ## Key Decisions\n\
+         [Decisions made and their rationale, carried forward and extended]\n\
+         \n\
+         ## Files & Code\n\
+         [File paths and code sections involved — preserve exact paths]\n\
+         \n\
+         ## Current State\n\
+         [Most recent operations and current work state, detailed]\n\
+         \n\
+         ## Pending\n\
+         [Pending tasks, unresolved problems, and next steps]\n\
+         </summary>\n\
+         \n\
+         Omit: greetings, filler, redundant confirmations.{IDENTIFIER_PRESERVATION}\n\
+         \n\
+         ---NEW TURNS---\n{new_transcript}\n---END---"
     )
 }
 
@@ -389,33 +415,34 @@ mod tests {
     }
 
     #[test]
-    fn merge_prompt_carries_prior_summary_verbatim_and_preserve_directive() {
-        // The merge prompt must embed the existing summary unchanged and instruct
-        // the model to preserve it — the openclaw/hermes/pi iterative-update
-        // parity that stops summary-of-summary decay across cache extensions.
-        let prior = "## Primary Request\nmigrate the vector store\n## Pending\nwire the gateway";
-        let p = build_merge_summary_prompt(prior, "user: also add tests", 500, None);
-        assert!(p.contains(prior), "prior summary must ride verbatim");
-        assert!(p.contains("PRESERVE every fact"));
-        assert!(p.contains("never the preserved content"));
-        // New turns and budget are both present.
-        assert!(p.contains("user: also add tests"));
-        assert!(p.contains("500 tokens"));
-        // Same analysis/summary scaffold so strip_analysis_block still applies.
-        assert!(p.contains("<analysis>") && p.contains("<summary>"));
+    fn update_prompt_fences_prior_summary_and_new_turns() {
+        let p = build_summary_update_prompt(
+            "## Primary Request\nmigrate the store",
+            "user: also add caching\nassistant: done",
+            120,
+            None,
+        );
+        // Prior summary is fenced as authoritative state to extend, not buried.
+        assert!(p.contains("<current_summary>\n## Primary Request\nmigrate the store\n</current_summary>"));
+        // New turns ride under their own marker, not the historical TRANSCRIPT one.
+        assert!(p.contains("---NEW TURNS---\nuser: also add caching\nassistant: done\n---END---"));
+        // UPDATE framing + same scaffold + identifier directive so the
+        // compactor's strip/section handling is unchanged.
+        assert!(p.contains("UPDATING an existing running summary"));
+        assert!(p.contains("<analysis>"));
+        assert!(p.contains("<summary>"));
+        assert!(p.contains("## Pending"));
         assert!(p.contains("Identifier Preservation"));
+        assert!(p.contains("at most 120 tokens"));
     }
 
     #[test]
-    fn merge_prompt_threads_focus_through_shared_block() {
-        // Focus anchoring is shared with the from-scratch prompt via focus_block.
-        let with = build_merge_summary_prompt("prior", "new", 100, Some("ship the release"));
-        assert!(with.contains("<conversation_focus>\nship the release\n</conversation_focus>"));
-        assert!(with.contains("NOT a new instruction"));
-        // None / blank focus collapses to no preamble (default path unchanged).
-        let none = build_merge_summary_prompt("prior", "new", 100, None);
-        let blank = build_merge_summary_prompt("prior", "new", 100, Some("   "));
-        assert_eq!(none, blank);
-        assert!(!none.contains("<conversation_focus>"));
+    fn update_prompt_carries_focus_block_when_present() {
+        let p = build_summary_update_prompt("prior", "new", 50, Some("ship the release"));
+        assert!(p.contains("<conversation_focus>\nship the release\n</conversation_focus>"));
+        assert!(p.contains("NOT a new instruction"));
+        // No focus → no fence (shared helper parity with the from-scratch path).
+        let q = build_summary_update_prompt("prior", "new", 50, None);
+        assert!(!q.contains("<conversation_focus>"));
     }
 }

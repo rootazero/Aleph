@@ -1,0 +1,61 @@
+name: AlephPaneliOS
+options:
+  bundleIdPrefix: ai.aleph
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    TARGETED_DEVICE_FAMILY: "1"
+
+targets:
+  AlephPaneliOS:
+    type: application
+    platform: iOS
+    sources:
+      - AlephPaneliOS
+    info:
+      path: AlephPaneliOS/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Aleph Panel
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        UILaunchScreen:
+          UIColorName: ""
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        # WKWebView loads cleartext http (local 127.0.0.1:18999, or remote Debian
+        # via env override). NSAllowsArbitraryLoads covers the public-IP remote;
+        # NSAllowsLocalNetworking covers loopback.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.aleph.panel.iossim
+        PRODUCT_NAME: AlephPaneliOS
+
+schemes:
+  AlephPaneliOS:
+    build:
+      targets:
+        AlephPaneliOS: all
+    run:
+      config: Debug
+      # The connection target is injected via the PANEL_URL env so NO secret
+      # (server IP/token) lives in committed source. xcodegen expands ${PANEL_URL}
+      # from the shell at generate time → the resolved value is written only into
+      # the GENERATED .xcodeproj scheme, which is gitignored. project.yml itself
+      # keeps just the ${PANEL_URL} placeholder. Regenerate via ./generate.sh
+      # (it reads a fresh token). Empty/unset → app falls to about:blank (no leak).
+      environmentVariables:
+        - variable: PANEL_URL
+          value: ${PANEL_URL}
+          isEnabled: true

@@ -894,9 +894,7 @@ async fn supervise_remote_lite(handle: tauri::AppHandle) {
                 relocation_ticks = 0;
                 relocated = false;
                 if let connection::ConnectionTarget::Remote(url) = connection::load_target() {
-                    if let Some(window) =
-                        tauri::Manager::get_webview_window(&handle, "main")
-                    {
+                    if let Some(window) = tauri::Manager::get_webview_window(&handle, "main") {
                         let _ = window.navigate(url);
                     }
                 }

@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# === Launch helper TEMPLATE — copy, then fill in your connection target ===
+#
+#   cp launch-local.sh.example launch-local.sh   # the copy is gitignored
+#   ./launch-local.sh                            # boots the sim + loads the panel
+#
+# The copy holds the gateway IP+token and MUST NEVER be committed (.gitignore
+# already excludes launch-local.sh and *.local.sh). Nothing here is a secret:
+# this template only has placeholders.
+#
+# It injects PANEL_URL into the iOS simulator at launch; the Swift shell reads it
+# at runtime (no secret is ever baked into source).
+set -euo pipefail
+cd "$(dirname "$0")"
+
+UDID="${UDID:-<YOUR_SIMULATOR_UDID>}"   # find via: xcrun simctl list devices | grep Booted
+BID="ai.aleph.panel.iossim"
+ROUTE="${1:-/settings}"                 # /settings | / | /memory ...
+
+# ---- Pick ONE connection target, then set PANEL_URL accordingly ----
+#
+# (A) LOCAL full core on THIS Mac — token fetched live, nothing to fill in:
+#       REPO_ROOT="$(cd ../.. && pwd)"
+#       TOKEN="$("$REPO_ROOT/target/debug/aleph-server" bootstrap-token | tail -1)"
+#       PANEL_URL="http://127.0.0.1:18790${ROUTE}?token=${TOKEN}"
+#
+# (B) REMOTE Debian core over LAN / Internet — fill IP + token by hand
+#     (get a token on the server: ./aleph-server bootstrap-token):
+#       PANEL_URL="http://<DEBIAN_IP>:18790${ROUTE}?token=<TOKEN>"
+#
+PANEL_URL="http://<DEBIAN_IP>:18790${ROUTE}?token=<TOKEN>"
+
+xcrun simctl terminate "$UDID" "$BID" 2>/dev/null || true
+SIMCTL_CHILD_PANEL_URL="$PANEL_URL" xcrun simctl launch "$UDID" "$BID"

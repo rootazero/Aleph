@@ -35,7 +35,15 @@ use crate::context::{DashboardContext, DashboardState};
 use crate::state::hotkey::{self as hotkey, HotkeyState};
 use crate::state::layout::{LayoutMode, WorkspaceState};
 use crate::state::notifications::NotificationsState;
+use crate::platform::phone::settings::PhoneSettings;
+use crate::platform::phone::settings::appearance::PhoneAppearance;
+use crate::platform::phone::settings::connection::PhoneConnection;
+use crate::platform::phone::settings::model_route::PhoneModelRoute;
+use crate::platform::phone::settings::embeddings::PhoneEmbeddings;
+use crate::platform::phone::settings::providers::PhoneProviders;
+use crate::platform::phone::chat::PhoneChat;
 use crate::state::sessions::SessionMap;
+use crate::state::viewport::{FormFactor, FormFactorState};
 use crate::views::chat::ChatState;
 use crate::views::voice::{ImmersiveVoiceView, VoiceMode};
 
@@ -78,6 +86,10 @@ fn AppContent() -> impl IntoView {
     // sidebar's auto-select-default-agent path is what opens the first
     // tab. Cmd+1..9 / Cmd+W hotkeys are installed lazily by SessionTabs.
     provide_context(SessionMap::new());
+
+    // Form-factor (Wide/Phone/Tablet) — read by SettingsRouter to swap the
+    // wide `/settings` page for the iOS-native PhoneSettings at <640px.
+    provide_context(FormFactorState::new());
 
     // Workspace pane state — UI-TARS-parity. ChatOnly is the default so
     // legacy users see zero UI change; the LayoutToggle in the composer
@@ -371,10 +383,15 @@ fn ChatBandChrome() -> impl IntoView {
 fn MainContent() -> impl IntoView {
     let location = use_location();
     let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
+    let form_factor = expect_context::<FormFactorState>();
 
     view! {
         <div style:display=move || if mode.get() == PanelMode::Chat { "contents" } else { "none" }>
-            <ChatView />
+            {move || if form_factor.form_factor.get() == FormFactor::Phone {
+                view! { <PhoneChat /> }.into_any()
+            } else {
+                view! { <ChatView /> }.into_any()
+            }}
         </div>
         <div style:display=move || if mode.get() == PanelMode::Dashboard { "contents" } else { "none" }>
             <DashboardRouter />
@@ -423,6 +440,7 @@ fn DashboardRouter() -> impl IntoView {
 #[component]
 fn SettingsRouter() -> impl IntoView {
     let location = use_location();
+    let form_factor = expect_context::<FormFactorState>();
 
     move || {
         let path = location.pathname.get();
@@ -431,23 +449,60 @@ fn SettingsRouter() -> impl IntoView {
             // these settings is already authorized (operator) — loopback or a
             // token-validated remote — so there is no per-page ConfigGate; the
             // login wall (TokenWall) is the one and only gate.
-            "/settings" => view! { <Settings /> }.into_any(),
+            "/settings" => {
+                if form_factor.form_factor.get() == FormFactor::Phone {
+                    view! { <PhoneSettings /> }.into_any()
+                } else {
+                    view! { <Settings /> }.into_any()
+                }
+            }
             "/settings/general" => view! { <GeneralView /> }.into_any(),
-            "/settings/appearance" => view! { <AppearanceView /> }.into_any(),
+            "/settings/appearance" => {
+                if form_factor.form_factor.get() == FormFactor::Phone {
+                    view! { <PhoneAppearance /> }.into_any()
+                } else {
+                    view! { <AppearanceView /> }.into_any()
+                }
+            }
             "/settings/behavior" => view! { <BehaviorView /> }.into_any(),
 
             // AI
             "/settings/search" => view! { <SearchView /> }.into_any(),
-            "/settings/providers" => view! { <ProvidersView /> }.into_any(),
-            "/settings/embedding-providers" => view! { <EmbeddingProvidersView /> }.into_any(),
+            "/settings/providers" => {
+                if form_factor.form_factor.get() == FormFactor::Phone {
+                    view! { <PhoneProviders /> }.into_any()
+                } else {
+                    view! { <ProvidersView /> }.into_any()
+                }
+            }
+            "/settings/embedding-providers" => {
+                if form_factor.form_factor.get() == FormFactor::Phone {
+                    view! { <PhoneEmbeddings /> }.into_any()
+                } else {
+                    view! { <EmbeddingProvidersView /> }.into_any()
+                }
+            }
             "/settings/reranking-providers" => view! { <RerankingProvidersView /> }.into_any(),
             "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
-            "/settings/model-route" => view! { <RouteView /> }.into_any(),
+            "/settings/model-route" => {
+                if form_factor.form_factor.get() == FormFactor::Phone {
+                    view! { <PhoneModelRoute /> }.into_any()
+                } else {
+                    view! { <RouteView /> }.into_any()
+                }
+            }
             "/settings/memory" => view! { <MemoryView /> }.into_any(),
 
             // Browser
             "/settings/browser" => view! { <BrowserView /> }.into_any(),
-            "/settings/network" => view! { <NetworkView /> }.into_any(),
+            "/settings/network" => {
+                if form_factor.form_factor.get() == FormFactor::Phone {
+                    view! { <PhoneConnection /> }.into_any()
+                } else {
+                    view! { <NetworkView /> }.into_any()
+                }
+            }
+
 
             // Extensions
             "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),

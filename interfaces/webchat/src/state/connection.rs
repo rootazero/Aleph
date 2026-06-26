@@ -51,7 +51,9 @@ impl ConnectionPhase {
         // Any explicit error wins — surface it so the user gets a Retry path.
         if let Some(reason) = connection_error {
             return Self::Failed {
-                failure: ConnectionFailure::Unknown { detail: reason.to_string() },
+                failure: ConnectionFailure::Unknown {
+                    detail: reason.to_string(),
+                },
             };
         }
         if is_reconnecting {
@@ -201,13 +203,11 @@ mod tests {
         assert!(ConnectionPhase::Connecting.is_pre_ready());
         assert!(!ConnectionPhase::Connected.is_pre_ready());
         assert!(!ConnectionPhase::Reconnecting { attempt: 1, max: 5 }.is_pre_ready());
-        assert!(
-            !ConnectionPhase::Failed {
-                failure: ConnectionFailure::Unknown {
-                    detail: "x".to_string()
-                }
+        assert!(!ConnectionPhase::Failed {
+            failure: ConnectionFailure::Unknown {
+                detail: "x".to_string()
             }
-            .is_pre_ready()
-        );
+        }
+        .is_pre_ready());
     }
 }

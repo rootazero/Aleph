@@ -308,6 +308,12 @@ fn build_request_payload<'a>(
 /// claude-code's "already attempted" single-shot guard (query.ts:1092).
 const MAX_REACTIVE_COMPACT_ATTEMPTS: u32 = 1;
 
+/// Fresh-tail size for the preflight cheap passes when no context budget is
+/// wired (`context_budget == None`). Mirrors `CompactorConfig::default`'s tail
+/// of 6 — named so the no-budget fallback cannot silently diverge from the
+/// configured compactor's tail.
+const NO_BUDGET_FRESH_TAIL: usize = 6;
+
 /// Plain-text tool-call promotion (openclaw `tool-call-repair` parity).
 ///
 /// Weaker / proxied models sometimes emit a tool call as assistant **text**
@@ -498,7 +504,7 @@ impl AgentHarness {
                         overhead_tokens: 0,
                         available_for_messages: 0,
                     },
-                    6usize,
+                    NO_BUDGET_FRESH_TAIL,
                 ),
             };
             let freed = pipeline.run(&mut messages, &pressure, fresh_tail).await;

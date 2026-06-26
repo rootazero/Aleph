@@ -89,7 +89,7 @@ fn team_history_item_to_message(index: usize, item: TeamMessageItem) -> ChatMess
 /// external-update live refresh (`run.session_updated` with an
 /// `origin_channel`); callers must already have `chat.session_key`
 /// pointing at `key`.
-async fn hydrate_session_history(
+pub(crate) async fn hydrate_session_history(
     dash: DashboardState,
     chat: ChatState,
     workspace: Option<WorkspaceState>,

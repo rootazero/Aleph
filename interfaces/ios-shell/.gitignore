@@ -1,0 +1,18 @@
+# Xcode / build artifacts
+build/
+DerivedData/
+*.xcuserstate
+
+# The .xcodeproj is GENERATED from project.yml by xcodegen — never commit it.
+# Critically, its generated scheme embeds the resolved PANEL_URL (server IP+token),
+# so committing it would leak the secret. Regenerate locally via ./generate.sh.
+*.xcodeproj/
+
+# Screenshots / scratch
+*.png
+.DS_Store
+
+# Local launch helper holds the gateway IP+token — never commit.
+# Copy launch-local.sh.example -> launch-local.sh and fill it in.
+launch-local.sh
+*.local.sh

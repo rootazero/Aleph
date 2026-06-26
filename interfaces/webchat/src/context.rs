@@ -580,7 +580,9 @@ impl DashboardState {
                 Either::Right(((), _)) => {
                     // TCP may be up but WS upgrade hung — fail closed instead of
                     // spinning the boot gate forever.
-                    Err(ConnectionError::ConnectFailed("WebSocket open timed out".into()))
+                    Err(ConnectionError::ConnectFailed(
+                        "WebSocket open timed out".into(),
+                    ))
                 }
             }
         };
@@ -761,7 +763,9 @@ impl DashboardState {
                             classify(FailureStage::AfterOpen, drop_reason.as_deref(), false),
                             ConnectionFailure::AuthRequired
                         ) {
-                            state.connection_failure.set(Some(ConnectionFailure::AuthRequired));
+                            state
+                                .connection_failure
+                                .set(Some(ConnectionFailure::AuthRequired));
                         }
                         state.is_connected.set(false);
                         // Clear the dead rpc_tx so the next rpc_call() won't
@@ -860,7 +864,10 @@ impl DashboardState {
         use crate::state::connection::MAX_RECONNECT_ATTEMPTS;
         use shared_ui_logic::connection::{ConnectionFailure, ReconnectStrategy};
 
-        if matches!(self.connection_failure.get_untracked(), Some(ConnectionFailure::AuthRequired)) {
+        if matches!(
+            self.connection_failure.get_untracked(),
+            Some(ConnectionFailure::AuthRequired)
+        ) {
             self.needs_token.set(true);
             self.is_reconnecting.set(false);
             return Ok(());
