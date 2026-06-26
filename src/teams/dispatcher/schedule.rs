@@ -18,6 +18,7 @@ use crate::agents::swarm::tasks::retry::{
     is_retry_eligible, jittered_backoff_secs, read_max_retries, retry_decision,
     with_retry_not_before, RetryDecision,
 };
+use crate::agents::swarm::tasks::timeout::{effective_timeout_secs, read_task_timeout};
 use crate::agents::swarm::tasks::{
     CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate, TaskRunStatus,
 };
@@ -64,8 +65,16 @@ fn completion_status(task: &CoordTask) -> CoordTaskStatus {
 ///
 /// Returns `true` only for `InProgress` dispatcher-managed tasks that this
 /// process isn't running, have a recorded `started_at`, and whose elapsed
-/// time exceeds `zombie_ttl_secs`. A `zombie_ttl_secs` of 0 disables
-/// detection (matches the runtime fast-path in [`TeamDispatcher::reclaim_zombies`]).
+/// time exceeds the task's **effective** zombie threshold. A `zombie_ttl_secs`
+/// of 0 disables detection (matches the runtime fast-path in
+/// [`TeamDispatcher::reclaim_zombies`]).
+///
+/// The effective threshold is `max(zombie_ttl_secs, per-task timeout)`. The
+/// global config already guarantees `zombie_ttl_secs >= task_timeout_secs` so a
+/// healthy long-running task is never reaped before its own deadline; a per-task
+/// timeout override ([`read_task_timeout`]) can exceed that global, so it is
+/// folded in here too — otherwise a legitimately long task orphaned by a process
+/// restart would be force-failed before its own budget elapsed.
 #[must_use]
 pub fn is_zombie(
     task: &CoordTask,
@@ -88,7 +97,8 @@ pub fn is_zombie(
     let Some(started) = task.started_at else {
         return false;
     };
-    now_epoch.saturating_sub(started) > zombie_ttl_secs
+    let effective_ttl = zombie_ttl_secs.max(read_task_timeout(&task.metadata).unwrap_or(0));
+    now_epoch.saturating_sub(started) > effective_ttl
 }
 
 /// Pure scheduling filter: from `tasks`, pick those ready to run right now,
@@ -395,23 +405,16 @@ impl TeamDispatcher {
             Ok(t) => t,
             Err(_) => return,
         };
-        let running: HashMap<String, String> = self.running.lock().await.clone();
+        // Run-set as a key-only set so the single-source-of-truth predicate
+        // [`is_zombie`] decides — no inline copy of the checks to drift from it.
+        let running: HashSet<String> = self.running.lock().await.keys().cloned().collect();
         let now = Self::now_epoch();
 
         for task in in_progress {
-            if !is_dispatcher_managed(&task) {
+            if !is_zombie(&task, &running, now, zombie_ttl) {
                 continue;
             }
-            if running.contains_key(&task.id) {
-                continue; // owned by this process — let normal flow handle it
-            }
-            let Some(started) = task.started_at else {
-                continue; // no clock to compare against
-            };
-            let elapsed = now.saturating_sub(started);
-            if elapsed <= zombie_ttl {
-                continue; // still within grace window
-            }
+            let elapsed = now.saturating_sub(task.started_at.unwrap_or(now));
             tracing::warn!(
                 task_id = %task.id,
                 age_secs = elapsed,
@@ -513,13 +516,17 @@ impl TeamDispatcher {
         // tasks carry no such key, so this is `None` and the run keeps its
         // default model.
         let model_override = crate::workflow::workflow_model_override(&task.metadata);
+        // A task may override the global single-attempt timeout via its metadata
+        // (`timeout_secs`), so a deep research subtask and a quick formatting step
+        // no longer share one budget. Absent → the configured global default.
+        let timeout_secs = effective_timeout_secs(&task.metadata, self.config.task_timeout_secs);
         let outcome = execute_member_task(
             &self.context,
             &target,
             &team_id,
             &task_id,
             input,
-            self.config.task_timeout_secs,
+            timeout_secs,
             isolate,
             model_override,
         )
@@ -1221,5 +1228,34 @@ mod tests {
         t.status = CoordTaskStatus::Pending;
         let running = HashSet::new();
         assert!(!is_zombie(&t, &running, 1_000_000, 60));
+    }
+
+    #[test]
+    fn zombie_detection_honours_longer_per_task_timeout() {
+        use crate::agents::swarm::tasks::timeout::with_task_timeout;
+        // A task with a per-task timeout (1000s) above the global zombie TTL (60s)
+        // must not be reaped before its own deadline — the effective threshold is
+        // max(global, per-task). Started 500s ago: past the global TTL but inside
+        // its own 1000s budget → not yet a zombie.
+        let mut t = in_progress_task("long", 1_000_000, true);
+        t.metadata = with_task_timeout(t.metadata, Some(1000));
+        let running = HashSet::new();
+        assert!(!is_zombie(&t, &running, 1_000_500, 60));
+        // Past its own budget → finally a zombie.
+        assert!(is_zombie(&t, &running, 1_001_001, 60));
+    }
+
+    #[test]
+    fn zombie_detection_ignores_shorter_per_task_timeout() {
+        use crate::agents::swarm::tasks::timeout::with_task_timeout;
+        // A per-task timeout *below* the global TTL never shrinks the safety net:
+        // the global zombie grace still governs (effective = max(global, per-task)).
+        let mut t = in_progress_task("short", 1_000_000, true);
+        t.metadata = with_task_timeout(t.metadata, Some(10));
+        let running = HashSet::new();
+        // 30s elapsed: past the 10s per-task timeout but inside the 60s global
+        // grace → not a zombie (the in-process timeout already aborts the run;
+        // the zombie reaper is only the orphan safety net).
+        assert!(!is_zombie(&t, &running, 1_000_030, 60));
     }
 }
