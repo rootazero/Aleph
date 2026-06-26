@@ -43,6 +43,7 @@
 //! ```
 
 pub mod adapters;
+mod audit;
 pub mod callback_sink;
 mod config;
 pub mod node_requester;
@@ -51,6 +52,7 @@ mod policy;
 mod session_route;
 mod types;
 
+pub use audit::audit_identity;
 pub use node_requester::run_node_approval;
 pub use operator_requester::OperatorApprovalRequester;
 
