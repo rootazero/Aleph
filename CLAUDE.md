@@ -279,6 +279,8 @@ Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子�
 | RELEASE.md | [docs/reference/RELEASE.md](docs/reference/RELEASE.md) — 发版两步流程 + `just verify-build` 预检 + CI fail-fast 轮询 |
 | PROCESS_MANAGEMENT.md | [docs/reference/PROCESS_MANAGEMENT.md](docs/reference/PROCESS_MANAGEMENT.md) — Singleton flock / Spec C 不变量 / CLI 写策略 |
 
+> **官方 skills/plugins 离线兜底**: 根目录 `skills/` 与 `plugins/` 是两个 git submodule（upstream = 兄弟仓 Aleph-skills / Aleph-plugins），经 `include_dir!` 在 `aleph-server` **编译期嵌入二进制**（`src/bundled/mod.rs`）。首次安装优先从上游兄弟仓 git clone 官方内容（`src/bundled/extractor.rs::extract_bundled_content`）；**网络故障 / clone 失败时回退到这份嵌入快照**，保证完整桌面 App（单机零配置）离线也能装上官方 skills/plugins。**勿删这两个目录**——`include_dir!` 是编译期宏，目录缺失直接编译失败，并连带破坏 `build.rs` rerun / CI `submodules: recursive` / `justfile` 发版重嵌链。（另一层：Hub 浏览目录冷启动 primer 同样投影这份快照，远端 catalog fetch 后整槽覆盖。）
+
 ---
 
 ## 🏢 官方仓库 (Official Repositories)
