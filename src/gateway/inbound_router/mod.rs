@@ -1331,6 +1331,91 @@ mod tests {
         assert_ne!(work.to_key_string(), personal.to_key_string());
     }
 
+    fn env_store_with_binding(bindings: &[(&str, &str)]) -> Arc<AgentEnvStore> {
+        use crate::gateway::agent_env::AgentEnvStoreConfig;
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            AgentEnvStore::new(AgentEnvStoreConfig {
+                db_path: temp.keep().join("env.db"),
+                default_profile: "default".to_string(),
+                archive_after_days: 0,
+            })
+            .unwrap(),
+        );
+        for (channel, agent) in bindings {
+            store.set_active_agent(channel, agent).unwrap();
+        }
+        store
+    }
+
+    fn dm_on(channel: &str) -> InboundMessage {
+        InboundMessage {
+            id: MessageId::new("m-resolve"),
+            channel_id: ChannelId::new(channel),
+            conversation_id: ConversationId::new("conv-x"),
+            sender_id: UserId::new("owner"),
+            sender_name: None,
+            text: "hi".to_string(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+            metadata: vec![],
+        }
+    }
+
+    /// An explicit per-channel `agent_switch` binding must win over the configured
+    /// *default* agent when route_bindings exist but none govern this channel —
+    /// otherwise the switch tool is a silent no-op the moment any routing is set.
+    #[tokio::test]
+    async fn explicit_binding_overrides_default_route() {
+        use crate::routing::config::MatchRule;
+        // Route binding only governs `discord`; a `telegram` DM falls to Default.
+        let binding = RouteBinding {
+            agent_id: "work".to_string(),
+            match_rule: MatchRule {
+                channel: Some("discord".to_string()),
+                ..Default::default()
+            },
+        };
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_route_bindings(vec![binding], SessionConfig::default(), "main")
+        .with_workspace_manager(env_store_with_binding(&[("telegram", "trader")]));
+
+        let (agent, route) = router.resolve_agent_id_async(&dm_on("telegram")).await.unwrap();
+        assert_eq!(agent, "trader", "explicit switch must beat the default route");
+        assert!(route.is_none(), "override must rebuild the session key (route=None)");
+    }
+
+    /// Inverse guard: a *specific* matching route binding is NOT overridden by a
+    /// channel-level workspace binding — carefully-scoped routing config wins.
+    #[tokio::test]
+    async fn specific_route_binding_is_not_overridden() {
+        use crate::routing::config::MatchRule;
+        let binding = RouteBinding {
+            agent_id: "work".to_string(),
+            match_rule: MatchRule {
+                channel: Some("discord".to_string()),
+                ..Default::default()
+            },
+        };
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_route_bindings(vec![binding], SessionConfig::default(), "main")
+        .with_workspace_manager(env_store_with_binding(&[("discord", "trader")]));
+
+        let (agent, _route) = router.resolve_agent_id_async(&dm_on("discord")).await.unwrap();
+        assert_eq!(agent, "work", "specific channel route binding must win over workspace override");
+    }
+
     fn bot_authored_msg(id: &str) -> InboundMessage {
         use crate::gateway::channel::MessageMeta;
         InboundMessage {
