@@ -174,4 +174,17 @@ mod tests {
         let p: McpPreset = serde_json::from_str(json).expect("parse");
         assert!(p.post_install.is_none());
     }
+
+    #[test]
+    fn unreal_engine_preset_is_local_http_with_guidance() {
+        let ue = find("unreal-engine").expect("unreal-engine present");
+        assert_eq!(ue.transports.len(), 1);
+        let t = &ue.transports[0];
+        assert_eq!(t.kind, McpTransportType::Http);
+        assert_eq!(t.url.as_deref(), Some("http://127.0.0.1:8000/mcp"));
+        assert!(ue.required_env.is_empty());
+        assert!(ue.official);
+        let pi = ue.post_install.as_deref().expect("post_install set");
+        assert!(pi.contains("Unreal MCP"));
+    }
 }
