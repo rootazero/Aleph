@@ -589,8 +589,11 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // require_mention / slash-command admin configuration. This connects it.
     //
     // Inbound iMessage messages carry channel_id "imessage" (see imessage/db.rs),
-    // so the gating config is registered under that key.
-    #[cfg(target_os = "macos")]
+    // so the gating config is registered under that key. Ungated: the BlueBubbles
+    // transport runs on all platforms and needs the same DM/group/allowlist/
+    // require-mention/slash-admin gating — the `From<&IMessageConfig>` conversion
+    // is already cross-platform (a local-only transport simply never registers a
+    // live "imessage" channel off-macOS, so its gating config is a harmless no-op).
     if let Some(ref cfg_arc) = app_config {
         let cfg = cfg_arc.read().await;
         for inst in cfg.resolved_channels() {
