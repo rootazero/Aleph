@@ -249,6 +249,63 @@ impl BlueBubblesApi {
     }
 }
 
+/// Build the callback URL BlueBubbles will POST to (password in query —
+/// the webhook API cannot send custom headers).
+#[must_use]
+pub fn webhook_callback_url(host: &str, port: u16, path: &str, password: &str) -> String {
+    let host = match host {
+        "0.0.0.0" | "127.0.0.1" | "::" | "localhost" => "localhost",
+        h => h,
+    };
+    let enc: String = url::form_urlencoded::byte_serialize(password.as_bytes()).collect();
+    format!("http://{host}:{port}{path}?password={enc}")
+}
+
+impl BlueBubblesApi {
+    pub async fn list_webhooks(&self) -> Vec<(i64, String)> {
+        let Ok(res) = self.client.get(self.api_url("/api/v1/webhook")).send().await else {
+            return vec![];
+        };
+        let Ok(v) = res.json::<serde_json::Value>().await else { return vec![]; };
+        v["data"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|w| Some((w["id"].as_i64()?, w["url"].as_str()?.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Register `url` if not already present (idempotent — survives crashes).
+    pub async fn register_webhook(&self, url: &str) -> bool {
+        if self.list_webhooks().await.iter().any(|(_, u)| u == url) {
+            return true;
+        }
+        let payload =
+            serde_json::json!({ "url": url, "events": ["new-message", "updated-message"] });
+        self.client
+            .post(self.api_url("/api/v1/webhook"))
+            .json(&payload)
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+    }
+
+    pub async fn unregister_matching(&self, url: &str) {
+        for (id, u) in self.list_webhooks().await {
+            if u == url {
+                let _ = self
+                    .client
+                    .delete(self.api_url(&format!("/api/v1/webhook/{id}")))
+                    .send()
+                    .await;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,5 +319,12 @@ mod tests {
             api.api_url("/api/v1/chat/x?with=participants"),
             "http://h:1/api/v1/chat/x?with=participants&password=p%20w"
         );
+    }
+
+    #[test]
+    fn webhook_register_url_embeds_password() {
+        let _api = BlueBubblesApi::new("http://h:1".into(), "pw".into());
+        let url = super::webhook_callback_url("localhost", 8645, "/bluebubbles-webhook", "pw");
+        assert_eq!(url, "http://localhost:8645/bluebubbles-webhook?password=pw");
     }
 }

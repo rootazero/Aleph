@@ -9,7 +9,7 @@ pub mod outbound;
 
 pub use config::BlueBubblesConfig;
 
-use std::sync::Arc;
+use crate::sync_primitives::{Arc, AtomicBool, Mutex as StdMutex, Ordering};
 
 use async_trait::async_trait;
 
@@ -19,6 +19,7 @@ use crate::gateway::channel::{
 };
 
 use api::{BlueBubblesApi, LruGuidCache, ServerCaps};
+use inbound::dedup::BbDedup;
 
 /// Honest capabilities for the BlueBubbles transport.
 #[must_use]
@@ -44,7 +45,6 @@ pub fn bluebubbles_capabilities() -> ChannelCapabilities {
 /// iMessage channel backed by a BlueBubbles server.
 pub struct BlueBubblesChannel {
     info: ChannelInfo,
-    #[allow(dead_code)] // self.config not read until Task 11 (webhook lifecycle)
     config: BlueBubblesConfig,
     channel_state: ChannelState,
     #[allow(dead_code)] // consumed in Task 12 (catch-up poll)
@@ -54,6 +54,9 @@ pub struct BlueBubblesChannel {
     api: BlueBubblesApi,
     guid_cache: Arc<tokio::sync::Mutex<LruGuidCache>>,
     server_caps: Arc<tokio::sync::RwLock<ServerCaps>>,
+    running: Arc<AtomicBool>,
+    dedup: Arc<StdMutex<BbDedup>>,
+    webhook_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl BlueBubblesChannel {
@@ -75,6 +78,9 @@ impl BlueBubblesChannel {
             api,
             guid_cache: Arc::new(tokio::sync::Mutex::new(LruGuidCache::new(500))),
             server_caps: Arc::new(tokio::sync::RwLock::new(ServerCaps::default())),
+            running: Arc::new(AtomicBool::new(false)),
+            dedup: Arc::new(StdMutex::new(BbDedup::new())),
+            webhook_handle: None,
         }
     }
 
@@ -84,6 +90,19 @@ impl BlueBubblesChannel {
     ) {
         self.offset_tracker = Some(tracker);
     }
+}
+
+/// Compile mention wake-word patterns; skip and warn on invalid regex.
+fn compile_patterns(raw: &[String]) -> Vec<regex::Regex> {
+    raw.iter()
+        .filter_map(|p| match regex::Regex::new(p) {
+            Ok(re) => Some(re),
+            Err(e) => {
+                tracing::warn!("invalid mention pattern {:?}: {e}", p);
+                None
+            }
+        })
+        .collect()
 }
 
 #[async_trait]
@@ -97,17 +116,57 @@ impl Channel for BlueBubblesChannel {
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
-        // Filled in Tasks 10-12 (webhook + poll). Skeleton marks connected.
-        self.channel_state
-            .set_status(ChannelStatus::Connected)
-            .await;
+        self.channel_state.set_status(ChannelStatus::Connecting).await;
+
+        if self.api.ping().await.is_err() {
+            self.channel_state.set_status(ChannelStatus::Error).await;
+            return Err(ChannelError::NotConnected("BlueBubbles ping failed".into()));
+        }
+        *self.server_caps.write().await = self.api.server_caps().await;
+
+        let patterns = compile_patterns(&self.config.mention_patterns);
+        let state = inbound::webhook_server::WebhookState {
+            password: self.config.password.clone(),
+            require_mention: self.config.require_mention,
+            mention_patterns: Arc::new(patterns),
+            sender: self.channel_state.sender(),
+            api: Arc::new(self.api.clone()),
+            dedup: self.dedup.clone(),
+        };
+        let (host, port, path) = (
+            self.config.webhook_host.clone(),
+            self.config.webhook_port,
+            self.config.webhook_path.clone(),
+        );
+        self.webhook_handle =
+            Some(tokio::spawn(inbound::webhook_server::run_webhook_server(state, host, port, path)));
+
+        let cb = api::webhook_callback_url(
+            &self.config.webhook_host,
+            self.config.webhook_port,
+            &self.config.webhook_path,
+            &self.config.password,
+        );
+        self.api.register_webhook(&cb).await;
+
+        self.running.store(true, Ordering::SeqCst);
+        self.channel_state.set_status(ChannelStatus::Connected).await;
         Ok(())
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
-        self.channel_state
-            .set_status(ChannelStatus::Disconnected)
-            .await;
+        let cb = api::webhook_callback_url(
+            &self.config.webhook_host,
+            self.config.webhook_port,
+            &self.config.webhook_path,
+            &self.config.password,
+        );
+        self.api.unregister_matching(&cb).await;
+        if let Some(h) = self.webhook_handle.take() {
+            h.abort();
+        }
+        self.running.store(false, Ordering::SeqCst);
+        self.channel_state.set_status(ChannelStatus::Disconnected).await;
         Ok(())
     }
 
