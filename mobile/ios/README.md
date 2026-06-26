@@ -30,7 +30,7 @@ falling back to `UserDefaults`, then `about:blank`. Concretely:
 ### Option 1 — Xcode ▶ Run (local core on this Mac)
 
 ```bash
-cd mobile/ios-shell
+cd mobile/ios
 ./generate.sh            # bakes a fresh PANEL_URL into the gitignored scheme
 open AlephPaneliOS.xcodeproj   # then press ▶ Run (local core must be up on :18790)
 ```
@@ -38,7 +38,7 @@ open AlephPaneliOS.xcodeproj   # then press ▶ Run (local core must be up on :1
 ### Option 2 — simulator launcher (local OR remote Debian)
 
 ```bash
-cd mobile/ios-shell
+cd mobile/ios
 cp launch-local.sh.example launch-local.sh   # the copy is gitignored
 # edit launch-local.sh: set UDID + PANEL_URL (local 127.0.0.1, or your Debian IP+token)
 ./launch-local.sh
