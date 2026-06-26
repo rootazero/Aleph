@@ -16,6 +16,7 @@
 //! behaviour.
 
 mod diff;
+mod json;
 mod log;
 mod search;
 
@@ -28,6 +29,8 @@ pub enum ContentKind {
     Search,
     /// Unified diff (`git diff` / `diff -u`).
     Diff,
+    /// JSON document / array (API response, config dump, structured output).
+    Json,
 }
 
 impl ContentKind {
@@ -37,6 +40,7 @@ impl ContentKind {
             Self::Log => "log",
             Self::Search => "search",
             Self::Diff => "diff",
+            Self::Json => "json",
         }
     }
 }
@@ -81,14 +85,15 @@ pub fn reduce(text: &str) -> Option<Reduction> {
     match classify(text)? {
         ContentKind::Diff => diff::reduce_diff(text),
         ContentKind::Search => search::reduce_search(text),
+        ContentKind::Json => json::reduce_json(text),
         ContentKind::Log => log::reduce_log(text),
     }
 }
 
 /// Cheap whole-text classification. Checks most-specific types first (diff has
-/// unmistakable markers; search has a rigid `path:line:` shape; log is the
-/// broad fallback gated on clear command/build/test signals so ordinary prose
-/// is never misclassified).
+/// unmistakable markers; JSON is a brace/bracket-delimited document; search has
+/// a rigid `path:line:` shape; log is the broad fallback gated on clear
+/// command/build/test signals so ordinary prose is never misclassified).
 #[must_use]
 pub fn classify(text: &str) -> Option<ContentKind> {
     let lines: Vec<&str> = text.lines().collect();
@@ -97,6 +102,12 @@ pub fn classify(text: &str) -> Option<ContentKind> {
     }
     if diff::looks_like_diff(&lines) {
         return Some(ContentKind::Diff);
+    }
+    // JSON is brace/bracket-delimited — an unmistakable whole-document shape
+    // that never collides with the `path:line:` search texture below (a JSON
+    // `"key": value` line has no `:<digits>:` line-number marker).
+    if json::looks_like_json(&lines) {
+        return Some(ContentKind::Json);
     }
     if search::looks_like_search(&lines) {
         return Some(ContentKind::Search);
