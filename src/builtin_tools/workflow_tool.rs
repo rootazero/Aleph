@@ -24,8 +24,8 @@ use crate::sync_primitives::Arc;
 use crate::tools::turn_context::current_turn_context;
 use crate::tools::AlephTool;
 use crate::workflow::{
-    self, ClarifyContext, WorkflowDef, WorkflowManifest, WORKFLOW_NAME_KEY, WORKFLOW_RUN_ID_KEY,
-    WORKFLOW_STEP_KEY,
+    self, ClarifyContext, WorkflowDef, WorkflowManifest, WORKFLOW_MODEL_KEY, WORKFLOW_NAME_KEY,
+    WORKFLOW_RUN_ID_KEY, WORKFLOW_STEP_KEY,
 };
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -126,10 +126,29 @@ pub struct WorkflowRunStep {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+    /// Per-step model override the dispatcher resolves at launch (read from the
+    /// `workflow_model` metadata the compiler stamped). Present only for steps
+    /// that pin a model — so the inspecting LLM sees which model a step is (or
+    /// was) running on without exporting the template to `.workflow.js` (R8).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// For failed steps: the (bounded) error text, so the LLM can decide
     /// retry / skip / cancel without an extra lookup.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// A step's executable per-step model override, projected for `describe` /
+/// `run` so the inspecting LLM sees what model each step pins *before* (and
+/// just after) launching — the executable half of the manifest's per-step
+/// metadata that `to_def` otherwise drops (R8 model-perceivable surface).
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowStepModel {
+    /// Step-local id from the template.
+    pub step: String,
+    /// `"model"` or `"provider/model"` — resolved by the dispatcher into a
+    /// `RunRequest.model_override` at member-run launch.
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -160,6 +179,12 @@ pub struct WorkflowToolOutput {
     /// Populated by `import` — imperative constructs that could not be mapped.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dropped: Option<Vec<String>>,
+    /// Populated by `describe` (the template's pinned per-step models) and `run`
+    /// (the models actually applied to the launched steps) — the executable
+    /// per-step model overrides `definition` (a lean `WorkflowDef`) cannot carry.
+    /// Empty when no step pins a model; omitted from the wire then.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<WorkflowStepModel>>,
 }
 
 impl WorkflowToolOutput {
@@ -174,8 +199,30 @@ impl WorkflowToolOutput {
             steps: None,
             rendered: None,
             dropped: None,
+            models: None,
         }
     }
+}
+
+/// Project a manifest's pinned per-step model overrides into `models` rows in
+/// step order. Returns `None` when no step pins a model so the field is omitted
+/// from the wire (byte-identical output for model-less templates).
+fn manifest_step_models(manifest: &WorkflowManifest) -> Option<Vec<WorkflowStepModel>> {
+    let rows: Vec<WorkflowStepModel> = manifest
+        .steps
+        .iter()
+        .filter_map(|s| {
+            s.model
+                .as_deref()
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+                .map(|m| WorkflowStepModel {
+                    step: s.id.clone(),
+                    model: m.to_string(),
+                })
+        })
+        .collect();
+    (!rows.is_empty()).then_some(rows)
 }
 
 #[derive(Clone)]
@@ -436,6 +483,16 @@ fn step_row(task: &CoordTask) -> WorkflowRunStep {
         task_id: task.id.clone(),
         status: task.status.as_str().to_string(),
         owner: task.owner.clone(),
+        // The per-step model the dispatcher resolves at launch — read from the
+        // same `workflow_model` metadata `workflow_model_override` consumes, so
+        // status reports exactly the model the run uses. Absent → agent default.
+        model: task
+            .metadata
+            .get(WORKFLOW_MODEL_KEY)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(str::to_string),
         error: match task.status {
             CoordTaskStatus::Failed => task
                 .result
@@ -492,7 +549,10 @@ impl AlephTool for WorkflowTool {
          drafts the dream pipeline auto-grew from recurring skill use; \
          `describe_proposal` reviews one's steps + provenance before \
          `accept_proposal` activates it. For `run`, create a team first so \
-         each step's agent resolves to a member.";
+         each step's agent resolves to a member. `describe` and `run` report \
+         each step's pinned model override in `models`, and `status` shows the \
+         model every step runs on — so you can see model assignments without \
+         exporting the template.";
 
     type Args = WorkflowArgs;
     type Output = WorkflowToolOutput;
@@ -541,11 +601,16 @@ impl AlephTool for WorkflowTool {
             WorkflowArgs::Describe { name } => {
                 let manifest = workflow::store::load(&name)?;
                 // Output the executable projection — the tool's `definition`
-                // field is a `WorkflowDef`; the extra metadata is reachable via
-                // `export`.
+                // field is a `WorkflowDef`. The one executable extra `to_def`
+                // drops is the per-step model override, so surface it separately
+                // in `models` (the rest of the interchange metadata stays
+                // `export`-only). Without this an LLM cannot see which model a
+                // step runs on without rendering the template to `.workflow.js`.
+                let models = manifest_step_models(&manifest);
                 let message = format!("workflow '{name}' has {} step(s)", manifest.steps.len());
                 Ok(WorkflowToolOutput {
                     definition: Some(manifest.to_def()),
+                    models,
                     ..WorkflowToolOutput::msg("describe", message)
                 })
             }
@@ -580,6 +645,10 @@ impl AlephTool for WorkflowTool {
                     .iter()
                     .filter_map(|s| s.model.as_ref().map(|m| (s.id.clone(), m.clone())))
                     .collect();
+                // Deterministic, step-ordered projection of the same overrides to
+                // echo back in the output — so the LLM sees which model each step
+                // launched on without a follow-up `describe`/`status`.
+                let model_rows = manifest_step_models(&manifest);
                 // Pre-flight: reject a run the team cannot execute before any
                 // coord_task is created, so the LLM gets an immediate, actionable
                 // error instead of a "success" that the dispatcher then fails
@@ -635,6 +704,7 @@ impl AlephTool for WorkflowTool {
                 Ok(WorkflowToolOutput {
                     task_ids: Some(mat.task_ids),
                     run_id: Some(mat.run_id),
+                    models: model_rows,
                     ..WorkflowToolOutput::msg("run", message)
                 })
             }
@@ -1931,5 +2001,121 @@ mod tests {
             strategy.is_some(),
             "provider + concrete guardrail => Some(strategy)"
         );
+    }
+
+    // --- per-step model surfacing (R8 observability) ---
+
+    /// A manifest mirroring `linear_def()` but with the `gather` step pinned to a
+    /// model and `write` left on the agent default — exercising both the
+    /// "has a model" and "no model" projection branches.
+    fn manifest_with_pinned_model() -> WorkflowManifest {
+        let mut m = WorkflowManifest::from_def(&linear_def());
+        m.steps[0].model = Some("opus".into());
+        m
+    }
+
+    #[test]
+    fn manifest_step_models_projects_only_pinned_steps() {
+        let rows = manifest_step_models(&manifest_with_pinned_model())
+            .expect("at least one step pins a model");
+        assert_eq!(rows.len(), 1, "only the pinned step appears");
+        assert_eq!(rows[0].step, "gather");
+        assert_eq!(rows[0].model, "opus");
+        // A wholly model-less template projects to None (field omitted on wire).
+        assert!(manifest_step_models(&WorkflowManifest::from_def(&linear_def())).is_none());
+    }
+
+    #[test]
+    fn manifest_step_models_skips_blank_model() {
+        // A whitespace-only model string is not a real override — it must not
+        // surface as a pinned model (mirrors the run-time override parser, which
+        // trims and treats empty as "no override").
+        let mut m = WorkflowManifest::from_def(&linear_def());
+        m.steps[0].model = Some("   ".into());
+        assert!(manifest_step_models(&m).is_none(), "blank model is no model");
+    }
+
+    #[tokio::test]
+    async fn describe_surfaces_pinned_per_step_models() {
+        // `describe` returns the lean WorkflowDef (no model field), so the
+        // executable per-step model would be invisible without the `models`
+        // projection. Save a model-pinned template and assert describe surfaces it.
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let described = {
+            let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("ALEPH_HOME");
+            // SAFETY: guarded single mutator; restored below.
+            unsafe {
+                std::env::set_var("ALEPH_HOME", tmp.path());
+            }
+            workflow::store::save(&manifest_with_pinned_model()).expect("save pinned template");
+            let described = t
+                .call(WorkflowArgs::Describe {
+                    name: "pipeline".into(),
+                })
+                .await
+                .expect("describe");
+            // SAFETY: same guarded invariant; restore prior value.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("ALEPH_HOME", v),
+                    None => std::env::remove_var("ALEPH_HOME"),
+                }
+            }
+            described
+        };
+
+        let models = described
+            .models
+            .as_ref()
+            .expect("describe surfaces pinned models");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].step, "gather");
+        assert_eq!(models[0].model, "opus");
+        // The lean definition still comes back (executable core) alongside it.
+        assert!(described.definition.is_some());
+    }
+
+    #[tokio::test]
+    async fn status_row_carries_per_step_model_from_metadata() {
+        // After a run, each step's backing task carries WORKFLOW_MODEL_KEY for
+        // the pinned model; `status` must echo exactly that, so an operator sees
+        // which model a step runs on without re-reading the template.
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let mut models = std::collections::HashMap::new();
+        models.insert("gather".to_string(), "opus".to_string());
+        let mat = workflow::materialize(
+            &linear_def(),
+            "x",
+            "team-9",
+            t.coord_store.as_ref(),
+            None,
+            Some(&models),
+            None,
+        )
+        .await
+        .expect("materialise with a per-step model");
+
+        let out = t
+            .call(WorkflowArgs::Status {
+                name: "pipeline".into(),
+                team_id: "team-9".into(),
+                run_id: Some(mat.run_id),
+            })
+            .await
+            .expect("status");
+        let steps = out.steps.as_ref().expect("status populates steps");
+        assert_eq!(steps[0].step, "gather");
+        assert_eq!(
+            steps[0].model.as_deref(),
+            Some("opus"),
+            "pinned step reports its model"
+        );
+        assert_eq!(steps[1].step, "write");
+        assert!(steps[1].model.is_none(), "unpinned step has no model");
     }
 }
