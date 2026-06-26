@@ -1,7 +1,19 @@
 //! iMessage Channel Configuration
 
+use crate::gateway::interfaces::imessage::bluebubbles::config::BlueBubblesConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+/// Which transport the iMessage channel uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Transport {
+    /// chat.db polling + AppleScript (macOS only).
+    #[default]
+    Local,
+    /// BlueBubbles REST + webhook (any OS).
+    Bluebubbles,
+}
 
 /// Default database path
 fn default_db_path() -> String {
@@ -54,6 +66,16 @@ pub struct IMessageConfig {
     /// Whether the channel is enabled
     #[serde(default)]
     pub enabled: bool,
+
+    /// Transport selection. Defaults to `local`; if a `[bluebubbles]` block is
+    /// present and `transport` is unset, `effective_transport()` promotes to
+    /// `bluebubbles`.
+    #[serde(default)]
+    pub transport: Option<Transport>,
+
+    /// BlueBubbles transport config (present => bluebubbles transport).
+    #[serde(default)]
+    pub bluebubbles: Option<BlueBubblesConfig>,
 
     /// Path to the Messages database
     #[serde(default = "default_db_path")]
@@ -130,6 +152,8 @@ impl Default for IMessageConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            transport: None,
+            bluebubbles: None,
             db_path: default_db_path(),
             poll_interval_ms: default_poll_interval(),
             dm_policy: default_dm_policy(),
@@ -150,6 +174,17 @@ impl Default for IMessageConfig {
 }
 
 impl IMessageConfig {
+    /// Resolve the effective transport: explicit `transport` wins; otherwise a
+    /// present `[bluebubbles]` block implies `Bluebubbles`; else `Local`.
+    #[must_use]
+    pub fn effective_transport(&self) -> Transport {
+        match self.transport {
+            Some(t) => t,
+            None if self.bluebubbles.is_some() => Transport::Bluebubbles,
+            None => Transport::Local,
+        }
+    }
+
     /// Get the expanded database path
     #[must_use]
     pub fn db_path(&self) -> PathBuf {
@@ -210,5 +245,43 @@ mod tests {
         assert_eq!(config.poll_interval_ms, 2000);
         assert_eq!(config.dm_policy, DmPolicy::Allowlist);
         assert_eq!(config.allow_from.len(), 2);
+    }
+
+    #[test]
+    fn transport_defaults_to_local() {
+        let cfg: IMessageConfig = toml::from_str("enabled = true").unwrap();
+        assert_eq!(cfg.transport, None);
+        assert!(cfg.bluebubbles.is_none());
+        assert_eq!(cfg.effective_transport(), Transport::Local);
+    }
+
+    #[test]
+    fn presence_of_bluebubbles_block_promotes_transport() {
+        let toml = r#"
+            enabled = true
+            [bluebubbles]
+            server_url = "http://192.168.1.50:1234"
+            password = "pw"
+        "#;
+        let cfg: IMessageConfig = toml::from_str(toml).unwrap();
+        // transport not explicitly set, but a bb block is present
+        assert_eq!(cfg.effective_transport(), Transport::Bluebubbles);
+        let bb = cfg.bluebubbles.unwrap();
+        assert_eq!(bb.webhook_port, 8645);
+        assert_eq!(bb.webhook_path, "/bluebubbles-webhook");
+        assert!(bb.send_read_receipts);
+    }
+
+    #[test]
+    fn explicit_local_transport_wins_over_bb_block() {
+        let toml = r#"
+            enabled = true
+            transport = "local"
+            [bluebubbles]
+            server_url = "http://x"
+            password = "pw"
+        "#;
+        let cfg: IMessageConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.effective_transport(), Transport::Local);
     }
 }

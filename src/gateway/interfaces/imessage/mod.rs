@@ -19,6 +19,7 @@
 //! poll_interval_ms = 1000
 //! ```
 
+pub mod bluebubbles;
 pub mod config;
 mod db;
 mod sender;
