@@ -35,6 +35,8 @@ pub struct PhoneMemoryState {
     pub page: RwSignal<u32>,
     /// The note opened in the detail screen.
     pub selected: RwSignal<Option<CompressedFact>>,
+    /// Bumping this re-triggers the note-window loader (used by the Retry cell).
+    pub reload_nonce: RwSignal<u32>,
 }
 
 /// Phone Memory router. Owns `PhoneMemoryState`, bootstraps the agent, and
@@ -54,6 +56,7 @@ pub fn PhoneMemory() -> impl IntoView {
         query: RwSignal::new(String::new()),
         page: RwSignal::new(0),
         selected: RwSignal::new(None),
+        reload_nonce: RwSignal::new(0),
     };
     provide_context(st);
 
@@ -74,7 +77,9 @@ pub fn PhoneMemory() -> impl IntoView {
     });
 
     // Note-window loader — connect-gated (cold-boot lesson) + per-agent.
+    // Also re-runs when `reload_nonce` is bumped (manual Retry from the error cell).
     Effect::new(move || {
+        st.reload_nonce.get();
         if dashboard.is_connected.get() {
             let agent = mem.agent_id.get();
             spawn_local(async move {

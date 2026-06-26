@@ -99,6 +99,9 @@ pub fn PhoneMemoryList() -> impl IntoView {
                     return view! {
                         <div class="list">
                             <div class="cell"><div class="cell-body"><div class="cell-title">"Couldn't load memories"</div><div class="cell-sub">{err}</div></div></div>
+                            <div class="cell" on:click=move |_| st.reload_nonce.update(|n| *n += 1)>
+                                <div class="cell-body"><div class="cell-title" style="color:var(--color-primary);">"Retry"</div></div>
+                            </div>
                         </div>
                     }.into_any();
                 }

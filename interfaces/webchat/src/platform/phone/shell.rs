@@ -52,18 +52,20 @@ pub fn PhoneTabBar() -> impl IntoView {
 pub fn PhoneShell(
     title: &'static str,
     #[prop(optional)] back: Option<&'static str>,
+    #[prop(optional)] back_label: Option<&'static str>,
     children: Children,
 ) -> impl IntoView {
     let navigate = use_navigate();
     let back_btn = back.map(|to| {
         let navigate = navigate.clone();
+        let label = back_label.unwrap_or("Settings");
         view! {
             <button
                 style="position:absolute; left:10px; top:50%; transform:translateY(-10%); display:flex; align-items:center; gap:2px; background:none; border:0; cursor:pointer; color:var(--color-primary); font:inherit; font-size:16px; padding:4px 6px 4px 0;"
                 on:click=move |_| navigate(to, NavigateOptions::default())
             >
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 6 9 12 15 18"></polyline></svg>
-                "Settings"
+                {label}
             </button>
         }
     });
