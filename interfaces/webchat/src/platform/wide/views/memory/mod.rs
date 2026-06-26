@@ -9,7 +9,7 @@ use crate::state::memory::{MemoryState, MemoryView};
 use leptos::prelude::*;
 use std::collections::HashSet;
 
-mod data;
+pub mod data;
 mod drawer;
 mod facets;
 

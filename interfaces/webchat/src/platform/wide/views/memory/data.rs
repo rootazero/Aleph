@@ -69,6 +69,21 @@ pub fn facet_slice(facts: &[CompressedFact], facet: MemoryFacet) -> Vec<Compress
     }
 }
 
+/// Case-insensitive substring filter over a note window by `content`.
+/// An empty or whitespace-only query is a passthrough (full clone).
+#[must_use]
+pub fn filter_notes(window: &[CompressedFact], query: &str) -> Vec<CompressedFact> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return window.to_vec();
+    }
+    window
+        .iter()
+        .filter(|f| f.content.to_lowercase().contains(&q))
+        .cloned()
+        .collect()
+}
+
 /// Zero-indexed client-side page slice; out-of-range pages yield empty.
 #[must_use]
 pub fn page_slice<T: Clone>(items: &[T], page: u32, page_size: u32) -> Vec<T> {
@@ -204,5 +219,41 @@ mod tests {
         );
         // Unknown path → None.
         assert_eq!(locate_note(&window, "missing"), None);
+    }
+
+    fn fact_content(content: &str) -> CompressedFact {
+        CompressedFact {
+            id: "i".into(),
+            agent_id: "main".into(),
+            content: content.into(),
+            fact_type: "preference".into(),
+            created_at: 0,
+            category: "preference".into(),
+            path: content.into(),
+        }
+    }
+
+    #[test]
+    fn filter_notes_empty_query_passthrough() {
+        let w = vec![fact_content("Alpha"), fact_content("Beta")];
+        assert_eq!(filter_notes(&w, "").len(), 2);
+        assert_eq!(filter_notes(&w, "   ").len(), 2);
+    }
+
+    #[test]
+    fn filter_notes_case_insensitive_substring() {
+        let w = vec![
+            fact_content("Deploy on 18790"),
+            fact_content("Smoke test first"),
+        ];
+        let r = filter_notes(&w, "SMOKE");
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].content, "Smoke test first");
+    }
+
+    #[test]
+    fn filter_notes_no_match_is_empty() {
+        let w = vec![fact_content("Alpha")];
+        assert!(filter_notes(&w, "zzz").is_empty());
     }
 }
