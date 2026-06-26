@@ -84,8 +84,8 @@ impl AlephTool for GatewayRouteTool {
         would be routed to. Returns the target agent, session key, and how the match \
         was made (peer/guild/team/account/channel/default). Use this when agents need \
         to self-route or coordinate cross-channel communication. This is a deterministic, \
-        config-driven channel→agent lookup — it does NOT classify the message's intent \
-        (that is the model's job).";
+        config-driven channel→agent lookup over the configured `[routing]` bindings — it \
+        does NOT classify the message's intent (that is the model's job).";
 
     type Args = GatewayRouteArgs;
     type Output = GatewayRouteOutput;
@@ -184,6 +184,37 @@ mod tests {
         let result = tool.call(args).await.unwrap();
         assert_eq!(result.agent_id, "main");
         assert_eq!(result.matched_by, "default");
+    }
+
+    #[tokio::test]
+    async fn test_configured_bindings_are_honored() {
+        // Regression: the tool must reflect the real `[routing]` bindings it is
+        // constructed with (the constructor now snapshots them from live config),
+        // not silently answer "default" the way `::default()` did. A channel
+        // binding to a non-default agent must surface as a `channel` match.
+        use crate::routing::{MatchRule, RouteBinding};
+
+        let bindings = vec![RouteBinding {
+            agent_id: "telegram-agent".to_string(),
+            match_rule: MatchRule {
+                channel: Some("telegram".to_string()),
+                account_id: Some("*".to_string()),
+                ..Default::default()
+            },
+        }];
+        let tool = GatewayRouteTool::new(bindings, SessionConfig::default(), "main".to_string());
+        let args = GatewayRouteArgs {
+            channel: "telegram".to_string(),
+            peer_id: None,
+            peer_kind: None,
+            guild_id: None,
+            team_id: None,
+            account_id: None,
+        };
+
+        let result = tool.call(args).await.unwrap();
+        assert_eq!(result.agent_id, "telegram-agent");
+        assert_eq!(result.matched_by, "channel");
     }
 
     #[tokio::test]

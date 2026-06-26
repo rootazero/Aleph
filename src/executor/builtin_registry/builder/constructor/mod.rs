@@ -1015,7 +1015,26 @@ impl BuiltinToolRegistry {
                     None
                 }
             },
-            gateway_route_tool: crate::builtin_tools::gateway_route::GatewayRouteTool::default(),
+            // Wire the LLM-facing routing query tool from the SAME live config
+            // the inbound gateway snapshots (`subsystems.rs::with_route_bindings`).
+            // Previously `::default()` gave it empty bindings + default session
+            // config, so `gateway_route` always answered "main"/"default" no
+            // matter what `[routing]` configured — the tool lied to the model
+            // (violating R8: configuration must be truthfully queryable). Snapshot
+            // here (not live-read) to stay in parity with the router, which also
+            // snapshots at boot — a live tool against a snapshotted router would
+            // diverge again after a config reload.
+            gateway_route_tool: match config.config {
+                Some(ref cfg) => {
+                    let guard = cfg.read().await;
+                    crate::builtin_tools::gateway_route::GatewayRouteTool::new(
+                        guard.bindings.clone(),
+                        guard.session.clone(),
+                        crate::routing::DEFAULT_AGENT_ID.to_string(),
+                    )
+                }
+                None => crate::builtin_tools::gateway_route::GatewayRouteTool::with_defaults(),
+            },
             task_create_tool,
             task_update_tool,
             task_list_tool,
