@@ -3,9 +3,12 @@
 //! Replaces old conversation history with concise summaries via a side-channel
 //! LLM call. Falls back to deterministic truncation when the LLM call fails.
 
+use std::borrow::Cow;
 use std::time::Duration;
 
-use super::summary_utils::{build_window_summary_prompt, latest_user_task, strip_analysis_block};
+use super::summary_utils::{
+    build_merge_summary_prompt, build_window_summary_prompt, latest_user_task, strip_analysis_block,
+};
 use crate::memory::session_compactor::summary_source::SessionSummarySource;
 use crate::memory::store::MemoryBackend;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
@@ -429,17 +432,28 @@ impl ContextCompactor {
             });
         }
 
-        // Extension merge: one LLM call over [cached summary + gap]; the old
-        // summary is part of the transcript, so the merged summary absorbs it.
-        // Deterministic truncation mirrors the main path's failure handling.
-        // The merge window is small (1 summary + gap), so no max_window re-cap
-        // is needed here.
-        let merge_window = &messages[c.start..cut_end_m];
-        let transcript = serialize_transcript(merge_window);
-        let merge_tokens = estimate_tokens(&transcript);
-        let token_budget = (merge_tokens as f32 * self.config.target_ratio) as usize;
+        // Extension merge via the preserve-and-extend prompt (openclaw/hermes/pi
+        // iterative-update parity): the prior summary rides as an explicit floor
+        // the model must keep verbatim, and only the un-summarized gap is the NEW
+        // material to fold in. The previous from-scratch path re-summarized
+        // [summary + gap] generically, which re-compressed the already-condensed
+        // prior summary and decayed detail on every merge. The merge window is
+        // small (1 summary + gap), so no max_window re-cap is needed here.
+        let prior_body = c
+            .summary
+            .trim_start_matches("[Context Summary]")
+            .trim()
+            .to_string();
+        let gap_window = &messages[c.start + 1..cut_end_m];
+        let gap_transcript = serialize_transcript(gap_window);
+        // Budget protects the prior summary (must survive verbatim) and adds a
+        // condensed share of the gap — never below the prior summary alone, so
+        // the merge can only grow or hold, never re-compress what was kept.
+        let token_budget = estimate_tokens(&prior_body)
+            + (estimate_tokens(&gap_transcript) as f32 * self.config.target_ratio) as usize;
         let focus = latest_user_task(&messages[cut_end_m..]);
-        let prompt = build_window_summary_prompt(&transcript, token_budget, focus.as_deref());
+        let prompt =
+            build_merge_summary_prompt(&prior_body, &gap_transcript, token_budget, focus.as_deref());
 
         let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
         let merged = match llm_result {
@@ -451,10 +465,19 @@ impl ContextCompactor {
         };
         let (body, strategy) = match merged {
             Some(s) => (s, CompactStrategy::LlmSummary),
-            None if self.config.fallback_to_truncation => (
-                deterministic_truncation(merge_window),
-                CompactStrategy::DeterministicTruncation,
-            ),
+            None if self.config.fallback_to_truncation => {
+                // Merge LLM failed: keep the prior summary verbatim and append a
+                // deterministic truncation of only the NEW gap — never collapse
+                // the prior summary itself to first-lines (preserve semantics
+                // hold even on the failure path).
+                let truncated_gap = deterministic_truncation(gap_window);
+                let combined = if truncated_gap.trim().is_empty() {
+                    prior_body.clone()
+                } else {
+                    format!("{prior_body}\n{truncated_gap}")
+                };
+                (combined, CompactStrategy::DeterministicTruncation)
+            }
             None => {
                 // Merge failed and truncation is disabled: keep the reapplied
                 // summary + raw gap. The cache stays on its old (still valid)
@@ -574,23 +597,47 @@ fn first_message_text(msg: &UnifiedMessage) -> Option<&str> {
     msg.content_blocks().first().and_then(|b| b.as_text())
 }
 
-/// Serialize a slice of messages into a human-readable transcript.
+/// Per-message character cap applied to the summarizer transcript.
+///
+/// Old tool results and pasted blobs in the compaction window can each be many
+/// KB; an un-capped transcript can blow past the side-channel summarizer's own
+/// context window, failing the LLM call and forcing the lossy truncation
+/// fallback. openclaw caps tool-result serialization at 2000 chars for the same
+/// reason. This bounds the summarizer INPUT only — the stored message log and
+/// the fingerprint cache hash are computed from `messages`, never the
+/// transcript, so capping here cannot affect cache validity or what the model
+/// finally sees in context.
+const TRANSCRIPT_MSG_MAX_CHARS: usize = 2000;
+
+/// Cap `text` to [`TRANSCRIPT_MSG_MAX_CHARS`] Unicode scalar values on a char
+/// boundary (P7 UTF-8 safety), appending an elision marker when cut. The head
+/// carries the actionable signal (what the tool did / the turn's intent); the
+/// tail of a long old result is rarely load-bearing in a summary.
+fn cap_transcript_text(text: &str) -> Cow<'_, str> {
+    let count = text.chars().count();
+    if count <= TRANSCRIPT_MSG_MAX_CHARS {
+        return Cow::Borrowed(text);
+    }
+    let head: String = text.chars().take(TRANSCRIPT_MSG_MAX_CHARS).collect();
+    let dropped = count - TRANSCRIPT_MSG_MAX_CHARS;
+    Cow::Owned(format!("{head}… [+{dropped} chars elided]"))
+}
+
+/// Serialize a slice of messages into a human-readable transcript, capping each
+/// message body via [`cap_transcript_text`] so a few huge old tool results can
+/// never blow up the side-channel summarizer prompt.
 fn serialize_transcript(messages: &[UnifiedMessage]) -> String {
     let mut lines = Vec::with_capacity(messages.len());
     for msg in messages {
-        let role = match msg {
-            UnifiedMessage::User { .. } => "user",
-            UnifiedMessage::Assistant { .. } => "assistant",
+        let text = msg.text_content();
+        let capped = cap_transcript_text(&text);
+        match msg {
+            UnifiedMessage::User { .. } => lines.push(format!("user: {capped}")),
+            UnifiedMessage::Assistant { .. } => lines.push(format!("assistant: {capped}")),
             UnifiedMessage::ToolResult { tool_name, .. } => {
-                lines.push(format!(
-                    "tool_result({}): {}",
-                    tool_name,
-                    msg.text_content()
-                ));
-                continue;
+                lines.push(format!("tool_result({tool_name}): {capped}"));
             }
-        };
-        lines.push(format!("{}: {}", role, msg.text_content()));
+        }
     }
     lines.join("\n")
 }
@@ -931,9 +978,13 @@ mod tests {
 
         assert_eq!(r2.strategy_used, CompactStrategy::LlmSummary);
         assert_eq!(provider.call_count(), 2);
+        // The merge now uses the preserve-and-extend prompt: the prior summary
+        // rides verbatim under the EXISTING SUMMARY fence (marker trimmed) so the
+        // model is told to keep it rather than re-compress it.
         assert!(
-            provider.prompt().contains("[Context Summary]"),
-            "merge transcript must include the previous summary"
+            provider.prompt().contains("---EXISTING SUMMARY---")
+                && provider.prompt().contains("## Primary Request"),
+            "merge prompt must carry the prior summary as the preserve floor"
         );
         let first_text = first_message_text(&turn2[0]).unwrap();
         assert!(first_text.contains("merged"));
@@ -998,6 +1049,46 @@ mod tests {
         assert_eq!(snap_boundary_forward(&messages, 4), 4);
         // Out-of-range / end index is preserved.
         assert_eq!(snap_boundary_forward(&messages, 5), 5);
+    }
+
+    #[test]
+    fn cap_transcript_text_passes_short_text_through_borrowed() {
+        // Below the cap the text is returned untouched and borrowed (no alloc).
+        let short = "a short tool result";
+        let capped = cap_transcript_text(short);
+        assert!(matches!(capped, Cow::Borrowed(_)));
+        assert_eq!(capped, short);
+    }
+
+    #[test]
+    fn cap_transcript_text_truncates_on_char_boundary_with_marker() {
+        // A multibyte body over the cap must truncate without panicking and carry
+        // the elision marker — never slice mid-codepoint (P7 UTF-8 safety).
+        let long = "本".repeat(TRANSCRIPT_MSG_MAX_CHARS + 500);
+        let capped = cap_transcript_text(&long);
+        assert!(matches!(capped, Cow::Owned(_)));
+        assert!(capped.contains("chars elided]"));
+        // Head is bounded to the cap; the original is far longer.
+        assert!(capped.chars().count() < long.chars().count());
+        assert!(capped.starts_with('本'));
+    }
+
+    #[test]
+    fn serialize_transcript_bounds_huge_tool_results() {
+        // A giant old tool result must not be serialized verbatim into the
+        // summarizer prompt (openclaw TOOL_RESULT_MAX_CHARS parity): the rendered
+        // line is bounded, while the role/tool framing is preserved.
+        let big = "Z".repeat(TRANSCRIPT_MSG_MAX_CHARS * 4);
+        let messages = vec![
+            UnifiedMessage::user("ask"),
+            UnifiedMessage::tool_result("c1", "file_read", &big, false),
+        ];
+        let transcript = serialize_transcript(&messages);
+        assert!(transcript.contains("user: ask"));
+        assert!(transcript.contains("tool_result(file_read):"));
+        assert!(transcript.contains("chars elided]"));
+        // The transcript is far shorter than the raw body it summarizes.
+        assert!(transcript.chars().count() < big.chars().count());
     }
 
     #[tokio::test]
