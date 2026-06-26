@@ -512,16 +512,29 @@ impl SelfConfigTool {
                     _ => String::new(),
                 };
 
-                Ok(SelfConfigOutput {
-                    success: result.success,
-                    message: format!(
+                // An applied patch whose diff is empty changed nothing: the live
+                // config already matched. Report that plainly instead of "applied
+                // (0 changes)" + a restart hint the user doesn't need — nothing
+                // was persisted, so no reload impact applies.
+                let message = if !dry_run && result.diff.is_empty() {
+                    format!(
+                        "Config at '{config_path}' already matches the requested value — \
+                         no change applied.{health_note}"
+                    )
+                } else {
+                    format!(
                         "Config patch {} at '{}' ({} changes). {}{}",
                         mode,
                         config_path,
                         result.diff.len(),
                         impact.agent_hint(),
                         health_note
-                    ),
+                    )
+                };
+
+                Ok(SelfConfigOutput {
+                    success: result.success,
+                    message,
                     data: Some(data),
                     preview_message,
                 })

@@ -264,6 +264,34 @@ impl ConfigPatcher {
             });
         }
 
+        // 9b. No-op guard. An empty diff means the patch deep-merges to a config
+        // value-identical to the live one. Persisting it anyway would snapshot
+        // + rewrite config.toml and bump its mtime for zero behavioral change —
+        // and worse, every spurious snapshot evicts a real restore point from
+        // the bounded backup ring, silently eroding the rollback safety net an
+        // agent's idempotent retries depend on. Skip the write entirely.
+        //
+        // A requested provider health check still runs: verifying that the live
+        // provider is reachable is meaningful independent of whether the config
+        // changed (the agent asked "is it reachable", not "did I change it").
+        // Mirrors openclaw's `respondConfigPatchNoop`, which skips the file
+        // write + restart when the merged config diffs to nothing.
+        if diff.is_empty() {
+            let health_check = if request.health_check {
+                Some(self.run_provider_health_check(&request.path).await)
+            } else {
+                None
+            };
+            debug!(path = %request.path, "Config patch is a no-op (empty diff); skipping write");
+            return Ok(PatchResult {
+                success: true,
+                applied_sections: vec![top_section],
+                diff,
+                health_check,
+                warnings,
+            });
+        }
+
         // 10. Check conflict (mtime) — hard error if file was modified externally
         self.check_conflict().await?;
 
@@ -1044,6 +1072,56 @@ mod tests {
             .filter_map(|e| e.ok())
             .collect();
         assert_eq!(entries.len(), 1, "Exactly one backup snapshot expected");
+    }
+
+    #[tokio::test]
+    async fn test_patcher_noop_skips_write_and_backup() {
+        // A value-identical re-patch must be a no-op: no new backup snapshot
+        // (so idempotent retries can't evict real restore points from the ring)
+        // and no rewrite of config.toml (mtime stays put).
+        let tmp = TempDir::new().unwrap();
+        let (patcher, config_path, backup_dir) = setup_patcher(&tmp);
+        patcher.record_mtime().await;
+
+        // First apply: a real change. Leaves one backup snapshot.
+        patcher
+            .apply(PatchRequest {
+                path: "general".to_string(),
+                patch: json!({"language": "zh-Hans"}),
+                health_check: false,
+                dry_run: false,
+            })
+            .await
+            .unwrap();
+        let backups_after_first = std::fs::read_dir(&backup_dir).unwrap().count();
+        assert_eq!(backups_after_first, 1, "first apply should snapshot once");
+        let file_after_first = std::fs::read_to_string(&config_path).unwrap();
+
+        // Second apply: the SAME value. The diff is empty -> no-op.
+        let result = patcher
+            .apply(PatchRequest {
+                path: "general".to_string(),
+                patch: json!({"language": "zh-Hans"}),
+                health_check: false,
+                dry_run: false,
+            })
+            .await
+            .unwrap();
+        assert!(result.success, "a no-op patch still reports success");
+        assert!(result.diff.is_empty(), "no-op patch must report an empty diff");
+
+        // No second snapshot was taken; the backup ring is untouched.
+        let backups_after_noop = std::fs::read_dir(&backup_dir).unwrap().count();
+        assert_eq!(
+            backups_after_noop, 1,
+            "a no-op patch must NOT create a backup snapshot"
+        );
+        // config.toml is byte-identical to before the no-op.
+        assert_eq!(
+            std::fs::read_to_string(&config_path).unwrap(),
+            file_after_first,
+            "a no-op patch must NOT rewrite config.toml"
+        );
     }
 
     #[tokio::test]
