@@ -48,17 +48,24 @@ pub post_install: Option<String>,
 ```
 - `#[serde(default)]` 保证旧 `catalog.json` 条目(无该字段)继续反序列化。
 
-**Hub 投影**(`src/hub/types.rs` + `src/hub/official_mcp.rs`):
-- `ExtensionEntry` 新增同名 `pub post_install: Option<String>`(同 serde 属性,保持 wire 向后兼容)。
-- `map_entry` 透传 `post_install: p.post_install.clone()`。
+**Hub 投影/解析**(`src/hub/official_mcp.rs`):新增纯函数
+```rust
+/// 给定 Hub 条目 id(`aleph-hub:<slug>`),若映射到带 post_install 的内置预设则返回其文案。
+pub fn post_install_for(entry_id: &str) -> Option<&'static str> {
+    let slug = entry_id.strip_prefix(&format!("{ALEPH_HUB_ID}:"))?;
+    presets::find(slug)?.post_install.as_deref()
+}
+```
+- **关键决策:刻意不给 `ExtensionEntry` 加字段**。`ExtensionEntry` 有 12 处 struct 字面量构造(无 `Default`),加字段会全部破裂;在「不跑 cargo check 直接提交」约束下,漏改一处 = 提交不可编译。helper 把 presets↔hub 耦合留在 `official_mcp.rs`(它本就 import presets),gateway 仅依赖 hub(既有依赖),无新增跨层边。
 
 **Gateway 露出**(`src/gateway/handlers/extensions/install.rs`):
-- `handle_install` 成功响应 JSON 增 `"post_install": entry.post_install`。
-- `handle_disclosure` 预览响应增 `"post_install": entry.post_install`(方案 B —— 让用户**点安装前**就看到需先在编辑器起 server)。
+- `handle_disclosure` 响应增 `"post_install": official_mcp::post_install_for(&entry.id)`。这是**唯一被消费的路径**(detail_drawer 懒加载 disclosure)。
+- **不改 `handle_install`**:其成功态在前端是**转瞬即逝的 toast**(`install_flow.rs` Done 步骤被 Effect 立即收起),无持久消费者 → 加了是死数据(YAGNI)。
 
-**Panel 渲染**(Leptos/WASM,R2:UI 唯一源):
-- 在扩展披露/安装成功视图,若 `post_install` 非空,渲染为一条信息提示(notice)。这是该字段的**真实消费者**,非投机抽象。
-- 具体组件由 writing-plans 阶段定位。
+**Panel 渲染**(`interfaces/webchat/`,Leptos/WASM,R2:UI 唯一源):
+- `api/extensions.rs::disclosure()` 返回值扩为三元组,带 `post_install: Option<String>`(唯一调用方 detail_drawer)。
+- `components/extensions/detail_drawer.rs` 在「what it reaches」区下方,`post_install` 非空时渲染设置提示框。detail_drawer 是**持久**面板(装前可读、装后可重开参考),覆盖方案 B 的预览诉求。为避免 i18n key 跨 locale churn,提示框用图标前缀(⚙️)+ 服务端已本地化(zh)的正文,不引入新 i18n key。
+- **要点**:Panel 经 `rust_embed` 编译期嵌入 binary,改完需 `just wasm` + 重编 server 才可见(CLAUDE.md 嵌入链);本会话不重建,留作用户后续手动步骤。
 
 ### 3.2 改动 B —— `unreal-engine` catalog 条目
 
@@ -96,18 +103,20 @@ pub post_install: Option<String>,
 ## 4. 数据流(安装路径,验证无误)
 
 ```
-catalog.json (unreal-engine)
-  → presets::catalog()                       [反序列化,含 post_install]
-  → official_mcp::map_entry                   [keyless http → is_projectable=true]
-      → InstallSpec::McpRemote{StreamableHttp}, requires_config=false, post_install 透传
+catalog.json (unreal-engine, 含 post_install)
+  → presets::catalog() / presets::find("unreal-engine")   [反序列化]
+  → official_mcp::map_entry                  [keyless http → is_projectable=true]
+      → InstallSpec::McpRemote{StreamableHttp}, requires_config=false
   → hub::primer 写入 aleph-hub slot
-  → extensions.disclosure                     [响应带 post_install 预览]  ← 方案 B
-  → extensions.install → run_install
-      → mcp.add_server(McpManagerConfig::http(...).with_auto_start(true))
-      → InstallOutcome::Mcp{id}
-  → verify_install                            [start_server + list_servers → tool_count]
-  → 响应 { ok, outcome, verify, post_install, ... }
-  → Panel 渲染 post_install notice
+  ── 预览/设置指引路径(post_install)──
+  detail_drawer 选中条目 → extensions.disclosure
+      → handle_disclosure 响应 += official_mcp::post_install_for("aleph-hub:unreal-engine")
+      → api/extensions.rs::disclosure() 解析三元组
+      → detail_drawer 渲染 ⚙️ 设置提示
+  ── 安装路径 ──
+  detail_drawer「Install」→ extensions.install → run_install
+      → mcp.add_server(McpManagerConfig::http(...).with_auto_start(true))  [§4.1 急切握手]
+      → InstallOutcome::Mcp{id} → verify_install → { ok, outcome, verify, ... }
 ```
 
 关键不变量:`http://127.0.0.1:8000/mcp` 无 `<ENV_KEY>` 占位 → `is_projectable` 通过 → 投影为 `McpRemote`;`required_env` 空 → `requires_config=false` → 无密钥收集步骤,一键安装。
@@ -126,10 +135,11 @@ catalog.json (unreal-engine)
 
 ## 5. 测试
 
-- `presets::tests`:`catalog.json` 解析含 `unreal-engine`;其 transport 为 http、url=`http://127.0.0.1:8000/mcp`、`required_env` 空、`post_install` 非空。
-- `official_mcp::tests`:`unreal-engine` 投影为 `aleph-hub:unreal-engine`、`InstallSpec::McpRemote`(`StreamableHttp`)、`requires_config=false`、`post_install` 透传非空。
-- `install.rs::tests`:`handle_disclosure` / `handle_install` 响应含 `post_install`(可用纯函数级断言或现有 handler 测试风格)。
-- 旧 `catalog.json` 条目(无 `post_install`)反序列化为 `None`(向后兼容回归)。
+- `presets::tests`:`catalog.json` 解析含 `unreal-engine`;transport=http、url=`http://127.0.0.1:8000/mcp`、`required_env` 空、`post_install` 为 `Some` 且含「Unreal MCP」。
+- `presets::tests`:无 `post_install` 键的 preset JSON 反序列化为 `None`(向后兼容回归)。
+- `official_mcp::tests`:`unreal-engine` 投影为 `aleph-hub:unreal-engine`、`InstallSpec::McpRemote`(`StreamableHttp`)、`requires_config=false`。
+- `official_mcp::tests`(`post_install_for`):`"aleph-hub:unreal-engine"`→`Some`;`"aleph-hub:context7"`→`None`(无 post_install);`"unreal-engine"`(无前缀)→`None`;`"aleph-hub:nope"`→`None`。
+- 前端 `api/extensions.rs::tests`:新纯函数 `parse_disclosure_result(v)` 从带 `post_install` 兄弟键的响应解析出 `Some`;缺该键 → `None`。
 
 ## 6. 熵减 / 清理
 
