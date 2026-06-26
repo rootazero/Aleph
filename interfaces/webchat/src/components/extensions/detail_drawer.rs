@@ -17,17 +17,20 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
 
     let disclosure = RwSignal::new(Option::<DisclosurePayload>::None);
     let disc_loading = RwSignal::new(false);
+    let post_install = RwSignal::new(Option::<String>::None);
 
     // Lazy-load disclosure when an entry is selected.
     Effect::new(move || {
         if let Some(entry) = store.selected.get() {
             disclosure.set(None);
+            post_install.set(None);
             disc_loading.set(true);
             let id = entry.id.clone();
             spawn_local(async move {
                 match ExtensionsApi::disclosure(&state, id).await {
-                    Ok((d, _findings)) => {
+                    Ok((d, _findings, pi)) => {
                         disclosure.set(Some(d));
+                        post_install.set(pi);
                         disc_loading.set(false);
                     }
                     Err(_) => {
@@ -104,6 +107,12 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
                                         view! { <p class="text-text-tertiary italic">{t!(i18n, extensions.no_perms)}</p> }.into_any()
                                     }}
                                 </div>
+                                // setup guidance (post_install) — persistent, pre/post install
+                                {move || post_install.get().map(|pi| view! {
+                                    <div class="p-2 rounded border border-border text-xs text-text-secondary whitespace-pre-line">
+                                        "⚙️ "{pi}
+                                    </div>
+                                })}
                             </div>
                             <footer class="px-4 py-3 border-t border-border flex gap-2">
                                 {{
