@@ -7,6 +7,7 @@ mod apply_patch;
 mod batch;
 pub(crate) mod edit;
 mod edit_match;
+mod image_read;
 mod ops;
 mod path_utils;
 pub(crate) use path_utils::{check_and_resolve_path, get_denied_paths};

@@ -187,11 +187,11 @@
 - **打磨话术**：「‘DAG 工具执行’在工具层其实是 `concurrency.rs` 的资源群分并行（非真 DAG）。要‘多步骤依赖图’去 Workflow/Task 层（`compile.rs`+`teams/dispatcher/`），**别在 `concurrency.rs` 找、也别在工具层重造 DAG**（违 R6；该需求应上升到 Workflow 层表达）。」
 
 ### 3.4 内置文件工具 (Builtin File Tools)
-- **口语关键词**：built-in 工具、read/write file、edit、apply patch、文件操作
-- **代码锚点**：`src/builtin_tools/file_ops/`——`tool.rs`（FileOps 8 operation dispatch）、`read.rs`、`write.rs`、`edit.rs`、`apply_patch.rs`、`mod.rs`（check_path 保护黑名单 .ssh/.aws 等）；`src/builtin_tools/bash_exec.rs`、`src/builtin_tools/generation/`（图像/语音）
+- **口语关键词**：built-in 工具、read/write file、edit、apply patch、读图片、文件操作
+- **代码锚点**：`src/builtin_tools/file_ops/`——`tool.rs`（FileOps 9 operation dispatch：list/move/copy/delete/mkdir/search/stats/batch_move/organize）、`read.rs`（窗口化 cat -n + 二进制嗅探 + 读图）、`image_read.rs`（图片→视觉模型 payload）、`read_cache.rs`（跨轮未变更重读去重）、`write.rs`、`edit.rs` + `edit_match.rs`（exact→排印折叠→CRLF→行锚定模糊→诊断）、`apply_patch.rs`（V4A 多文件结构化补丁，复用 edit_match）、`path_utils.rs`（check_path 黑名单 + 符号链接规范化 + FsScope rebase）、`ops.rs`/`batch.rs`/`search.rs`/`stats.rs`/`text.rs`；`src/builtin_tools/bash_exec.rs`、`src/builtin_tools/generation/`（图像/语音）
 - **职责**：文件读写/编辑/补丁 + bash + 生成类原子工具，impl AlephTool 自动生成 schema。
-- **状态**：✅ 已实现，路径黑名单 + 沙箱 policy 双守卫。
-- **打磨话术**：「内置 file 工具都在 `file_ops/`，每个操作一个文件。路径安全在 `mod.rs::check_path`。」
+- **状态**：✅ 已实现，路径黑名单 + 沙箱 policy 双守卫；原子写 + 进程级 per-path 锁 + UTF-8 安全窗口读。**Gap 分析（vs openclaw/hermes/pi，2026-06-26）**：file_ops 整体**已超越**三家——编辑模糊匹配移植 codex `seek_sequence` 且叠加排印折叠/CRLF/行锚定诊断、`apply_patch` 用 ~200 行状态机复用 edit_match（codex 是 4600 行 Lark）、`read_cache` 对齐 hermes 重读去重、凭据黑名单广度超 OpenSquilla `sensitive_paths.py` 且加固 Aleph 自身 vault/data。**唯一缺口（pi `read.ts` parity）：`file_read` 读不到图片**——旧实现对一切二进制（含 PNG/JPEG）一律回「not displayable」存根，视觉模型看不见图。**修复 + 连线（2026-06-26）**：新增 `image_read.rs`（仅用既有 `image` png/jpeg/gif/tiff + `base64` 依赖，零新依赖/零平台 API/零 harness 改动）——magic-bytes 嗅探→decode→超 1568px 降采样（Anthropic 最优边长，比 pi 盲缩 2000² 更省 token）→规范化重编码 PNG/JPEG→base64；`read.rs` 的 `is_binary` 分支先试 `encode_for_model`，命中则在 `FileReadOutput` 填 `image_base64`/`format`（serde skip），由**既有** `tools/result_processing.rs::hoist_inline_images` 自动提升为 `ContentBlock::Image`（与 desktop screenshot 同一管线，capability_gate 兜底非视觉模型，image_stripping 管历史图）。
+- **打磨话术**：「内置 file 工具都在 `file_ops/`，每个操作一个文件。路径安全在 `path_utils.rs::check_and_resolve_path`。‘读图片让模型看见’＝`read.rs` 二进制分支调 `image_read::encode_for_model`，回 `{image_base64,format}` 后由 `result_processing::hoist_inline_images` 提升为图块——**别在 harness 里加图像处理**（违 R10），复用 screenshot 那条线。‘编辑匹配不上’去 `edit_match.rs`，‘多文件补丁’去 `apply_patch.rs`，‘同文件反复重读’去 `read_cache.rs`。」
 
 ### 3.5 工具注册机制 (Tool Registry) & 统一工具/斜杠命令
 - **口语关键词**：内置命令注册、工具注册、统一注册、斜杠命令、slash command、热加载
