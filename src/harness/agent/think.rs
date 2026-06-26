@@ -227,6 +227,29 @@ fn last_assistant_has_text(events: &[SessionEventRecord]) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the harness may forward live token deltas this turn.
+///
+/// Streaming requires an HTTP provider seam (`has_http_seam`) and the absence
+/// of an *output* guardrail. Only the output guardrail rewrites or blocks the
+/// FINAL assembled text, and that verdict cannot be un-emitted once deltas have
+/// streamed — so a registry carrying ≥1 output guardrail must keep the one-shot
+/// emit. Input- and tool-call-only registries have a no-op output stage
+/// (`GuardrailRegistry::evaluate_output` short-circuits to `Allow` on an empty
+/// output vec), so they stream normally.
+///
+/// `output_count()` reads the build-time output vec, which is never mutated, so
+/// the gate is stable against the `disable_all` runtime kill-switch: a registry
+/// configured with output guardrails stays conservatively non-streaming even
+/// while temporarily disabled. Pure mechanical capability check (R10): no
+/// policy, no reasoning, no per-turn state.
+fn may_stream_deltas(
+    guardrails: Option<&crate::guardrails::GuardrailRegistry>,
+    has_http_seam: bool,
+) -> bool {
+    let output_guarded = guardrails.is_some_and(|g| g.output_count() > 0);
+    has_http_seam && !output_guarded
+}
+
 /// Estimate the token cost of the tool schema sent to the provider.
 ///
 /// Mirrors the wire shape — name + description + JSON-serialized parameters —
@@ -694,14 +717,22 @@ impl AgentHarness {
             session_id,
         );
         // Streaming gate: live token deltas require an HTTP provider seam and
-        // no output guardrail. The output guardrail (Stage 5a below) sanitises
+        // no *output* guardrail. The output guardrail (Stage 5a below) sanitises
         // the FINAL assembled text, which cannot be applied retroactively to an
-        // already-emitted incremental stream — so guardrailed turns keep the
-        // one-shot emit. Mock/non-HTTP providers also fall through. When the
-        // gate is open, `stream_llm_call` forwards text/thinking deltas live
-        // and we suppress the once-per-turn `on_delta` further down.
-        let provider_streams =
-            self.deps.guardrails.is_none() && self.deps.llm.as_http_provider().is_some();
+        // already-emitted incremental stream — so a turn whose registry carries
+        // an output guardrail keeps the one-shot emit. A registry with only
+        // input / tool-call guardrails has a no-op output stage
+        // (`evaluate_output` short-circuits on an empty output vec), so it now
+        // streams normally instead of paying a blanket suppression for an
+        // unrelated surface — restoring live streaming for the common
+        // PII/secrets-input + tool-call-arg-guard deployment. Mock/non-HTTP
+        // providers also fall through. When the gate is open, `stream_llm_call`
+        // forwards text/thinking deltas live and we suppress the once-per-turn
+        // `on_delta` further down.
+        let provider_streams = may_stream_deltas(
+            self.deps.guardrails.as_deref(),
+            self.deps.llm.as_http_provider().is_some(),
+        );
         let primary_call = if provider_streams {
             self.stream_llm_call(payload, callback, parent_cancel, started)
                 .await?
@@ -1831,6 +1862,31 @@ mod tests {
         // "  \n\t" alone does not constitute a terminal text response.
         let events = vec![mk(0, user("hi")), mk(1, assistant("   \n\t", false))];
         assert!(!last_assistant_has_text(&events));
+    }
+
+    #[test]
+    fn may_stream_deltas_requires_http_seam() {
+        // No HTTP delta seam (mock / non-HTTP provider) → never stream, even
+        // with no guardrails at all.
+        assert!(!super::may_stream_deltas(None, false));
+        // HTTP seam present, no registry → stream.
+        assert!(super::may_stream_deltas(None, true));
+    }
+
+    #[test]
+    fn may_stream_deltas_streams_for_input_or_tool_call_only_registry() {
+        use crate::guardrails::GuardrailRegistry;
+        // A registry with zero output guardrails (input/tool-call-only, or an
+        // empty registry) has a no-op output stage, so the harness keeps live
+        // streaming instead of the old blanket suppression. This is the
+        // regression the gate fix targets: the stream was previously killed by
+        // the mere presence of a registry, contradicting the documented "no
+        // *output* guardrail" contract.
+        let registry = GuardrailRegistry::empty();
+        assert_eq!(registry.output_count(), 0);
+        assert!(super::may_stream_deltas(Some(&registry), true));
+        // Still gated on the HTTP seam.
+        assert!(!super::may_stream_deltas(Some(&registry), false));
     }
 
     #[test]
