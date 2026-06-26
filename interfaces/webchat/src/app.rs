@@ -32,16 +32,17 @@ use crate::components::notification_center::NotificationCenter;
 use crate::components::service_blocking_gate::ServiceBlockingGate;
 use crate::components::token_wall::TokenWall;
 use crate::context::{DashboardContext, DashboardState};
+use crate::platform::phone::chat::PhoneChat;
+use crate::platform::phone::memory::PhoneMemory;
+use crate::platform::phone::settings::appearance::PhoneAppearance;
+use crate::platform::phone::settings::connection::PhoneConnection;
+use crate::platform::phone::settings::embeddings::PhoneEmbeddings;
+use crate::platform::phone::settings::model_route::PhoneModelRoute;
+use crate::platform::phone::settings::providers::PhoneProviders;
+use crate::platform::phone::settings::PhoneSettings;
 use crate::state::hotkey::{self as hotkey, HotkeyState};
 use crate::state::layout::{LayoutMode, WorkspaceState};
 use crate::state::notifications::NotificationsState;
-use crate::platform::phone::settings::PhoneSettings;
-use crate::platform::phone::settings::appearance::PhoneAppearance;
-use crate::platform::phone::settings::connection::PhoneConnection;
-use crate::platform::phone::settings::model_route::PhoneModelRoute;
-use crate::platform::phone::settings::embeddings::PhoneEmbeddings;
-use crate::platform::phone::settings::providers::PhoneProviders;
-use crate::platform::phone::chat::PhoneChat;
 use crate::state::sessions::SessionMap;
 use crate::state::viewport::{FormFactor, FormFactorState};
 use crate::views::chat::ChatState;
@@ -397,7 +398,11 @@ fn MainContent() -> impl IntoView {
             <DashboardRouter />
         </div>
         <div style:display=move || if mode.get() == PanelMode::Memory { "contents" } else { "none" }>
-            <MemoryHub />
+            {move || if form_factor.form_factor.get() == FormFactor::Phone {
+                view! { <PhoneMemory /> }.into_any()
+            } else {
+                view! { <MemoryHub /> }.into_any()
+            }}
         </div>
         <div style:display=move || if mode.get() == PanelMode::Agents { "contents" } else { "none" }>
             <AgentsRouter />
@@ -502,7 +507,6 @@ fn SettingsRouter() -> impl IntoView {
                     view! { <NetworkView /> }.into_any()
                 }
             }
-
 
             // Extensions
             "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),

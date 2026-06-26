@@ -11,5 +11,6 @@
 //! desktop/browser UI. Screens are added in subsequent steps.
 
 pub mod chat;
+pub mod memory;
 pub mod settings;
 pub mod shell;
