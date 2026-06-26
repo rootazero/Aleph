@@ -12,6 +12,16 @@ pub struct ParsedCommand {
     pub source_type: ToolSourceType,
     /// Command name (without leading /)
     pub command_name: String,
+    /// Canonical registry id of the resolved tool, verbatim from
+    /// [`UnifiedTool::id`] (e.g. `builtin:session_new`, `mcp:fs:read_file`,
+    /// `plugin:diag:ping`, `custom:3:translate`).
+    ///
+    /// `resolve_command` already knows the full id; carrying it here means
+    /// downstream consumers (the `command.execute` RPC, the channel fast-path
+    /// serializer) no longer reconstruct it lossily from `source_type` +
+    /// `command_name` — a reconstruction that silently dropped the MCP server,
+    /// plugin id, and custom rule-index segments.
+    pub tool_id: String,
     /// Arguments after the command name
     pub arguments: Option<String>,
     /// Full original input
@@ -90,6 +100,7 @@ impl CommandParser {
         Some(ParsedCommand {
             source_type,
             command_name: resolved.tool.name.clone(),
+            tool_id: resolved.tool.id.clone(),
             arguments: resolved.arguments,
             full_input: resolved.raw_input,
             context,
@@ -204,6 +215,9 @@ mod tests {
         assert_eq!(cmd.command_name, "ping");
         assert_eq!(cmd.arguments, Some("localhost".to_string()));
         assert!(matches!(cmd.source_type, ToolSourceType::Plugin));
+        // The canonical registry id must survive resolution intact — not be
+        // reconstructed lossily downstream as `plugin:ping`.
+        assert_eq!(cmd.tool_id, "plugin:diagnostics:ping");
         // Execution must target the canonical registry id, not a mangled MCP id.
         match cmd.context {
             CommandContext::Builtin { tool_name } => {
