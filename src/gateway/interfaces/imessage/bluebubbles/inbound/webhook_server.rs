@@ -81,7 +81,11 @@ pub async fn handle_webhook(
                 if state.send_read_receipts {
                     let api = state.api.clone();
                     let cg = m.chat_guid.clone();
-                    tokio::spawn(async move { let _ = api.mark_read(&cg).await; });
+                    tokio::spawn(async move {
+                        if let Err(e) = api.mark_read(&cg).await {
+                            tracing::debug!("mark_read {cg}: {e}");
+                        }
+                    });
                 }
             }
         }

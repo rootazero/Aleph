@@ -125,6 +125,9 @@ impl Channel for BlueBubblesChannel {
             return Err(ChannelError::NotConnected("BlueBubbles ping failed".into()));
         }
         *self.server_caps.write().await = self.api.server_caps().await;
+        // Snapshot private-api availability to gate auto-read receipts: BlueBubbles
+        // rejects read-receipt POSTs without private-api, so don't fire them needlessly.
+        let private_api = self.server_caps.read().await.private_api;
 
         let patterns = compile_patterns(&self.config.mention_patterns);
         let state = inbound::webhook_server::WebhookState {
@@ -134,7 +137,7 @@ impl Channel for BlueBubblesChannel {
             sender: self.channel_state.sender(),
             api: Arc::new(self.api.clone()),
             dedup: self.dedup.clone(),
-            send_read_receipts: self.config.send_read_receipts,
+            send_read_receipts: self.config.send_read_receipts && private_api,
         };
         let (host, port, path) = (
             self.config.webhook_host.clone(),
