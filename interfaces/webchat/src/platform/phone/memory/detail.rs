@@ -33,7 +33,7 @@ pub fn PhoneMemoryDetail() -> impl IntoView {
         let navigate = navigate.clone();
         Effect::new(move || {
             if st.selected.get().is_none() {
-                navigate("/memory", NavigateOptions::default());
+                navigate("/memory/list", NavigateOptions::default());
             }
         });
     }
@@ -61,14 +61,14 @@ pub fn PhoneMemoryDetail() -> impl IntoView {
     move || {
         let Some(fact) = st.selected.get() else {
             // The redirect Effect is navigating away; render an empty shell.
-            return view! { <PhoneShell title="Note" back="/memory" back_label="Memory"><div></div></PhoneShell> }
+            return view! { <PhoneShell title="Note" back="/memory/list" back_label="List"><div></div></PhoneShell> }
                 .into_any();
         };
         let stripe = category_color(&fact.category);
         let title = fact.content.clone();
         let path = fact.path.clone();
         view! {
-            <PhoneShell title="Note" back="/memory" back_label="Memory">
+            <PhoneShell title="Note" back="/memory/list" back_label="List">
             <div>
                 <div style=format!("height:3px;background:{stripe};border-radius:2px;margin-bottom:10px")></div>
                 <h3 style="font-size:16px; font-weight:600; color:var(--color-text-primary); margin:0 0 6px; word-break:break-word;">{title}</h3>
