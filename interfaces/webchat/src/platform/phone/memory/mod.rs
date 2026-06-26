@@ -8,6 +8,7 @@ pub mod cell;
 pub mod detail;
 pub mod graph;
 pub mod list;
+pub mod menu;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
