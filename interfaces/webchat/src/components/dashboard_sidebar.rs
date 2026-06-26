@@ -28,8 +28,7 @@ pub fn DashboardSidebar() -> impl IntoView {
                     <circle cx="18" cy="5" r="3" />
                     <circle cx="6" cy="12" r="3" />
                     <circle cx="18" cy="19" r="3" />
-                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
-                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+                    <path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" />
                 </SidebarItem>
                 <SidebarItem href="/dashboard/tasks" label=Signal::derive(move || t_string!(i18n, dashboard.sidebar.scheduled_tasks).to_string())>
                     <circle cx="12" cy="12" r="10" />
