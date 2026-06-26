@@ -10,6 +10,7 @@
 //! Isolated from [`super::wide`] by construction — phone code never touches the
 //! desktop/browser UI. Screens are added in subsequent steps.
 
+pub mod agents;
 pub mod chat;
 pub mod memory;
 pub mod settings;
