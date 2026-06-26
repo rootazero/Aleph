@@ -470,6 +470,28 @@ mod tests {
     }
 
     #[test]
+    fn notes_links_confidence_migration_is_idempotent() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        // Simulate a legacy table without confidence.
+        conn.execute_batch(
+            "CREATE TABLE notes_links (id INTEGER PRIMARY KEY AUTOINCREMENT, \
+             agent_id TEXT NOT NULL DEFAULT 'default', from_note TEXT NOT NULL, \
+             to_note TEXT NOT NULL, to_raw TEXT NOT NULL, relation TEXT, \
+             UNIQUE(agent_id, from_note, to_note))",
+        )
+        .unwrap();
+        migrations::migrate_notes_links_confidence(&conn).unwrap();
+        migrations::migrate_notes_links_confidence(&conn).unwrap(); // twice = no-op
+        let has: bool = conn
+            .prepare("PRAGMA table_info(notes_links)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .any(|n| n.is_ok_and(|n| n == "confidence"));
+        assert!(has);
+    }
+
+    #[test]
     fn migrate_notes_links_relation_is_idempotent() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(

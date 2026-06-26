@@ -19,6 +19,14 @@ use std::path::PathBuf;
 pub const INDEX_FILENAME: &str = "index.md";
 pub const SUMMARY_CHAR_LIMIT: usize = 80;
 
+/// Compact graph-health counts surfaced in index.md's header.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GraphHealth {
+    pub isolated: usize,
+    pub bridges: usize,
+    pub surprising: usize,
+}
+
 pub struct IndexMdGenerator {
     agent_dir: PathBuf,
 }
@@ -35,8 +43,12 @@ impl IndexMdGenerator {
     }
 
     /// Render and write the full index to disk.
-    pub async fn write(&self, entries: &[NoteIndexEntry]) -> Result<IndexStats, AlephError> {
-        let text = self.render(entries).await?;
+    pub async fn write(
+        &self,
+        entries: &[NoteIndexEntry],
+        health: Option<GraphHealth>,
+    ) -> Result<IndexStats, AlephError> {
+        let text = self.render(entries, health).await?;
         tokio::fs::create_dir_all(&self.agent_dir)
             .await
             .map_err(|e| AlephError::other(format!("create index dir: {e}")))?;
@@ -55,7 +67,11 @@ impl IndexMdGenerator {
     }
 
     /// Pure renderer (no disk side-effects).
-    pub async fn render(&self, entries: &[NoteIndexEntry]) -> Result<String, AlephError> {
+    pub async fn render(
+        &self,
+        entries: &[NoteIndexEntry],
+        health: Option<GraphHealth>,
+    ) -> Result<String, AlephError> {
         let mut by_cat: BTreeMap<String, Vec<&NoteIndexEntry>> = BTreeMap::new();
         for e in entries {
             by_cat.entry(e.category.clone()).or_default().push(e);
@@ -69,6 +85,15 @@ impl IndexMdGenerator {
             entries.len(),
             now
         ));
+
+        if let Some(h) = health {
+            if h.isolated + h.bridges + h.surprising > 0 {
+                out.push_str(&format!(
+                    "> graph health: isolated {} · bridges {} · surprising {} — consider weaving isolated notes.\n\n",
+                    h.isolated, h.bridges, h.surprising
+                ));
+            }
+        }
 
         for (cat, items) in by_cat.iter() {
             out.push_str(&format!("## {} ({})\n", cat, items.len()));
@@ -162,7 +187,7 @@ mod tests {
     async fn render_empty() {
         let dir = tempfile::tempdir().unwrap();
         let g = IndexMdGenerator::new(dir.path());
-        let s = g.render(&[]).await.unwrap();
+        let s = g.render(&[], None).await.unwrap();
         assert!(s.contains("<!-- total: 0 notes"));
         assert!(s.contains("# Index"));
     }
@@ -176,7 +201,7 @@ mod tests {
             entry("learning", "tokio", 1_700_001_000),
             entry("preference", "editor", 1_700_000_500),
         ];
-        let s = g.render(&entries).await.unwrap();
+        let s = g.render(&entries, None).await.unwrap();
         let pl = s.find("## learning (2)").unwrap();
         let pp = s.find("## preference (1)").unwrap();
         assert!(pl < pp);
@@ -199,7 +224,7 @@ mod tests {
         .await
         .unwrap();
         let entries = vec![entry("learning", "rust", 1_700_000_000)];
-        let s = g.render(&entries).await.unwrap();
+        let s = g.render(&entries, None).await.unwrap();
         assert!(s.contains("The user likes Rust macros a lot."));
     }
 
@@ -208,7 +233,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let g = IndexMdGenerator::new(dir.path());
         let entries = vec![entry("tool", "ast_grep-cheatsheet", 0)];
-        let s = g.render(&entries).await.unwrap();
+        let s = g.render(&entries, None).await.unwrap();
         assert!(s.contains("ast grep cheatsheet"));
     }
 
@@ -227,7 +252,7 @@ mod tests {
         .await
         .unwrap();
         let entries = vec![entry("project", "x", 0)];
-        let s = g.render(&entries).await.unwrap();
+        let s = g.render(&entries, None).await.unwrap();
         assert!(s.contains("…"));
     }
 
@@ -236,13 +261,38 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let g = IndexMdGenerator::new(dir.path());
         let entries = vec![entry("learning", "rust", 1_700_000_000)];
-        let stats = g.write(&entries).await.unwrap();
+        let stats = g.write(&entries, None).await.unwrap();
         assert_eq!(stats.notes_indexed, 1);
         assert!(stats.bytes_written > 0);
         let body = tokio::fs::read_to_string(dir.path().join("index.md"))
             .await
             .unwrap();
         assert!(body.contains("learning/rust"));
+    }
+
+    #[tokio::test]
+    async fn health_line_rendered_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let g = IndexMdGenerator::new(dir.path());
+        let entries = vec![entry("learning", "rust", 1_700_000_000)];
+        let health = Some(GraphHealth {
+            isolated: 4,
+            bridges: 1,
+            surprising: 2,
+        });
+        let s = g.render(&entries, health).await.unwrap();
+        assert!(s.contains("graph health"));
+        assert!(s.contains("isolated 4"));
+        assert!(s.contains("bridges 1"));
+        assert!(s.contains("surprising 2"));
+    }
+
+    #[tokio::test]
+    async fn no_health_line_when_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let g = IndexMdGenerator::new(dir.path());
+        let s = g.render(&[], None).await.unwrap();
+        assert!(!s.contains("graph health"));
     }
 
     use proptest::prelude::*;
@@ -289,7 +339,7 @@ mod tests {
                 })
                 .collect();
 
-            let rendered = rt.block_on(g.render(&entries)).unwrap();
+            let rendered = rt.block_on(g.render(&entries, None)).unwrap();
             for e in &entries {
                 prop_assert!(rendered.contains(&e.path), "missing {}", e.path);
             }

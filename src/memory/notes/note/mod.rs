@@ -15,7 +15,7 @@ mod tests;
 pub mod types;
 
 pub use helpers::{sanitize_note_path, sanitize_title};
-pub use relation::Relation;
+pub use relation::{is_structural_strong, Relation, STRUCTURAL_STRONG};
 pub use types::{FactProvenance, ProvenanceOrigin, Severity};
 
 use helpers::{sha256_hex, yaml_inline_array};

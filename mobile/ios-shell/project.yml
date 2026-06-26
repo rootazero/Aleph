@@ -42,6 +42,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.aleph.panel.iossim
         PRODUCT_NAME: AlephPaneliOS
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
 schemes:
   AlephPaneliOS:

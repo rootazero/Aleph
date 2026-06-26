@@ -90,6 +90,28 @@ impl<S: NoteStore + Send + Sync + 'static> FsNoteOrientation<S> {
         log.rotate_if_needed().await?;
         Ok(())
     }
+
+    /// Read graph-insight counts from the materialized store. Non-fatal: any
+    /// read failure returns `None` so index generation is never blocked.
+    async fn graph_health(
+        &self,
+        agent_id: &str,
+    ) -> Option<crate::memory::notes::orientation::index_md::GraphHealth> {
+        use crate::memory::notes::orientation::index_md::GraphHealth;
+        let count = |rows: &[(String, String)], kind: &str| -> usize {
+            rows.iter()
+                .find(|(k, _)| k == kind)
+                .and_then(|(_, json)| serde_json::from_str::<serde_json::Value>(json).ok())
+                .and_then(|v| v.as_array().map(Vec::len))
+                .unwrap_or(0)
+        };
+        let rows = self.store.read_graph_insights(agent_id, None).await.ok()?;
+        Some(GraphHealth {
+            isolated: count(&rows, "isolated"),
+            bridges: count(&rows, "bridge"),
+            surprising: count(&rows, "surprising"),
+        })
+    }
 }
 
 #[async_trait]
@@ -179,7 +201,8 @@ impl<S: NoteStore + Send + Sync + 'static> NoteOrientation for FsNoteOrientation
     async fn rebuild_index(&self, agent_id: &str) -> Result<IndexStats, AlephError> {
         let entries = self.store.list_notes(agent_id).await?;
         let gen = IndexMdGenerator::new(self.agent_dir(agent_id));
-        let stats = gen.write(&entries).await?;
+        let health = self.graph_health(agent_id).await;
+        let stats = gen.write(&entries, health).await?;
         self.dirty
             .lock()
             .unwrap_or_else(|e| e.into_inner())
