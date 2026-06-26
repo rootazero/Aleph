@@ -29,25 +29,87 @@ struct RegistryToolAdapter<R: ToolRegistry + 'static> {
 /// Tools that should have `working_dir` injected when not specified by LLM
 const WORKING_DIR_TOOLS: &[&str] = &["bash", "code_exec"];
 
-/// Tools that mutate state and must NOT run concurrently.
-pub(crate) const EXCLUSIVE_TOOLS: &[&str] = &[
-    "bash",
-    "code_exec",
-    "file_ops",
-    "self_manage",
-    "vault_store",
-    "cron_manage",
-    "agent_create",
-    "agent_delete",
-    "agent_switch",
-    "team_create",
-    "team_delegate",
-    "team_set_protocol",
-    "heartbeat_create",
-    "heartbeat_delete",
-    "task_create",
-    "task_update",
-    "channel_pairing",
+/// Builtin tools that are side-effect-free for scheduling purposes: their
+/// execution neither mutates shared state nor depends on another in-flight
+/// call's effects, so any number may run concurrently
+/// ([`crate::tools::concurrency::ConcurrencyClaim::Shared`]).
+///
+/// This is the **safe-default inversion** of the former `EXCLUSIVE_TOOLS`
+/// mutating-denylist. Under the denylist, a tool was concurrent-safe *unless*
+/// explicitly listed — so any mutator a contributor forgot to add (e.g.
+/// `team_disband`, which is even confirmation-required, or `team_member_add` /
+/// `heartbeat_update` / `skill_install`) silently became `Shared` and could
+/// race another call in the same parallel batch. The allowlist flips the
+/// failure mode: a tool parallelizes only if it is *explicitly* known read-only;
+/// every other tool — including any future mutator added without touching this
+/// file — defaults to whole-world [`ConcurrencyClaim::global`], so a forgotten
+/// entry costs parallelism (serial, still correct) instead of risking a race.
+///
+/// Mirrors hermes-agent's `_PARALLEL_SAFE_TOOLS` allowlist, but pairs it with
+/// Aleph's sound path-overlap partition ([`crate::tools::concurrency`]): the
+/// path-scoped file mutators below ([`bounded_file_writer_path`] + `file_ops`)
+/// still parallelize on disjoint paths via [`RegistryToolAdapter::concurrency_claim`],
+/// which no reference agent does. Keep this list conservative — only add a tool
+/// once its read-only-ness is certain. Shared mutable state (browser session,
+/// agent/session lifecycle) is intentionally absent, so those tools serialize.
+pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
+    // Introspection / catalog (pure reads).
+    "agent_info",
+    "agent_list",
+    "a2a_agents",
+    "arena_query",
+    "config_audit",
+    "doctor",
+    "get_tool_schema",
+    "list_models",
+    "list_tools",
+    "search_tools",
+    "read_config_guide",
+    "node_list",
+    // Search / retrieval (no mutation).
+    "search",
+    "web_fetch",
+    "web_search",
+    "ctx_search",
+    "document_extract",
+    "knowledge",
+    // File reads (writers are path-scoped, see `bounded_file_writer_path`).
+    "file_read",
+    // Memory / context reads.
+    "memory_search",
+    "memory_recall",
+    "memory_browse",
+    "memory_explore",
+    "memory_timeline",
+    "recall_context",
+    "recall_events",
+    // Session / inbox reads.
+    "session_list",
+    "session_read",
+    "session_search",
+    "inbox_read",
+    // Task reads.
+    "task_list",
+    "task_read_artifact",
+    // Team reads.
+    "team_status",
+    "team_digest",
+    "team_usage",
+    // Heartbeat reads.
+    "heartbeat_list",
+    "heartbeat_report",
+    // Skill reads.
+    "skill_list",
+    "skill_read",
+    "skill_status",
+    // Desktop accessibility queries (read-only inspection of the UI tree).
+    "desktop_ax_query_by_role",
+    "desktop_ax_query_focused",
+    "desktop_ax_query_tree",
+    "desktop_ax_snapshot",
+    "desktop_som",
+    "desktop_gui_locate",
+    "desktop_check_permissions",
 ];
 
 /// Builtin tools that require explicit user confirmation before they run.
@@ -56,18 +118,19 @@ pub(crate) const EXCLUSIVE_TOOLS: &[&str] = &[
 /// agent deletion, team disband). The adapter reports this through
 /// [`LoopTool::requires_confirmation`], so the live `ScopedToolService`
 /// confirmation gate routes a user prompt before dispatch — no gateway-side
-/// allowlist needed. Co-located with [`EXCLUSIVE_TOOLS`]: both are per-tool
+/// allowlist needed. Co-located with [`READ_ONLY_TOOLS`]: both are per-tool
 /// runtime dispatch properties this adapter self-declares. Mirrors the
 /// `AlephTool::requires_confirmation()` overrides on these tools (which feed
 /// the metadata/describe path); keep the two in sync.
 pub(crate) const CONFIRMATION_REQUIRED_TOOLS: &[&str] =
     &["vault_store", "agent_delete", "team_disband"];
 
-/// Extract the bounded target path for a path-bearing file mutator that is NOT
-/// on [`EXCLUSIVE_TOOLS`] (`file_write` / `file_edit` / `apply_patch`). Returns
-/// `None` for any other tool (including read-only `file_read`, which keeps the
-/// `Shared` default). Used by [`RegistryToolAdapter::concurrency_claim`] to give
-/// these mutators a same-path-serializing scope.
+/// Extract the bounded target path for a path-bearing file mutator
+/// (`file_write` / `file_edit` / `apply_patch`). Returns `None` for any other
+/// tool (including read-only `file_read`, which is in [`READ_ONLY_TOOLS`] and
+/// keeps the `Shared` claim). Used by [`RegistryToolAdapter::concurrency_claim`]
+/// to give these mutators a same-path-serializing scope so writes to different
+/// files parallelize while writes to the same file serialize.
 fn bounded_file_writer_path(name: &str, input: &Value) -> Option<String> {
     let candidates: &[&str] = match name {
         "file_write" | "file_edit" => &["file_path", "path"],
@@ -121,32 +184,37 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
     }
 
     fn is_concurrent_safe(&self, _input: &Value) -> bool {
-        !EXCLUSIVE_TOOLS.contains(&self.name.as_str())
+        // Safe default: only explicitly-known read-only tools are freely
+        // concurrent. Path-scoped file writers are not "freely" concurrent
+        // (they conflict on overlapping paths), so they report `false` here —
+        // their bounded parallelism is expressed through `concurrency_claim`,
+        // not this coarse boolean. Everything unlisted is exclusive.
+        READ_ONLY_TOOLS.contains(&self.name.as_str())
     }
 
     fn concurrency_claim(&self, input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
         use crate::tools::concurrency::ConcurrencyClaim;
         let name = self.name.as_str();
-        // `file_ops` is whole-world-exclusive under the boolean model; refine
-        // it to a bounded path scope for mutating operations and to `Shared`
-        // for read-only ones (list/search/stats) so disjoint or read-only file
-        // operations can parallelize.
+        // `file_ops` multiplexes read-only (list/search/stats → `Shared`) and
+        // mutating (move/copy/delete/… → bounded `Paths`) operations off its
+        // `operation` discriminant, so it is resolved before the allowlist.
         if name == "file_ops" {
             return file_ops_claim(input);
         }
-        // `file_write` / `file_edit` / `apply_patch` are NOT on EXCLUSIVE_TOOLS,
-        // so the boolean model treats them as `Shared` — which races on the
-        // same file. Bind them to their concrete target path so two writes to
-        // the same file serialize while writes to different files parallelize.
+        // `file_write` / `file_edit` / `apply_patch` mutate exactly their target
+        // path. Bind them to that concrete path so two writes to the same file
+        // serialize while writes to different files parallelize.
         if let Some(path) = bounded_file_writer_path(name, input) {
             return ConcurrencyClaim::paths(std::iter::once(path));
         }
-        // Everything else keeps the boolean-derived claim: EXCLUSIVE_TOOLS map
-        // to whole-world exclusive, the rest to `Shared`.
-        if EXCLUSIVE_TOOLS.contains(&name) {
-            ConcurrencyClaim::global()
-        } else {
+        // Safe default: read-only allowlist → `Shared`; everything else
+        // (known mutators AND any unlisted/unknown tool) → whole-world
+        // exclusive. A forgotten mutator serializes (correct) rather than
+        // racing, which is the whole point of the allowlist inversion.
+        if READ_ONLY_TOOLS.contains(&name) {
             ConcurrencyClaim::Shared
+        } else {
+            ConcurrencyClaim::global()
         }
     }
 
@@ -349,8 +417,12 @@ mod tests {
     }
 
     #[test]
-    fn test_exclusive_tools_list() {
-        // Known write/mutating tools must be in the exclusive list
+    fn test_mutating_tools_excluded_from_readonly_allowlist() {
+        // Known write/mutating tools must NOT be on the read-only allowlist, so
+        // they default to whole-world exclusive. Includes `team_disband` and
+        // `team_member_add`, which the old `EXCLUSIVE_TOOLS` denylist omitted —
+        // the bug the allowlist inversion fixes (a forgotten mutator now
+        // serializes instead of silently parallelizing).
         let write_tools = &[
             "bash",
             "code_exec",
@@ -362,26 +434,30 @@ mod tests {
             "agent_delete",
             "team_create",
             "team_delegate",
+            "team_disband",
+            "team_member_add",
+            "team_member_remove",
+            "heartbeat_create",
+            "heartbeat_update",
+            "skill_install",
             "channel_pairing",
         ];
         for tool in write_tools {
             assert!(
-                EXCLUSIVE_TOOLS.contains(tool),
-                "{} should be in EXCLUSIVE_TOOLS",
-                tool
+                !READ_ONLY_TOOLS.contains(tool),
+                "{tool} mutates state and must NOT be on READ_ONLY_TOOLS",
             );
         }
     }
 
     #[test]
-    fn test_readonly_not_in_exclusive() {
-        // Read-only tools must NOT be in the exclusive list
-        let read_tools = &["search", "memory_recall", "web_fetch", "knowledge"];
+    fn test_readonly_tools_on_allowlist() {
+        // Read-only tools must be on the allowlist so they keep parallelizing.
+        let read_tools = &["search", "memory_recall", "web_fetch", "knowledge", "file_read"];
         for tool in read_tools {
             assert!(
-                !EXCLUSIVE_TOOLS.contains(tool),
-                "{} should NOT be in EXCLUSIVE_TOOLS",
-                tool
+                READ_ONLY_TOOLS.contains(tool),
+                "{tool} is read-only and should be on READ_ONLY_TOOLS",
             );
         }
     }
