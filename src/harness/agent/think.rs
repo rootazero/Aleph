@@ -227,6 +227,29 @@ fn last_assistant_has_text(events: &[SessionEventRecord]) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the harness may forward live token deltas this turn.
+///
+/// Streaming requires an HTTP provider seam (`has_http_seam`) and the absence
+/// of an *output* guardrail. Only the output guardrail rewrites or blocks the
+/// FINAL assembled text, and that verdict cannot be un-emitted once deltas have
+/// streamed — so a registry carrying ≥1 output guardrail must keep the one-shot
+/// emit. Input- and tool-call-only registries have a no-op output stage
+/// (`GuardrailRegistry::evaluate_output` short-circuits to `Allow` on an empty
+/// output vec), so they stream normally.
+///
+/// `output_count()` reads the build-time output vec, which is never mutated, so
+/// the gate is stable against the `disable_all` runtime kill-switch: a registry
+/// configured with output guardrails stays conservatively non-streaming even
+/// while temporarily disabled. Pure mechanical capability check (R10): no
+/// policy, no reasoning, no per-turn state.
+fn may_stream_deltas(
+    guardrails: Option<&crate::guardrails::GuardrailRegistry>,
+    has_http_seam: bool,
+) -> bool {
+    let output_guarded = guardrails.is_some_and(|g| g.output_count() > 0);
+    has_http_seam && !output_guarded
+}
+
 /// Estimate the token cost of the tool schema sent to the provider.
 ///
 /// Mirrors the wire shape — name + description + JSON-serialized parameters —
@@ -694,14 +717,22 @@ impl AgentHarness {
             session_id,
         );
         // Streaming gate: live token deltas require an HTTP provider seam and
-        // no output guardrail. The output guardrail (Stage 5a below) sanitises
+        // no *output* guardrail. The output guardrail (Stage 5a below) sanitises
         // the FINAL assembled text, which cannot be applied retroactively to an
-        // already-emitted incremental stream — so guardrailed turns keep the
-        // one-shot emit. Mock/non-HTTP providers also fall through. When the
-        // gate is open, `stream_llm_call` forwards text/thinking deltas live
-        // and we suppress the once-per-turn `on_delta` further down.
-        let provider_streams =
-            self.deps.guardrails.is_none() && self.deps.llm.as_http_provider().is_some();
+        // already-emitted incremental stream — so a turn whose registry carries
+        // an output guardrail keeps the one-shot emit. A registry with only
+        // input / tool-call guardrails has a no-op output stage
+        // (`evaluate_output` short-circuits on an empty output vec), so it now
+        // streams normally instead of paying a blanket suppression for an
+        // unrelated surface — restoring live streaming for the common
+        // PII/secrets-input + tool-call-arg-guard deployment. Mock/non-HTTP
+        // providers also fall through. When the gate is open, `stream_llm_call`
+        // forwards text/thinking deltas live and we suppress the once-per-turn
+        // `on_delta` further down.
+        let provider_streams = may_stream_deltas(
+            self.deps.guardrails.as_deref(),
+            self.deps.llm.as_http_provider().is_some(),
+        );
         let primary_call = if provider_streams {
             self.stream_llm_call(payload, callback, parent_cancel, started)
                 .await?
@@ -786,46 +817,21 @@ impl AgentHarness {
         // 3b-pre. Context-window-exceeded recovery (claude-code parity).
         // `model_context_window_exceeded` means the *context window* — not
         // the output cap — filled mid-generation. The resume-nudge loop in
-        // 3b would append more messages and re-hit the wall, so route this
-        // to the same reactive-compaction rescue that `prompt_too_long`
-        // errors take: synthesize an error carrying the overflow marker
-        // (which `llm_retry::classify` maps to `CompactAndRetry`) and let
-        // the helper reuse its one-shot cap, trace, and budget plumbing.
-        // The loop is bounded by that cap: each pass either returns a
-        // compacted-and-retried response or errors out when rescues are
-        // exhausted, so a model that keeps overflowing cannot spin.
-        while matches!(
-            response.stop_reason,
-            crate::providers::adapter::StopReason::ContextWindowExceeded
-        ) {
-            // The overflowed call still billed input plus the partial output;
-            // count it before the retry replaces `response`.
-            self.account_intermediate_tokens(&response);
-            // The rescue below replaces `response` via the non-streaming path.
-            response_was_streamed = false;
-            tracing::warn!(
-                ?session_id,
-                "provider stopped with model_context_window_exceeded; \
-                 routing to reactive compaction",
-            );
-            let overflow_err = crate::error::AlephError::ProviderError {
-                message: "model_context_window_exceeded: provider stopped because \
-                          the context window is full"
-                    .to_string(),
-                suggestion: None,
-            };
-            response = self
-                .try_reactive_compact_and_retry(
-                    overflow_err,
-                    session_id,
-                    &mut messages,
-                    tools_ref,
-                    budget_tool_tokens,
-                    parent_cancel,
-                    started,
-                )
-                .await?;
-        }
+        // 3b would append more messages and re-hit the wall, so route this to
+        // reactive compaction FIRST, before 3b ever appends. The drain helper
+        // is bounded by the one-shot reactive-compact cap, so a model that
+        // keeps overflowing cannot spin. See `drain_context_overflow`.
+        self.drain_context_overflow(
+            &mut response,
+            &mut response_was_streamed,
+            session_id,
+            &mut messages,
+            tools_ref,
+            budget_tool_tokens,
+            parent_cancel,
+            started,
+        )
+        .await?;
 
         // 3b. max_output_tokens recovery (claude-code parity, query.ts:1188).
         // When the provider hits its output-token cap mid-stream we get
@@ -897,6 +903,27 @@ impl AgentHarness {
                 }
             };
         }
+        // 3b-post. The 3b resume loop appends a partial + nudge to `messages`
+        // and re-issues; that larger request can itself overflow the *context
+        // window*, yielding a `ContextWindowExceeded` response that the 3b-pre
+        // drain (which ran before 3b) already passed. Drain it again here so a
+        // post-resume overflow is recovered instead of slipping through as a
+        // degraded terminal turn. The same one-shot reactive-compact cap bounds
+        // both drains jointly — a second overflow after the cap is spent
+        // surfaces the error rather than spinning. No-op (zero LLM cost) on the
+        // common path where 3b did not run or left a non-overflow response.
+        self.drain_context_overflow(
+            &mut response,
+            &mut response_was_streamed,
+            session_id,
+            &mut messages,
+            tools_ref,
+            budget_tool_tokens,
+            parent_cancel,
+            started,
+        )
+        .await?;
+
         // Exit-point reason fidelity. Capture the surviving response's
         // degradation verdicts here — after every bounded recovery loop has
         // had its chance to replace `response`, and before tool-call
@@ -1305,6 +1332,72 @@ impl AgentHarness {
             metrics: metrics_for_trace,
         });
         result
+    }
+
+    /// Drain a `ContextWindowExceeded` terminal state via reactive compaction.
+    ///
+    /// `model_context_window_exceeded` means the *context window* filled
+    /// mid-generation (distinct from the output-token cap). Each pass counts
+    /// the overflowed call's billed tokens, synthesizes the overflow-marker
+    /// error (`llm_retry::classify` maps it to `CompactAndRetry`), and routes
+    /// through [`Self::try_reactive_compact_and_retry`] — reusing its one-shot
+    /// cap, trace, and budget plumbing. Bounded by that cap: a model that keeps
+    /// overflowing surfaces the error (via `?`) rather than spinning.
+    ///
+    /// Called at BOTH points the window can fill mid-pipeline — right after the
+    /// primary call (3b-pre, before the resume loop appends more) and again
+    /// after the `max_output_tokens` resume loop (3b-post, whose nudge retry can
+    /// itself overflow). `response` / `response_was_streamed` are `&mut` so the
+    /// helper updates the caller's surviving state in place. No-op (zero LLM
+    /// cost) when `response` is not in the overflow state.
+    ///
+    /// R10-safe: pure round scheduling around one provider failure mode, no
+    /// policy — the decision to compact is fully encoded in the classifier.
+    #[allow(clippy::too_many_arguments)]
+    async fn drain_context_overflow(
+        &self,
+        response: &mut ProviderResponse,
+        response_was_streamed: &mut bool,
+        session_id: &SessionId,
+        messages: &mut Vec<UnifiedMessage>,
+        tools_ref: Option<&[crate::tool_metadata::ToolDefinition]>,
+        budget_tool_tokens: usize,
+        parent_cancel: &CancellationToken,
+        started: std::time::Instant,
+    ) -> Result<(), HarnessError> {
+        while matches!(
+            response.stop_reason,
+            crate::providers::adapter::StopReason::ContextWindowExceeded
+        ) {
+            // The overflowed call still billed input plus the partial output;
+            // count it before the retry replaces `response`.
+            self.account_intermediate_tokens(response);
+            // The rescue below replaces `response` via the non-streaming path.
+            *response_was_streamed = false;
+            tracing::warn!(
+                ?session_id,
+                "provider stopped with model_context_window_exceeded; \
+                 routing to reactive compaction",
+            );
+            let overflow_err = crate::error::AlephError::ProviderError {
+                message: "model_context_window_exceeded: provider stopped because \
+                          the context window is full"
+                    .to_string(),
+                suggestion: None,
+            };
+            *response = self
+                .try_reactive_compact_and_retry(
+                    overflow_err,
+                    session_id,
+                    messages,
+                    tools_ref,
+                    budget_tool_tokens,
+                    parent_cancel,
+                    started,
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     /// Reactive-compaction rescue (Phase A — claude-code parity,
@@ -1831,6 +1924,31 @@ mod tests {
         // "  \n\t" alone does not constitute a terminal text response.
         let events = vec![mk(0, user("hi")), mk(1, assistant("   \n\t", false))];
         assert!(!last_assistant_has_text(&events));
+    }
+
+    #[test]
+    fn may_stream_deltas_requires_http_seam() {
+        // No HTTP delta seam (mock / non-HTTP provider) → never stream, even
+        // with no guardrails at all.
+        assert!(!super::may_stream_deltas(None, false));
+        // HTTP seam present, no registry → stream.
+        assert!(super::may_stream_deltas(None, true));
+    }
+
+    #[test]
+    fn may_stream_deltas_streams_for_input_or_tool_call_only_registry() {
+        use crate::guardrails::GuardrailRegistry;
+        // A registry with zero output guardrails (input/tool-call-only, or an
+        // empty registry) has a no-op output stage, so the harness keeps live
+        // streaming instead of the old blanket suppression. This is the
+        // regression the gate fix targets: the stream was previously killed by
+        // the mere presence of a registry, contradicting the documented "no
+        // *output* guardrail" contract.
+        let registry = GuardrailRegistry::empty();
+        assert_eq!(registry.output_count(), 0);
+        assert!(super::may_stream_deltas(Some(&registry), true));
+        // Still gated on the HTTP seam.
+        assert!(!super::may_stream_deltas(Some(&registry), false));
     }
 
     #[test]
