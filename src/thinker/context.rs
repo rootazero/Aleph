@@ -136,6 +136,45 @@ pub struct EnvironmentContract {
     pub security_notes: Vec<String>,
 }
 
+/// What kind of voice context this turn is in.
+///
+/// Replaces the bare `voice_mode_active: bool` so `VoiceModeLayer` can adapt the
+/// spoken-reply contract to *why* voice is on, not just *whether*. Two distinct
+/// facts the gateway already computes flow in here:
+/// - the reply is read aloud (TTS), and
+/// - the user's message arrived as ASR-transcribed speech.
+///
+/// The second fact was previously discarded (the inbound router OR-collapsed it
+/// into one boolean). Modelling it as an enum makes the illegal "transcribed but
+/// not spoken" state unrepresentable — the layer only ever sees the variants
+/// below. R7/R10: this is a mechanical record of gateway facts, no judgment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum VoiceContext {
+    /// Not a voice turn — `VoiceModeLayer` emits nothing (prompt byte-identical).
+    #[default]
+    Off,
+    /// The reply is read aloud; the user typed their message.
+    Spoken,
+    /// The reply is read aloud **and** the user's message arrived as
+    /// ASR-transcribed speech — the layer additionally invites the model to
+    /// repair transcription artifacts.
+    SpokenTranscribed,
+}
+
+impl VoiceContext {
+    /// True for any spoken turn (everything except [`Self::Off`]).
+    #[must_use]
+    pub const fn is_active(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    /// True when this turn's user input was ASR-transcribed speech.
+    #[must_use]
+    pub const fn is_transcribed(self) -> bool {
+        matches!(self, Self::SpokenTranscribed)
+    }
+}
+
 /// Resolved context after two-phase filtering
 ///
 /// This is the final output of the `ContextAggregator`, containing:
@@ -194,13 +233,13 @@ pub struct ResolvedContext {
     /// the harness bridge; `None` emits nothing (byte-identical tail).
     #[serde(skip, default)]
     pub strategy_guardrails: Option<String>,
-    /// Whether voice mode is active for this session, rendered by
-    /// `VoiceModeLayer` (priority 1710) as the spoken-reply guidelines.
-    /// Populated in the harness bridge from `voice::session_mode` (written by
-    /// the gateway inbound router). `false` keeps the section absent — the
-    /// prompt is byte-identical for non-voice turns.
+    /// Voice context for this session, rendered by `VoiceModeLayer`
+    /// (priority 1710) as the spoken-reply guidelines. Populated in the harness
+    /// bridge from `voice::session_mode` (written by the gateway inbound
+    /// router). [`VoiceContext::Off`] keeps the section absent — the prompt is
+    /// byte-identical for non-voice turns.
     #[serde(skip, default)]
-    pub voice_mode_active: bool,
+    pub voice: VoiceContext,
 }
 
 /// Context Aggregator for reconciling interaction and security layers
@@ -279,7 +318,7 @@ impl ContextAggregator {
             standing_goal: None,
             strategy: None,
             strategy_guardrails: None,
-            voice_mode_active: false,
+            voice: VoiceContext::Off,
         }
     }
 

@@ -426,10 +426,15 @@ impl AgentHarnessRunner {
         // Voice mode: read the session-keyed flag the gateway inbound router set
         // for this turn so `VoiceModeLayer` (priority 1710) injects the
         // spoken-reply guidelines. Mirrors `execution_plan` / `standing_goal` —
-        // a mechanical session-keyed lookup, no judgment. `false` (no voice)
-        // leaves the prompt byte-identical.
-        resolved_context.voice_mode_active =
-            crate::gateway::voice::session_mode::is_active(&session_key_str);
+        // a mechanical session-keyed lookup, no judgment. `Off` (no voice)
+        // leaves the prompt byte-identical; the `transcribed` bit distinguishes
+        // a spoken-only turn from one whose input was ASR-transcribed.
+        resolved_context.voice =
+            match crate::gateway::voice::session_mode::get(&session_key_str) {
+                None => crate::thinker::context::VoiceContext::Off,
+                Some(false) => crate::thinker::context::VoiceContext::Spoken,
+                Some(true) => crate::thinker::context::VoiceContext::SpokenTranscribed,
+            };
         builder = builder.with_resolved_context(resolved_context);
         // Resolve the governance behavior name once (same source of truth as
         // the robustness profile) and pre-load its overridable coaching delta.
