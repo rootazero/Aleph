@@ -229,7 +229,18 @@ impl MessageRouter {
             attachments: vec![],
         };
 
-        let _ = self.msg_store.send_message(notification).await;
+        // Best-effort: the escalation hint is advisory (the thread keeps working
+        // either way), but a silent drop hid genuine store failures. Surface it
+        // so a broken message store is observable — consistent with the explicit
+        // `warn!` on park failure in the dispatcher's clarify path.
+        if let Err(e) = self.msg_store.send_message(notification).await {
+            tracing::warn!(
+                thread_id = %thread_id,
+                leader_id = %leader_id,
+                error = %e,
+                "team router: failed to deliver thread-escalation suggestion"
+            );
+        }
     }
 }
 

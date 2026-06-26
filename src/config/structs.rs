@@ -10,8 +10,8 @@ use crate::config::types::{
     PromptSectionConfig, ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, SearchConfig,
     SearchConfigInternal, SecretMapping, SecretProviderConfig, SecretsConfig, ShellSecurityConfig,
     SkillsConfig, SmartFlowConfig, SmartMatchingConfig, StabilityToml, StopHookConfig,
-    SubAgentConfig, TeamDispatcherConfigToml, ToolServiceConfig, ToolsConfig, UnifiedToolsConfig,
-    VoiceLocalConfig, VoiceSection,
+    SubAgentConfig, TeamBroadcastConfigToml, TeamDispatcherConfigToml, ToolServiceConfig,
+    ToolsConfig, UnifiedToolsConfig, VoiceLocalConfig, VoiceSection,
 };
 use crate::tasks::cron::CronConfig;
 use crate::tasks::heartbeat::config::HeartbeatConfig;
@@ -247,6 +247,13 @@ pub struct Config {
     /// `dispatcher` field above.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team_dispatcher: Option<TeamDispatcherConfigToml>,
+    /// Group-chat broadcast storm-prevention guards (`[team_broadcast]`): chain
+    /// depth, fan-out width, total-activation cap, transcript token budget.
+    /// Absent ⇒ `teams::broadcast::BroadcastConfig::default()` at the boot site
+    /// (byte-identical prior behaviour). The broadcast-side parallel to
+    /// `team_dispatcher` above (§4.5 ↔ §4.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_broadcast: Option<TeamBroadcastConfigToml>,
     /// Mid-run trajectory resume — boot-scan auto-resume of interrupted runs.
     #[serde(default)]
     pub resume: crate::config::types::ResumeConfig,
@@ -460,6 +467,7 @@ impl Default for Config {
             context_budget: None,
             strategy: None,
             team_dispatcher: None,
+            team_broadcast: None,
             resume: crate::config::types::ResumeConfig::default(),
             projects: crate::config::types::ProjectsConfig::default(),
             desktop: crate::config::types::desktop::DesktopDaemonConfig::default(),
