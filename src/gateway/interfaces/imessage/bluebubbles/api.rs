@@ -304,6 +304,68 @@ impl BlueBubblesApi {
             }
         }
     }
+
+    /// Fetch messages created after `after_ms` (epoch milliseconds).
+    /// Returns the `data` array; empty on any failure.
+    pub async fn query_messages_after(&self, after_ms: i64) -> Vec<serde_json::Value> {
+        let body = serde_json::json!({
+            "after": after_ms,
+            "limit": 100,
+            "sort": "ASC",
+            "with": ["handle", "attachment", "chats"]
+        });
+        let Ok(res) = self
+            .client
+            .post(self.api_url("/api/v1/message/query"))
+            .json(&body)
+            .send()
+            .await
+        else {
+            return vec![];
+        };
+        let Ok(v) = res.json::<serde_json::Value>().await else { return vec![] };
+        v["data"].as_array().cloned().unwrap_or_default()
+    }
+
+    /// Download an attachment by GUID, write to a temp file, return the path.
+    /// `None` on any failure (network, disk, etc.). Logged at debug level.
+    pub async fn download_attachment(&self, guid: &str, mime: &str) -> Option<String> {
+        let encoded_guid: String = url::form_urlencoded::byte_serialize(guid.as_bytes())
+            .collect::<String>()
+            .replace('+', "%20");
+        let url = self.api_url(&format!("/api/v1/attachment/{encoded_guid}/download"));
+        let res = self.client.get(&url).send().await.ok()?;
+        let res = res.error_for_status().ok()?;
+        let bytes = res.bytes().await.ok()?;
+        let ext = mime_to_ext(mime);
+        let sanitized: String = guid
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+            .collect();
+        let path = std::env::temp_dir().join(format!("aleph-bb-{sanitized}.{ext}"));
+        if let Err(e) = tokio::fs::write(&path, &bytes).await {
+            tracing::debug!("BlueBubbles attachment write failed for {guid}: {e}");
+            return None;
+        }
+        Some(path.to_string_lossy().into_owned())
+    }
+}
+
+/// Map a MIME type to a short extension for temp-file naming.
+fn mime_to_ext(mime: &str) -> &'static str {
+    if mime.contains("jpeg") || mime.contains("jpg") {
+        "jpg"
+    } else if mime.contains("png") {
+        "png"
+    } else if mime.contains("mp3") {
+        "mp3"
+    } else if mime.starts_with("audio/") {
+        "m4a"
+    } else if mime.starts_with("video/") {
+        "mp4"
+    } else {
+        "bin"
+    }
 }
 
 #[cfg(test)]

@@ -73,8 +73,9 @@ pub async fn handle_webhook(
                     .is_duplicate(&m.guid)
             };
             if !dup {
-                // Attachment download deferred to Task 12's shared helper; emit text now.
-                let inbound = to_inbound(&m, vec![]);
+                let atts =
+                    super::download_attachments(&state.api, &m.attachment_guids).await;
+                let inbound = to_inbound(&m, atts);
                 let _ = state.sender.send(inbound);
             }
         }

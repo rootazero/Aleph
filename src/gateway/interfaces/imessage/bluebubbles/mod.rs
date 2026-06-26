@@ -10,6 +10,7 @@ pub mod outbound;
 pub use config::BlueBubblesConfig;
 
 use crate::sync_primitives::{Arc, AtomicBool, Mutex as StdMutex, Ordering};
+use std::time::Duration;
 
 use async_trait::async_trait;
 
@@ -47,7 +48,6 @@ pub struct BlueBubblesChannel {
     info: ChannelInfo,
     config: BlueBubblesConfig,
     channel_state: ChannelState,
-    #[allow(dead_code)] // consumed in Task 12 (catch-up poll)
     offset_tracker: Option<
         Arc<crate::gateway::interfaces::telegram::offset::OffsetTracker>,
     >,
@@ -150,6 +150,18 @@ impl Channel for BlueBubblesChannel {
         self.api.register_webhook(&cb).await;
 
         self.running.store(true, Ordering::SeqCst);
+
+        if let Some(tracker) = &self.offset_tracker {
+            tokio::spawn(inbound::poll::run_catchup_poll(
+                Arc::new(self.api.clone()),
+                self.channel_state.sender(),
+                self.dedup.clone(),
+                tracker.clone(),
+                self.running.clone(),
+                Duration::from_secs(self.config.poll_interval_secs),
+            ));
+        }
+
         self.channel_state.set_status(ChannelStatus::Connected).await;
         Ok(())
     }
