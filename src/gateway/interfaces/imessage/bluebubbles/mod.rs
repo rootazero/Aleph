@@ -57,6 +57,7 @@ pub struct BlueBubblesChannel {
     running: Arc<AtomicBool>,
     dedup: Arc<StdMutex<BbDedup>>,
     webhook_handle: Option<tokio::task::JoinHandle<()>>,
+    poll_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl BlueBubblesChannel {
@@ -81,6 +82,7 @@ impl BlueBubblesChannel {
             running: Arc::new(AtomicBool::new(false)),
             dedup: Arc::new(StdMutex::new(BbDedup::new())),
             webhook_handle: None,
+            poll_handle: None,
         }
     }
 
@@ -152,14 +154,14 @@ impl Channel for BlueBubblesChannel {
         self.running.store(true, Ordering::SeqCst);
 
         if let Some(tracker) = &self.offset_tracker {
-            tokio::spawn(inbound::poll::run_catchup_poll(
+            self.poll_handle = Some(tokio::spawn(inbound::poll::run_catchup_poll(
                 Arc::new(self.api.clone()),
                 self.channel_state.sender(),
                 self.dedup.clone(),
                 tracker.clone(),
                 self.running.clone(),
                 Duration::from_secs(self.config.poll_interval_secs),
-            ));
+            )));
         }
 
         self.channel_state.set_status(ChannelStatus::Connected).await;
@@ -175,6 +177,9 @@ impl Channel for BlueBubblesChannel {
         );
         self.api.unregister_matching(&cb).await;
         if let Some(h) = self.webhook_handle.take() {
+            h.abort();
+        }
+        if let Some(h) = self.poll_handle.take() {
             h.abort();
         }
         self.running.store(false, Ordering::SeqCst);

@@ -357,10 +357,16 @@ fn mime_to_ext(mime: &str) -> &'static str {
         "jpg"
     } else if mime.contains("png") {
         "png"
+    } else if mime.contains("heic") {
+        "heic"
+    } else if mime.contains("gif") {
+        "gif"
     } else if mime.contains("mp3") {
         "mp3"
     } else if mime.starts_with("audio/") {
         "m4a"
+    } else if mime.contains("quicktime") {
+        "mov"
     } else if mime.starts_with("video/") {
         "mp4"
     } else {
