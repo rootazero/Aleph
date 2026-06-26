@@ -80,11 +80,11 @@ impl IMessageChannel {
                 images: true,
                 audio: true,
                 video: true,
-                reactions: true,
-                replies: false, // iMessage supports tapbacks but not threading
+                reactions: false,            // AppleScript cannot send tapbacks
+                replies: false,
                 editing: false,
                 deletion: false,
-                typing_indicator: false, // Would need more complex integration
+                typing_indicator: false,
                 read_receipts: false,
                 rich_text: false,
                 max_message_length: 20000,              // Approximate limit
@@ -359,5 +359,16 @@ mod tests {
         assert_eq!(channel.info().id.as_str(), "imessage");
         assert_eq!(channel.info().channel_type, "imessage");
         assert!(channel.capabilities().attachments);
+    }
+
+    #[test]
+    fn local_capabilities_are_honest() {
+        let channel = IMessageChannel::new(IMessageConfig::default());
+        let caps = &channel.info().capabilities;
+        assert!(!caps.reactions, "AppleScript cannot send tapbacks");
+        assert!(!caps.replies);
+        assert!(!caps.typing_indicator);
+        assert!(!caps.read_receipts);
+        assert!(caps.attachments);
     }
 }
