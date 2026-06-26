@@ -71,6 +71,22 @@ pub(super) fn find_steering_target(
     find_steering_target_id(runs, new_run_id, session_key).is_some()
 }
 
+/// Whether `request` carries actual user steering content (non-blank text or at
+/// least one attachment).
+///
+/// A content-less request — a resume-style loop continuation, or a synthetic run
+/// that merely lost the `try_start_run` race — has nothing to contribute to a
+/// running sibling. Both busy-input branches consult this single predicate so
+/// they stay symmetric: `Steer` skips injecting a blank `UserMessage`, and
+/// `Interrupt` skips cancelling a healthy sibling it cannot improve on (Hermes
+/// `internal`-event protection parity — a content-less event never tears down
+/// in-flight work). Intrinsic guard at the decision point, so it no longer
+/// depends on every caller remembering to strip an inherited `Interrupt` key
+/// (cf. [`build_steering_rescue_request`]). Pure for unit testing.
+pub(super) fn has_steering_content(request: &RunRequest) -> bool {
+    !request.input.trim().is_empty() || !request.attachments.is_empty()
+}
+
 /// Render the user-visible session text for a request, mirroring the attachment
 /// markers used when a message is first persisted in `execute()`. Extracted so
 /// the steering-injection path and the normal store path stay byte-identical.
@@ -287,7 +303,9 @@ pub(super) async fn try_inject_steering(
     // Nothing to say, nothing to inject: a request with no text and no
     // attachments (e.g. a resume-style run that lost the slot race) would
     // append a blank user message to the live log. Fall back to busy/retry.
-    if request.input.trim().is_empty() && request.attachments.is_empty() {
+    // Same predicate gates the `Interrupt` branch, keeping the two modes
+    // symmetric.
+    if !has_steering_content(request) {
         return false;
     }
 
@@ -504,6 +522,27 @@ mod tests {
 
         let without = apply_reconcile_preamble("do X".to_string(), false);
         assert_eq!(without, "do X");
+    }
+
+    #[test]
+    fn has_content_true_for_text_or_attachment_false_for_empty() {
+        // Plain text → content.
+        assert!(has_steering_content(&run_request("s1", "do X")));
+        // Whitespace-only is treated as empty (a resume placeholder).
+        assert!(!has_steering_content(&run_request("s1", "   ")));
+        assert!(!has_steering_content(&run_request("s1", "")));
+        // No text but an attachment still counts as content (image-only steer).
+        let mut req = run_request("s1", "");
+        req.attachments = vec![Attachment {
+            id: "att-1".to_string(),
+            mime_type: "image/png".to_string(),
+            filename: Some("a.png".to_string()),
+            size: None,
+            url: None,
+            path: None,
+            data: None,
+        }];
+        assert!(has_steering_content(&req));
     }
 
     #[test]
