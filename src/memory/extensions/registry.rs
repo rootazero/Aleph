@@ -230,9 +230,9 @@ impl MemoryExtensionRegistry {
     /// extension contributed — callers should treat that as "no extra
     /// summary context", not a failure.
     ///
-    /// **Wire-point TODO**: `CompressionService::compress_default_notes`
-    /// should call this BEFORE the LLM extract step and append the returned
-    /// text to the compression prompt context.
+    /// Wired at `CompressionService::compress_to_notes`
+    /// (`src/memory/compression/service.rs`): the returned text is folded into
+    /// the ingest prompt as extra context before the LLM extract step.
     pub async fn dispatch_on_pre_compress(&self, ctx: &PreCompressCtx) -> String {
         let mut parts: Vec<String> = Vec::new();
         for ext in self.snapshot() {
@@ -254,9 +254,9 @@ impl MemoryExtensionRegistry {
     /// `on_delegation`: sequential broadcast. Fires on parent-side completion
     /// of a subagent run. Failures/timeouts are logged and skipped.
     ///
-    /// **Wire-point TODO**: `SubagentTool` (or whatever orchestrates child
-    /// runs) should call this with a trimmed `result_summary` after the
-    /// child run completes.
+    /// Wired at the subagent spawn site (`src/agents/subagent_tool/spawn.rs`):
+    /// fired fire-and-forget with a trimmed `result_summary` after the child
+    /// run completes (or panics/errors, surfaced as `(error) …`).
     pub async fn dispatch_on_delegation(&self, ctx: &DelegationCtx) {
         for ext in self.snapshot() {
             let name = ext.name().to_string();
