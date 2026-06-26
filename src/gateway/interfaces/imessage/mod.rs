@@ -1,14 +1,12 @@
 //! iMessage Channel Implementation
 //!
-//! Provides iMessage integration for the Gateway using:
-//! - `SQLite` database polling for receiving messages
-//! - `AppleScript` for sending messages
+//! Provides iMessage integration for the Gateway using two transports:
 //!
-//! # Requirements
-//!
-//! - macOS only
-//! - Full Disk Access permission (to read chat.db)
-//! - Automation permission (to control Messages.app)
+//! - **Local** (`IMessageChannel`): SQLite database polling for receiving +
+//!   AppleScript for sending. Requires macOS, Full Disk Access, and
+//!   Automation permission — only *registered* on macOS.
+//! - **BlueBubbles** (`BlueBubblesChannel`): REST + webhook against a running
+//!   BlueBubbles server. Pure HTTP — compiles and runs on any OS.
 //!
 //! # Configuration
 //!
@@ -25,6 +23,7 @@ mod db;
 mod sender;
 mod target;
 
+pub use bluebubbles::{BlueBubblesChannel, BlueBubblesConfig};
 pub use config::{
     DmPolicy as IMessageDmPolicy, GroupPolicy as IMessageGroupPolicy, IMessageConfig,
 };

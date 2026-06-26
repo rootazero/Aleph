@@ -53,8 +53,8 @@ pub mod xmpp;
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
 pub use imessage::{
-    IMessageChannel, IMessageChannelFactory, IMessageConfig, IMessageTarget, MessageSender,
-    MessagesDb,
+    BlueBubblesChannel, BlueBubblesConfig, IMessageChannel, IMessageChannelFactory, IMessageConfig,
+    IMessageTarget, MessageSender, MessagesDb,
 };
 
 pub use discord::{DiscordChannel, DiscordChannelFactory, DiscordConfig};
