@@ -108,24 +108,28 @@ impl NoteStore for SqliteMemoryBackend {
             Ok(raw_target.to_string())
         };
 
-        let mut desired: HashMap<String, (String, Option<String>)> = HashMap::new();
+        // to_note -> (to_raw, relation, confidence)
+        let mut desired: HashMap<String, (String, Option<String>, f32)> = HashMap::new();
         for raw_target in &note.links {
             let resolved = resolve_target(raw_target)?;
             desired
                 .entry(resolved)
-                .or_insert_with(|| (raw_target.clone(), None));
+                .or_insert_with(|| (raw_target.clone(), None, 1.0));
         }
         for rel in &note.relations {
             let resolved = resolve_target(&rel.to)?;
             // Typed relation overrides a plain wikilink to the same target.
-            desired.insert(resolved, (rel.to.clone(), Some(rel.rel_type.clone())));
+            desired.insert(
+                resolved,
+                (rel.to.clone(), Some(rel.rel_type.clone()), rel.confidence.clamp(0.0, 1.0)),
+            );
         }
 
-        // Existing edges for this from_note: to_note -> (to_raw, relation).
-        let existing: HashMap<String, (String, Option<String>)> = {
+        // Existing edges: to_note -> (to_raw, relation, confidence).
+        let existing: HashMap<String, (String, Option<String>, f32)> = {
             let mut stmt = conn
                 .prepare(
-                    "SELECT to_note, to_raw, relation FROM notes_links \
+                    "SELECT to_note, to_raw, relation, confidence FROM notes_links \
                      WHERE agent_id = ?1 AND from_note = ?2",
                 )
                 .map_err(|e| AlephError::config(format!("index_note links scan prep: {e}")))?;
@@ -135,11 +139,12 @@ impl NoteStore for SqliteMemoryBackend {
                         r.get::<_, String>(0)?,
                         r.get::<_, String>(1)?,
                         r.get::<_, Option<String>>(2)?,
+                        r.get::<_, f32>(3)?,
                     ))
                 })
                 .map_err(|e| AlephError::config(format!("index_note links scan: {e}")))?;
             rows.filter_map(|r| r.ok())
-                .map(|(to_note, to_raw, relation)| (to_note, (to_raw, relation)))
+                .map(|(to_note, to_raw, relation, conf)| (to_note, (to_raw, relation, conf)))
                 .collect()
         };
 
@@ -156,19 +161,20 @@ impl NoteStore for SqliteMemoryBackend {
         }
 
         // UPSERT new or changed targets; skip unchanged rows (no write storm).
-        for (to_note, (to_raw, relation)) in &desired {
-            let unchanged = existing
-                .get(to_note)
-                .is_some_and(|(er, erel)| er == to_raw && erel == relation);
+        for (to_note, (to_raw, relation, confidence)) in &desired {
+            let unchanged = existing.get(to_note).is_some_and(|(er, erel, econf)| {
+                er == to_raw && erel == relation && (econf - confidence).abs() < f32::EPSILON
+            });
             if unchanged {
                 continue;
             }
             conn.execute(
-                "INSERT INTO notes_links (agent_id, from_note, to_note, to_raw, relation) \
-                 VALUES (?1, ?2, ?3, ?4, ?5) \
+                "INSERT INTO notes_links (agent_id, from_note, to_note, to_raw, relation, confidence) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
                  ON CONFLICT(agent_id, from_note, to_note) \
-                 DO UPDATE SET to_raw = excluded.to_raw, relation = excluded.relation",
-                params![agent_id, path, to_note, to_raw, relation],
+                 DO UPDATE SET to_raw = excluded.to_raw, relation = excluded.relation, \
+                               confidence = excluded.confidence",
+                params![agent_id, path, to_note, to_raw, relation, confidence],
             )
             .map_err(|e| AlephError::config(format!("index_note links upsert: {e}")))?;
         }

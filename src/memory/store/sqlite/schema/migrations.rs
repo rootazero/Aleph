@@ -194,6 +194,29 @@ pub fn drop_obsolete_facts_tables(conn: &Connection) -> Result<(), AlephError> {
     Ok(())
 }
 
+/// Add the `confidence` column to `notes_links` for existing databases.
+/// Safe to call multiple times (checks column existence first).
+pub fn migrate_notes_links_confidence(conn: &Connection) -> Result<(), AlephError> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(notes_links)")
+        .map_err(|e| AlephError::config(format!("PRAGMA table_info notes_links: {e}")))?;
+    let has_confidence = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| AlephError::config(format!("table_info query: {e}")))?
+        .any(|name| name.is_ok_and(|n| n == "confidence"));
+    drop(stmt);
+
+    if !has_confidence {
+        conn.execute_batch(
+            "ALTER TABLE notes_links ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0",
+        )
+        .map_err(|e| {
+            AlephError::config(format!("Failed to add notes_links.confidence: {e}"))
+        })?;
+    }
+    Ok(())
+}
+
 /// Unify legacy `default`-agent notes rows into `main`, and purge
 /// `test-memory-validation` residue. Idempotent: re-running has no effect
 /// once `default`/`test-memory-validation` rows are gone.
