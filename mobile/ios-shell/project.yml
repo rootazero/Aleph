@@ -31,12 +31,13 @@ targets:
           UIColorName: ""
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
-        # WKWebView loads cleartext http (local 127.0.0.1:18999, or remote Debian
-        # via env override). NSAllowsArbitraryLoads covers the public-IP remote;
-        # NSAllowsLocalNetworking covers loopback.
+        # WKWebView loads cleartext http (remote public-IP core, or local
+        # 127.0.0.1). NSAllowsArbitraryLoads alone disables ATS for ALL hosts
+        # (public IP + loopback). Do NOT also add NSAllowsLocalNetworking: on
+        # iOS 10+ its mere presence makes the OS IGNORE NSAllowsArbitraryLoads,
+        # which re-blocks public-IP cleartext (NSURLErrorDomain -1022).
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-          NSAllowsLocalNetworking: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.aleph.panel.iossim
