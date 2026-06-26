@@ -204,8 +204,8 @@
 - **口语关键词**：AI 动态路由、意图路由、工具选择、语义路由
 - **代码锚点**：`src/harness/agent/prompt.rs`（把工具 schema 列表注入 system prompt）、`src/harness/agent/think.rs`（`.with_tools()` 发给 LLM）、`src/builtin_tools/gateway_route.rs`（**纯确定性 channel→agent 解析查询**，不分类意图）、`src/routing/resolve.rs`（`resolve_route` 层级匹配引擎）
 - **职责**：把全部可用工具 schema 注入提示词，**由 LLM 自由选择/组合**；系统不做确定性意图分类或工具过滤。`gateway_route` 只回答"这条消息按 channel/peer 绑定路由到哪个 agent/session"，是配置驱动的 I/O 查询，不碰语义。
-- **状态**：✅ 已实现（LLM 主权 R7）。
-- **打磨话术**：「‘动态路由’= LLM 看全量工具自选（`prompt.rs` 注入）。**不要加规则引擎式意图分类**（违 R7）。`gateway_route` 是确定性 channel 解析，不是意图分类器。**已熵减（2026-06-17）**：删除寄生的 regex 任务分类器（旧 `routing/rules.rs` + `routing/task_router.rs` + `tool_metadata` 的 L1/L2/L3 `RoutingLayer` + 死配置 `[task_routing]`）——它们是 Dispatcher 解散遗骸、suggestion-only 无消费者、直接违 R7/P8，已连根清除。」
+- **状态**：✅ 已实现（LLM 主权 R7）。**连线修复（2026-06-26）**：`gateway_route` 工具此前在 `executor/builtin_registry/builder/constructor/mod.rs` 经 `GatewayRouteTool::default()` 注册（空 bindings + 默认 session config）——**无论真实 `[routing]` 配了什么 binding/dm_scope，LLM 调 `gateway_route` 恒回 `main`/`default`**，与真实网关分发（`agent_resolver.rs` 用 `subsystems.rs::with_route_bindings` 快照的真实 bindings）完全脱节，工具向模型撒谎（违 R8 配置应可真实查询）。已改为构造时从**同一份 live `config.config`** 读取 `.bindings`+`.session` 注入 `GatewayRouteTool::new`，与网关同源同默认（`DEFAULT_AGENT_ID="main"`）；取快照而非 live-read 以与同样 boot 快照的网关保持 parity（避免 reload 后再次发散）。
+- **打磨话术**：「‘动态路由’= LLM 看全量工具自选（`prompt.rs` 注入）。**不要加规则引擎式意图分类**（违 R7）。`gateway_route` 是确定性 channel 解析，不是意图分类器；它反映**已配置的 `[routing]` bindings**（构造时从 live config 快照，连线点在 `constructor/mod.rs` 的 `gateway_route_tool:` 字段，**别再退回 `::default()`** 那会让工具对真实路由失明）。**已熵减（2026-06-17）**：删除寄生的 regex 任务分类器（旧 `routing/rules.rs` + `routing/task_router.rs` + `tool_metadata` 的 L1/L2/L3 `RoutingLayer` + 死配置 `[task_routing]`）——它们是 Dispatcher 解散遗骸、suggestion-only 无消费者、直接违 R7/P8，已连根清除。」
 
 ### 3.7 Shell/Bash 工具 (Shell Execution)
 - **口语关键词**：bash、shell、脚本执行、后台进程、wait/poll/kill、后台进程上限
