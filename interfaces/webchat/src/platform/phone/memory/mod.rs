@@ -6,6 +6,7 @@
 
 pub mod cell;
 pub mod detail;
+pub mod graph;
 pub mod list;
 
 use leptos::prelude::*;
