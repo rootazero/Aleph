@@ -35,6 +35,12 @@ pub struct McpPreset {
     /// Free-form tags.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Post-install setup guidance shown to the user (Chinese, user-facing).
+    /// For presets needing out-of-band setup (e.g. a local editor-embedded
+    /// server). `None` = no extra steps. `serde(default)` keeps old catalog
+    /// entries (without this key) parseable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_install: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,5 +160,18 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("<AMAP_MAPS_API_KEY>"));
+    }
+
+    #[test]
+    fn post_install_defaults_to_none_when_absent() {
+        // Back-compat: a preset JSON without the post_install key still parses.
+        let json = r#"{
+            "id": "x", "name": "X", "category": "developer",
+            "description": "d", "vendor": "V", "official": true,
+            "reachability": "global",
+            "transports": [{ "kind": "http", "url": "https://x/mcp" }]
+        }"#;
+        let p: McpPreset = serde_json::from_str(json).expect("parse");
+        assert!(p.post_install.is_none());
     }
 }
