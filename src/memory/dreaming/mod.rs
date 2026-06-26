@@ -1150,19 +1150,22 @@ impl DreamDaemon {
 
 /// Compute a `RawMetrics` snapshot for the Dream cycle.
 ///
-/// Pulls notes (count + 24h growth) from the in-memory note index, then
-/// folds in 24h tool-invocation aggregates from `raw_memories` so the
-/// signal collector can surface `tool_failure_rate` / `tool_call_volume` /
-/// `tool_latency_score` (Spec 3). A backend failure on the tool query is
-/// downgraded to a warning — strategy selection runs on the note signals
-/// alone rather than aborting the whole cycle.
+/// Pulls notes (count + 24h growth) from the in-memory note index, folds in
+/// 24h tool-invocation aggregates from `raw_memories` so the signal collector
+/// can surface `tool_failure_rate` / `tool_call_volume` / `tool_latency_score`
+/// (Spec 3), and folds in per-note recall counts from `recall_signals` so the
+/// recall-derived signals (`note_hit_rate` / `never_recalled_ratio` /
+/// `skill_recall_rate`) carry real values rather than the historical zeros.
 ///
-/// Quality and recall rates still require dedicated aggregate queries and
-/// remain at zero; a follow-up can fold in the `dream_report` /
-/// `recall_signals` tables.
+/// The recall wiring is load-bearing: `skill_recall_rate` feeds the strategy
+/// selector's `growth_pressure` (a false 0 perpetually inflated the synthesize
+/// pressure) and the `MutationGate` wasted-distillation detector (a false 0
+/// made it fire `Conserve` the moment any skill was produced). Both the tool
+/// and the recall queries degrade to a warning + zeros on backend failure —
+/// strategy selection runs on the surviving signals rather than aborting.
 async fn compute_raw_metrics(
     notes: &[NoteIndexEntry],
-    store: &dyn crate::memory::store::raw_memory::RawMemoryStore,
+    store: &SqliteMemoryBackend,
     agent_id: &str,
 ) -> RawMetrics {
     let day_ago = now_timestamp() - 86_400;
@@ -1183,9 +1186,46 @@ async fn compute_raw_metrics(
             }
         };
 
+    // Fold in recall signals with a single batch query over every note path.
+    // `recall_hit_counts` returns only the paths that have at least one recorded
+    // recall, so its key set is exactly the recalled subset.
+    let total_notes = notes.len() as u32;
+    let all_paths: Vec<String> = notes.iter().map(|n| n.path.clone()).collect();
+    let (note_hit_rate, never_recalled_count, skill_notes_total, skill_notes_recalled) =
+        match store.recall_hit_counts(&all_paths).await {
+            Ok(hits) => {
+                let recalled_total = hits.len() as u32;
+                let never = total_notes.saturating_sub(recalled_total);
+                let skill_total =
+                    notes.iter().filter(|n| n.category == "skill").count() as u32;
+                let skill_recalled = notes
+                    .iter()
+                    .filter(|n| n.category == "skill" && hits.contains_key(&n.path))
+                    .count() as u32;
+                let hit_rate = if total_notes > 0 {
+                    f64::from(recalled_total) / f64::from(total_notes)
+                } else {
+                    0.0
+                };
+                (hit_rate, never, skill_total, skill_recalled)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    agent = agent_id,
+                    "recall-signal aggregation failed; recall signals will read zero",
+                );
+                (0.0, 0, 0, 0)
+            }
+        };
+
     RawMetrics {
-        total_notes: notes.len() as u32,
+        total_notes,
         notes_added_24h,
+        note_hit_rate,
+        never_recalled_count,
+        skill_notes_total,
+        skill_notes_recalled,
         tool_calls_total_24h: tool_total,
         tool_calls_failed_24h: tool_failed,
         tool_avg_duration_ms_24h: tool_avg_ms,
@@ -1433,6 +1473,57 @@ mod tests {
         assert_eq!(m.tool_calls_failed_24h, 1);
         // (10 + 30 + 0) / 3 = 13
         assert_eq!(m.tool_avg_duration_ms_24h, 40 / 3);
+    }
+
+    #[tokio::test]
+    async fn compute_raw_metrics_folds_in_recall_signals() {
+        let temp =
+            std::env::temp_dir().join(format!("aleph_metrics_recall_{}", uuid::Uuid::new_v4()));
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+
+        let now = now_timestamp();
+        let note = |path: &str, category: &str| NoteIndexEntry {
+            path: path.into(),
+            filename: path.rsplit('/').next().unwrap_or(path).into(),
+            agent_id: DEFAULT_AGENT_ID.into(),
+            category: category.into(),
+            tags: vec![],
+            link_count: 0,
+            created_at: now,
+            updated_at: now,
+            content_hash: "h".into(),
+        };
+        // Two skill notes (one recalled, one cold) + one reference note (cold).
+        let notes = vec![
+            note("skill/async-errors", "skill"),
+            note("skill/never-used", "skill"),
+            note("reference/api", "reference"),
+        ];
+
+        // Record a recall hit for exactly one skill note.
+        store
+            .record_recall_hits(
+                "how to handle async errors",
+                "auto-recall",
+                &[("skill/async-errors".to_string(), 0.9)],
+                DEFAULT_AGENT_ID,
+            )
+            .await
+            .unwrap();
+
+        let m = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID).await;
+        // Skill recall: 1 of 2 skill notes recalled → skill_recall_rate = 0.5,
+        // which keeps the wasted-distillation gate from misfiring (its bug was
+        // a structural recalled=0).
+        assert_eq!(m.skill_notes_total, 2);
+        assert_eq!(m.skill_notes_recalled, 1);
+        // 3 notes, 1 recalled → 2 never recalled.
+        assert_eq!(m.never_recalled_count, 2);
+        assert!((m.note_hit_rate - 1.0 / 3.0).abs() < 1e-9);
+
+        // The derived skill_recall_rate signal must now be non-zero.
+        let snap = SignalSnapshot::from_metrics(&m);
+        assert!((snap.score("skill_recall_rate") - 0.5).abs() < 1e-9);
     }
 
     #[tokio::test]
