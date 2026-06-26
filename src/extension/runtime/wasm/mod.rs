@@ -120,8 +120,15 @@ impl WasmRuntime {
                 "secret_exists",
                 [PTR],
                 [PTR],
-                host_state,
+                host_state.clone(),
                 host_functions::host_secret_exists,
+            )
+            .with_function(
+                "http_fetch",
+                [PTR],
+                [PTR],
+                host_state,
+                host_functions::host_http_fetch,
             )
             .build()
             .map_err(|e| ExtensionError::Runtime(format!("Failed to load WASM: {e}")))?;

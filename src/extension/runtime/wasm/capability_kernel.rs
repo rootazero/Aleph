@@ -7,9 +7,10 @@
 //! - Audit logging
 //! - Resource counting
 
-use crate::sync_primitives::{AtomicU32, Ordering};
+use crate::sync_primitives::{AtomicU32, Mutex, Ordering};
 
-use crate::extension::runtime::wasm::capabilities::WasmCapabilities;
+use crate::extension::runtime::wasm::allowlist::AllowlistValidator;
+use crate::extension::runtime::wasm::capabilities::{HttpCapability, WasmCapabilities};
 use crate::extension::runtime::wasm::limits::WasmResourceLimits;
 
 /// Errors from capability checks
@@ -54,11 +55,14 @@ pub struct WasmCapabilityKernel {
     log_count: AtomicU32,
     http_call_count: AtomicU32,
     tool_invoke_count: AtomicU32,
+    /// Monotonic millis timestamps of recent HTTP calls, for sliding-window
+    /// rate limiting. Pruned to the last hour on each `check_rate_limit`.
+    http_timestamps: Mutex<Vec<u64>>,
 }
 
 impl WasmCapabilityKernel {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         plugin_id: String,
         capabilities: WasmCapabilities,
         limits: WasmResourceLimits,
@@ -70,6 +74,7 @@ impl WasmCapabilityKernel {
             log_count: AtomicU32::new(0),
             http_call_count: AtomicU32::new(0),
             tool_invoke_count: AtomicU32::new(0),
+            http_timestamps: Mutex::new(Vec::new()),
         }
     }
 
@@ -151,6 +156,68 @@ impl WasmCapabilityKernel {
         Ok(())
     }
 
+    /// Validate an outbound HTTP request against the declared `http` capability.
+    ///
+    /// Returns `NotDeclared` if the plugin never requested the `http`
+    /// capability (default-deny), or `NotAllowed` if the request fails the
+    /// allowlist (HTTPS-only, anti host-confusion, path-traversal safe).
+    pub fn check_http_request(&self, method: &str, url: &str) -> Result<(), CapabilityError> {
+        let http = self
+            .capabilities
+            .http
+            .as_ref()
+            .ok_or_else(|| CapabilityError::NotDeclared("http".to_string()))?;
+        AllowlistValidator::new(http.allowlist.clone())
+            .check(method, url)
+            .map_err(|e| CapabilityError::NotAllowed(e.to_string()))
+    }
+
+    /// Enforce the declared per-minute / per-hour HTTP rate limit using a
+    /// sliding window. A zero threshold (or no `rate_limit`) means unlimited.
+    /// Records the current call's timestamp when the request is admitted.
+    pub fn check_rate_limit(&self) -> Result<(), CapabilityError> {
+        let Some(rl) = self
+            .capabilities
+            .http
+            .as_ref()
+            .and_then(|h| h.rate_limit.as_ref())
+        else {
+            return Ok(());
+        };
+        let now = self.now_millis();
+        let mut stamps = self
+            .http_timestamps
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Drop anything older than the longest (hour) window.
+        stamps.retain(|t| now.saturating_sub(*t) < 3_600_000);
+        let last_minute = stamps
+            .iter()
+            .filter(|t| now.saturating_sub(**t) < 60_000)
+            .count() as u32;
+        if rl.requests_per_minute > 0 && last_minute >= rl.requests_per_minute {
+            return Err(CapabilityError::RateLimited(format!(
+                "{} requests/minute exceeded",
+                rl.requests_per_minute
+            )));
+        }
+        if rl.requests_per_hour > 0 && stamps.len() as u32 >= rl.requests_per_hour {
+            return Err(CapabilityError::RateLimited(format!(
+                "{} requests/hour exceeded",
+                rl.requests_per_hour
+            )));
+        }
+        stamps.push(now);
+        Ok(())
+    }
+
+    /// Borrow the declared HTTP capability (timeout / size caps live here),
+    /// or `None` if the plugin did not request `http` access.
+    #[must_use]
+    pub fn http_config(&self) -> Option<&HttpCapability> {
+        self.capabilities.http.as_ref()
+    }
+
     pub fn check_tool_invoke_limit(&self) -> Result<(), CapabilityError> {
         let prev = self.tool_invoke_count.fetch_add(1, Ordering::SeqCst);
         if prev >= self.limits.max_tool_invokes {
@@ -220,7 +287,9 @@ impl WasmCapabilityKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension::runtime::wasm::capabilities::{SecretsCapability, WorkspaceCapability};
+    use crate::extension::runtime::wasm::capabilities::{
+        EndpointPattern, HttpCapability, RateLimit, SecretsCapability, WorkspaceCapability,
+    };
 
     fn kernel_with_no_caps() -> WasmCapabilityKernel {
         WasmCapabilityKernel::new(
@@ -256,6 +325,76 @@ mod tests {
             caps,
             WasmResourceLimits::default(),
         )
+    }
+
+    fn kernel_with_http(rate_limit: Option<RateLimit>) -> WasmCapabilityKernel {
+        let caps = WasmCapabilities {
+            http: Some(HttpCapability {
+                allowlist: vec![EndpointPattern {
+                    host: "api.example.com".to_string(),
+                    path_prefix: "/v1/".to_string(),
+                    methods: vec!["GET".to_string()],
+                }],
+                credentials: vec![],
+                rate_limit,
+                timeout_secs: 30,
+                max_request_bytes: 1024,
+                max_response_bytes: 2048,
+            }),
+            ..Default::default()
+        };
+        WasmCapabilityKernel::new("test-plugin".to_string(), caps, WasmResourceLimits::default())
+    }
+
+    #[test]
+    fn test_http_request_denied_without_capability() {
+        let kernel = kernel_with_no_caps();
+        let result = kernel.check_http_request("GET", "https://api.example.com/v1/x");
+        assert!(matches!(result, Err(CapabilityError::NotDeclared(_))));
+    }
+
+    #[test]
+    fn test_http_request_allowlist_enforced() {
+        let kernel = kernel_with_http(None);
+        // Matches host + path + method
+        assert!(kernel
+            .check_http_request("GET", "https://api.example.com/v1/users")
+            .is_ok());
+        // Wrong host
+        assert!(matches!(
+            kernel.check_http_request("GET", "https://evil.com/v1/users"),
+            Err(CapabilityError::NotAllowed(_))
+        ));
+        // Non-HTTPS is rejected by the validator
+        assert!(matches!(
+            kernel.check_http_request("GET", "http://api.example.com/v1/users"),
+            Err(CapabilityError::NotAllowed(_))
+        ));
+        // http_config exposes the size caps
+        assert_eq!(kernel.http_config().unwrap().max_response_bytes, 2048);
+    }
+
+    #[test]
+    fn test_rate_limit_sliding_window() {
+        let kernel = kernel_with_http(Some(RateLimit {
+            requests_per_minute: 2,
+            requests_per_hour: 100,
+        }));
+        assert!(kernel.check_rate_limit().is_ok());
+        assert!(kernel.check_rate_limit().is_ok());
+        // Third call within the same minute is rate-limited.
+        assert!(matches!(
+            kernel.check_rate_limit(),
+            Err(CapabilityError::RateLimited(_))
+        ));
+    }
+
+    #[test]
+    fn test_rate_limit_noop_when_undeclared() {
+        let kernel = kernel_with_http(None);
+        for _ in 0..10 {
+            assert!(kernel.check_rate_limit().is_ok());
+        }
     }
 
     #[test]
