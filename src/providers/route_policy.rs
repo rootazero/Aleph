@@ -49,10 +49,14 @@ pub struct LoadMetric {
     /// (USD/Mtok × 1000) for this candidate's first model, looked up from the
     /// static [`crate::pricing`] rate card and folded in by the failover layer —
     /// the same "derived field, pre-computed outside the policy" contract as
-    /// [`utilization_permille`](Self::utilization_permille). `0` = unpriced
-    /// (on-machine / self-hosted models carry no rate card), which sorts *first*
-    /// under [`CostAware`](crate::config::types::LoadBalanceStrategy::CostAware)
-    /// so effectively-free local inference is preferred. The sort key for
+    /// [`utilization_permille`](Self::utilization_permille). `0` = free local
+    /// inference (an on-machine / self-hosted model that carries no rate card),
+    /// which sorts *first* under
+    /// [`CostAware`](crate::config::types::LoadBalanceStrategy::CostAware) so it
+    /// is preferred; [`u64::MAX`] = unpriced *cloud* (a model absent from the
+    /// table, whose cost is unknown rather than zero), which sorts *last* so it
+    /// never ranks ahead of a confirmable price. The failover layer derives this
+    /// split from each candidate's [`EndpointTier`]. The sort key for
     /// `CostAware`; ignored by every other strategy.
     pub price_per_mtok: u64,
 }
@@ -402,8 +406,10 @@ where
             u64::from(m.utilization_permille)
         }),
         // Cheapest first — lowest blended input+output price (milli-USD/Mtok).
-        // `0` (unpriced local / self-hosted) sorts first, so effectively-free
-        // on-machine inference is preferred over any paid cloud endpoint.
+        // `0` (free local / self-hosted) sorts first, so effectively-free
+        // on-machine inference is preferred over any paid cloud endpoint;
+        // `u64::MAX` (unpriced cloud, cost unknown) sorts last so it never
+        // out-ranks a confirmable price. The failover layer sets both.
         LoadBalanceStrategy::CostAware => {
             sort_by_metric(group, metric_of, name_of, |m| m.price_per_mtok)
         }
@@ -921,6 +927,15 @@ mod tests {
         // b unpriced (0 = free local) leads even though a/c are priced.
         let names = cost_names(&[("a", 50_000), ("b", 0), ("c", 20_000)]);
         assert_eq!(names, vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn cost_aware_unknown_cost_sentinel_sorts_last() {
+        // `u64::MAX` is the failover layer's "unpriced cloud, cost unknown"
+        // sentinel: it must rank behind every confirmable price rather than
+        // ahead of them (the bug where an unpriced cloud model looked free).
+        let names = cost_names(&[("a", 50_000), ("b", u64::MAX), ("c", 20_000)]);
+        assert_eq!(names, vec!["c", "a", "b"]);
     }
 
     #[test]
