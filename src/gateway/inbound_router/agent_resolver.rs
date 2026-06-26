@@ -70,6 +70,31 @@ impl InboundMessageRouter {
                 &input,
             );
 
+            // An explicit per-channel binding (set by `agent_switch` / Panel) is a
+            // deliberate runtime override. It must win when NO *specific* route
+            // binding governs this conversation — otherwise the namesake
+            // `agent_switch` action is a silent no-op whenever any route_bindings
+            // exist, because Tier 1 returns before the Tier 2 workspace binding is
+            // ever consulted. Specific bindings (Peer/Guild/Team/Account/Channel)
+            // still win, preserving carefully-scoped routing config.
+            if resolved.matched_by == crate::routing::resolve::MatchedBy::Default {
+                let channel = msg.channel_id.as_str();
+                if let Some(ref manager) = self.workspace_manager {
+                    if let Ok(Some(agent_id)) = manager.get_active_agent(channel) {
+                        if agent_id != resolved.agent_id {
+                            debug!(
+                                "Channel '{}' override → agent '{}' (explicit switch beats default route)",
+                                channel, agent_id
+                            );
+                            // Return None for the route so the context builder
+                            // rebuilds the session key for the override agent
+                            // (the route's key was computed for the default agent).
+                            return Some((agent_id, None));
+                        }
+                    }
+                }
+            }
+
             debug!(
                 "Route resolved: channel='{}' → agent='{}' (matched_by={:?})",
                 msg.channel_id.as_str(),

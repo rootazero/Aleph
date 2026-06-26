@@ -347,6 +347,33 @@ impl AgentEnvStore {
         }
     }
 
+    /// Get every channel bound to each agent (many-to-one aware).
+    ///
+    /// The binding model is N channels → 1 agent, so [`Self::get_all_agent_bindings`]
+    /// (one channel per agent) is lossy — an agent bound to several channels shows
+    /// only one. This returns the full `agent_id → [channel, …]` grouping for honest
+    /// listing. Channels are sorted for deterministic output.
+    pub fn bindings_by_agent(
+        &self,
+    ) -> Result<std::collections::HashMap<String, Vec<String>>, AgentEnvError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare("SELECT agent_id, channel FROM channel_active_agent ORDER BY agent_id, channel")
+            .map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        let mut map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let (agent_id, channel) = row.map_err(|e| AgentEnvError::Database(e.to_string()))?;
+            map.entry(agent_id).or_default().push(channel);
+        }
+        Ok(map)
+    }
+
     /// Get all agent→channel bindings (for Panel agents.bindings RPC).
     pub fn get_all_agent_bindings(
         &self,
