@@ -1,0 +1,204 @@
+//! Cross-turn "unchanged re-read" detection for `file_read`.
+//!
+//! A model that re-issues the *same* `file_read` (identical path / offset /
+//! limit) across turns re-pays the full token cost every time, and tight read
+//! loops (read → think → read the same thing again) can stall a run. `file_read`
+//! results are deliberately never persisted to the result store — see the §3.2
+//! invariant "no read-file-marker loop" (`tools::result_processing`) — so the
+//! per-turn spill path offers no protection on this code path specifically.
+//!
+//! This guard closes that gap *mechanically*, not by reasoning about intent
+//! (R7 / P8): it keys on `(canonical_path, offset, limit)` and compares the
+//! file's `(mtime, size)`. When a repeat read targets a byte-for-byte unchanged
+//! window, the caller may omit the full rendered content and return a compact
+//! stub — the model already received that content on the first read. A second
+//! consecutive repeat escalates the wording to a firm "stop re-reading" nudge.
+//! Any real change (mtime or size) resets the counter and yields a fresh read.
+//!
+//! The store fails *open*: if the filesystem timestamp can't be read, or the
+//! lock is poisoned, the caller renders normally. A false "fresh" only costs
+//! tokens; a false "unchanged" would starve the model, so the bias is
+//! deliberate.
+
+use std::collections::HashMap;
+use std::time::SystemTime;
+
+use crate::sync_primitives::{Arc, Mutex};
+
+/// Identity of a windowed read: same file + same window ⇒ same key.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ReadKey {
+    path: String,
+    offset: Option<u64>,
+    limit: Option<u64>,
+}
+
+/// What we remember about the last time this exact window was read.
+#[derive(Clone, Copy)]
+struct ReadFingerprint {
+    mtime: SystemTime,
+    size: u64,
+    /// Count of *consecutive* unchanged re-reads already served as a stub
+    /// (0 means the last observation rendered full content).
+    repeats: u32,
+}
+
+/// Outcome of observing a read against the cache.
+pub(super) enum ReadCacheDecision {
+    /// File is new, changed, or unverifiable: execute and render in full.
+    Fresh,
+    /// Identical re-read of an unchanged file: the caller may serve a stub.
+    /// `repeats` is 1 for the first stub and escalates on each further repeat.
+    Unchanged { repeats: u32 },
+}
+
+/// Per-instance fingerprint store, shared across `Clone`s of one `FileReadTool`
+/// (= one builtin registry = one session). A plain `std::sync::Mutex` is right
+/// here: every critical section is a single map probe/insert, never held across
+/// an `.await`.
+#[derive(Clone, Default)]
+pub(super) struct ReadCache {
+    inner: Arc<Mutex<HashMap<ReadKey, ReadFingerprint>>>,
+}
+
+impl ReadCache {
+    /// Record this read and decide whether the caller may skip full rendering.
+    ///
+    /// `fingerprint` carries the file's current `(mtime, size)`, or `None` when
+    /// the filesystem metadata could not be read. On `None` we fail open
+    /// (return [`ReadCacheDecision::Fresh`]) and forget any prior entry, so a
+    /// later successful stat starts the counter clean rather than comparing
+    /// against a stale fingerprint.
+    pub(super) fn observe(
+        &self,
+        path: &str,
+        offset: Option<u64>,
+        limit: Option<u64>,
+        fingerprint: Option<(SystemTime, u64)>,
+    ) -> ReadCacheDecision {
+        let key = ReadKey {
+            path: path.to_string(),
+            offset,
+            limit,
+        };
+
+        // Poison-safe per P7: recover the guard rather than panicking.
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+
+        let Some((mtime, size)) = fingerprint else {
+            map.remove(&key);
+            return ReadCacheDecision::Fresh;
+        };
+
+        match map.get_mut(&key) {
+            Some(fp) if fp.mtime == mtime && fp.size == size => {
+                fp.repeats = fp.repeats.saturating_add(1);
+                ReadCacheDecision::Unchanged {
+                    repeats: fp.repeats,
+                }
+            }
+            _ => {
+                map.insert(
+                    key,
+                    ReadFingerprint {
+                        mtime,
+                        size,
+                        repeats: 0,
+                    },
+                );
+                ReadCacheDecision::Fresh
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn t0() -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(1_000)
+    }
+
+    #[test]
+    fn first_read_is_fresh() {
+        let cache = ReadCache::default();
+        let d = cache.observe("/a.txt", None, None, Some((t0(), 42)));
+        assert!(matches!(d, ReadCacheDecision::Fresh));
+    }
+
+    #[test]
+    fn unchanged_repeat_escalates() {
+        let cache = ReadCache::default();
+        let fp = Some((t0(), 42));
+        assert!(matches!(
+            cache.observe("/a.txt", None, None, fp),
+            ReadCacheDecision::Fresh
+        ));
+        assert!(matches!(
+            cache.observe("/a.txt", None, None, fp),
+            ReadCacheDecision::Unchanged { repeats: 1 }
+        ));
+        assert!(matches!(
+            cache.observe("/a.txt", None, None, fp),
+            ReadCacheDecision::Unchanged { repeats: 2 }
+        ));
+    }
+
+    #[test]
+    fn changed_mtime_resets_to_fresh() {
+        let cache = ReadCache::default();
+        cache.observe("/a.txt", None, None, Some((t0(), 42)));
+        // Same size, newer mtime ⇒ the file changed.
+        let newer = t0() + Duration::from_secs(5);
+        assert!(matches!(
+            cache.observe("/a.txt", None, None, Some((newer, 42))),
+            ReadCacheDecision::Fresh
+        ));
+        // And the counter restarts from this new baseline.
+        assert!(matches!(
+            cache.observe("/a.txt", None, None, Some((newer, 42))),
+            ReadCacheDecision::Unchanged { repeats: 1 }
+        ));
+    }
+
+    #[test]
+    fn changed_size_resets_to_fresh() {
+        let cache = ReadCache::default();
+        cache.observe("/a.txt", None, None, Some((t0(), 42)));
+        assert!(matches!(
+            cache.observe("/a.txt", None, None, Some((t0(), 99))),
+            ReadCacheDecision::Fresh
+        ));
+    }
+
+    #[test]
+    fn different_window_is_independent() {
+        let cache = ReadCache::default();
+        let fp = Some((t0(), 42));
+        cache.observe("/a.txt", None, None, fp);
+        // Same file, different offset ⇒ a different window, tracked separately.
+        assert!(matches!(
+            cache.observe("/a.txt", Some(100), None, fp),
+            ReadCacheDecision::Fresh
+        ));
+    }
+
+    #[test]
+    fn missing_fingerprint_fails_open_and_forgets() {
+        let cache = ReadCache::default();
+        let fp = Some((t0(), 42));
+        cache.observe("/a.txt", None, None, fp);
+        // An unverifiable stat fails open and clears the prior entry...
+        assert!(matches!(
+            cache.observe("/a.txt", None, None, None),
+            ReadCacheDecision::Fresh
+        ));
+        // ...so the next verifiable read is treated as a fresh baseline.
+        assert!(matches!(
+            cache.observe("/a.txt", None, None, fp),
+            ReadCacheDecision::Fresh
+        ));
+    }
+}

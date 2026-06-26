@@ -16,6 +16,7 @@ use tracing::info;
 
 use super::ops::read_file_bytes;
 use super::path_utils::get_denied_paths;
+use super::read_cache::{ReadCache, ReadCacheDecision};
 use super::text::{clamp_line, is_binary, DEFAULT_READ_LINE_LIMIT};
 use crate::error::Result;
 use crate::tools::AlephTool;
@@ -73,6 +74,9 @@ pub struct FileReadTool {
     denied_paths: Vec<String>,
     /// Optional `ToolContext` handle for workspace-scoped output path resolution.
     tool_context_handle: Option<crate::tools::ToolContextHandle>,
+    /// Cross-turn fingerprint store that collapses repeated reads of an
+    /// unchanged file into a compact stub. Shared across `Clone`s of this tool.
+    read_cache: ReadCache,
 }
 
 impl FileReadTool {
@@ -88,6 +92,7 @@ impl FileReadTool {
             max_read_size: 100 * 1024 * 1024, // 100 MB
             denied_paths,
             tool_context_handle: None,
+            read_cache: ReadCache::default(),
         }
     }
 
@@ -120,6 +125,9 @@ impl Clone for FileReadTool {
             max_read_size: self.max_read_size,
             denied_paths: self.denied_paths.clone(),
             tool_context_handle: self.tool_context_handle.clone(),
+            // Share the fingerprint store so dedup spans the tool's lifetime,
+            // not just a single registry clone.
+            read_cache: self.read_cache.clone(),
         }
     }
 }
@@ -257,10 +265,73 @@ impl AlephTool for FileReadTool {
         // Lossy decode: a few stray bytes degrade to U+FFFD rather than failing
         // the whole read.
         let text = String::from_utf8_lossy(&bytes);
-        let output = render_window(&text, &args, size, path_str);
+
+        // Cross-turn unchanged-read guard: a cheap stat keyed against the last
+        // read of this exact window. If the file is byte-for-byte unchanged,
+        // skip re-rendering the (potentially large) numbered content and return
+        // a compact stub instead. A failed stat fails open to a full read.
+        let fingerprint = std::fs::metadata(&canonical)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .map(|mtime| (mtime, size));
+        let output = match self
+            .read_cache
+            .observe(&path_str, args.offset, args.limit, fingerprint)
+        {
+            ReadCacheDecision::Unchanged { repeats } => {
+                unchanged_stub(&text, &args, size, path_str, repeats)
+            }
+            ReadCacheDecision::Fresh => render_window(&text, &args, size, path_str),
+        };
 
         notify_tool_result(Self::NAME, &output.message, output.success);
         Ok(output)
+    }
+}
+
+/// Compact response served on a repeat read of a byte-for-byte unchanged
+/// window. The full numbered content is intentionally omitted — the model
+/// received it on the first read — which is the whole point: it avoids
+/// re-paying the token cost and breaks tight read loops. `total_lines` is still
+/// reported (a cheap `lines().count()`) so the model keeps accurate file shape.
+fn unchanged_stub(
+    text: &str,
+    args: &FileReadArgs,
+    size: u64,
+    path: String,
+    repeats: u32,
+) -> FileReadOutput {
+    let total_lines = text.lines().count() as u64;
+    let window = match (args.offset, args.limit) {
+        (Some(o), Some(l)) => format!("lines {o}–{}", o.saturating_add(l)),
+        (Some(o), None) => format!("from line {o}"),
+        (None, Some(l)) => format!("first {l} lines"),
+        (None, None) => "the whole file".to_string(),
+    };
+    let message = if repeats >= 2 {
+        format!(
+            "STOP — repeat #{repeats} of an identical read of an unchanged file \
+             ({window}). The content has not changed since your first read and \
+             is already in your context. Re-reading wastes tokens; act on what \
+             you already have, or take a different step."
+        )
+    } else {
+        format!(
+            "Unchanged since your previous read ({window}): same modification \
+             time and size, so the content is identical to what you already \
+             received. Full content omitted to save context — re-read only after \
+             the file changes."
+        )
+    };
+    FileReadOutput {
+        success: true,
+        path,
+        content: String::new(),
+        size,
+        total_lines,
+        returned_lines: 0,
+        truncated: false,
+        message,
     }
 }
 
@@ -396,5 +467,54 @@ mod tests {
         );
         assert_eq!(out.total_lines, 1);
         assert!(out.content.contains("1\tsolo"));
+    }
+
+    #[tokio::test]
+    async fn repeat_read_of_unchanged_file_is_stubbed() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        fs::write(&file, "first\nsecond\nthird\n").unwrap();
+
+        // Same instance across both calls — the shared cache spans turns.
+        let tool = FileReadTool::new();
+        let first = AlephTool::call(&tool, args(&file, None, None))
+            .await
+            .unwrap();
+        assert!(
+            first.content.contains("1\tfirst"),
+            "first read returns full content"
+        );
+
+        let second = AlephTool::call(&tool, args(&file, None, None))
+            .await
+            .unwrap();
+        assert!(second.success);
+        assert!(second.content.is_empty(), "repeat read omits content");
+        assert_eq!(second.returned_lines, 0);
+        assert_eq!(second.total_lines, 3, "file shape still reported");
+        assert!(second.message.to_lowercase().contains("unchanged"));
+    }
+
+    #[tokio::test]
+    async fn changed_file_returns_full_content_again() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        fs::write(&file, "one\n").unwrap();
+
+        let tool = FileReadTool::new();
+        let _ = AlephTool::call(&tool, args(&file, None, None))
+            .await
+            .unwrap();
+
+        // Mutating the file changes its size → the next read must be full again.
+        fs::write(&file, "one\ntwo\nthree\n").unwrap();
+        let again = AlephTool::call(&tool, args(&file, None, None))
+            .await
+            .unwrap();
+        assert!(
+            again.content.contains("3\tthree"),
+            "post-change read is fresh"
+        );
+        assert_eq!(again.returned_lines, 3);
     }
 }
