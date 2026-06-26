@@ -18,8 +18,9 @@ use alephcore::gateway::handlers::auth as auth_handlers;
 use alephcore::gateway::interfaces::telegram::offset::OffsetTracker;
 use alephcore::gateway::interfaces::telegram::parse_telegram_channel_config;
 use alephcore::gateway::interfaces::TelegramChannel;
+use alephcore::gateway::interfaces::IMessageConfig;
 #[cfg(target_os = "macos")]
-use alephcore::gateway::interfaces::{IMessageChannel, IMessageConfig};
+use alephcore::gateway::interfaces::IMessageChannel;
 use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{AgentRegistry, ChannelRegistry, InboundMessageRouter, RoutingConfig};
 
@@ -269,35 +270,82 @@ pub(in crate::commands::start) async fn initialize_channels(
 
     // Create and register all channel instances
     for inst in &instances {
-        // iMessage uses its own constructor (no id parameter)
-        #[cfg(target_os = "macos")]
         if inst.channel_type == "imessage" {
             match serde_json::from_value::<IMessageConfig>(inst.config.clone()) {
                 Ok(imessage_config) => {
-                    let mut imessage_channel = IMessageChannel::new(imessage_config);
-                    // Wire persistent catch-up cursor so a restart recovers
-                    // messages received while the daemon was offline.
-                    if let Some(ref db) = state_db {
-                        let tracker = OffsetTracker::new(db.clone(), inst.id.clone());
-                        imessage_channel.set_offset_tracker(Arc::new(tracker));
-                    }
-                    let channel_id = channel_registry.register(Box::new(imessage_channel)).await;
-                    if !daemon {
-                        println!("Registered channel: {channel_id} (iMessage)");
+                    use alephcore::gateway::interfaces::imessage::config::Transport;
+                    match imessage_config.effective_transport() {
+                        Transport::Bluebubbles => {
+                            // Inject vault secrets (password) before constructing.
+                            let mut cfg_json = inst.config.clone();
+                            inject_channel_secrets(&inst.id, &mut cfg_json, &vault);
+                            match serde_json::from_value::<IMessageConfig>(cfg_json) {
+                                Ok(bb_cfg) => match bb_cfg.bluebubbles {
+                                    Some(bb) => {
+                                        let mut bb_channel =
+                                            alephcore::gateway::interfaces::BlueBubblesChannel::new(
+                                                bb,
+                                            );
+                                        if let Some(ref db) = state_db {
+                                            // Distinct cursor key: timestamps, not ROWID.
+                                            let tracker = OffsetTracker::new(
+                                                db.clone(),
+                                                format!("{}-bb", inst.id),
+                                            );
+                                            bb_channel.set_offset_tracker(Arc::new(tracker));
+                                        }
+                                        let cid = channel_registry
+                                            .register(Box::new(bb_channel))
+                                            .await;
+                                        if !daemon {
+                                            println!(
+                                                "Registered channel: {cid} (iMessage/BlueBubbles)"
+                                            );
+                                        }
+                                    }
+                                    None => tracing::warn!(
+                                        "imessage '{}' transport=bluebubbles but no [bluebubbles] block; skipping",
+                                        inst.id
+                                    ),
+                                },
+                                Err(e) => tracing::warn!(
+                                    "Failed to parse imessage config '{}': {e}; skipping",
+                                    inst.id
+                                ),
+                            }
+                        }
+                        Transport::Local => {
+                            #[cfg(target_os = "macos")]
+                            {
+                                let mut imessage_channel = IMessageChannel::new(imessage_config);
+                                if let Some(ref db) = state_db {
+                                    let tracker =
+                                        OffsetTracker::new(db.clone(), inst.id.clone());
+                                    imessage_channel.set_offset_tracker(Arc::new(tracker));
+                                }
+                                let cid = channel_registry
+                                    .register(Box::new(imessage_channel))
+                                    .await;
+                                if !daemon {
+                                    println!("Registered channel: {cid} (iMessage/local)");
+                                }
+                            }
+                            #[cfg(not(target_os = "macos"))]
+                            {
+                                let _ = imessage_config;
+                                tracing::warn!(
+                                    "imessage '{}' transport=local requires macOS; skipping on this OS",
+                                    inst.id
+                                );
+                            }
+                        }
                     }
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "Failed to parse imessage config '{}': {}, skipping channel",
-                        inst.id,
-                        e
+                        "Failed to parse imessage config '{}': {e}; skipping",
+                        inst.id
                     );
-                    if !daemon {
-                        eprintln!(
-                            "Warning: iMessage channel '{}' has invalid config and was skipped",
-                            inst.id
-                        );
-                    }
                 }
             }
             continue;

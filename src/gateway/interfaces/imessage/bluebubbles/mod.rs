@@ -40,6 +40,10 @@ pub struct BlueBubblesChannel {
     #[allow(dead_code)] // Read from Tasks 7/11 (api build from server_url/password; webhook lifecycle)
     config: BlueBubblesConfig,
     channel_state: ChannelState,
+    #[allow(dead_code)] // consumed in Task 12 (catch-up poll)
+    offset_tracker: Option<
+        std::sync::Arc<crate::gateway::interfaces::telegram::offset::OffsetTracker>,
+    >,
 }
 
 impl BlueBubblesChannel {
@@ -56,7 +60,17 @@ impl BlueBubblesChannel {
             info,
             config,
             channel_state: ChannelState::new(100),
+            offset_tracker: None,
         }
+    }
+
+    pub fn set_offset_tracker(
+        &mut self,
+        tracker: std::sync::Arc<
+            crate::gateway::interfaces::telegram::offset::OffsetTracker,
+        >,
+    ) {
+        self.offset_tracker = Some(tracker);
     }
 }
 
