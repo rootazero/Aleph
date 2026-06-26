@@ -123,6 +123,16 @@ impl OnboardingFlow {
         ]
     }
 
+    /// Create iMessage transport options
+    pub fn imessage_transport_options() -> Vec<WizardOption> {
+        vec![
+            WizardOption::new(json!("local"), "Local (macOS)")
+                .with_hint("chat.db + AppleScript — same Mac as Aleph"),
+            WizardOption::new(json!("bluebubbles"), "BlueBubbles")
+                .with_hint("REST server — any OS, richer features"),
+        ]
+    }
+
     /// Create messaging app options
     fn messaging_options() -> Vec<WizardOption> {
         vec![
@@ -133,7 +143,8 @@ impl OnboardingFlow {
             WizardOption::new(json!("slack"), "Slack")
                 .with_hint("Business communication")
                 .disabled(),
-            WizardOption::new(json!("imessage"), "iMessage").with_hint("macOS only"),
+            WizardOption::new(json!("imessage"), "iMessage")
+                .with_hint("macOS (local) or BlueBubbles (any OS)"),
         ]
     }
 }
@@ -492,5 +503,16 @@ mod tests {
         let data = OnboardingData::default();
         assert!(data.primary_provider.is_none());
         assert!(data.messaging_apps.is_empty());
+    }
+
+    #[test]
+    fn imessage_offers_both_transports() {
+        let opts = OnboardingFlow::imessage_transport_options();
+        let vals: Vec<_> = opts
+            .iter()
+            .map(|o| o.value.as_str().unwrap().to_string())
+            .collect();
+        assert!(vals.contains(&"bluebubbles".to_string()));
+        assert!(vals.contains(&"local".to_string()));
     }
 }
