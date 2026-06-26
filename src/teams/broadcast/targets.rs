@@ -2,7 +2,7 @@
 //!
 //! 防风暴的"谁回复"闸 + 宽度闸 + 自环护栏全在这里,无 IO,host 可测。
 
-use super::{MAX_FANOUT_WIDTH, RESERVED_USER_HANDLE};
+use super::RESERVED_USER_HANDLE;
 use crate::teams::messages::{extract_mentions, MENTION_ALL};
 
 /// 解析一条触发消息要唤醒哪些 agent。
@@ -16,6 +16,9 @@ use crate::teams::messages::{extract_mentions, MENTION_ALL};
 ///
 /// 规则(spec §7):`@all`/`@everyone` → 全员(除 sender);具体 `@` → 取名册内的;
 /// 去掉自@和 `@user`;用户消息没@ → `[leader]`;agent 回复没@ → `[]`;宽度上限截断。
+///
+/// `max_fanout_width` 来自 [`BroadcastConfig::max_fanout_width`](super::BroadcastConfig),
+/// 截断本轮唤醒人数(防 `@all` 在大群一次炸开)。
 #[must_use]
 pub fn resolve_targets(
     content: &str,
@@ -24,6 +27,7 @@ pub fn resolve_targets(
     roster: &[String],
     user_triggered: bool,
     leader_first: bool,
+    max_fanout_width: usize,
 ) -> Vec<String> {
     // Hard gate (strategy round 2): on the user's first message to a team while
     // the leader has just minted a plan, route ONLY to the leader so it
@@ -68,13 +72,14 @@ pub fn resolve_targets(
     }
 
     // 宽度上限
-    targets.truncate(MAX_FANOUT_WIDTH);
+    targets.truncate(max_fanout_width);
     targets
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::teams::broadcast::MAX_FANOUT_WIDTH;
 
     fn roster() -> Vec<String> {
         ["leader", "alice", "bob", "carol", "dave", "erin", "frank"]
@@ -85,13 +90,29 @@ mod tests {
 
     #[test]
     fn user_mention_specific_agents() {
-        let t = resolve_targets("@alice @bob 看下", "user", "leader", &roster(), true, false);
+        let t = resolve_targets(
+            "@alice @bob 看下",
+            "user",
+            "leader",
+            &roster(),
+            true,
+            false,
+            MAX_FANOUT_WIDTH,
+        );
         assert_eq!(t, vec!["alice".to_string(), "bob".to_string()]);
     }
 
     #[test]
     fn user_no_mention_falls_back_to_leader() {
-        let t = resolve_targets("随便聊聊", "user", "leader", &roster(), true, false);
+        let t = resolve_targets(
+            "随便聊聊",
+            "user",
+            "leader",
+            &roster(),
+            true,
+            false,
+            MAX_FANOUT_WIDTH,
+        );
         assert_eq!(
             t,
             vec!["leader".to_string()],
@@ -102,16 +123,40 @@ mod tests {
     #[test]
     fn agent_reply_no_mention_stops_chain() {
         // agent 回复没@人 → 不兜底,返回空(链自然停)
-        let t = resolve_targets("好的我做完了", "alice", "leader", &roster(), false, false);
+        let t = resolve_targets(
+            "好的我做完了",
+            "alice",
+            "leader",
+            &roster(),
+            false,
+            false,
+            MAX_FANOUT_WIDTH,
+        );
         assert!(t.is_empty(), "agent 回复没@人不应触发 leader 兜底");
     }
 
     #[test]
     fn at_all_expands_to_everyone_except_sender_capped() {
-        let t = resolve_targets("@all 报到", "user", "leader", &roster(), true, false);
+        let t = resolve_targets(
+            "@all 报到",
+            "user",
+            "leader",
+            &roster(),
+            true,
+            false,
+            MAX_FANOUT_WIDTH,
+        );
         // roster 7 人,@all 排除 sender(user 不在 roster)→ 7 人,宽度上限 5
         assert_eq!(t.len(), MAX_FANOUT_WIDTH, "@all 受宽度上限截断");
         assert!(!t.contains(&"user".to_string()));
+    }
+
+    #[test]
+    fn fanout_width_is_configurable() {
+        // 把宽度闸调到 2 → @all 在 7 人群里只唤醒 2 人(验证闸值真正生效,
+        // 而非沿用旧的硬编码 MAX_FANOUT_WIDTH)。
+        let t = resolve_targets("@all 报到", "user", "leader", &roster(), true, false, 2);
+        assert_eq!(t.len(), 2, "自定义宽度闸截断");
     }
 
     #[test]
@@ -124,20 +169,37 @@ mod tests {
             &roster(),
             false,
             false,
+            MAX_FANOUT_WIDTH,
         );
         assert_eq!(t, vec!["bob".to_string()], "去掉自@和@user");
     }
 
     #[test]
     fn unknown_mention_ignored() {
-        let t = resolve_targets("@nobody @alice", "user", "leader", &roster(), true, false);
+        let t = resolve_targets(
+            "@nobody @alice",
+            "user",
+            "leader",
+            &roster(),
+            true,
+            false,
+            MAX_FANOUT_WIDTH,
+        );
         assert_eq!(t, vec!["alice".to_string()], "不在名册的@被忽略");
     }
 
     #[test]
     fn leader_first_overrides_explicit_mention() {
         // hard gate ON + user message that @-named alice → still routes to leader only
-        let t = resolve_targets("@alice 看下", "user", "leader", &roster(), true, true);
+        let t = resolve_targets(
+            "@alice 看下",
+            "user",
+            "leader",
+            &roster(),
+            true,
+            true,
+            MAX_FANOUT_WIDTH,
+        );
         assert_eq!(
             t,
             vec!["leader".to_string()],
@@ -148,7 +210,15 @@ mod tests {
     #[test]
     fn leader_first_inactive_keeps_normal_routing() {
         // hard gate OFF → existing behavior (alice gets it)
-        let t = resolve_targets("@alice 看下", "user", "leader", &roster(), true, false);
+        let t = resolve_targets(
+            "@alice 看下",
+            "user",
+            "leader",
+            &roster(),
+            true,
+            false,
+            MAX_FANOUT_WIDTH,
+        );
         assert_eq!(t, vec!["alice".to_string()]);
     }
 }

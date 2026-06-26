@@ -72,7 +72,9 @@ impl TeamDispatcher {
             .await
         {
             tracing::warn!(task_id = %task.id, error = %e, "dispatcher: failed to park clarify task");
-            let _ = self.coord_store.release_lock(&task.id, CLARIFY_OWNER).await;
+            if let Err(re) = self.coord_store.release_lock(&task.id, CLARIFY_OWNER).await {
+                tracing::debug!(task_id = %task.id, error = %re, "dispatcher: clarify lock release failed after park error");
+            }
             return;
         }
 
@@ -103,6 +105,8 @@ impl TeamDispatcher {
             }
         }
 
-        let _ = self.coord_store.release_lock(&task.id, CLARIFY_OWNER).await;
+        if let Err(e) = self.coord_store.release_lock(&task.id, CLARIFY_OWNER).await {
+            tracing::debug!(task_id = %task.id, error = %e, "dispatcher: clarify lock release failed after delivery");
+        }
     }
 }

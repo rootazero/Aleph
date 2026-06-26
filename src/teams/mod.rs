@@ -24,6 +24,7 @@ pub mod workflow_canvas;
 pub mod integration_tests;
 
 pub use artifacts::{ArtifactType, TaskArtifact, TaskStatus};
+pub use broadcast::BroadcastConfig;
 pub use dispatcher::{DispatcherConfig, TeamDispatcher};
 pub use events::{EventLogStore, SqliteEventLogStore, TeamEventLogger};
 pub use notifier::TeamNotifier;

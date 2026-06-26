@@ -169,6 +169,52 @@ pub struct TeamDispatcherConfigToml {
     pub retry_backoff_cap_secs: Option<u64>,
 }
 
+// =============================================================================
+// TeamBroadcastConfigToml — `[team_broadcast]`
+// =============================================================================
+
+/// Operator tunables for the multi-agent **group-chat broadcast** storm-prevention
+/// guards (§4.5) — the broadcast-side parallel to [`TeamDispatcherConfigToml`]
+/// (§4.4). Each field is `Option`: an absent key falls back to the live
+/// `teams::broadcast::BroadcastConfig::default()` at the boot site, so an
+/// unconfigured deployment is byte-identical to prior behaviour and the
+/// authoritative defaults never drift (they are read from the runtime struct,
+/// not duplicated here). Closes the wiring gap where the three storm-prevention
+/// guards (`MAX_CHAIN_DEPTH` / `MAX_FANOUT_WIDTH` / `MAX_TOTAL_ACTIVATIONS`) and
+/// the transcript budget were permanently pinned as bare `const`s.
+///
+/// A `0` for any guard would create a "born-dead" group chat (every chat blocked
+/// at depth 0, nobody ever woken, etc.); the boot mapping treats `0` as "use the
+/// default" (P7 boundary clamp), mirroring `[team_dispatcher]`'s zombie-ttl clamp.
+///
+/// # Example TOML
+///
+/// ```toml
+/// [team_broadcast]
+/// max_chain_depth = 8          # allow deeper A↔B back-and-forth
+/// max_fanout_width = 3         # tighter @all blast radius
+/// max_total_activations = 64   # larger team, more total member runs per turn
+/// transcript_token_budget = 12000
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct TeamBroadcastConfigToml {
+    /// Max reply-chain depth (guards against A↔B infinite @-pingpong).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_chain_depth: Option<u32>,
+    /// Max agents woken in a single round (guards against `@all` blowing open a
+    /// large team at once).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_fanout_width: Option<usize>,
+    /// Max cumulative member activations across the whole fan-out tree of one
+    /// user message (the global storm-prevention cap).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_total_activations: Option<usize>,
+    /// Token budget for the group transcript injected into each member's prompt
+    /// (over budget ⇒ most-recent kept from the tail).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_token_budget: Option<usize>,
+}
+
 impl DispatcherConfigToml {
     /// Validate the configuration values
     ///

@@ -272,6 +272,7 @@ pub async fn handle_chat_send(
     team_planner_provider: Option<Arc<dyn crate::providers::AiProvider>>,
     event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     coord_task_store: Option<Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>>,
+    broadcast_cfg: crate::teams::broadcast::BroadcastConfig,
 ) -> JsonRpcResponse {
     let params: ChatSendParams = match parse_params(&request) {
         Ok(p) => p,
@@ -374,6 +375,7 @@ pub async fn handle_chat_send(
         Arc::clone(&msg_store),
         team_planner_provider,
         coord_task_store,
+        broadcast_cfg,
     );
     let run_id = uuid::Uuid::new_v4().to_string();
     let team_id = params.team_id.clone();
