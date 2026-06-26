@@ -259,10 +259,10 @@
 
 ### 4.1 Goal 命令 (Standing Goal)
 - **口语关键词**：goal 命令、自主目标、持久目标、自动续跑、迭代/token/deadline 上限
-- **代码锚点**：`src/goal/`（mod.rs / types.rs / store.rs）、`src/tasks/goal_pursuit.rs`、`src/builtin_tools/goal.rs`（GoalAction: set/get/update/clear——单文件，无 list 动作）
+- **代码锚点**：`src/goal/`（mod.rs / types.rs / store.rs）、`src/tasks/goal_pursuit.rs`、`src/builtin_tools/goal.rs`（GoalAction: set/get/update/clear/**list**——单文件）
 - **职责**：用户设持久目标，LLM 经 goal 工具管状态，后台按 迭代/token/deadline 上限自主续跑，每轮注入进度 lessons + 剩余配额。
-- **状态**：✅ 已实现（should_continue / continuation_prompt / cap/deadline/budget_reached_note 全连，门控器决定客观完成）。
-- **打磨话术**：「goal 状态机在 `src/goal/`；‘续跑触发’在 `tasks/goal_pursuit.rs`；用户面工具在 `builtin_tools/goal.rs`。」
+- **状态**：✅ 已实现（should_continue / continuation_prompt / cap/deadline/budget_reached_note 全连，门控器决定客观完成）。**list 连线（2026-06-26）**——`get` 只读当前 session（goal 按 session_key 一会话一行），跨会话设的 goal 在别的通道用 `get` 看不见，违 R6 一核多端 + R8 工具即一切（无法自然语言问"我有哪些在跑的目标"）。底层 `GoalStore::list_all()` 早建好（dream lessons-promote 在 sweep）却从未暴露给 LLM；现新增 `GoalAction::List` 分支复用之，紧凑渲染（`render_list_line`，按 `updated_at_ms` 倒序，标注 `(this session)`，pursuit/budget/deadline 同 `render` 词汇），零 schema 漂移、零新增字段。
+- **打磨话术**：「goal 状态机在 `src/goal/`；‘续跑触发’在 `tasks/goal_pursuit.rs`；用户面工具在 `builtin_tools/goal.rs`。‘列出所有会话的 goal’= `GoalAction::List`→`GoalStore::list_all()`（跨会话；`get` 只看当前会话）。」
 
 ### 4.2 Loop 命令 (Loop Command)
 - **口语关键词**：loop 命令、周期循环、定时、cadence、内存态
