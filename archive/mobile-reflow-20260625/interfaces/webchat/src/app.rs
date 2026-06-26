@@ -1,0 +1,547 @@
+use crate::i18n::{t_string, use_i18n, I18nContextProvider};
+use crate::state::memory::MemoryState;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+use leptos_router::components::Router;
+use leptos_router::hooks::{use_location, use_navigate};
+
+// Views
+use crate::views::agent_trace::AgentTrace;
+use crate::views::chat::ChatView;
+use crate::views::cron::CronView;
+use crate::views::extensions::{ExtensionsView, StoreState};
+use crate::views::home::Home;
+use crate::views::logs::Logs;
+use crate::views::memory_hub::MemoryHub;
+use crate::views::runtimes::RuntimesView;
+use crate::views::settings::{
+    AcpHarnessesView, AppearanceView, BehaviorView, BrowserView, ChannelPlatformPage,
+    ChannelsOverview, EmbeddingProvidersView, ExecutionView, GeneralView, GenerationProvidersView,
+    McpView, MemoryView, NetworkView, PluginsView, PoliciesView, ProvidersView,
+    RerankingProvidersView, RouteView, RoutingRulesView, SearchView, SecurityView, Settings,
+    SkillsView,
+};
+use crate::views::tasks::TasksView;
+use crate::views::teams::TeamsView;
+use crate::views::usage::UsageView;
+// Layout components
+use crate::components::boot_check_gate::BootCheckGate;
+use crate::components::command_palette::CommandPalette;
+use crate::components::mobile_tab_bar::MobileTabBar;
+use crate::components::mobile_top_bar::MobileTopBar;
+use crate::components::mode_sidebar::{ModeSidebar, PanelMode};
+use crate::components::nav_menu::label_of;
+use crate::components::notification_center::NotificationCenter;
+use crate::components::service_blocking_gate::ServiceBlockingGate;
+use crate::components::token_wall::TokenWall;
+use crate::context::{DashboardContext, DashboardState};
+use crate::state::hotkey::{self as hotkey, HotkeyState};
+use crate::state::layout::{LayoutMode, WorkspaceState};
+use crate::state::notifications::NotificationsState;
+use crate::state::sessions::SessionMap;
+use crate::state::viewport::ViewportState;
+use crate::views::chat::ChatState;
+use crate::views::voice::{ImmersiveVoiceView, VoiceMode};
+
+#[component]
+#[must_use]
+pub fn App() -> impl IntoView {
+    view! {
+        <I18nContextProvider>
+            <DashboardContext>
+                <AppContent />
+            </DashboardContext>
+        </I18nContextProvider>
+    }
+}
+
+#[component]
+fn AppContent() -> impl IntoView {
+    let state = expect_context::<DashboardState>();
+
+    // MemoryState must be provided here (parent of MainContent) so the
+    // aleph-shell class binding and the Esc key listener can both read it.
+    provide_context(MemoryState::new());
+
+    // Chat state lives above both the chat sidebar (left column) and the
+    // chat view (main area) so they share one session / agent selection.
+    // Bound (not inlined) so it can also be threaded into `HotkeyState` below
+    // for the `f` repair hotkey — `ChatState` is `Copy`, so this is free.
+    let chat_state = ChatState::new();
+    provide_context(chat_state);
+
+    // Immersive voice mode switch. Provided at the shell root so the composer
+    // mini-orb (which flips it on) and the full-screen overlay (mounted at the
+    // shell root, below) both read the same signal. The overlay reuses this
+    // same ChatState, so a voice turn lands in the live chat transcript. Also
+    // threaded into `HotkeyState` below so the ⌘⇧V / Esc bindings reach it.
+    let voice_mode = VoiceMode::new();
+    provide_context(voice_mode);
+
+    // Multi-tab session registry (per-agent). Empty at boot; the chat
+    // sidebar's auto-select-default-agent path is what opens the first
+    // tab. Cmd+1..9 / Cmd+W hotkeys are installed lazily by SessionTabs.
+    provide_context(SessionMap::new());
+
+    // Workspace pane state — UI-TARS-parity. ChatOnly is the default so
+    // legacy users see zero UI change; the LayoutToggle in the composer
+    // opens Split mode on demand. Persisted in localStorage.
+    provide_context(WorkspaceState::new());
+
+    // Hotkey state — owns the ⌘K command-palette open signal and carries the
+    // VoiceMode switch for the ⌘⇧V / Esc bindings. Installed *before* the
+    // keydown listener below so the listener can read it.
+    let hk = HotkeyState::new(voice_mode, chat_state);
+    provide_context(hk);
+    hotkey::install(hk);
+
+    // NotificationCenter UI state — open/closed + dismissed key set. The
+    // data layer (alert subscriptions on DashboardState) is already wired
+    // in `setup_alert_subscriptions()`; this is purely the popover surface.
+    provide_context(NotificationsState::new());
+
+    // Extensions (Aleph Hub) store — lifted above both columns so the
+    // left-column category nav (ExtensionsSidebar) and the main-area grid
+    // (BrowsePane) share one `category` selection. Mirrors ChatState's
+    // split-column sharing (see above).
+    provide_context(StoreState::new());
+
+    // Reactive viewport width + mobile nav-drawer toggle — drives mobile-only
+    // behaviors (full-screen notification sheet, the slide-over sidebar drawer).
+    // Layout reflow itself is CSS-driven (Tailwind `max-sm:`). Bound (not
+    // inlined) so the drawer backdrop below can read `drawer_open`.
+    let viewport = ViewportState::new();
+    provide_context(viewport);
+
+    // Esc key: uncollapse sidebar when collapsed. Coexists with the
+    // hotkey-installed Esc handler that closes the palette; both only act
+    // when their respective state is "open", so they never conflict.
+    {
+        use leptos::ev::keydown;
+        let mem_for_key = expect_context::<MemoryState>();
+        window_event_listener(keydown, move |ev: web_sys::KeyboardEvent| {
+            if ev.key() == "Escape" && mem_for_key.sidebar_collapsed.get() {
+                mem_for_key.sidebar_collapsed.set(false);
+            }
+        });
+    }
+
+    // Setup WebSocket connection and alert subscriptions on mount
+    Effect::new(move || {
+        let state = state;
+        spawn_local(async move {
+            match state.connect().await {
+                Ok(()) => {
+                    web_sys::console::log_1(&"Connected to Gateway".into());
+                    if let Err(e) = state.setup_alert_subscriptions().await {
+                        web_sys::console::error_1(
+                            &format!("Failed to setup alert subscriptions: {e}").into(),
+                        );
+                    }
+                    if let Err(e) = state.setup_approval_subscriptions().await {
+                        web_sys::console::error_1(
+                            &format!("Failed to setup approval subscriptions: {e}").into(),
+                        );
+                    }
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Failed to connect to Gateway: {e}").into());
+                }
+            }
+        });
+    });
+
+    // Cleanup on unmount
+    on_cleanup(move || {
+        spawn_local(async move {
+            let _ = state.disconnect().await;
+        });
+    });
+
+    let mem_for_shell = expect_context::<MemoryState>();
+
+    view! {
+        // Two-column shell (Codex) floating on the drifting light-field.
+        <div
+            class="aleph-shell flex h-screen text-text-primary font-sans selection:bg-primary/30"
+            class:sidebar-collapsed=move || mem_for_shell.sidebar_collapsed.get()
+        >
+            // No global title-bar drag strip on the shell root — the macOS
+            // Overlay title bar is carved out from the chrome buttons by
+            // attaching `data-tauri-drag-region=""` to the structural
+            // elements that SHOULD drag: the sidebar brand row (left
+            // column, covers the area under the traffic lights), and a
+            // dedicated `aleph-main-drag-band` parked at the top of the
+            // right `<main>` column (covers every tab uniformly — chat,
+            // dashboard, memory, agents, teams, settings). Each chrome
+            // button explicitly opts out via `-webkit-app-region:
+            // no-drag` (utility class `aleph-no-drag` or via the
+            // button's own CSS rules), so the drag surface yields to
+            // the buttons rather than the other way around.
+
+            // Fixed top-left collapse button — anchored to the window so it
+            // stays clickable when the sidebar slides off-screen. Visibility
+            // (see tailwind.css):
+            //   • macOS Tauri: always visible, vertically centred with the
+            //     overlay traffic lights.
+            //   • Web + Tauri Win/Linux: only visible when the sidebar is
+            //     collapsed; while expanded, the inline brand-row button in
+            //     SidebarBrand handles it.
+            // `data-tauri-drag-region="false"` opts out of the parent drag
+            // strip so clicks aren't swallowed by the window-drag handler.
+            <button
+                type="button"
+                class="aleph-sidebar-toggle max-sm:hidden"
+                data-tauri-drag-region="false"
+                on:click={
+                    let mem = mem_for_shell;
+                    move |_| {
+                        let s = &mem.sidebar_collapsed;
+                        s.set(!s.get());
+                    }
+                }
+                title="Toggle sidebar (Esc)"
+                aria-label="Toggle sidebar"
+            >
+                <svg
+                    width="16" height="16" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="1.8"
+                    stroke-linecap="round" stroke-linejoin="round"
+                >
+                    <rect x="3" y="5" width="18" height="14" rx="2.5" />
+                    <line x1="9" y1="5" x2="9" y2="19" />
+                </svg>
+            </button>
+            <Router>
+                // Left column — context-aware sidebar, full window height.
+                // On mobile it slides in as an overlay (see ModeSidebar's
+                // `max-sm:` classes); on desktop it's a permanent column.
+                <ModeSidebar />
+
+                // Mobile nav-drawer backdrop — dims the content and captures a
+                // tap to close the slide-over sidebar. Mounted only while the
+                // drawer is open; `hidden max-sm:block` keeps it phone-only.
+                <Show when=move || viewport.drawer_open.get()>
+                    <div
+                        class="hidden max-sm:block fixed inset-0 z-[65] bg-surface-overlay/50"
+                        on:click=move |_| viewport.drawer_open.set(false)
+                    />
+                </Show>
+
+                // Main content area — `relative` is the positioning
+                // ancestor for the absolutely-floating drag band below.
+                // Transparent, so the light-field shows through.
+                <main class="flex-1 relative min-h-0 overflow-y-auto max-sm:pb-20">
+                    // Window-drag band — floats over the top of `<main>`
+                    // WITHOUT taking layout space (CSS `position:
+                    // absolute`, `background: transparent`). On macOS
+                    // it occupies the overlay traffic-light strip
+                    // (height `--aleph-band-h` = 30px) as a window-
+                    // drag handle; on web / Win / Linux it collapses
+                    // to height 0. Because the band is out of flow,
+                    // tab content fills the full `<main>` height —
+                    // no awkward downward shift and no visible white
+                    // strip on tabs with contrasting backgrounds
+                    // (e.g. the memory canvas).
+                    //
+                    // `z-50` keeps the band's chrome chips above
+                    // tab content; the band itself is transparent
+                    // so any text scrolling beneath is fine.
+                    <div
+                        class="aleph-main-drag-band z-50"
+                        data-tauri-drag-region=""
+                    >
+                        <ChatBandChrome />
+                    </div>
+                    <MainContent />
+                </main>
+
+                // ⌘K / Ctrl+K command palette overlay. Mounted inside <Router>
+                // so it can call `use_navigate()`; the overlay itself sits
+                // above all shell chrome via z-index.
+                <CommandPalette />
+
+                // Aggregate alert surface — bell + popover anchored top-right.
+                // Reads DashboardState.alerts (already wired via alerts.**).
+                <NotificationCenter />
+
+                // Runtime recovery overlay — engages when the panel was live
+                // but lost the Gateway and exhausted automatic reconnects.
+                // Inside <Router> so its "Open logs" button can navigate.
+                <ServiceBlockingGate />
+
+                // Bottom tab bar — primary section switcher on mobile
+                // (`hidden max-sm:flex`); never renders on desktop. Inside
+                // <Router> so it can use_navigate / use_location.
+                <MobileTabBar />
+            </Router>
+
+            // First-boot gate — blocks the shell with a "Connecting…" or
+            // "Cannot reach core" overlay until the first connection succeeds.
+            // Outside <Router> because it never navigates.
+            <BootCheckGate />
+
+            // Login wall — full-screen token box for a remote Panel that
+            // connected without a valid Gateway token. Loopback / authorized
+            // connections never render it. Mounted at the shell root so it
+            // overlays everything until the device authorizes.
+            <TokenWall />
+
+            // Immersive voice overlay — full-screen `.voice-stage` (fixed,
+            // z-40) hosting the mic/VAD/TTS session loop. Mounted at the shell
+            // root so it floats over every tab; `ChatView` stays mounted
+            // beneath it (MainContent toggles display, never unmounts), so the
+            // `stream.*` subscription that feeds the assistant transcript keeps
+            // running while the overlay is up. Renders nothing until opened.
+            <ImmersiveVoiceView />
+        </div>
+    }
+}
+
+/// Chrome buttons that live INSIDE the `<main>` top drag band so they sit
+/// on the traffic-light y-baseline (window-y ≈ 15 on macOS).
+///
+/// Two affordances, both chat-tab-only:
+///   • `LayoutToggle` — sits at the chat-surface top-right. Right offset
+///     is `right-[44px]` in `ChatOnly` (4 px left of the
+///     `NotificationCenter` bell) and `right-[calc(var(--aleph-workspace-w)+8px)]`
+///     in `Split` so it tracks the chat / workspace boundary: the pane is
+///     `--aleph-workspace-w` of main, so the toggle parks 8 px inside the
+///     chat surface, glued to the pane's leading edge at any window width.
+///   • Workspace label ("WORKSPACE · idle / tool") — Split-only, left
+///     offset is `left-[calc(100% - var(--aleph-workspace-w) + 16px)]` so
+///     the text sits 16 px inside the workspace pane's leading edge,
+///     matching the previous `WorkspaceHeader.px-4` placement.
+///
+/// Both offsets read the same `--aleph-workspace-w` token that sizes the
+/// pane (see `tailwind.css` `:root`), so they never drift from the real
+/// boundary — change the width in one place and all three follow.
+///
+/// Both children opt out of the drag region (`aleph-no-drag` +
+/// `data-tauri-drag-region="false"`); the surrounding band space still
+/// drags the window on macOS Overlay-titlebar windows.
+#[component]
+fn ChatBandChrome() -> impl IntoView {
+    let location = use_location();
+    let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
+    // WorkspaceState may not be in scope during early boot races; fall
+    // back to nothing rather than panicking.
+    let Some(workspace) = use_context::<WorkspaceState>() else {
+        return ().into_any();
+    };
+    let i18n = use_i18n();
+    // Team mode swaps the workspace pane for a self-labelled "交付物 | 任务"
+    // tab header parked at the same top-leading position. The generic
+    // "工作区 · …" band label would sit right on top of those tabs (and
+    // "工具详情" is a single-agent tool-activity concept that doesn't apply
+    // to a team pane), so gate it off whenever a team is active. `ChatState`
+    // may be absent during early boot races — treat that as "not a team".
+    let chat = use_context::<ChatState>();
+
+    view! {
+        <Show when=move || mode.get() == PanelMode::Chat>
+            // Workspace label — single-agent only. Within that case it stays
+            // always-mounted (not Split-gated) so it can glide + fade in
+            // lockstep with the pane (same 200ms ease-out via `.aleph-ws-label`)
+            // instead of popping; `workspace-collapsed` slides it off the right
+            // edge when not in Split.
+            <Show when=move || chat.is_none_or(|c| c.team_id.get().is_none())>
+                <div
+                    class="aleph-ws-label aleph-no-drag pointer-events-none absolute aleph-chrome-top
+                           left-[calc(100%_-_var(--aleph-workspace-w)_+_16px)] flex items-center gap-2
+                           text-xs uppercase tracking-wider text-text-tertiary h-7"
+                    class:workspace-collapsed=move || workspace.mode.get() != LayoutMode::Split
+                    data-tauri-drag-region="false"
+                >
+                    <span>{move || t_string!(i18n, common.workspace_title).to_string()}</span>
+                    <span class="text-text-tertiary/60">
+                        {move || {
+                            if workspace.tool_payloads.with(|m| !m.is_empty()) {
+                                t_string!(i18n, common.workspace_state_tool).to_string()
+                            } else {
+                                t_string!(i18n, common.workspace_state_idle).to_string()
+                            }
+                        }}
+                    </span>
+                </div>
+            </Show>
+            // LayoutToggle — right-edge tracks the chat / workspace
+            // boundary. `pointer-events-auto` re-enables clicks because
+            // the band itself is `pointer-events:none` on web / Win /
+            // Linux (it only captures drag input on macOS). `aleph-no-drag`
+            // is belt-and-braces — Tauri's `data-tauri-drag-region="false"`
+            // already toggles `-webkit-app-region`, but the utility class
+            // makes the opt-out resilient if the child re-parents.
+            <div
+                class=move || {
+                    let base = "absolute aleph-chrome-top z-[45] max-sm:hidden \
+                                pointer-events-auto aleph-no-drag aleph-ws-toggle";
+                    if workspace.mode.get() == LayoutMode::Split {
+                        format!("{base} right-[calc(var(--aleph-workspace-w)_+_8px)]")
+                    } else {
+                        format!("{base} right-[44px]")
+                    }
+                }
+                data-tauri-drag-region="false"
+            >
+                <crate::components::layout_toggle::LayoutToggle />
+            </div>
+        </Show>
+    }
+    .into_any()
+}
+
+/// Main content routing — uses CSS display toggling for mode switching to keep
+/// mode containers alive, avoiding reactive scope issues with Effect::new()
+/// inside re-evaluating closures. Sub-routing within each mode is handled by
+/// dedicated router components.
+#[component]
+fn MainContent() -> impl IntoView {
+    let location = use_location();
+    let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
+    let i18n = use_i18n();
+    // Non-chat tabs share one mode-driven MobileTopBar (hamburger opens the
+    // drawer → closes Phase-1 gap a; title = label_of(mode); right defaults to
+    // the bell). Chat owns its own bar (agent pill) in chat/view.rs. Hidden
+    // when Chat is active so it never stacks over the chat pill bar.
+    let non_chat = Memo::new(move |_| mode.get() != PanelMode::Chat);
+    let title = Signal::derive(move || label_of(mode.get(), i18n));
+
+    view! {
+        <Show when=move || non_chat.get()>
+            <div class="absolute inset-x-0 top-0 z-20">
+                <MobileTopBar title=title />
+            </div>
+        </Show>
+        <div style:display=move || if mode.get() == PanelMode::Chat { "contents" } else { "none" }>
+            <ChatView />
+        </div>
+        <div style:display=move || if mode.get() == PanelMode::Dashboard { "contents" } else { "none" }>
+            <DashboardRouter />
+        </div>
+        <div style:display=move || if mode.get() == PanelMode::Memory { "contents" } else { "none" }>
+            <MemoryHub />
+        </div>
+        <div style:display=move || if mode.get() == PanelMode::Agents { "contents" } else { "none" }>
+            <AgentsRouter />
+        </div>
+        <div style:display=move || if mode.get() == PanelMode::Teams { "contents" } else { "none" }>
+            <TeamsView />
+        </div>
+        <div style:display=move || if mode.get() == PanelMode::Extensions { "contents" } else { "none" }>
+            <ExtensionsView />
+        </div>
+        <div style:display=move || if mode.get() == PanelMode::Settings { "block" } else { "none" }>
+            <SettingsRouter />
+        </div>
+    }
+}
+
+/// Dashboard sub-routing
+#[component]
+fn DashboardRouter() -> impl IntoView {
+    let location = use_location();
+
+    move || {
+        let path = location.pathname.get();
+        match path.as_str() {
+            "/dashboard" => view! { <Home /> }.into_any(),
+            "/dashboard/memory" => view! { <MemoryVaultRedirect /> }.into_any(),
+            "/dashboard/cron" => view! { <CronView /> }.into_any(),
+            "/dashboard/tasks" => view! { <TasksView /> }.into_any(),
+            "/dashboard/logs" => view! { <Logs /> }.into_any(),
+            "/dashboard/trace" => view! { <AgentTrace /> }.into_any(),
+            "/dashboard/runtimes" => view! { <RuntimesView /> }.into_any(),
+            "/dashboard/usage" => view! { <UsageView /> }.into_any(),
+            // Not in dashboard mode — render nothing (div is hidden)
+            _ => ().into_any(),
+        }
+    }
+}
+
+/// Settings sub-routing
+#[component]
+fn SettingsRouter() -> impl IntoView {
+    let location = use_location();
+
+    move || {
+        let path = location.pathname.get();
+        match path.as_str() {
+            // Single-tier Gateway-token model: any connection that can reach
+            // these settings is already authorized (operator) — loopback or a
+            // token-validated remote — so there is no per-page ConfigGate; the
+            // login wall (TokenWall) is the one and only gate.
+            "/settings" => view! { <Settings /> }.into_any(),
+            "/settings/general" => view! { <GeneralView /> }.into_any(),
+            "/settings/appearance" => view! { <AppearanceView /> }.into_any(),
+            "/settings/behavior" => view! { <BehaviorView /> }.into_any(),
+
+            // AI
+            "/settings/search" => view! { <SearchView /> }.into_any(),
+            "/settings/providers" => view! { <ProvidersView /> }.into_any(),
+            "/settings/embedding-providers" => view! { <EmbeddingProvidersView /> }.into_any(),
+            "/settings/reranking-providers" => view! { <RerankingProvidersView /> }.into_any(),
+            "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
+            "/settings/model-route" => view! { <RouteView /> }.into_any(),
+            "/settings/memory" => view! { <MemoryView /> }.into_any(),
+
+            // Browser
+            "/settings/browser" => view! { <BrowserView /> }.into_any(),
+            "/settings/network" => view! { <NetworkView /> }.into_any(),
+
+            // Extensions
+            "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),
+            "/settings/mcp" => view! { <McpView /> }.into_any(),
+            "/settings/plugins" => view! { <PluginsView /> }.into_any(),
+            "/settings/skills" => view! { <SkillsView /> }.into_any(),
+            "/settings/acp" => view! { <AcpHarnessesView /> }.into_any(),
+
+            // Security
+            "/settings/security" => view! { <SecurityView /> }.into_any(),
+            "/settings/policies" => view! { <PoliciesView /> }.into_any(),
+            "/settings/execution" => view! { <ExecutionView /> }.into_any(),
+            // Channels
+            "/settings/channels" => view! { <ChannelsOverview /> }.into_any(),
+            _ if path.starts_with("/settings/channels/") => {
+                let platform_type = path
+                    .strip_prefix("/settings/channels/")
+                    .unwrap_or("")
+                    .to_string();
+                let platform_type = StoredValue::new(platform_type);
+                view! { <ChannelPlatformPage platform_type=platform_type.get_value() /> }.into_any()
+            }
+
+            // Not in settings mode or unknown path — render nothing (div is hidden)
+            _ => ().into_any(),
+        }
+    }
+}
+
+/// Agents sub-routing
+#[component]
+fn AgentsRouter() -> impl IntoView {
+    let location = use_location();
+
+    move || {
+        let path = location.pathname.get();
+        if path.starts_with("/agents") {
+            view! { <crate::views::agents::AgentsView /> }.into_any()
+        } else {
+            ().into_any()
+        }
+    }
+}
+
+/// Back-compat redirect: the Vault now lives inside the Memory Hub. Anyone
+/// hitting the old `/dashboard/memory` is sent to `/memory?view=table`.
+#[component]
+fn MemoryVaultRedirect() -> impl IntoView {
+    let navigate = use_navigate();
+    Effect::new(move |_| {
+        navigate(
+            "/memory?view=table",
+            leptos_router::NavigateOptions::default(),
+        );
+    });
+    ().into_any()
+}
