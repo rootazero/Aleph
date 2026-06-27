@@ -172,15 +172,15 @@ fn assemble<'a>(
     visited: &mut std::collections::HashSet<&'a str>,
 ) -> TreeNode {
     let children: Vec<TreeNode> = if visited.insert(node.node_id.as_str()) {
-        children_of
-            .get(node.node_id.as_str())
-            .map(|kids| {
-                kids.iter()
-                    .filter(|c| !visited.contains(c.node_id.as_str()))
-                    .map(|c| assemble(c, children_of, visited))
-                    .collect()
-            })
-            .unwrap_or_default()
+        let mut out = Vec::new();
+        if let Some(kids) = children_of.get(node.node_id.as_str()) {
+            for c in kids {
+                if !visited.contains(c.node_id.as_str()) {
+                    out.push(assemble(c, children_of, visited));
+                }
+            }
+        }
+        out
     } else {
         Vec::new()
     };
