@@ -442,24 +442,30 @@ impl ScratchpadManager {
         let content = self.read().await?;
         let mut out = String::with_capacity(content.len());
         let mut count = 0usize;
+        // Maintain the single-in-progress invariant: starting a new item reverts
+        // any other active `[~]` item to pending.
+        let demote_others = status == PlanItemStatus::InProgress;
 
         for line in content.split_inclusive('\n') {
             let trimmed = line.trim_start();
             let body = trimmed.trim_end_matches(['\n', '\r']);
             let is_item =
                 body.starts_with("- [ ]") || body.starts_with("- [~]") || body.starts_with("- [x]");
-            // The placeholder never consumes an index (matches parse_snapshot).
             if is_item && body != "- [ ] ..." {
                 let this = count;
                 count += 1;
+                let indent = &line[..line.len() - trimmed.len()];
+                let after_marker = &trimmed[5..];
                 if this == item_index {
-                    let indent = &line[..line.len() - trimmed.len()];
-                    // All three markers are exactly 5 ASCII bytes; the slice
-                    // keeps the item text and any trailing newline intact.
-                    let after_marker = &trimmed[5..];
                     out.push_str(indent);
                     out.push_str("- ");
                     out.push_str(status.glyph());
+                    out.push_str(after_marker);
+                    continue;
+                } else if demote_others && body.starts_with("- [~]") {
+                    out.push_str(indent);
+                    out.push_str("- ");
+                    out.push_str(PlanItemStatus::Pending.glyph());
                     out.push_str(after_marker);
                     continue;
                 }
@@ -674,6 +680,26 @@ mod tests {
         // alpha + gamma still pending — beta did not bleed into a sibling.
         assert_eq!(snap.items[0].status, PlanItemStatus::Pending);
         assert_eq!(snap.items[2].status, PlanItemStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn start_item_demotes_previous_in_progress() {
+        let temp = tempdir().unwrap();
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
+        manager.initialize(Some("obj")).await.unwrap();
+        manager.set_plan(&["a", "b", "c"]).await.unwrap();
+        manager.start_item(0).await.unwrap();
+        manager.start_item(1).await.unwrap(); // must demote item 0
+        let snap = manager.snapshot().await.unwrap();
+        let in_prog: Vec<usize> = snap
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, it)| it.is_in_progress())
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(in_prog, vec![1], "only the newest started item stays in progress");
+        assert!(!snap.items[0].is_in_progress(), "previous in-progress demoted to pending");
     }
 
     #[tokio::test]
