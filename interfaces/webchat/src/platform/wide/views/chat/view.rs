@@ -174,10 +174,14 @@ pub fn ChatView() -> impl IntoView {
     };
 
     view! {
-        // Transparent — the shell's light-field shows through. Outer flex
-        // row hosts the chat surface + optional workspace pane sibling.
+        // Transparent — the shell's light-field shows through. `relative` is
+        // the positioning ancestor for the workspace pane, which now FLOATS
+        // over the chat surface as a right-anchored overlay (see
+        // `WorkspacePanel`); `overflow-hidden` clips it while it's slid
+        // off-screen-right when collapsed, so `<main>` grows no horizontal
+        // scrollbar.
         <div
-            class="relative flex h-full"
+            class="relative flex h-full overflow-hidden"
             on:dragover=on_dragover
             on:dragleave=on_dragleave
             on:drop=on_drop

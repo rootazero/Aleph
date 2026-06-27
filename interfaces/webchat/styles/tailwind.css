@@ -1547,14 +1547,21 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 }
 
 /* --- The Codex-style composer card --- */
+/* Opaque card: under the glass material `--color-surface-raised` resolves to
+   the translucent `--mat-raised`, which let chat bubbles bleed through behind
+   the backdrop blur. We flatten that material tint over an opaque
+   `--color-surface` ground (raised fill layer under the sheen) so the input
+   box reads as a solid surface — bubbles scrolling behind it are covered, not
+   frosted. With an opaque background the backdrop blur has nothing to filter,
+   so it's dropped (mirrors the reduced-transparency fallback above). */
 .aleph-composer {
-  background-color: var(--color-surface-raised);
-  background-image: linear-gradient(to bottom, var(--aleph-sheen), transparent 52%);
+  background-color: var(--color-surface);
+  background-image:
+    linear-gradient(to bottom, var(--aleph-sheen), transparent 52%),
+    linear-gradient(0deg, var(--color-surface-raised), var(--color-surface-raised));
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md), inset 0 1px 0 var(--aleph-sheen);
-  backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
   transition: box-shadow var(--duration-normal) var(--ease-spring),
               border-color var(--duration-normal) var(--ease-spring),
               transform var(--duration-normal) var(--ease-spring);
@@ -1873,18 +1880,17 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
     overflow: hidden;
 }
 
-/* ── Collapsible workspace pane (chat right rail) ──────────────────
-   Mirror the left sidebar's eased collapse so opening/closing the
-   workspace shrinks/grows over 200ms instead of popping instantly.
-   The pane is sized by flex-basis (+ min-width floor), so those — not
-   `width` — are what we animate. Unlayered, so it overrides the
-   Tailwind `basis-*`/`min-w-*` utilities without `!important`. */
+/* ── Collapsible workspace pane (chat right overlay) ───────────────
+   The pane FLOATS over the chat surface (absolute, right-anchored) so
+   opening/closing it never reflows the chat detail. Collapse eases by
+   sliding it off the right edge + fading over 200ms (mirrors the
+   `.aleph-ws-label` park-off-right), instead of the old flex-basis
+   shrink it used as a sibling column. */
 .aleph-workspace-pane {
-    transition: flex-basis 200ms ease-out, min-width 200ms ease-out, opacity 200ms ease-out;
+    transition: transform 200ms ease-out, opacity 200ms ease-out;
 }
 .aleph-workspace-pane.workspace-collapsed {
-    flex-basis: 0;
-    min-width: 0;
+    transform: translateX(100%);
     opacity: 0;
     pointer-events: none;
 }

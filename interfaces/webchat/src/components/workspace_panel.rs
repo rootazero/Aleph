@@ -66,15 +66,20 @@ pub fn WorkspacePanel() -> impl IntoView {
     let i18n = use_i18n();
 
     view! {
-        // Always mounted so collapse/expand can EASE via a CSS transition
-        // (mirrors the left `.aleph-sidebar`), instead of popping in/out the
-        // way a `<Show>` mount/unmount would. The `workspace-collapsed`
-        // modifier shrinks flex-basis + min-width to 0 over 200ms when not
-        // in Split mode.
+        // Always mounted so collapse/expand can EASE via a CSS transition.
+        // FLOATS over the chat surface as an opaque overlay (same idiom as
+        // the composer's project / model-picker popovers: `glass` +
+        // `bg-surface-overlay` + `shadow-xl`) instead of being a flex sibling
+        // column — so opening/closing it no longer reflows the chat detail.
+        // `absolute inset-y-0 right-0` anchors it to the right edge of the
+        // ChatView's `relative` root; the `workspace-collapsed` modifier
+        // slides it off-screen right + fades over 200ms when not in Split.
+        // Width still reads `--aleph-workspace-w` so the band chrome
+        // (label + LayoutToggle in app.rs) stays glued to its leading edge.
         <aside
-            class="aleph-workspace-pane flex flex-col h-full
-                   border-l border-border bg-surface-base/40
-                   min-w-[280px] basis-[var(--aleph-workspace-w)] shrink overflow-hidden"
+            class="aleph-workspace-pane absolute inset-y-0 right-0 z-20 flex flex-col
+                   glass border-l border-border bg-surface-overlay/95 shadow-xl
+                   min-w-[280px] w-[var(--aleph-workspace-w)] overflow-hidden"
             class:workspace-collapsed=move || workspace.mode.get() != LayoutMode::Split
         >
             <Show
