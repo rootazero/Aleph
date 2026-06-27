@@ -356,6 +356,14 @@ pub struct RunSummary {
     pub terminate_detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_breakdown: Option<aleph_protocol::TokenBreakdownView>,
+    /// Current context-window occupancy (tokens) after the latest turn. Gauge
+    /// numerator on the panel. `#[serde(default)]` so legacy payloads → 0.
+    #[serde(default)]
+    pub context_tokens: u32,
+    /// Authoritative context-window size (tokens) for the run's model. Gauge
+    /// denominator on the panel. `#[serde(default)]` so legacy payloads → 0.
+    #[serde(default)]
+    pub context_window: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

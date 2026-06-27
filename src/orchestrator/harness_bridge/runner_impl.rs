@@ -555,6 +555,8 @@ impl HarnessRunner for AgentHarnessRunner {
             token_breakdown,
             tool_timeline: harness.tool_timeline(),
             estimated_cost,
+            context_tokens: 0,
+            context_window: 0,
         };
 
         // P4: single-source the terminal `Complete(outcome)` emit. The
