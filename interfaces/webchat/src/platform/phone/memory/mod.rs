@@ -1,12 +1,14 @@
-//! Native iPhone Memory (Vault) screens. Mirrors the phone Chat/Settings
-//! pattern: a Vault list landing (`/memory`) drilling into a read-only note
-//! detail (`/memory/note`). Reuses the memory data layer (R4); only the
-//! presentation is phone-specific. Vault-only v1 — the Graph/galaxy toggle and
-//! the Raw conversation facet stay desktop-only.
+//! Native iPhone Memory screens. Mirrors the phone Chat/Settings drill-down
+//! pattern: a menu landing (`/memory`) — agent selector + Graph/List rows —
+//! drilling into the full-screen Graph galaxy (`/memory/graph`), the Vault
+//! list (`/memory/list`), and a read-only note detail (`/memory/note`).
+//! Reuses the memory data layer (R4); only the presentation is phone-specific.
 
 pub mod cell;
 pub mod detail;
+pub mod graph;
 pub mod list;
+pub mod menu;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -19,7 +21,9 @@ use crate::state::memory::MemoryState;
 use crate::views::memory::data::{MemoryFacet, NOTE_WINDOW};
 
 use self::detail::PhoneMemoryDetail;
+use self::graph::PhoneMemoryGraph;
 use self::list::PhoneMemoryList;
+use self::menu::PhoneMemoryMenu;
 
 /// Router-owned state for the phone Memory screens. Every field is an
 /// `RwSignal` (Copy), so the struct is `Copy` and travels via context.
@@ -99,11 +103,53 @@ pub fn PhoneMemory() -> impl IntoView {
     });
 
     let location = use_location();
-    move || {
-        if location.pathname.get() == "/memory/note" {
-            view! { <PhoneMemoryDetail/> }.into_any()
-        } else {
-            view! { <PhoneMemoryList/> }.into_any()
-        }
+    move || match screen_for_path(&location.pathname.get()) {
+        MemoryScreen::Note => view! { <PhoneMemoryDetail/> }.into_any(),
+        MemoryScreen::Graph => view! { <PhoneMemoryGraph/> }.into_any(),
+        MemoryScreen::List => view! { <PhoneMemoryList/> }.into_any(),
+        MemoryScreen::Menu => view! { <PhoneMemoryMenu/> }.into_any(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pure path → screen mapping. Extracted so the routing table is unit-tested
+// without the Leptos runtime (mirrors `state::memory::parse_view_param`).
+// ---------------------------------------------------------------------------
+
+/// Which phone Memory screen a URL path maps to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryScreen {
+    Menu,
+    List,
+    Graph,
+    Note,
+}
+
+#[must_use]
+pub(crate) fn screen_for_path(path: &str) -> MemoryScreen {
+    match path {
+        "/memory/note" => MemoryScreen::Note,
+        "/memory/graph" => MemoryScreen::Graph,
+        "/memory/list" => MemoryScreen::List,
+        _ => MemoryScreen::Menu,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screen_for_path_maps_each_route() {
+        assert_eq!(screen_for_path("/memory"), MemoryScreen::Menu);
+        assert_eq!(screen_for_path("/memory/list"), MemoryScreen::List);
+        assert_eq!(screen_for_path("/memory/graph"), MemoryScreen::Graph);
+        assert_eq!(screen_for_path("/memory/note"), MemoryScreen::Note);
+    }
+
+    #[test]
+    fn screen_for_path_unknown_falls_back_to_menu() {
+        assert_eq!(screen_for_path("/memory/bogus"), MemoryScreen::Menu);
+        assert_eq!(screen_for_path("/"), MemoryScreen::Menu);
     }
 }

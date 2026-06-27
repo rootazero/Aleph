@@ -27,25 +27,19 @@ use crate::views::usage::UsageView;
 // Layout components
 use crate::components::boot_check_gate::BootCheckGate;
 use crate::components::command_palette::CommandPalette;
+use crate::components::mobile_tab_bar::MobileTabBar;
+use crate::components::mobile_top_bar::MobileTopBar;
 use crate::components::mode_sidebar::{ModeSidebar, PanelMode};
+use crate::components::nav_menu::label_of;
 use crate::components::notification_center::NotificationCenter;
 use crate::components::service_blocking_gate::ServiceBlockingGate;
 use crate::components::token_wall::TokenWall;
 use crate::context::{DashboardContext, DashboardState};
-use crate::platform::phone::agents::PhoneAgents;
-use crate::platform::phone::chat::PhoneChat;
-use crate::platform::phone::memory::PhoneMemory;
-use crate::platform::phone::settings::appearance::PhoneAppearance;
-use crate::platform::phone::settings::connection::PhoneConnection;
-use crate::platform::phone::settings::embeddings::PhoneEmbeddings;
-use crate::platform::phone::settings::model_route::PhoneModelRoute;
-use crate::platform::phone::settings::providers::PhoneProviders;
-use crate::platform::phone::settings::PhoneSettings;
 use crate::state::hotkey::{self as hotkey, HotkeyState};
 use crate::state::layout::{LayoutMode, WorkspaceState};
 use crate::state::notifications::NotificationsState;
 use crate::state::sessions::SessionMap;
-use crate::state::viewport::{FormFactor, FormFactorState};
+use crate::state::viewport::ViewportState;
 use crate::views::chat::ChatState;
 use crate::views::voice::{ImmersiveVoiceView, VoiceMode};
 
@@ -89,10 +83,6 @@ fn AppContent() -> impl IntoView {
     // tab. Cmd+1..9 / Cmd+W hotkeys are installed lazily by SessionTabs.
     provide_context(SessionMap::new());
 
-    // Form-factor (Wide/Phone/Tablet) — read by SettingsRouter to swap the
-    // wide `/settings` page for the iOS-native PhoneSettings at <640px.
-    provide_context(FormFactorState::new());
-
     // Workspace pane state — UI-TARS-parity. ChatOnly is the default so
     // legacy users see zero UI change; the LayoutToggle in the composer
     // opens Split mode on demand. Persisted in localStorage.
@@ -115,6 +105,13 @@ fn AppContent() -> impl IntoView {
     // (BrowsePane) share one `category` selection. Mirrors ChatState's
     // split-column sharing (see above).
     provide_context(StoreState::new());
+
+    // Reactive viewport width + mobile nav-drawer toggle — drives mobile-only
+    // behaviors (full-screen notification sheet, the slide-over sidebar drawer).
+    // Layout reflow itself is CSS-driven (Tailwind `max-sm:`). Bound (not
+    // inlined) so the drawer backdrop below can read `drawer_open`.
+    let viewport = ViewportState::new();
+    provide_context(viewport);
 
     // Esc key: uncollapse sidebar when collapsed. Coexists with the
     // hotkey-installed Esc handler that closes the palette; both only act
@@ -194,7 +191,7 @@ fn AppContent() -> impl IntoView {
             // strip so clicks aren't swallowed by the window-drag handler.
             <button
                 type="button"
-                class="aleph-sidebar-toggle"
+                class="aleph-sidebar-toggle max-sm:hidden"
                 data-tauri-drag-region="false"
                 on:click={
                     let mem = mem_for_shell;
@@ -216,13 +213,25 @@ fn AppContent() -> impl IntoView {
                 </svg>
             </button>
             <Router>
-                // Left column — context-aware sidebar, full window height
+                // Left column — context-aware sidebar, full window height.
+                // On mobile it slides in as an overlay (see ModeSidebar's
+                // `max-sm:` classes); on desktop it's a permanent column.
                 <ModeSidebar />
+
+                // Mobile nav-drawer backdrop — dims the content and captures a
+                // tap to close the slide-over sidebar. Mounted only while the
+                // drawer is open; `hidden max-sm:block` keeps it phone-only.
+                <Show when=move || viewport.drawer_open.get()>
+                    <div
+                        class="hidden max-sm:block fixed inset-0 z-[65] bg-surface-overlay/50"
+                        on:click=move |_| viewport.drawer_open.set(false)
+                    />
+                </Show>
 
                 // Main content area — `relative` is the positioning
                 // ancestor for the absolutely-floating drag band below.
                 // Transparent, so the light-field shows through.
-                <main class="flex-1 relative min-h-0 overflow-y-auto">
+                <main class="flex-1 relative min-h-0 overflow-y-auto max-sm:pb-20">
                     // Window-drag band — floats over the top of `<main>`
                     // WITHOUT taking layout space (CSS `position:
                     // absolute`, `background: transparent`). On macOS
@@ -260,6 +269,11 @@ fn AppContent() -> impl IntoView {
                 // but lost the Gateway and exhausted automatic reconnects.
                 // Inside <Router> so its "Open logs" button can navigate.
                 <ServiceBlockingGate />
+
+                // Bottom tab bar — primary section switcher on mobile
+                // (`hidden max-sm:flex`); never renders on desktop. Inside
+                // <Router> so it can use_navigate / use_location.
+                <MobileTabBar />
             </Router>
 
             // First-boot gate — blocks the shell with a "Connecting…" or
@@ -360,7 +374,7 @@ fn ChatBandChrome() -> impl IntoView {
             // makes the opt-out resilient if the child re-parents.
             <div
                 class=move || {
-                    let base = "absolute aleph-chrome-top z-[45] \
+                    let base = "absolute aleph-chrome-top z-[45] max-sm:hidden \
                                 pointer-events-auto aleph-no-drag aleph-ws-toggle";
                     if workspace.mode.get() == LayoutMode::Split {
                         format!("{base} right-[calc(var(--aleph-workspace-w)_+_8px)]")
@@ -385,32 +399,31 @@ fn ChatBandChrome() -> impl IntoView {
 fn MainContent() -> impl IntoView {
     let location = use_location();
     let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
-    let form_factor = expect_context::<FormFactorState>();
+    let i18n = use_i18n();
+    // Non-chat tabs share one mode-driven MobileTopBar (hamburger opens the
+    // drawer → closes Phase-1 gap a; title = label_of(mode); right defaults to
+    // the bell). Chat owns its own bar (agent pill) in chat/view.rs. Hidden
+    // when Chat is active so it never stacks over the chat pill bar.
+    let non_chat = Memo::new(move |_| mode.get() != PanelMode::Chat);
+    let title = Signal::derive(move || label_of(mode.get(), i18n));
 
     view! {
+        <Show when=move || non_chat.get()>
+            <div class="absolute inset-x-0 top-0 z-20">
+                <MobileTopBar title=title />
+            </div>
+        </Show>
         <div style:display=move || if mode.get() == PanelMode::Chat { "contents" } else { "none" }>
-            {move || if form_factor.form_factor.get() == FormFactor::Phone {
-                view! { <PhoneChat /> }.into_any()
-            } else {
-                view! { <ChatView /> }.into_any()
-            }}
+            <ChatView />
         </div>
         <div style:display=move || if mode.get() == PanelMode::Dashboard { "contents" } else { "none" }>
             <DashboardRouter />
         </div>
         <div style:display=move || if mode.get() == PanelMode::Memory { "contents" } else { "none" }>
-            {move || if form_factor.form_factor.get() == FormFactor::Phone {
-                view! { <PhoneMemory /> }.into_any()
-            } else {
-                view! { <MemoryHub /> }.into_any()
-            }}
+            <MemoryHub />
         </div>
         <div style:display=move || if mode.get() == PanelMode::Agents { "contents" } else { "none" }>
-            {move || if form_factor.form_factor.get() == FormFactor::Phone {
-                view! { <PhoneAgents /> }.into_any()
-            } else {
-                view! { <AgentsRouter /> }.into_any()
-            }}
+            <AgentsRouter />
         </div>
         <div style:display=move || if mode.get() == PanelMode::Teams { "contents" } else { "none" }>
             <TeamsView />
@@ -450,7 +463,6 @@ fn DashboardRouter() -> impl IntoView {
 #[component]
 fn SettingsRouter() -> impl IntoView {
     let location = use_location();
-    let form_factor = expect_context::<FormFactorState>();
 
     move || {
         let path = location.pathname.get();
@@ -459,59 +471,23 @@ fn SettingsRouter() -> impl IntoView {
             // these settings is already authorized (operator) — loopback or a
             // token-validated remote — so there is no per-page ConfigGate; the
             // login wall (TokenWall) is the one and only gate.
-            "/settings" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneSettings /> }.into_any()
-                } else {
-                    view! { <Settings /> }.into_any()
-                }
-            }
+            "/settings" => view! { <Settings /> }.into_any(),
             "/settings/general" => view! { <GeneralView /> }.into_any(),
-            "/settings/appearance" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneAppearance /> }.into_any()
-                } else {
-                    view! { <AppearanceView /> }.into_any()
-                }
-            }
+            "/settings/appearance" => view! { <AppearanceView /> }.into_any(),
             "/settings/behavior" => view! { <BehaviorView /> }.into_any(),
 
             // AI
             "/settings/search" => view! { <SearchView /> }.into_any(),
-            "/settings/providers" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneProviders /> }.into_any()
-                } else {
-                    view! { <ProvidersView /> }.into_any()
-                }
-            }
-            "/settings/embedding-providers" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneEmbeddings /> }.into_any()
-                } else {
-                    view! { <EmbeddingProvidersView /> }.into_any()
-                }
-            }
+            "/settings/providers" => view! { <ProvidersView /> }.into_any(),
+            "/settings/embedding-providers" => view! { <EmbeddingProvidersView /> }.into_any(),
             "/settings/reranking-providers" => view! { <RerankingProvidersView /> }.into_any(),
             "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
-            "/settings/model-route" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneModelRoute /> }.into_any()
-                } else {
-                    view! { <RouteView /> }.into_any()
-                }
-            }
+            "/settings/model-route" => view! { <RouteView /> }.into_any(),
             "/settings/memory" => view! { <MemoryView /> }.into_any(),
 
             // Browser
             "/settings/browser" => view! { <BrowserView /> }.into_any(),
-            "/settings/network" => {
-                if form_factor.form_factor.get() == FormFactor::Phone {
-                    view! { <PhoneConnection /> }.into_any()
-                } else {
-                    view! { <NetworkView /> }.into_any()
-                }
-            }
+            "/settings/network" => view! { <NetworkView /> }.into_any(),
 
             // Extensions
             "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),

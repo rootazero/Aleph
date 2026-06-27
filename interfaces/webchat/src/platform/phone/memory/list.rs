@@ -50,7 +50,7 @@ pub fn PhoneMemoryList() -> impl IntoView {
     let counts = move || bucket_counts(&st.window.get());
 
     view! {
-        <PhoneShell title="Memory">
+        <PhoneShell title="Memory" back="/memory" back_label="Memory">
         // Single element child for PhoneShell (mixed static+dynamic siblings
         // must live inside one element — see the PhoneShell footgun note).
         <div style="display:flex; flex-direction:column; gap:12px;">

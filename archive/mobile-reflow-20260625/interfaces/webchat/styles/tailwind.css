@@ -1,0 +1,2305 @@
+@import "tailwindcss";
+
+/* Scan Leptos Rust source files for class names */
+@source "../src/**/*.rs";
+@source "../dist/**/*.html";
+
+/* ============================================================
+   OKLCH Design Token System — "Quiet Luxury"
+   Mist (breath) + Mauve (depth) + Olive (balance) + Taupe (warmth)
+   ============================================================ */
+
+@theme {
+  /* === Surface Hierarchy ===
+     Spread widened (raised 1.00 → sunken 0.92) so raised cards, the base
+     canvas, and sunken input wells read as distinct materials rather than
+     one near-flat tone. Borders + the tiered shadows do the rest. */
+  --color-surface:          oklch(0.96 0.005 220);
+  --color-surface-raised:   oklch(1.00 0.000 0);
+  --color-surface-sunken:   oklch(0.905 0.010 220);
+  --color-surface-overlay:  oklch(0.985 0.004 220);
+
+  /* === Sidebar — Slightly cooler than raised === */
+  --color-sidebar:          oklch(0.99 0.003 220);
+  --color-sidebar-active:   oklch(0.95 0.015 310);
+  --color-sidebar-accent:   oklch(0.55 0.120 310);
+
+  /* === Text Hierarchy === */
+  --color-text-primary:     oklch(0.20 0.015 310);
+  --color-text-secondary:   oklch(0.40 0.010 220);
+  --color-text-tertiary:    oklch(0.48 0.008 220);
+  --color-text-inverse:     oklch(0.97 0.005 220);
+
+  /* === Borders === */
+  --color-border:           oklch(0.86 0.009 220);
+  --color-border-subtle:    oklch(0.91 0.006 220);
+  --color-border-strong:    oklch(0.75 0.012 220);
+
+  /* === Focus Ring === */
+  --color-ring:             oklch(0.55 0.120 310 / 0.35);
+
+  /* === Primary — Mauve === */
+  --color-primary:          oklch(0.55 0.120 310);
+  --color-primary-hover:    oklch(0.50 0.110 310);
+  --color-primary-subtle:   oklch(0.95 0.020 310);
+
+  /* === Success — Olive === */
+  --color-success:          oklch(0.55 0.120 130);
+  --color-success-subtle:   oklch(0.95 0.025 130);
+
+  /* === Warning — Taupe === */
+  --color-warning:          oklch(0.60 0.080 70);
+  --color-warning-subtle:   oklch(0.95 0.015 70);
+
+  /* === Danger — Muted Red === */
+  --color-danger:           oklch(0.55 0.150 25);
+  --color-danger-subtle:    oklch(0.95 0.020 25);
+
+  /* === Info — Mist Deep === */
+  --color-info:             oklch(0.50 0.030 220);
+  --color-info-subtle:      oklch(0.95 0.010 220);
+
+  /* === Chart Palette === */
+  --color-chart-1:          oklch(0.55 0.120 310);
+  --color-chart-2:          oklch(0.58 0.120 130);
+  --color-chart-3:          oklch(0.60 0.080 70);
+  --color-chart-4:          oklch(0.50 0.030 220);
+
+  /* === Typography — Inter (modern variable web sans) leading,
+         SF / system stack as graceful fallback. JetBrains Mono for code.
+         Loaded via <link> in index.html; fallbacks keep zero-network safe. === */
+  --font-sans: "Inter", "Inter Variable", -apple-system, BlinkMacSystemFont,
+    "SF Pro Text", "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "JetBrains Mono Variable", ui-monospace,
+    SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --font-serif: "Fraunces", "Noto Sans SC", Georgia, serif;
+
+  /* === Motion — one converged ease-out curve, calm by default ===
+         Aliased into a duration scale so components can pick a tempo
+         without hard-coding magic numbers. === */
+  --default-transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+  --default-transition-duration:         180ms;
+  --ease-spring:                         cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out:                            cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast:                       120ms;
+  --duration-normal:                     200ms;
+  --duration-slow:                       320ms;
+
+  /* === Radii — explicit scale, slightly larger than Tailwind v4 defaults
+         to produce the modern "soft" web-app feel. The whole panel inherits
+         these via the existing `rounded-*` utilities — zero component edits
+         needed (`rounded-lg`: 8→12, `rounded-xl`: 12→16, `rounded-2xl`: 16→20).
+         Each token is multiplied by `--control-ui-radius-scale` (default 1,
+         driven by the Appearance settings "圆角" knob) so the whole panel's
+         roundness re-derives from a single runtime value. `--radius-full`
+         stays fixed so pills/avatars never lose their full curve. === */
+  --radius-xs:   calc(0.1875rem * var(--control-ui-radius-scale, 1));  /*  3px */
+  --radius-sm:   calc(0.375rem  * var(--control-ui-radius-scale, 1));  /*  6px */
+  --radius-md:   calc(0.5rem    * var(--control-ui-radius-scale, 1));  /*  8px */
+  --radius-lg:   calc(0.75rem   * var(--control-ui-radius-scale, 1));  /* 12px */
+  --radius-xl:   calc(1rem      * var(--control-ui-radius-scale, 1));  /* 16px */
+  --radius-2xl:  calc(1.25rem   * var(--control-ui-radius-scale, 1));  /* 20px */
+  --radius-3xl:  calc(1.75rem   * var(--control-ui-radius-scale, 1));  /* 28px */
+  --radius-full: 9999px;
+
+  /* === Spacing base — Tailwind v4 keys every numeric spacing utility
+         (padding, margin, gap, width, height) off this one unit. 0.22rem
+         (~12% under the 0.25rem Tailwind default) bakes a denser baseline;
+         `--control-ui-density` (the Appearance 「紧凑度」 knob, default 1)
+         re-scales the whole panel's whitespace from here, exactly as
+         `--control-ui-text-scale` re-scales every rem. === */
+  --spacing: calc(0.22rem * var(--control-ui-density, 1));
+
+  /* === Depth — soft, layered shadows in place of heavy borders.
+         `--shadow-glow` is accent-tinted so it follows the active palette. === */
+  --shadow-xs: 0 1px 2px oklch(0.20 0.02 310 / 0.05);
+  --shadow-sm: 0 1px 2px oklch(0.20 0.02 310 / 0.05),
+               0 1px 3px oklch(0.20 0.02 310 / 0.06);
+  /* md/lg/xl carry a tight contact layer + a mid layer + a soft ambient
+     layer. Three stops read as genuine elevation (a single blur reads flat);
+     all hues are mauve-tinted so the depth belongs to the palette. */
+  --shadow-md: 0 1px 2px oklch(0.20 0.02 310 / 0.05),
+               0 3px 6px oklch(0.20 0.02 310 / 0.07),
+               0 8px 18px oklch(0.20 0.02 310 / 0.09);
+  --shadow-lg: 0 2px 4px oklch(0.20 0.02 310 / 0.06),
+               0 6px 12px oklch(0.20 0.02 310 / 0.08),
+               0 16px 34px oklch(0.20 0.02 310 / 0.12);
+  --shadow-xl: 0 3px 6px oklch(0.20 0.02 310 / 0.07),
+               0 10px 20px oklch(0.20 0.02 310 / 0.10),
+               0 24px 52px oklch(0.20 0.02 310 / 0.16);
+  --shadow-glow: 0 0 0 1px color-mix(in oklch, var(--color-primary) 28%, transparent),
+                 0 0 20px color-mix(in oklch, var(--color-primary) 22%, transparent);
+
+  /* === Focus — single source of truth, accent-aware, two-layer ring.
+         Use via `box-shadow: var(--focus-ring)` on `:focus-visible`. === */
+  --focus-ring: 0 0 0 2px var(--color-surface),
+                0 0 0 4px color-mix(in oklch, var(--color-primary) 55%, transparent);
+  --focus-glow: 0 0 0 2px var(--color-surface),
+                0 0 0 4px var(--color-primary),
+                0 0 16px color-mix(in oklch, var(--color-primary) 32%, transparent);
+
+  /* === Selection — accent-tinted text selection (subdued, not jarring). === */
+  --selection-bg: color-mix(in oklch, var(--color-primary) 38%, transparent);
+  --selection-fg: var(--color-text-primary);
+}
+
+/* ============================================================
+   Base Layer — typography tuning, a11y scale, safe-area, selection.
+   This is the single global tweak point that makes the panel feel
+   "modern + airy" rather than "system-native + heavy":
+     • Inter as primary, calmed tracking, OpenType ligatures
+     • Tabular numerals on number-flavoured spots (metrics, counters)
+     • `--control-ui-text-scale` / `--control-ui-radius-scale` hooks (1.0
+       default; the Appearance settings page sets them at runtime for
+       low-vision text scaling / corner roundness, no recompile)
+     • iPhone / iPad / Tauri full-screen safe-area insets
+   ============================================================ */
+
+:root {
+  /* Accessibility scale — every text rule keys off Tailwind utilities
+     so we only need a single global font-size knob. Components stay
+     ignorant of the value. Both knobs are driven by the Appearance
+     settings page (字号 / 圆角); defaults of 1 reproduce the base design. */
+  --control-ui-text-scale: 1;
+  --control-ui-radius-scale: 1;
+  --control-ui-density: 1;
+
+  /* OS safe-area pass-through for PWA / full-screen Tauri shells. */
+  --safe-area-top:    env(safe-area-inset-top, 0px);
+  --safe-area-right:  env(safe-area-inset-right, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left:   env(safe-area-inset-left, 0px);
+
+  /* Tiered blur strengths. The subtle in-content frost and full-viewport
+     scrim stay global here; the lush/chrome tiers are per-material (see
+     primitive blocks). */
+  --glass-blur-subtle: 8px;
+  --scrim-blur: 2px;
+
+  /* Focused form-control border — a restrained, accent-tinted edge. The soft
+     focus ring is the real signal, so a focused field only warms TOWARD the
+     accent instead of snapping to full --color-primary (which read as too
+     loud). Lives here (not @theme) so Tailwind emits no utility for it. Both
+     source tokens are root-level, so this re-resolves automatically in dark
+     and under every accent palette — no mirror copy needed. */
+  --color-border-focus: color-mix(in oklch, var(--color-primary) 42%, var(--color-border-strong));
+
+  /* ── Voice orb ── flow colors derive from accent (relative OKLCH), level driven by JS */
+  --voice-flow-a: var(--color-primary);
+  --voice-flow-b: oklch(from var(--color-primary) calc(l + 0.08) calc(c * 1.15) calc(h + 60));
+  --voice-flow-c: oklch(from var(--color-primary) calc(l + 0.12) calc(c * 0.9) calc(h - 55));
+  --voice-glow: oklch(from var(--color-primary) l c h / 0.45);
+  --voice-level: 0; /* 0..1, written per-frame from AnalyserNode RMS */
+  --voice-flow-speed: 7s;
+}
+
+html {
+  /* Apply the a11y scale via the root font-size knob — every `rem` in the
+     panel (utilities, tokens, components) recalculates from this. */
+  font-size: calc(16px * var(--control-ui-text-scale));
+  -webkit-text-size-adjust: 100%;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;       /* 13px @ scale=1 — denser baseline */
+  line-height: 1.5;
+  letter-spacing: -0.005em;   /* sub-pixel calm; Inter ships slightly loose */
+  font-feature-settings: "cv11", "ss01", "ss03";  /* Inter alternate forms */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Avoid ugly single-word last lines in flowing copy (graceful no-op on
+     engines that don't support it yet). */
+  text-wrap: pretty;
+}
+
+/* Numeric surfaces (metrics, counters, timestamps) — opt-in via the
+   `.tabular-nums` utility Tailwind already ships; we just guarantee the
+   feature is available even when the user is on the system stack. */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Large-viewport step-up — at desktop widths the base ticks up one notch
+   so the panel breathes in 27" monitors without distorting smaller screens. */
+@media (min-width: 1600px) {
+  body { font-size: 0.875rem; }    /* 14px */
+}
+
+/* Headings get a slightly tighter tracking — Inter renders crisper at -0.02em.
+   `text-wrap: balance` evens out multi-line headings so no orphan word is
+   left dangling on the last line. */
+h1, h2, h3, h4, h5, h6 {
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+/* Accent-tinted text selection — calibrated low so highlights don't shout.
+   Caret-color + scrollbar tinting live further down in their own block so the
+   accent-aware comment there remains a single source of truth. */
+::selection {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+/* :focus-visible — single, accent-aware ring for every interactive element
+   that doesn't opt into a stricter ring of its own. */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Restrained focus border for form controls. The accent-aware ring above is
+   the focus signal; the border only warms toward the accent via
+   --color-border-focus instead of snapping to full --color-primary. Unlayered,
+   so it overrides the scattered `focus:border-primary` utilities across ~160
+   inputs from one place — zero component edits. Uses `:focus` (not
+   `:focus-visible`) to also calm pointer-driven focus, matching the utilities
+   it supersedes. */
+input:focus,
+textarea:focus,
+select:focus,
+[contenteditable="true"]:focus {
+  border-color: var(--color-border-focus);
+}
+
+/* ============================================================
+   Dark Mode Overrides
+   ============================================================ */
+
+.dark {
+  --color-surface:          oklch(0.15 0.020 310);
+  --color-surface-raised:   oklch(0.225 0.022 310);
+  --color-surface-sunken:   oklch(0.095 0.016 310);
+  --color-surface-overlay:  oklch(0.205 0.020 310);
+
+  --color-sidebar:          oklch(0.13 0.025 310);
+  --color-sidebar-active:   oklch(0.22 0.035 310);
+  --color-sidebar-accent:   oklch(0.65 0.120 310);
+
+  --color-text-primary:     oklch(0.97 0.005 220);
+  --color-text-secondary:   oklch(0.68 0.008 220);
+  --color-text-tertiary:    oklch(0.62 0.006 220);
+
+  --color-border:           oklch(0.31 0.020 310);
+  --color-border-subtle:    oklch(0.22 0.018 310);
+  --color-border-strong:    oklch(0.38 0.022 310);
+
+  --color-ring:             oklch(0.65 0.120 310 / 0.35);
+
+  --color-primary:          oklch(0.65 0.120 310);
+  --color-primary-hover:    oklch(0.70 0.110 310);
+  --color-primary-subtle:   oklch(0.20 0.040 310);
+
+  --color-success:          oklch(0.65 0.120 130);
+  --color-success-subtle:   oklch(0.20 0.030 130);
+
+  --color-warning:          oklch(0.70 0.080 70);
+  --color-warning-subtle:   oklch(0.20 0.020 70);
+
+  --color-danger:           oklch(0.65 0.150 25);
+  --color-danger-subtle:    oklch(0.20 0.030 25);
+
+  --color-info:             oklch(0.65 0.030 220);
+  --color-info-subtle:      oklch(0.20 0.015 220);
+}
+
+/* System preference fallback */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --color-surface:          oklch(0.15 0.020 310);
+    --color-surface-raised:   oklch(0.225 0.022 310);
+    --color-surface-sunken:   oklch(0.095 0.016 310);
+    --color-surface-overlay:  oklch(0.205 0.020 310);
+
+    --color-sidebar:          oklch(0.13 0.025 310);
+    --color-sidebar-active:   oklch(0.22 0.035 310);
+    --color-sidebar-accent:   oklch(0.65 0.120 310);
+
+    --color-text-primary:     oklch(0.97 0.005 220);
+    --color-text-secondary:   oklch(0.68 0.008 220);
+    --color-text-tertiary:    oklch(0.62 0.006 220);
+
+    --color-border:           oklch(0.31 0.020 310);
+    --color-border-subtle:    oklch(0.22 0.018 310);
+    --color-border-strong:    oklch(0.38 0.022 310);
+
+    --color-ring:             oklch(0.65 0.120 310 / 0.35);
+
+    --color-primary:          oklch(0.65 0.120 310);
+    --color-primary-hover:    oklch(0.70 0.110 310);
+    --color-primary-subtle:   oklch(0.20 0.040 310);
+
+    --color-success:          oklch(0.65 0.120 130);
+    --color-success-subtle:   oklch(0.20 0.030 130);
+
+    --color-warning:          oklch(0.70 0.080 70);
+    --color-warning-subtle:   oklch(0.20 0.020 70);
+
+    --color-danger:           oklch(0.65 0.150 25);
+    --color-danger-subtle:    oklch(0.20 0.030 25);
+
+    --color-info:             oklch(0.65 0.030 220);
+    --color-info-subtle:      oklch(0.20 0.015 220);
+  }
+}
+
+/* ============================================================
+   Accent Palettes — orthogonal to light/dark.
+   Selected via the `data-accent` attribute on <html>. Each palette
+   only re-tints the primary / focus / sidebar-accent tokens; the
+   neutral surface hierarchy is left untouched. Default (absent or
+   "mauve") keeps the base @theme hue 310.
+   ============================================================ */
+
+/* --- Light values --- */
+html[data-accent="ocean"] {
+  --color-primary:          oklch(0.55 0.130 250);
+  --color-primary-hover:    oklch(0.50 0.120 250);
+  --color-primary-subtle:   oklch(0.95 0.030 250);
+  --color-sidebar-active:   oklch(0.95 0.022 250);
+  --color-sidebar-accent:   oklch(0.55 0.130 250);
+  --color-ring:             oklch(0.55 0.130 250 / 0.35);
+  --color-chart-1:          oklch(0.55 0.130 250);
+}
+html[data-accent="forest"] {
+  --color-primary:          oklch(0.53 0.115 150);
+  --color-primary-hover:    oklch(0.48 0.105 150);
+  --color-primary-subtle:   oklch(0.95 0.030 150);
+  --color-sidebar-active:   oklch(0.95 0.022 150);
+  --color-sidebar-accent:   oklch(0.53 0.115 150);
+  --color-ring:             oklch(0.53 0.115 150 / 0.35);
+  --color-chart-1:          oklch(0.53 0.115 150);
+}
+html[data-accent="sunset"] {
+  --color-primary:          oklch(0.62 0.135 60);
+  --color-primary-hover:    oklch(0.57 0.125 60);
+  --color-primary-subtle:   oklch(0.95 0.035 60);
+  --color-sidebar-active:   oklch(0.95 0.025 60);
+  --color-sidebar-accent:   oklch(0.58 0.130 60);
+  --color-ring:             oklch(0.62 0.135 60 / 0.35);
+  --color-chart-1:          oklch(0.62 0.135 60);
+}
+html[data-accent="rose"] {
+  --color-primary:          oklch(0.57 0.150 15);
+  --color-primary-hover:    oklch(0.52 0.140 15);
+  --color-primary-subtle:   oklch(0.95 0.035 15);
+  --color-sidebar-active:   oklch(0.95 0.025 15);
+  --color-sidebar-accent:   oklch(0.57 0.150 15);
+  --color-ring:             oklch(0.57 0.150 15 / 0.35);
+  --color-chart-1:          oklch(0.57 0.150 15);
+}
+
+/* --- Dark values (explicit `.dark` class) --- */
+html.dark[data-accent="ocean"] {
+  --color-primary:          oklch(0.68 0.130 250);
+  --color-primary-hover:    oklch(0.73 0.120 250);
+  --color-primary-subtle:   oklch(0.22 0.050 250);
+  --color-sidebar-active:   oklch(0.24 0.040 250);
+  --color-sidebar-accent:   oklch(0.70 0.130 250);
+  --color-ring:             oklch(0.68 0.130 250 / 0.35);
+  --color-chart-1:          oklch(0.68 0.130 250);
+}
+html.dark[data-accent="forest"] {
+  --color-primary:          oklch(0.66 0.120 150);
+  --color-primary-hover:    oklch(0.71 0.110 150);
+  --color-primary-subtle:   oklch(0.22 0.045 150);
+  --color-sidebar-active:   oklch(0.24 0.038 150);
+  --color-sidebar-accent:   oklch(0.68 0.120 150);
+  --color-ring:             oklch(0.66 0.120 150 / 0.35);
+  --color-chart-1:          oklch(0.66 0.120 150);
+}
+html.dark[data-accent="sunset"] {
+  --color-primary:          oklch(0.74 0.135 65);
+  --color-primary-hover:    oklch(0.79 0.125 65);
+  --color-primary-subtle:   oklch(0.24 0.050 65);
+  --color-sidebar-active:   oklch(0.26 0.040 65);
+  --color-sidebar-accent:   oklch(0.76 0.135 65);
+  --color-ring:             oklch(0.74 0.135 65 / 0.35);
+  --color-chart-1:          oklch(0.74 0.135 65);
+}
+html.dark[data-accent="rose"] {
+  --color-primary:          oklch(0.70 0.150 15);
+  --color-primary-hover:    oklch(0.75 0.140 15);
+  --color-primary-subtle:   oklch(0.23 0.055 15);
+  --color-sidebar-active:   oklch(0.25 0.045 15);
+  --color-sidebar-accent:   oklch(0.72 0.150 15);
+  --color-ring:             oklch(0.70 0.150 15 / 0.35);
+  --color-chart-1:          oklch(0.70 0.150 15);
+}
+
+/* --- System dark (no class, OS preference) --- */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light)[data-accent="ocean"] {
+    --color-primary:          oklch(0.68 0.130 250);
+    --color-primary-hover:    oklch(0.73 0.120 250);
+    --color-primary-subtle:   oklch(0.22 0.050 250);
+    --color-sidebar-active:   oklch(0.24 0.040 250);
+    --color-sidebar-accent:   oklch(0.70 0.130 250);
+    --color-ring:             oklch(0.68 0.130 250 / 0.35);
+    --color-chart-1:          oklch(0.68 0.130 250);
+  }
+  :root:not(.light)[data-accent="forest"] {
+    --color-primary:          oklch(0.66 0.120 150);
+    --color-primary-hover:    oklch(0.71 0.110 150);
+    --color-primary-subtle:   oklch(0.22 0.045 150);
+    --color-sidebar-active:   oklch(0.24 0.038 150);
+    --color-sidebar-accent:   oklch(0.68 0.120 150);
+    --color-ring:             oklch(0.66 0.120 150 / 0.35);
+    --color-chart-1:          oklch(0.66 0.120 150);
+  }
+  :root:not(.light)[data-accent="sunset"] {
+    --color-primary:          oklch(0.74 0.135 65);
+    --color-primary-hover:    oklch(0.79 0.125 65);
+    --color-primary-subtle:   oklch(0.24 0.050 65);
+    --color-sidebar-active:   oklch(0.26 0.040 65);
+    --color-sidebar-accent:   oklch(0.76 0.135 65);
+    --color-ring:             oklch(0.74 0.135 65 / 0.35);
+    --color-chart-1:          oklch(0.74 0.135 65);
+  }
+  :root:not(.light)[data-accent="rose"] {
+    --color-primary:          oklch(0.70 0.150 15);
+    --color-primary-hover:    oklch(0.75 0.140 15);
+    --color-primary-subtle:   oklch(0.23 0.055 15);
+    --color-sidebar-active:   oklch(0.25 0.045 15);
+    --color-sidebar-accent:   oklch(0.72 0.150 15);
+    --color-ring:             oklch(0.70 0.150 15 / 0.35);
+    --color-chart-1:          oklch(0.70 0.150 15);
+  }
+}
+
+/* ============================================================
+   Glass utility — frosted popovers / menus on any theme.
+   ============================================================ */
+
+/* Base rule lives in @layer components so positioning utilities
+   (`absolute`/`fixed` on popovers) override the `relative` fallback —
+   without a layer, this unlayered rule would clobber them. `relative`
+   still applies to any glass element that has no position utility,
+   anchoring the ::before/::after overlays. */
+@layer components {
+  .glass {
+    position: relative;
+    /* Isolate the popover/menu/modal subtree's layout + style invalidation from
+       the document. `layout style` only — NOT `paint` (that would clip the
+       shadow-xl halo) and NOT `size` (size tracks content). Keeps reactive
+       updates inside a popover from triggering a full-document recalc. Purely
+       a perf hint; zero visual effect. */
+    contain: layout style;
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    /* Diagonal sheen folded into the surface itself — leaves ::before for the
+       bezel and ::after for grain. Composes with the element's bg-color
+       utility (different property), so no conflict with bg-surface-overlay. */
+    background-image: linear-gradient(160deg, oklch(1 0 0 / 0.06), transparent 42%);
+  }
+}
+/* Gradient specular edge — bright at the top, fading down. Painted once,
+   composited; ~0 per-frame cost. Light/dark variance flows through the
+   mat-pop-spec-* primitives. */
+.glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(180deg,
+    var(--mat-pop-spec-hi), var(--mat-pop-spec-mid) 45%, var(--mat-pop-spec-lo));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  pointer-events: none;
+}
+/* Fine grain — kills the "plastic" flatness of a large blur. */
+.glass::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: var(--mat-pop-grain);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+}
+/* The popover's own children must sit above the ::before/::after overlays. */
+.glass > * { position: relative; z-index: 1; }
+
+/* ============================================================
+   Shared blur helpers — drive the full-viewport modal scrim and the
+   light in-content frosts off the tiered tokens, so they follow the
+   theme and the reduced-transparency safety valve. The scrim sets only
+   backdrop-filter; each call site keeps its own dim background colour.
+   ============================================================ */
+.aleph-scrim {
+  backdrop-filter: blur(var(--scrim-blur));
+  -webkit-backdrop-filter: blur(var(--scrim-blur));
+}
+.aleph-blur-subtle {
+  backdrop-filter: blur(var(--glass-blur-subtle));
+  -webkit-backdrop-filter: blur(var(--glass-blur-subtle));
+}
+
+/* ============================================================
+   Message glass — faux-glass materials for the chat message flow.
+   NO backdrop-filter by design: bubbles sit in the scroll flow over a
+   static panel background, so blur would cost compositor time for an
+   invisible effect (hundreds of bubbles × per-frame cost). The look is
+   layered instead: translucent fill + 160° sheen + bright top edge +
+   soft shadow. Real backdrop-filter stays reserved for transient
+   surfaces (.glass on modals/menus).
+   Token states: per-material primitive blocks (light default → .dark override
+   → a media-query branch for System mode), with ALL surface tokens derived
+   once via color-mix below.
+   ============================================================ */
+
+/* ============================================================
+   Material primitives — one flat block per material × brightness.
+   Every glass surface token below derives from these via color-mix,
+   so a new material = one new block, zero new derivations.
+   This block: LUXE (default material). Liquid/Aurora live further
+   down, after the accent palettes — search `data-material=`.
+   Selector convention: brightness → class on <html> (`.dark` / `:root`),
+   material → data-attribute on <html> (`html[data-material="liquid"]`).
+   ============================================================ */
+:root {
+  /* surface inks + fill strengths */
+  --mat-ink-raise: oklch(1 0 0);
+  --mat-ink-sink: oklch(0.45 0.02 295);
+  --mat-fill-bubble: 65%;
+  --mat-fill-inset: 6%;
+  /* edges & light */
+  --mat-bubble-sheen: oklch(1 0 0 / 0.35);
+  --mat-edge: oklch(0.40 0.02 295 / 0.14);
+  --mat-edge-top: oklch(0.40 0.02 295 / 0.20);
+  --mat-edge-sunken: oklch(0.40 0.02 295 / 0.12);
+  --mat-edge-sunken-top: oklch(0.40 0.02 295 / 0.16);
+  /* depth */
+  --mat-shadow: oklch(0.35 0.02 295 / 0.10);
+  /* leaf colours (no useful derivation — keep exact) */
+  --mat-code-header: oklch(0.45 0.02 295 / 0.08);
+  --mat-code-pre: oklch(0.45 0.02 295 / 0.05);
+  /* user bubble accent recipe */
+  --mat-user-fill: 68%;
+  --mat-user-glow: 25%;
+  /* blur tiers (vary by MATERIAL only, not brightness) */
+  --glass-blur: 20px;
+  --glass-saturate: 1.6;
+  --glass-blur-chrome: 16px;
+  /* canvas field — opaque ground for non-macOS; semi-opaque aurora base
+     (on macOS the always-on vibrancy faintly shows through it). */
+  --mat-solid-ground: oklch(0.988 0.004 295);
+  --mat-canvas-base: oklch(0.972 0.005 295 / 0.86);
+  --mat-glow-a: 20%;
+  --mat-glow-b: 13%;
+  --mat-glow-top: 7%;
+  /* Cool counter-hue — a second light source so the wash reads as a mesh. */
+  --mat-glow-counter: color-mix(in oklch, oklch(0.62 0.13 250) 10%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.72);
+  /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
+  --mat-raised: oklch(1.00 0 0 / 0.55);
+  /* canvas grain CSS opacity over a FULL-strength noise SVG — effective alpha
+     equals this token. Legacy hardcoded grain was 0.025/0.05; luxe deepens it
+     slightly. */
+  --mat-grain: 0.035;
+  --mat-fill-chrome: 78%;
+  --mat-chrome-topline: oklch(1 0 0 / 0);
+  /* popover (.glass) specular edge + grain */
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.9);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.2);
+  --mat-pop-spec-lo: oklch(0.4 0.02 295 / 0.06);
+  --mat-pop-grain: 0.25;
+}
+.dark {
+  --mat-ink-raise: oklch(0.24 0.02 310);
+  --mat-ink-sink: oklch(0.19 0.02 310);
+  --mat-fill-bubble: 75%;
+  --mat-fill-inset: 70%;
+  --mat-bubble-sheen: oklch(1 0 0 / 0.05);
+  --mat-edge: oklch(1 0 0 / 0.10);
+  --mat-edge-top: oklch(1 0 0 / 0.22);
+  --mat-edge-sunken: oklch(1 0 0 / 0.07);
+  --mat-edge-sunken-top: oklch(1 0 0 / 0.13);
+  --mat-shadow: oklch(0 0 0 / 0.25);
+  --mat-code-header: oklch(0.19 0.02 310 / 0.9);
+  --mat-code-pre: oklch(0.15 0.02 310 / 0.85);
+  /* brightness-invariant for Luxe (materials DO vary these per brightness);
+     listed anyway — every primitive block stays a complete set. */
+  --mat-user-fill: 68%;
+  --mat-user-glow: 25%;
+  --mat-solid-ground: oklch(0.155 0.022 300);
+  --mat-canvas-base: oklch(0.175 0.022 300 / 0.84);
+  --mat-glow-a: 24%;
+  --mat-glow-b: 15%;
+  --mat-glow-top: 8%;
+  --mat-glow-counter: color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.05);
+  --mat-raised: oklch(0.26 0.018 300 / 0.45);
+  --mat-grain: 0.06;
+  --mat-fill-chrome: 78%;
+  --mat-chrome-topline: oklch(1 0 0 / 0);
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.40);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.04);
+  --mat-pop-spec-lo: oklch(1 0 0 / 0);
+  --mat-pop-grain: 0.4;
+}
+/* System mode (no explicit class) + OS dark — exact mirror of `.dark`.
+   Edit `.dark` first, then copy every property here. Never tune this block
+   independently; it exists only because the media query can't reference
+   the class-based selector.
+   (enforced by mirror_blocks_are_verbatim_copies in src/appearance.rs) */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --mat-ink-raise: oklch(0.24 0.02 310);
+    --mat-ink-sink: oklch(0.19 0.02 310);
+    --mat-fill-bubble: 75%;
+    --mat-fill-inset: 70%;
+    --mat-bubble-sheen: oklch(1 0 0 / 0.05);
+    --mat-edge: oklch(1 0 0 / 0.10);
+    --mat-edge-top: oklch(1 0 0 / 0.22);
+    --mat-edge-sunken: oklch(1 0 0 / 0.07);
+    --mat-edge-sunken-top: oklch(1 0 0 / 0.13);
+    --mat-shadow: oklch(0 0 0 / 0.25);
+    --mat-code-header: oklch(0.19 0.02 310 / 0.9);
+    --mat-code-pre: oklch(0.15 0.02 310 / 0.85);
+    /* brightness-invariant for Luxe (materials DO vary these per brightness);
+       listed anyway — every primitive block stays a complete set. */
+    --mat-user-fill: 68%;
+    --mat-user-glow: 25%;
+    --mat-solid-ground: oklch(0.155 0.022 300);
+    --mat-canvas-base: oklch(0.175 0.022 300 / 0.84);
+    --mat-glow-a: 24%;
+    --mat-glow-b: 15%;
+    --mat-glow-top: 8%;
+    --mat-glow-counter: color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
+    --mat-sheen: oklch(1 0 0 / 0.05);
+    --mat-raised: oklch(0.26 0.018 300 / 0.45);
+    --mat-grain: 0.06;
+    --mat-fill-chrome: 78%;
+    --mat-chrome-topline: oklch(1 0 0 / 0);
+    --mat-pop-spec-hi: oklch(1 0 0 / 0.40);
+    --mat-pop-spec-mid: oklch(1 0 0 / 0.04);
+    --mat-pop-spec-lo: oklch(1 0 0 / 0);
+    --mat-pop-grain: 0.4;
+  }
+}
+
+/* ============================================================
+   Material: LIQUID GLASS — translucent lens surfaces, bright
+   specular edges, vivid accent-derived light field.
+   ============================================================ */
+html[data-material="liquid"] {
+  --mat-ink-raise: oklch(1 0 0);
+  --mat-ink-sink: oklch(0.42 0.04 300);
+  --mat-fill-bubble: 46%;
+  --mat-fill-inset: 8%;
+  --mat-bubble-sheen: oklch(1 0 0 / 0.55);
+  --mat-edge: oklch(1 0 0 / 0.55);
+  --mat-edge-top: oklch(1 0 0 / 0.92);
+  --mat-edge-sunken: oklch(0.40 0.03 300 / 0.14);
+  --mat-edge-sunken-top: oklch(1 0 0 / 0.55);
+  --mat-shadow: oklch(0.35 0.05 300 / 0.16);
+  --mat-code-header: oklch(0.45 0.03 300 / 0.10);
+  --mat-code-pre: oklch(0.45 0.03 300 / 0.06);
+  --mat-user-fill: 60%;
+  --mat-user-glow: 40%;
+  --mat-solid-ground: oklch(0.965 0.010 300);
+  --mat-canvas-base: oklch(0.955 0.012 300 / 0.82);
+  --mat-glow-a: 38%;
+  --mat-glow-b: 26%;
+  --mat-glow-top: 16%;
+  --mat-glow-counter: color-mix(in oklch, oklch(0.70 0.14 250) 26%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.85);
+  --mat-raised: oklch(1 0 0 / 0.42);
+  --mat-grain: 0.05;
+  --mat-fill-chrome: 58%;
+  --mat-chrome-topline: oklch(1 0 0 / 0.35);
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.95);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.25);
+  --mat-pop-spec-lo: oklch(0.4 0.03 300 / 0.06);
+  --mat-pop-grain: 0.3;
+  --glass-blur: 34px;
+  --glass-saturate: 2.0;
+  --glass-blur-chrome: 24px;
+}
+html[data-material="liquid"].dark {
+  /* visionOS-style lens: WHITE ink at low fill over a vivid dark field. */
+  --mat-ink-raise: oklch(1 0 0);
+  --mat-ink-sink: oklch(1 0 0);
+  --mat-fill-bubble: 8%;
+  --mat-fill-inset: 5%;
+  --mat-bubble-sheen: oklch(1 0 0 / 0.10);
+  --mat-edge: oklch(1 0 0 / 0.13);
+  --mat-edge-top: oklch(1 0 0 / 0.32);
+  --mat-edge-sunken: oklch(1 0 0 / 0.08);
+  --mat-edge-sunken-top: oklch(1 0 0 / 0.16);
+  --mat-shadow: oklch(0 0 0 / 0.35);
+  --mat-code-header: oklch(0.16 0.03 305 / 0.85);
+  --mat-code-pre: oklch(0.13 0.03 305 / 0.8);
+  --mat-user-fill: 48%;
+  --mat-user-glow: 45%;
+  --mat-solid-ground: oklch(0.140 0.030 300);
+  --mat-canvas-base: oklch(0.150 0.030 300 / 0.78);
+  --mat-glow-a: 44%;
+  --mat-glow-b: 30%;
+  --mat-glow-top: 14%;
+  --mat-glow-counter: color-mix(in oklch, oklch(0.66 0.14 250) 26%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.08);
+  --mat-raised: oklch(0.25 0.020 300 / 0.38);
+  --mat-grain: 0.09;
+  --mat-fill-chrome: 55%;
+  --mat-chrome-topline: oklch(1 0 0 / 0.06);
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.62);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.10);
+  --mat-pop-spec-lo: oklch(1 0 0 / 0.02);
+  --mat-pop-grain: 0.5;
+}
+
+/* ============================================================
+   Material: AURORA FROST — the canvas IS the show; surfaces are
+   thick milky frost the colour bleeds through.
+   ============================================================ */
+html[data-material="aurora"] {
+  --mat-ink-raise: oklch(1 0 0);
+  --mat-ink-sink: oklch(0.42 0.03 330);
+  --mat-fill-bubble: 58%;
+  --mat-fill-inset: 7%;
+  --mat-bubble-sheen: oklch(1 0 0 / 0.60);
+  --mat-edge: oklch(1 0 0 / 0.70);
+  --mat-edge-top: oklch(1 0 0 / 0.95);
+  --mat-edge-sunken: oklch(0.40 0.03 330 / 0.13);
+  --mat-edge-sunken-top: oklch(1 0 0 / 0.60);
+  --mat-shadow: oklch(0.45 0.06 330 / 0.13);
+  --mat-code-header: oklch(0.45 0.03 330 / 0.09);
+  --mat-code-pre: oklch(0.45 0.03 330 / 0.05);
+  --mat-user-fill: 62%;
+  --mat-user-glow: 32%;
+  --mat-solid-ground: oklch(0.965 0.015 330);
+  --mat-canvas-base: oklch(0.960 0.018 330 / 0.80);
+  --mat-glow-a: 48%;
+  --mat-glow-b: 36%;
+  --mat-glow-top: 26%;
+  --mat-glow-counter: color-mix(in oklch, oklch(0.72 0.12 200) 34%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.90);
+  --mat-raised: oklch(1 0 0 / 0.60);
+  --mat-grain: 0.02;
+  --mat-fill-chrome: 72%;
+  --mat-chrome-topline: oklch(1 0 0 / 0.25);
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.95);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.30);
+  --mat-pop-spec-lo: oklch(0.4 0.03 330 / 0.05);
+  --mat-pop-grain: 0.18;
+  --glass-blur: 26px;
+  --glass-saturate: 1.5;
+  --glass-blur-chrome: 20px;
+}
+html[data-material="aurora"].dark {
+  --mat-ink-raise: oklch(0.22 0.05 315);
+  --mat-ink-sink: oklch(0.17 0.04 312);
+  --mat-fill-bubble: 50%;
+  --mat-fill-inset: 60%;
+  --mat-bubble-sheen: oklch(1 0 0 / 0.09);
+  --mat-edge: oklch(1 0 0 / 0.11);
+  --mat-edge-top: oklch(1 0 0 / 0.27);
+  --mat-edge-sunken: oklch(1 0 0 / 0.07);
+  --mat-edge-sunken-top: oklch(1 0 0 / 0.14);
+  --mat-shadow: oklch(0 0 0 / 0.38);
+  --mat-code-header: oklch(0.15 0.04 312 / 0.9);
+  --mat-code-pre: oklch(0.12 0.04 312 / 0.85);
+  --mat-user-fill: 55%;
+  --mat-user-glow: 38%;
+  --mat-solid-ground: oklch(0.160 0.040 310);
+  --mat-canvas-base: oklch(0.170 0.045 310 / 0.76);
+  --mat-glow-a: 40%;
+  --mat-glow-b: 32%;
+  --mat-glow-top: 18%;
+  --mat-glow-counter: color-mix(in oklch, oklch(0.62 0.13 230) 30%, transparent);
+  --mat-sheen: oklch(1 0 0 / 0.06);
+  --mat-raised: oklch(0.24 0.030 310 / 0.50);
+  --mat-grain: 0.035;
+  --mat-fill-chrome: 64%;
+  --mat-chrome-topline: oklch(1 0 0 / 0.05);
+  --mat-pop-spec-hi: oklch(1 0 0 / 0.50);
+  --mat-pop-spec-mid: oklch(1 0 0 / 0.08);
+  --mat-pop-spec-lo: oklch(1 0 0 / 0.01);
+  --mat-pop-grain: 0.35;
+}
+
+/* System mode + OS dark — mirrors of the material `.dark` blocks above.
+   Edit the `.dark` blocks first, then copy every line here verbatim. Never
+   tune these independently; they exist only because the media query can't
+   reference the class-based selector.
+   (enforced by mirror_blocks_are_verbatim_copies in src/appearance.rs) */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light)[data-material="liquid"] {
+    /* visionOS-style lens: WHITE ink at low fill over a vivid dark field. */
+    --mat-ink-raise: oklch(1 0 0);
+    --mat-ink-sink: oklch(1 0 0);
+    --mat-fill-bubble: 8%;
+    --mat-fill-inset: 5%;
+    --mat-bubble-sheen: oklch(1 0 0 / 0.10);
+    --mat-edge: oklch(1 0 0 / 0.13);
+    --mat-edge-top: oklch(1 0 0 / 0.32);
+    --mat-edge-sunken: oklch(1 0 0 / 0.08);
+    --mat-edge-sunken-top: oklch(1 0 0 / 0.16);
+    --mat-shadow: oklch(0 0 0 / 0.35);
+    --mat-code-header: oklch(0.16 0.03 305 / 0.85);
+    --mat-code-pre: oklch(0.13 0.03 305 / 0.8);
+    --mat-user-fill: 48%;
+    --mat-user-glow: 45%;
+    --mat-solid-ground: oklch(0.140 0.030 300);
+    --mat-canvas-base: oklch(0.150 0.030 300 / 0.78);
+    --mat-glow-a: 44%;
+    --mat-glow-b: 30%;
+    --mat-glow-top: 14%;
+    --mat-glow-counter: color-mix(in oklch, oklch(0.66 0.14 250) 26%, transparent);
+    --mat-sheen: oklch(1 0 0 / 0.08);
+    --mat-raised: oklch(0.25 0.020 300 / 0.38);
+    --mat-grain: 0.09;
+    --mat-fill-chrome: 55%;
+    --mat-chrome-topline: oklch(1 0 0 / 0.06);
+    --mat-pop-spec-hi: oklch(1 0 0 / 0.62);
+    --mat-pop-spec-mid: oklch(1 0 0 / 0.10);
+    --mat-pop-spec-lo: oklch(1 0 0 / 0.02);
+    --mat-pop-grain: 0.5;
+  }
+  :root:not(.light)[data-material="aurora"] {
+    --mat-ink-raise: oklch(0.22 0.05 315);
+    --mat-ink-sink: oklch(0.17 0.04 312);
+    --mat-fill-bubble: 50%;
+    --mat-fill-inset: 60%;
+    --mat-bubble-sheen: oklch(1 0 0 / 0.09);
+    --mat-edge: oklch(1 0 0 / 0.11);
+    --mat-edge-top: oklch(1 0 0 / 0.27);
+    --mat-edge-sunken: oklch(1 0 0 / 0.07);
+    --mat-edge-sunken-top: oklch(1 0 0 / 0.14);
+    --mat-shadow: oklch(0 0 0 / 0.38);
+    --mat-code-header: oklch(0.15 0.04 312 / 0.9);
+    --mat-code-pre: oklch(0.12 0.04 312 / 0.85);
+    --mat-user-fill: 55%;
+    --mat-user-glow: 38%;
+    --mat-solid-ground: oklch(0.160 0.040 310);
+    --mat-canvas-base: oklch(0.170 0.045 310 / 0.76);
+    --mat-glow-a: 40%;
+    --mat-glow-b: 32%;
+    --mat-glow-top: 18%;
+    --mat-glow-counter: color-mix(in oklch, oklch(0.62 0.13 230) 30%, transparent);
+    --mat-sheen: oklch(1 0 0 / 0.06);
+    --mat-raised: oklch(0.24 0.030 310 / 0.50);
+    --mat-grain: 0.035;
+    --mat-fill-chrome: 64%;
+    --mat-chrome-topline: oklch(1 0 0 / 0.05);
+    --mat-pop-spec-hi: oklch(1 0 0 / 0.50);
+    --mat-pop-spec-mid: oklch(1 0 0 / 0.08);
+    --mat-pop-spec-lo: oklch(1 0 0 / 0.01);
+    --mat-pop-grain: 0.35;
+  }
+}
+
+/* ── Derived surface tokens — defined ONCE; all themes/materials flow
+      through the primitives above. All theme classes live on <html>, so
+      single-element cascade resolution makes the var() substitution pick
+      up each material/brightness block automatically.
+      (atmosphere tokens have their own derivation block further down —
+      search "Atmosphere tokens — derived") ── */
+:root {
+  --msg-glass-bg: color-mix(in oklch, var(--mat-ink-raise) var(--mat-fill-bubble), transparent);
+  --msg-glass-sheen: linear-gradient(160deg, var(--mat-bubble-sheen), transparent 42%);
+  --msg-glass-border: var(--mat-edge);
+  --msg-glass-border-top: var(--mat-edge-top);
+  --msg-glass-shadow: 0 2px 10px var(--mat-shadow);
+  --glass-inset-bg: color-mix(in oklch, var(--mat-ink-sink) var(--mat-fill-inset), transparent);
+  --glass-inset-border: var(--mat-edge-sunken);
+  --glass-inset-border-top: var(--mat-edge-sunken-top);
+  --code-header-bg: var(--mat-code-header);
+  --code-pre-bg: var(--mat-code-pre);
+}
+
+@layer components {
+  /* Assistant bubble — faux glass. Text colour comes from the caller's
+     text-* utility; this class owns only the material. */
+  .msg-glass {
+    background-image: var(--msg-glass-sheen);
+    background-color: var(--msg-glass-bg);
+    border: 1px solid var(--msg-glass-border);
+    border-top-color: var(--msg-glass-border-top);
+    --tw-shadow: var(--msg-glass-shadow);
+    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow),
+                var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+  }
+  /* User bubble — accent-tinted glass. Every colour derives from
+     --color-primary via color-mix so the four accent palettes
+     (ocean/forest/sunset/rose) follow automatically. */
+  .msg-glass-user {
+    color: var(--color-text-inverse);
+    background-image: linear-gradient(160deg, oklch(1 0 0 / 0.10), transparent 45%);
+    background-color: color-mix(in oklch, var(--color-primary) var(--mat-user-fill), transparent);
+    border: 1px solid color-mix(in oklch, var(--color-primary) 45%, transparent);
+    border-top-color: color-mix(in oklch, white 28%, var(--color-primary));
+    box-shadow: 0 4px 14px color-mix(in oklch, var(--color-primary) var(--mat-user-glow), transparent);
+  }
+  /* Errored final answer — danger-tinted glass (same recipe, danger hue). */
+  .msg-glass-danger {
+    background-image: linear-gradient(160deg, oklch(1 0 0 / 0.06), transparent 45%);
+    background-color: color-mix(in oklch, var(--color-danger) 16%, transparent);
+    border: 1px solid color-mix(in oklch, var(--color-danger) 35%, transparent);
+  }
+  /* Inset surface — the lightest tier, for second-level surfaces nested
+     inside bubbles (tool cards, reasoning panel, step strip, date pill,
+     hero chips). Material hierarchy: panel atmosphere → msg-glass →
+     glass-inset. */
+  .glass-inset {
+    background-color: var(--glass-inset-bg);
+    border: 1px solid var(--glass-inset-border);
+    border-top-color: var(--glass-inset-border-top);
+  }
+  /* Sidebar nav items — faux frosted inset tile. Used MUTUALLY EXCLUSIVELY:
+     inactive rows get `.nav-tile`, the selected row gets `.nav-tile-active`
+     (never both — see note below). All colours derive from adaptive tokens
+     via color-mix, so light/dark/glass + the four accent palettes follow
+     automatically. Zero backdrop-filter (nav items are many + route-switch
+     frequently; the tile sits on .aleph-sidebar's real frosted layer). */
+  .nav-tile,
+  .nav-tile-active {
+    border: 1px solid transparent;        /* placeholder: equal box model both states → zero layout shift */
+    transition: background-color .15s, color .15s, box-shadow .15s, border-color .15s;
+  }
+  .nav-tile { color: var(--color-text-secondary); }
+  .nav-tile:hover {
+    background-color: color-mix(in oklch, var(--color-text-primary) 8%, transparent);
+    color: var(--color-text-primary);
+  }
+  /* NOTE: active rows intentionally carry ONLY .nav-tile-active (not .nav-tile),
+     so no .nav-tile:hover rule washes out the accent when a selected row is
+     hovered. */
+  .nav-tile-active {
+    color: var(--color-sidebar-accent);
+    background-color: color-mix(in oklch, var(--color-sidebar-accent) 22%, transparent);
+    border-color: color-mix(in oklch, var(--color-sidebar-accent) 38%, transparent);
+    box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.10);   /* top highlight: source of glassiness */
+    font-weight: 600;
+  }
+
+  /* Full-screen immersive stage */
+  .voice-stage {
+    position: fixed; inset: 0; z-index: 40;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background:
+      radial-gradient(ellipse at 50% 118%, var(--voice-glow), transparent 58%),
+      var(--color-surface);
+  }
+  /* Orb: wrapper positions, inner morphs — NEVER merge (transform clobbering) */
+  .voice-orb {
+    position: relative;
+    width: var(--voice-orb-size, 11rem); height: var(--voice-orb-size, 11rem);
+    overflow: hidden;
+    border-radius: 50%;
+    /* The morph is driven by `clip-path: inset(... round ...)`, NOT by
+       border-radius + overflow:hidden. WebKit/WKWebView does NOT clip the
+       mix-blend-mode flow/sheen children (each on its own compositing layer) to
+       a rounded overflow ancestor — they bleed out and the orb reads as a box
+       (the desktop full-screen bug; Blink clips fine). `clip-path` DOES clip
+       composited descendants, and `inset round` can trace the same organic blob,
+       so it both kills the box and keeps the living morph. The base value is a
+       circle so reduced-motion (animation:none) freezes to a clean round, never
+       a square. */
+    clip-path: inset(0 round 50%);
+    animation: voice-morph-clip 5s ease-in-out infinite, voice-hue-drift 26s ease-in-out infinite;
+    scale: calc(1 + var(--voice-level) * 0.2);
+    transition: scale 90ms ease-out;
+    background: oklch(from var(--color-primary) 0.32 calc(c * 0.7) h);
+    box-shadow: 0 0 calc(3rem + var(--voice-level) * 2.5rem) calc(0.9rem + var(--voice-level) * 0.8rem) var(--voice-glow);
+  }
+  .voice-orb-flow {
+    position: absolute; inset: -30%; mix-blend-mode: screen; opacity: 0.9;
+    background: conic-gradient(from 0deg, var(--voice-flow-a), var(--voice-flow-b), var(--voice-flow-c), var(--voice-flow-a));
+    animation: voice-flow-spin var(--voice-flow-speed) linear infinite;
+  }
+  .voice-orb-sheen {
+    position: absolute; inset: -30%; mix-blend-mode: screen;
+    background: radial-gradient(circle at 35% 35%, oklch(1 0 0 / 0.75), transparent 45%);
+    animation: voice-sheen-drift 4.4s ease-in-out infinite;
+  }
+  /* State modifiers: flow speed is the state's voice */
+  .voice-orb--listening  { --voice-flow-speed: 7s; }
+  .voice-orb--processing { --voice-flow-speed: 14s; }
+  .voice-orb--speaking   { --voice-flow-speed: 3.5s; }
+  .voice-orb--error .voice-orb-flow { background: conic-gradient(from 0deg, var(--color-danger), var(--voice-flow-a), var(--color-danger)); }
+  /* Mini orb for composer button — sized to match the 20px sibling glyphs.
+     At this scale the voice-morph blob reads as a wobbling box, so mini stays a
+     clean circle (morph dropped); the inner flow spin + hue drift keep it alive,
+     and the glow is tightened so its halo doesn't inflate the apparent size. */
+  .voice-orb--mini {
+    --voice-orb-size: 1.25rem;
+    border-radius: 50%;
+    /* WebKit/WKWebView does NOT clip the mix-blend-mode children
+       (.voice-orb-flow / .voice-orb-sheen, each promoted to its own
+       compositing layer) to the parent's border-radius + overflow:hidden — the
+       inset:-30% square gradients bleed out and the mini reads as a box (the
+       composer icon bug; Blink clips fine, hence the desktop-vs-browser split).
+       The hue-drift `filter` here is itself what composites the orb. A mask DOES
+       clip composited descendants, so pin the mini to its inscribed circle. The
+       full orb dodges this via its border-radius-morph animation forcing the
+       clip; the static mini does not. */
+    -webkit-mask: radial-gradient(circle closest-side, #000 99%, transparent 100%);
+    mask: radial-gradient(circle closest-side, #000 99%, transparent 100%);
+    animation: voice-hue-drift 26s ease-in-out infinite;
+    box-shadow: 0 0 0.5rem 0.08rem var(--voice-glow);
+  }
+  /* Caption + hint */
+  .voice-caption { color: var(--color-text-primary); font-size: 1rem; text-align: center; max-width: 36rem; min-height: 1.6em; padding: 0 1.5rem; }
+  .voice-hint { color: var(--color-text-tertiary); font-size: 0.75rem; text-align: center; }
+  /* Two-stage caption: floating hypothesis (gray) vs committed text (solid white). */
+  .voice-interim  { color: var(--color-text-tertiary); }
+  .voice-committed { color: var(--color-text-primary, #f5f5f7); }
+  /* C·水波拂过: utterance-end lock triggers clip wipe + sheen sweep, ~160ms. */
+  .voice-lock .voice-committed { animation: voice-wave-final .16s ease-out both; position: relative; }
+  .voice-lock .voice-committed::after {
+    content: ""; position: absolute; inset: -40% auto -40% 0; width: 46px;
+    background: linear-gradient(90deg, transparent, color-mix(in oklch, var(--color-primary, #7c8cff) 60%, white) 50%, transparent);
+    filter: blur(3px); mix-blend-mode: screen; animation: voice-wave-sheen .16s ease-out both;
+  }
+  @keyframes voice-wave-final { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+  @keyframes voice-wave-sheen { from { transform: translateX(-60px); opacity: .9; } to { transform: translateX(360px); opacity: 0; } }
+  /* AI-formatted text quietly fades in over the locked white line (a micro fade,
+     NOT a second C-wave). Top-level @keyframes so it resolves outside the
+     reduced-motion query; `.formatted` placed AFTER the wave rule so its equal-
+     specificity `animation`/`::after { display:none }` win the cascade. */
+  @keyframes voice-fade-in { from { opacity: .3; } to { opacity: 1; } }
+  .voice-committed.formatted { animation: voice-fade-in .12s ease-out both; }
+  .voice-committed.formatted::after { display: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .voice-lock .voice-committed { animation: voice-fade-in .16s ease-out both; }
+    .voice-lock .voice-committed::after { display: none; }
+  }
+}
+
+/* ============================================================
+   Accessibility: macOS "Reduce transparency" (and the CSS media query it
+   maps to) → drop all glass to opaque solids. No backdrop-filter, no
+   see-through. !important on the token overrides wins the cascade
+   regardless of where the semi-opaque defaults sit in source order.
+   ============================================================ */
+@media (prefers-reduced-transparency: reduce) {
+  .glass, .aleph-sidebar, .aleph-sidebar::before {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .glass::before, .glass::after, .aleph-sidebar::before,
+  .aleph-shell::after { display: none !important; }
+  .aleph-scrim, .aleph-blur-subtle {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .aleph-sidebar { background-color: var(--color-sidebar) !important; }
+  /* Kill the primitives at the source: every material collapses to solid.
+     !important here beats any non-!important material or theme block
+     regardless of specificity or position. `:root[data-material]` also
+     covers the data-material attribute blocks so they can't re-supply
+     values via the normal cascade. */
+  :root, :root[data-material] {
+    --aleph-canvas-base: var(--aleph-solid-ground) !important;
+    --mat-raised: oklch(1.00 0 0) !important;
+    --mat-grain: 0 !important;
+    --scrim-blur: 0px !important;
+    --glass-blur: 0px !important;
+    --glass-blur-subtle: 0px !important;
+    --glass-blur-chrome: 0px !important;
+    --glass-saturate: 1 !important;
+  }
+  .dark, .dark[data-material] { --mat-raised: oklch(0.20 0.018 310) !important; }
+  /* Message-flow faux glass → opaque solids. */
+  .msg-glass {
+    background-color: var(--color-surface-raised) !important;
+    background-image: none !important;
+    box-shadow: none !important;
+  }
+  .msg-glass-user {
+    background-color: var(--color-primary) !important;
+    background-image: none !important;
+    box-shadow: none !important;
+  }
+  .msg-glass-danger {
+    background-color: var(--color-danger-subtle) !important;
+    background-image: none !important;
+  }
+  .glass-inset { background-color: var(--color-surface-sunken) !important; }
+  .nav-tile-active {
+    background-color: var(--color-sidebar-active) !important;
+    box-shadow: none !important;
+  }
+  .aleph-composer, .aleph-session-tabs {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .aleph-session-tabs { background-color: var(--color-surface) !important; }
+  .chat-scroll-fade { mask-image: none !important; -webkit-mask-image: none !important; }
+  /* Voice orb — drop blend trickery, stage becomes opaque surface. */
+  .voice-orb-flow, .voice-orb-sheen { mix-blend-mode: normal; }
+  .voice-stage { background: var(--color-surface); }
+  /* Wave sheen — drop screen blend when transparency is reduced. */
+  .voice-lock .voice-committed::after { mix-blend-mode: normal; }
+}
+@media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
+  :root:not(.light), :root:not(.light)[data-material] {
+    --mat-raised: oklch(0.20 0.018 310) !important;
+  }
+}
+
+/* Soft entrance for popovers / menus. */
+@keyframes aleph-pop-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+.animate-pop-in {
+  animation: aleph-pop-in 0.16s var(--ease-spring);
+  transform-origin: bottom left;
+}
+/* Glass popovers/modals must NOT transform during entrance: scaling or
+   translating a backdrop-filter surface forces WebKit to re-sample + re-blur
+   the backdrop on every animation frame — a visible hitch on WKWebView for the
+   large frosted modals (command palette, notification center). Fade-only keeps
+   the resting frosted look byte-identical while dropping the per-frame re-blur.
+   It also leaves the element's own transform free, so positioning transforms
+   like the command palette's `-translate-x-1/2` centering hold throughout the
+   entrance instead of being clobbered by the keyframe. Higher specificity
+   (0,2,0) overrides only the animation-name from `.animate-pop-in`'s shorthand;
+   duration/easing are inherited. */
+.glass.animate-pop-in {
+  animation-name: aleph-pop-in-fade;
+}
+@keyframes aleph-pop-in-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Voice orb — organic blob morph + flow rotation + sheen/hue drift. */
+/* clip-path morph: same organic radii as the old border-radius morph, but
+   driven through clip-path so WebKit clips the composited blend-mode children
+   (border-radius+overflow does not — see .voice-orb). rotate kept for parity. */
+@keyframes voice-morph-clip {
+  0%, 100% { clip-path: inset(0 round 46% 54% 52% 48% / 50% 46% 54% 50%); rotate: 0deg; }
+  25%      { clip-path: inset(0 round 58% 42% 44% 56% / 42% 60% 40% 58%); rotate: 9deg; }
+  50%      { clip-path: inset(0 round 40% 60% 58% 42% / 56% 40% 60% 44%); rotate: -5deg; }
+  75%      { clip-path: inset(0 round 54% 46% 40% 60% / 46% 54% 46% 54%); rotate: 5deg; }
+}
+@keyframes voice-flow-spin { to { rotate: 360deg; } }
+@keyframes voice-sheen-drift {
+  0%, 100% { translate: 0 0; scale: 1; }
+  50%      { translate: 9% -7%; scale: 1.12; }
+}
+@keyframes voice-hue-drift {
+  0%, 100% { filter: hue-rotate(0deg) saturate(1.05); }
+  50%      { filter: hue-rotate(28deg) saturate(1.15); }
+}
+
+/* ============================================================
+   Global Transitions & Motion
+   ============================================================ */
+
+:root {
+  transition: background-color 0.22s var(--ease-spring),
+    color 0.22s var(--ease-spring), border-color 0.22s var(--ease-spring);
+}
+
+/* Respect the user's reduced-motion preference everywhere. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* Voice orb — static blob; audio level maps to flow opacity instead of motion. */
+  .voice-orb, .voice-orb-flow, .voice-orb-sheen { animation: none; }
+  .voice-orb { scale: 1; transition: none; }
+  .voice-orb-flow { opacity: calc(0.55 + var(--voice-level) * 0.4); transition: opacity 120ms linear; }
+}
+
+/* ============================================================
+   Chat liveness — reading indicator + streaming bubble pulse.
+   Token-driven (accent-aware); the global reduced-motion cap above
+   already neutralises these animations.
+   ============================================================ */
+
+/* Three-dot "reading / thinking" indicator with a staggered bounce. */
+.reading-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.reading-dots > span {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  opacity: 0.5;
+  animation: aleph-reading-dot 1.2s ease-in-out infinite;
+}
+.reading-dots > span:nth-child(2) { animation-delay: 0.15s; }
+.reading-dots > span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes aleph-reading-dot {
+  0%, 80%, 100% { opacity: 0.35; transform: translateY(0); }
+  40%           { opacity: 1;    transform: translateY(-3px); }
+}
+
+/* ============================================================
+   Theme switch — circular reveal via the View Transition API.
+   `theme_toggle.rs` adds `.theme-switching` to <html> and sets
+   --theme-x / --theme-y to the click origin before calling
+   document.startViewTransition(). Browsers without the API fall back
+   to the instant cross-fade (the :root color transition above).
+   ============================================================ */
+html.theme-switching::view-transition-old(root) { animation: none; }
+html.theme-switching::view-transition-new(root) {
+  animation: aleph-theme-reveal 0.42s var(--ease-spring) forwards;
+}
+@keyframes aleph-theme-reveal {
+  from { clip-path: circle(0%   at var(--theme-x, 50%) var(--theme-y, 50%)); }
+  to   { clip-path: circle(150% at var(--theme-x, 50%) var(--theme-y, 50%)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  html.theme-switching::view-transition-new(root),
+  html.theme-switching::view-transition-old(root) { animation: none !important; }
+}
+
+/* ── Markdown prose ────────────────────────────────────── */
+
+/* Constrain the prose to its bubble so wide children (tables, code) scroll
+   internally instead of stretching the bubble past its max-width. */
+.markdown-body { min-width: 0; max-width: 100%; }
+.markdown-body h1,
+.markdown-body h2 {
+  /* gradient hairline under the two top heading levels */
+  background-image: linear-gradient(90deg, var(--color-border), transparent 70%);
+  background-repeat: no-repeat;
+  background-size: 100% 1px;
+  background-position: 0 100%;
+  padding-bottom: 0.35rem;
+}
+.markdown-body h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em; margin-top: 1.1rem; margin-bottom: 0.5rem; }
+.markdown-body h2 { font-size: 1.0625rem; font-weight: 600; margin-top: 0.85rem; margin-bottom: 0.45rem; }
+.markdown-body h3 { font-size: 0.9375rem; font-weight: 600; margin-top: 0.6rem; margin-bottom: 0.3rem; }
+.markdown-body p { margin: 0.375rem 0; line-height: 1.625; }
+.markdown-body ul { list-style-type: disc; padding-left: 1.25rem; margin: 0.375rem 0; }
+.markdown-body ol { list-style-type: decimal; padding-left: 1.25rem; margin: 0.375rem 0; }
+.markdown-body li { margin: 0.125rem 0; }
+.markdown-body a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--color-primary) 40%, transparent);
+  text-underline-offset: 2px;
+  transition: text-decoration-color 0.15s;
+}
+.markdown-body a:hover { text-decoration-color: var(--color-primary); }
+.markdown-body blockquote {
+  /* accent-tinted bar + wash; no italics (poor CJK rendering) */
+  border-left: 3px solid color-mix(in oklch, var(--color-primary) 55%, transparent);
+  border-radius: 2px;
+  padding: 0.25rem 0 0.25rem 0.75rem;
+  margin: 0.5rem 0;
+  color: var(--color-text-secondary);
+  background: linear-gradient(90deg, color-mix(in oklch, var(--color-primary) 7%, transparent), transparent 70%);
+}
+/* Tables scroll horizontally inside the bubble rather than overflowing it:
+   `display:block` turns the table box into its own scroll container, capped at
+   the bubble width. Long unbreakable cell content (paths/URLs) also wraps.
+   Modern grid: rounded hairline shell, header fill, row separators only. */
+.markdown-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 0.5rem 0;
+  font-size: 0.875rem;
+  border: 1px solid var(--glass-inset-border);
+  border-radius: var(--radius-md);
+}
+.markdown-body th {
+  padding: 0.375rem 0.75rem;
+  background: var(--glass-inset-bg);
+  font-weight: 600;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
+}
+.markdown-body td {
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.markdown-body tr:last-child td { border-bottom: none; }
+.markdown-body th,
+.markdown-body td { overflow-wrap: anywhere; word-break: break-word; }
+.markdown-body code:not(pre code) {
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-sm);
+  background: var(--glass-inset-bg);
+  border: 1px solid var(--glass-inset-border);
+  font-size: 0.8125rem;
+  font-family: var(--font-mono);
+  font-feature-settings: "calt", "zero";
+}
+.markdown-body hr {
+  border: none;
+  height: 1px;
+  margin: 0.85rem 0;
+  background: linear-gradient(90deg, transparent, var(--color-border), transparent);
+}
+.markdown-body img {
+  border-radius: 0.5rem;
+  max-width: 100%;
+  margin: 0.5rem 0;
+  border: 1px solid var(--glass-inset-border);
+  box-shadow: 0 2px 10px oklch(0 0 0 / 0.12);
+}
+.markdown-body input[type="checkbox"] { margin-right: 0.375rem; accent-color: var(--color-primary); }
+
+/* ── Code block — refined header bar on faux glass ── */
+.code-block-wrapper {
+  position: relative;
+  margin: 0.75rem 0;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--glass-inset-border);
+  border-top-color: var(--glass-inset-border-top);
+  overflow: hidden;
+}
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.3rem 0.75rem;
+  background-image: linear-gradient(180deg, oklch(1 0 0 / 0.05), transparent);
+  background-color: var(--code-header-bg);
+  border-bottom: 1px solid var(--glass-inset-border);
+  font-size: 0.75rem;
+  color: var(--color-text-tertiary);
+}
+.code-block-wrapper pre {
+  margin: 0;
+  padding: 0.75rem;
+  background: var(--code-pre-bg);
+  overflow-x: auto;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.copy-btn {
+  opacity: 0;
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--glass-inset-border);
+  color: var(--color-text-secondary);
+  transition: opacity 0.2s, color 0.2s, background-color 0.2s;
+}
+.code-block-wrapper:hover .copy-btn,
+.copy-btn:focus-visible { opacity: 1; }
+.copy-btn:hover { color: var(--color-text-primary); background-color: var(--glass-inset-bg); }
+.copy-btn.copied { color: var(--color-success); background-color: var(--color-success-subtle); opacity: 1; }
+
+/* ════════════════════════════════════════════════════════════
+   Aleph Atmosphere
+   Codex's two-column structure married to a Gemini-style
+   light-field: a static accent-aware light-field sits behind every
+   surface while glossy materials float on top.
+   ════════════════════════════════════════════════════════════ */
+
+/* --- Atmosphere tokens — derived once from the material primitives
+       (message-surface tokens derive in their own block above — search
+       "Derived surface tokens") --- */
+:root {
+  --aleph-solid-ground: var(--mat-solid-ground);
+  --aleph-canvas-base: var(--mat-canvas-base);
+  --aleph-glow-a: color-mix(in oklch, var(--color-primary) var(--mat-glow-a), transparent);
+  --aleph-glow-b: color-mix(in oklch, var(--color-primary) var(--mat-glow-b), transparent);
+  --aleph-glow-top: color-mix(in oklch, var(--color-primary) var(--mat-glow-top), transparent);
+  --aleph-glow-c: var(--mat-glow-counter);
+  --aleph-sheen: var(--mat-sheen);
+  --color-surface-raised: var(--mat-raised);
+}
+
+/* macOS: let the always-on vibrancy show behind our semi-opaque aurora in every
+   mode (faint, controlled 通透感). Non-macOS: paint an opaque ground so the
+   semi-opaque aurora has something solid to sit on. */
+html[data-platform="macos"],
+html[data-platform="macos"] body { background-color: transparent; }
+html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-ground); }
+
+/* --- The drifting light-field, fixed behind the whole shell --- */
+.aleph-shell {
+  position: relative;
+  isolation: isolate;
+}
+.aleph-shell::before {
+  content: "";
+  position: fixed;
+  inset: -28%;
+  z-index: -1;
+  background-color: var(--aleph-canvas-base);
+  background-image:
+    radial-gradient(ellipse 56% 46% at 14% 114%, var(--aleph-glow-a),   transparent 66%),
+    radial-gradient(ellipse 50% 42% at 94% 118%, var(--aleph-glow-b),   transparent 64%),
+    radial-gradient(ellipse 46% 40% at 88% -8%,  var(--aleph-glow-c),   transparent 62%),
+    radial-gradient(ellipse 82% 50% at 50% -14%, var(--aleph-glow-top), transparent 72%);
+  /* `aleph-drift` infinite alternate was here. Removed: at 60 Hz it
+   * paid an 8-13% CPU/GPU tax (KeyframeInterpolation + per-frame
+   * GraphicsLayerCA::recursiveCommitChanges on a viewport-sized
+   * composited layer) for a 2.6% / 26 s translate that's visually
+   * imperceptible. Static gradient is the same look without the cost.
+   */
+}
+/* Static fine grain over the canvas — painted once, zero per-frame cost.
+   Two jobs: (1) gives the chrome backdrop-blur visible structure to frost
+   (the grain gets iced flat under sidebar/composer — the frosted-vs-clear
+   differential finally shows), (2) dithers gradient banding on the aurora.
+   SVG is the seamless 180×180 canvas tile at FULL strength — NOT the popover
+   tile used by .glass::after, which has 0.035 baked into its rect — so the
+   effective alpha equals --mat-grain alone. */
+.aleph-shell::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: var(--mat-grain);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* --- Glossy sidebar — a soft, accent-tinted column (Codex) --- */
+.aleph-sidebar {
+  /* `position: relative` only anchors the ::before blur layer; it does NOT
+     create a containing block for `position: fixed` descendants (only
+     backdrop-filter / transform do). Keeping the blur OFF this element — and
+     NOT adding isolation/z-index here — is load-bearing: the popovers'
+     `fixed inset-0` click-outside catchers must resolve against the viewport
+     and paint in the shell's root stacking context, or clicks in the main
+     area won't close them. */
+  position: relative;
+  background-color: color-mix(in oklch, var(--color-sidebar) var(--mat-fill-chrome), transparent);
+  background-image: linear-gradient(
+    180deg,
+    color-mix(in oklch, var(--color-primary) 9%, var(--color-sidebar)) 0%,
+    color-mix(in oklch, var(--color-primary) 5%, var(--color-sidebar)) 52%,
+    color-mix(in oklch, var(--color-primary) 8%, var(--color-sidebar)) 100%
+  );
+  box-shadow: inset -1px 0 0 var(--color-border-subtle),
+              inset  1px 0 0 var(--aleph-sheen),
+              inset  0 1px 0 var(--mat-chrome-topline);
+}
+/* The frosted blur lives on a z-index:-1 layer behind the sidebar content,
+   so the .aleph-sidebar element itself stays free of backdrop-filter (and
+   thus of the fixed-descendant containing block it would otherwise impose). */
+.aleph-sidebar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
+}
+
+/* Brand row — hugs the top of the sidebar by default. On macOS the row
+   is padded down to clear the overlay traffic lights (and the fixed
+   sidebar-toggle that sits in the same band, next to them). Web + Tauri
+   Win/Linux carry their own inline collapse button inside the brand row,
+   so the row stays tight against the top edge. */
+.aleph-sidebar-head { padding-top: 0.85rem; }
+html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
+
+/* The ℵ wordmark tile. A diagonal sheen sweeps across on hover — the
+   animation only exists during :hover, so it costs nothing at rest. */
+.aleph-mark {
+  position: relative;
+  overflow: hidden;
+  background-image: linear-gradient(145deg,
+    var(--color-primary),
+    color-mix(in oklch, var(--color-primary) 55%, oklch(0.58 0.13 250)));
+  box-shadow: 0 2px 9px color-mix(in oklch, var(--color-primary) 42%, transparent),
+              inset 0 1px 0 oklch(1 0 0 / 0.45);
+  transition: transform var(--duration-normal) var(--ease-spring),
+              box-shadow var(--duration-normal) var(--ease-spring);
+}
+.aleph-mark::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg,
+    transparent 30%,
+    oklch(1 0 0 / 0.42) 50%,
+    transparent 70%);
+  background-size: 220% 100%;
+  background-position: 140% 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.aleph-mark:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 5px 16px color-mix(in oklch, var(--color-primary) 48%, transparent),
+              inset 0 1px 0 oklch(1 0 0 / 0.5);
+}
+.aleph-mark:hover::after {
+  opacity: 1;
+  background-position: -40% 0;
+  transition: background-position 0.6s var(--ease-out), opacity 0.2s linear;
+}
+
+/* --- The Codex-style composer card --- */
+.aleph-composer {
+  background-color: var(--color-surface-raised);
+  background-image: linear-gradient(to bottom, var(--aleph-sheen), transparent 52%);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md), inset 0 1px 0 var(--aleph-sheen);
+  backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
+  transition: box-shadow var(--duration-normal) var(--ease-spring),
+              border-color var(--duration-normal) var(--ease-spring),
+              transform var(--duration-normal) var(--ease-spring);
+}
+/* Resting hover lift — only when the composer is NOT focused (the
+   focus-within ring below owns the focused look). */
+.aleph-composer:hover:not(:focus-within) {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--aleph-sheen);
+  transform: translateY(-1px);
+}
+.aleph-composer:focus-within {
+  border-color: var(--color-border-focus);
+  box-shadow: var(--shadow-lg),
+              0 0 0 2px var(--color-ring),
+              inset 0 1px 0 var(--aleph-sheen);
+}
+/* The composer's outer 4 px ring already signals focus; suppress the
+   global `:focus-visible` box-shadow ring on the textarea itself so the
+   user doesn't see two stacked highlights (inner rectangle + outer arc). */
+.aleph-composer textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* --- Session tab strip — frosted chrome band over the message flow --- */
+.aleph-session-tabs {
+  background-color: color-mix(in oklch, var(--color-surface) 55%, transparent);
+  backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
+  border-bottom: 1px solid var(--color-border-subtle);
+  box-shadow: inset 0 1px 0 var(--mat-chrome-topline);
+}
+
+/* Top fade — content dissolves under the chrome band instead of clipping.
+   Static mask on the scroll container. Measured in WKWebView 2026-06-12
+   (147-message fixture): mask on/off Δ≈0.01ms avg frame time, 60fps on
+   all three materials — the §6.2 escape hatch (drop the fade, keep the
+   float) stays available but unexercised. */
+.chat-scroll-fade {
+  mask-image: linear-gradient(180deg, transparent 0, #000 26px);
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 26px);
+}
+
+/* --- Empty-state hero --- */
+.aleph-hero-orb {
+  background-image:
+    radial-gradient(circle at 36% 30%, oklch(1 0 0 / 0.6), transparent 56%),
+    linear-gradient(152deg,
+      var(--color-primary),
+      color-mix(in oklch, var(--color-primary) 52%, oklch(0.6 0.13 250)));
+  box-shadow: 0 12px 36px color-mix(in oklch, var(--color-primary) 42%, transparent),
+              inset 0 1px 2px oklch(1 0 0 / 0.55);
+  /* `aleph-breathe` infinite alternate dropped — same 60 Hz keyframe
+   * cost as `aleph-drift`. Orb still renders, just doesn't bob.
+   * A spring lift + intensified glow on hover is interaction-only, so it
+   * reintroduces life without the idle GPU tax. */
+  transition: transform 0.4s var(--ease-spring), box-shadow 0.4s var(--ease-spring);
+}
+.aleph-hero-orb:hover {
+  transform: translateY(-3px) scale(1.04);
+  box-shadow: 0 18px 48px color-mix(in oklch, var(--color-primary) 52%, transparent),
+              inset 0 1px 2px oklch(1 0 0 / 0.6);
+}
+.aleph-hero-title {
+  background-image: linear-gradient(110deg,
+    var(--color-text-primary) 32%,
+    var(--color-primary)      54%,
+    var(--color-text-primary) 76%);
+  background-size: 220% auto;
+  background-position: 0 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  /* `aleph-shimmer` infinite dropped to avoid idle per-frame text repaint.
+   * Instead the gradient sweeps once on hover — a single finite animation,
+   * zero cost at rest. */
+}
+.aleph-hero-title:hover {
+  animation: aleph-title-sweep 0.9s var(--ease-out);
+}
+@keyframes aleph-title-sweep {
+  from { background-position: 150% 0; }
+  to   { background-position: 0 0;    }
+}
+
+/* Staggered entrance for the hero. */
+@keyframes aleph-rise {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+.aleph-rise { animation: aleph-rise 0.62s var(--ease-spring) both; }
+
+/* ── Memory canvas node tokens ─────────────────────────────────────── */
+:root {
+    --node-bg:           linear-gradient(135deg, #252544, #1d1d38);
+    --node-border:       rgba(255, 255, 255, 0.12);
+    --text-title:        #f1f5f9;
+    --text-body:         #cbd5e1;
+    --text-meta:         #94a3b8;
+    --text-code:         #e2e8f0;
+
+    --cat-feedback:      #a78bfa;
+    --cat-project:       #34d399;
+    --cat-reference:     #60a5fa;
+    --cat-user:          #fbbf24;
+    --cat-error:         #f44336;
+
+    --shadow-base:       0 8px 32px rgba(0, 0, 0, 0.6);
+    --glow-hover:        0 0 24px rgba(167, 139, 250, 0.27);
+    --glow-selected:     0 0 32px rgba(167, 139, 250, 0.53), 0 0 0 2px #a78bfa;
+    --glow-active:       0 0 32px rgba(252, 211, 77, 0.67);
+}
+
+.node-card-full {
+    position: absolute;
+    width: 280px;
+    background: var(--node-bg);
+    border: 1px solid var(--node-border);
+    border-radius: 6px;
+    box-shadow: var(--shadow-base);
+    overflow: hidden;
+    transition: box-shadow 120ms ease-out;
+    will-change: transform;
+    user-select: none;
+    color: var(--text-body);
+}
+.node-card-full:hover               { box-shadow: var(--shadow-base), var(--glow-hover); }
+.node-card-full[data-selected]      { box-shadow: var(--shadow-base), var(--glow-selected); }
+.node-card-full[data-active]        { box-shadow: var(--shadow-base), var(--glow-active); }
+
+.node-card-full__title {
+    color: var(--text-title);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.35;
+    padding: 8px 12px 4px;
+    word-break: break-word;
+}
+.node-card-full__excerpt {
+    color: var(--text-body);
+    font-size: 11.5px;
+    line-height: 1.5;
+    padding: 0 12px 8px;
+    max-height: 9.4em;
+    overflow: hidden;
+}
+.node-card-full__excerpt code,
+.node-card-full__excerpt pre {
+    color: var(--text-code);
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-family: "Cascadia Code", "Fira Code", ui-monospace, monospace;
+}
+.node-card-full__excerpt pre {
+    overflow-x: auto;
+    padding: 6px 8px;
+}
+.node-card-full__excerpt blockquote {
+    border-left: 3px solid var(--cat-reference);
+    padding: 2px 8px;
+    margin: 4px 0;
+    color: var(--text-meta);
+}
+.node-card-full__excerpt input[type="checkbox"] {
+    accent-color: #4db8a4;
+    margin-right: 4px;
+}
+.node-card-full__excerpt a {
+    color: var(--cat-reference);
+    text-decoration: underline;
+}
+.node-card-full__tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 0 12px 10px;
+}
+.node-card-tag {
+    color: var(--text-meta);
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 10.5px;
+    line-height: 1.4;
+}
+
+.node-card-mini {
+    position: absolute;
+    width: 140px;
+    background: rgba(26, 26, 46, 0.93);
+    border: 1px solid var(--node-border);
+    border-radius: 7px;
+    padding: 6px 9px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    transition: box-shadow 120ms ease-out;
+    color: var(--text-title);
+    font-size: 11px;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    will-change: transform;
+}
+.node-card-mini:hover               { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), var(--glow-hover); }
+.node-card-mini[data-selected]      { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), var(--glow-selected); }
+.node-card-mini[data-active]        { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), var(--glow-active); }
+
+.node-card-dot {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    box-shadow: 0 0 12px currentColor;
+    transition: width 120ms ease-out, height 120ms ease-out, box-shadow 120ms ease-out;
+    cursor: pointer;
+    will-change: transform;
+}
+.node-card-dot:hover { width: 14px; height: 14px; box-shadow: 0 0 18px currentColor; }
+
+/* Soften Dot↔Mini↔Full swaps: the reactive match remounts the card element,
+   so a mount fade-in removes the harsh pop. Opacity-only — must not touch the
+   translate3d transform that positions the card each frame. */
+@keyframes node-card-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+.node-card-full,
+.node-card-mini,
+.node-card-dot {
+    animation: node-card-in 120ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+    .node-card-full,
+    .node-card-mini,
+    .node-card-dot { animation: none; }
+}
+
+/* ── Sidebar node markdown editor ─────────────────────────────────── */
+.node-detail-editor {
+    width: 100%;
+    min-height: 180px;
+    resize: vertical;
+    background: #14142a;
+    border: 1px solid var(--node-border);
+    border-radius: 6px;
+    padding: 8px;
+    color: var(--text-body);
+    font-family: "Cascadia Code", "Fira Code", ui-monospace, monospace;
+    font-size: 11.5px;
+    line-height: 1.5;
+}
+.node-detail-editor:focus {
+    outline: none;
+    border-color: var(--cat-feedback);
+}
+.node-detail-btn {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--node-border);
+    border-radius: 5px;
+    color: var(--text-body);
+    font-size: 11px;
+    padding: 3px 12px;
+    cursor: pointer;
+    transition: background 120ms ease-out;
+}
+.node-detail-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+.node-detail-btn:disabled            { opacity: 0.5; cursor: default; }
+.node-detail-btn--save {
+    background: var(--cat-feedback);
+    border-color: var(--cat-feedback);
+    color: #14142a;
+    font-weight: 600;
+}
+.node-detail-btn--save:hover:not(:disabled) { filter: brightness(1.1); background: var(--cat-feedback); }
+
+/* ── Memory detail panel: theme-following overrides ───────────────────
+   The node tokens (--text-title/body/meta/code, --node-border) and the
+   editor/button backgrounds above are tuned for cards floating on the
+   always-dark canvas (.node-card-*). The NodeDetailPanel, however, lives
+   inside the theme-following left sidebar (.aleph-sidebar): there the dark
+   constants render as black boxes + washed-out text in light mode (and are
+   needlessly muted in dark mode). Remap the tokens to the app theme tokens
+   inside the sidebar scope only — canvas cards are outside .aleph-sidebar
+   and keep their original dark palette untouched. */
+.aleph-sidebar {
+    --text-title: var(--color-text-primary);
+    --text-body:  var(--color-text-secondary);
+    --text-meta:  var(--color-text-tertiary);
+    --text-code:  var(--color-text-primary);
+    --node-border: var(--color-border);
+}
+.aleph-sidebar .node-detail-editor {
+    background: var(--color-surface-sunken);
+    color: var(--color-text-primary);
+}
+.aleph-sidebar .node-detail-btn {
+    background: color-mix(in oklch, var(--color-text-primary) 8%, transparent);
+}
+.aleph-sidebar .node-detail-btn:hover:not(:disabled) {
+    background: color-mix(in oklch, var(--color-text-primary) 16%, transparent);
+}
+.aleph-sidebar .node-card-full__excerpt code,
+.aleph-sidebar .node-card-full__excerpt pre {
+    background: color-mix(in oklch, var(--color-text-primary) 8%, transparent);
+}
+
+/* ── Collapsible aleph-sidebar ───────────────────────────────────── */
+.aleph-sidebar {
+    transition: transform 200ms ease-out, width 200ms ease-out;
+}
+.aleph-shell.sidebar-collapsed .aleph-sidebar {
+    transform: translateX(-100%);
+    width: 0;
+    overflow: hidden;
+}
+
+/* ── Collapsible workspace pane (chat right rail) ──────────────────
+   Mirror the left sidebar's eased collapse so opening/closing the
+   workspace shrinks/grows over 200ms instead of popping instantly.
+   The pane is sized by flex-basis (+ min-width floor), so those — not
+   `width` — are what we animate. Unlayered, so it overrides the
+   Tailwind `basis-*`/`min-w-*` utilities without `!important`. */
+.aleph-workspace-pane {
+    transition: flex-basis 200ms ease-out, min-width 200ms ease-out, opacity 200ms ease-out;
+}
+.aleph-workspace-pane.workspace-collapsed {
+    flex-basis: 0;
+    min-width: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* Workspace chrome (LayoutToggle + "WORKSPACE · …" label) glides in
+   lockstep with the pane — same 200ms ease-out — so the toggle's right
+   edge and the label's left edge slide with the boundary instead of
+   snapping. The label additionally fades + parks off the right edge when
+   collapsed (it's always mounted now so it can animate out). */
+.aleph-ws-toggle {
+    transition: right 200ms ease-out;
+}
+.aleph-ws-label {
+    transition: left 200ms ease-out, opacity 200ms ease-out;
+}
+.aleph-ws-label.workspace-collapsed {
+    left: calc(100% + 16px);
+    opacity: 0;
+}
+
+/* === Title-row layout tokens ====================================
+   `--aleph-chrome-y` is the y-coordinate (from the window's top edge)
+   where every chrome glyph centers its vertical midline:
+     • macOS  → traffic-light midline (≈15 px) so the left collapse
+       toggle, right workspace toggle, notification bell, and the
+       workspace pane's "WORKSPACE · …" label all sit on the same row
+       as the OS overlay traffic lights.
+     • Other  → sidebar brand logo midline (≈28 px). The `aleph-mark`
+       tile is 28 × 28 inside `.aleph-sidebar-head` whose top padding
+       is 0.85 rem = 13.6 px → logo center ≈ 27.6 px; rounded to 28 px.
+
+   `--aleph-band-h` is the height of the global `<main>` drag band
+   that reserves space for the macOS overlay-titlebar chrome row.
+   Web + Tauri Win/Linux already have system-level top chrome (browser
+   tab bar / native title bar) so the band is 0 there — only macOS
+   needs to carve out room inside the panel itself.
+
+   `.aleph-chrome-top` positions a 28 × 28 button so its center lands
+   on the chrome row (when used by fixed-positioned chrome anchored
+   to the window). */
+:root {
+    --aleph-chrome-y: 28px;
+    --aleph-band-h: 0px;
+    /* Mirrors `.aleph-sidebar-head` top padding so every right-pane page's
+       content top edge lines up with the sidebar brand-logo top edge. */
+    --aleph-content-top: 0.85rem;
+    /* Workspace pane width — single source of truth. The pane's flex-basis
+       AND the chrome that tracks its edge (the LayoutToggle's right offset
+       and the "WORKSPACE · …" label's left offset, both in `app.rs`) all
+       read this, so they stay glued to the real boundary at any window
+       width and a width tweak only happens here. Pane is 40% of `<main>`;
+       the band chrome is positioned absolutely inside `<main>`, so the same
+       `%` resolves to the same pixel column. */
+    --aleph-workspace-w: 40%;
+}
+html[data-platform="macos"] {
+    --aleph-chrome-y: 15px;
+    --aleph-band-h: 30px;
+    --aleph-content-top: 2.45rem;
+}
+.aleph-chrome-top {
+    top: calc(var(--aleph-chrome-y) - 14px);
+}
+
+/* Mobile (≤639px): the notification bell — the only `.aleph-chrome-top`
+   chrome that stays visible on phones (the LayoutToggle + workspace label
+   are `max-sm:hidden`) — drops below the status-bar safe area so it never
+   hides under the iOS notch. On web the inset resolves to 0, so the bell
+   just sits a touch below the top edge. */
+@media (max-width: 639px) {
+    .aleph-chrome-top {
+        top: calc(var(--safe-area-top) + 10px);
+    }
+    /* Section pages (`.aleph-content-top`) must clear BOTH the status-bar safe
+       area AND the 43px `MobileTopBar` overlay (`absolute top-0 z-20`, app.rs)
+       that sits below the notch — otherwise the first content row hides under
+       the bar. 3rem(48px) clears the measured 43px bar + ~5px gap. env()
+       resolves to 0 in the browser, so the web preview tracks the device. */
+    :root {
+        --aleph-content-top: calc(var(--safe-area-top) + 3rem);
+    }
+    /* On mobile the sidebar is a slide-over drawer, so it must LEAVE the flex
+       flow — otherwise its width squeezes `<main>` to the right even while it
+       is translated off-screen. The base `.aleph-sidebar { position: relative }`
+       (load-bearing on desktop: it keeps the popovers' `fixed inset-0`
+       catchers resolving against the viewport) is an unlayered rule that would
+       otherwise beat the `max-sm:fixed` utility, so we override it here. The
+       aside has no `position: fixed` descendants, so taking it out of flow is
+       safe. */
+    .aleph-sidebar {
+        position: fixed;
+    }
+}
+
+/* Mobile-first responsive 2-col grid for settings forms. Collapses to a
+   single column under the 640px breakpoint, expands to 2 columns on `sm`+.
+   Replaces scattered `grid grid-cols-2` so each settings sub-grid stays in
+   sync without per-call `max-sm:` duplication. */
+.grid-responsive {
+    @apply grid grid-cols-1 gap-4 sm:grid-cols-2;
+}
+
+/* Uniform page-content top inset. Applied to every section page's root
+   container (Dashboard / Agents / Teams / Settings) so the right pane's
+   content top edge aligns with the left sidebar logo. Platform-aware via
+   `--aleph-content-top`: on macOS it clears the overlay traffic-light band
+   exactly like the brand row does. Pages keep their own horizontal/bottom
+   padding; only the top inset is centralized here. */
+.aleph-content-top {
+    padding-top: var(--aleph-content-top);
+}
+
+/* Mobile top chrome band — the reusable `MobileTopBar` mounted atop every
+   tab (`components/mobile_top_bar.rs`). One safe-area-aware band so each tab
+   inherits notch clearance + a single z-layer instead of re-deriving them.
+   Sits ABOVE tab content but BELOW the nav-drawer backdrop (z-65) / drawer
+   (z-70), so opening the drawer covers it; the bottom tab bar is z-40, this
+   band z-45 — the two never overlap (top vs bottom). env() resolves to 0 in
+   the browser, so the web preview just hugs the top edge. */
+.mobile-top-bar {
+    position: relative;
+    z-index: 45;
+    padding-top: calc(var(--safe-area-top) + 0.5rem);
+}
+
+/* Belt-and-braces opt-out from the macOS `-webkit-app-region: drag`
+   surfaces that wrap the brand row, the workspace header, and the
+   chat-surface drag strip. Tauri's `data-tauri-drag-region="false"`
+   attribute already toggles this CSS, but applying the property
+   directly via a utility class makes the opt-out resilient to children
+   that get re-parented at runtime. */
+.aleph-no-drag {
+    -webkit-app-region: no-drag;
+}
+
+/* Global drag band parked at the very top of `<main>`. Only meaningful
+   on macOS (Overlay title-bar style, no OS-drawn titlebar to grab); on
+   Win/Linux/web the native chrome (or browser) handles window-drag, so
+   the band collapses to height 0 and stays out of the way.
+
+   Absolutely positioned (NOT in flex flow): the band floats over the
+   top `--aleph-band-h` strip of `<main>` without reserving layout
+   space. Every tab's content fills the full `<main>` height — so the
+   memory canvas, agent grid, settings panes, etc. render flush with
+   the window top instead of leaving a visible carve-out strip (which
+   used to expose the shell's light-field as an ugly "white bar" on
+   tabs with contrasting backgrounds like the dark memory canvas).
+
+   The band is fully transparent — if content text or graphics scroll
+   underneath, that's fine; the band only intercepts pointer drag, it
+   does not paint. On macOS the band is `pointer-events: auto +
+   -webkit-app-region: drag` so the strip remains a window-drag
+   handle; chrome chips (LayoutToggle, workspace label, notification
+   bell) opt back in with `aleph-no-drag` + `pointer-events: auto`. */
+.aleph-main-drag-band {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--aleph-band-h);
+    pointer-events: none;
+    background: transparent;
+}
+html[data-platform="macos"] .aleph-main-drag-band {
+    pointer-events: auto;
+    -webkit-app-region: drag;
+}
+
+/* Fixed top-left sidebar toggle — pinned to the window, not the sidebar,
+   so it remains clickable when the sidebar slides off-screen.
+
+   Visibility model:
+   • macOS Tauri: always visible, vertically centred on the traffic-light
+     midline (via `aleph-chrome-top`). The fixed toggle is the only
+     collapse control there; the inline brand-row variant is hidden.
+   • Web + Tauri Win/Linux: only visible when the sidebar is collapsed.
+     While the sidebar is open, the inline collapse button in the brand
+     row handles it; this fixed one takes over as soon as the sidebar
+     slides away. Centred on the brand-logo midline (≈28 px). */
+.aleph-sidebar-toggle {
+    position: fixed;
+    top: calc(var(--aleph-chrome-y) - 14px);
+    left: 10px;
+    /* Must sit ABOVE the macOS `aleph-main-drag-band` (z-50), which appears
+       later in the DOM and shares this stacking context — at equal z-index
+       the band would paint on top and (being `-webkit-app-region: drag` +
+       `pointer-events: auto`) swallow this button's clicks once the sidebar
+       is collapsed. 60 keeps it under the command palette / modals. */
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    background: transparent;
+    color: var(--color-text-secondary);
+    border: none;
+    border-radius: 9999px;
+    cursor: pointer;
+    transition: background-color var(--duration-fast) var(--ease-out),
+                color var(--duration-fast) var(--ease-out);
+    -webkit-app-region: no-drag;
+}
+.aleph-sidebar-toggle:hover {
+    background-color: var(--color-surface-raised);
+    color: var(--color-text-primary);
+}
+.aleph-sidebar-toggle:active {
+    background-color: color-mix(in oklch, var(--color-surface-raised) 80%, var(--color-text-primary) 20%);
+}
+.aleph-sidebar-toggle:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 1px;
+}
+/* Hide the fixed toggle while the sidebar is expanded (the inline brand-row
+   button is in charge). macOS Tauri overrides this back to flex below. */
+.aleph-shell:not(.sidebar-collapsed) .aleph-sidebar-toggle {
+    display: none;
+}
+/* macOS Tauri — fixed toggle is always visible. Left offset clears the
+   overlay traffic lights (~60 px wide). Vertical position comes from
+   the shared `--aleph-chrome-y` variable so the toggle, bell, right
+   toggle, and workspace label all line up on the same y-baseline. */
+html[data-platform="macos"] .aleph-shell .aleph-sidebar-toggle {
+    display: flex;
+    left: 72px;
+}
+
+/* Inline collapse button — lives inside the brand row next to ThemeToggle.
+   Visible on web + Tauri Win/Linux; hidden on macOS (the fixed toggle
+   above is the only collapse control there). */
+.aleph-sidebar-inline-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    background: transparent;
+    color: var(--color-text-secondary);
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background-color var(--duration-fast) var(--ease-out),
+                color var(--duration-fast) var(--ease-out);
+}
+.aleph-sidebar-inline-toggle:hover {
+    background-color: color-mix(in oklch, var(--color-text-primary) 12%, transparent);
+    color: var(--color-text-primary);
+}
+.aleph-sidebar-inline-toggle:active {
+    background-color: color-mix(in oklch, var(--color-text-primary) 18%, transparent);
+}
+.aleph-sidebar-inline-toggle:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 1px;
+}
+html[data-platform="macos"] .aleph-sidebar-inline-toggle {
+    display: none;
+}
+
+/* Theme popover lives inside ThemeToggle's `.relative` wrapper, which on
+   web + Tauri Win/Linux sits before the inline collapse button in the
+   brand row. Its trigger right edge is therefore 30 px (button 26 + gap 4)
+   shy of the brand row's content right edge — anchoring the popover to
+   `right: 0` of the trigger would push it past the sidebar's left edge.
+   Shift it back so its right edge meets the brand row's right edge. On
+   macOS the inline button is `display: none` and the trigger sits flush
+   right again, so reset the offset there. */
+.aleph-sidebar-head .theme-picker-popover {
+    right: -1.875rem;
+}
+html[data-platform="macos"] .aleph-sidebar-head .theme-picker-popover {
+    right: 0;
+}
+
+/* ── Accent-aware caret + scrollbar ──────────────────────────────────
+   Two near-invisible accent surfaces that follow the active palette,
+   broadening the perceived footprint of the accent color without
+   touching component code:
+
+   1. caret-color — the blinking text cursor in every input/textarea
+      tints to the accent, so typing anywhere shows the palette.
+
+   2. Scrollbar — a thin, idle-neutral / hover-accent thumb on every
+      scrollable region (chat history, session list, settings, etc.).
+      Idle thumb stays subdued (text-tertiary @ ~35%) so it doesn't
+      visually nag; on hover it lights up to the accent.
+
+   Firefox uses `scrollbar-width` + `scrollbar-color`; WebKit uses
+   `::-webkit-scrollbar*` pseudo-elements. Both are covered. */
+
+input, textarea, [contenteditable="true"], [contenteditable=""] {
+    caret-color: var(--color-primary);
+}
+
+/* `scrollbar-width` / `scrollbar-color` are INHERITED — declaring them once on
+   :root cascades to every element WITHOUT the universal-selector match + the
+   per-element color-mix recompute that a `*` rule forces on every style recalc
+   (measured ~18% of each layout pass). WebKit (WKWebView/Chrome — the only
+   targets) renders the actual scrollbar via the `::-webkit-scrollbar*` pseudos
+   below, so this is visually identical there; the inherited value only matters
+   for Firefox's idle thumb. The former `*:hover { scrollbar-color }` rule is
+   dropped: it recomputed color-mix across the whole hover chain on every
+   pointer move (menu-hover jank), and the WebKit hover accent is already
+   handled by `::-webkit-scrollbar-thumb:hover`. */
+:root {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--color-text-tertiary) 35%, transparent) transparent;
+}
+*::-webkit-scrollbar          { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track    { background: transparent; }
+*::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--color-text-tertiary) 35%, transparent);
+    border-radius: var(--radius-full);
+    transition: background-color var(--duration-fast) var(--ease-out);
+}
+*::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklch, var(--color-primary) 55%, transparent);
+}
+*::-webkit-scrollbar-corner   { background: transparent; }
+
+/* (Grain rule merged into .aleph-shell::after near .aleph-shell::before above;
+   opacity is now driven by --mat-grain from the material primitive block.) */
+
+/* ════════════════════════════════════════════════════════════
+   Chat message entrance — a one-shot rise+fade as each bubble
+   mounts. Wired in `messages.rs` ONLY on non-streaming bubbles:
+   the keyed <For> recreates a streaming bubble on every token, so
+   animating those would replay the entrance per chunk. Finalized
+   and user bubbles mount once, so the animation plays once. The
+   global reduced-motion cap already neutralises this.
+   ════════════════════════════════════════════════════════════ */
+@keyframes aleph-msg-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.992); }
+  to   { opacity: 1; transform: none; }
+}
+.aleph-msg-in {
+  animation: aleph-msg-in 0.34s var(--ease-out) both;
+}
+
+/* One-shot spin for the retry button — confirms the click registered. */
+@keyframes aleph-spin-once {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(-360deg); }
+}
+.aleph-spin-once {
+  animation: aleph-spin-once 0.5s var(--ease-out);
+}
+
+/* Team roster bar wrapper: full-width float over the top chrome. It is
+   `pointer-events: none` so window-drag (the macOS band beneath) AND the top
+   chrome (sidebar toggle, workspace toggle, notification bell) stay reachable
+   THROUGH it — the wrapper carves no `no-drag` hole and steals no clicks. Only
+   the interactive cluster button + popover opt back in with `pointer-events:
+   auto` + `aleph-no-drag`; the expanded pill bar is display-only, so the band
+   drags right over it.
+   container-type lets the inner expanded/collapsed views swap by width. */
+.aleph-roster-wrap {
+  container-type: inline-size;
+  padding: 6px 8px;
+  pointer-events: none;
+}
+/* macOS: always clear the top-right chrome (workspace toggle + notification
+   bell), which is anchored to the chat surface's right edge regardless of
+   sidebar state. */
+html[data-platform="macos"] .aleph-roster-wrap {
+  padding-right: 96px;
+}
+/* When the sidebar is collapsed the fixed sidebar toggle
+   (`.aleph-sidebar-toggle`) sits at the chat surface's top-left and the roster
+   must start past it so the first avatar doesn't cover the button. The toggle's
+   x differs by platform, so the left clearance does too:
+
+   • Web / Win / Linux: toggle at `left: 10px`, 28px wide → right edge 38px, so
+     content starts at 38 + 8px gap = 46px.
+   • macOS: toggle at `left: 72px` (clears the overlay traffic lights), 28px
+     wide → right edge 100px, so content starts at 100 + 8px = 108px.
+
+   With the sidebar expanded the chat surface starts at the sidebar's right edge
+   so the toggle floats over the SIDEBAR, not the chat — the roster then hugs
+   the chat's own left edge (default 8px) and no clearance is needed. */
+.aleph-shell.sidebar-collapsed .aleph-roster-wrap {
+  padding-left: 46px;
+}
+html[data-platform="macos"] .aleph-shell.sidebar-collapsed .aleph-roster-wrap {
+  padding-left: 108px;
+}
+/* Width swap: default (narrow) shows the cluster; >=700px shows the pill bar.
+   700px ~= CLUSTER_CAP(5) * ~140px per pill. With the name cap bounding each
+   pill (see team_participants.rs), 5 pills clear the default 1180px window;
+   when a narrower surface can't seat them the bar `overflow-x-auto` scrolls. */
+.aleph-roster-expanded { display: none; }
+.aleph-roster-collapsed { display: flex; }
+@container (min-width: 700px) {
+  .aleph-roster-expanded { display: flex; }
+  .aleph-roster-collapsed { display: none; }
+}
+/* Crowded (> CLUSTER_CAP members): always the cluster, regardless of width.
+   Two-class selector outspecifies the bare container-query rules, so it wins
+   without !important. The expanded bar is also not rendered (Show=false) when
+   crowded; this guarantees the cluster stays visible even at wide widths. */
+.aleph-roster-crowded .aleph-roster-expanded { display: none; }
+.aleph-roster-crowded .aleph-roster-collapsed { display: flex; }
+.aleph-roster-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 4px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--color-surface-raised) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+  white-space: nowrap;
+}
+/* Team task strip pill sits in the composer stack; truncation keeps it on one
+   line regardless of subject length. */
+.aleph-task-strip-subject { min-width: 0; }
+
