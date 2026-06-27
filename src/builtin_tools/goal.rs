@@ -491,7 +491,7 @@ token_budget. \
                 }
                 // Newest-updated first so the most relevant goals lead.
                 let mut sorted = goals;
-                sorted.sort_unstable_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+                sorted.sort_unstable_by_key(|g| std::cmp::Reverse(g.updated_at_ms));
                 let mut message = format!("Standing goals ({}):\n", sorted.len());
                 for goal in &sorted {
                     message.push_str(&Self::render_list_line(goal, &session, now));
