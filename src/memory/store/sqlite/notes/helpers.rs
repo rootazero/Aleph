@@ -82,6 +82,7 @@ pub(crate) const fn provenance_origin_to_str(origin: &ProvenanceOrigin) -> &'sta
         ProvenanceOrigin::RawSource => "raw_source",
         ProvenanceOrigin::PriorNote => "prior_note",
         ProvenanceOrigin::Inferred => "inferred",
+        ProvenanceOrigin::System => "system",
         ProvenanceOrigin::Legacy => "legacy",
     }
 }
@@ -93,6 +94,7 @@ pub(crate) fn provenance_origin_from_str(s: &str) -> ProvenanceOrigin {
         "raw_source" => ProvenanceOrigin::RawSource,
         "prior_note" => ProvenanceOrigin::PriorNote,
         "inferred" => ProvenanceOrigin::Inferred,
+        "system" => ProvenanceOrigin::System,
         _ => ProvenanceOrigin::Legacy,
     }
 }
@@ -159,4 +161,26 @@ pub(crate) fn collect_edges_between(
         edges.push(row.map_err(|e| AlephError::config(format!("collect_edges row: {e}")))?);
     }
     Ok(edges)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provenance_origin_str_roundtrips_all_variants() {
+        for o in [
+            ProvenanceOrigin::RawSource,
+            ProvenanceOrigin::PriorNote,
+            ProvenanceOrigin::Inferred,
+            ProvenanceOrigin::System,
+            ProvenanceOrigin::Legacy,
+        ] {
+            assert_eq!(
+                provenance_origin_from_str(provenance_origin_to_str(&o)),
+                o,
+                "round-trip must be identity for {o:?}"
+            );
+        }
+    }
 }

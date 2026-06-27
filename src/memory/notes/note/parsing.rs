@@ -13,7 +13,7 @@ use super::types::{FactProvenance, ProvenanceOrigin};
 /// segment is optional (e.g. inferred facts have no source).
 pub static PROVENANCE_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(
-        r"<!--\s*(?:src:\s*([^,]+?),\s*)?origin:\s*(raw_source|prior_note|inferred|legacy)\s*,\s*inferred:\s*(true|false)\s*-->",
+        r"<!--\s*(?:src:\s*([^,]+?),\s*)?origin:\s*(raw_source|prior_note|inferred|legacy|system)\s*,\s*inferred:\s*(true|false)\s*-->",
     ).unwrap()
 });
 
@@ -39,6 +39,7 @@ pub fn extract_provenance_markers(body: &str, facts: &[String]) -> Vec<FactProve
                         "raw_source" => ProvenanceOrigin::RawSource,
                         "prior_note" => ProvenanceOrigin::PriorNote,
                         "inferred" => ProvenanceOrigin::Inferred,
+                        "system" => ProvenanceOrigin::System,
                         _ => ProvenanceOrigin::Legacy,
                     },
                     source_id: c.get(1).map(|m| m.as_str().trim().to_string()),
@@ -194,6 +195,7 @@ pub fn fact_provenance_for(fact: &str) -> super::types::FactProvenance {
             "raw_source" => ProvenanceOrigin::RawSource,
             "prior_note" => ProvenanceOrigin::PriorNote,
             "inferred" => ProvenanceOrigin::Inferred,
+            "system" => ProvenanceOrigin::System,
             _ => ProvenanceOrigin::Legacy,
         };
         let inferred = caps.get(3).map(|m| m.as_str() == "true").unwrap_or(false);

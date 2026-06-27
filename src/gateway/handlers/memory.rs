@@ -505,7 +505,7 @@ pub async fn handle_trace(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         target: String,
         kind: TraceKind,
         #[serde(default)]
-        max_depth: Option<usize>,
+        max_results: Option<usize>,
     }
 
     let params: Params = match parse_params(&request) {
@@ -533,7 +533,7 @@ pub async fn handle_trace(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         .call_impl(MemoryTraceArgs {
             target: params.target,
             kind: params.kind,
-            max_depth: params.max_depth,
+            max_results: params.max_results,
         })
         .await
     {

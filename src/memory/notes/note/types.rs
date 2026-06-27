@@ -44,6 +44,10 @@ pub enum ProvenanceOrigin {
     RawSource,
     PriorNote,
     Inferred,
+    /// System-generated structural fact (e.g. the `[title]`/`[summary]` lines
+    /// synthesized during note creation). Deterministic scaffolding, not
+    /// user/LLM-derived content — distinct from `Legacy` (no marker at all).
+    System,
     Legacy,
 }
 
