@@ -211,6 +211,14 @@ The partial index (`WHERE is_processed = 0`) ensures that even with unbounded hi
 
 Operational implication: if rows must be truly deleted (privacy, disk pressure), the correct escape hatch today is an explicit `DELETE FROM raw_memories WHERE is_processed = 1 AND created_at < ?` run out-of-band. The memory subsystem does not issue such a DELETE on its own.
 
+## 9. Retention Invariant (Provenance Chain Protection)
+
+**Any future time-based or size-based garbage-collection sweep of `raw_memories` must exclude rows referenced by the provenance chain.** Concretely: before deleting a row, verify that `notes_citing(raw_id)` is empty — i.e. the row is not cited as a `source_notes` entry in any note, and is not referenced in any `notes_provenance` or `notes_sources` table. If a row is still referenced, it must be retained even if it falls outside the retention window.
+
+Today (as of 2026-06-27) no time-based sweep exists; this invariant documents the pin to honor when one is added. The provenance chain — linking notes back to their raw-memory sources across three levels (L3 user-profile sessions → L2 synthesized notes → L1 distilled-note facts → L0 raw rows) — creates a bidirectional dependency: just as CompressionService produces notes from raws, the evidence chain allows drill-down queries to recover the source raw memories that fed a given fact or profile section. Deleting a raw while notes still point to it breaks the chain and orphans evidence.
+
+See [MEMORY_SYSTEM.md §12](../MEMORY_SYSTEM.md) for the full provenance chain documentation.
+
 ## See Also
 
 - [Notes (L1)](NOTES.md) — where processed raw rows land after distillation.

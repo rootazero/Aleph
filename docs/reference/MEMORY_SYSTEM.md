@@ -252,7 +252,33 @@ Notes form an Obsidian-compatible knowledge graph through `[[wikilink]]` syntax:
 
 The `notes_links` SQLite table stores outgoing links per note, enabling fast graph traversal without re-parsing markdown.
 
-## 12. Subdocument Navigation
+## 12. Provenance Chain (Evidence Drill-Down)
+
+Evidence traceability from user profile → synthesized notes → distilled notes → raw source data is enforced via four-level provenance metadata:
+
+**L3 (Session-level):** `USER.md` contains a machine-readable `## Sources` block listing, per profile section (Identity, Communication Style, etc.), which session IDs last modified that section. Example: `- Identity: sid_abc, sid_def`.
+
+**L2 (Synthesis-level):** Synthesis notes (output of the Dream Daemon consolidation phase) store `source_notes` — an array of note paths that were clustered/merged to produce the synthesis. The field persists in note frontmatter as `source_notes: [path/to/note1, path/to/note2]`.
+
+**L1 (Distillation-level):** Regular notes produced by `CompressionService` store per-fact provenance via two mechanisms:
+- `source_notes` field: list of raw-memory IDs or notes that fed this note's creation.
+- `fact_provenance` field: per fact (parsed from inline HTML comments `<!-- src: <id>, origin: raw_source, inferred: false -->`) tracing individual facts back to raw-memory rows.
+
+Both are materialized into SQLite tables `notes_sources` and `notes_provenance` by the `NoteIndexer` via `index_note()`.
+
+**L0 (Raw source):** `raw_memories` rows are the authoritative source. Read APIs:
+- `RawMemoryStore::get_raws_by_ids(ids)` — fetch raw rows by ID.
+- `RawMemoryStore::get_raws_by_session(session_id)` — fetch all raws in a session.
+- `NoteStore::notes_citing(raw_id)` — fetch all notes that reference a raw via `notes_sources` or `notes_provenance`.
+
+**Consumer:** The `memory_trace` builtin tool and the `memory.trace` gateway RPC expose the drill-down chain:
+- Kind `profile_section` → session IDs from `USER.md ## Sources`.
+- Kind `note` → `source_notes` list (L2→L1) and per-fact `fact_provenance`.
+- Kind `raw` → raw-memory content from `raw_memories`.
+
+Missing or pruned raws are gracefully degraded with `pruned: true` marker; the chain never errors.
+
+## 13. Subdocument Navigation
 
 - [Notes (L1)](memory/NOTES.md) — markdown-first persistent knowledge, indexing, `note_manage` tool, wikilink graph, event sourcing.
 - [Raw Memory (L0)](memory/RAW_MEMORY.md) — ephemeral session data, compression input, capture hooks.
