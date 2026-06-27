@@ -798,7 +798,7 @@ impl AgentRegistry {
         let agent_dir = home.join(".aleph/agents").join(id);
 
         // Create workspace directory (runtime output, project files)
-        std::fs::create_dir_all(&workspace_path).map_err(|e| {
+        tokio::fs::create_dir_all(&workspace_path).await.map_err(|e| {
             AgentInstanceError::InitFailed(format!("Failed to create workspace for '{id}': {e}"))
         })?;
 
@@ -817,7 +817,7 @@ impl AgentRegistry {
         // Overwrite SOUL.md with custom content if provided
         if !soul_content.is_empty() {
             let soul_path = agent_dir.join("SOUL.md");
-            std::fs::write(&soul_path, soul_content).map_err(|e| {
+            tokio::fs::write(&soul_path, soul_content).await.map_err(|e| {
                 AgentInstanceError::InitFailed(format!("Failed to write SOUL.md for '{id}': {e}"))
             })?;
         }

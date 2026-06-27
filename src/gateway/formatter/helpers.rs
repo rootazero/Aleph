@@ -375,6 +375,8 @@ pub(super) fn parse_markdown_blocks(text: &str) -> Vec<BlockElement<'_>> {
 fn parse_line_blocks<'a>(text: &'a str, out: &mut Vec<BlockElement<'a>>) {
     let lines: Vec<&str> = text.lines().collect();
     let mut i = 0;
+    let mut quote_lines: Vec<&'a str> = Vec::new();
+    let mut table_rows: Vec<Vec<&'a str>> = Vec::new();
 
     while i < lines.len() {
         let line = lines[i];
@@ -406,7 +408,7 @@ fn parse_line_blocks<'a>(text: &'a str, out: &mut Vec<BlockElement<'a>>) {
 
         // Blockquote: > text (collect consecutive lines)
         if parse_blockquote_line(trimmed).is_some() {
-            let mut quote_lines = Vec::new();
+            quote_lines.clear();
             while i < lines.len() {
                 if let Some(inner) = parse_blockquote_line(lines[i].trim()) {
                     quote_lines.push(inner);
@@ -415,7 +417,7 @@ fn parse_line_blocks<'a>(text: &'a str, out: &mut Vec<BlockElement<'a>>) {
                     break;
                 }
             }
-            out.push(BlockElement::Blockquote(quote_lines));
+            out.push(BlockElement::Blockquote(std::mem::take(&mut quote_lines)));
             continue;
         }
 
@@ -424,16 +426,19 @@ fn parse_line_blocks<'a>(text: &'a str, out: &mut Vec<BlockElement<'a>>) {
         if trimmed.contains('|') && i + 1 < lines.len() && is_table_separator(lines[i + 1].trim()) {
             let headers = split_table_row(trimmed);
             i += 2; // consume header + delimiter
-            let mut rows = Vec::new();
+            table_rows.clear();
             while i < lines.len() {
                 let row_trimmed = lines[i].trim();
                 if row_trimmed.is_empty() || !row_trimmed.contains('|') {
                     break;
                 }
-                rows.push(split_table_row(row_trimmed));
+                table_rows.push(split_table_row(row_trimmed));
                 i += 1;
             }
-            out.push(BlockElement::Table { headers, rows });
+            out.push(BlockElement::Table {
+                headers,
+                rows: std::mem::take(&mut table_rows),
+            });
             continue;
         }
 

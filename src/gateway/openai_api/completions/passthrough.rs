@@ -198,7 +198,7 @@ pub async fn handle(
             .header(header::CACHE_CONTROL, "no-cache")
             .header(header::CONNECTION, "keep-alive")
             .body(body)
-            .unwrap()
+            .map_err(|e| ApiError::BadGateway(format!("failed to build response: {e}")))?
             .into_response())
     } else {
         // Non-streaming path

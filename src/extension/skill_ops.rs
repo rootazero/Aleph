@@ -170,11 +170,8 @@ impl ExtensionManager {
                         environment,
                         ..
                     } => {
-                        let (cmd, args) = if command.is_empty() {
-                            (String::new(), Vec::new())
-                        } else {
-                            (command[0].clone(), command[1..].to_vec())
-                        };
+                        let cmd = command.first().cloned().unwrap_or_default();
+                        let args = command.get(1..).unwrap_or(&[]).to_vec();
                         servers.insert(
                             name.clone(),
                             McpServerConfig {

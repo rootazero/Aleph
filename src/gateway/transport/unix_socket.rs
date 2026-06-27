@@ -198,7 +198,7 @@ impl UnixSocketTransport {
             }
         }
 
-        let err = last_err.unwrap();
+        let err = last_err.unwrap_or_else(|| unreachable!("connection loop recorded no error"));
         Err(TransportError::ConnectionFailed(format!(
             "Failed to connect to {} after {} attempts: {}",
             self.socket_path.display(),

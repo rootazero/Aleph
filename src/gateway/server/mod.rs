@@ -428,7 +428,8 @@ impl GatewayServer {
     /// Note: This consumes the Arc and returns a new one.
     /// Should only be called during setup, before `run()`.
     pub fn handlers_mut(&mut self) -> &mut HandlerRegistry {
-        Arc::get_mut(&mut self.handlers).expect("Cannot modify handlers after server is running")
+        Arc::get_mut(&mut self.handlers)
+            .unwrap_or_else(|| unreachable!("Cannot modify handlers after server is running"))
     }
 
     /// Get a reference to the event bus for publishing events

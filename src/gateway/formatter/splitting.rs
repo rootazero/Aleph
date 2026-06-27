@@ -80,11 +80,11 @@ pub(super) fn split_message(text: &str, max_len: usize) -> Vec<String> {
                 if !chunk.is_empty() {
                     chunks.push(format!("{}\n{}", chunk, fs.close_line));
                 }
-                buf = if rest.is_empty() {
-                    String::new()
+                if rest.is_empty() {
+                    buf.clear();
                 } else {
-                    format!("{}\n{}", fs.reopen_line, rest)
-                };
+                    buf = format!("{}\n{}", fs.reopen_line, rest);
+                }
             }
             None => {
                 if !chunk.is_empty() {

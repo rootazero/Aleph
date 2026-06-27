@@ -14,12 +14,16 @@ use crate::gateway::handlers::HandlerRegistry;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 
 #[derive(Clone)]
-pub struct HandlerLayer;
+pub struct HandlerLayer {
+    handlers: Arc<HandlerRegistry>,
+}
 
 impl HandlerLayer {
     #[must_use]
-    pub const fn new() -> Self {
-        Self
+    pub fn new() -> Self {
+        Self {
+            handlers: Arc::new(HandlerRegistry::default()),
+        }
     }
 }
 
@@ -32,12 +36,8 @@ impl Default for HandlerLayer {
 impl<S> Layer<S> for HandlerLayer {
     type Service = HandlerService<S>;
 
-    // This `Layer` impl exists only to satisfy the trait bound; the handler
-    // middleware is always constructed via `HandlerService::new`, never through
-    // the tower `Layer` path, so reaching here is a wiring bug.
-    #[allow(clippy::panic)]
-    fn layer(&self, _inner: S) -> Self::Service {
-        panic!("HandlerLayer must be used with HandlerService::new(Arc<HandlerRegistry>)")
+    fn layer(&self, inner: S) -> Self::Service {
+        HandlerService::with_inner(inner, self.handlers.clone())
     }
 }
 

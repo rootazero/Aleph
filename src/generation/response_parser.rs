@@ -7,7 +7,9 @@
 //! when users mention generation models in natural language.
 
 use regex::Regex;
-use std::sync::LazyLock;
+use std::sync::OnceLock;
+
+use super::error::{GenerationError, GenerationResult};
 
 /// Parsed generation request from AI response
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,13 +36,16 @@ pub struct ParseResult {
 }
 
 // Regex pattern for [GENERATE:type:provider:model:prompt]
-static GENERATE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    // SAFETY: This regex pattern is statically defined and known to be valid.
-    // A failure here indicates a programming error in the pattern itself,
-    // which would be caught by any test exercising the parser.
-    Regex::new(r"\[GENERATE:([^:]+):([^:]+):([^:]+):([^\]]+)\]")
-        .unwrap_or_else(|e| panic!("GENERATE_PATTERN regex is valid and statically defined: {e}"))
-});
+static GENERATE_PATTERN: OnceLock<Regex> = OnceLock::new();
+
+fn get_pattern() -> GenerationResult<&'static Regex> {
+    GENERATE_PATTERN.get_or_try_init(|| {
+        Regex::new(r"\[GENERATE:([^:]+):([^:]+):([^:]+):([^\]]+)\]")
+            .map_err(|e| GenerationError::InternalError {
+                message: format!("invalid GENERATE_PATTERN regex: {e}"),
+            })
+    })
+}
 
 /// Parse AI response for generation requests
 ///
@@ -51,12 +56,12 @@ static GENERATE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 /// * `response` - The AI response text to parse
 ///
 /// # Returns
-/// `ParseResult` containing extracted requests and cleaned response text
-pub fn parse_generation_requests(response: &str) -> ParseResult {
+/// `GenerationResult<ParseResult>` containing extracted requests and cleaned response text
+pub fn parse_generation_requests(response: &str) -> GenerationResult<ParseResult> {
     let mut requests = Vec::new();
     let mut cleaned_response = response.to_string();
 
-    for cap in GENERATE_PATTERN.captures_iter(response) {
+    for cap in get_pattern()?.captures_iter(response) {
         let original_text = cap.get(0).map(|m| m.as_str()).unwrap_or_default();
         let gen_type = cap.get(1).map(|m| m.as_str()).unwrap_or_default();
         let provider = cap.get(2).map(|m| m.as_str()).unwrap_or_default();
@@ -78,15 +83,15 @@ pub fn parse_generation_requests(response: &str) -> ParseResult {
         cleaned_response = cleaned_response.replacen(original_text, &replacement, 1);
     }
 
-    ParseResult {
+    Ok(ParseResult {
         requests,
         cleaned_response,
-    }
+    })
 }
 
 /// Check if response contains any generation requests
-pub fn has_generation_requests(response: &str) -> bool {
-    GENERATE_PATTERN.is_match(response)
+pub fn has_generation_requests(response: &str) -> GenerationResult<bool> {
+    Ok(get_pattern()?.is_match(response))
 }
 
 #[cfg(test)]
@@ -97,7 +102,7 @@ mod tests {
     fn test_parse_single_request() {
         let response =
             "好的，我来帮你生成一张图片。\n[GENERATE:image:midjourney:nanobanana:一只可爱的猫]";
-        let result = parse_generation_requests(response);
+        let result = parse_generation_requests(response).expect("static regex should be valid");
 
         assert_eq!(result.requests.len(), 1);
         let req = &result.requests[0];
@@ -110,7 +115,7 @@ mod tests {
     #[test]
     fn test_parse_multiple_requests() {
         let response = "我会生成两张图片：\n[GENERATE:image:dalle:dall-e-3:sunset]\n[GENERATE:image:midjourney:nanobanana:mountains]";
-        let result = parse_generation_requests(response);
+        let result = parse_generation_requests(response).expect("static regex should be valid");
 
         assert_eq!(result.requests.len(), 2);
         assert_eq!(result.requests[0].provider, "dalle");
@@ -120,7 +125,7 @@ mod tests {
     #[test]
     fn test_cleaned_response() {
         let response = "生成图片：[GENERATE:image:midjourney:nanobanana:cat]";
-        let result = parse_generation_requests(response);
+        let result = parse_generation_requests(response).expect("static regex should be valid");
 
         assert!(!result.cleaned_response.contains("[GENERATE"));
         assert!(result.cleaned_response.contains("🎨 正在使用"));
@@ -129,7 +134,7 @@ mod tests {
     #[test]
     fn test_no_generation_request() {
         let response = "这是一个普通的回复，没有生成请求。";
-        let result = parse_generation_requests(response);
+        let result = parse_generation_requests(response).expect("static regex should be valid");
 
         assert!(result.requests.is_empty());
         assert_eq!(result.cleaned_response, response);
@@ -137,16 +142,15 @@ mod tests {
 
     #[test]
     fn test_has_generation_requests() {
-        assert!(has_generation_requests(
-            "[GENERATE:image:dalle:model:prompt]"
-        ));
-        assert!(!has_generation_requests("no generation here"));
+        assert!(has_generation_requests("[GENERATE:image:dalle:model:prompt]")
+            .expect("static regex should be valid"));
+        assert!(!has_generation_requests("no generation here").expect("static regex should be valid"));
     }
 
     #[test]
     fn test_prompt_with_chinese() {
         let response = "[GENERATE:image:midjourney:fast:一只在海边奔跑的金毛猎犬，夕阳西下]";
-        let result = parse_generation_requests(response);
+        let result = parse_generation_requests(response).expect("static regex should be valid");
 
         assert_eq!(result.requests.len(), 1);
         assert_eq!(

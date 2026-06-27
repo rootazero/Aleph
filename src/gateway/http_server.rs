@@ -192,10 +192,9 @@ pub async fn serve_static_file(
 }
 
 fn not_found() -> Response<Body> {
-    Response::builder()
-        .status(StatusCode::NOT_FOUND)
-        .body(Body::from("Not Found"))
-        .unwrap()
+    let mut response = Response::new(Body::from("Not Found"));
+    *response.status_mut() = StatusCode::NOT_FOUND;
+    response
 }
 
 #[cfg(test)]

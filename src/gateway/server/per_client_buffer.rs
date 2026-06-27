@@ -40,6 +40,11 @@ impl Default for PerClientBufferMetrics {
     }
 }
 
+/// Error returned when a fire-and-forget broadcast cannot be delivered because
+/// the receiver has lagged or there are no active receivers.
+#[derive(Debug)]
+pub struct BufferFull;
+
 /// Per-client event buffer using broadcast channel internally.
 ///
 /// Uses broadcast semantics: when the receiver can't keep up with the sender,
@@ -63,14 +68,14 @@ impl PerClientBuffer {
 
     /// Try to broadcast an event to all receivers (fire-and-forget)
     ///
-    /// Returns `Ok(())` if sent, or `Err(())` if no receivers (buffer full).
+    /// Returns `Ok(())` if sent, or `Err(BufferFull)` if no receivers (buffer full).
     /// When receivers lag, events are dropped at the receiver level, not here.
-    pub fn try_send(&self, event: String) -> Result<(), ()> {
+    pub fn try_send(&self, event: String) -> Result<(), BufferFull> {
         match self.sender.send(event) {
             Ok(_) => Ok(()),
             Err(broadcast::error::SendError(_)) => {
                 self.metrics.add_overflow(1);
-                Err(())
+                Err(BufferFull)
             }
         }
     }

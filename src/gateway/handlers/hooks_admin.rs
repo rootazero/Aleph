@@ -149,13 +149,13 @@ fn build_action(p: &AddParams) -> Result<Value, String> {
         return Err("only one of command/prompt/agent/url may be set".into());
     }
     if let Some(c) = &p.command {
-        let mut obj = json!({ "type": "command", "command": c });
+        let mut obj = Map::new();
+        obj.insert("type".into(), json!("command"));
+        obj.insert("command".into(), json!(c));
         if let Some(t) = p.timeout_secs {
-            obj.as_object_mut()
-                .unwrap()
-                .insert("timeout_secs".into(), json!(t));
+            obj.insert("timeout_secs".into(), json!(t));
         }
-        return Ok(obj);
+        return Ok(Value::Object(obj));
     }
     if let Some(pr) = &p.prompt {
         return Ok(json!({ "type": "prompt", "prompt": pr }));
@@ -164,13 +164,13 @@ fn build_action(p: &AddParams) -> Result<Value, String> {
         return Ok(json!({ "type": "agent", "agent": a }));
     }
     if let Some(u) = &p.url {
-        let mut obj = json!({ "type": "http", "url": u });
+        let mut obj = Map::new();
+        obj.insert("type".into(), json!("http"));
+        obj.insert("url".into(), json!(u));
         if let Some(t) = p.timeout_secs {
-            obj.as_object_mut()
-                .unwrap()
-                .insert("timeout_secs".into(), json!(t));
+            obj.insert("timeout_secs".into(), json!(t));
         }
-        return Ok(obj);
+        return Ok(Value::Object(obj));
     }
     unreachable!()
 }

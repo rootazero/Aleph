@@ -134,7 +134,7 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
     let temp_path = std::env::temp_dir().join(format!("aleph-plugin-{}.zip", uuid::Uuid::new_v4()));
 
     // Write temp file
-    if let Err(e) = std::fs::write(&temp_path, &zip_data) {
+    if let Err(e) = tokio::fs::write(&temp_path, &zip_data).await {
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -143,10 +143,10 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
     }
 
     // Extract zip
-    let file = match std::fs::File::open(&temp_path) {
-        Ok(f) => f,
+    let zip_bytes = match tokio::fs::read(&temp_path).await {
+        Ok(b) => b,
         Err(e) => {
-            let _ = std::fs::remove_file(&temp_path);
+            let _ = tokio::fs::remove_file(&temp_path).await;
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -154,11 +154,12 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
             );
         }
     };
+    let cursor = std::io::Cursor::new(zip_bytes);
 
-    let mut archive = match zip::ZipArchive::new(file) {
+    let mut archive = match zip::ZipArchive::new(cursor) {
         Ok(a) => a,
         Err(e) => {
-            let _ = std::fs::remove_file(&temp_path);
+            let _ = tokio::fs::remove_file(&temp_path).await;
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -168,7 +169,7 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
     };
 
     if let Err(e) = archive.extract(&plugins_dir) {
-        let _ = std::fs::remove_file(&temp_path);
+        let _ = tokio::fs::remove_file(&temp_path).await;
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -176,7 +177,7 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
         );
     }
 
-    let _ = std::fs::remove_file(&temp_path);
+    let _ = tokio::fs::remove_file(&temp_path).await;
 
     // Return list of installed plugin names
     // For simplicity, return empty list - caller should use plugins.list to refresh

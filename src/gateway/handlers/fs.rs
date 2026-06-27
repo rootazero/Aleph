@@ -182,7 +182,7 @@ pub async fn handle_list_dir(request: JsonRpcRequest, config: SharedConfig) -> J
         Err(msg) => return JsonRpcResponse::error(request.id, OUT_OF_SCOPE, &msg),
     };
 
-    let read = match std::fs::read_dir(&canon) {
+    let mut read = match tokio::fs::read_dir(&canon).await {
         Ok(r) => r,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return JsonRpcResponse::error(
@@ -201,7 +201,18 @@ pub async fn handle_list_dir(request: JsonRpcRequest, config: SharedConfig) -> J
     };
 
     let mut entries: Vec<serde_json::Value> = Vec::with_capacity(64);
-    for entry in read.flatten() {
+    loop {
+        let entry = match read.next_entry().await {
+            Ok(Some(e)) => e,
+            Ok(None) => break,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("read_dir failed: {e}"),
+                );
+            }
+        };
         let name_os = entry.file_name();
         let name = name_os.to_string_lossy().to_string();
         if !params.show_hidden && name.starts_with('.') {
@@ -317,7 +328,7 @@ pub async fn handle_create_dir(request: JsonRpcRequest, config: SharedConfig) ->
             format!("already exists: {}", target.display()),
         );
     }
-    if let Err(e) = std::fs::create_dir_all(&target) {
+    if let Err(e) = tokio::fs::create_dir_all(&target).await {
         return JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("mkdir failed: {e}"));
     }
     // canonicalise so the returned path matches list_dir's output style
@@ -368,7 +379,7 @@ pub async fn handle_read_file(request: JsonRpcRequest, config: SharedConfig) -> 
         Err(msg) => return JsonRpcResponse::error(request.id, OUT_OF_SCOPE, &msg),
     };
 
-    let bytes = match std::fs::read(&canon) {
+    let bytes = match tokio::fs::read(&canon).await {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return JsonRpcResponse::error(

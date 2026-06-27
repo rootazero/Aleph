@@ -20,7 +20,9 @@ use leptos_router::components::A;
 #[component]
 #[must_use]
 pub fn ConnectionStatus() -> impl IntoView {
-    let state = use_context::<DashboardState>().expect("DashboardState not provided");
+    let Some(state) = use_context::<DashboardState>() else {
+        return ().into_any();
+    };
     let i18n = use_i18n();
 
     // Project the four signals into a single phase each render.

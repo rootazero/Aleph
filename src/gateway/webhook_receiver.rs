@@ -179,8 +179,8 @@ impl WebhookReceiver {
     /// Returns the signature in the format `"sha256={hex_digest}"`.
     #[must_use]
     pub fn compute_signature(secret: &str, data: &[u8]) -> String {
-        let mut mac =
-            HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key size");
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+            .unwrap_or_else(|_| unreachable!("HMAC accepts any key size"));
         mac.update(data);
         let result = mac.finalize();
         let hex_str = hex::encode(result.into_bytes());

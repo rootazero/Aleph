@@ -26,7 +26,9 @@ use leptos::task::spawn_local;
 #[component]
 #[must_use]
 pub fn BootCheckGate() -> impl IntoView {
-    let state = use_context::<DashboardState>().expect("DashboardState not provided");
+    let Some(state) = use_context::<DashboardState>() else {
+        return ().into_any();
+    };
     let i18n = use_i18n();
 
     // The gate disengages permanently once we've ever connected. After

@@ -464,10 +464,18 @@ impl MattermostMessageOps {
                 }
             });
 
+            let auth_text = match serde_json::to_string(&auth_msg) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::error!("Failed to serialize Mattermost auth message: {e}");
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(MAX_BACKOFF);
+                    continue;
+                }
+            };
+
             if let Err(e) = ws_tx
-                .send(tokio_tungstenite::tungstenite::Message::Text(
-                    serde_json::to_string(&auth_msg).unwrap().into(),
-                ))
+                .send(tokio_tungstenite::tungstenite::Message::Text(auth_text.into()))
                 .await
             {
                 tracing::warn!("Mattermost WebSocket auth send failed: {e}");
