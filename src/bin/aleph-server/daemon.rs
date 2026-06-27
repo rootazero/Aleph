@@ -492,13 +492,13 @@ mod rotation_tests {
     use tempfile::TempDir;
 
     fn write_file(path: &Path, bytes: usize) {
-        let mut f = std::fs::File::create(path).unwrap();
-        f.write_all(&vec![b'x'; bytes]).unwrap();
+        let mut f = std::fs::File::create(path).expect("create temp file");
+        f.write_all(&vec![b'x'; bytes]).expect("write temp file");
     }
 
     fn siblings(dir: &Path, except: &str) -> Vec<String> {
         std::fs::read_dir(dir)
-            .unwrap()
+            .expect("read temp dir")
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n != except)

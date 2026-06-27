@@ -159,7 +159,7 @@ struct CacheEntry {
 
 static URL_CACHE: Lazy<Mutex<LruCache<CacheKey, CacheEntry>>> = Lazy::new(|| {
     Mutex::new(LruCache::new(
-        NonZeroUsize::new(CACHE_CAPACITY).expect("CACHE_CAPACITY > 0"),
+        NonZeroUsize::new(CACHE_CAPACITY).unwrap_or_else(|| unreachable!("CACHE_CAPACITY > 0")),
     ))
 });
 
