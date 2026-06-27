@@ -102,8 +102,9 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
     // LF line). We bound the total header size to defend against an
     // unterminated client.
     let mut total = request_line.len();
+    let mut header = String::new();
     loop {
-        let mut header = String::new();
+        header.clear();
         let read = rd.read_line(&mut header).await?;
         if read == 0 {
             return Ok(());
