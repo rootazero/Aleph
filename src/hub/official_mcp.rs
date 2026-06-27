@@ -104,6 +104,15 @@ pub fn primer_entries() -> Vec<ExtensionEntry> {
     presets::catalog().iter().filter_map(map_entry).collect()
 }
 
+/// Setup guidance for a Hub entry, if its id maps to an in-binary MCP preset
+/// that carries `post_install`. Keyed by the Hub entry id (`aleph-hub:<slug>`).
+/// Returns `None` for non-preset ids, unknown slugs, or presets without
+/// guidance.
+pub fn post_install_for(entry_id: &str) -> Option<&'static str> {
+    let slug = entry_id.strip_prefix(&format!("{ALEPH_HUB_ID}:"))?;
+    presets::find(slug)?.post_install.as_deref()
+}
+
 /// True iff `cfg` was installed via the retired preset path: its id is a known
 /// preset slug AND its launch shape matches that preset. New Hub installs use
 /// `aleph-hub_<slug>` ids, so a raw-slug id never collides with a Hub install.
@@ -154,6 +163,42 @@ mod tests {
             .find(|e| e.id == id)
             .cloned()
             .unwrap_or_else(|| panic!("missing {id}"))
+    }
+
+    #[test]
+    fn unreal_engine_projects_to_keyless_remote() {
+        let e = primer_entries();
+        let ue = by_id(&e, "aleph-hub:unreal-engine");
+        assert_eq!(ue.kind, ExtensionKind::Mcp);
+        assert_eq!(ue.trust_tier, TrustTier::Official);
+        match ue.install_spec.unwrap() {
+            InstallSpec::McpRemote { url, transport, .. } => {
+                assert_eq!(url, "http://127.0.0.1:8000/mcp");
+                assert!(matches!(
+                    transport,
+                    crate::hub::types::McpTransport::StreamableHttp
+                ));
+            }
+            other => panic!("expected McpRemote, got {other:?}"),
+        }
+        assert!(!ue.requires_config);
+    }
+
+    #[test]
+    fn post_install_for_unreal_returns_guidance() {
+        let g = super::post_install_for("aleph-hub:unreal-engine").expect("guidance");
+        assert!(g.contains("Unreal MCP"));
+    }
+
+    #[test]
+    fn post_install_for_preset_without_guidance_is_none() {
+        assert!(super::post_install_for("aleph-hub:context7").is_none());
+    }
+
+    #[test]
+    fn post_install_for_unprefixed_or_unknown_is_none() {
+        assert!(super::post_install_for("unreal-engine").is_none()); // missing aleph-hub: prefix
+        assert!(super::post_install_for("aleph-hub:nope").is_none()); // unknown slug
     }
 
     #[test]

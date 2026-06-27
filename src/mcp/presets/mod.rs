@@ -35,6 +35,12 @@ pub struct McpPreset {
     /// Free-form tags.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Post-install setup guidance shown to the user (Chinese, user-facing).
+    /// For presets needing out-of-band setup (e.g. a local editor-embedded
+    /// server). `None` = no extra steps. `serde(default)` keeps old catalog
+    /// entries (without this key) parseable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_install: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,5 +160,31 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("<AMAP_MAPS_API_KEY>"));
+    }
+
+    #[test]
+    fn post_install_defaults_to_none_when_absent() {
+        // Back-compat: a preset JSON without the post_install key still parses.
+        let json = r#"{
+            "id": "x", "name": "X", "category": "developer",
+            "description": "d", "vendor": "V", "official": true,
+            "reachability": "global",
+            "transports": [{ "kind": "http", "url": "https://x/mcp" }]
+        }"#;
+        let p: McpPreset = serde_json::from_str(json).expect("parse");
+        assert!(p.post_install.is_none());
+    }
+
+    #[test]
+    fn unreal_engine_preset_is_local_http_with_guidance() {
+        let ue = find("unreal-engine").expect("unreal-engine present");
+        assert_eq!(ue.transports.len(), 1);
+        let t = &ue.transports[0];
+        assert_eq!(t.kind, McpTransportType::Http);
+        assert_eq!(t.url.as_deref(), Some("http://127.0.0.1:8000/mcp"));
+        assert!(ue.required_env.is_empty());
+        assert!(ue.official);
+        let pi = ue.post_install.as_deref().expect("post_install set");
+        assert!(pi.contains("Unreal MCP"));
     }
 }

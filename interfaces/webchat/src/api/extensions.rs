@@ -129,6 +129,23 @@ pub fn parse_install_result(v: &Value) -> Result<InstallResult, String> {
     }
 }
 
+/// Pure: parse an `extensions.disclosure` response into
+/// (disclosure, findings, optional post-install guidance). `post_install` is a
+/// sibling key, `null`/absent when the entry has no setup guidance.
+pub fn parse_disclosure_result(
+    v: &Value,
+) -> Result<(DisclosurePayload, Vec<InjectionFinding>, Option<String>), String> {
+    let disclosure = serde_json::from_value(v.get("disclosure").cloned().unwrap_or(Value::Null))
+        .map_err(|e| format!("parse disclosure: {e}"))?;
+    let findings = serde_json::from_value(v.get("injection_findings").cloned().unwrap_or(json!([])))
+        .unwrap_or_default();
+    let post_install = v
+        .get("post_install")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    Ok((disclosure, findings, post_install))
+}
+
 pub struct ExtensionsApi;
 
 impl ExtensionsApi {
@@ -150,17 +167,11 @@ impl ExtensionsApi {
     pub async fn disclosure(
         state: &DashboardState,
         id: String,
-    ) -> Result<(DisclosurePayload, Vec<InjectionFinding>), String> {
+    ) -> Result<(DisclosurePayload, Vec<InjectionFinding>, Option<String>), String> {
         let r = state
             .rpc_call("extensions.disclosure", json!({ "id": id }))
             .await?;
-        let disclosure =
-            serde_json::from_value(r.get("disclosure").cloned().unwrap_or(Value::Null))
-                .map_err(|e| format!("parse disclosure: {e}"))?;
-        let findings =
-            serde_json::from_value(r.get("injection_findings").cloned().unwrap_or(json!([])))
-                .unwrap_or_default();
-        Ok((disclosure, findings))
+        parse_disclosure_result(&r)
     }
 
     pub async fn install(
@@ -270,5 +281,23 @@ mod tests {
     #[test]
     fn parse_install_unknown_is_error() {
         assert!(parse_install_result(&json!({"weird": 1})).is_err());
+    }
+
+    #[test]
+    fn parse_disclosure_picks_up_post_install_sibling() {
+        let v = json!({
+            "disclosure": { "tier": "official", "risk": "network", "one_line": "x" },
+            "injection_findings": [],
+            "post_install": "启动编辑器 server"
+        });
+        let (_d, _f, pi) = parse_disclosure_result(&v).unwrap();
+        assert_eq!(pi.as_deref(), Some("启动编辑器 server"));
+    }
+
+    #[test]
+    fn parse_disclosure_absent_post_install_is_none() {
+        let v = json!({ "disclosure": { "tier": "official", "risk": "network", "one_line": "x" } });
+        let (_d, _f, pi) = parse_disclosure_result(&v).unwrap();
+        assert!(pi.is_none());
     }
 }
