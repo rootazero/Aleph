@@ -34,12 +34,10 @@ async fn input_guardrail_sanitizes_secret() {
         .with_input(Arc::new(SanitizeOnSecret))
         .build();
     let d = r.evaluate_input("the password is SECRET, ok?").await;
-    match d {
-        GuardrailDecision::Sanitize(rep) => {
-            assert!(rep.text.contains("[REDACTED]"));
-            assert!(!rep.text.contains("SECRET"));
-        }
-        other => panic!("expected Sanitize, got {other:?}"),
+    assert!(d.is_sanitize(), "expected Sanitize, got {d:?}");
+    if let GuardrailDecision::Sanitize(rep) = d {
+        assert!(rep.text.contains("[REDACTED]"));
+        assert!(!rep.text.contains("SECRET"));
     }
 }
 
