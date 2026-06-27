@@ -18,6 +18,7 @@ use rand::RngExt;
 ///   attachment-passthrough tool). When wiring one, add the call site to
 ///   this list to keep this enum honest.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ContentSource {
     WebFetch {
         url: String,
@@ -150,7 +151,7 @@ const FORMAT_MARKERS: &[&str] = &[
 /// Generate a random 8-byte hex ID.
 fn generate_boundary_id() -> String {
     let bytes = rand::rng().random::<[u8; 8]>();
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    format!("{:016x}", u64::from_be_bytes(bytes))
 }
 
 /// Wraps external content with boundary markers for safe LLM injection.
@@ -263,12 +264,29 @@ pub fn wrap_external_content_with_report(content: &str, source: ContentSource) -
 /// Returns `(scrubbed_text, replacement_count)`. The text is returned even if
 /// nothing was replaced so callers do not need to branch.
 pub(crate) fn scrub_special_tokens(text: &str) -> (String, usize) {
-    let mut out = text.to_string();
+    let markers: Vec<&str> = TOKENIZER_MARKERS
+        .iter()
+        .chain(FORMAT_MARKERS.iter())
+        .copied()
+        .collect();
+    let mut out = String::with_capacity(text.len());
     let mut count = 0usize;
-    for marker in TOKENIZER_MARKERS.iter().chain(FORMAT_MARKERS.iter()) {
-        if out.contains(marker) {
-            count += out.matches(marker).count();
-            out = out.replace(marker, SCRUBBED_TOKEN_REPLACEMENT);
+    let mut i = 0;
+    while i < text.len() {
+        let mut matched = false;
+        for marker in &markers {
+            if text[i..].starts_with(marker) {
+                out.push_str(SCRUBBED_TOKEN_REPLACEMENT);
+                count += 1;
+                i += marker.len();
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            let ch = text[i..].chars().next().expect("i < text.len()");
+            out.push(ch);
+            i += ch.len_utf8();
         }
     }
     (out, count)

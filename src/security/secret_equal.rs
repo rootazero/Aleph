@@ -24,12 +24,13 @@ pub fn secret_equal_bytes(provided: &[u8], expected: &[u8]) -> bool {
     if n == 0 {
         return true;
     }
-    let p = pad(provided, n);
-    let e = pad(expected, n);
-    // ct_eq dominates the cost; the length check is an exact-match gate
-    // applied after the constant-time compare so it does not short-circuit.
-    let eq: bool = p.ct_eq(&e).into();
-    eq && provided.len() == expected.len()
+    let mut diff = 0u8;
+    for i in 0..n {
+        let p = provided.get(i).copied().unwrap_or(0);
+        let e = expected.get(i).copied().unwrap_or(0);
+        diff |= p ^ e;
+    }
+    (diff.ct_eq(&0) & provided.len().ct_eq(&expected.len())).into()
 }
 
 /// Convenience wrapper for UTF-8 string secrets (bearer tokens, signature
@@ -40,16 +41,6 @@ pub fn secret_equal(provided: Option<&str>, expected: Option<&str>) -> bool {
     match (provided, expected) {
         (Some(p), Some(e)) => secret_equal_bytes(p.as_bytes(), e.as_bytes()),
         _ => false,
-    }
-}
-
-fn pad(input: &[u8], n: usize) -> Vec<u8> {
-    if input.len() == n {
-        input.to_vec()
-    } else {
-        let mut out = vec![0u8; n];
-        out[..input.len()].copy_from_slice(input);
-        out
     }
 }
 
