@@ -9,6 +9,7 @@ use super::events::subscribe_run_events;
 use super::messages::MessageList;
 use super::state::{ChatState, PendingAttachment};
 use super::team_events::subscribe_team_events;
+use super::TodoPanel;
 use crate::components::session_tabs::SessionTabs;
 use crate::components::team_participants::TeamParticipants;
 use crate::components::team_task_strip::TaskDrawerOpen;
@@ -206,6 +207,11 @@ pub fn ChatView() -> impl IntoView {
                     // Session tab strip overlay — frosted band pinned to the top,
                     // renders only when ≥2 agents are open.
                     <div class="absolute inset-x-0 top-0 z-10"><SessionTabs /></div>
+                    // Single-chat sticky Todo panel — below the tab strip,
+                    // above the message flow. Hidden when no active plan.
+                    <div class="absolute inset-x-0 top-0 z-[11] px-3 pt-9 pointer-events-none">
+                        <div class="pointer-events-auto"><TodoPanel /></div>
+                    </div>
                     // Team participants — top-left avatar cluster + popover
                     // (replaces the old left roster rail). Top-left keeps it
                     // clear of the band's workspace toggle + notification bell,

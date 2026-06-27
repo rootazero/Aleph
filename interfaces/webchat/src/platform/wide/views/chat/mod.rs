@@ -13,9 +13,11 @@ pub mod team_compose;
 pub mod team_events;
 pub mod team_task_logic;
 pub mod timeline;
+mod todo_panel;
 pub mod transcript;
 pub mod view;
 pub mod voice_playback;
 
 pub use state::ChatState;
+pub use todo_panel::TodoPanel;
 pub use view::ChatView;

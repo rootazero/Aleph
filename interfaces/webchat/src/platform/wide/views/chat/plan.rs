@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PlanItemStatusView {
     Pending,
     InProgress,
