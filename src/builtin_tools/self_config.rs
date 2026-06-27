@@ -907,7 +907,7 @@ mod tests {
         assert!(second.message.contains("backed up"), "{}", second.message);
 
         let backups_dir = tmp.path().join("backups");
-        let backups: Vec<_> = tokio::fs::read_dir(&backups_dir).await
+        let backups: Vec<_> = std::fs::read_dir(&backups_dir)
             .unwrap()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name().to_string_lossy().starts_with("SOUL.md."))

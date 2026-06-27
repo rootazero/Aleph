@@ -40,16 +40,11 @@ fn tool_use_and_result_form_single_unit() {
     assert_eq!(units.len(), 2, "expected 2 semantic units, got {units:?}");
     assert!(matches!(units[0], SemanticUnit::UserMessage { index: 0 }));
     match &units[1] {
-        SemanticUnit::ToolRound {
-            tool_use_index,
-            tool_result_index,
-            follow_up_index,
-            tool_name,
-        } => {
-            assert_eq!(*tool_use_index, 1);
-            assert_eq!(*tool_result_index, 2);
-            assert_eq!(*follow_up_index, Some(3));
-            assert_eq!(tool_name, "web_search");
+        SemanticUnit::ToolRound(round) => {
+            assert_eq!(round.tool_use_index, 1);
+            assert_eq!(round.tool_result_index, 2);
+            assert_eq!(round.follow_up_index, Some(3));
+            assert_eq!(round.tool_name, "web_search");
         }
         other => panic!("expected ToolRound, got {other:?}"),
     }
@@ -71,18 +66,15 @@ fn tool_round_never_split_even_when_oversized() {
 
     for chunk in &chunks {
         for unit in &chunk.units {
-            if let SemanticUnit::ToolRound {
-                tool_use_index,
-                tool_result_index,
-                follow_up_index,
-                ..
-            } = unit
-            {
+            if let SemanticUnit::ToolRound(round) = unit {
                 let idx = chunk.message_indices();
-                assert!(idx.contains(tool_use_index), "tool_use_index split");
-                assert!(idx.contains(tool_result_index), "tool_result_index split");
-                if let Some(fu) = follow_up_index {
-                    assert!(idx.contains(fu), "follow_up_index split");
+                assert!(idx.contains(&round.tool_use_index), "tool_use_index split");
+                assert!(
+                    idx.contains(&round.tool_result_index),
+                    "tool_result_index split"
+                );
+                if let Some(fu) = round.follow_up_index {
+                    assert!(idx.contains(&fu), "follow_up_index split");
                 }
             }
         }

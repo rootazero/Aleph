@@ -271,7 +271,7 @@ mod tests {
     async fn file_read_rejects_oversize() {
         let dir = tempfile::tempdir().unwrap();
         let big_path = dir.path().join("big.bin");
-        let mut f = tokio::fs::File::create(&big_path).await.unwrap();
+        let mut f = std::fs::File::create(&big_path).unwrap();
         f.write_all(&vec![0u8; MAX_FILE_BYTES + 1]).unwrap();
         drop(f);
         let reader = FileReadCommand::new(dir.path().to_path_buf());

@@ -260,6 +260,7 @@ async fn skill_read_can_reach_references_subdir() {
         sk.join("SKILL.md"),
         "---\nname: withref\ndescription: d\n---\nx",
     )
+    .await
     .unwrap();
     tokio::fs::write(sk.join("references").join("guide.md"), "REF-CONTENT").await.unwrap();
 
@@ -285,6 +286,7 @@ async fn skill_read_rejects_traversal_in_file_name() {
         sk.join("SKILL.md"),
         "---\nname: trav\ndescription: d\n---\nx",
     )
+    .await
     .unwrap();
     let tool = ReadSkillTool::with_directories(vec![tmp.path().to_path_buf()]);
     let err = AlephTool::call(
@@ -315,6 +317,7 @@ async fn duplicate_skill_across_dirs_is_refused() {
             sk.join("SKILL.md"),
             "---\nname: dup\ndescription: d\n---\nx",
         )
+        .await
         .unwrap();
     }
     let tool = ReadSkillTool::with_directories(vec![dir_a, dir_b]);
