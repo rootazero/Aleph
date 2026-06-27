@@ -37,16 +37,19 @@ pub fn TodoPanel() -> impl IntoView {
                 view! {
                     <div class="aleph-todo-wrap" class:done=move || complete>
                         // ── header (always visible) — click to toggle ──
+                        // Slim single line: 18px ring (same size as ContextGauge)
+                        // + percentage to its right + one-line summary that
+                        // ellipsis-truncates its tail. No 36px ring, no two-row meta.
                         <button
                             class="aleph-todo-head"
                             on:click=move |_| expanded.update(|e| *e = !*e)
                         >
                             <span class="aleph-todo-ring" style=ring_style>
-                                <span class="aleph-todo-ring-inner">{move || format!("{pct}%")}</span>
+                                <span class="aleph-todo-ring-inner"></span>
                             </span>
-                            <span class="aleph-todo-meta">
-                                <b>{move || format!("任务计划 · {done}/{total}")}</b>
-                                <small>{header_label}</small>
+                            <span class="aleph-todo-pct">{format!("{pct}%")}</span>
+                            <span class="aleph-todo-line">
+                                {format!("任务计划 · {done}/{total} · {header_label}")}
                             </span>
                             <span class="aleph-todo-chev" class:open=move || expanded.get()>"▾"</span>
                         </button>
@@ -83,19 +86,19 @@ pub fn TodoPanel() -> impl IntoView {
 
 /// Self-contained styles (OKLCH design tokens; check-draw + flash animations).
 const TODO_PANEL_CSS: &str = r#"
-.aleph-todo-wrap{margin:6px auto 0;max-width:760px;border:1px solid var(--color-border);
+.aleph-todo-wrap{margin:0 auto 6px;max-width:760px;border:1px solid var(--color-border);
   border-radius:14px;background:color-mix(in oklch,var(--color-surface-overlay) 92%,transparent);
   backdrop-filter:blur(8px);overflow:hidden;font-size:13px}
-.aleph-todo-head{display:flex;align-items:center;gap:12px;width:100%;padding:9px 13px;
-  background:transparent;border:0;cursor:pointer;color:var(--color-text-primary);text-align:left}
-.aleph-todo-ring{flex:0 0 auto;width:36px;height:36px;border-radius:50%;display:grid;place-items:center}
-.aleph-todo-ring-inner{width:27px;height:27px;border-radius:50%;background:var(--color-surface-raised);
-  display:grid;place-items:center;font-size:10px;font-weight:700;font-variant-numeric:tabular-nums}
-.aleph-todo-meta{display:flex;flex-direction:column;gap:1px;min-width:0}
-.aleph-todo-meta b{font-size:13px}
-.aleph-todo-meta small{font-size:11.5px;color:var(--color-text-secondary,oklch(0.55 0.01 310));
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52ch}
-.aleph-todo-chev{margin-left:auto;font-size:11px;transition:transform .18s;color:var(--color-text-secondary,#888)}
+.aleph-todo-head{display:flex;align-items:center;gap:8px;width:100%;padding:5px 12px;
+  background:transparent;border:0;cursor:pointer;color:var(--color-text-primary);text-align:left;font-size:13px}
+.aleph-todo-ring{flex:0 0 auto;width:18px;height:18px;border-radius:50%;display:grid;place-items:center}
+.aleph-todo-ring-inner{width:12px;height:12px;border-radius:50%;background:var(--color-surface-raised)}
+.aleph-todo-pct{flex:0 0 auto;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;
+  color:var(--color-text-secondary,#888)}
+.aleph-todo-line{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  color:var(--color-text-primary)}
+.aleph-todo-chev{flex:0 0 auto;margin-left:auto;font-size:11px;transition:transform .18s;
+  color:var(--color-text-secondary,#888)}
 .aleph-todo-chev.open{transform:rotate(180deg)}
 .aleph-todo-rows{list-style:none;margin:0;padding:4px 8px 8px}
 .aleph-todo-row{display:flex;align-items:flex-start;gap:10px;padding:6px 8px;border-radius:9px;line-height:1.45}
