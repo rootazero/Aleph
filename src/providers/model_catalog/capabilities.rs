@@ -916,8 +916,8 @@ mod tests {
 
     #[test]
     fn resolve_context_window_uses_catalog_for_known_models() {
-        // claude-opus-4-8 是目录里的精确前缀（context_window = 1_000_000，
-        // 见 capabilities.rs CAPABILITY_TABLE 的 "claude-opus-4-8" 行）。
+        // claude-opus-4-8 is an exact prefix in the catalog (context_window =
+        // 1_000_000, see the "claude-opus-4-8" row in CAPABILITY_TABLE).
         assert_eq!(resolve_context_window("claude-opus-4-8"), 1_000_000);
         assert_ne!(
             resolve_context_window("claude-opus-4-8"),
