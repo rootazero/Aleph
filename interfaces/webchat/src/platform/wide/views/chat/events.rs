@@ -207,6 +207,34 @@ fn append_reasoning(chat: ChatState, summary: &str) {
     });
 }
 
+/// Project the run summary's core-authoritative context occupancy onto the
+/// composer gauge. Pure rendering (R4): core computes `context_tokens` (current
+/// window occupancy) and `context_window` (the model's authoritative window);
+/// the panel only displays them. `total_tokens` (run cumulative) rides along for
+/// the tooltip. No-op unless both occupancy and window are present, so legacy
+/// payloads and runs with no LLM call leave the gauge hidden.
+fn apply_context_gauge(chat: ChatState, summary: &serde_json::Value) {
+    let used = summary
+        .get("context_tokens")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as u32;
+    let window = summary
+        .get("context_window")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as u32;
+    let total = summary
+        .get("total_tokens")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if used > 0 && window > 0 {
+        chat.context_usage.set(Some(ContextUsage {
+            used_tokens: used,
+            window_tokens: window,
+            total_tokens: total,
+        }));
+    }
+}
+
 /// Subscribe to `run.*` events and dispatch to `ChatState`. Tool args/results
 /// are mirrored into [`WorkspaceState::tool_payloads`] so the workspace
 /// pane can render real invocation details without an extra round-trip.
@@ -363,30 +391,12 @@ pub fn subscribe_run_events(
                 {
                     chat.finalize_answer(run_id, final_text);
                 }
-                // Context gauge: the run summary already ships token_breakdown
-                // (input = last-turn context tokens) + total_tokens. Resolve the
-                // window denominator from the run's model client-side and publish
-                // for the composer's ContextGauge. Additive read of data already
-                // on the wire — no backend protocol change.
+                // Context gauge: core now ships the authoritative current
+                // occupancy (`context_tokens`) and the per-model window
+                // (`context_window`); the panel is a pure renderer (R4). The
+                // run-cumulative `total_tokens` rides along for the tooltip.
                 if let Some(summary) = data.get("summary") {
-                    let input = summary
-                        .get("token_breakdown")
-                        .and_then(|b| b.get("input"))
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0) as u32;
-                    let total = summary
-                        .get("total_tokens")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0);
-                    if input > 0 || total > 0 {
-                        let model = chat.model_for_run(run_id).unwrap_or_default();
-                        let window = super::context_gauge::context_window_for(&model);
-                        chat.context_usage.set(Some(ContextUsage {
-                            used_tokens: input,
-                            window_tokens: window,
-                            total_tokens: total,
-                        }));
-                    }
+                    apply_context_gauge(chat, summary);
                 }
                 // Voice loop: if the mic button registered this run, speak the
                 // final reply via the core TTS path → endpoint playback.
@@ -526,5 +536,29 @@ mod projection_tests {
         assert_eq!(plan.total(), 3);
         assert_eq!(plan.done_count(), 1);
         assert!(plan.has_content());
+    }
+
+    #[test]
+    fn run_complete_projects_core_context_occupancy_to_gauge() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+
+        // Core ships authoritative occupancy + per-model window on the summary;
+        // the panel must project them straight onto the gauge.
+        let summary = json!({
+            "context_tokens": 42_000,
+            "context_window": 200_000,
+            "total_tokens": 55_000,
+        });
+        super::apply_context_gauge(chat, &summary);
+
+        let usage = chat
+            .context_usage
+            .get_untracked()
+            .expect("gauge published");
+        assert_eq!(usage.used_tokens, 42_000);
+        assert_eq!(usage.window_tokens, 200_000);
+        assert_eq!(usage.total_tokens, 55_000);
     }
 }
