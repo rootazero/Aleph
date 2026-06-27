@@ -371,7 +371,7 @@ impl RawMemoryStore for SqliteMemoryBackend {
             placeholders.join(", ")
         );
         let mut param_values: Vec<&dyn rusqlite::types::ToSql> =
-            vec![agent_id as &dyn rusqlite::types::ToSql];
+            vec![&agent_id as &dyn rusqlite::types::ToSql];
         for id in ids {
             param_values.push(id as &dyn rusqlite::types::ToSql);
         }
