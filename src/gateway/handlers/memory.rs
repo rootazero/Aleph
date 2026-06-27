@@ -488,6 +488,67 @@ pub async fn handle_list_corrections(
     }
 }
 
+// ============================================================================
+// Trace (evidence-chain walk)
+// ============================================================================
+
+/// Walk a memory claim down to ground-truth evidence.
+///
+/// Read-only; R4-compliant (I/O only). Forwards to
+/// [`crate::builtin_tools::memory_trace::MemoryTraceTool::call_impl`].
+pub async fn handle_trace(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+    use crate::builtin_tools::memory_trace::{MemoryTraceArgs, MemoryTraceTool, TraceKind};
+
+    #[derive(serde::Deserialize)]
+    struct Params {
+        agent_id: Option<String>,
+        target: String,
+        kind: TraceKind,
+        #[serde(default)]
+        max_depth: Option<usize>,
+    }
+
+    let params: Params = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let agent = params
+        .agent_id
+        .unwrap_or_else(|| crate::routing::DEFAULT_AGENT_ID.to_string());
+
+    let note_memory_dir = match crate::utils::paths::get_note_memory_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("memory.trace: note dir: {e}"),
+            )
+        }
+    };
+
+    let tool = MemoryTraceTool::new(db, agent, note_memory_dir);
+    match tool
+        .call_impl(MemoryTraceArgs {
+            target: params.target,
+            kind: params.kind,
+            max_depth: params.max_depth,
+        })
+        .await
+    {
+        Ok(res) => JsonRpcResponse::success(
+            request.id,
+            serde_json::to_value(res).unwrap_or_default(),
+        ),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("memory.trace: {e}"),
+        ),
+    }
+}
+
 use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::{AtomicBool, Ordering};
@@ -798,5 +859,55 @@ mod tests {
 
         let json = serde_json::to_value(&entry).unwrap();
         assert!(json.get("similarity_score").is_none());
+    }
+}
+
+#[cfg(test)]
+mod trace_tests {
+    use super::*;
+    use crate::memory::notes::store::NoteStore;
+    use crate::memory::notes::KnowledgeNote;
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::sync_primitives::Arc;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn returns_notes_and_evidence_for_seeded_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let db: crate::memory::store::MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+
+        // Seed a note that cites one raw memory (mirrors memory_trace.rs unit test).
+        let note = KnowledgeNote {
+            title: "exercise".into(),
+            category: "habits".into(),
+            facts: vec!["daily running".into()],
+            source_notes: vec!["raw-ev1".into()],
+            ..Default::default()
+        };
+        db.index_note(&note, "default", "habits").await.unwrap();
+
+        // Insert the raw so evidence resolves (non-pruned).
+        let mut raw = RawMemory::new("user: I run daily".into(), RawMemorySource::Transcript);
+        raw.id = "raw-ev1".into();
+        raw.agent_id = "default".into();
+        db.insert_raw_memory(&raw).await.unwrap();
+
+        let req = JsonRpcRequest::with_id(
+            "memory.trace",
+            Some(json!({ "target": "habits/exercise", "kind": "note" })),
+            json!(1),
+        );
+        let resp = handle_trace(req, db).await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert!(result["notes"].as_array().is_some(), "response has notes array");
+        assert!(result["evidence"].as_array().is_some(), "response has evidence array");
+        let evidence = result["evidence"].as_array().unwrap();
+        assert!(
+            evidence.iter().any(|e| e["raw_id"] == "raw-ev1"),
+            "evidence references seeded raw raw-ev1"
+        );
     }
 }

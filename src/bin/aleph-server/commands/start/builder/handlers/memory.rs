@@ -83,6 +83,13 @@ pub(in crate::commands::start) fn register_memory_handlers(
         memory_handlers::handle_list_corrections,
         memory_db
     );
+    // Read-only evidence-chain walk: note / raw / profile-section → ground-truth raws.
+    register_handler!(
+        server,
+        "memory.trace",
+        memory_handlers::handle_trace,
+        memory_db
+    );
     register_handler!(
         server,
         "memory.appList",
