@@ -8,8 +8,9 @@ use super::layers::{
     CuratedMemoryLayer, CustomInstructionsLayer, DoctorRepairHintLayer, EnvironmentLayer,
     ExecutionPlanLayer, ExtraFilesLayer, GenerationModelsLayer, GuidelinesLayer, HeartbeatLayer,
     HydratedToolsLayer, IdentityFilesLayer, InboundContextLayer, LanguageLayer,
-    McpInstructionsLayer, MemoryAugmentationLayer, MemoryProtocolLayer, OperationalGuidelinesLayer,
-    ProfileLayer, ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
+    McpInstructionsLayer, MemoryAugmentationLayer, MemoryProtocolLayer, MultiStepConductLayer,
+    OperationalGuidelinesLayer, ProfileLayer, ProtocolTokensLayer, ProviderGuidanceLayer,
+    RoleLayer, RuntimeCapabilitiesLayer,
     RuntimeContextLayer, SecurityLayer, SessionBudgetLayer, SessionContextGuideLayer,
     SessionResumeLayer, SkillInstructionsLayer, SkillModeLayer, SoulLayer, SpecialActionsLayer,
     StandingGoalLayer, StrategyLayer, StrategyPointerLayer, ThinkingGuidanceLayer,
@@ -302,6 +303,7 @@ impl PromptPipeline {
             Box::new(ProtocolTokensLayer),
             Box::new(HeartbeatLayer),
             Box::new(OperationalGuidelinesLayer),
+            Box::new(MultiStepConductLayer),
             Box::new(ProviderGuidanceLayer),
             Box::new(SessionBudgetLayer),
             Box::new(CitationStandardsLayer),
@@ -456,7 +458,9 @@ mod tests {
         // 2026-06-18). See `default_layers`.
         // → 43 (DoctorRepairHintLayer @1715 — WebRich-only "/doctor → press f"
         // hint, 2026-06-19). See `default_layers`.
-        assert_eq!(pipeline.layer_count(), 43);
+        // → 44 (MultiStepConductLayer @805 Stable — autonomous scratchpad
+        // planning + interactive progress narration, 2026-06-28).
+        assert_eq!(pipeline.layer_count(), 44);
     }
 
     #[test]
