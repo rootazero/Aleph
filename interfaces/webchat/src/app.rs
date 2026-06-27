@@ -43,6 +43,7 @@ use crate::platform::phone::settings::embeddings::PhoneEmbeddings;
 use crate::platform::phone::settings::model_route::PhoneModelRoute;
 use crate::platform::phone::settings::providers::PhoneProviders;
 use crate::platform::phone::settings::PhoneSettings;
+use crate::platform::phone::teams::PhoneTeams;
 use crate::state::hotkey::{self as hotkey, HotkeyState};
 use crate::state::layout::{LayoutMode, WorkspaceState};
 use crate::state::notifications::NotificationsState;
@@ -419,7 +420,11 @@ fn MainContent() -> impl IntoView {
             }}
         </div>
         <div style:display=move || if mode.get() == PanelMode::Teams { "contents" } else { "none" }>
-            <TeamsView />
+            {move || if form_factor.form_factor.get() == FormFactor::Phone {
+                view! { <PhoneTeams /> }.into_any()
+            } else {
+                view! { <TeamsView /> }.into_any()
+            }}
         </div>
         <div style:display=move || if mode.get() == PanelMode::Extensions { "contents" } else { "none" }>
             <ExtensionsView />
