@@ -101,7 +101,7 @@ fn test_parse_args_basic() {
             assert!(!args.run_in_background);
             assert!(args.context_summary.is_none());
         }
-        _ => panic!("expected SubagentAction::Run"),
+        _ => unreachable!("expected SubagentAction::Run"),
     }
 }
 
@@ -129,7 +129,7 @@ fn test_parse_args_full() {
                 Some("We are working on a Rust project.")
             );
         }
-        _ => panic!("expected SubagentAction::Run"),
+        _ => unreachable!("expected SubagentAction::Run"),
     }
 }
 
@@ -152,7 +152,7 @@ fn test_parse_args_check_status() {
     let action = parse_args(&json!({ "request_id": "abc-123" })).unwrap();
     match action {
         SubagentAction::CheckStatus(rid) => assert_eq!(rid, "abc-123"),
-        _ => panic!("expected SubagentAction::CheckStatus"),
+        _ => unreachable!("expected SubagentAction::CheckStatus"),
     }
 }
 
@@ -162,7 +162,7 @@ fn test_parse_args_request_id_with_task_is_run() {
     let action = parse_args(&json!({ "task": "do work", "request_id": "abc" })).unwrap();
     match action {
         SubagentAction::Run(args) => assert_eq!(args.task, "do work"),
-        _ => panic!("expected SubagentAction::Run when both task and request_id given"),
+        _ => unreachable!("expected SubagentAction::Run when both task and request_id given"),
     }
 }
 
@@ -203,7 +203,7 @@ fn test_parse_args_with_name_and_team() {
             assert_eq!(args.name.as_deref(), Some("builder-1"));
             assert_eq!(args.team_name.as_deref(), Some("alpha"));
         }
-        _ => panic!("expected SubagentAction::Run"),
+        _ => unreachable!("expected SubagentAction::Run"),
     }
 }
 
@@ -241,7 +241,7 @@ fn test_parse_args_send_message() {
             assert_eq!(text, "please review the PR");
             assert_eq!(team_name, "alpha");
         }
-        _ => panic!("expected SubagentAction::SendMessage"),
+        _ => unreachable!("expected SubagentAction::SendMessage"),
     }
 }
 
@@ -257,7 +257,7 @@ fn test_parse_args_read_inbox() {
         SubagentAction::ReadInbox { team_name } => {
             assert_eq!(team_name, "alpha");
         }
-        _ => panic!("expected SubagentAction::ReadInbox"),
+        _ => unreachable!("expected SubagentAction::ReadInbox"),
     }
 }
 
@@ -274,7 +274,7 @@ async fn test_check_status_not_found() {
         ToolResult::Error { error, .. } => {
             assert!(error.contains("No background sub-agent found"));
         }
-        _ => panic!("expected error for unknown request_id"),
+        _ => unreachable!("expected error for unknown request_id"),
     }
 }
 
@@ -303,7 +303,7 @@ async fn test_check_status_completed() {
             assert_eq!(output["status"], "completed");
             assert_eq!(output["result"], "the result");
         }
-        _ => panic!("expected success with completed status"),
+        _ => unreachable!("expected success with completed status"),
     }
 }
 
@@ -326,7 +326,7 @@ async fn test_execute_with_agent_type() {
             assert!(output["iterations"].is_number());
             assert!(output["tool_calls_made"].is_number());
         }
-        ToolResult::Error { error, .. } => panic!("expected success, got error: {}", error),
+        ToolResult::Error { error, .. } => unreachable!("expected success, got error: {}", error),
     }
 }
 
@@ -349,7 +349,7 @@ async fn test_execute_with_aliased_agent_type() {
         ToolResult::Success { output } => {
             assert!(output["result"].is_string());
         }
-        ToolResult::Error { error, .. } => panic!("expected success, got error: {}", error),
+        ToolResult::Error { error, .. } => unreachable!("expected success, got error: {}", error),
     }
 }
 
@@ -372,7 +372,7 @@ async fn test_execute_unknown_agent_type() {
             assert!(error.contains("nonexistent_agent"));
             assert!(!retryable);
         }
-        _ => panic!("expected ToolResult::Error"),
+        _ => unreachable!("expected ToolResult::Error"),
     }
 }
 
@@ -396,7 +396,7 @@ async fn test_execute_background() {
             assert!(!output["request_id"].as_str().unwrap().is_empty());
             assert!(output["message"].is_string());
         }
-        ToolResult::Error { error, .. } => panic!("expected success, got error: {}", error),
+        ToolResult::Error { error, .. } => unreachable!("expected success, got error: {}", error),
     }
 }
 
@@ -410,7 +410,7 @@ async fn test_execute_missing_task() {
             assert!(error.contains("missing required field"));
             assert!(!retryable);
         }
-        _ => panic!("expected ToolResult::Error"),
+        _ => unreachable!("expected ToolResult::Error"),
     }
 }
 
@@ -449,7 +449,7 @@ async fn test_send_message_without_router() {
                 "unexpected error: {error}"
             );
         }
-        _ => panic!("expected error when message router not configured"),
+        _ => unreachable!("expected error when message router not configured"),
     }
 }
 
@@ -469,7 +469,7 @@ async fn test_read_inbox_without_inbox() {
         ToolResult::Error { error, .. } => {
             assert!(error.contains("inbox"), "unexpected error: {error}");
         }
-        _ => panic!("expected error when inbox not configured"),
+        _ => unreachable!("expected error when inbox not configured"),
     }
 }
 
@@ -486,7 +486,7 @@ async fn test_execute_success() {
             assert!(output["iterations"].is_number());
             assert!(output["tool_calls_made"].is_number());
         }
-        ToolResult::Error { error, .. } => panic!("expected success, got error: {}", error),
+        ToolResult::Error { error, .. } => unreachable!("expected success, got error: {}", error),
     }
 }
 
@@ -532,7 +532,7 @@ async fn check_status_returns_progress_array_when_running() {
         .await;
     let output = match result {
         ToolResult::Success { output } => output,
-        other => panic!("expected Success, got {other:?}"),
+        other => unreachable!("expected Success, got {other:?}"),
     };
     let progress = output.get("progress").expect("progress field present");
     assert!(progress.is_array());
@@ -561,7 +561,7 @@ fn batch_tasks_default_keeps_foreground() {
             );
             assert_eq!(args.batch_tasks.as_ref().unwrap().len(), 2);
         }
-        _ => panic!("expected SubagentAction::Run"),
+        _ => unreachable!("expected SubagentAction::Run"),
     }
 }
 
@@ -575,7 +575,7 @@ fn batch_tasks_explicit_background_preserved() {
     .unwrap();
     match action {
         SubagentAction::Run(args) => assert!(args.run_in_background),
-        _ => panic!("expected SubagentAction::Run"),
+        _ => unreachable!("expected SubagentAction::Run"),
     }
 }
 
@@ -608,7 +608,7 @@ async fn execute_batch_sync_returns_aggregated_results() {
                 assert!(r["result"].is_string(), "task {i} result must be string");
             }
         }
-        ToolResult::Error { error, .. } => panic!("expected success, got error: {error}"),
+        ToolResult::Error { error, .. } => unreachable!("expected success, got error: {error}"),
     }
 }
 
@@ -647,7 +647,7 @@ fn moa_parse_proposer_models_and_synthesize() {
                 Some("favour correctness over brevity")
             );
         }
-        _ => panic!("expected SubagentAction::Run"),
+        _ => unreachable!("expected SubagentAction::Run"),
     }
 }
 
@@ -700,7 +700,7 @@ async fn execute_moa_returns_synthesis() {
             let results = output["results"].as_array().expect("results is array");
             assert_eq!(results.len(), 2, "raw proposals are preserved");
         }
-        ToolResult::Error { error, .. } => panic!("expected success, got error: {error}"),
+        ToolResult::Error { error, .. } => unreachable!("expected success, got error: {error}"),
     }
 }
 
@@ -901,7 +901,7 @@ async fn background_subagent_forwards_trace_to_parent_sink() {
         .await;
     let rid = match out {
         ToolResult::Success { output } => output["request_id"].as_str().unwrap().to_string(),
-        other => panic!("expected background success, got {other:?}"),
+        other => unreachable!("expected background success, got {other:?}"),
     };
 
     // Poll until the background task completes (bounded).
@@ -947,7 +947,7 @@ async fn execute_batch_background_returns_request_ids() {
                 assert!(!s.is_empty());
             }
         }
-        ToolResult::Error { error, .. } => panic!("expected success, got error: {error}"),
+        ToolResult::Error { error, .. } => unreachable!("expected success, got error: {error}"),
     }
 }
 
@@ -996,7 +996,7 @@ async fn execute_list_enumerates_background_agents() {
             assert_eq!(output["completed"][0]["request_id"], "done-1");
             assert_eq!(output["completed"][0]["status"], "completed");
         }
-        other => panic!("expected Success, got {other:?}"),
+        other => unreachable!("expected Success, got {other:?}"),
     }
 }
 
@@ -1032,7 +1032,7 @@ async fn check_status_completed_is_repeatable() {
                 assert_eq!(output["status"], "completed", "poll {poll}");
                 assert_eq!(output["result"], "the answer", "poll {poll}");
             }
-            other => panic!("poll {poll}: expected Success, got {other:?}"),
+            other => unreachable!("poll {poll}: expected Success, got {other:?}"),
         }
     }
 }
@@ -1077,6 +1077,6 @@ async fn check_status_completed_reports_run_metrics() {
             assert_eq!(output["tool_calls_made"], 9);
             assert_eq!(output["total_tokens"], 555);
         }
-        other => panic!("expected Success, got {other:?}"),
+        other => unreachable!("expected Success, got {other:?}"),
     }
 }

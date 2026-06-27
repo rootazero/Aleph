@@ -271,11 +271,9 @@ fn add_column_if_missing(
         .filter_map(Result::ok)
         .any(|name| name == column);
     if !exists {
-        conn.execute(
-            &format!("ALTER TABLE {table} ADD COLUMN {column} {type_decl}"),
-            [],
-        )
-        .map_err(db_err)?;
+        let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {type_decl}");
+        conn.execute(&sql, [])
+            .map_err(db_err)?;
     }
     Ok(())
 }
