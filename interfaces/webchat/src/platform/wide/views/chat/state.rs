@@ -3,6 +3,7 @@
 use crate::api::teams::CoordTaskDto;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
+use super::plan::{PlanUpdate, PlanView};
 
 /// File staged for upload as part of the next outbound message.
 ///
@@ -367,6 +368,9 @@ pub struct ChatState {
     /// would reset each time (re-opening a strip the user just collapsed mid-run).
     /// Ephemeral, like `retry_pulse` — excluded from [`SessionSnapshot`].
     pub strip_open: RwSignal<std::collections::HashMap<String, bool>>,
+    /// Active single-chat task plan (scratchpad-driven Todo widget). `None`
+    /// hides the panel. Projected by `events.rs` via `scratchpad_plan_update`.
+    pub plan: RwSignal<Option<PlanView>>,
 }
 
 impl Default for ChatState {
@@ -404,6 +408,7 @@ impl ChatState {
             team_members: RwSignal::new(Vec::new()),
             team_tasks: RwSignal::new(Vec::new()),
             strip_open: RwSignal::new(std::collections::HashMap::new()),
+            plan: RwSignal::new(None),
         }
     }
 
@@ -425,6 +430,15 @@ impl ChatState {
         self.strip_open.update(|m| {
             m.insert(run_id.to_string(), next);
         });
+    }
+
+    /// Apply a projected plan update to the Todo-panel signal.
+    pub fn apply_plan_update(&self, update: PlanUpdate) {
+        match update {
+            PlanUpdate::Show(v) => self.plan.set(Some(v)),
+            PlanUpdate::Hide => self.plan.set(None),
+            PlanUpdate::NoChange => {}
+        }
     }
 
     /// Record a provider-retry status (`stream.run_retrying`).

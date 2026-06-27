@@ -5,6 +5,7 @@ pub mod events;
 pub mod list_scroll;
 pub mod mention_palette;
 pub mod messages;
+pub mod plan;
 pub mod project_menu;
 pub mod reasoning;
 pub mod state;

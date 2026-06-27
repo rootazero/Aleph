@@ -81,6 +81,19 @@ pub(crate) fn apply_trace_event(
             if !tool_id.is_empty() {
                 workspace.record_tool_result(run_id, tool_id, result.clone());
             }
+            // Project scratchpad plan snapshots into the sticky Todo panel.
+            if tool_name == "scratchpad" {
+                let action = call
+                    .and_then(|c| c.get("input"))
+                    .and_then(|i| i.get("action"))
+                    .and_then(|a| a.as_str())
+                    .unwrap_or("");
+                let snapshot = result
+                    .get("Success")
+                    .and_then(|s| s.get("output"))
+                    .and_then(|o| o.get("snapshot"));
+                chat.apply_plan_update(super::plan::scratchpad_plan_update(action, snapshot));
+            }
         }
         "tool_summary" => {
             if let Some(summary) = trace_event.get("summary").and_then(|s| s.as_str()) {
