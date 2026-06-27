@@ -1088,6 +1088,7 @@ impl BuiltinToolRegistry {
             config: config.config.clone(),
             media_pipeline: config.media_pipeline.clone(),
             recall_context_db: config.memory_db.clone(),
+            memory_trace_db: config.memory_db.clone(),
             tools,
         })
     }

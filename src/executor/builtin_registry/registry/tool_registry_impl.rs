@@ -1315,6 +1315,38 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })
             }
 
+            // Evidence-chain walk: profile section / note / raw id
+            // → source notes → raw memories → original transcript text.
+            "memory_trace" => {
+                let agent_id = self.caller_agent_id("default");
+                Box::pin(async move {
+                    let db = self.memory_trace_db.as_ref().ok_or_else(|| {
+                        AlephError::tool(
+                            "memory_trace not available: no memory backend configured",
+                        )
+                    })?;
+                    let note_memory_dir = crate::utils::paths::get_note_memory_dir()
+                        .map_err(|e| {
+                            AlephError::tool(format!("memory_trace: note dir: {e}"))
+                        })?;
+                    let args: crate::builtin_tools::memory_trace::MemoryTraceArgs =
+                        serde_json::from_value(arguments).map_err(|e| {
+                            AlephError::tool(format!("memory_trace: bad args: {e}"))
+                        })?;
+                    let tool = crate::builtin_tools::memory_trace::MemoryTraceTool::new(
+                        db.clone(),
+                        agent_id,
+                        note_memory_dir,
+                    );
+                    let out = tool
+                        .call_impl(args)
+                        .await
+                        .map_err(|e| AlephError::tool(format!("memory_trace: {e}")))?;
+                    serde_json::to_value(out)
+                        .map_err(|e| AlephError::tool(format!("memory_trace: serialize: {e}")))
+                })
+            }
+
             _ => {
                 if let Some((plugin_id, handler)) = self.resolve_plugin_handler(tool_name) {
                     let ext_mgr = self.extension_manager.clone();

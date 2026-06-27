@@ -70,6 +70,7 @@ pub mod memory_explore;
 pub mod memory_reflect;
 pub mod memory_search;
 pub mod memory_timeline;
+pub mod memory_trace;
 pub mod meta_tools;
 pub mod node_file;
 pub mod node_invoke;
