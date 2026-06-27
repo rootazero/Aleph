@@ -455,6 +455,8 @@ impl ScratchpadManager {
                 let this = count;
                 count += 1;
                 let indent = &line[..line.len() - trimmed.len()];
+                // All three markers are exactly 5 ASCII bytes; the slice keeps
+                // the item text and any trailing newline intact.
                 let after_marker = &trimmed[5..];
                 if this == item_index {
                     out.push_str(indent);
