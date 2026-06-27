@@ -61,7 +61,7 @@
 | F10 | Small, focused agents | R3 | `teams/` · `agents/`(subagent_spawner) | ✅ |
 | F11 | Trigger from anywhere | R5 / R6 | `gateway/` · `tasks/cron/` · channels | ✅ 核心招牌 |
 | F12 | Stateless reducer | R10 | `harness/agent/prompt.rs`（逐轮重建裸消息）· `context/compact`（增量摘要继承） | ⚠️ reducer-like 但非纯 → **与 F5 合并 采纳 A3** |
-| F13 | (附录) Pre-fetch context | — | `context/assembler/` · memory 召回 | ✅ 已具备（assembler 主动召回）；仅 AUDIT 备注，不立条款 |
+| F13 | (附录) Pre-fetch context | — | `memory/assembler/` · `context/retrieval/` | ✅ 已具备（assembler 主动召回）；仅 AUDIT 备注，不立条款 |
 
 **净缺口 = 4**：F3（A1）、F9（A2）、F5+F12（A3）、F6（A4）。
 
@@ -128,7 +128,7 @@
 
 ### P1（轻代码，独立，后续各自 plan）
 - **P1-1（A4/F6）**：盘点 `cancellation` / `resume_coordinator` / `steering` / `workflow` resume 的现有入口，评估是否值得一层**薄 facade / trait** 统一命名"生命周期契约"。约束：facade 落在 gateway/loop 层，**绝不进 `src/harness/`**（R10）。先产出"现状映射 + 是否需要 facade"的判断，再决定是否实现。
-- **P1-2（A1/F3，可选）**：评估是否把 F13 pre-fetch 的 assembler 主动召回在 AUDIT 标注为"已满足"即可，无需代码。
+- **P1-2（F13 pre-fetch，可选）**：评估是否把 F13 pre-fetch 的 assembler 主动召回在 AUDIT 标注为"已满足"即可，无需代码。
 
 ### P2（架构性，仅列为待评估 backlog，本轮不动）
 - **P2-1（A3/F5+F12）**：评估"执行状态单一可重建源"。当前 loop 状态纯内存（重启即丢，设计意图）、goal/task 各自持久、harness TurnState 逐轮重建。问题：是否值得引入统一的可重建状态视图？**必须先过"加代码前必答 3 问"**（脚手架 vs 认知 / 模型升级后是否还需要 / 是否有真实消费者）。**预判**：很可能 YAGNI——现状的"逐轮重建裸消息 + 持久 session + 增量摘要继承"已覆盖多数 reducer 收益；除非出现真实的跨重启执行恢复需求，否则不实现。AUDIT 须诚实记录此预判。

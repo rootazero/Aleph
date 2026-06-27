@@ -74,7 +74,7 @@
 ### F13 · (附录) Pre-fetch Context — ✅（仅备注，不立条款）
 - 原则：预取可能需要的 context。
 - 现状：assembler 主动召回记忆/上下文，已具备。
-- 锚点：`src/context/assembler/`、memory 召回链。
+- 锚点：`src/memory/assembler/`、`src/context/retrieval/`、memory 召回链。
 
 ## B. 模块改造建议清单
 
@@ -86,7 +86,7 @@
 
 ### P1（轻代码，后续 plan）
 - **P1-1（A4/F6）**：盘点 `cancellation`/`resume_coordinator`/`steering`/`workflow` resume 现有入口，评估是否值一层**薄 facade/trait** 统一命名"生命周期契约"。约束：facade 落 gateway/loop 层，**绝不进 `src/harness/`**（R10）。先产出"现状映射 + 是否需 facade"判断再决定实现。
-- **P1-2（A1/F3，可选）**：F13 pre-fetch 在 §A 标"已满足"即可，无需代码。
+- **P1-2（F13 pre-fetch，可选）**：F13 pre-fetch 在 §A 标"已满足"即可，无需代码。
 
 ### P2（架构性，仅 backlog，本轮不动）
 - **P2-1（A3/F5+F12）**：评估"执行状态单一可重建源"。现状 loop 纯内存（重启即丢，设计意图）、goal/task 各自持久、harness 逐轮重建。**必须先过"加代码前必答 3 问"**（脚手架 vs 认知 / 模型升级后是否还需 / 真实消费者几个）。**预判**：很可能 YAGNI——现状"逐轮重建裸消息 + 持久 session + 增量摘要继承"已覆盖多数 reducer 收益；除非出现真实跨重启执行恢复需求，否则不实现。
