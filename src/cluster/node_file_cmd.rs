@@ -95,9 +95,9 @@ impl NodeCommand for FileWriteCommand {
             return Err("file.write: target exists (set overwrite)".to_string());
         }
         if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("file.write: {e}"))?;
+            tokio::fs::create_dir_all(parent).await.map_err(|e| format!("file.write: {e}"))?;
         }
-        std::fs::write(&dest, &bytes).map_err(|e| format!("file.write: {e}"))?;
+        tokio::fs::write(&dest, &bytes).await.map_err(|e| format!("file.write: {e}"))?;
         Ok(json!({ "written": bytes.len() }))
     }
 
@@ -135,7 +135,7 @@ impl NodeCommand for FileReadCommand {
         // Compare the raw u64 before any cast: `len() as usize` truncates on a
         // 32-bit node, letting a huge file whose size mod 2^32 is under the cap
         // pass the check and then OOM in std::fs::read below.
-        let size = std::fs::metadata(&src)
+        let size = tokio::fs::metadata(&src).await
             .map_err(|e| format!("file.read: {e}"))?
             .len();
         if size > MAX_FILE_BYTES as u64 {
@@ -143,7 +143,7 @@ impl NodeCommand for FileReadCommand {
                 "file.read: {size} bytes exceeds {MAX_FILE_BYTES} cap"
             ));
         }
-        let bytes = std::fs::read(&src).map_err(|e| format!("file.read: {e}"))?;
+        let bytes = tokio::fs::read(&src).await.map_err(|e| format!("file.read: {e}"))?;
         Ok(json!({
             "content_b64": B64.encode(&bytes),
             "sha256": sha256_hex(&bytes),
@@ -271,7 +271,7 @@ mod tests {
     async fn file_read_rejects_oversize() {
         let dir = tempfile::tempdir().unwrap();
         let big_path = dir.path().join("big.bin");
-        let mut f = std::fs::File::create(&big_path).unwrap();
+        let mut f = tokio::fs::File::create(&big_path).await.unwrap();
         f.write_all(&vec![0u8; MAX_FILE_BYTES + 1]).unwrap();
         drop(f);
         let reader = FileReadCommand::new(dir.path().to_path_buf());
@@ -282,3 +282,4 @@ mod tests {
         assert!(err.contains("exceeds"), "{err}");
     }
 }
+
