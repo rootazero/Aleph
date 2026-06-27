@@ -13,22 +13,22 @@ use crate::tasks::cron::store::CronStore;
 /// Returns true if the chain leads back to `start_id`.
 pub fn detect_cycle(store: &CronStore, start_id: &str, new_target: &str) -> Result<bool, String> {
     let mut visited = HashSet::new();
-    let mut stack = vec![new_target.to_string()];
+    let mut stack: Vec<&str> = vec![new_target];
 
     while let Some(id) = stack.pop() {
         if id == start_id {
             return Ok(true);
         }
-        if !visited.insert(id.clone()) {
+        if !visited.insert(id) {
             continue;
         }
 
-        if let Some(job) = store.get_job(&id) {
-            if let Some(ref s) = job.next_job_id_on_success {
-                stack.push(s.clone());
+        if let Some(job) = store.get_job(id) {
+            if let Some(s) = &job.next_job_id_on_success {
+                stack.push(s);
             }
-            if let Some(ref f) = job.next_job_id_on_failure {
-                stack.push(f.clone());
+            if let Some(f) = &job.next_job_id_on_failure {
+                stack.push(f);
             }
         }
     }

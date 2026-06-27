@@ -45,6 +45,18 @@ pub fn init_schema(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate that `name` is a simple SQL identifier so it can safely be
+/// interpolated into a DDL statement. SQLite identifiers may start with a
+/// letter or underscore and contain only alphanumeric characters and underscores.
+fn is_valid_sql_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 /// Add `column` to `table` with the given `SQLite` type if it is not already there.
 /// `PRAGMA table_info` is the lightest way to introspect columns and avoids the
 /// "duplicate column" error that ALTER would raise on a repeat run.
@@ -54,6 +66,15 @@ fn ensure_column(
     column: &str,
     sql_type: &str,
 ) -> Result<(), String> {
+    if !is_valid_sql_identifier(table)
+        || !is_valid_sql_identifier(column)
+        || !is_valid_sql_identifier(sql_type)
+    {
+        return Err(format!(
+            "refusing to ALTER TABLE: invalid identifier table={table}, column={column}, type={sql_type}"
+        ));
+    }
+
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))
         .map_err(|e| format!("failed to prepare PRAGMA: {e}"))?;
@@ -65,11 +86,10 @@ fn ensure_column(
     if existing.iter().any(|c| c == column) {
         return Ok(());
     }
-    conn.execute(
-        &format!("ALTER TABLE {table} ADD COLUMN {column} {sql_type}"),
-        [],
-    )
-    .map_err(|e| format!("failed to ALTER TABLE {table} ADD {column}: {e}"))?;
+    let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {sql_type}");
+    conn
+        .execute(&sql, [])
+        .map_err(|e| format!("failed to ALTER TABLE {table} ADD {column}: {e}"))?;
     Ok(())
 }
 

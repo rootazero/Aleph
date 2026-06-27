@@ -11,7 +11,8 @@ use crate::tasks::cron::config::CronJob;
 use crate::tasks::shared::clock::Clock;
 
 static ENV_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"\{\{env:(\w+)\}\}").expect("ENV_RE regex is hardcoded and always valid")
+    regex::Regex::new(r"\{\{env:(\w+)\}\}")
+        .unwrap_or_else(|_| unreachable!("ENV_RE regex is hardcoded and always valid"))
 });
 
 /// Render a prompt template with variable substitution.

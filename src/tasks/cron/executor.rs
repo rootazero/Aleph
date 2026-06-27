@@ -70,15 +70,17 @@ pub fn build_cron_alert_dispatcher_fn(delivery_engine: Arc<DeliveryEngine>) -> A
         let engine = Arc::clone(&delivery_engine);
         Box::pin(async move {
             for alert in alerts {
+                let target = alert.target;
+                let output = format!("⚠️ {}: {}", alert.job_name, alert.message);
                 let payload = DeliveryPayload {
                     source_type: "cron".to_string(),
-                    task_name: alert.job_name.clone(),
+                    task_name: alert.job_name,
                     agent_id: String::new(),
                     // Gateway targets render `output` verbatim; keep the ⚠️
                     // prefix the previous dispatcher produced. Webhook targets
                     // additionally receive task_name / metadata as structured
                     // JSON fields.
-                    output: format!("⚠️ {}: {}", alert.job_name, alert.message),
+                    output,
                     channel_id: None,
                     metadata: serde_json::json!({
                         "job_id": alert.job_id,
@@ -87,7 +89,7 @@ pub fn build_cron_alert_dispatcher_fn(delivery_engine: Arc<DeliveryEngine>) -> A
                 };
                 let config = DeliveryConfig {
                     mode: DeliveryMode::Primary,
-                    targets: vec![alert.target.clone()],
+                    targets: vec![target],
                     fallback_target: None,
                 };
                 let outcomes = engine.deliver(&payload, &config).await;
@@ -498,10 +500,10 @@ async fn extract_terminate_reason(
     collector: &CollectingEventEmitter,
 ) -> Option<(String, Option<String>)> {
     let events = collector.events().await;
-    for event in events.iter().rev() {
-        if let StreamEvent::RunComplete { ref summary, .. } = event {
-            if let Some(ref label) = summary.terminate_reason {
-                return Some((label.clone(), summary.terminate_detail.clone()));
+    for event in events.into_iter().rev() {
+        if let StreamEvent::RunComplete { summary, .. } = event {
+            if let Some(label) = summary.terminate_reason {
+                return Some((label, summary.terminate_detail));
             }
         }
     }
