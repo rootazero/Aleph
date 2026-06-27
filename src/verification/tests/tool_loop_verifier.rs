@@ -52,7 +52,7 @@ async fn at_threshold_with_no_text_vetoes() {
             assert!(reason.contains("read"));
             assert!(reason.contains("5"));
         }
-        other => panic!("expected Veto, got {other:?}"),
+        other => assert!(false, "expected Veto, got {other:?}"),
     }
 }
 
@@ -228,7 +228,7 @@ async fn at_halt_threshold_halts() {
             assert!(reason.contains("read"));
             assert!(reason.contains("unproductive loop"));
         }
-        other => panic!("expected Halt, got {other:?}"),
+        other => assert!(false, "expected Halt, got {other:?}"),
     }
 }
 
@@ -258,7 +258,7 @@ async fn tier2_low_distinctness_no_text_steers() {
             assert!(reason.contains("file_read"));
             assert!(reason.contains("distinct"));
         }
-        other => panic!("expected Tier-2 Veto, got {other:?}"),
+        other => assert!(false, "expected Tier-2 Veto, got {other:?}"),
     }
 }
 

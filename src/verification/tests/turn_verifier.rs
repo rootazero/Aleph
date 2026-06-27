@@ -74,7 +74,7 @@ async fn first_veto_short_circuits_subsequent_verifiers() {
     let verdict = chain.verify(&ctx(), &cancel).await;
     match verdict {
         VerifierVerdict::Veto { reason, .. } => assert_eq!(reason, "first"),
-        other => panic!("expected first veto, got {other:?}"),
+        other => assert!(false, "expected first veto, got {other:?}"),
     }
 }
 
@@ -129,9 +129,9 @@ async fn concurrent_verify_vs_disable_all_is_consistent() {
 
     let mut readers = Vec::with_capacity(READERS);
     for _ in 0..READERS {
-        let chain = chain.clone();
-        let blocks = blocks.clone();
-        let allows = allows.clone();
+        let chain = Arc::clone(&chain);
+        let blocks = Arc::clone(&blocks);
+        let allows = Arc::clone(&allows);
         readers.push(tokio::spawn(async move {
             let cancel = CancellationToken::new();
             let c = TurnVerifyContext {
@@ -157,9 +157,9 @@ async fn concurrent_verify_vs_disable_all_is_consistent() {
     }
 
     for r in readers {
-        r.await.expect("reader task");
+        r.await.unwrap_or_else(|e| panic!("reader task: {e}"));
     }
-    toggler.await.expect("toggler task");
+    toggler.await.unwrap_or_else(|e| panic!("toggler task: {e}"));
 
     let total = blocks.load(Ordering::Relaxed) + allows.load(Ordering::Relaxed);
     assert_eq!(total, READERS * ITERS);
