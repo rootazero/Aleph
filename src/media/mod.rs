@@ -125,7 +125,9 @@ mod integration_tests {
 
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("readme.md");
-        std::fs::write(&file_path, "# Hello\n\nWorld").unwrap();
+        tokio::fs::write(&file_path, "# Hello\n\nWorld")
+            .await
+            .unwrap();
 
         let mt = detect::detect_by_extension("md").unwrap();
         let input = MediaInput::FilePath { path: file_path };

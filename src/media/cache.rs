@@ -469,7 +469,7 @@ mod tests {
         assert_eq!(cached.size, 4);
         assert_eq!(cached.mime_type, "application/octet-stream");
 
-        let content = std::fs::read(&cached.local_path).unwrap();
+        let content = tokio::fs::read(&cached.local_path).await.unwrap();
         assert_eq!(content, vec![1, 2, 3, 4]);
 
         // Cleanup
@@ -507,9 +507,9 @@ mod tests {
 
         // Create a temp file to use as "local path"
         let dir = session_dir("test-media-item-local");
-        std::fs::create_dir_all(&dir).unwrap();
+        tokio::fs::create_dir_all(&dir).await.unwrap();
         let local_file = dir.join("test.png");
-        std::fs::write(&local_file, b"fake png data").unwrap();
+        tokio::fs::write(&local_file, b"fake png data").await.unwrap();
 
         let item = MediaItem {
             url: local_file.to_string_lossy().to_string(),
@@ -548,7 +548,9 @@ mod tests {
         assert!(att.path.is_some(), "data URL should be decoded to file");
 
         // Verify content
-        let content = std::fs::read_to_string(att.path.as_ref().unwrap()).unwrap();
+        let content = tokio::fs::read_to_string(att.path.as_ref().unwrap())
+            .await
+            .unwrap();
         assert_eq!(content, "Hello");
 
         let _ = MediaCache::cleanup_session("test-media-item-data");

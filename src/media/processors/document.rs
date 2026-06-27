@@ -123,7 +123,6 @@ impl MediaProvider for TextDocumentProvider {
 mod tests {
     use super::*;
     use crate::media::types::MediaImageFormat;
-    use std::io::Write;
 
     #[test]
     fn supports_text_formats() {
@@ -159,8 +158,9 @@ mod tests {
     async fn read_text_file() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
-        let mut f = std::fs::File::create(&file_path).unwrap();
-        write!(f, "Hello, world!").unwrap();
+        tokio::fs::write(&file_path, "Hello, world!")
+            .await
+            .unwrap();
 
         let p = TextDocumentProvider;
         let input = MediaInput::FilePath { path: file_path };
