@@ -31,6 +31,14 @@ pub fn PhoneAgentDetail() -> impl IntoView {
     // (agent_id, active_tab) from the URL.
     let parsed = Memo::new(move |_| parse_detail_path(&location.pathname.get()));
 
+    // Tap-to-confirm guard for the destructive Delete (parity with the desktop
+    // ConfirmButton). Disarmed on every route change (agent or tab switch).
+    let confirming = RwSignal::new(false);
+    Effect::new(move || {
+        parsed.get();
+        confirming.set(false);
+    });
+
     view! {
         <PhoneShell title="Agent" back="/agents" back_label="Agents">
         <div style="display:flex; flex-direction:column; gap:14px;">
@@ -47,13 +55,18 @@ pub fn PhoneAgentDetail() -> impl IntoView {
                 let name = agent.name.clone().unwrap_or_else(|| agent.id.clone());
                 let is_default = agent.is_default;
 
-                // Header actions. `delete_agent` is always rendered (disabled
-                // when default); `set_default` is built only in the non-default
+                // Header actions. The Delete chip is a two-step tap-to-confirm
+                // (first tap arms, second deletes) — parity with the desktop
+                // ConfirmButton. `set_default` is built only in the non-default
                 // branch below to avoid an unused binding.
-                let delete_agent = {
+                let delete_or_arm = {
                     let id = agent_id.clone();
                     let navigate = navigate.clone();
                     move |_| {
+                        if !confirming.get_untracked() {
+                            confirming.set(true);
+                            return;
+                        }
                         let id = id.clone();
                         let navigate = navigate.clone();
                         let dash = dashboard;
@@ -105,9 +118,17 @@ pub fn PhoneAgentDetail() -> impl IntoView {
                             {default_action}
                             <button
                                 class="chip"
-                                style=if is_default { "flex:none; opacity:0.4; pointer-events:none;" } else { "flex:none; color:var(--color-danger);" }
-                                on:click=delete_agent
-                            >"Delete"</button>
+                                style=move || if is_default {
+                                    "flex:none; opacity:0.4; pointer-events:none;".to_string()
+                                } else if confirming.get() {
+                                    "flex:none; color:var(--color-text-inverse); background:var(--color-danger); border-color:var(--color-danger);".to_string()
+                                } else {
+                                    "flex:none; color:var(--color-danger);".to_string()
+                                }
+                                on:click=delete_or_arm
+                            >
+                                {move || if confirming.get() { "Confirm?" } else { "Delete" }}
+                            </button>
                         </div>
 
                         // Tab bar (horizontal scroll)
