@@ -145,6 +145,56 @@
 
 ---
 
+## 🧭 12-Factor 对照与采纳 (12-Factor Conformance & Adoption)
+
+> 本节是叠加在 R1–R10 / P1–P8 之上的**映射层**——**不改任何红线/原则，不设新红线**。它把 [12-Factor Agents](https://github.com/humanlayer/12-factor-agents) 与 Aleph 现状对照，并对真实缺口立"采纳条款"（前缀 A，工程承诺级，**非红线**）。逐 factor 证据、锚点与模块改造建议清单见 [TWELVE_FACTOR_AUDIT.md](docs/reference/TWELVE_FACTOR_AUDIT.md)。
+
+### 对照速览
+
+| # | Factor | 一句话 | 已对应 | 状态 |
+|---|--------|--------|--------|------|
+| F1 | Natural Language → Tool Calls | 自然语言转结构化工具调用 | R7/R8/P8 | ✅ |
+| F2 | Own your prompts | 自有提示词流水线 | R9 | ✅ |
+| F3 | Own your context window | 显式拥有 context 取舍 | A1 ↔ R9 | ⚠️→A1 |
+| F4 | Tools are structured outputs | 工具=结构化输出，执行解耦 | R8 | ✅ |
+| F5 | Unify execution & business state | 执行/业务状态统一可重建 | A3 ↔ R10 | ⚠️→A3 |
+| F6 | Launch / Pause / Resume | 统一启动/暂停/恢复契约 | A4 ↔ R5/R6 | ⚠️→A4 |
+| F7 | Contact humans with tools | 人在环=工具调用 | R5 | ✅ |
+| F8 | Own your control flow | 自有控制流（笨循环） | R10 | ✅ 典范 |
+| F9 | Compact errors into context | 压缩错误进 context 自愈 | A2 ↔ R10 | ⚠️→A2 |
+| F10 | Small, focused agents | 小而专的 agent | R3 | ✅ |
+| F11 | Trigger from anywhere | 触发无处不在 | R5/R6 | ✅ |
+| F12 | Stateless reducer | 趋向纯 reducer | A3 ↔ R10 | ⚠️→A3 |
+
+> F13（pre-fetch context）已由 assembler 主动召回满足，仅在审计文档备注，不立条款。
+
+### 采纳条款 (Adoption Clauses)
+
+**A1 · 自有 Context Window (Own Your Context Window, F3)**
+> Aleph 的 agent 按 **Prompt → Context → Harness → Loop** 四层构建；其中 **Context 层**（历史压缩 / 按模型窗口的压缩时机 / 内容类型路由缩减 / FTS5 检索回注 / 记忆三支柱）是一等工程关切，**context 的取舍由我们显式拥有**，不外包给框架默认消息格式。
+> 关联：R9（智慧在 prompt）、P6（简洁）。锚点：`src/context/`、`src/thinker/`。
+> ↳ 采纳·非红线
+
+**A2 · 错误压缩 ≠ 错误恢复 (Compact Errors, Not Recover Strategies, F9)**
+> **采纳**：把工具/Provider 错误**压缩并呈递给模型**，让模型在下一轮自愈（内容路由缩减、ToolError 事件、`think.rs` 有界 provider-failure drain）。
+> **仍禁**（= R10 第 5 不）：在 harness 里做**确定性的"错误恢复策略选择 / 多级重试矩阵"**（hermes 式 fat-harness 重试有意不移植）。
+> 边界一句话：**让模型看见并自愈错误 = 要；让 harness 替模型挑恢复策略 = 不要**。
+> 关联：R7 / R10。锚点：`src/context/budget/cheap_passes/structured/`、`src/harness/agent/think.rs`。
+> ↳ 采纳·非红线（本条是 R10 的读法说明，不改 R10 一字）
+
+**A3 · 状态可重建，趋向纯 Reducer (Reconstructible State, Toward a Pure Reducer, F5+F12)**
+> **方向性承诺**：执行状态应尽量可从**单一持久源**重建；每轮 Think 趋向"对持久 context 的纯 reduce"（`prompt.rs` 已逐轮重建裸消息）。新增有状态机件时，优先让其状态可观测、可重建。
+> **硬约束**：**不得**为此让 `src/harness/` 越过 R10 的 12 文件 / ~4900 行预算，或把业务状态搬进笨循环。具体统一方案先走"加代码前必答 3 问"，列为 backlog 评估（见审计文档 B §P2-1）。
+> 关联：R10、P4（依赖倒置）。锚点：`src/harness/trait_def.rs::TurnState`、`src/looping/`、`src/goal/`、`src/agents/swarm/tasks/store/`。
+> ↳ 采纳·非红线（方向性原则，落地需独立评估）
+
+**A4 · 统一 Launch / Pause / Resume 契约 (Unified Lifecycle Contract, F6)**
+> 把已存在的取消（`cancellation.rs`）、续跑（`resume_coordinator.rs`）、改需求打断/注入（`steering.rs` 三态 Steer/Interrupt/Queue）、workflow resume 命名为**一组生命周期契约**：任何长跑单元（goal / loop / workflow / team task）都应可被一致地启动、暂停、恢复、取消。
+> 关联：R5（AI 主动到达）、R6（一核多端）。统一 API 面（薄 facade，**不进 harness**）列为 backlog（见审计文档 B §P1-1）。
+> ↳ 采纳·非红线
+
+---
+
 ## 🛠 技术栈与禁用清单 (Tech Stack & Do NOT introduce)
 
 **核心栈**: Rust Core (tokio + serde) · 记忆层 SQLite + sqlite-vec · 接口 JSON Schema (schemars) · Panel Leptos/WASM · 桌面壳 Tauri。
@@ -245,6 +295,7 @@ Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子�
 | ARCHITECTURE.md | [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) |
 | **PRODUCT_TOPOLOGY.md** | [docs/reference/PRODUCT_TOPOLOGY.md](docs/reference/PRODUCT_TOPOLOGY.md) — 产品形态：一套源码(panel/core/shell)→三产物(完整App/纯壳Panel/独立core)排列组合 + 参考部署拓扑(家庭服务器+瘦客户端) |
 | **HARNESS_PHILOSOPHY.md** | [docs/reference/HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md) — 薄 Harness 哲学 + 笨循环编排核心（R10 详解） |
+| **TWELVE_FACTOR_AUDIT.md** | [docs/reference/TWELVE_FACTOR_AUDIT.md](docs/reference/TWELVE_FACTOR_AUDIT.md) — 12-Factor Agents 逐 factor 合规审计 + 采纳条款 A1–A4 母本 + 模块改造 backlog（对照宪法《🧭 12-Factor 对照与采纳》节） |
 | AGENT_SYSTEM.md | [docs/reference/AGENT_SYSTEM.md](docs/reference/AGENT_SYSTEM.md) |
 | AGENT_LOOP_CONTEXT_BUDGET.md | [docs/reference/AGENT_LOOP_CONTEXT_BUDGET.md](docs/reference/AGENT_LOOP_CONTEXT_BUDGET.md) |
 | AGENT_LOOP_TOOL_EXECUTION.md | [docs/reference/AGENT_LOOP_TOOL_EXECUTION.md](docs/reference/AGENT_LOOP_TOOL_EXECUTION.md) |
