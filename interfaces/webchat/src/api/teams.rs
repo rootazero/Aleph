@@ -416,6 +416,40 @@ impl TeamsApi {
             .map(|_| ())
     }
 
+    /// teams.workflow.approve_step — approve a waiting-review task; the
+    /// backend stamps the latest run Approved and transitions the task to
+    /// Completed (downstream dependents unblock). `reviewer_kind` defaults
+    /// to "user" on the server, so the panel sends only the task id.
+    pub async fn task_approve(state: &DashboardState, task_id: &str) -> Result<(), String> {
+        state
+            .rpc_call(
+                "teams.workflow.approve_step",
+                json!({ "task_id": task_id }),
+            )
+            .await
+            .map(|_| ())
+    }
+
+    /// teams.workflow.reject_step — reject a waiting-review task; the backend
+    /// stamps the latest run Rejected and transitions the task to Failed
+    /// (dependents stay blocked). An optional `reason` is recorded as the
+    /// task result and a review comment.
+    pub async fn task_reject(
+        state: &DashboardState,
+        task_id: &str,
+        reason: Option<&str>,
+    ) -> Result<(), String> {
+        let mut params = serde_json::Map::new();
+        params.insert("task_id".to_string(), Value::String(task_id.to_string()));
+        if let Some(r) = reason.filter(|s| !s.trim().is_empty()) {
+            params.insert("comment".to_string(), Value::String(r.to_string()));
+        }
+        state
+            .rpc_call("teams.workflow.reject_step", Value::Object(params))
+            .await
+            .map(|_| ())
+    }
+
     /// teams.task.trace — unified audit timeline (task + runs + comments
     ///   + events + artifacts + journal) in one round-trip. Returns the
     ///     raw JSON envelope; callers cherry-pick the fields they render.

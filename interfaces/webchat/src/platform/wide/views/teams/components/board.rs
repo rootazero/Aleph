@@ -1,4 +1,7 @@
-//! `KanbanBoard` — five-column responsive layout grouping tasks by derived status.
+//! `KanbanBoard` — nine-column responsive layout grouping tasks by stored
+//! status. Every stored `CoordTaskStatus` maps to exactly one column so no
+//! task is ever silently dropped from the board (`unsatisfiable` folds into
+//! Blocked, matching the core "derived blocked" semantics).
 
 use super::column::KanbanColumn;
 use crate::api::teams::CoordTaskDto;
@@ -25,7 +28,10 @@ pub fn KanbanBoard(
             .collect::<Vec<_>>()
     });
     let in_progress = Signal::derive(move || tasks_with_status(&tasks.get(), "in_progress"));
+    let waiting_review = Signal::derive(move || tasks_with_status(&tasks.get(), "waiting_review"));
+    let paused = Signal::derive(move || tasks_with_status(&tasks.get(), "paused"));
     let completed = Signal::derive(move || tasks_with_status(&tasks.get(), "completed"));
+    let skipped = Signal::derive(move || tasks_with_status(&tasks.get(), "skipped"));
     let failed = Signal::derive(move || tasks_with_status(&tasks.get(), "failed"));
     let cancelled = Signal::derive(move || tasks_with_status(&tasks.get(), "cancelled"));
 
@@ -53,8 +59,26 @@ pub fn KanbanBoard(
                 empty_label=empty_label()
             />
             <KanbanColumn
+                title=t_string!(i18n, teams.kanban.columns.waiting_review).to_string()
+                tasks=waiting_review
+                on_card_click=on_card_click
+                empty_label=empty_label()
+            />
+            <KanbanColumn
+                title=t_string!(i18n, teams.kanban.columns.paused).to_string()
+                tasks=paused
+                on_card_click=on_card_click
+                empty_label=empty_label()
+            />
+            <KanbanColumn
                 title=t_string!(i18n, teams.kanban.columns.completed).to_string()
                 tasks=completed
+                on_card_click=on_card_click
+                empty_label=empty_label()
+            />
+            <KanbanColumn
+                title=t_string!(i18n, teams.kanban.columns.skipped).to_string()
+                tasks=skipped
                 on_card_click=on_card_click
                 empty_label=empty_label()
             />

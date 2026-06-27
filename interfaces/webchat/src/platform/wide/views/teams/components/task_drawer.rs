@@ -12,6 +12,52 @@ use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
+/// A lifecycle action the drawer can offer for a task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskAction {
+    Start,
+    Complete,
+    Fail,
+    Cancel,
+    Pause,
+    Resume,
+    Skip,
+    Retry,
+    Approve,
+    Reject,
+}
+
+/// The dedicated side-effecting backend verbs (everything except the four
+/// plain status writes, which go through `update_task`, and Reject, which
+/// needs a reason and is handled separately).
+#[derive(Debug, Clone, Copy)]
+enum Verb {
+    Pause,
+    Resume,
+    Skip,
+    Retry,
+    Approve,
+}
+
+/// Which lifecycle actions the drawer offers for a task in `status`.
+///
+/// Pure + total so it is unit-testable without a DOM. The backend remains the
+/// final authority on transition validity; this only hides the obviously
+/// invalid actions so the UI never offers a guaranteed no-op. Terminal and
+/// unknown statuses expose nothing.
+fn actions_for_status(status: &str) -> Vec<TaskAction> {
+    use TaskAction::*;
+    match status {
+        "pending" => vec![Start, Pause, Skip, Cancel],
+        "blocked" | "unsatisfiable" => vec![Pause, Skip, Cancel],
+        "in_progress" => vec![Complete, Fail, Pause, Cancel],
+        "waiting_review" => vec![Approve, Reject, Skip, Cancel],
+        "paused" => vec![Resume, Cancel],
+        "failed" => vec![Retry],
+        _ => vec![],
+    }
+}
+
 #[component]
 #[must_use]
 pub fn TaskDetailDrawer(
@@ -32,6 +78,10 @@ pub fn TaskDetailDrawer(
     let new_comment: RwSignal<String> = RwSignal::new(String::new());
     let comment_busy = RwSignal::new(false);
 
+    // Reject flow: clicking Reject reveals an inline optional-reason input.
+    let reject_open = RwSignal::new(false);
+    let reject_reason: RwSignal<String> = RwSignal::new(String::new());
+
     // Reset transient action state whenever the drawer target changes so a
     // stale error from a previous task never bleeds into the next one.
     Effect::new(move |_| {
@@ -40,6 +90,8 @@ pub fn TaskDetailDrawer(
         busy.set(false);
         comment_busy.set(false);
         new_comment.set(String::new());
+        reject_open.set(false);
+        reject_reason.set(String::new());
         // Clear the previous task's history immediately so the user doesn't
         // see stale rows from another card while the fetch is in flight.
         runs.set(Vec::new());
@@ -143,6 +195,68 @@ pub fn TaskDetailDrawer(
         });
     };
 
+    // Generic runner for the dedicated side-effecting verbs (Result<(), String>).
+    // Mirrors `patch_status`'s busy-lock + success/error handling.
+    let run_verb = move |verb: Verb| {
+        if busy.get_untracked() {
+            return;
+        }
+        let Some(task) = open_for.get_untracked() else {
+            return;
+        };
+        let id = task.id;
+        busy.set(true);
+        error.set(None);
+        spawn_local(async move {
+            let res = match verb {
+                Verb::Pause => TeamsApi::task_pause(&dash, &id).await,
+                Verb::Resume => TeamsApi::task_resume(&dash, &id).await,
+                Verb::Skip => TeamsApi::task_skip(&dash, &id).await,
+                Verb::Retry => TeamsApi::task_retry(&dash, &id).await,
+                Verb::Approve => TeamsApi::task_approve(&dash, &id).await,
+            };
+            match res {
+                Ok(()) => {
+                    busy.set(false);
+                    on_changed.run(());
+                    open_for.set(None);
+                }
+                Err(e) => {
+                    busy.set(false);
+                    error.set(Some(e));
+                }
+            }
+        });
+    };
+
+    // Reject needs an optional reason captured from the reveal-on-click input.
+    let submit_reject = move |_ev: web_sys::MouseEvent| {
+        if busy.get_untracked() {
+            return;
+        }
+        let Some(task) = open_for.get_untracked() else {
+            return;
+        };
+        let id = task.id;
+        let reason = reject_reason.get_untracked().trim().to_string();
+        busy.set(true);
+        error.set(None);
+        spawn_local(async move {
+            let reason_opt = if reason.is_empty() { None } else { Some(reason.as_str()) };
+            match TeamsApi::task_reject(&dash, &id, reason_opt).await {
+                Ok(()) => {
+                    busy.set(false);
+                    on_changed.run(());
+                    open_for.set(None);
+                }
+                Err(e) => {
+                    busy.set(false);
+                    error.set(Some(e));
+                }
+            }
+        });
+    };
+
     view! {
         {move || match open_for.get() {
             None => ().into_any(),
@@ -168,24 +282,7 @@ pub fn TaskDetailDrawer(
                 let started_label = t_string!(i18n, teams.kanban.field.started).to_string();
                 let completed_label = t_string!(i18n, teams.kanban.field.completed).to_string();
                 let deps_label = t_string!(i18n, teams.kanban.field.dependencies).to_string();
-                let start_label = t_string!(i18n, teams.kanban.actions.start).to_string();
-                let complete_label = t_string!(i18n, teams.kanban.actions.complete).to_string();
-                let fail_label = t_string!(i18n, teams.kanban.actions.fail).to_string();
-                let cancel_label = t_string!(i18n, teams.kanban.actions.cancel).to_string();
                 let err_prefix = t_string!(i18n, teams.kanban.error.update_failed).to_string();
-
-                // The drawer only offers forward transitions; terminal states
-                // lock every button. `busy` additionally locks them all while a
-                // mutation is in flight.
-                let st = status.clone();
-                let start_locked =
-                    matches!(st.as_str(), "in_progress" | "completed" | "failed" | "cancelled");
-                let terminal_locked =
-                    matches!(st.as_str(), "completed" | "failed" | "cancelled");
-                let start_disabled = Signal::derive(move || busy.get() || start_locked);
-                let complete_disabled = Signal::derive(move || busy.get() || terminal_locked);
-                let fail_disabled = Signal::derive(move || busy.get() || terminal_locked);
-                let cancel_disabled = Signal::derive(move || busy.get() || terminal_locked);
 
                 view! {
                     <div class="fixed inset-0 z-40 flex justify-end">
@@ -201,7 +298,7 @@ pub fn TaskDetailDrawer(
                                 </button>
                             </header>
                             <div class="flex-1 overflow-y-auto p-4 space-y-3 text-sm">
-                                <FieldRow label=status_label value=status />
+                                <FieldRow label=status_label value=status.clone() />
                                 <FieldRow label=owner_label value=owner />
                                 <FieldRow label=priority_label value=priority />
                                 <FieldRow label=created_label value=created />
@@ -247,27 +344,58 @@ pub fn TaskDetailDrawer(
                                     <strong>{err_prefix.clone()}{": "}</strong>{e}
                                 </div>
                             })}
-                            <footer class="px-4 py-3 border-t border-border flex gap-2 flex-wrap">
-                                <ActionButton
-                                    label=start_label
-                                    disabled=start_disabled
-                                    on_click=move |_| patch_status("in_progress")
-                                />
-                                <ActionButton
-                                    label=complete_label
-                                    disabled=complete_disabled
-                                    on_click=move |_| patch_status("completed")
-                                />
-                                <ActionButton
-                                    label=fail_label
-                                    disabled=fail_disabled
-                                    on_click=move |_| patch_status("failed")
-                                />
-                                <ActionButton
-                                    label=cancel_label
-                                    disabled=cancel_disabled
-                                    on_click=move |_| patch_status("cancelled")
-                                />
+                            <footer class="px-4 py-3 border-t border-border flex flex-col gap-2">
+                                {move || reject_open.get().then(|| view! {
+                                    <div class="flex gap-1.5 items-start">
+                                        <textarea
+                                            class="flex-1 text-xs p-1.5 rounded border border-border bg-surface-sunken resize-y min-h-[2.5rem]"
+                                            placeholder=move || t_string!(i18n, teams.kanban.actions.reject_reason_placeholder).to_string()
+                                            prop:value=move || reject_reason.get()
+                                            on:input=move |ev| reject_reason.set(event_target_value(&ev))
+                                        />
+                                        <button
+                                            class="px-2 py-1 text-xs rounded bg-danger/10 text-danger hover:bg-danger/20 cursor-pointer"
+                                            disabled=move || busy.get()
+                                            on:click=move |ev| submit_reject(ev)
+                                        >
+                                            {t_string!(i18n, teams.kanban.actions.reject).to_string()}
+                                        </button>
+                                    </div>
+                                })}
+                                <div class="flex gap-2 flex-wrap">
+                                    {actions_for_status(&status).into_iter().map(|action| {
+                                        let label = match action {
+                                            TaskAction::Start => t_string!(i18n, teams.kanban.actions.start).to_string(),
+                                            TaskAction::Complete => t_string!(i18n, teams.kanban.actions.complete).to_string(),
+                                            TaskAction::Fail => t_string!(i18n, teams.kanban.actions.fail).to_string(),
+                                            TaskAction::Cancel => t_string!(i18n, teams.kanban.actions.cancel).to_string(),
+                                            TaskAction::Pause => t_string!(i18n, teams.kanban.actions.pause).to_string(),
+                                            TaskAction::Resume => t_string!(i18n, teams.kanban.actions.resume).to_string(),
+                                            TaskAction::Skip => t_string!(i18n, teams.kanban.actions.skip).to_string(),
+                                            TaskAction::Retry => t_string!(i18n, teams.kanban.actions.retry).to_string(),
+                                            TaskAction::Approve => t_string!(i18n, teams.kanban.actions.approve).to_string(),
+                                            TaskAction::Reject => t_string!(i18n, teams.kanban.actions.reject).to_string(),
+                                        };
+                                        view! {
+                                            <ActionButton
+                                                label=label
+                                                disabled=Signal::derive(move || busy.get())
+                                                on_click=move |_| match action {
+                                                    TaskAction::Start => patch_status("in_progress"),
+                                                    TaskAction::Complete => patch_status("completed"),
+                                                    TaskAction::Fail => patch_status("failed"),
+                                                    TaskAction::Cancel => patch_status("cancelled"),
+                                                    TaskAction::Pause => run_verb(Verb::Pause),
+                                                    TaskAction::Resume => run_verb(Verb::Resume),
+                                                    TaskAction::Skip => run_verb(Verb::Skip),
+                                                    TaskAction::Retry => run_verb(Verb::Retry),
+                                                    TaskAction::Approve => run_verb(Verb::Approve),
+                                                    TaskAction::Reject => reject_open.set(true),
+                                                }
+                                            />
+                                        }
+                                    }).collect_view()}
+                                </div>
                             </footer>
                         </aside>
                     </div>
@@ -448,5 +576,27 @@ fn EventsSection(events: RwSignal<Vec<TaskEventDto>>) -> impl IntoView {
                 }
             }}
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{actions_for_status, TaskAction};
+
+    #[test]
+    fn gating_matches_lifecycle_rules() {
+        use TaskAction::*;
+        assert_eq!(actions_for_status("pending"), vec![Start, Pause, Skip, Cancel]);
+        assert_eq!(actions_for_status("blocked"), vec![Pause, Skip, Cancel]);
+        // "unsatisfiable" (derived blocked) mirrors blocked exactly.
+        assert_eq!(actions_for_status("unsatisfiable"), actions_for_status("blocked"));
+        assert_eq!(actions_for_status("in_progress"), vec![Complete, Fail, Pause, Cancel]);
+        assert_eq!(actions_for_status("waiting_review"), vec![Approve, Reject, Skip, Cancel]);
+        assert_eq!(actions_for_status("paused"), vec![Resume, Cancel]);
+        assert_eq!(actions_for_status("failed"), vec![Retry]);
+        // Terminal + unknown statuses expose no actions.
+        for s in ["completed", "skipped", "cancelled", "garbage"] {
+            assert!(actions_for_status(s).is_empty(), "{s} must be terminal/inert");
+        }
     }
 }
