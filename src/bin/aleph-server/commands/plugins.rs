@@ -78,7 +78,7 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
 
     // Ensure plugins directory exists
     if !plugins_dir.exists() {
-        std::fs::create_dir_all(&plugins_dir)?;
+        tokio::fs::create_dir_all(&plugins_dir).await?;
     }
 
     let repo_name = url
@@ -316,18 +316,17 @@ pub async fn handle_plugin_update(
     } else {
         let dir = scope_install_dir(plugin_scope, None)?;
         let mut found = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+        let mut entries = tokio::fs::read_dir(&dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            if !entry.file_type().await.is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
+            if let Some(n) = entry.file_name().to_str() {
+                // Skip staging/backup scratch dirs.
+                if n.starts_with('.') {
                     continue;
                 }
-                if let Some(n) = entry.file_name().to_str() {
-                    // Skip staging/backup scratch dirs.
-                    if n.starts_with('.') {
-                        continue;
-                    }
-                    found.push(n.to_string());
-                }
+                found.push(n.to_string());
             }
         }
         if found.is_empty() {
@@ -473,3 +472,4 @@ pub async fn handle_marketplace_command(
     }
     Ok(())
 }
+

@@ -79,7 +79,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Ensure ~/.aleph/ directory structure exists
     match alephcore::utils::paths::get_config_dir() {
         Ok(config_dir) => {
-            if let Err(e) = std::fs::create_dir_all(&config_dir) {
+            if let Err(e) = tokio::fs::create_dir_all(&config_dir).await {
                 return Err(format!(
                     "Error: cannot create config directory {}: {}",
                     config_dir.display(),
@@ -2540,3 +2540,4 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     Ok(())
 }
+
