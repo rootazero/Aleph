@@ -53,7 +53,7 @@
 
 横向滚动 chip 条,取代被消除的左栏 `CategoryNav`。
 
-- 容器:`<div class="flex gap-2 overflow-x-auto cc-hide-scroll px-4 py-2">`(`cc-hide-scroll` 隐藏滚动条,ios.css:30 已有)。
+- 容器:`<div class="flex gap-2 overflow-x-auto cc-hide-scroll py-1">`(`cc-hide-scroll` 隐藏滚动条,ios.css:30 已有;不加横向 padding —— `PhoneShell` 滚动体已 `padding:16px`)。
 - chip 集合:`[("featured", "★"), ("all", "🗂")]` 两个全局项 + `CATEGORIES.iter()` 各 `(c.value, c.emoji)`,共 14 个。
 - 每 chip:`<button class=move || if store.category.get()==value {"chip chip-active"} else {"chip"} on:click=move|_| store.category.set(value.to_string())>` 内含 `emoji` + `category_label(i18n, value)` 文案。`.chip`/`.chip-active` 见 ios.css:46/56,**零新 CSS**。
 - 不含桌面的 "Back to Chat" 退出项(那是桌面全屏接管专属;手机经 ••• More tab 离开)。
@@ -65,13 +65,14 @@
 - 结构:
   ```
   PhoneShell title="Extensions"  (无 back —— 着陆页,经 ••• More tab 返回,与 Dashboard/Teams 着陆页一致)
-    └─ 单个 <div>(footgun 防护:static + 复用组件包在一个普通 DOM 元素内):
+    └─ 单个 <div>(footgun 防护:所有子节点包在一个普通 DOM 元素内):
          <PhoneCategoryBar/>
-         <BrowsePane/>          // 原样复用:search + Installed 按钮 + FilterSegs + 响应式单列 grid + 自带 catalog load Effect
-  <ExtensionDetailDrawer/>       // 原样复用(94vw overlay)
-  <InstallFlow/>                 // 原样复用(94vw modal)
-  <InstalledPanel/>              // 原样复用(94vw overlay)
+         <BrowsePane/>            // 原样复用:search + Installed 按钮 + FilterSegs + 响应式单列 grid + 自带 catalog load Effect
+         <ExtensionDetailDrawer/> // 原样复用(94vw fixed overlay)
+         <InstallFlow/>           // 原样复用(94vw fixed modal)
+         <InstalledPanel/>        // 原样复用(94vw fixed overlay)
   ```
+- **🔑 三个 overlay 必须放在 `PhoneShell` 内(children),不是其后的兄弟**:`PhoneShell` 根是 `fixed … z-[70]`,**自成 stacking context**;三个 overlay 是 `z-[60]`/`z-50`。若作 `</PhoneShell>` 之后的兄弟,它们落在父 stacking context 的 z-60 < 壳的 z-70 → 被壳遮挡(drawer/modal 不可见)。放进 `PhoneShell` children 后,它们在壳的 z-70 context 内、绘制于壳内容之上。`fixed` 元素不受祖先 `overflow` 裁剪(链上无 `transform` 祖先),仍定位到视口。
 - 不持有任何信号(`StoreState` 已 app 级);不订阅流;无 `Effect`(catalog load 在 `BrowsePane` 自带)。
 - 依赖复用路径(全部已被 `ExtensionsView` 使用,故可达):
   - `crate::platform::phone::shell::PhoneShell`
