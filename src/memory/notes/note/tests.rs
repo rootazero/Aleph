@@ -4,15 +4,16 @@ mod tests {
 
     #[test]
     fn extract_provenance_markers_handles_all_origins() {
-        let body = "- a <!-- src: raw/abc, origin: raw_source, inferred: false -->\n- b <!-- origin: inferred, inferred: true -->\n- c <!-- src: note/x, origin: prior_note, inferred: false -->\n- legacy fact with no marker\n";
+        let body = "- a <!-- src: raw/abc, origin: raw_source, inferred: false -->\n- b <!-- origin: inferred, inferred: true -->\n- c <!-- src: note/x, origin: prior_note, inferred: false -->\n- d <!-- origin: system, inferred: false -->\n- legacy fact with no marker\n";
         let provs = parsing::extract_provenance_markers(body, &parsing::extract_facts(body));
-        assert_eq!(provs.len(), 4);
+        assert_eq!(provs.len(), 5);
         assert_eq!(provs[0].origin, types::ProvenanceOrigin::RawSource);
         assert_eq!(provs[0].source_id.as_deref(), Some("raw/abc"));
         assert_eq!(provs[1].origin, types::ProvenanceOrigin::Inferred);
         assert!(provs[1].inferred);
         assert_eq!(provs[2].origin, types::ProvenanceOrigin::PriorNote);
-        assert_eq!(provs[3].origin, types::ProvenanceOrigin::Legacy);
+        assert_eq!(provs[3].origin, types::ProvenanceOrigin::System);
+        assert_eq!(provs[4].origin, types::ProvenanceOrigin::Legacy);
     }
 
     #[test]

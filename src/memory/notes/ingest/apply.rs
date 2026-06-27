@@ -20,10 +20,16 @@ use uuid::Uuid;
 /// pass through unchanged; otherwise append a permissive
 /// `<!-- origin: inferred, inferred: true -->` marker so every stored fact
 /// is downstream-classifiable.
+/// Provenance marker for system-generated structural facts (`[title]` /
+/// `[summary]` lines). They are deterministic scaffolding, not user/LLM
+/// content, so they carry `origin: system` rather than falling through to
+/// `Legacy`.
+const SYSTEM_FACT_MARKER: &str = "<!-- origin: system, inferred: false -->";
+
 fn ensure_origin_marker(line: &str) -> String {
     static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(
-            r"<!--\s*(?:src:[^,]+,\s*)?origin:\s*(?:raw_source|prior_note|inferred|legacy)\s*,\s*inferred:\s*(?:true|false)\s*-->",
+            r"<!--\s*(?:src:[^,]+,\s*)?origin:\s*(?:raw_source|prior_note|inferred|legacy|system)\s*,\s*inferred:\s*(?:true|false)\s*-->",
         )
         .unwrap()
     });
@@ -146,13 +152,16 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 };
                 let summary_trimmed: String = summary.chars().take(120).collect();
                 if !summary_trimmed.is_empty() {
-                    note.facts.insert(0, format!("[summary] {summary_trimmed}"));
+                    note.facts
+                        .insert(0, format!("[summary] {summary_trimmed} {SYSTEM_FACT_MARKER}"));
                 }
                 if !title.is_empty() && title != &safe {
-                    note.facts.insert(0, format!("[title] {title}"));
+                    note.facts
+                        .insert(0, format!("[title] {title} {SYSTEM_FACT_MARKER}"));
                 }
                 // Per-fact provenance: every fact now carries a marker
-                // (ensure_origin_marker stamped any the LLM omitted).
+                // (ensure_origin_marker stamped any the LLM omitted; the
+                // synthetic title/summary lines carry origin: system).
                 note.fact_provenance = note
                     .facts
                     .iter()
@@ -897,6 +906,53 @@ mod tests {
             n.source_notes.contains(&"raw-batch-1".to_string()),
             "expected source_notes to contain 'raw-batch-1', got: {:?}",
             n.source_notes,
+        );
+    }
+
+    #[tokio::test]
+    async fn create_stamps_system_provenance_on_title_and_summary() {
+        use crate::memory::notes::note::ProvenanceOrigin;
+        let (dir, backend, indexer) = fresh().await;
+        let mut tx =
+            CompoundApplyTx::new(&indexer, &backend, dir.path().join("note"), "default");
+        tx.stage(&PageOp::Create {
+            note_path: "learning/tokio".into(),
+            title: "Tokio".into(),
+            summary: "Async runtime".into(),
+            facts: vec!["event-driven".into()],
+            links: vec![],
+            tags: vec![],
+            relations: vec![],
+            source_ids: vec![],
+        })
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let body =
+            tokio::fs::read_to_string(dir.path().join("note/default/learning/tokio.md"))
+                .await
+                .unwrap();
+        let n =
+            crate::memory::notes::note::KnowledgeNote::from_markdown("tokio", &body).unwrap();
+
+        // The synthetic [title]/[summary] lines must be System origin, never Legacy.
+        let system = n
+            .fact_provenance
+            .iter()
+            .filter(|p| p.origin == ProvenanceOrigin::System)
+            .count();
+        assert_eq!(
+            system, 2,
+            "title + summary must be System origin, got {:?}",
+            n.fact_provenance
+        );
+        assert!(
+            !n.fact_provenance
+                .iter()
+                .any(|p| p.origin == ProvenanceOrigin::Legacy),
+            "no fact should fall through to Legacy after stamping, got {:?}",
+            n.fact_provenance
         );
     }
 }
