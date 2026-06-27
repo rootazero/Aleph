@@ -45,6 +45,7 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
             }
         }
         let source = raws[0].source.clone();
+        let batch_ids: Vec<String> = raws.iter().map(|r| r.id.clone()).collect();
         // Related-page gathering is best-effort context enrichment for the
         // planning LLM: it needs an embedding round-trip to hybrid-search for
         // related notes. When the embedding endpoint is unavailable
@@ -111,7 +112,7 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
             }
         }
 
-        let report = match self.try_apply(agent_id, &plan).await {
+        let report = match self.try_apply(agent_id, &plan, &batch_ids).await {
             Ok(r) => r,
             Err(ApplyError::HashConflict { path, actual, .. }) => {
                 warn!("compound ingest: hash conflict on {path}; re-planning");
@@ -139,7 +140,7 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
                         return Ok(ApplyReport::default());
                     }
                 }
-                self.try_apply(agent_id, &plan2)
+                self.try_apply(agent_id, &plan2, &batch_ids)
                     .await
                     .map_err(|e| match e {
                         ApplyError::Other(inner) => inner,
@@ -228,13 +229,15 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
         &self,
         agent_id: &str,
         plan: &IngestPlan,
+        batch_ids: &[String],
     ) -> Result<ApplyReport, ApplyError> {
         let mut tx = CompoundApplyTx::new(
             &self.indexer,
             &self.store,
             self.memory_dir.clone(),
             agent_id,
-        );
+        )
+        .with_batch_sources(batch_ids.to_vec());
         for op in &plan.ops {
             tx.stage(op).await?;
         }
@@ -370,6 +373,7 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                             note_path,
                             facts,
                             links,
+                            source_ids,
                             ..
                         },
                     ) => {
@@ -383,6 +387,7 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                             new_facts: facts,
                             new_links: links,
                             new_relations: vec![],
+                            source_ids,
                         })
                     }
                     (_, op) => Some(op),
