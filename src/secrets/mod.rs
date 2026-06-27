@@ -23,4 +23,4 @@ pub use types::{DecryptedSecret, EntryMetadata, SecretError};
 pub use vault::SecretVault;
 pub use vault_resolver::VaultSecretResolver;
 pub use virtual_key_resolver::VirtualKeyResolver;
-pub use web3_signer::{EvmSigner, SecretResolver, SignIntent, SignedResult};
+pub use web3_signer::{EvmSigner, SecretResolver, SignIntent, SignedResult, TransactionIntent};
