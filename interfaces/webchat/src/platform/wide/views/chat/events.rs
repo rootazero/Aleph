@@ -88,9 +88,18 @@ pub(crate) fn apply_trace_event(
                     .and_then(|i| i.get("action"))
                     .and_then(|a| a.as_str())
                     .unwrap_or("");
-                let snapshot = result
-                    .get("Success")
-                    .and_then(|s| s.get("output"))
+                // The harness serializes a tool's structured output as a
+                // JSON-encoded STRING inside `Success.output` (the same text the
+                // model is shown), so `output` is a `Value::String`, not an
+                // object — `o.get("snapshot")` on a string is always `None`.
+                // Decode the string first; tolerate the already-object form too.
+                let output = result.get("Success").and_then(|s| s.get("output"));
+                let decoded = output
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+                let snapshot = decoded
+                    .as_ref()
+                    .or(output)
                     .and_then(|o| o.get("snapshot"));
                 chat.apply_plan_update(super::plan::scratchpad_plan_update(action, snapshot));
             }
@@ -481,5 +490,41 @@ mod projection_tests {
         assert!(msgs
             .iter()
             .any(|m| m.iteration == Some(2) && m.content.contains("done")));
+    }
+
+    #[test]
+    fn scratchpad_string_encoded_output_projects_plan_to_panel() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        let ws = WorkspaceState::new();
+        chat.start_assistant_message("run-1");
+
+        // Real gateway wire shape: the harness serializes the scratchpad tool's
+        // structured output as a JSON-encoded STRING inside `Success.output`,
+        // so the snapshot is nested one JSON level deeper than a plain object.
+        // The Todo-panel projection must decode the string before reading it.
+        let output_str = concat!(
+            "{\"content\":\"Plan:...\",\"message\":\"Plan set with 3 items\",",
+            "\"snapshot\":{\"complete\":false,\"objective\":null,\"items\":[",
+            "{\"status\":\"pending\",\"text\":\"step one\"},",
+            "{\"status\":\"in_progress\",\"text\":\"step two\"},",
+            "{\"status\":\"completed\",\"text\":\"step three\"}]},\"success\":true}"
+        );
+        let ev = json!({
+            "kind": "tool_call_completed", "iteration": 1,
+            "call": { "tool_id": "s1", "tool_name": "scratchpad", "duration_ms": 13,
+                      "input": { "action": "set_plan" } },
+            "result": { "Success": { "output": output_str } }
+        });
+        apply_trace_event(chat, ws, "run-1", &ev);
+
+        let plan = chat
+            .plan
+            .get_untracked()
+            .expect("plan must be Some after a string-encoded snapshot");
+        assert_eq!(plan.total(), 3);
+        assert_eq!(plan.done_count(), 1);
+        assert!(plan.has_content());
     }
 }
