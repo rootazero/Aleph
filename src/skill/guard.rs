@@ -122,8 +122,12 @@ const PATTERNS: &[Pattern] = &[
     },
 ];
 
-static PATTERN_SET: Lazy<RegexSet> =
-    Lazy::new(|| RegexSet::new(PATTERNS.iter().map(|p| p.regex)).expect("guard patterns compile"));
+static PATTERN_SET: Lazy<RegexSet> = Lazy::new(|| {
+    RegexSet::new(PATTERNS.iter().map(|p| p.regex)).unwrap_or_else(|e| {
+        tracing::error!(error = %e, "guard patterns failed to compile; falling back to empty set");
+        RegexSet::empty()
+    })
+});
 
 /// Zero-width / bidi unicode chars often used for prompt-injection hiding.
 const INVISIBLE_CHARS: &[char] = &[

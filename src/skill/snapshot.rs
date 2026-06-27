@@ -113,7 +113,7 @@ impl SkillSnapshot {
                     // Apply the user's scope override (if any) on a clone so the
                     // downstream prompt layer, which reads `manifest.scope()`,
                     // honours it. Without an override this is a plain clone.
-                    let effective = match entry.and_then(|e| e.scope_override.clone()) {
+                    let effective = match entry.and_then(|e| e.scope_override) {
                         Some(scope) => {
                             let mut m = manifest.clone();
                             m.set_scope(scope);

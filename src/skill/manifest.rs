@@ -206,54 +206,61 @@ pub fn parse_skill_content(
 
     // Install specs
     if let Some(installs) = raw.install {
-        let specs = installs
-            .into_iter()
-            .filter_map(|raw_spec| {
-                let kind = match raw_spec.kind.to_lowercase().as_str() {
-                    "brew" => crate::domain::skill::InstallKind::Brew,
-                    "apt" => crate::domain::skill::InstallKind::Apt,
-                    "scoop" => crate::domain::skill::InstallKind::Scoop,
-                    "winget" => crate::domain::skill::InstallKind::Winget,
-                    "npm" => crate::domain::skill::InstallKind::Npm,
-                    "uv" => crate::domain::skill::InstallKind::Uv,
-                    "go" => crate::domain::skill::InstallKind::Go,
-                    "download" => crate::domain::skill::InstallKind::Download,
-                    _ => return None,
-                };
-                let os = raw_spec.os.map(|os_list| {
-                    os_list
-                        .iter()
-                        .filter_map(|s| s.parse::<Os>().ok())
-                        .collect::<Vec<_>>()
-                });
-                Some(InstallSpec {
-                    id: raw_spec.id,
-                    kind,
-                    package: raw_spec.package,
-                    bins: raw_spec.bins.unwrap_or_default(),
-                    os,
-                    url: raw_spec.url,
-                })
-            })
-            .collect();
-        manifest.set_install_specs(specs);
+        manifest.set_install_specs(parse_install_specs(installs));
     }
 
     // Metadata fields
-    if let Some(env) = raw.primary_env {
-        manifest.set_primary_env(env);
-    }
-    if let Some(url) = raw.homepage {
-        manifest.set_homepage(url);
-    }
-    if let Some(emoji) = raw.emoji {
-        manifest.set_emoji(emoji);
-    }
-    if let Some(when) = raw.when_to_use {
-        manifest.set_when_to_use(when);
-    }
+    apply_metadata(&mut manifest, &raw);
 
     Ok(manifest)
+}
+
+fn parse_install_specs(installs: Vec<RawInstallSpec>) -> Vec<InstallSpec> {
+    installs
+        .into_iter()
+        .filter_map(|raw_spec| {
+            let kind = match raw_spec.kind.to_lowercase().as_str() {
+                "brew" => InstallKind::Brew,
+                "apt" => InstallKind::Apt,
+                "scoop" => InstallKind::Scoop,
+                "winget" => InstallKind::Winget,
+                "npm" => InstallKind::Npm,
+                "uv" => InstallKind::Uv,
+                "go" => InstallKind::Go,
+                "download" => InstallKind::Download,
+                _ => return None,
+            };
+            let os = raw_spec.os.map(|os_list| {
+                os_list
+                    .iter()
+                    .filter_map(|s| s.parse::<Os>().ok())
+                    .collect::<Vec<_>>()
+            });
+            Some(InstallSpec {
+                id: raw_spec.id,
+                kind,
+                package: raw_spec.package,
+                bins: raw_spec.bins.unwrap_or_default(),
+                os,
+                url: raw_spec.url,
+            })
+        })
+        .collect()
+}
+
+fn apply_metadata(manifest: &mut SkillManifest, raw: &RawFrontmatter) {
+    if let Some(env) = raw.primary_env.clone() {
+        manifest.set_primary_env(env);
+    }
+    if let Some(url) = raw.homepage.clone() {
+        manifest.set_homepage(url);
+    }
+    if let Some(emoji) = raw.emoji.clone() {
+        manifest.set_emoji(emoji);
+    }
+    if let Some(when) = raw.when_to_use.clone() {
+        manifest.set_when_to_use(when);
+    }
 }
 
 /// Split content into (`yaml_frontmatter`, body).

@@ -81,34 +81,34 @@ pub struct InstallResult {
     pub exit_code: Option<i32>,
 }
 
+const fn install_kind_index(kind: &InstallKind) -> usize {
+    match kind {
+        InstallKind::Brew => 0,
+        InstallKind::Scoop => 1,
+        InstallKind::Winget => 2,
+        InstallKind::Uv => 3,
+        InstallKind::Npm => 4,
+        InstallKind::Go => 5,
+        InstallKind::Apt => 6,
+        InstallKind::Download => 7,
+    }
+}
+
+// Rank tables for `select_best_install`. Lower values are preferred.
+// Scoop and Winget are the Windows system managers, ranked alongside Brew
+// (the macOS system manager): high when system managers are preferred, just
+// after Brew otherwise. Scoop outranks Winget because it targets CLI/dev
+// tools (Winget leans toward desktop apps). OS filtering runs before ranking,
+// so these only compete on Windows in practice.
+const PREFER_BREW_RANKS: [u8; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+const PREFER_UV_RANKS: [u8; 8] = [2, 3, 4, 0, 1, 5, 6, 7];
+
 const fn install_kind_rank(kind: &InstallKind, prefer_brew: bool) -> u8 {
-    // Scoop and Winget are the Windows system managers, ranked alongside Brew
-    // (the macOS system manager): high when system managers are preferred, just
-    // after Brew otherwise. Scoop outranks Winget because it targets CLI/dev
-    // tools (Winget leans toward desktop apps). OS filtering runs before ranking,
-    // so these only compete on Windows in practice.
+    let idx = install_kind_index(kind);
     if prefer_brew {
-        match kind {
-            InstallKind::Brew => 0,
-            InstallKind::Scoop => 1,
-            InstallKind::Winget => 2,
-            InstallKind::Uv => 3,
-            InstallKind::Npm => 4,
-            InstallKind::Go => 5,
-            InstallKind::Apt => 6,
-            InstallKind::Download => 7,
-        }
+        PREFER_BREW_RANKS[idx]
     } else {
-        match kind {
-            InstallKind::Uv => 0,
-            InstallKind::Npm => 1,
-            InstallKind::Brew => 2,
-            InstallKind::Scoop => 3,
-            InstallKind::Winget => 4,
-            InstallKind::Go => 5,
-            InstallKind::Apt => 6,
-            InstallKind::Download => 7,
-        }
+        PREFER_UV_RANKS[idx]
     }
 }
 
