@@ -99,17 +99,17 @@ impl SystemCapability for WindowsSystem {
                     unsafe {
                         if IsWindowVisible(hwnd).as_bool() {
                             let mut buf = [0u16; 512];
-                            let len = GetWindowTextW(hwnd, &mut buf);
+                            let len = GetWindowTextW(hwnd, buf.as_mut_ptr());
                             if len > 0 {
                                 let title = String::from_utf16_lossy(&buf[..len as usize]);
                                 let mut pid: u32 = 0;
-                                GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                                GetWindowThreadProcessId(hwnd, Some(std::ptr::addr_of_mut!(pid)));
 
                                 let state = &mut *(lparam.0 as *mut EnumState);
                                 state.apps.push(AppInfo {
                                     name: title,
                                     bundle_id: String::new(),
-                                    pid: Some(pid as u64),
+                                    pid: Some(u64::from(pid)),
                                     is_active: false,
                                 });
                             }
@@ -119,8 +119,10 @@ impl SystemCapability for WindowsSystem {
                 }
 
                 let mut state = EnumState { apps: Vec::new() };
+                // SAFETY: `enum_proc` matches `WNDENUMPROC`; `state` outlives the
+                // synchronous enumeration.
                 unsafe {
-                    let _ = EnumWindows(Some(enum_proc), LPARAM(&mut state as *mut _ as isize));
+                    let _ = EnumWindows(Some(enum_proc), LPARAM(std::ptr::addr_of_mut!(state) as isize));
                 }
 
                 Ok(state.apps)
@@ -246,7 +248,7 @@ $template.GetElementsByTagName('text').Item(1).AppendChild($template.CreateTextN
                 };
 
                 let mut hostname_buf = [0u16; 256];
-                let mut size = hostname_buf.len() as u32;
+                let mut size = 256u32;
 
                 // SAFETY: GetComputerNameExW writes up to `size` UTF-16 units
                 // into the buffer and updates `size` with the count written.
@@ -254,7 +256,7 @@ $template.GetElementsByTagName('text').Item(1).AppendChild($template.CreateTextN
                     if GetComputerNameExW(
                         ComputerNamePhysicalDnsHostname,
                         PWSTR(hostname_buf.as_mut_ptr()),
-                        &mut size,
+                        std::ptr::addr_of_mut!(size),
                     )
                     .is_ok()
                     {
@@ -308,7 +310,7 @@ $template.GetElementsByTagName('text').Item(1).AppendChild($template.CreateTextN
                 // SAFETY: GetLastInputInfo writes into the struct on success;
                 // GetTickCount64 returns u64 millis since boot (no 49.7-day wrap).
                 let (ok, now_ms, last_ms) = unsafe {
-                    let ok = GetLastInputInfo(&mut info as *mut _ as *mut _).as_bool();
+                    let ok = GetLastInputInfo(std::ptr::addr_of_mut!(info) as *mut _).as_bool();
                     (ok, GetTickCount64(), info.dwTime)
                 };
 

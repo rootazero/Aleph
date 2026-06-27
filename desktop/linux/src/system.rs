@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn create_default() {
-        let _sys = LinuxSystem;
+        LinuxSystem;
     }
 
     #[test]

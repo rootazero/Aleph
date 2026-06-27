@@ -12,9 +12,9 @@ use aleph_desktop::{
 
 // ES_CONTINUOUS = 0x80000000, ES_SYSTEM_REQUIRED = 0x00000001
 #[cfg(windows)]
-const ES_CONTINUOUS: u32 = 0x80000000;
+const ES_CONTINUOUS: u32 = 0x8000_0000;
 #[cfg(windows)]
-const ES_SYSTEM_REQUIRED: u32 = 0x00000001;
+const ES_SYSTEM_REQUIRED: u32 = 0x0000_0001;
 
 #[cfg(windows)]
 #[link(name = "kernel32")]

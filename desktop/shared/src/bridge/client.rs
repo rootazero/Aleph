@@ -114,7 +114,7 @@ impl SwiftBridge {
     /// reports `false`.
     #[must_use]
     pub fn is_running(&self) -> bool {
-        self.state.try_lock().map(|g| g.is_some()).unwrap_or(false)
+        self.state.try_lock().map_or(false, |g| g.is_some())
     }
 
     /// Spawn the helper subprocess and wire up reader + stderr tasks.

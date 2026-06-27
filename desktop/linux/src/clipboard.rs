@@ -163,11 +163,12 @@ fn pick_image_target(listing: &str) -> Option<&str> {
 /// Encode raw image bytes as a base64 PNG, transcoding non-PNG via the `image`
 /// crate. Mirrors the macOS TIFF→PNG fallback.
 fn to_png_base64(bytes: &[u8], is_png: bool) -> Option<String> {
+    use image::ImageReader;
+    use std::io::Cursor;
+
     if is_png {
         return Some(general_purpose::STANDARD.encode(bytes));
     }
-    use image::ImageReader;
-    use std::io::Cursor;
 
     let img = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()

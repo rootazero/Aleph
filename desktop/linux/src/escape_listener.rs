@@ -45,7 +45,7 @@ impl LinuxEscapeListener {
     /// Test constructor: watch an explicit (or absent) sentinel path instead
     /// of resolving `$HOME`.
     #[cfg(test)]
-    fn for_test(sentinel: Option<PathBuf>) -> Self {
+    const fn for_test(sentinel: Option<PathBuf>) -> Self {
         Self { sentinel }
     }
 
@@ -87,7 +87,7 @@ impl EscapeAbort for LinuxEscapeListener {
                 "Linux escape listener armed — `touch` this file to abort desktop control"
             );
         } else {
-            warn!("HOME is unset — Linux desktop-abort sentinel is unavailable")
+            warn!("HOME is unset — Linux desktop-abort sentinel is unavailable");
         }
         Ok(())
     }

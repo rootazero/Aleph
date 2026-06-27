@@ -223,7 +223,7 @@ mod imp {
             unsafe {
                 let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             }
-            ComGuard
+            Self
         }
     }
 
@@ -273,7 +273,7 @@ mod imp {
             unsafe {
                 if IsWindowVisible(hwnd).as_bool() {
                     let mut wpid: u32 = 0;
-                    GetWindowThreadProcessId(hwnd, Some(&mut wpid));
+                    GetWindowThreadProcessId(hwnd, Some(std::ptr::addr_of_mut!(wpid)));
                     let find = &mut *(lparam.0 as *mut Find);
                     if wpid == find.pid {
                         find.hit = Some(hwnd);
@@ -288,7 +288,7 @@ mod imp {
         // SAFETY: `proc` matches `WNDENUMPROC`; `find` lives until `EnumWindows`
         // returns.
         unsafe {
-            let _ = EnumWindows(Some(proc), LPARAM(&mut find as *mut Find as isize));
+            let _ = EnumWindows(Some(proc), LPARAM(std::ptr::addr_of_mut!(find) as isize));
         }
         find.hit
     }
@@ -297,31 +297,34 @@ mod imp {
     /// origin) into the shared [`Region`]. Physical pixels are what the Windows
     /// click/screenshot path already uses, so coordinates round-trip directly
     /// into `desktop_click` without rescaling.
-    fn rect_to_region(r: RECT) -> Region {
+    const fn rect_to_region(r: RECT) -> Region {
         Region {
-            x: r.left as f64,
-            y: r.top as f64,
-            width: (r.right - r.left) as f64,
-            height: (r.bottom - r.top) as f64,
+            x: f64::from(r.left),
+            y: f64::from(r.top),
+            width: f64::from(r.right - r.left),
+            height: f64::from(r.bottom - r.top),
         }
     }
 
     /// Read one element's scalar fields into a childless [`AxElement`].
     fn node_of(el: &IUIAutomationElement) -> AxElement {
         // SAFETY: all four are documented read-only UIA property getters.
+        // SAFETY: read-only UIA control-type property getter.
         let role = unsafe {
             el.CurrentControlType()
-                .map(|ct| control_type_to_ax_role(ct.0))
-                .unwrap_or("AXUnknown")
+                .map_or("AXUnknown", |ct| control_type_to_ax_role(ct.0))
         }
         .to_string();
+        // SAFETY: read-only UIA name property getter.
         let title = unsafe { el.CurrentName() }
             .map(|b| b.to_string())
             .ok()
             .filter(|s| !s.is_empty());
+        // SAFETY: read-only UIA bounding-rectangle property getter.
         let bounds = unsafe { el.CurrentBoundingRectangle() }
             .ok()
             .map(rect_to_region);
+        // SAFETY: read-only UIA process-id property getter.
         let pid = unsafe { el.CurrentProcessId() }.unwrap_or(0);
 
         AxElement {
@@ -358,6 +361,7 @@ mod imp {
             if *count >= MAX_NODES {
                 break;
             }
+            // SAFETY: walker sibling traversal; terminates at end of child list.
             next = unsafe { walker.GetNextSiblingElement(&child) };
         }
         node
@@ -367,10 +371,7 @@ mod imp {
         let _com = ComGuard::new();
         let uia = automation()?;
         // SAFETY: documented UIA call; a missing focus surfaces as `Err`.
-        match unsafe { uia.GetFocusedElement() } {
-            Ok(el) => Ok(Some(node_of(&el))),
-            Err(_) => Ok(None),
-        }
+        unsafe { uia.GetFocusedElement() }.map_or(Ok(None), |el| Ok(Some(node_of(&el))))
     }
 
     pub(super) fn query_tree(pid: Option<i32>, max_depth: u32) -> Result<Option<AxElement>> {
@@ -393,9 +394,8 @@ mod imp {
         // Walking + filtering (rather than a UIA property condition) reuses the
         // exact same role mapping the rest of the system sees, so results are
         // consistent with `query_tree` / `desktop_som`.
-        let tree = match query_tree(pid, ROLE_SCAN_DEPTH)? {
-            Some(t) => t,
-            None => return Ok(Vec::new()),
+        let Some(tree) = query_tree(pid, ROLE_SCAN_DEPTH)? else {
+            return Ok(Vec::new());
         };
         let mut out = Vec::new();
         collect_role(&tree, role, &mut out);

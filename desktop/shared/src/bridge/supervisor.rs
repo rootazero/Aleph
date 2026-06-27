@@ -116,19 +116,16 @@ impl SpawnGate {
     /// failure is still cooling down.
     #[must_use]
     pub fn poll(&self) -> SpawnDecision {
-        match self.next_spawn_at {
-            Some(at) => {
-                let now = Instant::now();
-                if now >= at {
-                    SpawnDecision::Go
-                } else {
-                    SpawnDecision::Backoff {
-                        remaining: at.saturating_duration_since(now),
-                    }
+        self.next_spawn_at.map_or(SpawnDecision::Go, |at| {
+            let now = Instant::now();
+            if now >= at {
+                SpawnDecision::Go
+            } else {
+                SpawnDecision::Backoff {
+                    remaining: at.saturating_duration_since(now),
                 }
             }
-            None => SpawnDecision::Go,
-        }
+        })
     }
 
     /// Record a spawn failure or helper crash. Advances the backoff ladder,
@@ -177,7 +174,7 @@ mod tests {
 
     #[test]
     fn disable_threshold_trips_after_5_within_10min() {
-        let mut w = RestartWindow::new(5, Duration::from_secs(600));
+        let mut w = RestartWindow::new(5, Duration::from_mins(10));
         for _ in 0..5 {
             assert!(!w.record_and_should_disable());
         }
@@ -199,13 +196,13 @@ mod tests {
 
     #[test]
     fn gate_starts_clear() {
-        let gate = SpawnGate::new(5, Duration::from_secs(600));
+        let gate = SpawnGate::new(5, Duration::from_mins(10));
         assert_eq!(gate.poll(), SpawnDecision::Go);
     }
 
     #[test]
     fn gate_backs_off_after_failure() {
-        let mut gate = SpawnGate::new(5, Duration::from_secs(600));
+        let mut gate = SpawnGate::new(5, Duration::from_mins(10));
         assert!(!gate.record_failure());
         // First rung is 1s — a poll immediately after must report Backoff.
         match gate.poll() {
@@ -218,7 +215,7 @@ mod tests {
 
     #[test]
     fn gate_clears_on_success() {
-        let mut gate = SpawnGate::new(5, Duration::from_secs(600));
+        let mut gate = SpawnGate::new(5, Duration::from_mins(10));
         gate.record_failure();
         gate.record_success();
         assert_eq!(
@@ -230,7 +227,7 @@ mod tests {
 
     #[test]
     fn gate_disables_after_threshold() {
-        let mut gate = SpawnGate::new(5, Duration::from_secs(600));
+        let mut gate = SpawnGate::new(5, Duration::from_mins(10));
         for _ in 0..5 {
             assert!(!gate.record_failure());
         }
@@ -239,10 +236,10 @@ mod tests {
 
     #[test]
     fn gate_backoff_window_elapses_to_go() {
-        let mut gate = SpawnGate::new(5, Duration::from_secs(600));
+        let mut gate = SpawnGate::new(5, Duration::from_mins(10));
         gate.record_failure();
         // Force the gate open by rewinding the armed instant into the past.
-        gate.next_spawn_at = Some(Instant::now() - Duration::from_secs(1));
+        gate.next_spawn_at = Some(Instant::now().checked_sub(Duration::from_secs(1)).unwrap());
         assert_eq!(gate.poll(), SpawnDecision::Go);
     }
 }

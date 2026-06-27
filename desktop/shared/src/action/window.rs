@@ -173,7 +173,7 @@ fn windows_window_list() -> Result<Vec<WindowInfo>> {
         unsafe {
             if IsWindowVisible(hwnd).as_bool() {
                 let mut buf = [0u16; 512];
-                let len = GetWindowTextW(hwnd, &mut buf);
+                let len = GetWindowTextW(hwnd, buf.as_mut_ptr());
                 if len > 0 {
                     let title = String::from_utf16_lossy(&buf[..len as usize]);
                     let mut pid: u32 = 0;
@@ -183,7 +183,7 @@ fn windows_window_list() -> Result<Vec<WindowInfo>> {
                         id: hwnd.0 as usize as u64,
                         title,
                         owner: String::new(),
-                        pid: pid as u64,
+                        pid: u64::from(pid),
                     });
                 }
             }
@@ -199,7 +199,7 @@ fn windows_window_list() -> Result<Vec<WindowInfo>> {
     unsafe {
         let _ = EnumWindows(
             Some(enum_proc),
-            LPARAM(&mut state as *mut EnumState as isize),
+            LPARAM(std::ptr::addr_of_mut!(state) as isize),
         );
     }
 

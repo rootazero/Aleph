@@ -40,11 +40,12 @@ pub fn take_screenshot(region: Option<&ScreenRegion>) -> Result<Screenshot> {
         .find(|m| m.is_primary().unwrap_or(false))
         .ok_or_else(|| DesktopError::ScreenCapture("No primary monitor found".into()))?;
 
-    let image = match region {
-        Some(r) => monitor.capture_region(r.x, r.y, r.width, r.height),
-        None => monitor.capture_image(),
-    }
-    .map_err(|e| DesktopError::ScreenCapture(format!("Screen capture failed: {e}")))?;
+    let image = region
+        .map_or_else(
+            || monitor.capture_image(),
+            |r| monitor.capture_region(r.x, r.y, r.width, r.height),
+        )
+        .map_err(|e| DesktopError::ScreenCapture(format!("Screen capture failed: {e}")))?;
 
     let (width, height) = (image.width(), image.height());
 
@@ -154,11 +155,12 @@ pub fn take_screenshot_display(
             DesktopError::ScreenCapture(format!("Display with id {display_id} not found"))
         })?;
 
-    let image = match region {
-        Some(r) => monitor.capture_region(r.x, r.y, r.width, r.height),
-        None => monitor.capture_image(),
-    }
-    .map_err(|e| DesktopError::ScreenCapture(format!("Screen capture failed: {e}")))?;
+    let image = region
+        .map_or_else(
+            || monitor.capture_image(),
+            |r| monitor.capture_region(r.x, r.y, r.width, r.height),
+        )
+        .map_err(|e| DesktopError::ScreenCapture(format!("Screen capture failed: {e}")))?;
 
     let (width, height) = (image.width(), image.height());
 

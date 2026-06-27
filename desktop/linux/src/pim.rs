@@ -20,7 +20,7 @@ impl LinuxPim {
             .map(|h| h.join(".thunderbird"))
     }
 
-    fn find_mbox_files(&self) -> Vec<(String, PathBuf)> {
+    fn find_mbox_files() -> Vec<(String, PathBuf)> {
         let tb_dir = match Self::thunderbird_dir() {
             Some(d) if d.exists() => d,
             _ => return Vec::new(),
@@ -46,7 +46,8 @@ impl LinuxPim {
                 Self::walk_mail_dir(root, &path, out);
             } else {
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if name.starts_with('.') || name.ends_with(".msf") || name.ends_with(".dat") {
+                let name_lower = name.to_ascii_lowercase();
+                if name_lower.starts_with('.') || name_lower.ends_with(".msf") || name_lower.ends_with(".dat") {
                     continue;
                 }
                 let relative = path.strip_prefix(root).unwrap_or(&path);
@@ -126,9 +127,10 @@ impl LinuxPim {
             }
             if line.starts_with(' ') || line.starts_with('\t') {
                 if let Some(ref key) = current_key {
-                    let val = headers.get_mut(key).unwrap();
-                    val.push(' ');
-                    val.push_str(line.trim());
+                    if let Some(val) = headers.get_mut(key) {
+                        val.push(' ');
+                        val.push_str(line.trim());
+                    }
                 }
             } else if let Some((key, val)) = line.split_once(':') {
                 let key_lc = key.trim().to_ascii_lowercase();
@@ -168,7 +170,7 @@ impl LinuxPim {
     async fn read_mbox_file(path: &Path) -> Result<String> {
         tokio::fs::read_to_string(path)
             .await
-            .map_err(|e| DesktopError::PlatformError(format!("Failed to read mbox {path:?}: {e}")))
+            .map_err(|e| DesktopError::PlatformError(format!("Failed to read mbox {}: {e}", path.display())))
     }
 }
 
@@ -218,7 +220,7 @@ impl PimCapability for LinuxPim {
         limit: u32,
     ) -> Result<Vec<MailMessage>> {
         let query_lc = query.to_ascii_lowercase();
-        let folders = self.find_mbox_files();
+        let folders = Self::find_mbox_files();
         let mut result = Vec::new();
 
         let target_folders: Vec<(String, PathBuf)> = match folder {
@@ -227,9 +229,8 @@ impl PimCapability for LinuxPim {
         };
 
         for (folder_id, path) in target_folders {
-            let content = match Self::read_mbox_file(&path).await {
-                Ok(c) => c,
-                Err(_) => continue,
+            let Ok(content) = Self::read_mbox_file(&path).await else {
+                continue;
             };
             let messages = Self::parse_mbox(&content);
             for msg in messages {
