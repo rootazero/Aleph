@@ -65,6 +65,7 @@ pub struct CompoundApplyTx<'a, S: NoteStore + Send + Sync + 'static> {
     staged: Vec<StagedWrite>,
     pending_links: Vec<(String, String)>,
     pending_supersedes: Vec<(String, String)>,
+    batch_source_ids: Vec<String>,
     committed: bool,
 }
 
@@ -88,6 +89,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
             staged: Vec::new(),
             pending_links: Vec::new(),
             pending_supersedes: Vec::new(),
+            batch_source_ids: Vec::new(),
             committed: false,
         }
     }
@@ -95,6 +97,22 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
     #[must_use]
     pub fn tx_id(&self) -> &str {
         &self.tx_id
+    }
+
+    /// Deterministic fallback raw-ids applied to any staged note whose op
+    /// carried no `source_ids` (so the L0→L1 chain is never empty).
+    #[must_use]
+    pub fn with_batch_sources(mut self, ids: Vec<String>) -> Self {
+        self.batch_source_ids = ids;
+        self
+    }
+
+    fn resolve_sources(&self, op_ids: &[String]) -> Vec<String> {
+        if op_ids.is_empty() {
+            self.batch_source_ids.clone()
+        } else {
+            op_ids.to_vec()
+        }
     }
 
     pub async fn stage(&mut self, op: &PageOp) -> Result<(), ApplyError> {
@@ -107,6 +125,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 links,
                 tags,
                 relations,
+                source_ids,
             } => {
                 let (category, filename) = split_path(note_path)?;
                 let safe = sanitize_title(&filename)?;
@@ -119,6 +138,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                     facts: facts.iter().map(|f| ensure_origin_marker(f)).collect(),
                     links: links.clone(),
                     relations: relations.iter().cloned().map(Relation::clamped).collect(),
+                    source_notes: self.resolve_sources(source_ids),
                     created_at: chrono::Utc::now().timestamp(),
                     updated_at: chrono::Utc::now().timestamp(),
                     content_hash: String::new(),
@@ -131,6 +151,13 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 if !title.is_empty() && title != &safe {
                     note.facts.insert(0, format!("[title] {title}"));
                 }
+                // Per-fact provenance: every fact now carries a marker
+                // (ensure_origin_marker stamped any the LLM omitted).
+                note.fact_provenance = note
+                    .facts
+                    .iter()
+                    .map(|f| crate::memory::notes::note::fact_provenance_for(f))
+                    .collect();
                 self.push_staged(&category, &safe, note, "create").await?;
             }
             PageOp::Append {
@@ -138,6 +165,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 new_facts,
                 new_links,
                 new_relations,
+                source_ids,
             } => {
                 let (category, filename) = split_path(note_path)?;
                 let safe = sanitize_title(&filename)?;
@@ -164,6 +192,16 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                         merged.relations.push(r);
                     }
                 }
+                for s in self.resolve_sources(source_ids) {
+                    if !merged.source_notes.contains(&s) {
+                        merged.source_notes.push(s);
+                    }
+                }
+                merged.fact_provenance = merged
+                    .facts
+                    .iter()
+                    .map(|f| crate::memory::notes::note::fact_provenance_for(f))
+                    .collect();
                 merged.updated_at = chrono::Utc::now().timestamp();
                 self.push_staged(&category, &safe, merged, "append").await?;
             }
@@ -506,6 +544,7 @@ mod tests {
             links: vec!["learning/rust-async".into()],
             tags: vec!["rust".into()],
             relations: vec![],
+            source_ids: vec![],
         })
         .await
         .unwrap();
@@ -531,6 +570,7 @@ mod tests {
                 links: vec!["learning/rust-async".into()],
                 tags: vec![],
                 relations: vec![],
+                source_ids: vec![],
             })
             .await
             .unwrap();
@@ -565,6 +605,7 @@ mod tests {
             links: vec![],
             tags: vec![],
             relations: vec![],
+            source_ids: vec![],
         })
         .await
         .unwrap();
@@ -587,6 +628,7 @@ mod tests {
             links: vec!["learning/rust-async".into()],
             tags: vec![],
             relations: vec![],
+            source_ids: vec![],
         })
         .await
         .unwrap();
@@ -598,6 +640,7 @@ mod tests {
             new_facts: vec!["fact-a".into(), "fact-b".into()],
             new_links: vec![],
             new_relations: vec![],
+            source_ids: vec![],
         })
         .await
         .unwrap();
@@ -627,6 +670,7 @@ mod tests {
                 rel_type: "works_at".into(),
                 confidence: 0.9,
             }],
+            source_ids: vec![],
         })
         .await
         .unwrap();
@@ -666,6 +710,7 @@ mod tests {
                     rel_type: "knows".into(),
                     confidence: 0.5,
                 }],
+                source_ids: vec![],
             })
             .await
             .unwrap();
@@ -692,6 +737,7 @@ mod tests {
                         confidence: 0.9,
                     },
                 ],
+                source_ids: vec![],
             })
             .await
             .unwrap();
@@ -734,6 +780,7 @@ mod tests {
                     links: vec!["seed/link".to_string()],
                     tags: vec![],
                     relations: vec![],
+                    source_ids: vec![],
                 })
             }),
             path.clone().prop_map(|p| PageOp::Append {
@@ -741,6 +788,7 @@ mod tests {
                 new_facts: vec!["f".into()],
                 new_links: vec![],
                 new_relations: vec![],
+                source_ids: vec![],
             }),
             (path.clone(), path)
                 .prop_filter("distinct endpoints", |(a, b)| a != b)
@@ -787,5 +835,68 @@ mod tests {
             });
             result?;
         }
+    }
+
+    #[tokio::test]
+    async fn create_populates_source_notes_from_op_ids() {
+        let (dir, backend, indexer) = fresh().await;
+        let mut tx = CompoundApplyTx::new(&indexer, &backend, dir.path().join("note"), "default");
+        tx.stage(&PageOp::Create {
+            note_path: "preference/typescript".into(),
+            title: "TypeScript".into(),
+            summary: "".into(),
+            facts: vec!["The user prefers TypeScript.".into()],
+            links: vec![],
+            tags: vec![],
+            relations: vec![],
+            source_ids: vec!["raw-A".into(), "raw-B".into()],
+        })
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let body = tokio::fs::read_to_string(dir.path().join("note/default/preference/typescript.md"))
+            .await
+            .unwrap();
+        assert!(body.contains("source_notes:"), "frontmatter must carry source_notes");
+        assert!(body.contains("raw-A") && body.contains("raw-B"));
+
+        // Order-independent assertion (no Task 6 dependency):
+        let n = crate::memory::notes::note::KnowledgeNote::from_markdown(
+            "typescript",
+            &body,
+        ).unwrap();
+        assert_eq!(n.source_notes, vec!["raw-A".to_string(), "raw-B".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn create_falls_back_to_batch_sources_when_op_ids_empty() {
+        let (dir, backend, indexer) = fresh().await;
+        let mut tx = CompoundApplyTx::new(&indexer, &backend, dir.path().join("note"), "default")
+            .with_batch_sources(vec!["raw-batch-1".into()]);
+        tx.stage(&PageOp::Create {
+            note_path: "learning/x".into(),
+            title: "X".into(),
+            summary: "".into(),
+            facts: vec!["fact".into()],
+            links: vec![],
+            tags: vec![],
+            relations: vec![],
+            source_ids: vec![], // LLM omitted → fall back to batch
+        })
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let body = tokio::fs::read_to_string(dir.path().join("note/default/learning/x.md"))
+            .await
+            .unwrap();
+        // Order-independent assertion (no Task 6 dependency):
+        let n = crate::memory::notes::note::KnowledgeNote::from_markdown("x", &body).unwrap();
+        assert!(
+            n.source_notes.contains(&"raw-batch-1".to_string()),
+            "expected source_notes to contain 'raw-batch-1', got: {:?}",
+            n.source_notes,
+        );
     }
 }

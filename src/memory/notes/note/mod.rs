@@ -15,6 +15,7 @@ mod tests;
 pub mod types;
 
 pub use helpers::{sanitize_note_path, sanitize_title};
+pub use parsing::fact_provenance_for;
 pub use relation::{is_structural_strong, Relation, STRUCTURAL_STRONG};
 pub use types::{FactProvenance, ProvenanceOrigin, Severity};
 

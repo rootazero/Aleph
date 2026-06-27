@@ -299,6 +299,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true,
     },
     BuiltinToolDefinition {
+        name: "memory_trace",
+        description: "Drill a memory claim down to ground-truth evidence: profile section / note path / raw id → source notes → raw memories → original transcript text. Returns the evidence chain; missing raws are marked as pruned rather than causing an error.",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
         name: "note_orient",
         description: "Fetch a compact orientation snapshot of the memory wiki: SCHEMA, index, and recent log entries",
         requires_config: true,
@@ -1099,6 +1104,7 @@ pub fn create_tool_boxed(
         // BuiltinToolRegistry::with_config(), same as note_manage below.
         "memory_reflect"
         | "recall_context"
+        | "memory_trace"
         | "note_orient"
         | "note_schema"
         | "user_profile"

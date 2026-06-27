@@ -709,4 +709,16 @@ tags: []
         let reparsed = KnowledgeNote::from_markdown(&note.title, &md).unwrap();
         assert!(reparsed.permanent);
     }
+
+    #[test]
+    fn fact_with_src_marker_parses_to_raw_source() {
+        let md = "---\ncategory: preference\n---\n\n- The user prefers TypeScript. <!-- src: raw-uuid-9, origin: raw_source, inferred: false -->\n- A bare inferred fact. <!-- origin: inferred, inferred: true -->\n";
+        let n = KnowledgeNote::from_markdown("typescript", md).unwrap();
+        assert_eq!(n.fact_provenance.len(), 2);
+        assert_eq!(n.fact_provenance[0].origin, crate::memory::notes::note::ProvenanceOrigin::RawSource);
+        assert_eq!(n.fact_provenance[0].source_id.as_deref(), Some("raw-uuid-9"));
+        assert!(!n.fact_provenance[0].inferred);
+        assert_eq!(n.fact_provenance[1].origin, crate::memory::notes::note::ProvenanceOrigin::Inferred);
+        assert!(n.fact_provenance[1].inferred);
+    }
 }

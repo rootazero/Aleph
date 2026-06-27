@@ -627,4 +627,25 @@ mod tests {
             .unwrap();
         assert!(empty.is_empty());
     }
+
+    #[tokio::test]
+    async fn sources_of_and_notes_citing_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap();
+        let note = KnowledgeNote {
+            title: "typescript".into(),
+            category: "preference".into(),
+            facts: vec!["prefers ts".into()],
+            source_notes: vec!["raw-1".into(), "raw-2".into()],
+            ..Default::default()
+        };
+        backend.index_note(&note, "default", "preference").await.unwrap();
+
+        let mut srcs = backend.sources_of("default", "preference/typescript").await.unwrap();
+        srcs.sort();
+        assert_eq!(srcs, vec!["raw-1".to_string(), "raw-2".to_string()]);
+
+        let citing = backend.notes_citing("default", "raw-1").await.unwrap();
+        assert_eq!(citing, vec!["preference/typescript".to_string()]);
+    }
 }

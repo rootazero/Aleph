@@ -366,6 +366,26 @@ pub trait NoteStore: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Source refs (raw-memory ids or prior-note paths) a note was distilled
+    /// from — forward provenance. Default: empty.
+    async fn sources_of(
+        &self,
+        _agent_id: &str,
+        _note_path: &str,
+    ) -> Result<Vec<String>, AlephError> {
+        Ok(Vec::new())
+    }
+
+    /// Reverse provenance: note paths that cite a given source ref (raw id or
+    /// note path). Backed by `idx_notes_sources_ref`. Default: empty.
+    async fn notes_citing(
+        &self,
+        _agent_id: &str,
+        _source_ref: &str,
+    ) -> Result<Vec<String>, AlephError> {
+        Ok(Vec::new())
+    }
+
     /// Enqueue a candidate for async LLM review. Returns the new queue row id.
     async fn enqueue_review(
         &self,

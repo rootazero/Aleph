@@ -47,6 +47,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "memory_explore",
             "memory_timeline",
             "memory_reflect",
+            "memory_trace",
             "recall_context",
             "recall_events",
             "ctx_search",

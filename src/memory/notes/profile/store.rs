@@ -129,17 +129,31 @@ pub fn parse_user_md(raw: &str) -> Result<UserProfile, AlephError> {
     // --- body sections ---
     let body = &rest_of(raw, body_start);
     let mut sections: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut sources: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut current_heading: Option<String> = None;
+    let mut in_sources = false;
 
     for line in body.lines() {
         if let Some(heading) = line.strip_prefix("## ") {
-            current_heading = Some(heading.trim().to_string());
+            let h = heading.trim().to_string();
+            in_sources = h == "Sources";
+            current_heading = Some(h);
         } else if let Some(bullet) = line.strip_prefix("- ") {
-            if let Some(ref h) = current_heading {
-                sections
-                    .entry(h.clone())
-                    .or_default()
-                    .push(bullet.trim().to_string());
+            let bullet = bullet.trim();
+            if in_sources {
+                // Format: "<Section>: sid1, sid2"
+                if let Some((sec, ids)) = bullet.split_once(": ") {
+                    let list: Vec<String> = ids
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    if !list.is_empty() {
+                        sources.insert(sec.trim().to_string(), list);
+                    }
+                }
+            } else if let Some(ref h) = current_heading {
+                sections.entry(h.clone()).or_default().push(bullet.to_string());
             }
         }
     }
@@ -151,6 +165,7 @@ pub fn parse_user_md(raw: &str) -> Result<UserProfile, AlephError> {
         last_session,
         confidence,
         sections,
+        sources,
         raw: raw.to_string(),
         content_hash,
     })
@@ -167,13 +182,15 @@ fn rest_of(s: &str, byte_offset: usize) -> &str {
 /// Render a USER.md string from components.
 ///
 /// Sections are emitted in [`ProfileSection::ALL`] order.  `updated` is set to
-/// today's UTC date automatically.
+/// today's UTC date automatically.  If `sources` is non-empty, a machine-readable
+/// `## Sources` block is appended after the six content sections.
 #[must_use]
 pub fn render_user_md(
     revision: u32,
     last_session: &str,
     confidence: &str,
     sections: &BTreeMap<String, Vec<String>>,
+    sources: &BTreeMap<String, Vec<String>>,
 ) -> String {
     let today = Utc::now().format("%Y-%m-%d").to_string();
     let mut out = String::new();
@@ -195,6 +212,17 @@ pub fn render_user_md(
         if let Some(bullets) = sections.get(heading) {
             for bullet in bullets {
                 out.push_str(&format!("- {bullet}\n"));
+            }
+        }
+    }
+
+    // provenance block (machine-readable; one line per section that has sources)
+    if !sources.is_empty() {
+        out.push('\n');
+        out.push_str("## Sources\n");
+        for (section, ids) in sources {
+            if !ids.is_empty() {
+                out.push_str(&format!("- {section}: {}\n", ids.join(", ")));
             }
         }
     }
@@ -285,6 +313,7 @@ confidence: "medium"
             &profile.last_session,
             &profile.confidence,
             &profile.sections,
+            &profile.sources,
         );
 
         let re_parsed = parse_user_md(&rendered).unwrap();
@@ -328,5 +357,23 @@ confidence: "medium"
         assert!(err.is_err());
         let msg = err.unwrap_err().to_string();
         assert!(msg.contains("hash conflict"));
+    }
+
+    #[test]
+    fn sources_block_round_trips() {
+        let mut sources: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        sources.insert("Identity".into(), vec!["ses_a".into(), "ses_b".into()]);
+        sources.insert("Current Focus".into(), vec!["ses_c".into()]);
+
+        let mut sections: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        sections.insert("Identity".into(), vec!["Prefers TypeScript".into()]);
+
+        let md = render_user_md(2, "ses_c", "high", &sections, &sources);
+        assert!(md.contains("## Sources"));
+        let parsed = parse_user_md(&md).unwrap();
+        assert_eq!(parsed.sources.get("Identity"), Some(&vec!["ses_a".to_string(), "ses_b".to_string()]));
+        assert_eq!(parsed.sources.get("Current Focus"), Some(&vec!["ses_c".to_string()]));
+        // The Sources heading must NOT pollute the 6 content sections.
+        assert!(!parsed.sections.contains_key("Sources"));
     }
 }

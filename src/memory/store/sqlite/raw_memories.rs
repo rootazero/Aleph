@@ -351,6 +351,71 @@ impl RawMemoryStore for SqliteMemoryBackend {
         }
         Ok(results)
     }
+
+    async fn get_raws_by_ids(
+        &self,
+        agent_id: &str,
+        ids: &[String],
+    ) -> Result<Vec<RawMemory>, AlephError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = lock_conn!(self)?;
+        // ?1 = agent_id; ?2 .. ?N+1 = ids
+        let placeholders: Vec<String> = (0..ids.len()).map(|i| format!("?{}", i + 2)).collect();
+        let sql = format!(
+            "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
+             is_processed, created_at \
+             FROM raw_memories \
+             WHERE agent_id = ?1 AND id IN ({})",
+            placeholders.join(", ")
+        );
+        let mut param_values: Vec<&dyn rusqlite::types::ToSql> =
+            vec![&agent_id as &dyn rusqlite::types::ToSql];
+        for id in ids {
+            param_values.push(id as &dyn rusqlite::types::ToSql);
+        }
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| AlephError::config(format!("get_raws_by_ids prepare: {e}")))?;
+        let rows = stmt
+            .query_map(param_values.as_slice(), row_to_raw_memory)
+            .map_err(|e| AlephError::config(format!("get_raws_by_ids query: {e}")))?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(
+                row.map_err(|e| AlephError::config(format!("get_raws_by_ids row: {e}")))?,
+            );
+        }
+        Ok(results)
+    }
+
+    async fn get_raws_by_session(
+        &self,
+        agent_id: &str,
+        session_id: &str,
+    ) -> Result<Vec<RawMemory>, AlephError> {
+        let conn = lock_conn!(self)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
+                 is_processed, created_at \
+                 FROM raw_memories \
+                 WHERE agent_id = ?1 AND session_id = ?2 \
+                 ORDER BY created_at ASC",
+            )
+            .map_err(|e| AlephError::config(format!("get_raws_by_session prepare: {e}")))?;
+        let rows = stmt
+            .query_map(params![agent_id, session_id], row_to_raw_memory)
+            .map_err(|e| AlephError::config(format!("get_raws_by_session query: {e}")))?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(
+                row.map_err(|e| AlephError::config(format!("get_raws_by_session row: {e}")))?,
+            );
+        }
+        Ok(results)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -723,5 +788,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(tele_rows.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn raw_fetch_by_id_and_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap();
+        let mut r = RawMemory::new("hello".into(), RawMemorySource::Transcript);
+        r.agent_id = "default".into();
+        r.session_id = Some("ses_x".into());
+        backend.insert_raw_memory(&r).await.unwrap();
+
+        let by_id = backend.get_raws_by_ids("default", &[r.id.clone()]).await.unwrap();
+        assert_eq!(by_id.len(), 1);
+        let by_ses = backend.get_raws_by_session("default", "ses_x").await.unwrap();
+        assert_eq!(by_ses.len(), 1);
     }
 }

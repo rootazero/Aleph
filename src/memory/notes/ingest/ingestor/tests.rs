@@ -803,6 +803,7 @@ async fn dedup_redirects_near_duplicate_create_to_append() {
         score: 1.0,
     }];
     let ops = vec![PageOp::Create {
+        source_ids: vec![],
         note_path: "learning/tokio-runtime".into(),
         title: "Tokio runtime".into(),
         summary: "async".into(),
@@ -861,6 +862,7 @@ async fn dedup_disabled_keeps_create_unchanged() {
         score: 1.0,
     }];
     let ops = vec![PageOp::Create {
+        source_ids: vec![],
         note_path: "learning/tokio-runtime".into(),
         title: "Tokio runtime".into(),
         summary: "async".into(),
@@ -913,6 +915,7 @@ async fn dedup_never_self_redirects() {
         score: 1.0,
     }];
     let ops = vec![PageOp::Create {
+        source_ids: vec![],
         note_path: "learning/tokio".into(),
         title: "Tokio".into(),
         summary: "async".into(),
@@ -969,6 +972,7 @@ async fn run_dedup_tier(seed_vec: Vec<f32>, budget: RelatedBudget) -> Vec<PageOp
         score: 1.0,
     }];
     let ops = vec![PageOp::Create {
+        source_ids: vec![],
         note_path: "learning/tokio-runtime".into(),
         title: "Tokio runtime".into(),
         summary: "async".into(),
@@ -1042,6 +1046,7 @@ fn related_page(path: &str) -> RelatedPage {
 
 fn linkless_create(path: &str) -> PageOp {
     PageOp::Create {
+        source_ids: vec![],
         note_path: path.to_string(),
         title: "T".into(),
         summary: "S".into(),
@@ -1222,6 +1227,7 @@ async fn enforce_link_contract_links_via_keywords_when_related_empty() {
         gate: None,
     };
     let ops = vec![PageOp::Create {
+        source_ids: vec![],
         note_path: "entity/us-iran-conflict-2026".into(),
         title: "US-Iran Conflict".into(),
         summary: "tensions monitored".into(),

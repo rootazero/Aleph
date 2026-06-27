@@ -100,7 +100,8 @@ impl DreamStage for NoteSynthesisStage {
                 category: "synthesis".to_string(),
                 tags: vec![category.clone(), "synthesis".to_string()],
                 facts: vec![synthesis_text.clone()],
-                links: source_links,
+                links: source_links.clone(),
+                source_notes: source_links,
                 created_at: chrono::Utc::now().timestamp(),
                 updated_at: chrono::Utc::now().timestamp(),
                 content_hash: String::new(),
@@ -229,5 +230,26 @@ mod tests {
             "synthesis category must be excluded"
         );
         assert_eq!(by_category["preference"].len(), 3);
+    }
+
+    #[test]
+    fn synthesis_note_records_source_member_paths() {
+        // Mirror the construction at note_synthesis.rs: a synthesis note built
+        // from member paths must expose them as source_notes (provenance), not
+        // only as links.
+        let member_paths = vec!["learning/tokio".to_string(), "learning/async".to_string()];
+        let note = KnowledgeNote {
+            title: "learning Synthesis".into(),
+            category: "synthesis".into(),
+            tags: vec!["learning".into(), "synthesis".into()],
+            facts: vec!["Synthesized insight.".into()],
+            links: member_paths.clone(),
+            source_notes: member_paths.clone(),
+            created_at: 0,
+            updated_at: 0,
+            content_hash: String::new(),
+            ..Default::default()
+        };
+        assert_eq!(note.source_notes, member_paths);
     }
 }

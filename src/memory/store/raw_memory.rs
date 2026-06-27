@@ -354,6 +354,26 @@ pub trait RawMemoryStore: Send + Sync {
             .find(|r| r.path.as_deref() == Some(path)))
     }
 
+    /// Fetch raw memory rows by their explicit ids, scoped to an agent.
+    /// Returns an empty vec when `ids` is empty. Default: empty.
+    async fn get_raws_by_ids(
+        &self,
+        _agent_id: &str,
+        _ids: &[String],
+    ) -> Result<Vec<RawMemory>, AlephError> {
+        Ok(Vec::new())
+    }
+
+    /// Fetch all raw memory rows for a session, ordered by `created_at` ASC.
+    /// Default: empty.
+    async fn get_raws_by_session(
+        &self,
+        _agent_id: &str,
+        _session_id: &str,
+    ) -> Result<Vec<RawMemory>, AlephError> {
+        Ok(Vec::new())
+    }
+
     /// Get raw memories by storage source type, scoped to an agent.
     /// Used for cross-session retrieval (e.g. all `SessionCompressed` summaries).
     ///

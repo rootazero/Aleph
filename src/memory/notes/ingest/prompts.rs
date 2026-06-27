@@ -51,14 +51,22 @@ to them, emit an IngestPlan that updates the wiki.
     USER stated or confirmed about themselves or the world. Do NOT record
     the assistant's own suggestions, hedges, or proposed options as user
     facts unless the user explicitly accepted them.
+13. PROVENANCE. Each raw memory in the input is shown as
+    `### raw-N (id=<UUID>, source=...)`. For every `create` and `append`
+    op, set `source_ids` to the list of `<UUID>` values whose content the
+    op was distilled from. When a SINGLE fact comes verbatim from one raw,
+    you MAY also append an inline marker to that fact string:
+    `<!-- src: <UUID>, origin: raw_source, inferred: false -->`.
+    Facts you infer or generalize need no marker (they default to inferred).
+    Never invent a UUID — copy it exactly from the input.
 
 ## Page op kinds
 
 - `create` — new page. Fields: `note_path` (category/filename),
   `title`, `summary` (≤120 chars), `facts[]`, `links[]` (use `[P<n>]`
-  tokens), `tags[]`.
+  tokens), `tags[]`, `source_ids[]` (raw UUIDs this page came from).
 - `append` — add facts to an existing page. Fields: `note_path`,
-  `new_facts[]`, `new_links[]`.
+  `new_facts[]`, `new_links[]`, `source_ids[]`.
 - `update` — replace facts on an existing page. Fields: `note_path`,
   `expected_content_hash`, `new_facts[]`, `reason`.
 - `contradict` — mark a page contradicted by new info. Fields:
@@ -100,8 +108,8 @@ use only the token numbers that actually appear in your input's "Related
 existing pages" section (e.g. if only `[P0]` is shown, never write `[P1]`):
 
 ```json
-{"kind": "create", "note_path": "personal/li-wei.md", "title": "Li Wei", "summary": "User's partner of six years", "facts": ["Li Wei works in tech."], "links": ["[P3]"], "tags": ["personal"]}
-{"kind": "append", "note_path": "[P1]", "new_facts": ["Comments must be in English."], "new_links": []}
+{"kind": "create", "note_path": "preference/typescript.md", "title": "TypeScript", "summary": "User prefers TypeScript", "facts": ["The user prefers TypeScript. <!-- src: 7f3a..., origin: raw_source, inferred: false -->"], "links": ["[P3]"], "tags": ["preference"], "source_ids": ["7f3a..."]}
+{"kind": "append", "note_path": "[P1]", "new_facts": ["Comments must be in English."], "new_links": [], "source_ids": ["9b2c..."]}
 {"kind": "update", "note_path": "[P0]", "expected_content_hash": "<copy hash from input>", "new_facts": ["Current focus is the memory subsystem."], "reason": "User clarified the focus area."}
 {"kind": "link", "from": "[P3]", "to": "[P0]"}
 {"kind": "supersede", "old_path": "[P2]", "new_path": "[P0]"}

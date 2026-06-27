@@ -343,6 +343,8 @@ pub struct BuiltinToolRegistry {
     /// Memory backend for the `recall_context` tool (pre-compression recovery).
     /// Built per-call with the active session id from `session_context_handle`.
     pub(crate) recall_context_db: Option<crate::memory::store::MemoryBackend>,
+    /// Memory backend for the `memory_trace` tool (evidence-chain walk).
+    pub(crate) memory_trace_db: Option<crate::memory::store::MemoryBackend>,
     /// Tool metadata for lookup
     pub(crate) tools: HashMap<String, UnifiedTool>,
 }

@@ -96,6 +96,7 @@ mod tests {
                 last_session: "s1".into(),
                 confidence: "high".into(),
                 sections: Default::default(),
+                sources: Default::default(),
                 raw: "## Identity\n- test user".into(),
                 content_hash: "abc".into(),
             }))

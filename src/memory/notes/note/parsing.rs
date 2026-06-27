@@ -182,6 +182,27 @@ pub fn parse_date_to_unix(date: &Option<String>) -> Result<i64, AlephError> {
     Ok(dt.and_utc().timestamp())
 }
 
+/// Per-fact provenance parse — single-fact counterpart of
+/// `extract_provenance_markers`. Returns `Default` (Legacy) when the fact
+/// carries no recognizable marker.
+#[must_use]
+pub fn fact_provenance_for(fact: &str) -> super::types::FactProvenance {
+    use super::types::{FactProvenance, ProvenanceOrigin};
+    if let Some(caps) = PROVENANCE_RE.captures(fact) {
+        let source_id = caps.get(1).map(|m| m.as_str().trim().to_string());
+        let origin = match caps.get(2).map(|m| m.as_str()).unwrap_or("legacy") {
+            "raw_source" => ProvenanceOrigin::RawSource,
+            "prior_note" => ProvenanceOrigin::PriorNote,
+            "inferred" => ProvenanceOrigin::Inferred,
+            _ => ProvenanceOrigin::Legacy,
+        };
+        let inferred = caps.get(3).map(|m| m.as_str() == "true").unwrap_or(false);
+        FactProvenance { origin, source_id, inferred }
+    } else {
+        FactProvenance::default()
+    }
+}
+
 /// Extract bullet-point facts from the body.
 ///
 /// Each top-level bullet (`- `) starts a new fact. Indented lines (indent >= 2)
