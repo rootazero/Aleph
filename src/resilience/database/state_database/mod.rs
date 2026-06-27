@@ -25,7 +25,7 @@ pub struct StateDatabase {
 
 impl StateDatabase {
     /// Register sqlite-vec extension for all connections
-    fn register_sqlite_vec_extension() {
+    fn register_sqlite_vec_extension() -> Result<(), AlephError> {
         // Register sqlite-vec extension before opening any connection
         // SAFETY: sqlite3_vec_init is the C entrypoint for the sqlite-vec extension;
         // the detailed rationale is inside the unsafe block.
@@ -40,8 +40,14 @@ impl StateDatabase {
                 *const rusqlite::ffi::sqlite3_api_routines,
             ) -> std::ffi::c_int;
             let init: SqliteVecInit = std::mem::transmute(sqlite3_vec_init as *const ());
-            rusqlite::ffi::sqlite3_auto_extension(Some(init));
+            let rc = rusqlite::ffi::sqlite3_auto_extension(Some(init));
+            if rc != rusqlite::ffi::SQLITE_OK {
+                return Err(AlephError::config(format!(
+                    "Failed to register sqlite-vec extension: error code {rc}"
+                )));
+            }
         }
+        Ok(())
     }
 
     /// Create the database schema
@@ -117,7 +123,7 @@ impl StateDatabase {
     /// Useful for unit tests that need isolated database instances.
     #[cfg(test)]
     pub fn in_memory() -> Result<Self, AlephError> {
-        Self::register_sqlite_vec_extension();
+        Self::register_sqlite_vec_extension()?;
 
         let conn = Connection::open_in_memory()
             .map_err(|e| AlephError::config(format!("Failed to open in-memory database: {}", e)))?;
@@ -151,7 +157,7 @@ impl StateDatabase {
     /// When embedding dimension changes (e.g., 384 -> 1024), old data is cleared.
     pub fn new(db_path: PathBuf) -> Result<Self, AlephError> {
         Self::ensure_parent_dir(&db_path)?;
-        Self::register_sqlite_vec_extension();
+        Self::register_sqlite_vec_extension()?;
 
         let conn = Self::open_db(&db_path)?;
 
@@ -206,7 +212,7 @@ impl StateDatabase {
     pub fn new_with_dim(db_path: PathBuf, embedding_dim: u32) -> Result<Self, AlephError> {
         Self::validate_embedding_dim(embedding_dim)?;
         Self::ensure_parent_dir(&db_path)?;
-        Self::register_sqlite_vec_extension();
+        Self::register_sqlite_vec_extension()?;
 
         let conn = Self::open_db(&db_path)?;
 
