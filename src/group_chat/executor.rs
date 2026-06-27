@@ -226,12 +226,11 @@ impl GroupChatExecutor {
                 .participants
                 .iter()
                 .find(|p| p.id == respondent.persona_id)
-                .ok_or_else(|| GroupChatError::PersonaNotFound(respondent.persona_id.clone()))?
-                .clone();
+                .ok_or_else(|| GroupChatError::PersonaNotFound(respondent.persona_id.clone()))?;
 
             // Build persona prompt with cumulative prior discussion
             let persona_prompt = build_persona_prompt(
-                &persona,
+                persona,
                 user_message,
                 &prior_discussion,
                 &respondent.guidance,
@@ -241,7 +240,7 @@ impl GroupChatExecutor {
             // `model` / `thinking_level` are honored only when the persona sets
             // them; otherwise these resolve to `None` and the request is identical
             // to using the provider's defaults.
-            let provider = self.resolve_provider(&persona);
+            let provider = self.resolve_provider(persona);
             let think_level = persona
                 .thinking_level
                 .as_deref()
