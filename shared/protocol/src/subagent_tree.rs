@@ -192,6 +192,7 @@ fn assemble<'a>(
     }
 }
 
+#[allow(clippy::cast_precision_loss)] // hotness is a heuristic ratio
 fn compute_rollup(node: &SubagentNode, children: &[TreeNode]) -> Rollup {
     let mut r = Rollup {
         descendant_count: 1,

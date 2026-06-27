@@ -101,6 +101,7 @@ impl NodeCommon {
     /// Per the JSON Canvas spec, `x`/`y` are the box's **top-left** corner and
     /// `width`/`height` extend right/down (+y is down).
     #[must_use]
+    #[allow(clippy::cast_precision_loss)] // centre of integer canvas coords; loss acceptable
     pub fn center(&self) -> (f64, f64) {
         (
             self.x as f64 + self.width as f64 / 2.0,
