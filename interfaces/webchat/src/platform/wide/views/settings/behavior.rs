@@ -4,6 +4,7 @@
 
 use crate::api::{BehaviorConfig, BehaviorConfigApi};
 use crate::context::DashboardState;
+use crate::state::typewriter::TypewriterClock;
 use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -93,6 +94,9 @@ pub fn BehaviorView() -> impl IntoView {
 fn OutputModeSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
+    // Shared reveal clock (absent in storybook) — kept live on save so the chat
+    // honors the new mode immediately, not just next reload.
+    let typewriter = use_context::<TypewriterClock>();
     let output_mode = RwSignal::new(config.get().output_mode);
     let saving = RwSignal::new(false);
     let save_error = RwSignal::new(Option::<String>::None);
@@ -105,10 +109,14 @@ fn OutputModeSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
 
         let mut cfg = config.get();
         cfg.output_mode = output_mode.get();
+        let is_instant = cfg.output_mode == "instant";
 
         spawn_local(async move {
             match BehaviorConfigApi::update(&state, cfg).await {
                 Ok(_) => {
+                    if let Some(tw) = typewriter {
+                        tw.instant.set(is_instant);
+                    }
                     saving.set(false);
                     save_success.set(true);
                     set_timeout(
@@ -200,6 +208,9 @@ fn OutputModeSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
 fn TypingSpeedSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
+    // Shared reveal clock (absent in storybook) — kept live on save so the chat
+    // reveals at the new speed immediately, not just next reload.
+    let typewriter = use_context::<TypewriterClock>();
     let typing_speed = RwSignal::new(config.get().typing_speed);
     let saving = RwSignal::new(false);
     let save_error = RwSignal::new(Option::<String>::None);
@@ -212,10 +223,14 @@ fn TypingSpeedSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
 
         let mut cfg = config.get();
         cfg.typing_speed = typing_speed.get();
+        let new_cps = cfg.typing_speed;
 
         spawn_local(async move {
             match BehaviorConfigApi::update(&state, cfg).await {
                 Ok(_) => {
+                    if let Some(tw) = typewriter {
+                        tw.cps.set(new_cps);
+                    }
                     saving.set(false);
                     save_success.set(true);
                     set_timeout(

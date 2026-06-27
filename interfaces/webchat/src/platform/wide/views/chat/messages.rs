@@ -7,7 +7,7 @@
 use super::reasoning::ReasoningPanel;
 use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState};
 use super::timeline::{self, TimelineRow};
-use crate::components::markdown::{MarkdownRenderer, StreamingRenderer};
+use crate::components::markdown::{MarkdownRenderer, TypewriterRenderer};
 use crate::components::tool_card::ToolCard;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
@@ -456,6 +456,9 @@ fn MessageBubble(
     };
 
     let content = message.content.clone();
+    // Stable key for the typewriter reveal clock — survives the per-token
+    // remount of a streaming bubble so the reveal sweep stays continuous.
+    let message_id = message.id.clone();
     let is_streaming = message.is_streaming;
     let error = message.error.clone();
     let model_info = message.model_info.clone();
@@ -630,7 +633,7 @@ fn MessageBubble(
                             <div class=bubble_class_reactive id=bubble_dom_id>
                                 {tool_calls_view}
                                 {if is_streaming {
-                                    view! { <StreamingRenderer content=content /> }.into_any()
+                                    view! { <TypewriterRenderer content=content message_id=message_id /> }.into_any()
                                 } else {
                                     view! { <MarkdownRenderer content=content /> }.into_any()
                                 }}
@@ -653,7 +656,7 @@ fn MessageBubble(
                                 </div>
                             }.into_any()
                         } else if is_streaming {
-                            view! { <StreamingRenderer content=content /> }.into_any()
+                            view! { <TypewriterRenderer content=content message_id=message_id /> }.into_any()
                         } else {
                             view! { <MarkdownRenderer content=content /> }.into_any()
                         }}
