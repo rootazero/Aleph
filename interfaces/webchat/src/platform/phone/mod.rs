@@ -17,3 +17,4 @@ pub mod memory;
 pub mod more;
 pub mod settings;
 pub mod shell;
+pub mod teams;
