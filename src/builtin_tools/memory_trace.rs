@@ -32,9 +32,10 @@ pub struct MemoryTraceArgs {
     pub target: String,
     /// The kind of target being traced.
     pub kind: TraceKind,
-    /// Maximum evidence items to return (default: unlimited).
+    /// Maximum number of evidence items to return (default: unlimited). This
+    /// caps the returned `evidence` list; it is not a graph-traversal depth.
     #[serde(default)]
-    pub max_depth: Option<usize>,
+    pub max_results: Option<usize>,
 }
 
 /// A single piece of ground-truth evidence in the chain.
@@ -187,8 +188,8 @@ impl MemoryTraceTool {
             }
         }
 
-        // 4. Apply max_depth cap if requested.
-        if let Some(max) = args.max_depth {
+        // 4. Cap the number of returned evidence items if requested.
+        if let Some(max) = args.max_results {
             evidence.truncate(max);
         }
 
@@ -242,7 +243,7 @@ mod tests {
             .call_impl(MemoryTraceArgs {
                 target: "preference/typescript".into(),
                 kind: TraceKind::Note,
-                max_depth: None,
+                max_results: None,
             })
             .await
             .unwrap();
@@ -312,7 +313,7 @@ mod tests {
             .call_impl(MemoryTraceArgs {
                 target: "Identity".into(),
                 kind: TraceKind::ProfileSection,
-                max_depth: None,
+                max_results: None,
             })
             .await
             .unwrap();
@@ -340,6 +341,6 @@ mod tests {
         let args: MemoryTraceArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.target, "preference/typescript");
         assert_eq!(args.kind, TraceKind::Note);
-        assert!(args.max_depth.is_none());
+        assert!(args.max_results.is_none());
     }
 }
