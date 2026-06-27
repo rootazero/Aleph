@@ -6,7 +6,6 @@
 //!
 //! Missing raws degrade to a `pruned: true` node, never an error.
 
-use crate::error::AlephError;
 use crate::memory::notes::store::NoteStore;
 use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::MemoryBackend;

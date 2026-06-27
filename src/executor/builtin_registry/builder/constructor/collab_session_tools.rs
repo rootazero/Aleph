@@ -538,6 +538,27 @@ impl BuiltinToolRegistry {
             info!("Registered recall_context tool");
         }
 
+        // memory_trace tool — gated on injection_mode (retrieval tools only)
+        if expose_retrieval_tools {
+            use crate::builtin_tools::memory_trace::MemoryTraceTool;
+            let schema = serde_json::to_value(schemars::schema_for!(
+                crate::builtin_tools::memory_trace::MemoryTraceArgs
+            ))
+            .unwrap_or_else(|e| {
+                warn!("Failed to serialize schema for memory_trace: {}", e);
+                serde_json::Value::Object(Default::default())
+            });
+            let mut ut = UnifiedTool::new(
+                format!("builtin:{}", MemoryTraceTool::NAME),
+                MemoryTraceTool::NAME,
+                MemoryTraceTool::DESCRIPTION,
+                ToolSource::Builtin,
+            );
+            ut.parameters_schema = Some(schema);
+            tools.insert(MemoryTraceTool::NAME.to_string(), ut);
+            info!("Registered memory_trace tool");
+        }
+
         (
             message_send_tool,
             inbox_read_tool,
