@@ -70,8 +70,8 @@ impl SkillStatusEntry {
         let disabled = entry_config.and_then(|c| c.enabled).is_some_and(|e| !e);
 
         let scope = entry_config
-            .and_then(|c| c.scope_override)
-            .unwrap_or_else(|| *manifest.scope());
+            .and_then(|c| c.scope_override.clone())
+            .unwrap_or_else(|| manifest.scope().clone());
 
         let mut missing = MissingRequirements::default();
         let eligible = match eligibility {
