@@ -243,6 +243,7 @@ mod tests {
         let mut plan = IngestPlan {
             reasoning: String::new(),
             ops: vec![PageOp::Append {
+                source_ids: vec![],
                 note_path: "[P0]".into(),
                 new_facts: vec!["f".into()],
                 new_links: vec![],
@@ -266,6 +267,7 @@ mod tests {
             reasoning: String::new(),
             ops: vec![
                 PageOp::Append {
+                    source_ids: vec![],
                     note_path: "[P99]".into(), // hallucinated — only P0..P2 exist
                     new_facts: vec!["f".into()],
                     new_links: vec![],
@@ -296,6 +298,7 @@ mod tests {
         let mut plan = IngestPlan {
             reasoning: String::new(),
             ops: vec![PageOp::Append {
+                source_ids: vec![],
                 note_path: "learning/rust-async".into(),
                 new_facts: vec!["f".into()],
                 new_links: vec!["learning/tokio".into()],
@@ -324,6 +327,7 @@ mod tests {
         let mut plan = IngestPlan {
             reasoning: String::new(),
             ops: vec![PageOp::Create {
+                source_ids: vec![],
                 note_path: "learning/new".into(),
                 title: "New".into(),
                 summary: String::new(),
@@ -380,6 +384,7 @@ mod tests {
         let mut plan = IngestPlan {
             reasoning: String::new(),
             ops: vec![PageOp::Append {
+                source_ids: vec![],
                 note_path: "learning/x".into(),
                 new_facts: vec!["f".into()],
                 new_links: vec![],
