@@ -829,6 +829,7 @@ impl ChatState {
         self.send_error.set(None);
         self.prompt_queue.set(Vec::new());
         self.strip_open.set(std::collections::HashMap::new());
+        self.plan.set(None);
     }
 
     /// Clear session state but keep `agent_id` (for new chat within same agent).
@@ -844,6 +845,7 @@ impl ChatState {
         self.team_id.set(None);
         self.team_members.set(Vec::new());
         self.strip_open.set(std::collections::HashMap::new());
+        self.plan.set(None);
         // agent_id is intentionally preserved
     }
 
@@ -893,8 +895,9 @@ impl ChatState {
         self.selected_model.set(snap.selected_model);
         self.next_msg_id.set(snap.next_msg_id);
         // Ephemeral (not in the snapshot): reset so the outgoing tab's
-        // collapse choices don't leak into the restored session.
+        // collapse choices / Todo panel don't leak into the restored session.
         self.strip_open.set(std::collections::HashMap::new());
+        self.plan.set(None);
     }
 }
 
