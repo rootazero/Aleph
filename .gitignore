@@ -85,6 +85,11 @@ graphify-out/
 .codegraph/
 .superpowers/
 .omc/
+# rust-doctor per-crate diagnostic cache (regenerated on each scan)
+.rust-doctor-cache.json
+**/.rust-doctor-cache.json
+# rust-doctor scratch revert list
+/revert_list.txt
 
 # ==============================================================================
 # Git worktrees
