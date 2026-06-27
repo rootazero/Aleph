@@ -30,7 +30,7 @@
 | Context | 记忆三支柱②会话结束 flush | Session-End Flush | `src/memory/flush/mod.rs` | ✅ |
 | Context | 记忆三支柱③错误沉淀教训 | Correction & Lesson Sedimentation | `src/memory/dreaming/stages/feedback_distill.rs` | ✅ |
 | Context | 做梦策略卡死 / wasted distillation 误报 / mutation gate / skill_recall_rate | Dream Signal Integrity & Mutation Gate | `src/memory/dreaming/{signals,mutation_gate,selector}.rs` + `mod.rs::compute_raw_metrics` | ✅ recall 连线(§2.8, 2026-06-26) |
-| Context | 记忆溯源 / evidence chain / 下钻 / drill-down | Memory Provenance Chain | `src/memory/apply.rs` source_notes + `src/memory/notes/{notes_sources,notes_provenance}` + `src/builtin_tools/memory_trace.rs` + `src/gateway/handlers/memory.rs` | ✅ 已连(2026-06-27) |
+| Context | 记忆溯源 / evidence chain / 下钻 / drill-down | Memory Provenance Chain | `src/memory/notes/ingest/apply.rs` (source_notes/fact_provenance) + `notes_sources`/`notes_provenance` tables (`src/memory/store/sqlite/schema/ddl.rs`) + `src/builtin_tools/memory_trace.rs` + `src/gateway/handlers/memory.rs::handle_trace` | ✅ 已连(2026-06-27) |
 | Harness | harness 架构 / Think-Act 笨循环 | Harness Architecture | `src/harness/` (12 文件) | ✅ |
 | Harness | tool calling 2.0 / tool use | Tool Calling | `src/harness/agent/act.rs` + `src/tools/scoped/` | ✅ |
 | Harness | 工具并发(群分) ≠ 任务 DAG | Tool Concurrency vs Task DAG | `src/tools/concurrency.rs`(工具群分) · `src/workflow/compile.rs`+`src/teams/dispatcher/`(任务 DAG) | ✅ 已澄清(G5) |
