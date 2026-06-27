@@ -46,11 +46,11 @@ impl std::fmt::Debug for ClaudeVisionProvider {
 }
 
 impl ClaudeVisionProvider {
-    fn build_client() -> Client {
+    fn build_client() -> Result<Client, VisionError> {
         Client::builder()
             .timeout(API_TIMEOUT)
             .build()
-            .expect("failed to build reqwest client with timeout")
+            .map_err(|e| VisionError::ProviderError(format!("failed to build HTTP client: {e}")))
     }
 
     /// Create a new Claude Vision provider.
@@ -58,15 +58,15 @@ impl ClaudeVisionProvider {
     /// # Arguments
     /// * `api_key` — Anthropic API key
     /// * `model` — Model identifier (e.g. "claude-sonnet-4-20250514")
-    pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Self {
-        Self {
-            client: Self::build_client(),
+    pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Result<Self, VisionError> {
+        Ok(Self {
+            client: Self::build_client()?,
             api_key: api_key.into(),
             model: model.into(),
             base_url: "https://api.anthropic.com".to_string(),
             max_tokens: 1024,
             default_confidence: 0.9,
-        }
+        })
     }
 
     /// Create a new provider with a custom base URL (for testing).
@@ -74,15 +74,15 @@ impl ClaudeVisionProvider {
         api_key: impl Into<String>,
         model: impl Into<String>,
         base_url: impl Into<String>,
-    ) -> Self {
-        Self {
-            client: Self::build_client(),
+    ) -> Result<Self, VisionError> {
+        Ok(Self {
+            client: Self::build_client()?,
             api_key: api_key.into(),
             model: model.into(),
             base_url: base_url.into(),
             max_tokens: 1024,
             default_confidence: 0.9,
-        }
+        })
     }
 
     /// Set the maximum tokens for API calls (default: 1024).
@@ -310,17 +310,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn capabilities_correct() {
-        let provider = ClaudeVisionProvider::new("sk-test", "claude-sonnet-4-20250514");
+    fn capabilities_correct() -> Result<(), VisionError> {
+        let provider = ClaudeVisionProvider::new("sk-test", "claude-sonnet-4-20250514")?;
         let caps = provider.capabilities();
         assert!(caps.image_understanding);
         assert!(caps.ocr);
         assert!(!caps.object_detection);
+        Ok(())
     }
 
     #[test]
-    fn name_is_claude_vision() {
-        let provider = ClaudeVisionProvider::new("sk-test", "claude-sonnet-4-20250514");
+    fn name_is_claude_vision() -> Result<(), VisionError> {
+        let provider = ClaudeVisionProvider::new("sk-test", "claude-sonnet-4-20250514")?;
         assert_eq!(provider.name(), "claude-vision");
+        Ok(())
     }
 }
