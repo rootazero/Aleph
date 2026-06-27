@@ -421,22 +421,22 @@ impl ProviderRegistry for MultiProviderRegistry {
             state.fallbacks.clone()
         };
 
-        for fb_provider_name in &global_fallbacks {
-            if state.providers.contains_key(fb_provider_name) {
-                candidates.push((fb_provider_name.clone(), String::new()));
+        for fb_provider_name in global_fallbacks {
+            if state.providers.contains_key(&fb_provider_name) {
+                candidates.push((fb_provider_name, String::new()));
             }
         }
 
         // Try each candidate
-        for (i, (provider_name, candidate_model)) in candidates.iter().enumerate() {
-            let health = state.health.get(provider_name).cloned().unwrap_or_default();
+        for (i, (provider_name, candidate_model)) in candidates.into_iter().enumerate() {
+            let health = state.health.get(&provider_name).cloned().unwrap_or_default();
             if !health.is_usable() {
                 continue;
             }
-            if state.providers.contains_key(provider_name) {
+            if state.providers.contains_key(&provider_name) {
                 return Ok(ResolvedModel {
-                    provider_name: provider_name.clone(),
-                    model: candidate_model.clone(),
+                    provider_name,
+                    model: candidate_model,
                     is_fallback: i > 0,
                     original_model: model.to_string(),
                 });
