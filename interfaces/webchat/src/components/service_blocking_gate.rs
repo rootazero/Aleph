@@ -171,7 +171,7 @@ pub fn ServiceBlockingGate() -> impl IntoView {
                 </div>
             </div>
         </Show>
-    }
+    }.into_any()
 }
 
 #[cfg(test)]

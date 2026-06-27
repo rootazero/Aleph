@@ -120,7 +120,7 @@ pub fn ConnectionStatus() -> impl IntoView {
                 })
             }}
         </A>
-    }
+    }.into_any()
 }
 
 /// Resolve the human-readable label for the live core. The origin that served

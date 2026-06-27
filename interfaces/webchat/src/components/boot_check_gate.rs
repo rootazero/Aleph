@@ -142,7 +142,7 @@ pub fn BootCheckGate() -> impl IntoView {
                 </div>
             </div>
         </Show>
-    }
+    }.into_any()
 }
 
 #[cfg(test)]

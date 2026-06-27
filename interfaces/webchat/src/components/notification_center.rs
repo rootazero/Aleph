@@ -307,7 +307,7 @@ pub fn NotificationCenter() -> impl IntoView {
                 </div>
             </div>
         </Show>
-    }
+    }.into_any()
 }
 
 #[cfg(test)]
