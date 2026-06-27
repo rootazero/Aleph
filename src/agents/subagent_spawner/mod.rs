@@ -212,9 +212,11 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             // fall back to the raw worktree/repo paths.
             let wt = h.path().to_path_buf();
             let repo = h.repo_root().to_path_buf();
+            let wt_for_blocking = wt.clone();
+            let repo_for_blocking = repo.clone();
             let (wt, repo) = tokio::task::spawn_blocking(move || {
-                let wt = wt.canonicalize().unwrap_or(wt);
-                let repo = repo.canonicalize().unwrap_or(repo);
+                let wt = wt_for_blocking.canonicalize().unwrap_or(wt_for_blocking);
+                let repo = repo_for_blocking.canonicalize().unwrap_or(repo_for_blocking);
                 (wt, repo)
             })
             .await

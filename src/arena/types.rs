@@ -280,7 +280,7 @@ impl ArenaManifest {
         }
 
         let strategy = match strategy_str {
-            "peer" => CoordinationStrategy::Peer { coordinator: coord },
+            "peer" => CoordinationStrategy::Peer { coordinator: coord.clone() },
             "pipeline" => {
                 let stages = stages.unwrap_or_else(|| {
                     agent_ids

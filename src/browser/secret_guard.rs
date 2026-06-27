@@ -50,7 +50,7 @@ pub(crate) fn scan_url_for_secrets(url: &str) -> Option<String> {
     // evasion such as "%73%6b-…".
     let decoded = percent_decode_str(url).decode_utf8_lossy();
     for candidate in [url, decoded.as_ref()] {
-        for rule in &secret_rules {
+        for rule in secret_rules {
             if let Some(m) = rule.detect(candidate).into_iter().next() {
                 return Some(m.rule_name);
             }
@@ -78,7 +78,7 @@ pub(crate) fn scan_url_for_secrets(url: &str) -> Option<String> {
 pub(crate) fn redact_secrets(text: &str) -> Cow<'_, str> {
     let rules = critical_rules();
     let mut matches: Vec<PiiMatch> = Vec::new();
-    for rule in &rules {
+    for rule in rules {
         matches.extend(rule.detect(text));
     }
     if matches.is_empty() {

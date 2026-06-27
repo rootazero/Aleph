@@ -614,7 +614,7 @@ fn copy_tree_with_prune(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
         // Use symlink_metadata so symlinks are not preserved; copying skips them,
         // so leaving them in `keep` would leave stale/dangling symlinks behind.
-        let ft = e.symlink_metadata()?.file_type();
+        let ft = std::fs::symlink_metadata(e.path())?.file_type();
         if !ft.is_symlink() {
             keep.insert(e.file_name());
         }
@@ -645,7 +645,7 @@ fn copy_dir_into(src: &Path, dst: &Path) -> std::io::Result<()> {
         let to = dst.join(&name);
         // Use symlink_metadata so we don't follow symlinks — prevents copying
         // files from outside the source tree or recursing into symlinked dirs.
-        let ft = entry.symlink_metadata()?.file_type();
+        let ft = std::fs::symlink_metadata(entry.path())?.file_type();
         if ft.is_dir() {
             copy_dir_into(&from, &to)?;
         } else if ft.is_file() {
