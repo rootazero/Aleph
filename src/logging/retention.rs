@@ -3,6 +3,8 @@
 /// This module re-exports the cleanup function from `aleph-logging`.
 use std::path::Path;
 
+use crate::logging::LoggingError;
+
 /// Clean up old log files based on retention policy.
 ///
 /// Delegates to `aleph_logging::cleanup_old_logs`.
@@ -11,8 +13,9 @@ pub fn cleanup_old_logs(
     log_dir: &Path,
     retention_days: u32,
     component_prefix: Option<&str>,
-) -> Result<usize, Box<dyn std::error::Error>> {
+) -> Result<usize, LoggingError> {
     aleph_logging::cleanup_old_logs(log_dir, retention_days, component_prefix)
+        .map_err(LoggingError::Cleanup)
 }
 
 #[cfg(test)]

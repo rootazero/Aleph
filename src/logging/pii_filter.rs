@@ -167,8 +167,7 @@ impl Visit for StringVisitor {
             self.message.push_str(trimmed);
         } else {
             use std::fmt::Write;
-            write!(&mut self.message, "{}={:?}", field.name(), value)
-                .expect("write to String cannot fail");
+            let _ = write!(&mut self.message, "{}={:?}", field.name(), value);
         }
     }
 
