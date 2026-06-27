@@ -290,10 +290,11 @@ fn topo_sort(tpl: &TeamTemplate) -> Result<Vec<&super::types::TemplateTask>, Tea
     ready.sort_by_key(|k| pos.get(*k).copied().unwrap_or(0));
 
     let mut out: Vec<&super::types::TemplateTask> = Vec::with_capacity(tpl.tasks.len());
+    let mut newly_ready: Vec<&str> = Vec::new();
     while let Some(k) = ready.pop() {
         out.push(by_key[k]);
         // Decrement in-degree for everyone depending on `k`.
-        let mut newly_ready: Vec<&str> = Vec::new();
+        newly_ready.clear();
         for other in &tpl.tasks {
             if other.depends_on.iter().any(|d| d == k) {
                 let entry = in_deg.get_mut(other.key.as_str()).ok_or_else(|| {
