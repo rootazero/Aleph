@@ -894,8 +894,8 @@ impl McpManagerActor {
         let config = config.clone();
         Some(McpServerStatusDetail {
             id: server_id.to_string(),
-            name: config.name,
-            transport: config.transport,
+            name: config.name.clone(),
+            transport: config.transport.clone(),
             health,
             tools,
             resources,
