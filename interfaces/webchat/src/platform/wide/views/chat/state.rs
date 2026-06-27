@@ -136,13 +136,11 @@ pub struct ProviderRetryNotice {
     pub max_attempts: u32,
 }
 
-/// Context-window occupancy snapshot for the composer gauge.
-///
-/// Populated from each `run_complete` summary (`token_breakdown.input` is the
-/// last turn's context tokens, `total_tokens` the run's running total). The
-/// window denominator is resolved client-side by
-/// [`super::context_gauge::context_window_for`] since the panel — an I/O-only
-/// interface (R4) — cannot reach core's model catalogue.
+/// Context-window occupancy snapshot for the composer gauge. All three figures
+/// are computed by core and shipped on the `run_complete` summary — the panel
+/// is a pure renderer (R4): `used_tokens` = current occupancy
+/// (`prompt_tokens_total` + last output), `window_tokens` = the model's
+/// authoritative context window, `total_tokens` = the run's cumulative total.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextUsage {
     /// Input/context tokens occupying the window after the latest turn.
