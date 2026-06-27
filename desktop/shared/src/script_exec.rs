@@ -1,0 +1,142 @@
+//! Process-execution helpers shared by every platform's `AutomationCapability`.
+//!
+//! Two execution shapes, deliberately separated:
+//!
+//! * [`output_capped`] — run a command to completion under a hard timeout,
+//!   killing the child on elapse. This is for scripts that are *expected to
+//!   terminate* (`ls`, `osascript "return 2+2"`). Without the cap a script
+//!   that never exits (a dev server invoked by mistake) blocks the caller
+//!   until the harness's 300s per-turn timeout, leaking a hung child.
+//!
+//! * [`spawn_background`] — launch a *long-running* process detached, with its
+//!   stdout/stderr redirected to a log file, and return its PID immediately.
+//!   This is the correct path for dev servers / watchers / daemons that the
+//!   model wants running so it can then open a browser against them.
+
+use std::process::{Output, Stdio};
+use std::time::Duration;
+
+use tokio::process::Command;
+
+use crate::error::{DesktopError, Result};
+
+/// Hard ceiling for a synchronous `run_script` call. Scripts are expected to
+/// terminate; anything that runs indefinitely must use [`spawn_background`].
+///
+/// Chosen well under the harness's 300s per-turn timeout so a hung script
+/// fails fast with an actionable error instead of a silent five-minute stall,
+/// yet generous enough not to kill ordinary slow-but-terminating commands
+/// (`npm install`, a build, a test run).
+pub const RUN_SCRIPT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Run `cmd` to completion, but never longer than `timeout`. On elapse the
+/// child is killed (`kill_on_drop`) so we never leak a hung process, and the
+/// caller gets a clear error that points at the background path.
+pub async fn output_capped(mut cmd: Command, timeout: Duration) -> Result<Output> {
+    // kill_on_drop ensures the SIGKILL fires when the timed-out future is
+    // dropped below — otherwise the child outlives the call as an orphan.
+    cmd.kill_on_drop(true);
+    match tokio::time::timeout(timeout, cmd.output()).await {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(e)) => Err(DesktopError::InputFailed(format!(
+            "failed to spawn process: {e}"
+        ))),
+        Err(_elapsed) => Err(DesktopError::InputFailed(format!(
+            "script exceeded {}s and was terminated. For a long-running process \
+             (dev server, file watcher, daemon) use the automation `run_background` \
+             action instead, then read its log file.",
+            timeout.as_secs()
+        ))),
+    }
+}
+
+/// Spawn `cmd` as a detached background process: stdin is `/dev/null`, stdout
+/// and stderr are redirected to `log_path` (truncated/created), and the call
+/// returns the child PID without waiting for it to exit.
+///
+/// A lightweight task owns the [`tokio::process::Child`] and reaps it when the
+/// process eventually exits, so a finished background process never lingers as
+/// a zombie. The process itself runs independently of that task.
+pub async fn spawn_background(mut cmd: Command, log_path: &str) -> Result<u32> {
+    let log = std::fs::File::create(log_path).map_err(|e| {
+        DesktopError::InputFailed(format!("cannot create log file {log_path}: {e}"))
+    })?;
+    let log_err = log
+        .try_clone()
+        .map_err(|e| DesktopError::InputFailed(format!("cannot duplicate log handle: {e}")))?;
+
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err));
+
+    let mut child = cmd.spawn().map_err(|e| {
+        DesktopError::InputFailed(format!("failed to spawn background process: {e}"))
+    })?;
+    let pid = child
+        .id()
+        .ok_or_else(|| DesktopError::InputFailed("spawned background process has no PID".into()))?;
+
+    // Detach + reap: keep the process running independently; this task only
+    // owns the handle so the child is reaped (no zombie) when it exits.
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+    });
+
+    Ok(pid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sh(script: &str) -> Command {
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(script);
+        c
+    }
+
+    #[tokio::test]
+    async fn output_capped_returns_output_for_fast_command() {
+        let out = output_capped(sh("echo hi"), Duration::from_secs(5))
+            .await
+            .expect("fast command should succeed");
+        assert!(String::from_utf8_lossy(&out.stdout).contains("hi"));
+    }
+
+    #[tokio::test]
+    async fn output_capped_times_out_and_reports_background_hint() {
+        // `sleep 5` would block far past the 200ms cap; the call must return
+        // promptly with an error that steers the caller to run_background.
+        let err = output_capped(sh("sleep 5"), Duration::from_millis(200))
+            .await
+            .expect_err("a command exceeding the cap must error");
+        let msg = err.to_string();
+        assert!(msg.contains("exceeded"), "got: {msg}");
+        assert!(msg.contains("run_background"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn spawn_background_returns_pid_and_writes_log() {
+        let dir = std::env::temp_dir();
+        let log_path = dir
+            .join("aleph-script-exec-test.log")
+            .to_string_lossy()
+            .into_owned();
+        let pid = spawn_background(sh("echo bg-hello"), &log_path)
+            .await
+            .expect("background spawn should succeed");
+        assert!(pid > 0);
+
+        // The process runs detached; poll the log until it flushes the line.
+        let mut contents = String::new();
+        for _ in 0..40 {
+            contents = std::fs::read_to_string(&log_path).unwrap_or_default();
+            if contents.contains("bg-hello") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(contents.contains("bg-hello"), "log was: {contents:?}");
+        let _ = std::fs::remove_file(&log_path);
+    }
+}

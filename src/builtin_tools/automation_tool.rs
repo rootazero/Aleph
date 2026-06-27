@@ -98,6 +98,23 @@ pub struct AutomationArgs {
     /// Optional input text for `run_shortcut`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
+    /// Log file path for `run_background` (captures stdout+stderr). Optional —
+    /// defaults to a temp file whose path is returned in the result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log: Option<String>,
+}
+
+/// Default log path for a `run_background` process when the caller does not
+/// supply one. Uses a per-process counter so concurrent servers don't clobber
+/// each other's logs within a single daemon lifetime.
+fn default_background_log_path() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir()
+        .join(format!("aleph-background-{n}.log"))
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Output from the automation tool.
@@ -127,13 +144,16 @@ impl AlephTool for AutomationTool {
     const DESCRIPTION: &'static str = r#"Run automation scripts and Shortcuts on the desktop.
 
 Actions:
-- run_script: Execute a script. Required: script, language. Languages: "applescript", "javascript"/"jxa", "shell"/"bash", "powershell"
+- run_script: Execute a script that TERMINATES and return its output. Required: script, language. Languages: "applescript", "javascript"/"jxa", "shell"/"bash", "powershell". Bounded by a 120s timeout — do NOT use it for servers or watchers (they never exit and will be killed); use run_background for those.
+- run_background: Launch a LONG-RUNNING process (dev server, file watcher, daemon) detached and return immediately with its PID. Required: script, language. Optional: log (path to capture stdout+stderr; defaults to a temp file, returned in the result). Use this to start a local server, then open the URL.
 - list_shortcuts: List available Shortcuts / automation workflows
 - run_shortcut: Run a Shortcut by name. Required: name. Optional: input
 
 Examples:
 {"action":"run_script","language":"applescript","script":"tell application \"Finder\" to get name of every window"}
 {"action":"run_script","language":"shell","script":"ls -la ~/Desktop"}
+{"action":"run_background","language":"shell","script":"cd /path/to/app && npm run dev","log":"/tmp/devserver.log"}
+{"action":"run_script","language":"shell","script":"open http://localhost:5173"}
 {"action":"list_shortcuts"}
 {"action":"run_shortcut","name":"My Workflow","input":"hello"}"#;
 
@@ -260,12 +280,82 @@ Examples:
                 }
             }
 
+            "run_background" => {
+                let script = match args.script {
+                    Some(ref s) => s.as_str(),
+                    None => {
+                        return Ok(AutomationOutput {
+                            success: false,
+                            data: None,
+                            message: Some(
+                                "run_background requires 'script' parameter.".to_string(),
+                            ),
+                        });
+                    }
+                };
+                let lang_str = match args.language {
+                    Some(ref l) => l.as_str(),
+                    None => {
+                        return Ok(AutomationOutput {
+                            success: false,
+                            data: None,
+                            message: Some(
+                                "run_background requires 'language' parameter. \
+                                 Valid languages: applescript, javascript/jxa, shell/bash, powershell"
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                };
+                let language = match parse_script_language(lang_str) {
+                    Some(l) => l,
+                    None => {
+                        return Ok(AutomationOutput {
+                            success: false,
+                            data: None,
+                            message: Some(format!(
+                                "Unknown language: '{lang_str}'. \
+                                 Valid languages: applescript, javascript/jxa, shell/bash, powershell"
+                            )),
+                        });
+                    }
+                };
+                if let Some(out) = self
+                    .check_approval("run_background", format!("{lang_str} background process"))
+                    .await
+                {
+                    return Ok(out);
+                }
+                let log_path = args
+                    .log
+                    .clone()
+                    .unwrap_or_else(default_background_log_path);
+                match auto.run_background(language, script, &log_path).await {
+                    Ok(pid) => Ok(AutomationOutput {
+                        success: true,
+                        data: Some(serde_json::json!({
+                            "pid": pid,
+                            "log_path": log_path,
+                            "note": "Process started in the background. Read the log_path \
+                                     to check its output/readiness; stop it with \
+                                     run_script `kill <pid>`.",
+                        })),
+                        message: None,
+                    }),
+                    Err(e) => Ok(AutomationOutput {
+                        success: false,
+                        data: None,
+                        message: Some(e.to_string()),
+                    }),
+                }
+            }
+
             unknown => Ok(AutomationOutput {
                 success: false,
                 data: None,
                 message: Some(format!(
                     "Unknown action: '{unknown}'. Valid actions: run_script, \
-                     list_shortcuts, run_shortcut"
+                     run_background, list_shortcuts, run_shortcut"
                 )),
             }),
         }

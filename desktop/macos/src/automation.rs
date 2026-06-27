@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use tokio::process::Command;
 
 use aleph_desktop::automation_types::{ScriptLanguage, ShortcutInfo};
+use aleph_desktop::script_exec::{output_capped, spawn_background, RUN_SCRIPT_TIMEOUT};
 use aleph_desktop::traits::AutomationCapability;
 use aleph_desktop::{DesktopError, Result};
 
@@ -25,41 +26,44 @@ impl Default for MacOSAutomation {
     }
 }
 
+/// Build the `osascript`/`sh` command for a script, without running it.
+/// Shared by the synchronous ([`run_script`]) and background
+/// ([`run_background`]) execution paths.
+///
+/// SECURITY: For `Shell` this executes arbitrary shell code. Callers must
+/// ensure `source` is trusted — never pass unvalidated user input.
+fn build_script_cmd(language: ScriptLanguage, source: &str) -> Result<Command> {
+    let cmd = match language {
+        ScriptLanguage::AppleScript => {
+            let mut c = Command::new("osascript");
+            c.arg("-e").arg(source);
+            c
+        }
+        ScriptLanguage::Jxa => {
+            let mut c = Command::new("osascript");
+            c.args(["-l", "JavaScript", "-e"]).arg(source);
+            c
+        }
+        ScriptLanguage::Shell => {
+            let mut c = Command::new("sh");
+            c.arg("-c").arg(source);
+            c
+        }
+        #[allow(unreachable_patterns)]
+        ScriptLanguage::PowerShell => {
+            return Err(DesktopError::NotImplemented(
+                "PowerShell is not available on macOS".into(),
+            ));
+        }
+    };
+    Ok(cmd)
+}
+
 #[async_trait]
 impl AutomationCapability for MacOSAutomation {
     async fn run_script(&self, language: ScriptLanguage, source: &str) -> Result<String> {
-        let output = match language {
-            ScriptLanguage::AppleScript => {
-                Command::new("osascript")
-                    .arg("-e")
-                    .arg(source)
-                    .output()
-                    .await
-            }
-            ScriptLanguage::Jxa => {
-                Command::new("osascript")
-                    .arg("-l")
-                    .arg("JavaScript")
-                    .arg("-e")
-                    .arg(source)
-                    .output()
-                    .await
-            }
-            ScriptLanguage::Shell => {
-                // SECURITY: Executes arbitrary shell code. Callers must ensure
-                // `source` is trusted — never pass unvalidated user input.
-                Command::new("sh").arg("-c").arg(source).output().await
-            }
-            #[allow(unreachable_patterns)]
-            ScriptLanguage::PowerShell => {
-                return Err(DesktopError::NotImplemented(
-                    "PowerShell is not available on macOS".into(),
-                ));
-            }
-        };
-
-        let output = output
-            .map_err(|e| DesktopError::InputFailed(format!("failed to spawn process: {e}")))?;
+        let cmd = build_script_cmd(language, source)?;
+        let output = output_capped(cmd, RUN_SCRIPT_TIMEOUT).await?;
 
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -67,6 +71,16 @@ impl AutomationCapability for MacOSAutomation {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             Err(DesktopError::InputFailed(stderr))
         }
+    }
+
+    async fn run_background(
+        &self,
+        language: ScriptLanguage,
+        source: &str,
+        log_path: &str,
+    ) -> Result<u32> {
+        let cmd = build_script_cmd(language, source)?;
+        spawn_background(cmd, log_path).await
     }
 
     async fn list_shortcuts(&self) -> Result<Vec<ShortcutInfo>> {
@@ -140,6 +154,31 @@ mod tests {
         let auto = MacOSAutomation::new();
         let result = auto.run_script(ScriptLanguage::Shell, "echo hello").await;
         assert_eq!(result.unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn test_run_background_returns_pid_and_logs() {
+        let auto = MacOSAutomation::new();
+        let log_path = std::env::temp_dir()
+            .join("aleph-macos-bg-test.log")
+            .to_string_lossy()
+            .into_owned();
+        let pid = auto
+            .run_background(ScriptLanguage::Shell, "echo bg-ok", &log_path)
+            .await
+            .expect("run_background should return a pid");
+        assert!(pid > 0);
+
+        let mut contents = String::new();
+        for _ in 0..40 {
+            contents = std::fs::read_to_string(&log_path).unwrap_or_default();
+            if contents.contains("bg-ok") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(contents.contains("bg-ok"), "log was: {contents:?}");
+        let _ = std::fs::remove_file(&log_path);
     }
 
     #[tokio::test]

@@ -32,6 +32,7 @@ pub mod permission_types;
 pub mod pim_types;
 pub mod platform;
 pub mod screen_types;
+pub mod script_exec;
 pub mod system_types;
 pub mod traits;
 

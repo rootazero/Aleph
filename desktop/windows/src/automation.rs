@@ -4,8 +4,32 @@ use async_trait::async_trait;
 use tokio::process::Command;
 
 use aleph_desktop::automation_types::{ScriptLanguage, ShortcutInfo};
+use aleph_desktop::script_exec::{output_capped, spawn_background, RUN_SCRIPT_TIMEOUT};
 use aleph_desktop::traits::AutomationCapability;
 use aleph_desktop::{DesktopError, Result};
+
+/// Build the `powershell.exe`/`cmd.exe` command for a script, without running
+/// it. Shared by the synchronous and background execution paths.
+fn build_script_cmd(language: ScriptLanguage, source: &str) -> Result<Command> {
+    let cmd = match language {
+        ScriptLanguage::PowerShell => {
+            let mut c = Command::new("powershell.exe");
+            c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", source]);
+            c
+        }
+        ScriptLanguage::Shell => {
+            let mut c = Command::new("cmd.exe");
+            c.args(["/C", source]);
+            c
+        }
+        ScriptLanguage::AppleScript | ScriptLanguage::Jxa => {
+            return Err(DesktopError::NotImplemented(
+                "AppleScript/JXA not available on Windows".into(),
+            ));
+        }
+    };
+    Ok(cmd)
+}
 
 pub struct WindowsAutomation {
     _private: (),
@@ -27,30 +51,8 @@ impl Default for WindowsAutomation {
 #[async_trait]
 impl AutomationCapability for WindowsAutomation {
     async fn run_script(&self, language: ScriptLanguage, source: &str) -> Result<String> {
-        let source = source.to_string();
-        let output = match language {
-            ScriptLanguage::PowerShell => {
-                Command::new("powershell.exe")
-                    .args([
-                        "-NoProfile",
-                        "-ExecutionPolicy",
-                        "Bypass",
-                        "-Command",
-                        &source,
-                    ])
-                    .output()
-                    .await
-            }
-            ScriptLanguage::Shell => Command::new("cmd.exe").args(["/C", &source]).output().await,
-            ScriptLanguage::AppleScript | ScriptLanguage::Jxa => {
-                return Err(DesktopError::NotImplemented(
-                    "AppleScript/JXA not available on Windows".into(),
-                ));
-            }
-        };
-
-        let output = output
-            .map_err(|e| DesktopError::InputFailed(format!("failed to spawn process: {e}")))?;
+        let cmd = build_script_cmd(language, source)?;
+        let output = output_capped(cmd, RUN_SCRIPT_TIMEOUT).await?;
 
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -58,6 +60,16 @@ impl AutomationCapability for WindowsAutomation {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             Err(DesktopError::InputFailed(stderr))
         }
+    }
+
+    async fn run_background(
+        &self,
+        language: ScriptLanguage,
+        source: &str,
+        log_path: &str,
+    ) -> Result<u32> {
+        let cmd = build_script_cmd(language, source)?;
+        spawn_background(cmd, log_path).await
     }
 
     async fn list_shortcuts(&self) -> Result<Vec<ShortcutInfo>> {

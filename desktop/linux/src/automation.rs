@@ -1,4 +1,5 @@
 use aleph_desktop::automation_types::{ScriptLanguage, ShortcutInfo};
+use aleph_desktop::script_exec::{output_capped, spawn_background, RUN_SCRIPT_TIMEOUT};
 use aleph_desktop::traits::AutomationCapability;
 use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;
@@ -24,14 +25,9 @@ impl AutomationCapability for LinuxAutomation {
         let source = source.to_string();
         match language {
             ScriptLanguage::Shell => {
-                let output = tokio::process::Command::new("bash")
-                    .arg("-c")
-                    .arg(&source)
-                    .output()
-                    .await
-                    .map_err(|e| {
-                        DesktopError::InputFailed(format!("Shell script execution failed: {e}"))
-                    })?;
+                let mut cmd = tokio::process::Command::new("bash");
+                cmd.arg("-c").arg(&source);
+                let output = output_capped(cmd, RUN_SCRIPT_TIMEOUT).await?;
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -76,6 +72,32 @@ impl AutomationCapability for LinuxAutomation {
                 format!("{language:?} is not available on Linux"),
             )),
         }
+    }
+
+    async fn run_background(
+        &self,
+        language: ScriptLanguage,
+        source: &str,
+        log_path: &str,
+    ) -> Result<u32> {
+        let cmd = match language {
+            ScriptLanguage::Shell => {
+                let mut c = tokio::process::Command::new("bash");
+                c.arg("-c").arg(source);
+                c
+            }
+            ScriptLanguage::PowerShell => {
+                let mut c = tokio::process::Command::new("pwsh");
+                c.args(["-NoProfile", "-Command", source]);
+                c
+            }
+            ScriptLanguage::AppleScript | ScriptLanguage::Jxa => {
+                return Err(DesktopError::NotImplemented(format!(
+                    "{language:?} is not available on Linux"
+                )));
+            }
+        };
+        spawn_background(cmd, log_path).await
     }
 
     async fn list_shortcuts(&self) -> Result<Vec<ShortcutInfo>> {
