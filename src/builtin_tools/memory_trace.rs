@@ -262,6 +262,72 @@ mod tests {
         );
     }
 
+    /// North-star (spec §7.5): a high-level L3 profile claim drills all the way
+    /// down to the L0 raw utterance. Section "Identity" → session id → raws in
+    /// that session → notes citing them → those notes' source raws → raw text
+    /// mentioning "TypeScript". The whole chain must connect end-to-end.
+    #[tokio::test]
+    async fn north_star_profile_section_drills_to_raw_typescript() {
+        use crate::memory::notes::profile::{render_user_md, ProfileStore};
+        use std::collections::BTreeMap;
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let agent = "main";
+
+        // L0: a raw memory carrying the ground-truth utterance, tagged with a session.
+        let mut raw = RawMemory::new(
+            "user: I prefer TypeScript for all new projects".into(),
+            RawMemorySource::Transcript,
+        );
+        raw.id = "raw-ts".into();
+        raw.agent_id = agent.into();
+        raw.session_id = Some("ses_x".into());
+        backend.insert_raw_memory(&raw).await.unwrap();
+
+        // L1: a note distilled from that raw (source_notes cites it → notes_sources).
+        let note = KnowledgeNote {
+            title: "typescript".into(),
+            category: "preference".into(),
+            facts: vec!["The user prefers TypeScript.".into()],
+            source_notes: vec!["raw-ts".into()],
+            ..Default::default()
+        };
+        backend.index_note(&note, agent, "preference").await.unwrap();
+
+        // L3: USER.md whose `## Sources` maps the "Identity" section to ses_x.
+        let mut sources: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        sources.insert("Identity".into(), vec!["ses_x".into()]);
+        let sections: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let md = render_user_md(1, "ses_x", "high", &sections, &sources);
+        ProfileStore::new(dir.path().join(agent))
+            .write(&md, None)
+            .await
+            .unwrap();
+
+        // Drill from the L3 section down to L0 raw content.
+        let tool = MemoryTraceTool::new(backend, agent, dir.path().to_path_buf());
+        let out = tool
+            .call_impl(MemoryTraceArgs {
+                target: "Identity".into(),
+                kind: TraceKind::ProfileSection,
+                max_depth: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            out.evidence.iter().any(|e| e
+                .content
+                .as_deref()
+                .map(|c| c.contains("TypeScript"))
+                .unwrap_or(false)),
+            "ProfileSection 'Identity' must drill to raw content mentioning TypeScript; got {:?}",
+            out.evidence
+        );
+    }
+
     #[test]
     fn tool_name_and_description() {
         assert_eq!(MemoryTraceTool::NAME, "memory_trace");
