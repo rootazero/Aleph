@@ -167,6 +167,8 @@ mod tests {
         let out = render(&ctx_for(InteractionParadigm::WebRich));
         assert!(out.contains("## Planning Multi-Step Work"));
         assert!(out.contains("scratchpad"));
+        // Lock the anti-over-trigger copy so a future edit can't silently drop it.
+        assert!(out.contains("Do not plan trivial work"));
         assert!(out.contains("## Narrate Your Progress"));
     }
 
