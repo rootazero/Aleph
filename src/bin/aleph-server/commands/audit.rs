@@ -260,17 +260,20 @@ fn print_execution_record(record: &ToolExecutionRecord) {
 
 /// Helper function to get all tool names from database
 async fn get_all_tool_names(db_path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let conn = alephcore::utils::sqlite_open::open_sqlite_safe(db_path)?;
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT tool_name FROM tool_executions
-         UNION
-         SELECT DISTINCT tool_name FROM capability_escalations
-         ORDER BY tool_name",
-    )?;
+    let db_path = db_path.to_path_buf();
+    let tool_names = tokio::task::spawn_blocking(move || {
+        let conn = alephcore::utils::sqlite_open::open_sqlite_safe(&db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT tool_name FROM tool_executions
+             UNION
+             SELECT DISTINCT tool_name FROM capability_escalations
+             ORDER BY tool_name",
+        )?;
 
-    let tool_names = stmt
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<Result<Vec<_>, _>>()?;
+        stmt.query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .await??;
 
     Ok(tool_names)
 }

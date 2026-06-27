@@ -144,6 +144,12 @@ impl IncomingHandler {
         let Some(path) = params.get("path").and_then(Value::as_str) else {
             return HandlerOutcome::invalid_params("fs/read_text_file: missing 'path'");
         };
+        if !self.policy_allows_read() {
+            return HandlerOutcome::Error {
+                code: PERMISSION_DENIED,
+                message: "fs/read_text_file denied by permission policy".to_string(),
+            };
+        }
         let abs = match self.confine(path) {
             Ok(p) => p,
             Err(e) => return e,
@@ -236,6 +242,11 @@ impl IncomingHandler {
                 matches!(kind, "read" | "search" | "fetch" | "think")
             }
         }
+    }
+
+    /// True if the policy permits filesystem reads.
+    fn policy_allows_read(&self) -> bool {
+        !matches!(self.policy, PermissionPolicy::DenyAll)
     }
 
     // --- path confinement --------------------------------------------------

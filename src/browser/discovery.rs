@@ -32,7 +32,7 @@ pub fn find_chromium() -> Result<PathBuf, BrowserError> {
     // Stage 1: Environment variable override
     if let Ok(env_path) = std::env::var("ALEPH_CHROME_PATH") {
         let p = PathBuf::from(&env_path);
-        if p.exists() {
+        if p.is_file() {
             tracing::debug!("Chromium found via ALEPH_CHROME_PATH: {}", p.display());
             return Ok(p);
         }
@@ -44,7 +44,7 @@ pub fn find_chromium() -> Result<PathBuf, BrowserError> {
 
     // Stage 2: Platform-specific well-known paths
     for path in platform_paths() {
-        if path.exists() {
+        if path.is_file() {
             tracing::debug!("Chromium found at platform path: {}", path.display());
             return Ok(path);
         }

@@ -204,7 +204,11 @@ where
                     format!("project_root must be absolute: {raw}"),
                 );
             }
-            if !path.is_dir() {
+            let is_dir = tokio::fs::metadata(&path)
+                .await
+                .map(|m| m.is_dir())
+                .unwrap_or(false);
+            if !is_dir {
                 return alephcore::gateway::JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
@@ -406,7 +410,11 @@ where
                     format!("project_root must be absolute: {raw}"),
                 );
             }
-            if !path.is_dir() {
+            let is_dir = tokio::fs::metadata(&path)
+                .await
+                .map(|m| m.is_dir())
+                .unwrap_or(false);
+            if !is_dir {
                 return alephcore::gateway::JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,

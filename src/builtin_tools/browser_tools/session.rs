@@ -66,7 +66,7 @@ impl BrowserSessionTool {
 /// browser state directory (`~/.aleph/data/browser/sessions/<name>.json`),
 /// creating the directory. Rejects empty names, leading dots, and any character
 /// outside `[A-Za-z0-9._-]` so a caller can never escape the managed directory.
-fn resolve_session_path(name: &str) -> std::result::Result<PathBuf, String> {
+async fn resolve_session_path(name: &str) -> std::result::Result<PathBuf, String> {
     if name.is_empty() {
         return Err("session name must not be empty".into());
     }
@@ -85,7 +85,9 @@ fn resolve_session_path(name: &str) -> std::result::Result<PathBuf, String> {
         .join("data")
         .join("browser")
         .join("sessions");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create session dir: {e}"))?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| format!("cannot create session dir: {e}"))?;
     Ok(dir.join(format!("{name}.json")))
 }
 
@@ -99,7 +101,7 @@ impl AlephTool for BrowserSessionTool {
     type Output = BrowserSessionOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let path = match resolve_session_path(&args.name) {
+        let path = match resolve_session_path(&args.name).await {
             Ok(p) => p,
             Err(e) => {
                 return Ok(BrowserSessionOutput {
@@ -142,18 +144,18 @@ mod tests {
     use super::*;
     use crate::browser::profile::BrowserSystemConfig;
 
-    #[test]
-    fn test_resolve_session_path_rejects_traversal() {
-        assert!(resolve_session_path("").is_err());
-        assert!(resolve_session_path("../etc/passwd").is_err());
-        assert!(resolve_session_path("a/b").is_err());
-        assert!(resolve_session_path("a\\b").is_err());
-        assert!(resolve_session_path(".hidden").is_err());
-        assert!(resolve_session_path("..").is_err());
+    #[tokio::test]
+    async fn test_resolve_session_path_rejects_traversal() {
+        assert!(resolve_session_path("").await.is_err());
+        assert!(resolve_session_path("../etc/passwd").await.is_err());
+        assert!(resolve_session_path("a/b").await.is_err());
+        assert!(resolve_session_path("a\\b").await.is_err());
+        assert!(resolve_session_path(".hidden").await.is_err());
+        assert!(resolve_session_path("..").await.is_err());
         // Valid slugs resolve under the managed sessions directory.
-        let p = resolve_session_path("github").unwrap();
+        let p = resolve_session_path("github").await.unwrap();
         assert!(p.ends_with("browser/sessions/github.json"));
-        assert!(resolve_session_path("my_site-1").is_ok());
+        assert!(resolve_session_path("my_site-1").await.is_ok());
     }
 
     #[tokio::test]

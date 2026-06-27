@@ -86,7 +86,9 @@ pub async fn run_node_approval(
             session_key: String::new(),
         },
     };
-    let _ = event_bus.publish_frame(&frame);
+    if let Err(e) = event_bus.publish_frame(&frame) {
+        tracing::warn!(error = %e, "failed to publish final approval event for node approval");
+    }
 
     decision_to_wire(decision)
 }

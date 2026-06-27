@@ -81,8 +81,8 @@ impl Default for ScreenshotOpts {
     fn default() -> Self {
         Self {
             full_page: false,
-            format: "png".to_string(),
-            quality: 80,
+            format: default_screenshot_format(),
+            quality: default_screenshot_quality(),
         }
     }
 }

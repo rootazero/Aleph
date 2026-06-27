@@ -494,10 +494,22 @@ impl AcpAdapterManager {
             let mut sessions = self.sessions.write().await;
             sessions.drain().collect::<Vec<_>>()
         };
-        for (key, entry) in entries {
+        for (key, entry) in &entries {
             info!(harness_id = %key.harness_id, cwd = ?key.cwd, "Shutting down ACP session");
             let mut session = entry.session.lock().await;
             session.kill().await;
+        }
+        for (key, _) in entries {
+            self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
+                harness_id: key.harness_id,
+                cwd: key.cwd.to_string_lossy().into_owned(),
+                session_name: if key.name.is_empty() {
+                    None
+                } else {
+                    Some(key.name)
+                },
+            })
+            .await;
         }
     }
 }

@@ -26,11 +26,16 @@ use crate::pii::{rules::build_rules, PiiMatch, PiiRule, PiiSeverity};
 /// (page-content output). Lower-severity PII (emails, phone numbers, IP
 /// addresses) is deliberately excluded: it is not a credential and must never
 /// block a navigation or be scrubbed from the page content the agent works on.
-fn critical_rules() -> Vec<Box<dyn PiiRule>> {
-    build_rules(&[])
-        .into_iter()
-        .filter(|r| r.severity() == PiiSeverity::Critical)
-        .collect()
+fn critical_rules() -> &'static [Box<dyn PiiRule>] {
+    static RULES: std::sync::OnceLock<Vec<Box<dyn PiiRule>>> = std::sync::OnceLock::new();
+    RULES
+        .get_or_init(|| {
+            build_rules(&[])
+                .into_iter()
+                .filter(|r| r.severity() == PiiSeverity::Critical)
+                .collect()
+        })
+        .as_slice()
 }
 
 /// Scan a navigation URL (raw + percent-decoded) for an embedded secret.

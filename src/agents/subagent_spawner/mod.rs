@@ -156,8 +156,12 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
     // Explicit cleanup happens on the success path (after harness completes Ok).
     let worktree_handle: Option<crate::sandbox::WorktreeHandle> = match req.isolation {
         Some(crate::agents::IsolationMode::Worktree) => {
-            let repo_root =
-                std::env::current_dir().map_err(|e| format!("sub-agent failed: cwd: {e}"))?;
+            // `current_dir()` is a blocking syscall; run it on the blocking pool
+            // so the async runtime thread stays available.
+            let repo_root = tokio::task::spawn_blocking(|| std::env::current_dir())
+                .await
+                .map_err(|e| format!("sub-agent failed: cwd join: {e}"))?
+                .map_err(|e| format!("sub-agent failed: cwd: {e}"))?;
             let label = &req.agent_def.id;
             let handle =
                 crate::sandbox::worktree::create(&repo_root, label, base.trace_sink.clone())
@@ -201,17 +205,24 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
     // Without a worktree the body runs un-wrapped, inheriting whatever scope
     // the parent run published — a non-isolated subagent intentionally shares
     // the parent's workspace.
-    let fs_scope = worktree_handle.as_ref().map(|h| {
-        let wt = h
-            .path()
-            .canonicalize()
-            .unwrap_or_else(|_| h.path().to_path_buf());
-        let repo = h
-            .repo_root()
-            .canonicalize()
-            .unwrap_or_else(|_| h.repo_root().to_path_buf());
-        crate::tools::fs_scope::FsScope::worktree(wt, repo)
-    });
+    let fs_scope = match worktree_handle.as_ref() {
+        Some(h) => {
+            // `canonicalize()` can block on the filesystem; move it off the
+            // async runtime thread. Failure to canonicalize is non-fatal — we
+            // fall back to the raw worktree/repo paths.
+            let wt = h.path().to_path_buf();
+            let repo = h.repo_root().to_path_buf();
+            let (wt, repo) = tokio::task::spawn_blocking(move || {
+                let wt = wt.canonicalize().unwrap_or(wt);
+                let repo = repo.canonicalize().unwrap_or(repo);
+                (wt, repo)
+            })
+            .await
+            .unwrap_or_else(|_| (wt, repo));
+            Some(crate::tools::fs_scope::FsScope::worktree(wt, repo))
+        }
+        None => None,
+    };
 
     let run_body = async {
         // 2. Unique ephemeral session key for this sub-agent.
