@@ -16,7 +16,6 @@ fn map_category(c: PresetCategory) -> ExtensionCategory {
     match c {
         PresetCategory::Developer => ExtensionCategory::Developer,
         PresetCategory::Daily => ExtensionCategory::Utilities,
-        PresetCategory::ModelProvider => ExtensionCategory::Design,
     }
 }
 
@@ -190,6 +189,24 @@ mod tests {
             other => panic!("expected McpStdio (http url has <KEY>), got {other:?}"),
         }
         assert!(amap.requires_config);
+    }
+
+    #[test]
+    fn zhipu_vision_projects_to_stdio_with_required_key() {
+        let e = primer_entries();
+        let z = by_id(&e, "aleph-hub:zhipu-vision");
+        assert_eq!(z.trust_tier, TrustTier::Official);
+        match z.install_spec.unwrap() {
+            InstallSpec::McpStdio { command, args, env } => {
+                assert_eq!(command, "npx");
+                assert_eq!(args, vec!["-y", "@z_ai/mcp-server"]);
+                assert!(env
+                    .iter()
+                    .any(|d| d.name == "Z_AI_API_KEY" && d.required && d.secret));
+            }
+            other => panic!("expected McpStdio, got {other:?}"),
+        }
+        assert!(z.requires_config);
     }
 
     #[test]

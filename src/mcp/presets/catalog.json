@@ -15,6 +15,23 @@
     "tags": ["docs", "developer"]
   },
   {
+    "id": "zhipu-vision",
+    "name": "智谱视觉理解",
+    "category": "developer",
+    "description": "截图转代码 / OCR / 报错诊断 / 图表与架构图理解（GLM-4.6V，给代码 agent 加视觉，智谱官方）。",
+    "vendor": "智谱 AI Z.AI",
+    "official": true,
+    "reachability": "cn-native",
+    "transports": [
+      { "kind": "stdio", "command": "npx", "args": ["-y", "@z_ai/mcp-server"], "requires_runtime": "node" }
+    ],
+    "required_env": [
+      { "key": "Z_AI_API_KEY", "label": "智谱 API Key", "description": "编程套餐 API Key", "secret": true, "required": true, "how_to_get_url": "https://bigmodel.cn/coding-plan/personal/overview" },
+      { "key": "Z_AI_MODE", "label": "服务平台", "description": "ZHIPU（大陆）或 ZAI（海外）", "secret": false, "required": false, "default": "ZHIPU" }
+    ],
+    "tags": ["vision", "ocr", "developer"]
+  },
+  {
     "id": "amap",
     "name": "高德地图",
     "category": "daily",
@@ -34,7 +51,7 @@
   {
     "id": "minimax",
     "name": "MiniMax",
-    "category": "model-provider",
+    "category": "developer",
     "description": "图像 / 视频 / 语音合成（MiniMax 官方）。",
     "vendor": "MiniMax",
     "official": true,
@@ -46,12 +63,12 @@
       { "key": "MINIMAX_API_KEY", "label": "MiniMax API Key", "description": "平台 API Key", "secret": true, "required": true, "how_to_get_url": "https://platform.minimaxi.com" },
       { "key": "MINIMAX_API_HOST", "label": "API Host", "description": "区域接入点", "secret": false, "required": true, "default": "https://api.minimaxi.com", "how_to_get_url": null }
     ],
-    "tags": ["image", "video", "tts", "model-provider"]
+    "tags": ["image", "video", "tts"]
   },
   {
     "id": "volcengine-veimagex",
     "name": "火山引擎 veImageX",
-    "category": "model-provider",
+    "category": "developer",
     "description": "文生图 / 超分 / 外扩 / OCR 等图像能力（火山官方）。",
     "vendor": "火山引擎 ByteDance",
     "official": true,
@@ -65,12 +82,12 @@
       { "key": "SERVICE_ID", "label": "Service ID", "description": "veImageX 服务 ID", "secret": false, "required": true, "how_to_get_url": null },
       { "key": "DOMAIN_NAME", "label": "Domain", "description": "veImageX 加速域名", "secret": false, "required": true, "how_to_get_url": null }
     ],
-    "tags": ["image", "model-provider"]
+    "tags": ["image"]
   },
   {
     "id": "siliconflow",
     "name": "硅基流动 SiliconFlow",
-    "category": "model-provider",
+    "category": "developer",
     "description": "文生图 / 图生视频 / 语音合成（Aleph 自建官方 MCP）。",
     "vendor": "硅基流动 SiliconFlow",
     "official": true,
@@ -84,12 +101,12 @@
       { "key": "SILICONFLOW_IMAGE_DIR", "label": "图片/视频保存目录", "description": "本地落盘目录（留空只返回远程 URL）", "secret": false, "required": false },
       { "key": "SILICONFLOW_AUDIO_DIR", "label": "音频保存目录", "description": "默认回退到图片目录", "secret": false, "required": false }
     ],
-    "tags": ["image", "video", "tts", "model-provider"]
+    "tags": ["image", "video", "tts"]
   },
   {
     "id": "t8star",
     "name": "T8star 中转",
-    "category": "model-provider",
+    "category": "developer",
     "description": "聚合中转：图像 / 语音 生成 + 模型列表 / 账户余额（Aleph 自建官方 MCP，视频迭代加入）。",
     "vendor": "T8star · 贞贞的AI工坊",
     "official": true,
@@ -103,6 +120,6 @@
       { "key": "T8STAR_IMAGE_DIR", "label": "图片保存目录", "description": "本地落盘目录（留空只返回远程 URL）", "secret": false, "required": false },
       { "key": "T8STAR_AUDIO_DIR", "label": "音频保存目录", "description": "默认回退到图片目录", "secret": false, "required": false }
     ],
-    "tags": ["image", "tts", "model-provider", "relay"]
+    "tags": ["image", "tts", "relay"]
   }
 ]

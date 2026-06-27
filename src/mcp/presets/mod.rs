@@ -42,7 +42,6 @@ pub struct McpPreset {
 pub enum PresetCategory {
     Developer,
     Daily,
-    ModelProvider,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,9 +117,10 @@ mod tests {
     #[test]
     fn bundled_catalog_parses_and_has_first_batch() {
         let all = catalog();
-        // 内置 6 个官方预设 id 必须都在
+        // 内置 7 个官方预设 id 必须都在
         for id in [
             "context7",
+            "zhipu-vision",
             "amap",
             "minimax",
             "volcengine-veimagex",
