@@ -35,6 +35,7 @@ use crate::context::{DashboardContext, DashboardState};
 use crate::platform::phone::agents::PhoneAgents;
 use crate::platform::phone::chat::PhoneChat;
 use crate::platform::phone::memory::PhoneMemory;
+use crate::platform::phone::more::PhoneMore;
 use crate::platform::phone::settings::appearance::PhoneAppearance;
 use crate::platform::phone::settings::connection::PhoneConnection;
 use crate::platform::phone::settings::embeddings::PhoneEmbeddings;
@@ -420,6 +421,14 @@ fn MainContent() -> impl IntoView {
         </div>
         <div style:display=move || if mode.get() == PanelMode::Settings { "block" } else { "none" }>
             <SettingsRouter />
+        </div>
+        <div style:display=move || if mode.get() == PanelMode::More { "contents" } else { "none" }>
+            {move || if form_factor.form_factor.get() == FormFactor::Phone {
+                view! { <PhoneMore /> }.into_any()
+            } else {
+                // /more is phone-only; desktop never routes here.
+                ().into_any()
+            }}
         </div>
     }
 }

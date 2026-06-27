@@ -13,5 +13,6 @@
 pub mod agents;
 pub mod chat;
 pub mod memory;
+pub mod more;
 pub mod settings;
 pub mod shell;
