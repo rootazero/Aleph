@@ -39,12 +39,15 @@ pub struct ParseResult {
 static GENERATE_PATTERN: OnceLock<Regex> = OnceLock::new();
 
 fn get_pattern() -> GenerationResult<&'static Regex> {
-    GENERATE_PATTERN.get_or_try_init(|| {
-        Regex::new(r"\[GENERATE:([^:]+):([^:]+):([^:]+):([^\]]+)\]")
-            .map_err(|e| GenerationError::InternalError {
-                message: format!("invalid GENERATE_PATTERN regex: {e}"),
-            })
-    })
+    if let Some(re) = GENERATE_PATTERN.get() {
+        return Ok(re);
+    }
+    let re = Regex::new(r"\[GENERATE:([^:]+):([^:]+):([^:]+):([^\]]+)\]").map_err(|e| {
+        GenerationError::InternalError {
+            message: format!("invalid GENERATE_PATTERN regex: {e}"),
+        }
+    })?;
+    Ok(GENERATE_PATTERN.get_or_init(|| re))
 }
 
 /// Parse AI response for generation requests

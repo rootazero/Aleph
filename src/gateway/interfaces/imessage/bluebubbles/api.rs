@@ -171,7 +171,7 @@ impl BlueBubblesApi {
                 .unwrap_or_default()
                 .iter()
                 .any(|p| p.address.as_deref() == Some(target));
-            if (matches_id || matches_part) {
+            if matches_id || matches_part {
                 if let Some(g) = guid {
                     cache.lock().await.put(target, &g);
                     return Some(g);
