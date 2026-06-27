@@ -747,41 +747,6 @@ pub(super) fn InputArea() -> impl IntoView {
                     })
                 }}
 
-                // Project + model row — both pickers sit directly above
-                // the composer so their dropdowns flip upward. The
-                // workspace toggle lives at the chat-surface top-right
-                // (see views/chat/view.rs) so it stays at the boundary
-                // when the workspace pane is open.
-                <div class="aleph-project-row flex items-center gap-2 px-1 pb-1">
-                    <ProjectMenu />
-                    <crate::components::model_picker::ModelPicker />
-                    // Live context-window gauge (mirrors hermes-desktop's
-                    // ContextGauge): an SVG ring of the last turn's prompt-token
-                    // occupancy. Self-hides until the first usage event lands.
-                    <super::context_gauge::ContextGauge />
-                    // Export conversation → Markdown download. Pushed to the far
-                    // right; only present once the thread has content.
-                    <Show when=move || !chat.messages.get().is_empty()>
-                        <button
-                            class="ml-auto p-1.5 rounded-lg text-text-tertiary hover:text-text-primary
-                                   hover:bg-surface-sunken transition-colors flex-shrink-0"
-                            title="导出对话为 Markdown"
-                            on:click=move |_| {
-                                let msgs = chat.messages.get_untracked();
-                                super::transcript::download_transcript(&msgs);
-                            }
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4"
-                                 viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                <polyline points="7 10 12 15 17 10" />
-                                <line x1="12" y1="15" x2="12" y2="3" />
-                            </svg>
-                        </button>
-                    </Show>
-                </div>
-
                 // Composer card — two zones: full-width auto-grow textarea
                 // on top, a toolbar row below (attach + voice on the left,
                 // clear / queue / abort / send on the right). The textarea
@@ -832,8 +797,10 @@ pub(super) fn InputArea() -> impl IntoView {
                         on:keydown=on_keydown
                     />
 
-                    // Toolbar row — left: attach + voice; right cluster: the
-                    // conditional clear / queue / abort / send buttons.
+                    // Toolbar row — left: attach + voice + project/model/gauge;
+                    // right cluster: export + conditional clear / queue / abort / send.
+                    // (The old standalone project-row was folded into this
+                    // row so its controls sit level with the attach paperclip.)
                     <div class="flex items-center gap-2">
                         <button
                             class="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary
@@ -854,7 +821,35 @@ pub(super) fn InputArea() -> impl IntoView {
                             disabled=Signal::derive(move || is_sending.get())
                         />
 
+                        // Migrated from the old project row — now level
+                        // with the attach paperclip. Dropdowns still flip upward.
+                        <ProjectMenu />
+                        <crate::components::model_picker::ModelPicker />
+                        // Live context-window gauge (self-hides until first usage).
+                        <super::context_gauge::ContextGauge />
+
                         <div class="ml-auto flex items-center gap-2">
+                            // Export conversation → Markdown (far right of the
+                            // cluster). Only once the thread has content.
+                            <Show when=move || !chat.messages.get().is_empty()>
+                                <button
+                                    class="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary
+                                           hover:bg-surface-sunken transition-colors flex-shrink-0"
+                                    title="导出对话为 Markdown"
+                                    on:click=move |_| {
+                                        let msgs = chat.messages.get_untracked();
+                                        super::transcript::download_transcript(&msgs);
+                                    }
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4"
+                                         viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                        <polyline points="7 10 12 15 17 10" />
+                                        <line x1="12" y1="15" x2="12" y2="3" />
+                                    </svg>
+                                </button>
+                            </Show>
                             // Clear-draft ✕ — visible only when text exists.
                             // Wipes text + closes palette + exits namespace in
                             // one click. Attachments are left alone (own ✕).
