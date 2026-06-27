@@ -54,7 +54,7 @@ pub fn print_list_table(headers: &[&str], rows: &[Vec<String>]) {
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
             if let Some(width) = widths.get_mut(i) {
-                *width = width.max(cell.len());
+                *width = (*width).max(cell.len());
             }
         }
     }
