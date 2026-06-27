@@ -41,36 +41,51 @@ pub enum Extractor {
     Selector,
 }
 
-// ---------------------------------------------------------------------------
-// Pre-compiled regexes for HTML cleaning (compiled once, reused forever)
-// ---------------------------------------------------------------------------
+// Pre-compiled regexes for HTML cleaning (compiled once, reused forever).
+// Patterns are static literals; a build-time failure here indicates a regex
+// bug that should be caught in tests, so we use unreachable! to signal an
+// invariant rather than panicking in library code.
 
-static RE_COMMENTS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)<!--.*?-->").unwrap_or_else(|e| panic!("invalid regex RE_COMMENTS: {e}")));
-static RE_SCRIPT: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?si)<script(\s[^>]*)?>.*?</script\s*>").unwrap_or_else(|e| panic!("invalid regex RE_SCRIPT: {e}")));
-static RE_STYLE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?si)<style(\s[^>]*)?>.*?</style\s*>").unwrap_or_else(|e| panic!("invalid regex RE_STYLE: {e}")));
-static RE_NOSCRIPT: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?si)<noscript(\s[^>]*)?>.*?</noscript\s*>").unwrap_or_else(|e| panic!("invalid regex RE_NOSCRIPT: {e}")));
-static RE_HIDDEN_ATTR: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?si)<[^>]+\shidden(\s[^>]*)?>.*?</[^>]+>").unwrap_or_else(|e| panic!("invalid regex RE_HIDDEN_ATTR: {e}")));
+static RE_COMMENTS: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?s)<!--.*?-->")
+        .unwrap_or_else(|e| unreachable!("invalid regex RE_COMMENTS: {e}"))
+});
+static RE_SCRIPT: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?si)<script(\s[^>]*)?>.*?</script\s*>")
+        .unwrap_or_else(|e| unreachable!("invalid regex RE_SCRIPT: {e}"))
+});
+static RE_STYLE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?si)<style(\s[^>]*)?>.*?</style\s*>")
+        .unwrap_or_else(|e| unreachable!("invalid regex RE_STYLE: {e}"))
+});
+static RE_NOSCRIPT: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?si)<noscript(\s[^>]*)?>.*?</noscript\s*>")
+        .unwrap_or_else(|e| unreachable!("invalid regex RE_NOSCRIPT: {e}"))
+});
+static RE_HIDDEN_ATTR: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?si)<[^>]+\shidden(\s[^>]*)?>.*?</[^>]+>")
+        .unwrap_or_else(|e| unreachable!("invalid regex RE_HIDDEN_ATTR: {e}"))
+});
 static RE_ARIA_HIDDEN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"(?si)<[^>]+\saria-hidden\s*=\s*["']true["'][^>]*>.*?</[^>]+>"#)
-        .unwrap_or_else(|e| panic!("invalid regex RE_ARIA_HIDDEN: {e}"))
+        .unwrap_or_else(|e| unreachable!("invalid regex RE_ARIA_HIDDEN: {e}"))
 });
 static RE_DISPLAY_NONE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r#"(?si)<[^>]+\sstyle\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"']*["'][^>]*>.*?</[^>]+>"#,
     )
-    .unwrap_or_else(|e| panic!("invalid regex RE_DISPLAY_NONE: {e}"))
+    .unwrap_or_else(|e| unreachable!("invalid regex RE_DISPLAY_NONE: {e}"))
 });
 static RE_SR_CLASSES: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r#"(?si)<[^>]+\sclass\s*=\s*["'][^"']*(?:sr-only|visually-hidden|d-none|screen-reader-only)[^"']*["'][^>]*>.*?</[^>]+>"#,
     )
-    .unwrap_or_else(|e| panic!("invalid regex RE_SR_CLASSES: {e}"))
+    .unwrap_or_else(|e| unreachable!("invalid regex RE_SR_CLASSES: {e}"))
 });
-static RE_STRIP_TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").unwrap_or_else(|e| panic!("invalid regex RE_STRIP_TAGS: {e}")));
+static RE_STRIP_TAGS: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"<[^>]+>")
+        .unwrap_or_else(|e| unreachable!("invalid regex RE_STRIP_TAGS: {e}"))
+});
 
 // Surface `<time datetime="…">` machine timestamps into the element's own
 // text. News/listing pages frequently carry the absolute publication time
@@ -80,14 +95,15 @@ static RE_STRIP_TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").unwrap_o
 // is what made fetched pages report "publish time: not provided".
 static RE_TIME_DATETIME: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"(?si)<time\b[^>]*\bdatetime\s*=\s*["']([^"']+)["'][^>]*>(.*?)</time>"#)
-        .unwrap_or_else(|e| panic!("invalid regex RE_TIME_DATETIME: {e}"))
+        .unwrap_or_else(|e| unreachable!("invalid regex RE_TIME_DATETIME: {e}"))
 });
 
 // Match `href="…"` / `src="…"` attribute values for base-URL resolution so
 // extracted Markdown links point at usable absolute "original article" URLs
 // rather than the relative paths an index page ships.
 static RE_HREF_SRC: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?i)(\s(?:href|src)\s*=\s*["'])([^"']*)(["'])"#).unwrap_or_else(|e| panic!("invalid regex RE_HREF_SRC: {e}"))
+    Regex::new(r#"(?i)(\s(?:href|src)\s*=\s*["'])([^"']*)(["'])"#)
+        .unwrap_or_else(|e| unreachable!("invalid regex RE_HREF_SRC: {e}"))
 });
 
 // ---------------------------------------------------------------------------
