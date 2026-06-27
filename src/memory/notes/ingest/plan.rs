@@ -30,6 +30,10 @@ pub enum PageOp {
         tags: Vec<String>,
         #[serde(default)]
         relations: Vec<Relation>,
+        /// Raw-memory ids (or prior-note paths) this page was distilled from.
+        /// LLM-attributed; empty means the apply layer falls back to the batch set.
+        #[serde(default)]
+        source_ids: Vec<String>,
     },
     Append {
         note_path: String,
@@ -39,6 +43,8 @@ pub enum PageOp {
         new_links: Vec<String>,
         #[serde(default)]
         new_relations: Vec<Relation>,
+        #[serde(default)]
+        source_ids: Vec<String>,
     },
     Update {
         note_path: String,
@@ -137,12 +143,14 @@ mod tests {
                 links: vec!["learning/rust-async".into()],
                 tags: vec!["rust".into()],
                 relations: vec![],
+                source_ids: vec![],
             },
             PageOp::Append {
                 note_path: "learning/rust-async".into(),
                 new_facts: vec!["pin API".into()],
                 new_links: vec![],
                 new_relations: vec![],
+                source_ids: vec![],
             },
             PageOp::Update {
                 note_path: "preference/runtime".into(),
@@ -188,6 +196,7 @@ mod tests {
             links: vec![],
             tags: vec![],
             relations: vec![],
+            source_ids: vec![],
         };
         assert_eq!(p.primary_path(), "a/b");
 
@@ -242,6 +251,42 @@ mod tests {
                 assert_eq!(new_relations[0].to, "entity/bob");
                 assert_eq!(new_relations[0].confidence, 1.0);
             }
+            _ => panic!("expected append"),
+        }
+    }
+
+    #[test]
+    fn create_and_append_carry_source_ids_with_serde_default() {
+        // New field round-trips.
+        let op = PageOp::Create {
+            note_path: "preference/typescript".into(),
+            title: "TypeScript".into(),
+            summary: "User prefers TypeScript".into(),
+            facts: vec!["The user prefers TypeScript.".into()],
+            links: vec![],
+            tags: vec![],
+            relations: vec![],
+            source_ids: vec!["raw-uuid-1".into(), "raw-uuid-2".into()],
+        };
+        let j = serde_json::to_string(&op).unwrap();
+        let back: PageOp = serde_json::from_str(&j).unwrap();
+        match back {
+            PageOp::Create { source_ids, .. } => assert_eq!(source_ids, vec!["raw-uuid-1", "raw-uuid-2"]),
+            _ => panic!("expected create"),
+        }
+
+        // Old JSON WITHOUT source_ids still parses (serde default = empty).
+        let legacy = r#"{"kind":"create","note_path":"a/b","title":"T","summary":"","facts":[],"links":[],"tags":[]}"#;
+        let op2: PageOp = serde_json::from_str(legacy).unwrap();
+        match op2 {
+            PageOp::Create { source_ids, .. } => assert!(source_ids.is_empty()),
+            _ => panic!("expected create"),
+        }
+
+        let legacy_append = r#"{"kind":"append","note_path":"a/b","new_facts":["x"],"new_links":[]}"#;
+        let op3: PageOp = serde_json::from_str(legacy_append).unwrap();
+        match op3 {
+            PageOp::Append { source_ids, .. } => assert!(source_ids.is_empty()),
             _ => panic!("expected append"),
         }
     }
