@@ -22,32 +22,31 @@ struct PiiPatterns {
 /// Global PII patterns (lazy-initialized)
 static PII_PATTERNS: OnceLock<PiiPatterns> = OnceLock::new();
 
+/// Compile a regex pattern, falling back to a never-matching regex if the
+/// pattern is invalid. All PII patterns are static constants that should
+/// always compile; the fallback keeps `scrub_pii` infallible.
+fn compile_regex(pattern: &str) -> Regex {
+    Regex::new(pattern).unwrap_or_else(|_| Regex::new("a^").expect("fallback regex is valid"))
+}
+
 /// Get or initialize PII patterns
 fn get_patterns() -> &'static PiiPatterns {
     PII_PATTERNS.get_or_init(|| PiiPatterns {
-        email: Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
-            .expect("email regex should be valid"),
-        phone: Regex::new(r"\b(\+?1?[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b")
-            .expect("phone regex should be valid"),
-        ssn: Regex::new(r"\b\d{3}-\d{2}-\d{4}\b")
-            .expect("ssn regex should be valid"),
-        credit_card: Regex::new(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b")
-            .expect("credit_card regex should be valid"),
+        email: compile_regex(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
+        phone: compile_regex(r"\b(\+?1?[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),
+        ssn: compile_regex(r"\b\d{3}-\d{2}-\d{4}\b"),
+        credit_card: compile_regex(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"),
         // NOTE: no trailing look-ahead — the `regex` crate has no look-around
         // support, and it is unnecessary here: every alternative's character
         // class already excludes the boundary characters, so greedy matching
         // stops at whitespace/quotes/punctuation on its own. Dropping it also
         // makes scrubbing strictly more conservative (keys followed by `,`/`)`
         // are now caught too), which matches this module's privacy-first intent.
-        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|Bearer\s+[a-zA-Z0-9._\-=]{20,})")
-            .expect("api_key regex should be valid"),
-        china_mobile: Regex::new(r"\b1[3-9]\d{9}\b")
-            .expect("china_mobile regex should be valid"),
-        china_id: Regex::new(r"\b\d{17}[\dXx]\b")
-            .expect("china_id regex should be valid"),
+        api_key: compile_regex(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|Bearer\s+[a-zA-Z0-9._\-=]{20,})"),
+        china_mobile: compile_regex(r"\b1[3-9]\d{9}\b"),
+        china_id: compile_regex(r"\b\d{17}[\dXx]\b"),
         // Major card network prefixes (Visa, MC, AmEx, Diners, Discover, JCB, UnionPay)
-        bank_card: Regex::new(r"\b(?:4\d{15}|5[1-5]\d{14}|3[47]\d{13}|3(?:0[0-5]|[68]\d)\d{11}|6(?:011|5\d{2})\d{12}|(?:2131|1800|35\d{3})\d{11}|62\d{14,17})\b")
-            .expect("bank_card regex should be valid"),
+        bank_card: compile_regex(r"\b(?:4\d{15}|5[1-5]\d{14}|3[47]\d{13}|3(?:0[0-5]|[68]\d)\d{11}|6(?:011|5\d{2})\d{12}|(?:2131|1800|35\d{3})\d{11}|62\d{14,17})\b"),
     })
 }
 

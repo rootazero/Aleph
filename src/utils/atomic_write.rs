@@ -110,8 +110,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("foo.md");
         atomic_write_file(&path, "hi").await.unwrap();
-        let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
-        assert_eq!(entries.len(), 1, "only the final file should remain");
+        let mut entries = tokio::fs::read_dir(dir.path()).await.unwrap();
+        let mut files = Vec::new();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            files.push(entry.path());
+        }
+        assert_eq!(files.len(), 1, "only the final file should remain");
     }
 
     #[cfg(unix)]

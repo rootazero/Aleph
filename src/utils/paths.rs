@@ -264,6 +264,41 @@ pub fn find_git_root(start: &std::path::Path) -> Option<PathBuf> {
 ///     // Scan for SKILL.md files
 /// }
 /// ```
+fn collect_project_skills_dirs(
+    start_dir: &std::path::Path,
+    stop_at: Option<&std::path::Path>,
+) -> Vec<PathBuf> {
+    use tracing::info;
+
+    let mut dirs = Vec::new();
+    let mut current = start_dir.to_path_buf();
+    loop {
+        // Check .aleph/skills/
+        let aleph_skills = current.join(".aleph").join("skills");
+        if aleph_skills.is_dir() && !dirs.contains(&aleph_skills) {
+            info!(path = %aleph_skills.display(), "Found project-level .aleph/skills");
+            dirs.push(aleph_skills);
+        }
+
+        // Check .claude/skills/ (Claude Code compatibility)
+        let claude_skills = current.join(".claude").join("skills");
+        if claude_skills.is_dir() && !dirs.contains(&claude_skills) {
+            info!(path = %claude_skills.display(), "Found project-level .claude/skills");
+            dirs.push(claude_skills);
+        }
+
+        // Stop at git root or if we've reached filesystem root
+        if stop_at.map_or(false, |stop| current == stop) {
+            break;
+        }
+
+        if !current.pop() {
+            break;
+        }
+    }
+    dirs
+}
+
 pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<PathBuf>> {
     use tracing::info;
 
@@ -286,33 +321,7 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     let stop_at = git_root.as_deref();
 
     // 1. Project level: traverse up from start to git root
-    let mut current = start_dir.clone();
-    loop {
-        // Check .aleph/skills/
-        let aleph_skills = current.join(".aleph").join("skills");
-        if aleph_skills.is_dir() && !dirs.contains(&aleph_skills) {
-            info!(path = %aleph_skills.display(), "Found project-level .aleph/skills");
-            dirs.push(aleph_skills);
-        }
-
-        // Check .claude/skills/ (Claude Code compatibility)
-        let claude_skills = current.join(".claude").join("skills");
-        if claude_skills.is_dir() && !dirs.contains(&claude_skills) {
-            info!(path = %claude_skills.display(), "Found project-level .claude/skills");
-            dirs.push(claude_skills);
-        }
-
-        // Stop at git root or if we've reached filesystem root
-        if let Some(stop) = stop_at {
-            if current == stop {
-                break;
-            }
-        }
-
-        if !current.pop() {
-            break;
-        }
-    }
+    dirs.extend(collect_project_skills_dirs(&start_dir, stop_at));
 
     // 2. User level: global directories
     if let Ok(home) = get_home_dir() {
