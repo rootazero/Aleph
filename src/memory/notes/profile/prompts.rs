@@ -152,6 +152,7 @@ mod tests {
                 );
                 m
             },
+            sources: Default::default(),
             raw: raw.clone(),
             content_hash: "abc".to_string(),
         }

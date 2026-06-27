@@ -46,6 +46,7 @@ pub struct UserProfile {
     pub last_session: String,
     pub confidence: String,
     pub sections: std::collections::BTreeMap<String, Vec<String>>,
+    pub sources: std::collections::BTreeMap<String, Vec<String>>,
     pub raw: String,
     pub content_hash: String,
 }

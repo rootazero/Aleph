@@ -110,6 +110,7 @@ impl ProfileSynthesizer for FixedProfile {
             confidence: "medium".to_string(),
             raw: "# User Profile\n## Identity\n- Software engineer\n".to_string(),
             sections,
+            sources: Default::default(),
             content_hash: "abc".to_string(),
         }))
     }
