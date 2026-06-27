@@ -90,7 +90,7 @@ pub fn render_tool_block(
 
     // Error line (only if failed and error exists)
     if tool.status == ToolStatus::Failed {
-        if let Some(err) = tool.error {
+        if let Some(ref err) = tool.error {
             let error_prefix = "Error: ";
             let max_err_len = inner_width.saturating_sub(error_prefix.len() + 2);
             let error_display = truncate_to_width(err, max_err_len);
