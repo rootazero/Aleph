@@ -35,6 +35,7 @@ use crate::context::{DashboardContext, DashboardState};
 use crate::platform::phone::agents::PhoneAgents;
 use crate::platform::phone::chat::PhoneChat;
 use crate::platform::phone::dashboard::PhoneDashboard;
+use crate::platform::phone::extensions::PhoneExtensions;
 use crate::platform::phone::memory::PhoneMemory;
 use crate::platform::phone::more::PhoneMore;
 use crate::platform::phone::settings::appearance::PhoneAppearance;
@@ -427,7 +428,11 @@ fn MainContent() -> impl IntoView {
             }}
         </div>
         <div style:display=move || if mode.get() == PanelMode::Extensions { "contents" } else { "none" }>
-            <ExtensionsView />
+            {move || if form_factor.form_factor.get() == FormFactor::Phone {
+                view! { <PhoneExtensions /> }.into_any()
+            } else {
+                view! { <ExtensionsView /> }.into_any()
+            }}
         </div>
         <div style:display=move || if mode.get() == PanelMode::Settings { "block" } else { "none" }>
             <SettingsRouter />
