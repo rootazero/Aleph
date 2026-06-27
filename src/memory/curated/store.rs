@@ -253,7 +253,8 @@ impl CuratedMemoryStore {
         let _gate = self.io_gate.lock().await;
         let lock_path = lock_sidecar(&self.file_path);
         if let Some(parent) = lock_path.parent() {
-            std::fs::create_dir_all(parent)
+            tokio::fs::create_dir_all(parent)
+                .await
                 .map_err(|e| CuratedError::Io(format!("mkdir {}: {e}", parent.display())))?;
         }
         let lock_file = OpenOptions::new()
@@ -299,7 +300,8 @@ impl CuratedMemoryStore {
         // Write back.
         let body = serialize(&working.entries);
         if let Some(parent) = self.file_path.parent() {
-            std::fs::create_dir_all(parent)
+            tokio::fs::create_dir_all(parent)
+                .await
                 .map_err(|e| CuratedError::Io(format!("mkdir {}: {e}", parent.display())))?;
         }
         atomic_write_file(&self.file_path, &body)
