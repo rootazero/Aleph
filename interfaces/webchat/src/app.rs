@@ -14,6 +14,7 @@ use crate::views::home::Home;
 use crate::views::logs::Logs;
 use crate::views::memory_hub::MemoryHub;
 use crate::views::runtimes::RuntimesView;
+use crate::views::subagent_tree::SubagentTree;
 use crate::views::settings::{
     AcpHarnessesView, AppearanceView, BehaviorView, BrowserView, ChannelPlatformPage,
     ChannelsOverview, EmbeddingProvidersView, ExecutionView, GeneralView, GenerationProvidersView,
@@ -463,6 +464,7 @@ fn DashboardRouter() -> impl IntoView {
             "/dashboard/tasks" => view! { <TasksView /> }.into_any(),
             "/dashboard/logs" => view! { <Logs /> }.into_any(),
             "/dashboard/trace" => view! { <AgentTrace /> }.into_any(),
+            "/dashboard/subagents" => view! { <SubagentTree /> }.into_any(),
             "/dashboard/runtimes" => view! { <RuntimesView /> }.into_any(),
             "/dashboard/usage" => view! { <UsageView /> }.into_any(),
             // Not in dashboard mode — render nothing (div is hidden)

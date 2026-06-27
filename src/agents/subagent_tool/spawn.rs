@@ -10,9 +10,11 @@ use futures::FutureExt;
 use tokio_util::sync::CancellationToken;
 
 use super::SubagentTool;
-use crate::agents::background_tracker::CompletedOutcome;
+use crate::agents::background_tracker::{CompletedOutcome, SpawnMeta};
 use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig};
+use crate::agents::subagent_tree_events::{emit_tree_event, now_ms};
 use crate::agents::AgentDef;
+use aleph_protocol::subagent_tree::{NodeLifecycle, SubagentNode, SubagentTreeEvent};
 
 impl SubagentTool {
     /// A3 — a fresh child token derived from the parent run's token (cancelled
@@ -65,8 +67,48 @@ impl SubagentTool {
         let request_id = uuid::Uuid::new_v4().to_string();
         let cancel_token = self.cancel_for_child_with(harness_cancel);
 
-        self.background_tracker
-            .register(request_id.clone(), cancel_token.clone(), task.clone());
+        // Phase 0/1 — capture tree identity before `child_chain` is moved into
+        // `build_runtime`. `root_session` is the owning top-level session (the
+        // `parent_session_id` invariant down the chain); `parent_id` is `None`
+        // because the production tool is shared per top-level run, so every
+        // background subagent attaches under the session root (see design doc).
+        let depth = child_chain.depth;
+        let root_session = self.parent_session_id.clone().unwrap_or_default();
+        let tree_agent_id = self.parent_agent_id.clone();
+
+        self.background_tracker.register_with_meta(
+            request_id.clone(),
+            cancel_token.clone(),
+            task.clone(),
+            SpawnMeta {
+                parent_id: None,
+                depth,
+                root_session: root_session.clone(),
+                model: model.clone(),
+            },
+        );
+
+        // Phase 1 — emit Spawned so the panel tree shows the node immediately.
+        emit_tree_event(
+            tree_agent_id.clone(),
+            root_session.clone(),
+            SubagentTreeEvent::Spawned {
+                node: SubagentNode {
+                    node_id: request_id.clone(),
+                    parent_id: None,
+                    depth,
+                    root_session: root_session.clone(),
+                    task: task.clone(),
+                    model: model.clone(),
+                    lifecycle: NodeLifecycle::Running,
+                    started_at_ms: now_ms(),
+                    elapsed_ms: 0,
+                    tool_count: 0,
+                    last_tool: None,
+                    last_activity: None,
+                },
+            },
+        );
 
         let mut runtime = self.build_runtime(child_chain, cancel_token);
         if let Some(parent_sink) = self.trace_sink.clone() {
@@ -75,6 +117,8 @@ impl SubagentTool {
                     parent_sink,
                     self.background_tracker.clone(),
                     request_id.clone(),
+                    tree_agent_id.clone(),
+                    root_session.clone(),
                 ),
             );
             runtime = runtime.with_trace_sink(wrapper);
@@ -94,6 +138,10 @@ impl SubagentTool {
 
         let tracker = self.background_tracker.clone();
         let rid = request_id.clone();
+        // Phase 1 — Settled emit captures (moved into the run task).
+        let root_session_for_done = root_session.clone();
+        let tree_agent_id_for_done = tree_agent_id.clone();
+        let settle_started = std::time::Instant::now();
         tokio::spawn(async move {
             let runtime_config = AgentRuntimeConfig {
                 agent_def,
@@ -158,6 +206,37 @@ impl SubagentTool {
                 };
                 (sid, result)
             });
+            // Phase 1 — emit Settled (typed lifecycle + metrics) before the
+            // outcome moves into the tracker. Reuses the tracker's single-source
+            // classifier so live + cold-start lifecycles never diverge.
+            let tree_lifecycle =
+                crate::agents::background_tracker::lifecycle_from_outcome(&outcome);
+            let (settled_iters, settled_tools, settled_tokens) = match &outcome {
+                CompletedOutcome::Ok {
+                    iterations,
+                    tool_calls_made,
+                    total_tokens,
+                    ..
+                } => (*iterations, *tool_calls_made, *total_tokens),
+                CompletedOutcome::Err(_) => (0, 0, 0),
+            };
+            emit_tree_event(
+                tree_agent_id_for_done.clone(),
+                root_session_for_done.clone(),
+                SubagentTreeEvent::Settled {
+                    node_id: rid.clone(),
+                    root_session: root_session_for_done.clone(),
+                    lifecycle: tree_lifecycle,
+                    duration_ms: settle_started
+                        .elapsed()
+                        .as_millis()
+                        .try_into()
+                        .unwrap_or(u64::MAX),
+                    iterations: settled_iters,
+                    tool_calls_made: settled_tools,
+                    total_tokens: settled_tokens,
+                },
+            );
             tracker.mark_completed(&rid, outcome);
             if let Some((session_id, result)) = announce {
                 crate::event::GlobalBus::global()

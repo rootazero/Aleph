@@ -1087,6 +1087,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         );
     }
 
+    // Register the subagent tree relay — live spawn/progress/settle events are
+    // republished to panels under `run.subagent_tree` for the background
+    // sub-agent tree view (pure observability; no parent turn driven).
+    alephcore::gateway::subagent_tree_relay::spawn_subagent_tree_relay(
+        server.event_bus().clone(),
+    );
+
     // Wire OpenAI-compatible API dependencies into GatewayServer
     server.execution_adapter = agent_result.execution_adapter.clone();
     server.openai_agent_registry = agent_result.agent_registry.clone();

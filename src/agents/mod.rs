@@ -29,6 +29,7 @@ pub mod progress;
 pub mod runtime;
 pub mod subagent_spawner;
 pub mod subagent_tool;
+pub mod subagent_tree_events;
 pub mod teammates;
 
 /// Thinking levels system for LLM reasoning depth control.

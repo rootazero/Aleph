@@ -134,9 +134,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             teammate_manager: None,
             message_router: None,
             inbox: None,
-            background_tracker: Arc::new(
-                crate::agents::background_tracker::BackgroundAgentTracker::new(),
-            ),
+            // Share the process-global tracker so the `subagent.tree` RPC reads
+            // the same live state this engine's spawn path writes.
+            background_tracker: crate::agents::background_tracker::BackgroundAgentTracker::global(),
             orchestrator: Arc::new(std::sync::OnceLock::new()),
             continuation_deps: Arc::new(std::sync::OnceLock::new()),
             channel_registry: Arc::new(tokio::sync::OnceCell::new()),
