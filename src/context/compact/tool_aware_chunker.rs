@@ -11,6 +11,20 @@ use crate::providers::message::UnifiedMessage;
 // SemanticUnit
 // =============================================================================
 
+/// A complete tool interaction round: the assistant tool-call message, its
+/// matching `ToolResult`, and an optional follow-up assistant message.
+#[derive(Debug, Clone)]
+pub struct ToolRound {
+    /// Index of the assistant message containing the `ToolCall` block.
+    pub tool_use_index: usize,
+    /// Index of the `ToolResult` message that answers the call.
+    pub tool_result_index: usize,
+    /// Index of the assistant follow-up message after the result, if any.
+    pub follow_up_index: Option<usize>,
+    /// Name of the first tool called in the round (for logging / scoring).
+    pub tool_name: String,
+}
+
 /// A single atomic semantic unit within a conversation.
 ///
 /// The chunker never splits a unit — even a large `ToolRound` that exceeds the
@@ -23,18 +37,8 @@ pub enum SemanticUnit {
     /// A plain assistant text message (no tool calls) at the given message index.
     AssistantText { index: usize },
 
-    /// A complete tool interaction round: the assistant tool-call message, its
-    /// matching `ToolResult`, and an optional follow-up assistant message.
-    ToolRound {
-        /// Index of the assistant message containing the `ToolCall` block.
-        tool_use_index: usize,
-        /// Index of the `ToolResult` message that answers the call.
-        tool_result_index: usize,
-        /// Index of the assistant follow-up message after the result, if any.
-        follow_up_index: Option<usize>,
-        /// Name of the first tool called in the round (for logging / scoring).
-        tool_name: String,
-    },
+    /// A complete tool interaction round.
+    ToolRound(Box<ToolRound>),
 }
 
 impl SemanticUnit {
@@ -44,15 +48,10 @@ impl SemanticUnit {
         match self {
             Self::UserMessage { index } => vec![*index],
             Self::AssistantText { index } => vec![*index],
-            Self::ToolRound {
-                tool_use_index,
-                tool_result_index,
-                follow_up_index,
-                ..
-            } => {
-                let mut indices = vec![*tool_use_index, *tool_result_index];
-                if let Some(fu) = follow_up_index {
-                    indices.push(*fu);
+            Self::ToolRound(round) => {
+                let mut indices = vec![round.tool_use_index, round.tool_result_index];
+                if let Some(fu) = round.follow_up_index {
+                    indices.push(fu);
                 }
                 indices
             }
@@ -81,7 +80,7 @@ impl SemanticUnit {
         match self {
             Self::UserMessage { index } => *index,
             Self::AssistantText { index } => *index,
-            Self::ToolRound { tool_use_index, .. } => *tool_use_index,
+            Self::ToolRound(round) => round.tool_use_index,
         }
     }
 
@@ -95,15 +94,11 @@ impl SemanticUnit {
         match self {
             Self::UserMessage { index } => *index,
             Self::AssistantText { index } => *index,
-            Self::ToolRound {
-                tool_use_index,
-                tool_result_index,
-                follow_up_index,
-                ..
-            } => follow_up_index
-                .unwrap_or(*tool_result_index)
-                .max(*tool_result_index)
-                .max(*tool_use_index),
+            Self::ToolRound(round) => round
+                .follow_up_index
+                .unwrap_or(round.tool_result_index)
+                .max(round.tool_result_index)
+                .max(round.tool_use_index),
         }
     }
 }
@@ -179,12 +174,12 @@ pub fn parse_semantic_units(messages: &[UnifiedMessage]) -> Vec<SemanticUnit> {
                     None
                 };
 
-                units.push(SemanticUnit::ToolRound {
+                units.push(SemanticUnit::ToolRound(Box::new(ToolRound {
                     tool_use_index,
                     tool_result_index,
                     follow_up_index,
                     tool_name,
-                });
+                })));
             } else {
                 // No matching ToolResult — treat as plain assistant text.
                 units.push(SemanticUnit::AssistantText {
@@ -374,16 +369,11 @@ mod tests {
         assert!(matches!(units[0], SemanticUnit::UserMessage { index: 0 }));
 
         match &units[1] {
-            SemanticUnit::ToolRound {
-                tool_use_index,
-                tool_result_index,
-                follow_up_index,
-                tool_name,
-            } => {
-                assert_eq!(*tool_use_index, 1);
-                assert_eq!(*tool_result_index, 2);
-                assert_eq!(*follow_up_index, Some(3));
-                assert_eq!(tool_name, "web_search");
+            SemanticUnit::ToolRound(round) => {
+                assert_eq!(round.tool_use_index, 1);
+                assert_eq!(round.tool_result_index, 2);
+                assert_eq!(round.follow_up_index, Some(3));
+                assert_eq!(round.tool_name, "web_search");
             }
             other => panic!("expected ToolRound, got {other:?}"),
         }
@@ -434,25 +424,20 @@ mod tests {
         // ToolRound must be in the same chunk.
         for chunk in &chunks {
             for unit in &chunk.units {
-                if let SemanticUnit::ToolRound {
-                    tool_use_index,
-                    tool_result_index,
-                    follow_up_index,
-                    ..
-                } = unit
+                if let SemanticUnit::ToolRound(round) = unit
                 {
                     let chunk_indices = chunk.message_indices();
                     assert!(
-                        chunk_indices.contains(tool_use_index),
+                        chunk_indices.contains(&round.tool_use_index),
                         "tool_use_index missing from chunk"
                     );
                     assert!(
-                        chunk_indices.contains(tool_result_index),
+                        chunk_indices.contains(&round.tool_result_index),
                         "tool_result_index missing from chunk"
                     );
-                    if let Some(fu) = follow_up_index {
+                    if let Some(fu) = round.follow_up_index {
                         assert!(
-                            chunk_indices.contains(fu),
+                            chunk_indices.contains(&fu),
                             "follow_up_index missing from chunk"
                         );
                     }
