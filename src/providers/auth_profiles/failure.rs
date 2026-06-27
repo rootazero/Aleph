@@ -77,7 +77,7 @@ impl ProfileUsageStats {
         if values.is_empty() {
             None
         } else {
-            Some(*values.iter().max().unwrap())
+            Some(values.into_iter().max().unwrap_or(0))
         }
     }
 
