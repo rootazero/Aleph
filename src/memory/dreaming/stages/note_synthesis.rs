@@ -92,21 +92,8 @@ impl DreamStage for NoteSynthesisStage {
 
             let synthesis_text = response.text_content();
 
-            // Build links from source note paths
-            let source_links: Vec<String> = note_paths.to_vec();
-
-            let note = KnowledgeNote {
-                title: format!("{category} Synthesis"),
-                category: "synthesis".to_string(),
-                tags: vec![category.clone(), "synthesis".to_string()],
-                facts: vec![synthesis_text.clone()],
-                links: source_links.clone(),
-                source_notes: source_links,
-                created_at: chrono::Utc::now().timestamp(),
-                updated_at: chrono::Utc::now().timestamp(),
-                content_hash: String::new(),
-                ..Default::default()
-            };
+            // Build the synthesis note from its source member paths.
+            let note = build_synthesis_note(&category, &synthesis_text, note_paths.to_vec());
 
             // Ensure the synthesis directory exists (not in CATEGORY_DIRS, create manually)
             let synthesis_dir = ctx
@@ -148,6 +135,31 @@ impl DreamStage for NoteSynthesisStage {
         ctx.report.synthesis_count = synthesis_count;
         tracing::info!(synthesis_count, "NoteSynthesis completed");
         Ok(ctx)
+    }
+}
+
+/// Build the L2 synthesis note for a category from its source member paths.
+///
+/// The member paths are recorded as BOTH `links` (graph edges) and
+/// `source_notes` (provenance: which L1 notes this synthesis distilled), so the
+/// L1→L2 evidence chain stays connected and `index_note` can materialize
+/// `notes_sources`.
+fn build_synthesis_note(
+    category: &str,
+    synthesis_text: &str,
+    source_links: Vec<String>,
+) -> KnowledgeNote {
+    KnowledgeNote {
+        title: format!("{category} Synthesis"),
+        category: "synthesis".to_string(),
+        tags: vec![category.to_string(), "synthesis".to_string()],
+        facts: vec![synthesis_text.to_string()],
+        links: source_links.clone(),
+        source_notes: source_links,
+        created_at: chrono::Utc::now().timestamp(),
+        updated_at: chrono::Utc::now().timestamp(),
+        content_hash: String::new(),
+        ..Default::default()
     }
 }
 
@@ -233,23 +245,19 @@ mod tests {
     }
 
     #[test]
-    fn synthesis_note_records_source_member_paths() {
-        // Mirror the construction at note_synthesis.rs: a synthesis note built
-        // from member paths must expose them as source_notes (provenance), not
-        // only as links.
+    fn build_synthesis_note_records_source_member_paths() {
+        // Exercise the real production builder: a synthesis note built from
+        // member paths must expose them as source_notes (provenance for the
+        // L1→L2 chain), not only as links.
         let member_paths = vec!["learning/tokio".to_string(), "learning/async".to_string()];
-        let note = KnowledgeNote {
-            title: "learning Synthesis".into(),
-            category: "synthesis".into(),
-            tags: vec!["learning".into(), "synthesis".into()],
-            facts: vec!["Synthesized insight.".into()],
-            links: member_paths.clone(),
-            source_notes: member_paths.clone(),
-            created_at: 0,
-            updated_at: 0,
-            content_hash: String::new(),
-            ..Default::default()
-        };
-        assert_eq!(note.source_notes, member_paths);
+        let note = build_synthesis_note("learning", "Synthesized insight.", member_paths.clone());
+        assert_eq!(
+            note.source_notes, member_paths,
+            "member paths must be recorded as source_notes"
+        );
+        assert_eq!(note.links, member_paths, "member paths must also be links");
+        assert_eq!(note.category, "synthesis");
+        assert_eq!(note.title, "learning Synthesis");
+        assert_eq!(note.facts, vec!["Synthesized insight.".to_string()]);
     }
 }
