@@ -27,9 +27,10 @@ impl StateDatabase {
     /// Register sqlite-vec extension for all connections
     fn register_sqlite_vec_extension() {
         // Register sqlite-vec extension before opening any connection
+        // SAFETY: sqlite3_vec_init is the C entrypoint for the sqlite-vec extension;
+        // the detailed rationale is inside the unsafe block.
         unsafe {
-            // SAFETY: sqlite3_vec_init is the C entrypoint for the sqlite-vec extension.
-            // sqlite3_auto_extension registers it to be loaded for all new connections.
+            // sqlite3_auto_extension registers sqlite3_vec_init to be loaded for all new connections.
             // The function item (a zero-sized type) is first cast to a data pointer,
             // then transmuted to the target function pointer type. Both are pointer-sized
             // on all platforms Rust supports; this is the standard FFI pattern.
@@ -49,6 +50,64 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to create schema: {e}")))?;
         conn.execute_batch(&Self::vec_schema_sql(embedding_dim))
             .map_err(|e| AlephError::config(format!("Failed to create vec0 tables: {e}")))?;
+        Ok(())
+    }
+
+    fn ensure_parent_dir(path: &std::path::Path) -> Result<(), AlephError> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                AlephError::config(format!("Failed to create database directory: {e}"))
+            })?;
+        }
+        Ok(())
+    }
+
+    fn open_db(path: &std::path::Path) -> Result<Connection, AlephError> {
+        crate::utils::sqlite_open::open_sqlite_safe(path)
+            .map_err(|e| AlephError::config(format!("Failed to open database: {e}")))
+    }
+
+    fn validate_embedding_dim(embedding_dim: u32) -> Result<(), AlephError> {
+        if embedding_dim == 0 || embedding_dim > 16_384 {
+            return Err(AlephError::config(format!(
+                "embedding dimension must be in 1..=16384, got {embedding_dim}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn drop_memories_for_dim_change(
+        conn: &Connection,
+        changed: bool,
+        new_dim: u32,
+        message: &str,
+    ) -> Result<(), AlephError> {
+        if !changed {
+            return Ok(());
+        }
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS memories; DROP TABLE IF EXISTS memories_vec; DROP TABLE IF EXISTS memories_fts;",
+        )
+        .map_err(|e| AlephError::config(format!("Failed to drop memories tables: {e}")))?;
+        tracing::info!(new_dim = new_dim, "{}", message);
+        Ok(())
+    }
+
+    fn run_optional_migrations(conn: &Connection) -> Result<(), AlephError> {
+        migration::migrate_add_experience_replays(conn)?;
+        migration::migrate_task_traces_to_agent_trace(conn)?;
+        migration::migrate_add_channel_offsets(conn)?;
+        migration::migrate_add_paired_users(conn)?;
+        migration::migrate_add_sticker_descriptions(conn)?;
+        Ok(())
+    }
+
+    fn record_embedding_dim(conn: &Connection, dim: u32) -> Result<(), AlephError> {
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('embedding_dimension', ?1)",
+            params![dim.to_string()],
+        )
+        .map_err(|e| AlephError::config(format!("Failed to update schema_info: {e}")))?;
         Ok(())
     }
 
@@ -91,79 +150,41 @@ impl StateDatabase {
     /// Includes migration logic for embedding dimension changes.
     /// When embedding dimension changes (e.g., 384 -> 1024), old data is cleared.
     pub fn new(db_path: PathBuf) -> Result<Self, AlephError> {
-        // Ensure parent directory exists
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                AlephError::config(format!("Failed to create database directory: {e}"))
-            })?;
-        }
-
+        Self::ensure_parent_dir(&db_path)?;
         Self::register_sqlite_vec_extension();
 
-        let conn = crate::utils::sqlite_open::open_sqlite_safe(&db_path)
-            .map_err(|e| AlephError::config(format!("Failed to open database: {e}")))?;
+        let conn = Self::open_db(&db_path)?;
 
-        // Check if migration is needed (dimension change)
         let needs_migration = Self::check_needs_migration(&conn)?;
+        // Drop the old memories table AND its derived vec0 index for the
+        // dimension migration. `memories_vec` is a vector index over
+        // `memories.embedding`; if only `memories` is dropped, the
+        // subsequent `CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec`
+        // keeps the stale-dimension table (IF NOT EXISTS is a no-op),
+        // leaving schema_info and the vec0 table disagreeing on the
+        // dimension and breaking every later embedding insert. Dropping
+        // both lets create_schema rebuild memories_vec at the new
+        // dimension, mirroring new_with_dim(). `memories_fts` is an
+        // external-content FTS5 index over `memories`; dropping `memories`
+        // does not drop it, so without an explicit drop it would retain
+        // stale rows pointing at rowids that no longer exist (phantom
+        // search hits). create_schema recreates it empty alongside the
+        // memories table and its sync triggers.
+        Self::drop_memories_for_dim_change(
+            &conn,
+            needs_migration,
+            DEFAULT_EMBEDDING_DIM,
+            "Cleared memories + memories_vec + memories_fts tables for embedding dimension migration",
+        )?;
 
-        if needs_migration {
-            // Drop the old memories table AND its derived vec0 index for the
-            // dimension migration. `memories_vec` is a vector index over
-            // `memories.embedding`; if only `memories` is dropped, the
-            // subsequent `CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec`
-            // keeps the stale-dimension table (IF NOT EXISTS is a no-op),
-            // leaving schema_info and the vec0 table disagreeing on the
-            // dimension and breaking every later embedding insert. Dropping
-            // both lets create_schema rebuild memories_vec at the new
-            // dimension, mirroring new_with_dim(). `memories_fts` is an
-            // external-content FTS5 index over `memories`; dropping `memories`
-            // does not drop it, so without an explicit drop it would retain
-            // stale rows pointing at rowids that no longer exist (phantom
-            // search hits). create_schema recreates it empty alongside the
-            // memories table and its sync triggers.
-            conn.execute_batch(
-                "DROP TABLE IF EXISTS memories; DROP TABLE IF EXISTS memories_vec; DROP TABLE IF EXISTS memories_fts;",
-            )
-            .map_err(|e| AlephError::config(format!("Failed to drop old table: {e}")))?;
-
-            tracing::info!(
-                new_dim = DEFAULT_EMBEDDING_DIM,
-                "Cleared memories + memories_vec + memories_fts tables for embedding dimension migration"
-            );
-        }
-
-        // Create schema with version metadata
         Self::create_schema(&conn, DEFAULT_EMBEDDING_DIM)?;
 
-        // Drop obsolete memory_facts / facts_fts / facts_vec tables from existing DBs
-        Self::drop_obsolete_state_facts_tables(&conn).map_err(|e| {
-            AlephError::config(format!("Failed to drop obsolete facts tables: {e}"))
-        })?;
+        Self::drop_obsolete_state_facts_tables(&conn)
+            .map_err(|e| AlephError::config(format!("Failed to drop obsolete facts tables: {e}")))?;
 
-        // Migrate to add experience_replays table for Cortex evolution system (idempotent)
-        migration::migrate_add_experience_replays(&conn)?;
-
-        // Migrate task traces to structured AgentTraceEvent storage (idempotent)
-        migration::migrate_task_traces_to_agent_trace(&conn)?;
-
-        // Migrate to add channel_offsets table for polling offset persistence (idempotent)
-        migration::migrate_add_channel_offsets(&conn)?;
-
-        // Migrate to add paired_users table for pairing persistence (idempotent)
-        migration::migrate_add_paired_users(&conn)?;
-
-        // Migrate to add sticker_descriptions table for Telegram sticker cache (idempotent)
-        migration::migrate_add_sticker_descriptions(&conn)?;
-
-        // Migrate existing data to vec0 tables (for upgrades from old schema)
+        Self::run_optional_migrations(&conn)?;
         Self::migrate_to_vec0(&conn)?;
-
-        // Update embedding dimension in schema_info
-        conn.execute(
-            "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('embedding_dimension', ?1)",
-            params![DEFAULT_EMBEDDING_DIM.to_string()],
-        )
-        .map_err(|e| AlephError::config(format!("Failed to update schema_info: {e}")))?;
+        Self::record_embedding_dim(&conn, DEFAULT_EMBEDDING_DIM)?;
 
         tracing::info!(
             subsystem = "resilience",
@@ -183,72 +204,42 @@ impl StateDatabase {
     ///
     /// Use this when the embedding dimension is known from configuration.
     pub fn new_with_dim(db_path: PathBuf, embedding_dim: u32) -> Result<Self, AlephError> {
-        if embedding_dim == 0 || embedding_dim > 16_384 {
-            return Err(AlephError::config(format!(
-                "embedding dimension must be in 1..=16384, got {embedding_dim}"
-            )));
-        }
-
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                AlephError::config(format!("Failed to create database directory: {e}"))
-            })?;
-        }
-
+        Self::validate_embedding_dim(embedding_dim)?;
+        Self::ensure_parent_dir(&db_path)?;
         Self::register_sqlite_vec_extension();
 
-        let conn = crate::utils::sqlite_open::open_sqlite_safe(&db_path)
-            .map_err(|e| AlephError::config(format!("Failed to open database: {e}")))?;
+        let conn = Self::open_db(&db_path)?;
 
-        // Check if dimension changed
         let dim_changed = Self::check_dimension_change(&conn, embedding_dim)?;
-
-        if dim_changed {
-            // Drop `memories` alongside `memories_vec` (and the derived FTS
-            // index), mirroring `new()`. Dropping only `memories_vec` would
-            // leave stale, old-dimension embedding BLOBs in `memories`; nothing
-            // re-indexes them here (migrate_to_vec0 is skipped below on a
-            // dimension change), and on the *next* restart — where the stored
-            // dimension matches and `dim_changed` is false — migrate_to_vec0
-            // would copy those old-dimension blobs into the new-dimension
-            // `memories_vec`, hitting a vec0 dimension-mismatch and failing
-            // startup. Clearing the rows keeps the dimension migration safe
-            // across restarts.
-            conn.execute_batch(
-                "DROP TABLE IF EXISTS memories; DROP TABLE IF EXISTS memories_vec; DROP TABLE IF EXISTS memories_fts;",
-            )
-            .map_err(|e| AlephError::config(format!("Failed to drop vec0 tables: {e}")))?;
-
-            tracing::info!(
-                new_dim = embedding_dim,
-                "Cleared memories + memories_vec + memories_fts for dimension change. Embeddings will be re-indexed."
-            );
-        }
+        // Drop `memories` alongside `memories_vec` (and the derived FTS
+        // index), mirroring `new()`. Dropping only `memories_vec` would
+        // leave stale, old-dimension embedding BLOBs in `memories`; nothing
+        // re-indexes them here (migrate_to_vec0 is skipped below on a
+        // dimension change), and on the *next* restart — where the stored
+        // dimension matches and `dim_changed` is false — migrate_to_vec0
+        // would copy those old-dimension blobs into the new-dimension
+        // `memories_vec`, hitting a vec0 dimension-mismatch and failing
+        // startup. Clearing the rows keeps the dimension migration safe
+        // across restarts.
+        Self::drop_memories_for_dim_change(
+            &conn,
+            dim_changed,
+            embedding_dim,
+            "Cleared memories + memories_vec + memories_fts for dimension change. Embeddings will be re-indexed.",
+        )?;
 
         Self::create_schema(&conn, embedding_dim)?;
 
-        // Drop obsolete memory_facts / facts_fts / facts_vec tables from existing DBs
-        Self::drop_obsolete_state_facts_tables(&conn).map_err(|e| {
-            AlephError::config(format!("Failed to drop obsolete facts tables: {e}"))
-        })?;
+        Self::drop_obsolete_state_facts_tables(&conn)
+            .map_err(|e| AlephError::config(format!("Failed to drop obsolete facts tables: {e}")))?;
 
-        // Run migrations
-        migration::migrate_add_experience_replays(&conn)?;
-        migration::migrate_task_traces_to_agent_trace(&conn)?;
-        migration::migrate_add_channel_offsets(&conn)?;
-        migration::migrate_add_paired_users(&conn)?;
-        migration::migrate_add_sticker_descriptions(&conn)?;
+        Self::run_optional_migrations(&conn)?;
 
         if !dim_changed {
             Self::migrate_to_vec0(&conn)?;
         }
 
-        // Store dimension in schema_info
-        conn.execute(
-            "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('embedding_dimension', ?1)",
-            params![embedding_dim.to_string()],
-        )
-        .map_err(|e| AlephError::config(format!("Failed to update schema_info: {e}")))?;
+        Self::record_embedding_dim(&conn, embedding_dim)?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
