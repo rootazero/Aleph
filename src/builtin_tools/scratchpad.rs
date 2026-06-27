@@ -107,8 +107,12 @@ impl From<&ScratchpadSnapshot> for PlanSnapshotDto {
 /// Arguments for the scratchpad tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScratchpadArgs {
-    /// Project identifier (AI-assigned name for the project)
-    pub project_id: String,
+    /// Project identifier (AI-assigned name). Optional — when omitted, the
+    /// current chat session derives a default scratchpad, so single-chat
+    /// todos work without naming a project. Pass an explicit id for a durable
+    /// cross-session project.
+    #[serde(default)]
+    pub project_id: Option<String>,
     /// Action to perform
     pub action: ScratchpadAction,
     /// Value for Initialize (objective), `SetObjective`, `AppendNote`
@@ -205,7 +209,7 @@ impl AlephTool for ScratchpadTool {
          across sessions. While an objective is set and plan items remain \
          unfinished, the goal-loop keeps this session running so you work through \
          them step by step — call action='clear' once the objective is fully \
-         achieved.";
+         achieved. The project_id is optional — omit it to use the current chat's scratchpad.";
 
     type Args = ScratchpadArgs;
     type Output = ScratchpadOutput;
@@ -226,38 +230,43 @@ impl AlephTool for ScratchpadTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Resolve the effective project id: explicit, else derive from the
+        // live chat session so single-chat todos need no project name.
+        let session_key = self.current_session_key().await;
+        let project_id = match args.project_id.clone() {
+            Some(p) if !p.trim().is_empty() => p,
+            _ => derive_default_project_id(&session_key),
+        };
+
         info!(
-            project_id = %args.project_id,
+            project_id = %project_id,
             action = %args.action,
             "Scratchpad operation requested"
         );
 
-        // Validate project_id to prevent path traversal
-        if args.project_id.contains("..")
-            || args.project_id.contains('/')
-            || args.project_id.contains('\\')
-            || args.project_id.contains('\0')
-            || args.project_id.starts_with('.')
+        // Validate project_id to prevent path traversal (applies to explicit ids;
+        // derived ids are pre-sanitized and always pass).
+        if project_id.contains("..")
+            || project_id.contains('/')
+            || project_id.contains('\\')
+            || project_id.contains('\0')
+            || project_id.starts_with('.')
         {
             return Err(crate::error::AlephError::tool(
                 "Invalid project_id: must not contain path separators, '..', null bytes, or start with '.'".to_string(),
             ));
         }
 
-        // Bind this session to the project it is actively working, so the
-        // goal-loop hook (ScratchpadGoalVerifier) can find this execution
-        // list at stop time. Read-only access never re-points the binding;
-        // Clear unbinds. No-op when no session handle is wired.
-        let session_key = self.current_session_key().await;
+        // Registry binding (unchanged semantics, now keyed on resolved id).
         if !session_key.is_empty() {
             match args.action {
                 ScratchpadAction::Read => {}
                 ScratchpadAction::Clear => scratchpad_registry::clear(&session_key),
-                _ => scratchpad_registry::set_active(&session_key, &args.project_id),
+                _ => scratchpad_registry::set_active(&session_key, &project_id),
             }
         }
 
-        let manager = ScratchpadManager::new(&args.project_id, "tool");
+        let manager = ScratchpadManager::new(&project_id, "tool");
 
         match args.action {
             ScratchpadAction::Initialize => {
@@ -372,6 +381,37 @@ impl AlephTool for ScratchpadTool {
     }
 }
 
+/// Derive a filesystem-safe default scratchpad project id from the live
+/// session key, for single-chat ad-hoc todos where the model omits
+/// `project_id`. Keeps only `[A-Za-z0-9_-]`, prefixes `chat-` (so it never
+/// starts with `.` and never collides with the path-traversal guard).
+fn derive_default_project_id(session_key: &str) -> String {
+    let slug: String = session_key
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect();
+    // collapse runs of '-' and trim edges for a clean slug
+    let mut collapsed = String::with_capacity(slug.len());
+    let mut prev_dash = false;
+    for c in slug.chars() {
+        if c == '-' {
+            if !prev_dash {
+                collapsed.push('-');
+            }
+            prev_dash = true;
+        } else {
+            collapsed.push(c);
+            prev_dash = false;
+        }
+    }
+    let trimmed = collapsed.trim_matches('-');
+    if trimmed.is_empty() {
+        "chat-default".to_string()
+    } else {
+        format!("chat-{trimmed}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,7 +503,7 @@ mod tests {
             "value": "Build feature X"
         }"#;
         let args: ScratchpadArgs = serde_json::from_str(json).unwrap();
-        assert_eq!(args.project_id, "my-project");
+        assert_eq!(args.project_id.as_deref(), Some("my-project"));
         assert!(matches!(args.action, ScratchpadAction::Initialize));
         assert_eq!(args.value, Some("Build feature X".to_string()));
     }
@@ -498,5 +538,15 @@ mod tests {
         let def = AlephTool::definition(&tool);
         assert_eq!(def.name, "scratchpad");
         assert!(def.llm_context.is_some());
+    }
+
+    #[test]
+    fn derive_default_project_id_sanitizes_and_prefixes() {
+        assert_eq!(derive_default_project_id("agent:abc/def 1"), "chat-agent-abc-def-1");
+        assert_eq!(derive_default_project_id(""), "chat-default");
+        assert_eq!(derive_default_project_id("///"), "chat-default");
+        // result must pass the same path-safety rules call() enforces
+        let id = derive_default_project_id("..\\evil");
+        assert!(!id.contains("..") && !id.contains('/') && !id.contains('\\') && !id.starts_with('.'));
     }
 }
