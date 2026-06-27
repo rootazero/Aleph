@@ -215,7 +215,9 @@ fn parse_jsonc(content: &str, path: &Path) -> Result<AlephConfig, ExtensionError
 
     // Handle trailing commas (common in JSONC)
     // Use regex to handle commas followed by whitespace before ] or }
-    let trailing_comma_re = regex::Regex::new(r",(\s*[\]}])").unwrap();
+    let trailing_comma_re = regex::Regex::new(r",(\s*[\]}])").map_err(|e| {
+        ExtensionError::config_parse(path, format!("Invalid trailing comma regex: {e}"))
+    })?;
     let result = trailing_comma_re.replace_all(&stripped, "$1").to_string();
 
     serde_json::from_str(&result)

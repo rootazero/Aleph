@@ -81,10 +81,14 @@ impl SkillTemplate {
 
         // Find all file references
         for cap in FILE_REF_REGEX.captures_iter(content) {
-            let full_match = cap.get(0).expect("regex capture group 0 always present");
+            let full_match = cap
+                .get(0)
+                .ok_or_else(|| ExtensionError::template_error("regex capture group 0 missing"))?;
             let path_str = cap
                 .get(1)
-                .expect("regex capture group 1 always present for file refs")
+                .ok_or_else(|| {
+                    ExtensionError::template_error("regex capture group 1 missing for file refs")
+                })?
                 .as_str();
 
             // Resolve the path
@@ -198,7 +202,7 @@ mod tests {
     async fn test_file_reference_relative() {
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join("config.json");
-        std::fs::write(&config_path, r#"{"key": "value"}"#).unwrap();
+        tokio::fs::write(&config_path, r#"{"key": "value"}"#).await.unwrap();
 
         let template =
             SkillTemplate::with_base_dir("Config: @./config.json", temp.path().to_path_buf());
@@ -212,7 +216,7 @@ mod tests {
     async fn test_file_reference_absolute_blocked() {
         let temp = TempDir::new().unwrap();
         let file_path = temp.path().join("test.txt");
-        std::fs::write(&file_path, "Test content").unwrap();
+        tokio::fs::write(&file_path, "Test content").await.unwrap();
 
         let template = SkillTemplate::with_base_dir(
             &format!("Content: @{}", file_path.display()),
@@ -263,7 +267,7 @@ mod tests {
     async fn test_combined_template() {
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join("settings.json");
-        std::fs::write(&config_path, r#"{"name": "test"}"#).unwrap();
+        tokio::fs::write(&config_path, r#"{"name": "test"}"#).await.unwrap();
 
         let template = SkillTemplate::with_base_dir(
             "User: $ARGUMENTS\nSettings: @./settings.json",

@@ -901,6 +901,8 @@ impl HookExecutor {
         // Sort by priority (lower value = earlier execution)
         resolvers.sort_by_key(|h| h.priority.as_i32());
 
+        // Execute all actions for this hook and collect results
+        let mut action_results = Vec::new();
         for hook in resolvers {
             // Check matcher pattern
             if !self.matches_pattern(hook, context) {
@@ -917,8 +919,7 @@ impl HookExecutor {
                 hook.plugin_name, event
             );
 
-            // Execute all actions for this hook and collect results
-            let mut action_results = Vec::new();
+            action_results.clear();
             for action in &hook.actions {
                 match self
                     .execute_action(
