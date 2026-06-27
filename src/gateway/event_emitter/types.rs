@@ -334,10 +334,12 @@ impl ToolResult {
 
 /// Summary of a completed agent run.
 ///
-/// Mirrors `aleph_protocol::RunSummary` field-for-field — kept in parallel
-/// because the gateway internal `StreamEvent` enum is distinct from the
-/// wire-protocol enum (see `events.rs` comment). Every new field carries
-/// `#[serde(default)]` so legacy producers round-trip cleanly.
+/// Mirrors `aleph_protocol::RunSummary` — kept in parallel because the gateway
+/// internal `StreamEvent` enum is distinct from the wire-protocol enum (see
+/// `events.rs` comment). The trailing `context_tokens` / `context_window` gauge
+/// fields are gateway-only (they ride the panel-bound `RunComplete` frame, which
+/// moves this struct directly; the protocol struct does not carry them). Every
+/// new field carries `#[serde(default)]` so legacy producers round-trip cleanly.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunSummary {
     pub total_tokens: u64,

@@ -706,7 +706,7 @@ mod tests {
 
     #[test]
     fn context_occupancy_folds_prompt_plus_output_anthropic_shape() {
-        // Anthropic 形态：input 不含 cache，cache_read > input ⇒ disjoint。
+        // Anthropic shape: input excludes cache; cache_read > input ⇒ disjoint.
         let u = TokenUsage {
             input_tokens: 100,
             output_tokens: 40,
@@ -721,7 +721,7 @@ mod tests {
 
     #[test]
     fn context_occupancy_no_double_count_openai_shape() {
-        // OpenAI 形态：input 已含 cache_read（cache_read <= input）。
+        // OpenAI shape: input already includes cache_read (cache_read <= input).
         let u = TokenUsage {
             input_tokens: 1000,
             output_tokens: 30,
