@@ -20,7 +20,7 @@ impl LinuxPim {
             .map(|h| h.join(".thunderbird"))
     }
 
-    fn find_mbox_files() -> Vec<(String, PathBuf)> {
+    fn find_mbox_files(&self) -> Vec<(String, PathBuf)> {
         let tb_dir = match Self::thunderbird_dir() {
             Some(d) if d.exists() => d,
             _ => return Vec::new(),
@@ -220,7 +220,7 @@ impl PimCapability for LinuxPim {
         limit: u32,
     ) -> Result<Vec<MailMessage>> {
         let query_lc = query.to_ascii_lowercase();
-        let folders = Self::find_mbox_files();
+        let folders = self.find_mbox_files();
         let mut result = Vec::new();
 
         let target_folders: Vec<(String, PathBuf)> = match folder {

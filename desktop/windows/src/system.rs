@@ -99,7 +99,7 @@ impl SystemCapability for WindowsSystem {
                     unsafe {
                         if IsWindowVisible(hwnd).as_bool() {
                             let mut buf = [0u16; 512];
-                            let len = GetWindowTextW(hwnd, buf.as_mut_ptr());
+                            let len = GetWindowTextW(hwnd, &mut buf);
                             if len > 0 {
                                 let title = String::from_utf16_lossy(&buf[..len as usize]);
                                 let mut pid: u32 = 0;

@@ -297,12 +297,12 @@ mod imp {
     /// origin) into the shared [`Region`]. Physical pixels are what the Windows
     /// click/screenshot path already uses, so coordinates round-trip directly
     /// into `desktop_click` without rescaling.
-    const fn rect_to_region(r: RECT) -> Region {
+    fn rect_to_region(r: RECT) -> Region {
         Region {
-            x: f64::from(r.left),
-            y: f64::from(r.top),
-            width: f64::from(r.right - r.left),
-            height: f64::from(r.bottom - r.top),
+            x: r.left as f64,
+            y: r.top as f64,
+            width: (r.right - r.left) as f64,
+            height: (r.bottom - r.top) as f64,
         }
     }
 
