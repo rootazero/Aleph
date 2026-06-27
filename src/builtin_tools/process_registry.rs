@@ -391,7 +391,7 @@ mod tests {
 
     /// A spawned-and-immediately-finished task gives us a real `AbortHandle`.
     async fn live_handle() -> AbortHandle {
-        let jh = tokio::spawn(async {});
+        let jh = tokio::spawn(async move {});
         let h = jh.abort_handle();
         let _ = jh.await;
         h
