@@ -100,7 +100,7 @@ impl LeakDetector {
         let ac = AhoCorasickBuilder::new()
             .ascii_case_insensitive(true)
             .build(&prefixes)
-            .expect("failed to build Aho-Corasick automaton");
+            .unwrap_or_else(|_| unreachable!("failed to build Aho-Corasick automaton"));
         Self { ac, patterns }
     }
 

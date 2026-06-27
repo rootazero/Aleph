@@ -74,8 +74,9 @@ pub fn decide_exec_approval(
         return ApprovalDecision::Deny {
             reason: analysis
                 .reason
-                .clone()
-                .unwrap_or_else(|| "command parse error".into()),
+                .as_deref()
+                .unwrap_or("command parse error")
+                .to_string(),
         };
     }
 

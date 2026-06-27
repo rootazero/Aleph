@@ -121,15 +121,17 @@ pub fn analyze_shell_command(
 
     let mut all_segments = Vec::new();
     let mut chains = Vec::new();
+    let mut chain_segments = Vec::new();
 
     for part in chain_parts {
+        chain_segments.clear();
+
         // Split by pipe |
         let pipeline_parts = match split_pipeline(&part) {
             Ok(parts) => parts,
             Err(reason) => return CommandAnalysis::error(reason),
         };
 
-        let mut chain_segments = Vec::new();
         for raw in pipeline_parts {
             let argv = match tokenize_segment(&raw) {
                 Some(tokens) if !tokens.is_empty() => tokens,
@@ -143,9 +145,10 @@ pub fn analyze_shell_command(
         }
 
         if !chain_segments.is_empty() {
-            all_segments.extend(chain_segments.clone());
-            chains.push(chain_segments);
+            chains.push(chain_segments.clone());
+            all_segments.extend(chain_segments.iter().cloned());
         }
+        chain_segments.clear();
     }
 
     if all_segments.is_empty() {
@@ -184,38 +187,10 @@ fn split_command_chain(command: &str) -> Result<Vec<String>, String> {
                 in_double = !in_double;
                 current.push(ch);
             }
-            '&' if !in_single && !in_double => {
-                if chars.peek() == Some(&'&') {
-                    chars.next();
-                    let trimmed = current.trim().to_string();
-                    if !trimmed.is_empty() {
-                        parts.push(trimmed);
-                    }
-                    current.clear();
-                } else {
-                    // Background operator not allowed
-                    return Err("background operator (&) not allowed".into());
-                }
-            }
-            '|' if !in_single && !in_double => {
-                if chars.peek() == Some(&'|') {
-                    chars.next();
-                    let trimmed = current.trim().to_string();
-                    if !trimmed.is_empty() {
-                        parts.push(trimmed);
-                    }
-                    current.clear();
-                } else {
-                    // Single pipe is OK, keep in current
+            '&' | '|' | ';' if !in_single && !in_double => {
+                if !try_split_chain_operator(ch, &mut chars, &mut parts, &mut current)? {
                     current.push(ch);
                 }
-            }
-            ';' if !in_single && !in_double => {
-                let trimmed = current.trim().to_string();
-                if !trimmed.is_empty() {
-                    parts.push(trimmed);
-                }
-                current.clear();
             }
             _ => {
                 current.push(ch);
@@ -227,12 +202,50 @@ fn split_command_chain(command: &str) -> Result<Vec<String>, String> {
         return Err("unclosed quote or trailing escape".into());
     }
 
-    let trimmed = current.trim().to_string();
-    if !trimmed.is_empty() {
-        parts.push(trimmed);
-    }
+    push_part(&mut parts, &mut current);
 
     Ok(parts)
+}
+
+fn push_part(parts: &mut Vec<String>, current: &mut String) {
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        parts.push(trimmed.to_string());
+    }
+    current.clear();
+}
+
+fn try_split_chain_operator(
+    ch: char,
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    parts: &mut Vec<String>,
+    current: &mut String,
+) -> Result<bool, String> {
+    match ch {
+        '&' => {
+            if chars.peek() == Some(&'&') {
+                chars.next();
+                push_part(parts, current);
+                Ok(true)
+            } else {
+                Err("background operator (&) not allowed".into())
+            }
+        }
+        '|' => {
+            if chars.peek() == Some(&'|') {
+                chars.next();
+                push_part(parts, current);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        ';' => {
+            push_part(parts, current);
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
 }
 
 /// Split a command chain part by pipe |
