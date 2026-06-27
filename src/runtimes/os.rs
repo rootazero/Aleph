@@ -19,24 +19,24 @@ pub enum TargetOs {
 impl TargetOs {
     /// Detect the current OS at runtime.
     ///
-    /// Panics on unsupported OSes at compile time via `cfg!` gating.
+    /// Returns `None` on unsupported OSes.
     #[must_use]
-    pub const fn current() -> Self {
+    pub const fn current() -> Option<Self> {
         #[cfg(target_os = "macos")]
         {
-            Self::MacOs
+            Some(Self::MacOs)
         }
         #[cfg(target_os = "linux")]
         {
-            Self::Linux
+            Some(Self::Linux)
         }
         #[cfg(target_os = "windows")]
         {
-            Self::Windows
+            Some(Self::Windows)
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         {
-            panic!("unsupported OS for Aleph runtimes")
+            None
         }
     }
 
@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn test_current_returns_concrete() {
-        let os = TargetOs::current();
+        let os = TargetOs::current().expect("current OS supported");
         assert!(matches!(
             os,
             TargetOs::MacOs | TargetOs::Linux | TargetOs::Windows

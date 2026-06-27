@@ -53,7 +53,15 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
         });
     }
 
-    let current = TargetOs::current();
+    let current = match TargetOs::current() {
+        Some(os) => os,
+        None => {
+            return Ok(BootstrapResult::Unsupported {
+                capability: name.into(),
+                reason: "unsupported OS for Aleph runtimes".into(),
+            });
+        }
+    };
     let os_install = match select_install(spec.install, current) {
         Some(oi) => oi,
         None => {
