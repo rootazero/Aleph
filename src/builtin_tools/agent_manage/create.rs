@@ -292,13 +292,13 @@ impl AlephTool for AgentCreateTool {
         // initialize_agent_identity's write_if_missing keeps it.
         let display_name = args.name.as_deref().unwrap_or(&args.id);
         let soul_content = resolve_soul_content(&args, display_name);
-        std::fs::create_dir_all(&agent_state_dir).map_err(|e| {
+        tokio::fs::create_dir_all(&agent_state_dir).await.map_err(|e| {
             crate::error::AlephError::other(format!(
                 "Failed to create agent state dir for '{}': {}",
                 args.id, e
             ))
         })?;
-        std::fs::write(agent_state_dir.join("SOUL.md"), &soul_content).map_err(|e| {
+        tokio::fs::write(agent_state_dir.join("SOUL.md"), &soul_content).await.map_err(|e| {
             crate::error::AlephError::other(format!(
                 "Failed to write SOUL.md for '{}': {}",
                 args.id, e
@@ -329,7 +329,7 @@ impl AlephTool for AgentCreateTool {
         })?;
 
         // Create workspace directory for tool output
-        std::fs::create_dir_all(&workspace_path).map_err(|e| {
+        tokio::fs::create_dir_all(&workspace_path).await.map_err(|e| {
             crate::error::AlephError::other(format!(
                 "Failed to create workspace for '{}': {}",
                 args.id, e
@@ -346,7 +346,7 @@ impl AlephTool for AgentCreateTool {
                  ## Instructions\n\n\
                  Add workspace-specific instructions here.\n"
             );
-            std::fs::write(&agents_md, content).map_err(|e| {
+            tokio::fs::write(&agents_md, content).await.map_err(|e| {
                 crate::error::AlephError::other(format!("Failed to write AGENTS.md: {e}"))
             })?;
         }
@@ -356,7 +356,7 @@ impl AlephTool for AgentCreateTool {
             let identity_name = args.name.as_deref().unwrap_or(&args.id);
             let identity_content =
                 format!("- Name: {identity_name}\n- Emoji: \u{1f916}\n- Theme: professional\n");
-            if let Err(e) = std::fs::write(&identity_path, identity_content) {
+            if let Err(e) = tokio::fs::write(&identity_path, identity_content).await {
                 warn!(agent_id = %args.id, path = %identity_path.display(), error = %e,
                     "Failed to write IDENTITY.md template (non-fatal)");
             }
@@ -366,7 +366,7 @@ impl AlephTool for AgentCreateTool {
         if !tools_path.exists() {
             let tools_content =
                 "# Tool Notes\n\nRecord your tool usage preferences and notes here.\n";
-            if let Err(e) = std::fs::write(&tools_path, tools_content) {
+            if let Err(e) = tokio::fs::write(&tools_path, tools_content).await {
                 warn!(agent_id = %args.id, path = %tools_path.display(), error = %e,
                     "Failed to write TOOLS.md template (non-fatal)");
             }
@@ -576,3 +576,4 @@ mod tests {
         assert!(def.llm_context.is_some());
     }
 }
+

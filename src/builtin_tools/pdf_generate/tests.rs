@@ -297,14 +297,14 @@ fn main() {
     assert!(output.pages >= 1);
 
     // Verify PDF file exists and has substantial content
-    let metadata = std::fs::metadata(&output_path).unwrap();
+    let metadata = tokio::fs::metadata(&output_path).await.unwrap();
     assert!(
         metadata.len() > 5000,
         "Browser-rendered PDF should be substantial"
     );
 
     // Cleanup
-    let _ = std::fs::remove_file(&output_path);
+    let _ = tokio::fs::remove_file(&output_path).await;
 }
 
 /// Test: Auto engine falls back to native when Chrome is unavailable.
@@ -336,7 +336,7 @@ async fn test_auto_engine_fallback() {
     let output = result.unwrap();
     assert!(output.success);
 
-    let _ = std::fs::remove_file(&output_path);
+    let _ = tokio::fs::remove_file(&output_path).await;
 }
 
 // ── Content format auto-detection ────────────────────────────────────────
@@ -406,3 +406,4 @@ fn test_args_schema_includes_render_engine() {
         "Schema should include native option"
     );
 }
+

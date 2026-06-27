@@ -227,7 +227,7 @@ make several coordinated edits at once."#;
             );
         }
         if let Some(parent) = resolved.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
                 return fail(
                     "add",
                     path,
@@ -274,7 +274,7 @@ make several coordinated edits at once."#;
                 format!("{} does not exist", resolved.display()),
             );
         }
-        match std::fs::remove_file(&resolved) {
+        match tokio::fs::remove_file(&resolved).await {
             Ok(()) => FileOutcome {
                 path: resolved.display().to_string(),
                 op: "delete",
@@ -336,7 +336,7 @@ make several coordinated edits at once."#;
         }
 
         // Read + binary refusal mirrors `file_edit::read_text_file`.
-        let bytes = match std::fs::read(&resolved) {
+        let bytes = match tokio::fs::read(&resolved).await {
             Ok(b) => b,
             Err(e) => return fail("update", path, format!("read failed: {e}")),
         };
@@ -425,7 +425,7 @@ make several coordinated edits at once."#;
 
         let final_path = if let Some(new_resolved) = move_dest {
             if let Some(parent) = new_resolved.parent() {
-                if let Err(e) = std::fs::create_dir_all(parent) {
+                if let Err(e) = tokio::fs::create_dir_all(parent).await {
                     return fail(
                         "update",
                         path,
@@ -437,7 +437,7 @@ make several coordinated edits at once."#;
                     );
                 }
             }
-            if let Err(e) = std::fs::rename(&resolved, &new_resolved) {
+            if let Err(e) = tokio::fs::rename(&resolved, &new_resolved).await {
                 return fail(
                     "update",
                     path,
@@ -857,7 +857,7 @@ mod tests {
     async fn end_to_end_add_and_update_in_tempdir() {
         let dir = tempfile::tempdir().expect("tempdir");
         let app_py = dir.path().join("app.py");
-        std::fs::write(&app_py, "x = 1\ny = 2\nz = 3\n").unwrap();
+        tokio::fs::write(&app_py, "x = 1\ny = 2\nz = 3\n").await.unwrap();
 
         // Run the add+update in the temp directory using absolute prefix in
         // the resolved paths. We bypass the tool's path-resolution layer
@@ -897,7 +897,7 @@ mod tests {
             .await;
         assert!(outcome2.success, "{:?}", outcome2);
 
-        let updated = std::fs::read_to_string(&app_py).unwrap();
+        let updated = tokio::fs::read_to_string(&app_py).await.unwrap();
         assert_eq!(updated, "x = 1\ny = 20\nz = 3\n");
     }
 
@@ -905,7 +905,7 @@ mod tests {
     async fn update_reports_unmatched_hunk() {
         let dir = tempfile::tempdir().expect("tempdir");
         let app_py = dir.path().join("app.py");
-        std::fs::write(&app_py, "a\nb\nc\n").unwrap();
+        tokio::fs::write(&app_py, "a\nb\nc\n").await.unwrap();
         let tool = ApplyPatchTool::new();
         let hunk = Hunk {
             header: None,
@@ -931,7 +931,7 @@ mod tests {
         // fallback recovers the location and the edit lands.
         let dir = tempfile::tempdir().expect("tempdir");
         let app_py = dir.path().join("app.py");
-        std::fs::write(&app_py, "x = 1   \ny = 2\nz = 3  \n").unwrap();
+        tokio::fs::write(&app_py, "x = 1   \ny = 2\nz = 3  \n").await.unwrap();
 
         let tool = ApplyPatchTool::new();
         let outcome = tool
@@ -952,7 +952,7 @@ mod tests {
             )
             .await;
         assert!(outcome.success, "{:?}", outcome);
-        let updated = std::fs::read_to_string(&app_py).unwrap();
+        let updated = tokio::fs::read_to_string(&app_py).await.unwrap();
         assert_eq!(updated, "x = 1\ny = 20\nz = 3\n");
     }
 
@@ -963,7 +963,7 @@ mod tests {
         // context line forces the line-anchored path.)
         let dir = tempfile::tempdir().expect("tempdir");
         let f = dir.path().join("log.txt");
-        std::fs::write(&f, "end \nmiddle\nend \n").unwrap();
+        tokio::fs::write(&f, "end \nmiddle\nend \n").await.unwrap();
 
         let tool = ApplyPatchTool::new();
         let outcome = tool
@@ -979,7 +979,8 @@ mod tests {
             )
             .await;
         assert!(outcome.success, "{:?}", outcome);
-        let updated = std::fs::read_to_string(&f).unwrap();
+        let updated = tokio::fs::read_to_string(&f).await.unwrap();
         assert_eq!(updated, "end \nmiddle\nFIN\n");
     }
 }
+

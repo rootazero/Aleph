@@ -139,7 +139,7 @@ impl AlephTool for AgentDeleteTool {
             let workspace = instance.workspace();
             let archived = workspace.with_extension("archived");
             if workspace.exists() {
-                if let Err(e) = std::fs::rename(workspace, &archived) {
+                if let Err(e) = tokio::fs::rename(workspace, &archived).await {
                     warn!(
                         agent_id = %args.agent_id,
                         error = %e,
@@ -162,7 +162,7 @@ impl AlephTool for AgentDeleteTool {
                 .join(&args.agent_id);
             if agent_state_dir.exists() {
                 let archived_state = agent_state_dir.with_extension("archived");
-                if let Err(e) = std::fs::rename(&agent_state_dir, &archived_state) {
+                if let Err(e) = tokio::fs::rename(&agent_state_dir, &archived_state).await {
                     warn!(
                         agent_id = %args.agent_id,
                         error = %e,
@@ -275,3 +275,4 @@ mod tests {
         assert!(!is_protected(&catalog, "my-custom-trader"));
     }
 }
+

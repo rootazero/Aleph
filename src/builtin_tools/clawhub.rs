@@ -482,7 +482,7 @@ impl AlephTool for ClawHubTool {
                 let meta_path = Self::skills_dir().join(skill_name).join(".clawhub.json");
 
                 let local_meta: ClawHubMeta = if meta_path.exists() {
-                    let content = std::fs::read_to_string(&meta_path).map_err(|e| {
+                    let content = tokio::fs::read_to_string(&meta_path).await.map_err(|e| {
                         AlephError::tool(format!("Failed to read .clawhub.json: {e}"))
                     })?;
                     serde_json::from_str(&content).map_err(|e| {
@@ -693,3 +693,4 @@ mod tests {
         assert!(!is_path_within(&base, &target));
     }
 }
+

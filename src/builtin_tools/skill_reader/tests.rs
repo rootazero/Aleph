@@ -255,13 +255,13 @@ async fn test_read_skill_multi_directory() {
 async fn skill_read_can_reach_references_subdir() {
     let tmp = tempfile::tempdir().unwrap();
     let sk = tmp.path().join("withref");
-    std::fs::create_dir_all(sk.join("references")).unwrap();
-    std::fs::write(
+    tokio::fs::create_dir_all(sk.join("references")).await.unwrap();
+    tokio::fs::write(
         sk.join("SKILL.md"),
         "---\nname: withref\ndescription: d\n---\nx",
     )
     .unwrap();
-    std::fs::write(sk.join("references").join("guide.md"), "REF-CONTENT").unwrap();
+    tokio::fs::write(sk.join("references").join("guide.md"), "REF-CONTENT").await.unwrap();
 
     let tool = ReadSkillTool::with_directories(vec![tmp.path().to_path_buf()]);
     let out = AlephTool::call(
@@ -280,8 +280,8 @@ async fn skill_read_can_reach_references_subdir() {
 async fn skill_read_rejects_traversal_in_file_name() {
     let tmp = tempfile::tempdir().unwrap();
     let sk = tmp.path().join("trav");
-    std::fs::create_dir_all(&sk).unwrap();
-    std::fs::write(
+    tokio::fs::create_dir_all(&sk).await.unwrap();
+    tokio::fs::write(
         sk.join("SKILL.md"),
         "---\nname: trav\ndescription: d\n---\nx",
     )
@@ -310,8 +310,8 @@ async fn duplicate_skill_across_dirs_is_refused() {
     let dir_b = tmp.path().join("b");
     for d in [&dir_a, &dir_b] {
         let sk = d.join("dup");
-        std::fs::create_dir_all(&sk).unwrap();
-        std::fs::write(
+        tokio::fs::create_dir_all(&sk).await.unwrap();
+        tokio::fs::write(
             sk.join("SKILL.md"),
             "---\nname: dup\ndescription: d\n---\nx",
         )
@@ -333,3 +333,4 @@ async fn duplicate_skill_across_dirs_is_refused() {
         "got: {msg}"
     );
 }
+
