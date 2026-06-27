@@ -11,7 +11,7 @@ use tracing::info;
 
 use crate::builtin_tools::scratchpad_registry;
 use crate::error::Result;
-use crate::memory::scratchpad::ScratchpadManager;
+use crate::memory::scratchpad::{PlanItemStatus, ScratchpadManager, ScratchpadSnapshot};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -52,6 +52,58 @@ impl std::fmt::Display for ScratchpadAction {
     }
 }
 
+/// Serde-friendly mirror of `PlanItemStatus` (which derives no serde).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanItemStatusDto {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+impl From<PlanItemStatus> for PlanItemStatusDto {
+    fn from(s: PlanItemStatus) -> Self {
+        match s {
+            PlanItemStatus::Pending => Self::Pending,
+            PlanItemStatus::InProgress => Self::InProgress,
+            PlanItemStatus::Done => Self::Completed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlanItemDto {
+    pub text: String,
+    pub status: PlanItemStatusDto,
+}
+
+/// Structured snapshot of the scratchpad plan, attached to `ScratchpadOutput`
+/// so the Panel can render a live Todo widget (rides the existing
+/// `tool_call_completed` event; no new protocol variant — R4/R10).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlanSnapshotDto {
+    pub objective: Option<String>,
+    pub items: Vec<PlanItemDto>,
+    pub complete: bool,
+}
+
+impl From<&ScratchpadSnapshot> for PlanSnapshotDto {
+    fn from(s: &ScratchpadSnapshot) -> Self {
+        Self {
+            objective: s.objective.clone(),
+            items: s
+                .items
+                .iter()
+                .map(|i| PlanItemDto {
+                    text: i.text.clone(),
+                    status: i.status.into(),
+                })
+                .collect(),
+            complete: s.is_objective_complete(),
+        }
+    }
+}
+
 /// Arguments for the scratchpad tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScratchpadArgs {
@@ -76,6 +128,9 @@ pub struct ScratchpadOutput {
     pub message: String,
     /// Scratchpad content (returned for Read/Initialize)
     pub content: Option<String>,
+    /// Structured plan snapshot for the Panel Todo widget (mutating actions only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<PlanSnapshotDto>,
 }
 
 /// Tool that allows the AI to manage project scratchpads
@@ -113,25 +168,28 @@ impl ScratchpadTool {
     }
 }
 
-/// Echo the updated execution list back to the model after a mutating
-/// action — Claude Code `TodoWrite` parity (the tool always returns the
-/// current list), giving the loop continuous visibility through the tool-
-/// result channel without touching the harness prompt builder (R10-safe).
-/// Fail-soft: returns `None` on any read error rather than failing the op.
+/// Read the scratchpad snapshot once and produce BOTH the model-facing
+/// progress echo text and the Panel-facing structured DTO, so the two never
+/// drift. Fail-soft: returns (None, None) on any read error rather than
+/// failing the op.
 ///
 /// When the action just finished the objective (every box `[x]`), the echo
 /// becomes a 收尾 completion summary instead of the in-progress checklist —
 /// closing the goal-loop with hermes-agent `mark_done` parity. The summary is
 /// structural (the model's own checkboxes), so the model stays sovereign over
 /// completion (R7); the progress sink mirrors it to the user channel (R5).
-async fn progress_echo(manager: &ScratchpadManager) -> Option<String> {
-    manager.snapshot().await.ok().map(|s| {
-        if s.is_objective_complete() {
-            s.render_completion()
-        } else {
-            s.render_progress()
+async fn progress_parts(manager: &ScratchpadManager) -> (Option<String>, Option<PlanSnapshotDto>) {
+    match manager.snapshot().await {
+        Ok(s) => {
+            let text = if s.is_objective_complete() {
+                s.render_completion()
+            } else {
+                s.render_progress()
+            };
+            (Some(text), Some(PlanSnapshotDto::from(&s)))
         }
-    })
+        Err(_) => (None, None),
+    }
 }
 
 #[async_trait]
@@ -209,6 +267,7 @@ impl AlephTool for ScratchpadTool {
                         success: true,
                         message: "Scratchpad already exists, returning current content".to_string(),
                         content: Some(content),
+                        snapshot: None,
                     })
                 } else {
                     manager.initialize(args.value.as_deref()).await?;
@@ -217,6 +276,7 @@ impl AlephTool for ScratchpadTool {
                         success: true,
                         message: "Scratchpad initialized".to_string(),
                         content: Some(content),
+                        snapshot: None,
                     })
                 }
             }
@@ -227,6 +287,7 @@ impl AlephTool for ScratchpadTool {
                         success: true,
                         message: "No scratchpad exists for this project".to_string(),
                         content: None,
+                        snapshot: None,
                     });
                 }
                 let content = manager.read().await?;
@@ -234,16 +295,19 @@ impl AlephTool for ScratchpadTool {
                     success: true,
                     message: "Scratchpad content loaded".to_string(),
                     content: Some(content),
+                    snapshot: None,
                 })
             }
 
             ScratchpadAction::SetObjective => {
                 let value = args.value.unwrap_or_default();
                 manager.set_objective(&value).await?;
+                let (content, snapshot) = progress_parts(&manager).await;
                 Ok(ScratchpadOutput {
                     success: true,
                     message: format!("Objective updated: {value}"),
-                    content: progress_echo(&manager).await,
+                    content,
+                    snapshot,
                 })
             }
 
@@ -251,30 +315,36 @@ impl AlephTool for ScratchpadTool {
                 let items = args.items.unwrap_or_default();
                 let items_ref: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
                 manager.set_plan(&items_ref).await?;
+                let (content, snapshot) = progress_parts(&manager).await;
                 Ok(ScratchpadOutput {
                     success: true,
                     message: format!("Plan set with {} items", items.len()),
-                    content: progress_echo(&manager).await,
+                    content,
+                    snapshot,
                 })
             }
 
             ScratchpadAction::StartItem => {
                 let index = args.item_index.unwrap_or(0);
                 manager.start_item(index).await?;
+                let (content, snapshot) = progress_parts(&manager).await;
                 Ok(ScratchpadOutput {
                     success: true,
                     message: format!("Item {index} marked in progress (current step)"),
-                    content: progress_echo(&manager).await,
+                    content,
+                    snapshot,
                 })
             }
 
             ScratchpadAction::CompleteItem => {
                 let index = args.item_index.unwrap_or(0);
                 manager.complete_item(index).await?;
+                let (content, snapshot) = progress_parts(&manager).await;
                 Ok(ScratchpadOutput {
                     success: true,
                     message: format!("Item {index} marked as complete"),
-                    content: progress_echo(&manager).await,
+                    content,
+                    snapshot,
                 })
             }
 
@@ -285,6 +355,7 @@ impl AlephTool for ScratchpadTool {
                     success: true,
                     message: "Note appended".to_string(),
                     content: None,
+                    snapshot: None,
                 })
             }
 
@@ -294,6 +365,7 @@ impl AlephTool for ScratchpadTool {
                     success: true,
                     message: "Scratchpad cleared".to_string(),
                     content: None,
+                    snapshot: None,
                 })
             }
         }
@@ -303,6 +375,37 @@ impl AlephTool for ScratchpadTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plan_snapshot_dto_maps_three_states_and_completion() {
+        use crate::memory::scratchpad::{PlanItem, PlanItemStatus, ScratchpadSnapshot};
+        let snap = ScratchpadSnapshot {
+            objective: Some("Ship auth".into()),
+            items: vec![
+                PlanItem { text: "Design".into(), status: PlanItemStatus::Done },
+                PlanItem { text: "Build".into(), status: PlanItemStatus::InProgress },
+                PlanItem { text: "Test".into(), status: PlanItemStatus::Pending },
+            ],
+        };
+        let dto = PlanSnapshotDto::from(&snap);
+        assert_eq!(dto.objective.as_deref(), Some("Ship auth"));
+        assert_eq!(dto.items.len(), 3);
+        assert_eq!(dto.complete, false); // not all done
+        let json = serde_json::to_value(&dto).unwrap();
+        assert_eq!(json["items"][0]["status"], "completed");
+        assert_eq!(json["items"][1]["status"], "in_progress");
+        assert_eq!(json["items"][2]["status"], "pending");
+    }
+
+    #[test]
+    fn plan_snapshot_dto_complete_when_all_done() {
+        use crate::memory::scratchpad::{PlanItem, PlanItemStatus, ScratchpadSnapshot};
+        let snap = ScratchpadSnapshot {
+            objective: Some("X".into()),
+            items: vec![PlanItem { text: "a".into(), status: PlanItemStatus::Done }],
+        };
+        assert!(PlanSnapshotDto::from(&snap).complete);
+    }
 
     #[test]
     fn test_tool_name_and_description() {
