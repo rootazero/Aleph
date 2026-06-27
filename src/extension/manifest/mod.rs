@@ -493,10 +493,11 @@ mod tests {
     #[tokio::test]
     async fn test_parse_manifest_from_dir_async_toml() {
         let temp_dir = TempDir::new().unwrap();
-        std::fs::write(
+        tokio::fs::write(
             temp_dir.path().join("aleph.plugin.toml"),
             "[plugin]\nid = \"async-toml-test\"\n",
         )
+        .await
         .unwrap();
 
         let manifest = parse_manifest_from_dir(temp_dir.path()).await.unwrap();

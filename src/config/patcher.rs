@@ -154,7 +154,7 @@ impl ConfigPatcher {
 
     /// Read the config file's mtime and store it for later conflict detection.
     pub async fn record_mtime(&self) {
-        match std::fs::metadata(&self.config_path) {
+        match tokio::fs::metadata(&self.config_path).await {
             Ok(meta) => match meta.modified() {
                 Ok(mtime) => {
                     *self.last_known_mtime.lock().await = Some(mtime);
@@ -260,6 +260,34 @@ impl ConfigPatcher {
                 } else {
                     None
                 },
+                warnings,
+            });
+        }
+
+        // 9b. No-op guard. An empty diff means the patch deep-merges to a config
+        // value-identical to the live one. Persisting it anyway would snapshot
+        // + rewrite config.toml and bump its mtime for zero behavioral change —
+        // and worse, every spurious snapshot evicts a real restore point from
+        // the bounded backup ring, silently eroding the rollback safety net an
+        // agent's idempotent retries depend on. Skip the write entirely.
+        //
+        // A requested provider health check still runs: verifying that the live
+        // provider is reachable is meaningful independent of whether the config
+        // changed (the agent asked "is it reachable", not "did I change it").
+        // Mirrors openclaw's `respondConfigPatchNoop`, which skips the file
+        // write + restart when the merged config diffs to nothing.
+        if diff.is_empty() {
+            let health_check = if request.health_check {
+                Some(self.run_provider_health_check(&request.path).await)
+            } else {
+                None
+            };
+            debug!(path = %request.path, "Config patch is a no-op (empty diff); skipping write");
+            return Ok(PatchResult {
+                success: true,
+                applied_sections: vec![top_section],
+                diff,
+                health_check,
                 warnings,
             });
         }
@@ -457,7 +485,8 @@ impl ConfigPatcher {
             None => return Ok(()), // no baseline recorded, skip check
         };
 
-        let current_mtime = std::fs::metadata(&self.config_path)
+        let current_mtime = tokio::fs::metadata(&self.config_path)
+            .await
             .and_then(|m| m.modified())
             .map_err(|e| AlephError::invalid_config(format!("Failed to read config mtime: {e}")))?;
 
@@ -973,7 +1002,7 @@ mod tests {
         patcher.record_mtime().await;
 
         // Snapshot the file content before the patch
-        let before = std::fs::read_to_string(&config_path).unwrap();
+        let before = tokio::fs::read_to_string(&config_path).await.unwrap();
 
         let request = PatchRequest {
             path: "general".to_string(),
@@ -989,7 +1018,7 @@ mod tests {
         assert!(!result.diff.is_empty());
 
         // But the file on disk must NOT have changed
-        let after = std::fs::read_to_string(&config_path).unwrap();
+        let after = tokio::fs::read_to_string(&config_path).await.unwrap();
         assert_eq!(before, after, "File should be unchanged after dry_run");
     }
 
@@ -1015,7 +1044,7 @@ mod tests {
         assert_eq!(config.general.language, Some("zh-Hans".to_string()));
 
         // File on disk should contain the new language value
-        let file_content = std::fs::read_to_string(&config_path).unwrap();
+        let file_content = tokio::fs::read_to_string(&config_path).await.unwrap();
         assert!(
             file_content.contains("zh-Hans"),
             "Saved file should contain the patched language value"
@@ -1039,11 +1068,76 @@ mod tests {
 
         // A backup should have been created in the backup directory
         assert!(backup_dir.exists(), "Backup directory should be created");
-        let entries: Vec<_> = std::fs::read_dir(&backup_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .collect();
+        let mut entries = Vec::new();
+        let mut dir = tokio::fs::read_dir(&backup_dir).await.unwrap();
+        while let Some(entry) = dir.next_entry().await.unwrap() {
+            entries.push(entry);
+        }
         assert_eq!(entries.len(), 1, "Exactly one backup snapshot expected");
+    }
+
+    #[tokio::test]
+    async fn test_patcher_noop_skips_write_and_backup() {
+        // A value-identical re-patch must be a no-op: no new backup snapshot
+        // (so idempotent retries can't evict real restore points from the ring)
+        // and no rewrite of config.toml (mtime stays put).
+        let tmp = TempDir::new().unwrap();
+        let (patcher, config_path, backup_dir) = setup_patcher(&tmp);
+        patcher.record_mtime().await;
+
+        // First apply: a real change. Leaves one backup snapshot.
+        patcher
+            .apply(PatchRequest {
+                path: "general".to_string(),
+                patch: json!({"language": "zh-Hans"}),
+                health_check: false,
+                dry_run: false,
+            })
+            .await
+            .unwrap();
+        let backups_after_first = {
+            let mut dir = tokio::fs::read_dir(&backup_dir).await.unwrap();
+            let mut n = 0;
+            while dir.next_entry().await.unwrap().is_some() {
+                n += 1;
+            }
+            n
+        };
+        assert_eq!(backups_after_first, 1, "first apply should snapshot once");
+        let file_after_first = tokio::fs::read_to_string(&config_path).await.unwrap();
+
+        // Second apply: the SAME value. The diff is empty -> no-op.
+        let result = patcher
+            .apply(PatchRequest {
+                path: "general".to_string(),
+                patch: json!({"language": "zh-Hans"}),
+                health_check: false,
+                dry_run: false,
+            })
+            .await
+            .unwrap();
+        assert!(result.success, "a no-op patch still reports success");
+        assert!(result.diff.is_empty(), "no-op patch must report an empty diff");
+
+        // No second snapshot was taken; the backup ring is untouched.
+        let backups_after_noop = {
+            let mut dir = tokio::fs::read_dir(&backup_dir).await.unwrap();
+            let mut n = 0;
+            while dir.next_entry().await.unwrap().is_some() {
+                n += 1;
+            }
+            n
+        };
+        assert_eq!(
+            backups_after_noop, 1,
+            "a no-op patch must NOT create a backup snapshot"
+        );
+        // config.toml is byte-identical to before the no-op.
+        assert_eq!(
+            tokio::fs::read_to_string(&config_path).await.unwrap(),
+            file_after_first,
+            "a no-op patch must NOT rewrite config.toml"
+        );
     }
 
     #[tokio::test]
@@ -1063,8 +1157,10 @@ mod tests {
 
         // Externally modify the file behind the patcher's back
         // Sleep briefly to guarantee a different mtime
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        std::fs::write(&config_path, "# externally modified\n").unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        tokio::fs::write(&config_path, "# externally modified\n")
+            .await
+            .unwrap();
 
         // Second patch should fail with conflict
         let request2 = PatchRequest {
@@ -1137,7 +1233,7 @@ mod tests {
             .await
             .unwrap();
 
-        let before = std::fs::read_to_string(&config_path).unwrap();
+        let before = tokio::fs::read_to_string(&config_path).await.unwrap();
         let result = patcher.rollback(None, true).await.unwrap();
         assert!(result.success);
 
@@ -1146,7 +1242,10 @@ mod tests {
             patcher.config.read().await.general.language,
             Some("zh-Hans".to_string())
         );
-        assert_eq!(std::fs::read_to_string(&config_path).unwrap(), before);
+        assert_eq!(
+            tokio::fs::read_to_string(&config_path).await.unwrap(),
+            before
+        );
     }
 
     #[tokio::test]

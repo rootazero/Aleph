@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use tracing::error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AuditEventType {
     AuthFailure,
     RateLimited,

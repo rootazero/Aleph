@@ -345,10 +345,11 @@ impl ExecApprovalManager {
         let target = pending
             .iter()
             .filter(|(_, e)| e.sender.is_some() && e.record.session_key == session_key)
-            // Tie-break on the id so equal `created_at` (coarse timer
-            // granularity on Windows) resolves a deterministic entry rather
-            // than an arbitrary HashMap-iteration order.
-            .min_by_key(|(id, e)| (e.created_at, (*id).clone()))
+            .min_by(|(id_a, e_a), (id_b, e_b)| {
+                e_a.created_at
+                    .cmp(&e_b.created_at)
+                    .then_with(|| id_a.cmp(id_b))
+            })
             .map(|(id, _)| id.clone());
 
         let Some(id) = target else {

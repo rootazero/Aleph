@@ -19,7 +19,7 @@ pub(super) async fn runtime_startup_warmup() {
             return;
         }
     };
-    if let Err(e) = std::fs::create_dir_all(&runtimes_dir) {
+    if let Err(e) = tokio::fs::create_dir_all(&runtimes_dir).await {
         tracing::warn!(error = %e, "runtime warmup skipped: cannot create runtimes dir");
         return;
     }
@@ -83,8 +83,9 @@ mod warmup_tests {
             "ledger must be persisted at {}",
             ledger_path.display()
         );
-        let content = std::fs::read_to_string(&ledger_path).unwrap();
+        let content = tokio::fs::read_to_string(&ledger_path).await.unwrap();
         let _: serde_json::Value =
             serde_json::from_str(&content).expect("ledger must be valid JSON");
     }
 }
+

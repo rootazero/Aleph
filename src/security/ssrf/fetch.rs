@@ -218,8 +218,8 @@ pub async fn safe_fetch(
         .map_err(|e| SsrfError::FetchFailed(e.to_string()))?;
 
     // Redirect loop
-    let mut visited: HashSet<String> = HashSet::new();
-    visited.insert(current_url.to_string());
+    let mut visited: HashSet<Url> = HashSet::new();
+    visited.insert(current_url.clone());
     let mut redirect_count: u16 = 0;
     let mut current_method = request.method;
     let mut current_headers = request.headers;
@@ -241,19 +241,18 @@ pub async fn safe_fetch(
             .to_string();
 
         // Resolve relative URLs against current
-        let next_url_str = current_url
+        let next_url = current_url
             .join(&location)
-            .map_err(|e| SsrfError::InvalidUrl(e.to_string()))?
-            .to_string();
+            .map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
 
         // Loop detection
-        if visited.contains(&next_url_str) {
+        if visited.contains(&next_url) {
             return Err(SsrfError::FetchFailed("redirect loop detected".to_string()));
         }
-        visited.insert(next_url_str.clone());
+        visited.insert(next_url.clone());
 
         // Validate the redirect target
-        let (next_url, next_pinned) = validate_url_full(&next_url_str, policy).await?;
+        let (next_url, next_pinned) = validate_url_full(next_url.as_str(), policy).await?;
 
         // Cross-origin detection → strip auth headers
         if policy.strip_auth_on_cross_origin && is_cross_origin(&current_url, &next_url) {

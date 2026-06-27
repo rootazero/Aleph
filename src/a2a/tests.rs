@@ -302,7 +302,7 @@ async fn test_stream_hub_pubsub() {
             assert_eq!(e.status.state, TaskState::Working);
             assert!(!e.is_final);
         }
-        _ => panic!("Expected StatusUpdate event"),
+        _ => unreachable!("Expected StatusUpdate event"),
     }
 
     // Broadcast a final event
@@ -325,7 +325,7 @@ async fn test_stream_hub_pubsub() {
             assert_eq!(e.status.state, TaskState::Completed);
             assert!(e.is_final);
         }
-        _ => panic!("Expected final StatusUpdate"),
+        _ => unreachable!("Expected final StatusUpdate"),
     }
 }
 

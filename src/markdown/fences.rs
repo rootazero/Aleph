@@ -8,8 +8,10 @@ use std::sync::LazyLock;
 
 /// Regex for matching code fence opening/closing lines.
 /// Matches: optional indent (0-3 spaces) + fence marker (``` or ~~~) + optional language tag
-static FENCE_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^( {0,3})(`{3,}|~{3,})(.*)$").expect("Invalid fence regex"));
+static FENCE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^( {0,3})(`{3,}|~{3,})(.*)$")
+        .unwrap_or_else(|e| panic!("Invalid fence regex: {e}"))
+});
 
 /// A span representing a code fence block in text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,7 +149,7 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
             let marker = caps.get(2).map_or("", |m| m.as_str());
             let info = caps.get(3).map_or("", |m| m.as_str().trim());
 
-            if let Some(open) = &current_fence {
+            if let Some(open) = current_fence.take() {
                 // Check if this closes the current fence.
                 // Closing fence must:
                 // 1. Use same character type (` or ~)
@@ -161,20 +163,19 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
                     spans.push(FenceSpan {
                         start: open.start,
                         end: line_start,
-                        marker: open.marker.clone(),
-                        indent: open.indent.clone(),
-                        language: open.language.clone(),
+                        marker: open.marker,
+                        indent: open.indent,
+                        language: open.language,
                     });
-                    current_fence = None;
+                } else {
+                    current_fence = Some(open);
                 }
             } else {
                 // Opening a new fence
                 let language = if info.is_empty() {
                     None
                 } else {
-                    // Extract just the language (first word)
-                    // unwrap is safe: info is non-empty after trim, so split_whitespace yields Some
-                    Some(info.split_whitespace().next().unwrap().to_string())
+                    info.split_whitespace().next().map(|s| s.to_string())
                 };
 
                 current_fence = Some(OpenFence {

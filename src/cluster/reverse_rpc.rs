@@ -110,6 +110,9 @@ pub enum ReverseRpcError {
     /// 不再空等满 `timeout_ms`。
     #[error("reverse-rpc call cancelled (node disconnected)")]
     Cancelled,
+    /// 序列化请求帧失败（理论上不可能发生）。
+    #[error("failed to serialize JsonRpcRequest: {0}")]
+    Serialize(#[from] serde_json::Error),
 }
 
 /// 绑定到**单条连接**的反向 RPC 通道：把请求帧写进该连接的出站 mpsc，
@@ -150,8 +153,7 @@ impl ReverseRpcChannel {
         // JsonRpcRequest is a plain struct (String + two Option<Value>) — serialization
         // cannot fail. expect() makes that invariant explicit instead of inventing a
         // misleading transport error.
-        let frame =
-            serde_json::to_string(&req).expect("JsonRpcRequest serialization is infallible");
+        let frame = serde_json::to_string(&req)?;
 
         if self.outbound.send(frame).await.is_err() {
             self.pending.cancel(&id);

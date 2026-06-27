@@ -30,7 +30,7 @@ fn api_key_regex() -> &'static Regex {
             )
             ",
         )
-        .unwrap()
+        .expect("static API key regex compiles")
     })
 }
 

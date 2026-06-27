@@ -1644,7 +1644,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
     Ok(AgentHandlersResult {
         _run_manager: run_manager
-            .expect("run_manager must be set in both real and simulated modes"),
+            .unwrap_or_else(|| panic!("run_manager must be set in both real and simulated modes")),
         execution_adapter: exec_adapter,
         agent_registry: agent_reg,
         default_provider: default_prov,

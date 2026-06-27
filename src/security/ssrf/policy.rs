@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 /// `allowed_hosts` — still deserializes instead of erroring on the missing
 /// siblings. This keeps hand-edited and Panel-written configs robust.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct SsrfPolicy {
     /// Master switch for SSRF protection.
     #[serde(default = "default_enabled")]

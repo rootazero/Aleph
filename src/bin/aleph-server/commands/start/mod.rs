@@ -79,7 +79,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Ensure ~/.aleph/ directory structure exists
     match alephcore::utils::paths::get_config_dir() {
         Ok(config_dir) => {
-            if let Err(e) = std::fs::create_dir_all(&config_dir) {
+            if let Err(e) = tokio::fs::create_dir_all(&config_dir).await {
                 return Err(format!(
                     "Error: cannot create config directory {}: {}",
                     config_dir.display(),
@@ -1087,6 +1087,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         );
     }
 
+    // Register the subagent tree relay — live spawn/progress/settle events are
+    // republished to panels under `run.subagent_tree` for the background
+    // sub-agent tree view (pure observability; no parent turn driven).
+    alephcore::gateway::subagent_tree_relay::spawn_subagent_tree_relay(
+        server.event_bus().clone(),
+    );
+
     // Wire OpenAI-compatible API dependencies into GatewayServer
     server.execution_adapter = agent_result.execution_adapter.clone();
     server.openai_agent_registry = agent_result.agent_registry.clone();
@@ -2009,9 +2016,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // Gateway event bus. No-op when the platform has no SystemCapability
         // (headless CI, etc.).
         if desktop_cfg.presence.enabled {
-            let platform = platform
-                .clone()
-                .expect("platform built when presence enabled");
+            let platform = platform.clone().unwrap_or_else(|| {
+                panic!("platform must be built when presence is enabled")
+            });
             if platform.system().is_some() {
                 let reporter = alephcore::tasks::presence::PresenceReporter::new(
                     platform,
@@ -2037,9 +2044,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // `MediaCapability::mic_level()` and publishes a categorical
         // (Active/Quiet/Unavailable) snapshot on the Gateway event bus.
         if desktop_cfg.mic_level.enabled {
-            let platform = platform
-                .clone()
-                .expect("platform built when mic_level enabled");
+            let platform = platform.clone().unwrap_or_else(|| {
+                panic!("platform must be built when mic_level is enabled")
+            });
             if platform.media().is_some() {
                 let reporter = alephcore::tasks::mic_level::MicLevelReporter::new(
                     platform,
@@ -2533,3 +2540,4 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     Ok(())
 }
+

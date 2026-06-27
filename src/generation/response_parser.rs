@@ -39,7 +39,7 @@ static GENERATE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     // A failure here indicates a programming error in the pattern itself,
     // which would be caught by any test exercising the parser.
     Regex::new(r"\[GENERATE:([^:]+):([^:]+):([^:]+):([^\]]+)\]")
-        .expect("GENERATE_PATTERN regex is valid and statically defined")
+        .unwrap_or_else(|e| panic!("GENERATE_PATTERN regex is valid and statically defined: {e}"))
 });
 
 /// Parse AI response for generation requests

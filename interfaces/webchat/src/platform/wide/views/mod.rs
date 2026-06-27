@@ -12,6 +12,7 @@ pub mod memory;
 pub mod memory_hub;
 pub mod runtimes;
 pub mod settings;
+pub mod subagent_tree;
 pub mod tasks;
 pub mod teams;
 pub mod usage;

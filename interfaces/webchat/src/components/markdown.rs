@@ -2,6 +2,7 @@
 //!
 //! Uses pulldown-cmark for Markdown parsing and syntect for code block highlighting.
 
+use crate::state::typewriter::{revealed_len, TypewriterClock};
 use leptos::prelude::*;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use std::sync::LazyLock;
@@ -218,6 +219,56 @@ pub fn StreamingRenderer(content: String) -> impl IntoView {
     view! {
         <div class="markdown-body text-sm leading-relaxed streaming-content" inner_html=html />
     }
+}
+
+/// Monotonic clock in milliseconds (page-load relative). Falls back to `0.0`
+/// when `performance` is unavailable, which `revealed_len` reads as "reveal
+/// all" once a start has been recorded (degrades to instant, never hides text).
+fn now_ms() -> f64 {
+    web_sys::window()
+        .and_then(|w| w.performance())
+        .map(|p| p.now())
+        .unwrap_or(0.0)
+}
+
+/// Streaming renderer that paces character reveal at `behavior.typing_speed`
+/// (chars/sec) via the shared [`TypewriterClock`].
+///
+/// The reveal start is keyed on `message_id` in the clock, so it survives the
+/// per-token remount of a streaming bubble (the keyed `<For>` recreates the
+/// bubble on every delta) and the typewriter sweep stays continuous. When no
+/// clock is in context (e.g. storybook) it degrades to plain [`StreamingRenderer`].
+#[component]
+#[must_use]
+pub fn TypewriterRenderer(content: String, message_id: String) -> impl IntoView {
+    let Some(clock) = use_context::<TypewriterClock>() else {
+        return view! { <StreamingRenderer content=content /> }.into_any();
+    };
+
+    // First-sight start stamp; identical on every per-token remount of this id.
+    let start = clock.start_for(&message_id, now_ms());
+    // Hold content in a StoredValue so the per-tick closure borrows it instead
+    // of cloning the (potentially large) accumulated text 30×/sec.
+    let content = StoredValue::new(content);
+    let total = content.with_value(|c| c.chars().count());
+
+    let html = move || {
+        clock.tick.track(); // re-render on each ~30fps animation tick
+        let revealed = revealed_len(total, now_ms() - start, clock.cps.get(), clock.instant.get());
+        content.with_value(|c| {
+            if revealed >= total {
+                render_streaming(c)
+            } else {
+                let shown: String = c.chars().take(revealed).collect();
+                render_streaming(&shown)
+            }
+        })
+    };
+
+    view! {
+        <div class="markdown-body text-sm leading-relaxed streaming-content" inner_html=html />
+    }
+    .into_any()
 }
 
 /// A Leptos component that renders Markdown content with syntax-highlighted code blocks.

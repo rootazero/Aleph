@@ -146,11 +146,17 @@ aleph-server node \
 ```
 
 寻址 `NodeRegistry::resolve` 走**多级匹配**(映射 openclaw `node-match.ts`,但用
-类型安全的 `ResolveError` 枚举表达):① 精确 node_id → ② 精确 device_name →
-③ 模糊(id 前缀 ≥4 字符 *或* name 子串,大小写不敏感)。任一级多命中即返回
+类型安全的 `ResolveError` 枚举表达):① 精确 node_id(原样,UUID) → ② 归一化
+device_name 等值 → ③ 模糊(id 前缀 ≥4 字符 *或* 归一化 name 子串)。**名字匹配
+经 `normalize_node_key` 大小写 + 标点/空格不敏感**(映射 openclaw
+`normalizeNodeKey`:`[^a-z0-9]+ → -`),故 "GPU Box" / "gpu_box" / "gpu-box"
+折叠为同一键、可互相寻址;两个归一化后撞键的名字(如 "Worker 1" 与 "worker-1")
+按 ② 报歧义而非静默挑一个。任一级多命中即返回
 `ResolveError::Ambiguous(候选标签)`,绝不静默挑第一个;调用方把它翻成给模型的
 精确提示(`node 'x' ambiguous — matches: worker-1 (id…), worker-2 (id…)`)。
-registry 只存在线会话,故无需"prefer-connected" tie-break。**中心侧 fail-fast**:
+registry 只存在线会话,故无需"prefer-connected" tie-break。同一 `normalize_node_key`
+被 `cluster.deregister` 的离线回退寻址(`handlers/cluster.rs::resolve_enrolled_node`)
+复用,消除"在线名大小写不敏感、离线敏感"的旧漂移。**中心侧 fail-fast**:
 仅当节点声明了非空命令目录且其中不含该命令时才拒绝(空目录→交节点权威)。
 下发即 `channel.call("tool.call", {tool, args})`。
 

@@ -35,21 +35,25 @@ async fn drain_loop(mut rx: mpsc::Receiver<AuditEntry>, store: Arc<SecurityStore
         tokio::select! {
             received = rx.recv() => match received {
                 Some(entry) => {
-                    if let Err(e) = store.insert_audit_entry(&entry) {
-                        tracing::error!(error = %e, ?entry.event_type, "audit drain insert failed");
+                    let event_type = entry.event_type;
+                    let store = store.clone();
+                    match tokio::task::spawn_blocking(move || store.insert_audit_entry(&entry)).await {
+                        Ok(Err(e)) => tracing::error!(error = %e, ?event_type, "audit drain insert failed"),
+                        Err(e) => tracing::error!(error = %e, "audit drain insert task panicked"),
+                        _ => {}
                     }
                 }
                 None => break,
             },
             _ = cleanup.tick() => {
-                match store.purge_audit_entries(DEFAULT_RETENTION_SECS) {
-                    Ok(n) if n > 0 => {
+                let store = store.clone();
+                match tokio::task::spawn_blocking(move || store.purge_audit_entries(DEFAULT_RETENTION_SECS)).await {
+                    Ok(Ok(n)) if n > 0 => {
                         tracing::debug!(removed = n, "audit retention purge complete");
                     }
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::error!(error = %e, "audit retention purge failed");
-                    }
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => tracing::error!(error = %e, "audit retention purge failed"),
+                    Err(e) => tracing::error!(error = %e, "audit retention purge task panicked"),
                 }
             }
         }

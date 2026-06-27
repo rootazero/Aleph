@@ -9,10 +9,12 @@
 
 use crate::sync_primitives::Arc;
 
-use crate::agents::background_tracker::BackgroundAgentTracker;
+use crate::agents::background_tracker::{progress_activity, BackgroundAgentTracker};
 use crate::agents::progress::{ProgressKind, SubagentProgress};
+use crate::agents::subagent_tree_events::emit_tree_event;
 use crate::harness::trace::{LoopTraceEvent, LoopTraceSessionOutcome, LoopTraceState};
 use crate::harness::TraceSink;
+use aleph_protocol::subagent_tree::SubagentTreeEvent;
 
 /// Decorator over a parent's `TraceSink` that translates select child events
 /// into `SubagentProgress` entries on a `BackgroundAgentTracker`, while always
@@ -24,6 +26,11 @@ pub struct ForwardingTraceSink {
     inner: Arc<dyn TraceSink>,
     tracker: Arc<BackgroundAgentTracker>,
     request_id: String,
+    /// Owning agent id — scope for the live `Progress` tree event.
+    agent_id: String,
+    /// Owning top-level session — the tree this node belongs to. Empty disables
+    /// live tree emission (CLI / tests with no panel).
+    root_session: String,
 }
 
 impl ForwardingTraceSink {
@@ -31,11 +38,15 @@ impl ForwardingTraceSink {
         inner: Arc<dyn TraceSink>,
         tracker: Arc<BackgroundAgentTracker>,
         request_id: String,
+        agent_id: String,
+        root_session: String,
     ) -> Self {
         Self {
             inner,
             tracker,
             request_id,
+            agent_id,
+            root_session,
         }
     }
 
@@ -112,7 +123,26 @@ fn render_tool_result_preview(result: &crate::tools::runtime::ToolResult) -> Opt
 impl TraceSink for ForwardingTraceSink {
     fn on_trace(&self, event: &LoopTraceEvent) {
         if let Some(progress) = self.translate(event) {
-            self.tracker.push_progress(&self.request_id, progress);
+            // Capture the Copy/cloneable fields before the progress moves into
+            // the tracker; emit a live `Progress` tree event using the updated
+            // tool_count the tracker returns (no second lock).
+            let kind = progress.kind;
+            let step = progress.step;
+            let tool_name = progress.tool_name.clone();
+            if let Some(tool_count) = self.tracker.push_progress(&self.request_id, progress) {
+                emit_tree_event(
+                    self.agent_id.clone(),
+                    self.root_session.clone(),
+                    SubagentTreeEvent::Progress {
+                        node_id: self.request_id.clone(),
+                        root_session: self.root_session.clone(),
+                        step,
+                        activity: progress_activity(kind).to_string(),
+                        tool_name,
+                        tool_count,
+                    },
+                );
+            }
         }
         self.inner.on_trace(event);
     }
@@ -163,7 +193,15 @@ mod tests {
         let tracker = Arc::new(BackgroundAgentTracker::new());
         tracker.register("rid".into(), CancellationToken::new(), "task".into());
         let inner_dyn: Arc<dyn TraceSink> = inner.clone();
-        let wrapper = ForwardingTraceSink::new(inner_dyn, tracker.clone(), "rid".into());
+        // Empty root_session → `emit_tree_event` no-ops, so these sync `#[test]`s
+        // need no Tokio runtime; the tracker-side behaviour is what's asserted.
+        let wrapper = ForwardingTraceSink::new(
+            inner_dyn,
+            tracker.clone(),
+            "rid".into(),
+            "agent".into(),
+            String::new(),
+        );
         (inner, tracker, wrapper)
     }
 

@@ -4,6 +4,8 @@
 /// and provides backward-compatible convenience wrappers for the server.
 use std::path::PathBuf;
 
+use crate::logging::LoggingError;
+
 /// Initialize file + console logging for a named component.
 ///
 /// Delegates to `aleph_logging::init_component_logging`.
@@ -12,20 +14,21 @@ pub fn init_component_logging(
     component: &str,
     retention_days: u32,
     default_filter: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), LoggingError> {
     aleph_logging::init_component_logging(component, retention_days, default_filter)
+        .map_err(LoggingError::Init)
 }
 
 /// Initialize logging with file appender and PII scrubbing (server defaults).
 ///
 /// Convenience wrapper that calls `init_component_logging("server", 7, "info")`.
-pub fn init_file_logging() -> Result<(), Box<dyn std::error::Error>> {
+pub fn init_file_logging() -> Result<(), LoggingError> {
     init_component_logging("server", 7, "info")
 }
 
 /// Get the log directory path: `~/.aleph/logs/`
-pub fn get_log_directory() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    Ok(aleph_logging::get_log_directory()?)
+pub fn get_log_directory() -> Result<PathBuf, LoggingError> {
+    aleph_logging::get_log_directory().map_err(|e| LoggingError::LogDirectory(e.into()))
 }
 
 #[cfg(test)]

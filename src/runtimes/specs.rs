@@ -276,7 +276,7 @@ pub fn select_install(installs: &[OsInstall], current: TargetOs) -> Option<&OsIn
 #[must_use]
 pub fn supported_on_current_os(name: &str) -> bool {
     find_spec(name)
-        .and_then(|s| select_install(s.install, TargetOs::current()))
+        .and_then(|s| TargetOs::current().and_then(|os| select_install(s.install, os)))
         .is_some_and(|oi| !matches!(oi.strategy, InstallStrategy::Unsupported { .. }))
 }
 

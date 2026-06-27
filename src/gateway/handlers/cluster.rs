@@ -9,7 +9,7 @@ use crate::sync_primitives::Arc;
 use serde::Deserialize;
 use tracing::warn;
 
-use crate::cluster::ResolveError;
+use crate::cluster::{normalize_node_key, ResolveError};
 use crate::gateway::handlers::auth::AuthContext;
 use crate::gateway::handlers::{parse_params, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
@@ -70,15 +70,24 @@ struct DeregisterParams {
 }
 
 /// 离线回退寻址：在 `security_store` 的已登记节点设备（role=node、未吊销）里按
-/// ① 精确 `device_id` ② 唯一精确 `device_name` 解析。模糊/歧义一律 `None`
-/// （保守——operator 可改用 id；在线路径的多级匹配语义不在此复制）。
+/// ① 精确 `device_id` ② 唯一归一化 `device_name` 解析。仍刻意不做模糊前缀/子串
+/// （保守——离线注销 operator 应精确指名）；但名字等值经 [`normalize_node_key`]
+/// 与在线 `NodeRegistry::match_id` 同源，消除「在线名大小写不敏感、离线敏感」的
+/// 寻址漂移——同一个 "GPU Box" 在线/离线都能用 "gpu-box" 注销。
 fn resolve_enrolled_node(ctx: &AuthContext, q: &str) -> Option<String> {
     let devices = ctx.security_store.list_devices().ok()?;
     let nodes: Vec<_> = devices.into_iter().filter(|d| d.role == "node").collect();
     if let Some(d) = nodes.iter().find(|d| d.device_id == q) {
         return Some(d.device_id.clone());
     }
-    let by_name: Vec<_> = nodes.iter().filter(|d| d.device_name == q).collect();
+    let nq = normalize_node_key(q);
+    if nq.is_empty() {
+        return None;
+    }
+    let by_name: Vec<_> = nodes
+        .iter()
+        .filter(|d| normalize_node_key(&d.device_name) == nq)
+        .collect();
     match by_name.as_slice() {
         [d] => Some(d.device_id.clone()),
         _ => None,
@@ -120,7 +129,7 @@ pub async fn handle_cluster_deregister(
                 )
             }
         },
-        Err(e @ ResolveError::Ambiguous(_)) => {
+        Err(e @ (ResolveError::Ambiguous(_) | ResolveError::NodeNotFound { .. })) => {
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
@@ -495,5 +504,41 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn deregister_offline_node_by_normalized_name() {
+        let ctx = create_test_context();
+        // Enrolled with a spaced, mixed-case name.
+        let enroll = handle_cluster_enroll(
+            JsonRpcRequest::with_id(
+                "cluster.enroll",
+                Some(serde_json::json!({"node_name": "GPU Box"})),
+                serde_json::json!(1),
+            ),
+            ctx.clone(),
+        )
+        .await;
+        let node_id = enroll.result.unwrap()["node_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Offline fallback resolves it by a dash-spelled lowercase variant —
+        // same normalize_node_key the online path uses (no online/offline drift).
+        let resp = handle_cluster_deregister(
+            JsonRpcRequest::with_id(
+                "cluster.deregister",
+                Some(serde_json::json!({"node": "gpu-box"})),
+                serde_json::json!(2),
+            ),
+            ctx,
+        )
+        .await;
+        assert!(resp.is_success(), "normalized offline deregister: {:?}", resp.error);
+        let r = resp.result.unwrap();
+        assert_eq!(r["node_id"], node_id);
+        assert_eq!(r["evicted"], false);
+        assert_eq!(r["device_removed"], true);
     }
 }

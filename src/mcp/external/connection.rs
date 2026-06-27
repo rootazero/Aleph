@@ -140,7 +140,7 @@ impl McpServerConnection {
     ) -> Result<Self> {
         let name = name.into();
         let conn = Self {
-            name: name.clone(),
+            name,
             transport,
             id_gen: IdGenerator::new(),
             capabilities: RwLock::new(None),
@@ -207,7 +207,7 @@ impl McpServerConnection {
         // Store instructions (if provided by server)
         {
             let mut inst = self.cached_instructions.write().await;
-            *inst = init_result.instructions.clone();
+            *inst = init_result.instructions;
         }
 
         // Send initialized notification (per JSON-RPC spec, notifications have no id)
@@ -545,7 +545,7 @@ impl McpServerConnection {
         })?;
 
         // Parse tool call result
-        let call_result: mcp_types::ToolCallResult = serde_json::from_value(result.clone())
+        let call_result: mcp_types::ToolCallResult = serde_json::from_value(result)
             .map_err(|e| {
                 AlephError::IoError(format!(
                     "Tool '{}' returned malformed result from '{}': {}",

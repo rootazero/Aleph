@@ -276,6 +276,25 @@ pub async fn handle_list(
         infos.extend(pending);
     }
 
+    // Durable outbound delivery queue depth (R8: the backlog is inspectable).
+    // Absent entirely when no durable store is attached, so the wire shape is a
+    // backward-compatible superset.
+    let delivery_queue = registry.delivery_queue_stats().map(|q| {
+        // Ordered (busiest-first) array, not an object, so the ranking survives.
+        let per_channel: Vec<Value> = q
+            .per_channel
+            .iter()
+            .map(|(channel, pending)| json!({ "channel": channel, "pending": pending }))
+            .collect();
+        json!({
+            "pending": q.pending,
+            "due_now": q.due_now,
+            "oldest_age_secs": q.oldest_age_secs,
+            "dead_lettered": q.dead_lettered,
+            "per_channel": per_channel,
+        })
+    });
+
     JsonRpcResponse::success(
         request.id,
         json!({
@@ -288,7 +307,8 @@ pub async fn handle_list(
                 "disconnected": summary.disconnected,
                 "error": summary.error,
                 "disabled": summary.disabled,
-            }
+            },
+            "delivery_queue": delivery_queue,
         }),
     )
 }

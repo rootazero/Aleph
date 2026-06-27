@@ -157,8 +157,8 @@ impl TokenRefreshManager {
         }
 
         // Get refresh token
-        let refresh_token = match tokens.refresh_token {
-            Some(ref t) => t.clone(),
+        let refresh_token = match tokens.refresh_token.as_ref() {
+            Some(t) => t,
             None => return Ok(()), // Can't refresh without refresh_token
         };
 

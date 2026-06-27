@@ -36,7 +36,7 @@ pub async fn run(args: BootstrapRuntimeArgs) -> i32 {
             return 2;
         }
     };
-    if let Err(e) = std::fs::create_dir_all(&runtimes_dir) {
+    if let Err(e) = tokio::fs::create_dir_all(&runtimes_dir).await {
         eprintln!(
             "error: cannot create runtimes dir {}: {e}",
             runtimes_dir.display()
@@ -241,3 +241,4 @@ mod tests {
         assert_eq!(resolve_targets(&args), vec!["uv"]);
     }
 }
+

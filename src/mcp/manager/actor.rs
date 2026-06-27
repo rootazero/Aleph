@@ -256,10 +256,11 @@ impl McpManagerActor {
         let mut to_restart: Vec<String> = Vec::new();
         for (server_id, client) in probes {
             let alive = client.check_server_health().await.values().all(|&ok| ok);
-            let health = self.health_states.entry(server_id.clone()).or_default();
             if alive {
-                health.record_success();
-            } else {
+                if let Some(health) = self.health_states.get_mut(&server_id) {
+                    health.record_success();
+                }
+            } else if let Some(health) = self.health_states.get_mut(&server_id) {
                 health.record_failure(
                     "health probe: transport not alive",
                     self.health_config.max_failures,
@@ -751,21 +752,22 @@ impl McpManagerActor {
         let tool_count = client.list_tools().await.len();
 
         // Store client and track start time
-        self.clients.insert(config.id.clone(), client);
-        self.start_times.insert(config.id.clone(), Instant::now());
+        let server_id = config.id.clone();
+        self.clients.insert(server_id.clone(), client);
+        self.start_times.insert(server_id.clone(), Instant::now());
         // Mark healthy while preserving the restart-window bookkeeping
         // (restart_count / restart_window_start). Re-inserting a fresh
         // ServerHealth here would zero the counter on every successful spawn,
         // letting a server that starts fine but dies between probes evade the
         // max_restarts cap and restart-loop forever.
         self.health_states
-            .entry(config.id.clone())
+            .entry(server_id.clone())
             .or_default()
             .record_success();
 
         // Broadcast started event
         let _ = self.event_tx.send(McpManagerEvent::ServerStarted {
-            server_id: config.id.clone(),
+            server_id,
             server_name: config.name.clone(),
             tool_count,
         });
@@ -819,7 +821,7 @@ impl McpManagerActor {
             let health = self
                 .health_states
                 .get(id)
-                .map_or(HealthStatus::Stopped, |h| h.status.clone());
+                .map_or(HealthStatus::Stopped, |h| h.status);
 
             // Get tool/resource/prompt counts from active clients
             let (tool_count, resource_count, prompt_count) =
@@ -854,10 +856,11 @@ impl McpManagerActor {
             let health = self
                 .health_states
                 .get(id)
-                .map_or(HealthStatus::Healthy, |h| h.status.clone());
+                .map_or(HealthStatus::Healthy, |h| h.status);
+            let id = id.clone();
             servers.push(McpServerInfo {
                 id: id.clone(),
-                name: id.clone(),
+                name: id,
                 transport: McpTransportType::Stdio,
                 tool_count: client.list_tools().await.len(),
                 resource_count: client.list_resources().await.len(),
@@ -888,15 +891,16 @@ impl McpManagerActor {
             (Vec::new(), Vec::new(), Vec::new())
         };
 
+        let config = config.clone();
         Some(McpServerStatusDetail {
             id: server_id.to_string(),
             name: config.name.clone(),
-            transport: config.transport,
+            transport: config.transport.clone(),
             health,
             tools,
             resources,
             prompts,
-            config: config.clone(),
+            config,
         })
     }
 
@@ -1229,7 +1233,7 @@ mod tests {
     #[tokio::test]
     async fn list_server_configs_returns_persisted_configs() {
         let path = std::env::temp_dir().join(format!("aleph_mcp_cfgs_{}.json", std::process::id()));
-        let _ = std::fs::remove_file(&path);
+        let _ = tokio::fs::remove_file(&path).await;
         let (actor, handle) = McpManagerActor::new(Some(path.clone()))
             .await
             .expect("actor builds");
@@ -1247,6 +1251,6 @@ mod tests {
             .iter()
             .any(|c| c.id == "srv-a" && c.name == "Server A"));
 
-        let _ = std::fs::remove_file(&path);
+        let _ = tokio::fs::remove_file(&path).await;
     }
 }

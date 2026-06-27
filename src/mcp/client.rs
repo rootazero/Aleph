@@ -363,11 +363,16 @@ impl McpClient {
 
         let mut sorted: Vec<_> = all_connections.iter().collect();
         sorted.sort_by(|a, b| a.name().cmp(b.name()));
+        let mut matching = None;
         for connection in sorted {
             let prompts = connection.list_prompts().await;
             if prompts.iter().any(|p| p.name == name) {
-                return connection.get_prompt(name, arguments.clone()).await;
+                matching = Some(connection);
+                break;
             }
+        }
+        if let Some(connection) = matching {
+            return connection.get_prompt(name, arguments).await;
         }
 
         Err(AlephError::NotFound(format!("Prompt not found: {name}")))

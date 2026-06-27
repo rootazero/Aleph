@@ -512,16 +512,29 @@ impl SelfConfigTool {
                     _ => String::new(),
                 };
 
-                Ok(SelfConfigOutput {
-                    success: result.success,
-                    message: format!(
+                // An applied patch whose diff is empty changed nothing: the live
+                // config already matched. Report that plainly instead of "applied
+                // (0 changes)" + a restart hint the user doesn't need — nothing
+                // was persisted, so no reload impact applies.
+                let message = if !dry_run && result.diff.is_empty() {
+                    format!(
+                        "Config at '{config_path}' already matches the requested value — \
+                         no change applied.{health_note}"
+                    )
+                } else {
+                    format!(
                         "Config patch {} at '{}' ({} changes). {}{}",
                         mode,
                         config_path,
                         result.diff.len(),
                         impact.agent_hint(),
                         health_note
-                    ),
+                    )
+                };
+
+                Ok(SelfConfigOutput {
+                    success: result.success,
+                    message,
                     data: Some(data),
                     preview_message,
                 })
@@ -807,7 +820,7 @@ mod tests {
     async fn test_list_files() {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path();
-        std::fs::write(dir.join("SOUL.md"), "soul content").unwrap();
+        tokio::fs::write(dir.join("SOUL.md"), "soul content").await.unwrap();
 
         let tool = tool_with_dir(dir);
         let result = AlephTool::call(&tool, SelfConfigArgs::ListFiles)
@@ -894,16 +907,16 @@ mod tests {
         assert!(second.message.contains("backed up"), "{}", second.message);
 
         let backups_dir = tmp.path().join("backups");
-        let backups: Vec<_> = std::fs::read_dir(&backups_dir)
+        let backups: Vec<_> = tokio::fs::read_dir(&backups_dir).await
             .unwrap()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name().to_string_lossy().starts_with("SOUL.md."))
             .collect();
         assert_eq!(backups.len(), 1);
-        let saved = std::fs::read_to_string(backups[0].path()).unwrap();
+        let saved = tokio::fs::read_to_string(backups[0].path()).await.unwrap();
         assert_eq!(saved, "version one", "backup must hold the OLD content");
         // The live file holds the new content.
-        let live = std::fs::read_to_string(tmp.path().join("SOUL.md")).unwrap();
+        let live = tokio::fs::read_to_string(tmp.path().join("SOUL.md")).await.unwrap();
         assert_eq!(live, "version two");
     }
 
@@ -1096,3 +1109,4 @@ mod tests {
         assert!(result.message.contains("always_local"));
     }
 }
+

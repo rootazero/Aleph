@@ -550,30 +550,35 @@ pub async fn handle_patch_config(
         }
     };
 
-    // Broadcast ConfigChanged event
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
+    // Broadcast ConfigChanged event — but only when something actually changed.
+    // The patcher now treats a value-identical patch as a no-op (empty diff,
+    // nothing persisted); broadcasting ConfigChanged for it would make every
+    // connected Panel needlessly refetch config. Skip the event on a no-op.
+    if !result.diff.is_empty() {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
 
-    let section = if result.applied_sections.len() == 1 {
-        Some(result.applied_sections[0].clone())
-    } else {
-        None
-    };
+        let section = if result.applied_sections.len() == 1 {
+            Some(result.applied_sections[0].clone())
+        } else {
+            None
+        };
 
-    let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
-        section,
-        value: json!({ "path": path }),
-        timestamp,
-    });
+        let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
+            section,
+            value: json!({ "path": path }),
+            timestamp,
+        });
 
-    if let Err(e) = event_bus.publish_json(&event) {
-        return JsonRpcResponse::error(
-            req.id,
-            INTERNAL_ERROR,
-            format!("Failed to broadcast event: {e}"),
-        );
+        if let Err(e) = event_bus.publish_json(&event) {
+            return JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                format!("Failed to broadcast event: {e}"),
+            );
+        }
     }
 
     info!(

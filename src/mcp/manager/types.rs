@@ -202,7 +202,7 @@ pub struct McpServerInfo {
 }
 
 /// Health status for circuit breaker pattern
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 #[derive(Default)]
 pub enum HealthStatus {

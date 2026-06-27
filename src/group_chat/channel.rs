@@ -70,10 +70,10 @@ impl GroupChatCommandParser for DefaultGroupChatCommandParser {
         let after = trimmed.strip_prefix("/groupchat")?.trim();
 
         if after == "start" || after.starts_with("start ") {
-            let args = after.strip_prefix("start").unwrap().trim();
+            let args = after.strip_prefix("start")?.trim();
             parse_start_command(args)
         } else if after == "end" || after.starts_with("end ") {
-            let session_id = after.strip_prefix("end").unwrap().trim().to_string();
+            let session_id = after.strip_prefix("end")?.trim().to_string();
             Some(GroupChatRequest::End { session_id })
         } else {
             None
@@ -178,6 +178,7 @@ fn tokenize(input: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut chars = input.chars().peekable();
     let mut current = String::new();
+    let mut quoted = String::new();
 
     while let Some(&ch) = chars.peek() {
         match ch {
@@ -186,9 +187,9 @@ fn tokenize(input: &str) -> Vec<String> {
                     tokens.push(std::mem::take(&mut current));
                 }
 
+                quoted.clear();
                 let quote = ch;
                 chars.next();
-                let mut quoted = String::new();
                 let mut closed = false;
                 while let Some(&c) = chars.peek() {
                     if c == '\\' {
@@ -215,12 +216,10 @@ fn tokenize(input: &str) -> Vec<String> {
                     chars.next();
                 }
                 if closed {
-                    tokens.push(quoted);
+                    tokens.push(std::mem::take(&mut quoted));
                 } else {
-                    let mut literal = String::new();
-                    literal.push(quote);
-                    literal.push_str(&quoted);
-                    tokens.push(literal);
+                    quoted.insert(0, quote);
+                    tokens.push(std::mem::take(&mut quoted));
                 }
             }
             c if c.is_whitespace() => {

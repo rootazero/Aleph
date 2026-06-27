@@ -131,55 +131,130 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
             ))
         })?;
 
-    let table_exists: i64 = conn
+    let result = migrate_task_traces_body(conn);
+
+    match result {
+        Ok(()) => conn
+            .execute_batch("RELEASE migration_task_traces_agent_trace")
+            .map_err(|e| AlephError::config(format!("Failed to commit migration: {e}"))),
+        Err(e) => {
+            if let Err(rollback_err) =
+                conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace")
+            {
+                tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
+            }
+            Err(e)
+        }
+    }
+}
+
+fn task_traces_table_exists(conn: &Connection) -> Result<bool, AlephError> {
+    let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_traces'",
             [],
             |row| row.get(0),
         )
-        .map_err(|e| {
-            if let Err(rollback_err) =
-                conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace")
-            {
-                tracing::warn!(error = %rollback_err, "Rollback of task_traces migration failed");
-            }
-            AlephError::config(format!("Failed to check task_traces table: {e}"))
-        })?;
+        .map_err(|e| AlephError::config(format!("Failed to check task_traces table: {e}")))?;
+    Ok(count > 0)
+}
 
-    if table_exists == 0 {
-        conn.execute_batch("RELEASE migration_task_traces_agent_trace")
-            .map_err(|e| AlephError::config(format!("Failed to commit migration: {e}")))?;
+fn task_traces_has_column(conn: &Connection, column: &str) -> Result<bool, AlephError> {
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('task_traces') WHERE name = ?1",
+            [column],
+            |row| row.get(0),
+        )
+        .map_err(|e| AlephError::config(format!("Failed to inspect task_traces columns: {e}")))?;
+    Ok(count > 0)
+}
+
+fn count_orphaned_legacy_traces(conn: &Connection) -> Result<i64, AlephError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM task_traces_legacy \
+         WHERE task_id NOT IN (SELECT id FROM agent_tasks)",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(|e| AlephError::config(format!("Failed to count orphaned legacy traces: {e}")))
+}
+
+struct LegacyTrace {
+    id: i64,
+    task_id: String,
+    step_index: u32,
+    role: String,
+    content_json: String,
+    timestamp: i64,
+}
+
+fn load_legacy_traces(conn: &Connection) -> Result<Vec<LegacyTrace>, AlephError> {
+    let mut select = conn
+        .prepare(
+            r#"
+            SELECT id, task_id, step_index, role, content_json, timestamp
+            FROM task_traces_legacy
+            WHERE task_id IN (SELECT id FROM agent_tasks)
+            ORDER BY id ASC
+            "#,
+        )
+        .map_err(|e| AlephError::config(format!("Failed to prepare legacy trace query: {e}")))?;
+
+    let rows = select
+        .query_map([], |row| {
+            Ok(LegacyTrace {
+                id: row.get(0)?,
+                task_id: row.get(1)?,
+                step_index: row.get(2)?,
+                role: row.get(3)?,
+                content_json: row.get(4)?,
+                timestamp: row.get(5)?,
+            })
+        })
+        .map_err(|e| AlephError::config(format!("Failed to load legacy traces: {e}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| AlephError::config(format!("Failed to collect legacy traces: {e}")))?;
+
+    Ok(rows)
+}
+
+fn insert_migrated_traces(conn: &Connection, traces: &[LegacyTrace]) -> Result<(), AlephError> {
+    let mut insert = conn
+        .prepare(
+            r#"
+            INSERT INTO task_traces (id, task_id, step_index, event_kind, event_json, timestamp)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "#,
+        )
+        .map_err(|e| AlephError::config(format!("Failed to prepare migrated trace insert: {e}")))?;
+
+    for trace in traces {
+        let event = legacy_trace_to_agent_trace(trace.step_index, &trace.role, &trace.content_json);
+        let event_json = serde_json::to_string(&event)
+            .map_err(|e| AlephError::config(format!("Failed to serialize migrated trace: {e}")))?;
+
+        insert
+            .execute(rusqlite::params![
+                trace.id,
+                trace.task_id,
+                trace.step_index,
+                event.kind(),
+                event_json,
+                trace.timestamp
+            ])
+            .map_err(|e| AlephError::config(format!("Failed to insert migrated trace: {e}")))?;
+    }
+
+    Ok(())
+}
+
+fn migrate_task_traces_body(conn: &Connection) -> Result<(), AlephError> {
+    if !task_traces_table_exists(conn)? {
         return Ok(());
     }
 
-    let has_event_json: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('task_traces') WHERE name='event_json'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| {
-            if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-            }
-            AlephError::config(format!("Failed to inspect task_traces columns: {e}"))
-        })?;
-    let has_event_kind: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('task_traces') WHERE name='event_kind'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| {
-            if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-            }
-            AlephError::config(format!("Failed to inspect task_traces columns: {e}"))
-        })?;
-
-    if has_event_json > 0 && has_event_kind > 0 {
-        conn.execute_batch("RELEASE migration_task_traces_agent_trace")
-            .map_err(|e| AlephError::config(format!("Failed to commit migration: {e}")))?;
+    if task_traces_has_column(conn, "event_json")? && task_traces_has_column(conn, "event_kind")? {
         return Ok(());
     }
 
@@ -197,12 +272,7 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
         );
         "#,
     )
-    .map_err(|e| {
-        if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-            }
-        AlephError::config(format!("Failed to recreate task_traces table: {e}"))
-    })?;
+    .map_err(|e| AlephError::config(format!("Failed to recreate task_traces table: {e}")))?;
 
     // Legacy DBs predate strict FK enforcement; a trace whose parent
     // `agent_tasks` row was later removed would violate the new table's
@@ -210,21 +280,7 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
     // since `new()` propagates the error). Such orphans are useless for replay
     // anyway. Count them for visibility, then skip them via the SELECT filter
     // below so the migration is robust on real-world databases.
-    let orphan_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM task_traces_legacy \
-             WHERE task_id NOT IN (SELECT id FROM agent_tasks)",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| {
-            if let Err(rollback_err) =
-                conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace")
-            {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-            }
-            AlephError::config(format!("Failed to count orphaned legacy traces: {e}"))
-        })?;
+    let orphan_count = count_orphaned_legacy_traces(conn)?;
     if orphan_count > 0 {
         tracing::warn!(
             orphan_count,
@@ -232,88 +288,8 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
         );
     }
 
-    {
-        let mut select = conn
-            .prepare(
-                r#"
-                SELECT id, task_id, step_index, role, content_json, timestamp
-                FROM task_traces_legacy
-                WHERE task_id IN (SELECT id FROM agent_tasks)
-                ORDER BY id ASC
-                "#,
-            )
-            .map_err(|e| {
-                if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-            }
-                AlephError::config(format!("Failed to prepare legacy trace query: {e}"))
-            })?;
-
-        let legacy_rows = select
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, u32>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, i64>(5)?,
-                ))
-            })
-            .map_err(|e| {
-                if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-                    tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-                }
-                AlephError::config(format!("Failed to load legacy traces: {e}"))
-            })?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| {
-                if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-                    tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-                }
-                AlephError::config(format!("Failed to collect legacy traces: {e}"))
-            })?;
-
-        let mut insert = conn
-            .prepare(
-                r#"
-                INSERT INTO task_traces (id, task_id, step_index, event_kind, event_json, timestamp)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                "#,
-            )
-            .map_err(|e| {
-                if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-                    tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-                }
-                AlephError::config(format!("Failed to prepare migrated trace insert: {e}"))
-            })?;
-
-        for (id, task_id, step_index, role, content_json, timestamp) in legacy_rows {
-            let event = legacy_trace_to_agent_trace(step_index, &role, &content_json);
-            let event_json = serde_json::to_string(&event).map_err(|e| {
-                if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-                    tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-                }
-                AlephError::config(format!("Failed to serialize migrated trace: {e}"))
-            })?;
-
-            insert
-                .execute(rusqlite::params![
-                    id,
-                    task_id,
-                    step_index,
-                    event.kind(),
-                    event_json,
-                    timestamp
-                ])
-                .map_err(|e| {
-                    if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-                        tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-                    }
-                    AlephError::config(format!("Failed to insert migrated trace: {e}"))
-                })?;
-        }
-    }
+    let legacy_rows = load_legacy_traces(conn)?;
+    insert_migrated_traces(conn, &legacy_rows)?;
 
     conn.execute_batch(
         r#"
@@ -321,15 +297,7 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
         CREATE INDEX IF NOT EXISTS idx_task_traces_task ON task_traces(task_id, step_index);
         "#,
     )
-    .map_err(|e| {
-        if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-            tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-        }
-        AlephError::config(format!("Failed to finalize task_traces migration: {e}"))
-    })?;
-
-    conn.execute_batch("RELEASE migration_task_traces_agent_trace")
-        .map_err(|e| AlephError::config(format!("Failed to commit migration: {e}")))?;
+    .map_err(|e| AlephError::config(format!("Failed to finalize task_traces migration: {e}")))?;
 
     Ok(())
 }
@@ -551,9 +519,10 @@ mod tests {
     #[allow(clippy::missing_transmute_annotations)]
     fn test_migrate_add_experience_replays_idempotent() {
         // Register sqlite-vec extension BEFORE opening connection
+        // SAFETY: sqlite3_vec_init is the C entrypoint for the sqlite-vec extension;
+        // the detailed rationale is inside the unsafe block.
         unsafe {
-            // SAFETY: sqlite3_vec_init is the C entrypoint for the sqlite-vec extension.
-            // sqlite3_auto_extension registers it to be loaded for all new connections.
+            // sqlite3_auto_extension registers sqlite3_vec_init to be loaded for all new connections.
             // The function item is cast to a data pointer then transmuted to the target
             // function pointer type, which is the standard FFI pattern.
             rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(

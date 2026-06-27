@@ -204,6 +204,10 @@ async fn concurrent_evaluate_vs_disable_all_is_consistent() {
                 let d = registry
                     .evaluate_tool_call("any", &serde_json::json!({"x": 1}))
                     .await;
+                assert!(
+                    d.is_block() || d.is_allow(),
+                    "unexpected decision under concurrency: {d:?}"
+                );
                 match d {
                     GuardrailDecision::Block { .. } => {
                         blocks.fetch_add(1, Ordering::Relaxed);
@@ -211,16 +215,18 @@ async fn concurrent_evaluate_vs_disable_all_is_consistent() {
                     GuardrailDecision::Allow => {
                         allows.fetch_add(1, Ordering::Relaxed);
                     }
-                    other => panic!("unexpected decision under concurrency: {other:?}"),
+                    _ => {}
                 }
             }
         }));
     }
 
     for r in readers {
-        r.await.expect("reader task");
+        let result = r.await;
+        assert!(result.is_ok(), "reader task failed: {result:?}");
     }
-    toggler.await.expect("toggler task");
+    let result = toggler.await;
+    assert!(result.is_ok(), "toggler task failed: {result:?}");
 
     let total = blocks.load(Ordering::Relaxed) + allows.load(Ordering::Relaxed);
     assert_eq!(total, READERS * ITERS, "every call must produce a decision");

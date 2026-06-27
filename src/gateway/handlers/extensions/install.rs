@@ -149,9 +149,14 @@ pub async fn handle_disclosure(req: JsonRpcRequest, cache: Arc<CatalogCache>) ->
         Err(e) => return JsonRpcResponse::error(req.id, INTERNAL_ERROR, e),
     };
     let disclosure = build_disclosure(&entry, &spec);
+    let post_install = crate::hub::official_mcp::post_install_for(&entry.id);
     JsonRpcResponse::success(
         req.id,
-        json!({ "disclosure": disclosure, "injection_findings": scan_text(&entry) }),
+        json!({
+            "disclosure": disclosure,
+            "injection_findings": scan_text(&entry),
+            "post_install": post_install,
+        }),
     )
 }
 

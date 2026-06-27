@@ -21,6 +21,19 @@ pub trait SecretResolver {
     fn resolve_secret(&self, name: &str) -> Result<DecryptedSecret, SecretError>;
 }
 
+/// Fields for an EIP-1559 transaction signing intent.
+#[derive(Debug, Clone)]
+pub struct TransactionIntent {
+    pub chain_id: u64,
+    pub to: [u8; 20],
+    pub value: [u8; 32],
+    pub data: Vec<u8>,
+    pub nonce: u64,
+    pub gas_limit: u64,
+    pub max_fee_per_gas: u64,
+    pub max_priority_fee_per_gas: u64,
+}
+
 /// Intent for what should be signed.
 #[derive(Debug, Clone)]
 pub enum SignIntent {
@@ -37,16 +50,7 @@ pub enum SignIntent {
     /// Signatures produced with this variant are NOT valid for on-chain submission.
     /// Use `PersonalSign` or `TypedData` for production signing. A future version will
     /// add proper RLP encoding for on-chain transaction signing.
-    Transaction {
-        chain_id: u64,
-        to: [u8; 20],
-        value: [u8; 32],
-        data: Vec<u8>,
-        nonce: u64,
-        gas_limit: u64,
-        max_fee_per_gas: u64,
-        max_priority_fee_per_gas: u64,
-    },
+    Transaction(Box<TransactionIntent>),
 }
 
 /// Result of a signing operation. NEVER contains private key.
@@ -176,26 +180,17 @@ fn compute_signing_digest(intent: &SignIntent) -> [u8; 32] {
             data.extend_from_slice(struct_hash);
             keccak256(&data)
         }
-        SignIntent::Transaction {
-            chain_id,
-            to,
-            value,
-            data,
-            nonce,
-            gas_limit,
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-        } => {
+        SignIntent::Transaction(intent) => {
             let mut payload = Vec::new();
             payload.push(0x02); // EIP-1559 type
-            payload.extend_from_slice(&chain_id.to_be_bytes());
-            payload.extend_from_slice(&nonce.to_be_bytes());
-            payload.extend_from_slice(&max_priority_fee_per_gas.to_be_bytes());
-            payload.extend_from_slice(&max_fee_per_gas.to_be_bytes());
-            payload.extend_from_slice(&gas_limit.to_be_bytes());
-            payload.extend_from_slice(to);
-            payload.extend_from_slice(value);
-            payload.extend_from_slice(data);
+            payload.extend_from_slice(&intent.chain_id.to_be_bytes());
+            payload.extend_from_slice(&intent.nonce.to_be_bytes());
+            payload.extend_from_slice(&intent.max_priority_fee_per_gas.to_be_bytes());
+            payload.extend_from_slice(&intent.max_fee_per_gas.to_be_bytes());
+            payload.extend_from_slice(&intent.gas_limit.to_be_bytes());
+            payload.extend_from_slice(&intent.to);
+            payload.extend_from_slice(&intent.value);
+            payload.extend_from_slice(&intent.data);
             keccak256(&payload)
         }
     }
@@ -303,7 +298,7 @@ mod tests {
         let resolver = test_resolver_with_key();
         let signer = EvmSigner::new(&resolver);
 
-        let intent = SignIntent::Transaction {
+        let intent = SignIntent::Transaction(Box::new(TransactionIntent {
             chain_id: 1,
             to: [0x42; 20],
             value: [0; 32],
@@ -312,7 +307,7 @@ mod tests {
             gas_limit: 21000,
             max_fee_per_gas: 30_000_000_000,
             max_priority_fee_per_gas: 1_000_000_000,
-        };
+        }));
         let result = signer.sign("wallet_main", &intent).unwrap();
         assert_eq!(result.signature.len(), 64);
     }

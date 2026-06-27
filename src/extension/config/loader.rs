@@ -96,7 +96,9 @@ fn parse_toml(content: &str, path: &Path) -> Result<AlephConfig, ExtensionError>
 fn parse_jsonc(content: &str, path: &Path) -> Result<AlephConfig, ExtensionError> {
     let stripped = strip_json_comments(content);
     // Handle trailing commas (common in JSONC)
-    let trailing_comma_re = regex::Regex::new(r",(\s*[\]}])").unwrap();
+    let trailing_comma_re = regex::Regex::new(r",(\s*[\]}])").map_err(|e| {
+        ExtensionError::config_parse(path, format!("Invalid trailing comma regex: {e}"))
+    })?;
     let cleaned = trailing_comma_re.replace_all(&stripped, "$1").to_string();
 
     serde_json::from_str(&cleaned)

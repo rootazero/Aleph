@@ -105,7 +105,7 @@ impl ConfigUiHints {
 
         for (pattern, hint) in &self.fields {
             if Self::matches_pattern(pattern, &parts)
-                && (best_match.is_none() || pattern.len() > best_match.unwrap().0.len())
+                && best_match.map_or(true, |(best, _)| pattern.len() > best.len())
             {
                 best_match = Some((pattern.as_str(), hint));
             }

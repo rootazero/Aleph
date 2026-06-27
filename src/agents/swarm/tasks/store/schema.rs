@@ -248,7 +248,7 @@ fn add_column_if_missing(
 ) -> crate::error::Result<()> {
     fn is_safe_identifier(s: &str) -> bool {
         !s.is_empty()
-            && s.chars().next().unwrap().is_ascii_alphabetic()
+            && s.starts_with(|c: char| c.is_ascii_alphabetic())
             && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
     }
     fn is_safe_type_decl(s: &str) -> bool {
@@ -271,11 +271,9 @@ fn add_column_if_missing(
         .filter_map(Result::ok)
         .any(|name| name == column);
     if !exists {
-        conn.execute(
-            &format!("ALTER TABLE {table} ADD COLUMN {column} {type_decl}"),
-            [],
-        )
-        .map_err(db_err)?;
+        let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {type_decl}");
+        conn.execute(&sql, [])
+            .map_err(db_err)?;
     }
     Ok(())
 }

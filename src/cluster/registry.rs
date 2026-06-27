@@ -51,6 +51,8 @@ pub enum ResolveError {
     NotFound,
     /// 多个在线节点匹配——附带可读候选标签（`name (short-id)`），供 LLM 收窄。
     Ambiguous(Vec<String>),
+    /// 内部状态不一致：match_id 返回的 id 在 nodes_by_id 中缺失。
+    NodeNotFound { name_or_id: String },
 }
 
 impl std::fmt::Display for ResolveError {
@@ -58,6 +60,10 @@ impl std::fmt::Display for ResolveError {
         match self {
             Self::NotFound => write!(f, "no online node matches"),
             Self::Ambiguous(c) => write!(f, "ambiguous — matches: {}", c.join(", ")),
+            Self::NodeNotFound { name_or_id } => write!(
+                f,
+                "internal node lookup failed for '{name_or_id}'"
+            ),
         }
     }
 }
@@ -176,32 +182,38 @@ impl NodeRegistry {
 
     /// 把 name/id 解析为唯一的 `node_id（多级匹配，registry` 只存在线会话故无需
     /// "prefer-connected" tie-break——所有候选都在线）。匹配级别（强→弱）：
-    /// ① 精确 `node_id` ② 精确 `device_name` ③ 模糊（id 前缀 ≥4 OR name 子串，
-    /// 大小写不敏感）。每级若多命中即 `Ambiguous`，绝不静默挑第一个。
+    /// ① 精确 `node_id`（原样，id 是 UUID） ② 归一化 `device_name` 等值
+    /// ③ 模糊（id 前缀 ≥4 OR 归一化 name 子串）。名字匹配经 [`normalize_node_key`]
+    /// 大小写 + 标点/空格不敏感（映射 openclaw `node-match.ts::normalizeNodeKey`），
+    /// 故 "GPU Box" 可用 "gpu-box" 寻址。每级若多命中即 `Ambiguous`，绝不静默挑第一个。
     fn match_id(inner: &RegistryInner, q: &str) -> std::result::Result<String, ResolveError> {
-        // ① 精确 id。
+        // ① 精确 id（UUID，大小写敏感、不归一化——避免折叠掉 id 内的连字符语义）。
         if inner.nodes_by_id.contains_key(q) {
             return Ok(q.to_string());
         }
-        // ② 精确 name（device_name 不保证唯一 → 可能歧义）。
-        let exact: Vec<&NodeSession> = inner
-            .nodes_by_id
-            .values()
-            .filter(|s| s.device_name == q)
-            .collect();
-        match exact.as_slice() {
-            [s] => return Ok(s.node_id.clone()),
-            [] => {}
-            many => return Err(ResolveError::Ambiguous(candidate_labels(many))),
+        let nq = normalize_node_key(q);
+        // ② 归一化精确 name（device_name 不保证唯一 → 可能歧义）。空键（全标点查询）
+        //    跳过名字匹配，否则会与同样归一化为空的脏名字误配。
+        if !nq.is_empty() {
+            let exact: Vec<&NodeSession> = inner
+                .nodes_by_id
+                .values()
+                .filter(|s| normalize_node_key(&s.device_name) == nq)
+                .collect();
+            match exact.as_slice() {
+                [s] => return Ok(s.node_id.clone()),
+                [] => {}
+                many => return Err(ResolveError::Ambiguous(candidate_labels(many))),
+            }
         }
-        // ③ 模糊：id 前缀（≥4 字符，避免 1 字符炸开）或 name 子串。
+        // ③ 模糊：id 前缀（≥4 字符原样小写，避免 1 字符炸开）或归一化 name 子串。
         let ql = q.to_ascii_lowercase();
         let fuzzy: Vec<&NodeSession> = inner
             .nodes_by_id
             .values()
             .filter(|s| {
                 (q.len() >= 4 && s.node_id.to_ascii_lowercase().starts_with(&ql))
-                    || s.device_name.to_ascii_lowercase().contains(&ql)
+                    || (!nq.is_empty() && normalize_node_key(&s.device_name).contains(&nq))
             })
             .collect();
         match fuzzy.as_slice() {
@@ -220,11 +232,9 @@ impl NodeRegistry {
     ) -> std::result::Result<(ReverseRpcChannel, Vec<CommandDescriptor>), ResolveError> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let id = Self::match_id(&inner, name_or_id)?;
-        let s = inner
-            .nodes_by_id
-            .get(&id)
-            .expect("match_id returns an id that is present in nodes_by_id");
-        Ok((s.channel.clone(), s.declared_commands.clone()))
+        let s = inner.nodes_by_id.get(&id).ok_or_else(|| ResolveError::NodeNotFound {
+            name_or_id: name_or_id.to_string(),
+        })?;        Ok((s.channel.clone(), s.declared_commands.clone()))
     }
 
     /// 同 [`resolve`] 的多级匹配，但只回 `node_id` —— `cluster.deregister` 用它把
@@ -281,6 +291,30 @@ fn candidate_labels(sessions: &[&NodeSession]) -> Vec<String> {
         .collect();
     labels.sort();
     labels
+}
+
+/// 把人类可读的节点名归一化成稳定查找键：转小写 + 把每段非字母数字（空格/标点/
+/// 下划线…）折叠为单个 `-` + 去掉首尾 `-`。映射 openclaw `node-match.ts::
+/// normalizeNodeKey`（`[^a-z0-9]+ → -`），让按 name 寻址大小写 + 标点不敏感
+/// （"GPU Box" / "gpu_box" / "gpu-box" 折叠为同一键）。在线 [`NodeRegistry::match_id`]
+/// 与离线 `cluster.deregister` 回退寻址共用此单一真源，杜绝两路语义漂移。
+pub(crate) fn normalize_node_key(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut pending_dash = false;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if pending_dash && !out.is_empty() {
+                out.push('-');
+            }
+            pending_dash = false;
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            // Defer the separator so leading/trailing/repeated runs collapse and
+            // never produce a boundary dash.
+            pending_dash = true;
+        }
+    }
+    out
 }
 
 /// connect→register 接缝：仅当 `role == Some("node")` 时把这条连接登记进
@@ -427,6 +461,71 @@ mod tests {
         assert_eq!(reg.resolve_id("dev-abcd").unwrap(), "abcd1234");
         // too-short prefix that isn't a name substring → not found.
         assert_eq!(reg.resolve_id("xyz").unwrap_err(), ResolveError::NotFound);
+    }
+
+    #[test]
+    fn normalize_node_key_folds_case_and_punctuation() {
+        assert_eq!(normalize_node_key("GPU Box"), "gpu-box");
+        assert_eq!(normalize_node_key("gpu_box"), "gpu-box");
+        assert_eq!(normalize_node_key("gpu-box"), "gpu-box");
+        assert_eq!(normalize_node_key("  GPU   Box!! "), "gpu-box");
+        assert_eq!(normalize_node_key("--Worker__1--"), "worker-1");
+        assert_eq!(normalize_node_key("Worker1"), "worker1");
+        // All-punctuation / empty → empty key (callers skip name matching on it).
+        assert_eq!(normalize_node_key("  -_- "), "");
+        assert_eq!(normalize_node_key(""), "");
+    }
+
+    #[test]
+    fn resolve_name_is_case_and_punctuation_insensitive() {
+        let reg = NodeRegistry::new();
+        reg.register(NodeSession {
+            node_id: "id-1".into(),
+            conn_id: "c1".into(),
+            device_name: "GPU Box".into(),
+            channel: test_channel(),
+            declared_commands: vec![],
+            tags: vec![],
+            connected_at: 1,
+        });
+        // The operator/LLM can spell the spaced name with a dash, underscore, or
+        // any case — all fold to the same key (maps openclaw normalizeNodeKey).
+        assert_eq!(reg.resolve_id("gpu-box").unwrap(), "id-1");
+        assert_eq!(reg.resolve_id("GPU_BOX").unwrap(), "id-1");
+        assert_eq!(reg.resolve_id("gpu box").unwrap(), "id-1");
+        // Substring fuzzy still works on the normalized form.
+        assert_eq!(reg.resolve_id("box").unwrap(), "id-1");
+        // An all-punctuation query matches nothing (empty normalized key).
+        assert_eq!(reg.resolve_id("---").unwrap_err(), ResolveError::NotFound);
+    }
+
+    #[test]
+    fn normalized_names_that_collide_are_ambiguous() {
+        let reg = NodeRegistry::new();
+        // "Worker 1" and "worker-1" both normalize to "worker-1" — addressing by
+        // name must report ambiguity rather than silently pick one.
+        reg.register(NodeSession {
+            node_id: "id-a".into(),
+            conn_id: "ca".into(),
+            device_name: "Worker 1".into(),
+            channel: test_channel(),
+            declared_commands: vec![],
+            tags: vec![],
+            connected_at: 1,
+        });
+        reg.register(NodeSession {
+            node_id: "id-b".into(),
+            conn_id: "cb".into(),
+            device_name: "worker-1".into(),
+            channel: test_channel(),
+            declared_commands: vec![],
+            tags: vec![],
+            connected_at: 1,
+        });
+        assert!(matches!(
+            reg.resolve_id("WORKER_1"),
+            Err(ResolveError::Ambiguous(_))
+        ));
     }
 
     #[test]

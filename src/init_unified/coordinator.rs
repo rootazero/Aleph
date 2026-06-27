@@ -11,7 +11,7 @@ use tracing::{info, warn};
 const CONFIG_SUBDIRS: &[&str] = &["logs", "cache", "output", "skills", "models"];
 
 /// Initialization phase identifier
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitPhase {
     Directories,
     Config,
@@ -154,7 +154,7 @@ impl InitializationCoordinator {
             // Execute phase
             match self.run_phase(phase).await {
                 Ok(()) => {
-                    completed_phases.push(phase.clone());
+                    completed_phases.push(*phase);
                     if let Some(h) = &self.handler {
                         h.on_phase_completed(phase.name().to_string());
                     }
@@ -227,87 +227,11 @@ impl InitializationCoordinator {
 
         for phase in completed_phases.iter().rev() {
             match phase {
-                InitPhase::Skills => {
-                    let skills_dir = self.config_dir.join("skills");
-                    if pre_existing.skills_dir {
-                        warn!(dir = ?skills_dir, "Skills directory pre-existed; skipping rollback to preserve user skills");
-                    } else if skills_dir.exists() {
-                        if let Err(e) = tokio::fs::remove_dir_all(&skills_dir).await {
-                            warn!(error = %e, dir = ?skills_dir, "Failed to remove skills directory during rollback");
-                            errors.push(format!("skills dir: {e}"));
-                        }
-                    }
-                }
-                InitPhase::Runtimes => match get_runtimes_dir() {
-                    Ok(runtimes_dir) => {
-                        if pre_existing.runtimes_dir {
-                            warn!(dir = ?runtimes_dir, "Runtimes directory pre-existed; skipping rollback to preserve installed runtimes");
-                        } else if runtimes_dir.exists() {
-                            if let Err(e) = tokio::fs::remove_dir_all(&runtimes_dir).await {
-                                warn!(error = %e, dir = ?runtimes_dir, "Failed to remove runtimes directory during rollback");
-                                errors.push(format!("runtimes dir: {e}"));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to get runtimes dir during rollback");
-                        errors.push(format!("runtimes dir: {e}"));
-                    }
-                },
-                InitPhase::Database => {
-                    // Don't delete memory.db (may pre-exist), but clean up WAL files
-                    // that were created during this initialization. If the database
-                    // pre-existed, its WAL may hold committed-but-uncheckpointed
-                    // transactions (or belong to a live connection) — leave it alone.
-                    if pre_existing.database {
-                        warn!("memory.db pre-existed; skipping WAL cleanup during rollback");
-                    } else {
-                        for suffix in ["-wal", "-shm"] {
-                            let wal_path = self.config_dir.join(format!("memory.db{suffix}"));
-                            if wal_path.exists() {
-                                if let Err(e) = tokio::fs::remove_file(&wal_path).await {
-                                    warn!(error = %e, path = ?wal_path, "Failed to remove WAL file during rollback");
-                                    errors.push(format!("wal {suffix}: {e}"));
-                                }
-                            }
-                        }
-                    }
-                }
-                InitPhase::Config => {
-                    // Skip: config.toml may pre-exist; deleting it could destroy user configuration.
-                    warn!("Skipping config rollback to avoid deleting pre-existing user configuration");
-                }
-                InitPhase::Directories => {
-                    for subdir in CONFIG_SUBDIRS {
-                        let path = self.config_dir.join(subdir);
-                        if pre_existing.subdirs.contains(*subdir) {
-                            continue;
-                        }
-                        if path.exists() {
-                            match tokio::fs::read_dir(&path).await {
-                                Ok(mut entries) => match entries.next_entry().await {
-                                    Ok(None) => {
-                                        if let Err(e) = tokio::fs::remove_dir(&path).await {
-                                            warn!(error = %e, dir = ?path, "Failed to remove empty directory during rollback");
-                                            errors.push(format!("dir {subdir}: {e}"));
-                                        }
-                                    }
-                                    Ok(Some(_)) => {
-                                        warn!(dir = ?path, "Directory not empty, skipping rollback");
-                                    }
-                                    Err(e) => {
-                                        warn!(error = %e, dir = ?path, "Failed to read directory during rollback");
-                                        errors.push(format!("dir {subdir}: {e}"));
-                                    }
-                                },
-                                Err(e) => {
-                                    warn!(error = %e, dir = ?path, "Failed to open directory during rollback");
-                                    errors.push(format!("dir {subdir}: {e}"));
-                                }
-                            }
-                        }
-                    }
-                }
+                InitPhase::Skills => self.rollback_skills(pre_existing, &mut errors).await,
+                InitPhase::Runtimes => self.rollback_runtimes(pre_existing, &mut errors).await,
+                InitPhase::Database => self.rollback_database(pre_existing, &mut errors).await,
+                InitPhase::Config => self.rollback_config(),
+                InitPhase::Directories => self.rollback_directories(pre_existing, &mut errors).await,
             }
         }
 
@@ -319,6 +243,94 @@ impl InitializationCoordinator {
                 "rollback",
                 format!("Partial rollback failed: {}", errors.join("; ")),
             ))
+        }
+    }
+
+    async fn rollback_skills(&self, pre_existing: &PreExistingState, errors: &mut Vec<String>) {
+        let skills_dir = self.config_dir.join("skills");
+        if pre_existing.skills_dir {
+            warn!(dir = ?skills_dir, "Skills directory pre-existed; skipping rollback to preserve user skills");
+        } else if skills_dir.exists() {
+            if let Err(e) = tokio::fs::remove_dir_all(&skills_dir).await {
+                warn!(error = %e, dir = ?skills_dir, "Failed to remove skills directory during rollback");
+                errors.push(format!("skills dir: {e}"));
+            }
+        }
+    }
+
+    async fn rollback_runtimes(&self, pre_existing: &PreExistingState, errors: &mut Vec<String>) {
+        match get_runtimes_dir() {
+            Ok(runtimes_dir) => {
+                if pre_existing.runtimes_dir {
+                    warn!(dir = ?runtimes_dir, "Runtimes directory pre-existed; skipping rollback to preserve installed runtimes");
+                } else if runtimes_dir.exists() {
+                    if let Err(e) = tokio::fs::remove_dir_all(&runtimes_dir).await {
+                        warn!(error = %e, dir = ?runtimes_dir, "Failed to remove runtimes directory during rollback");
+                        errors.push(format!("runtimes dir: {e}"));
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to get runtimes dir during rollback");
+                errors.push(format!("runtimes dir: {e}"));
+            }
+        }
+    }
+
+    async fn rollback_database(&self, pre_existing: &PreExistingState, errors: &mut Vec<String>) {
+        // Don't delete memory.db (may pre-exist), but clean up WAL files
+        // that were created during this initialization. If the database
+        // pre-existed, its WAL may hold committed-but-uncheckpointed
+        // transactions (or belong to a live connection) — leave it alone.
+        if pre_existing.database {
+            warn!("memory.db pre-existed; skipping WAL cleanup during rollback");
+            return;
+        }
+        for suffix in ["-wal", "-shm"] {
+            let wal_path = self.config_dir.join(format!("memory.db{suffix}"));
+            if wal_path.exists() {
+                if let Err(e) = tokio::fs::remove_file(&wal_path).await {
+                    warn!(error = %e, path = ?wal_path, "Failed to remove WAL file during rollback");
+                    errors.push(format!("wal {suffix}: {e}"));
+                }
+            }
+        }
+    }
+
+    fn rollback_config(&self) {
+        // Skip: config.toml may pre-exist; deleting it could destroy user configuration.
+        warn!("Skipping config rollback to avoid deleting pre-existing user configuration");
+    }
+
+    async fn rollback_directories(&self, pre_existing: &PreExistingState, errors: &mut Vec<String>) {
+        for subdir in CONFIG_SUBDIRS {
+            let path = self.config_dir.join(subdir);
+            if pre_existing.subdirs.contains(*subdir) {
+                continue;
+            }
+            if path.exists() {
+                match tokio::fs::read_dir(&path).await {
+                    Ok(mut entries) => match entries.next_entry().await {
+                        Ok(None) => {
+                            if let Err(e) = tokio::fs::remove_dir(&path).await {
+                                warn!(error = %e, dir = ?path, "Failed to remove empty directory during rollback");
+                                errors.push(format!("dir {subdir}: {e}"));
+                            }
+                        }
+                        Ok(Some(_)) => {
+                            warn!(dir = ?path, "Directory not empty, skipping rollback");
+                        }
+                        Err(e) => {
+                            warn!(error = %e, dir = ?path, "Failed to read directory during rollback");
+                            errors.push(format!("dir {subdir}: {e}"));
+                        }
+                    },
+                    Err(e) => {
+                        warn!(error = %e, dir = ?path, "Failed to open directory during rollback");
+                        errors.push(format!("dir {subdir}: {e}"));
+                    }
+                }
+            }
         }
     }
 

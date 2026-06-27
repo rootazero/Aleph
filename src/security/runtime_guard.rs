@@ -61,6 +61,7 @@ pub struct SecurityContext {
 
 /// Result of guard processing.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum GuardResult {
     Clean {
         text: String,

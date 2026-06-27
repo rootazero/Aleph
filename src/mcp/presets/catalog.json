@@ -121,5 +121,20 @@
       { "key": "T8STAR_AUDIO_DIR", "label": "音频保存目录", "description": "默认回退到图片目录", "secret": false, "required": false }
     ],
     "tags": ["image", "tts", "relay"]
+  },
+  {
+    "id": "unreal-engine",
+    "name": "虚幻引擎 (Unreal Engine)",
+    "category": "developer",
+    "description": "驱动正在运行的 Unreal Editor 5.8+：生成 Actor、配置光照、材质实例、运行自动化测试等。",
+    "vendor": "Epic Games",
+    "official": true,
+    "reachability": "cn-native",
+    "transports": [
+      { "kind": "http", "url": "http://127.0.0.1:8000/mcp" }
+    ],
+    "required_env": [],
+    "tags": ["game-engine", "unreal", "developer", "local"],
+    "post_install": "连接的是 Epic 官方「Unreal MCP」插件，运行在 Unreal Editor 进程内。⚠️ 安装前请先在编辑器里把 server 跑起来：\n1. 用 Unreal Editor 5.8+ 打开你的项目。\n2. Edit → Plugins 搜索「Unreal MCP」，启用并重启编辑器（依赖的 Toolset Registry 会自动启用）。\n3. Edit → Editor Preferences → General → Model Context Protocol，打开「Auto Start Server」（或在编辑器控制台运行 ModelContextProtocol.StartServer），默认监听 http://127.0.0.1:8000/mcp。\n4. 确认编辑器内 server 已在监听后，再回到 Aleph 点安装/启用——这样才能探测到工具。\n注意：Epic 标记此功能为实验性；工具调用在引擎 game thread 串行执行，避免并发下发。若你改过端口/路径，请相应修改该 server 的 URL。"
   }
 ]

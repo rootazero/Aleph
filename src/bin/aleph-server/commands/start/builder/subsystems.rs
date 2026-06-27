@@ -18,8 +18,9 @@ use alephcore::gateway::handlers::auth as auth_handlers;
 use alephcore::gateway::interfaces::telegram::offset::OffsetTracker;
 use alephcore::gateway::interfaces::telegram::parse_telegram_channel_config;
 use alephcore::gateway::interfaces::TelegramChannel;
+use alephcore::gateway::interfaces::IMessageConfig;
 #[cfg(target_os = "macos")]
-use alephcore::gateway::interfaces::{IMessageChannel, IMessageConfig};
+use alephcore::gateway::interfaces::IMessageChannel;
 use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{AgentRegistry, ChannelRegistry, InboundMessageRouter, RoutingConfig};
 
@@ -59,7 +60,7 @@ pub(in crate::commands::start) fn initialize_vault(
                 );
                 alephcore::gateway::security::SecurityStore::in_memory()
             })
-            .expect("Fatal: Failed to create in-memory security store fallback"),
+            .unwrap_or_else(|e| panic!("Fatal: Failed to create in-memory security store fallback: {e}")),
     );
 
     let mdns_broadcaster = match alephcore::gateway::MdnsBroadcaster::new(port, "aleph") {
@@ -226,6 +227,19 @@ pub(in crate::commands::start) async fn initialize_channels(
     // Replay any deliveries persisted before this start, and keep draining new
     // transient failures, for as long as the daemon runs.
     if let Some(store) = delivery_store {
+        // Surface any backlog recovered from a previous run at boot, rather than
+        // letting a silent pile-up of undelivered proactive pushes go unnoticed
+        // (redline R5). Only logs when there is actually something to report.
+        match store.stats(alephcore::gateway::delivery_queue::now_secs()) {
+            Ok(s) if s.pending > 0 || s.dead_lettered > 0 => tracing::info!(
+                pending = s.pending,
+                oldest_age_secs = ?s.oldest_age_secs,
+                dead_lettered = s.dead_lettered,
+                "Outbound delivery queue: recovered backlog from previous run"
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "delivery queue: boot stats query failed"),
+        }
         alephcore::gateway::delivery_queue::spawn_drain(channel_registry.clone(), store);
     }
 
@@ -269,35 +283,82 @@ pub(in crate::commands::start) async fn initialize_channels(
 
     // Create and register all channel instances
     for inst in &instances {
-        // iMessage uses its own constructor (no id parameter)
-        #[cfg(target_os = "macos")]
         if inst.channel_type == "imessage" {
             match serde_json::from_value::<IMessageConfig>(inst.config.clone()) {
                 Ok(imessage_config) => {
-                    let mut imessage_channel = IMessageChannel::new(imessage_config);
-                    // Wire persistent catch-up cursor so a restart recovers
-                    // messages received while the daemon was offline.
-                    if let Some(ref db) = state_db {
-                        let tracker = OffsetTracker::new(db.clone(), inst.id.clone());
-                        imessage_channel.set_offset_tracker(Arc::new(tracker));
-                    }
-                    let channel_id = channel_registry.register(Box::new(imessage_channel)).await;
-                    if !daemon {
-                        println!("Registered channel: {channel_id} (iMessage)");
+                    use alephcore::gateway::interfaces::imessage::config::Transport;
+                    match imessage_config.effective_transport() {
+                        Transport::Bluebubbles => {
+                            // Inject vault secrets (password) before constructing.
+                            let mut cfg_json = inst.config.clone();
+                            inject_channel_secrets(&inst.id, &mut cfg_json, &vault);
+                            match serde_json::from_value::<IMessageConfig>(cfg_json) {
+                                Ok(bb_cfg) => match bb_cfg.bluebubbles {
+                                    Some(bb) => {
+                                        let mut bb_channel =
+                                            alephcore::gateway::interfaces::BlueBubblesChannel::new(
+                                                bb,
+                                            );
+                                        if let Some(ref db) = state_db {
+                                            // Distinct cursor key: timestamps, not ROWID.
+                                            let tracker = OffsetTracker::new(
+                                                db.clone(),
+                                                format!("{}-bb", inst.id),
+                                            );
+                                            bb_channel.set_offset_tracker(Arc::new(tracker));
+                                        }
+                                        let cid = channel_registry
+                                            .register(Box::new(bb_channel))
+                                            .await;
+                                        if !daemon {
+                                            println!(
+                                                "Registered channel: {cid} (iMessage/BlueBubbles)"
+                                            );
+                                        }
+                                    }
+                                    None => tracing::warn!(
+                                        "imessage '{}' transport=bluebubbles but no [bluebubbles] block; skipping",
+                                        inst.id
+                                    ),
+                                },
+                                Err(e) => tracing::warn!(
+                                    "Failed to parse imessage config '{}': {e}; skipping",
+                                    inst.id
+                                ),
+                            }
+                        }
+                        Transport::Local => {
+                            #[cfg(target_os = "macos")]
+                            {
+                                let mut imessage_channel = IMessageChannel::new(imessage_config);
+                                if let Some(ref db) = state_db {
+                                    let tracker =
+                                        OffsetTracker::new(db.clone(), inst.id.clone());
+                                    imessage_channel.set_offset_tracker(Arc::new(tracker));
+                                }
+                                let cid = channel_registry
+                                    .register(Box::new(imessage_channel))
+                                    .await;
+                                if !daemon {
+                                    println!("Registered channel: {cid} (iMessage/local)");
+                                }
+                            }
+                            #[cfg(not(target_os = "macos"))]
+                            {
+                                let _ = imessage_config;
+                                tracing::warn!(
+                                    "imessage '{}' transport=local requires macOS; skipping on this OS",
+                                    inst.id
+                                );
+                            }
+                        }
                     }
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "Failed to parse imessage config '{}': {}, skipping channel",
-                        inst.id,
-                        e
+                        "Failed to parse imessage config '{}': {e}; skipping",
+                        inst.id
                     );
-                    if !daemon {
-                        eprintln!(
-                            "Warning: iMessage channel '{}' has invalid config and was skipped",
-                            inst.id
-                        );
-                    }
                 }
             }
             continue;
@@ -541,8 +602,11 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // require_mention / slash-command admin configuration. This connects it.
     //
     // Inbound iMessage messages carry channel_id "imessage" (see imessage/db.rs),
-    // so the gating config is registered under that key.
-    #[cfg(target_os = "macos")]
+    // so the gating config is registered under that key. Ungated: the BlueBubbles
+    // transport runs on all platforms and needs the same DM/group/allowlist/
+    // require-mention/slash-admin gating — the `From<&IMessageConfig>` conversion
+    // is already cross-platform (a local-only transport simply never registers a
+    // live "imessage" channel off-macOS, so its gating config is a harmless no-op).
     if let Some(ref cfg_arc) = app_config {
         let cfg = cfg_arc.read().await;
         for inst in cfg.resolved_channels() {

@@ -76,7 +76,7 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
             Err(ResolveError::NotFound) => {
                 return Err(AlephError::tool(format!("node '{}' not online", args.node)))
             }
-            Err(e @ ResolveError::Ambiguous(_)) => {
+            Err(e @ (ResolveError::Ambiguous(_) | ResolveError::NodeNotFound { .. })) => {
                 return Err(AlephError::tool(format!("node '{}' {e}", args.node)))
             }
         };
@@ -105,7 +105,7 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                 let local =
                     check_and_resolve_path(Path::new(&args.local_path), &get_denied_paths(), None)
                         .map_err(|e| AlephError::tool(format!("local path rejected: {e}")))?;
-                let meta = std::fs::metadata(&local).map_err(|e| {
+                let meta = tokio::fs::metadata(&local).await.map_err(|e| {
                     AlephError::tool(format!("stat local '{}': {e}", local.display()))
                 })?;
                 if meta.len() > MAX_FILE_BYTES as u64 {
@@ -114,7 +114,7 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                         meta.len()
                     )));
                 }
-                let bytes = std::fs::read(&local).map_err(|e| {
+                let bytes = tokio::fs::read(&local).await.map_err(|e| {
                     AlephError::tool(format!("read local '{}': {e}", local.display()))
                 })?;
                 let sha = sha256_hex(&bytes);
@@ -193,10 +193,10 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                     ));
                 }
                 if let Some(parent) = local.parent() {
-                    std::fs::create_dir_all(parent)
+                    tokio::fs::create_dir_all(parent).await
                         .map_err(|e| AlephError::tool(format!("create local dir: {e}")))?;
                 }
-                std::fs::write(&local, &bytes).map_err(|e| {
+                tokio::fs::write(&local, &bytes).await.map_err(|e| {
                     AlephError::tool(format!("write local '{}': {e}", local.display()))
                 })?;
                 Ok(json!({
@@ -281,7 +281,7 @@ mod tests {
     async fn push_sends_write_and_returns_summary() {
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join("src.txt");
-        std::fs::write(&local, b"payload-abc").unwrap();
+        tokio::fs::write(&local, b"payload-abc").await.unwrap();
         let (reg, rx, ch) = registry_with_node(vec!["file.write"]);
         spawn_file_responder(rx, ch, None);
 
@@ -330,7 +330,7 @@ mod tests {
     async fn push_rejects_oversize_local() {
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join("big.bin");
-        std::fs::write(&local, vec![0u8; super::MAX_FILE_BYTES + 1]).unwrap();
+        tokio::fs::write(&local, vec![0u8; super::MAX_FILE_BYTES + 1]).await.unwrap();
         let (reg, _rx, _ch) = registry_with_node(vec!["file.write"]);
         let tool = NodeFileTool::new(reg);
         let err = tool
@@ -423,7 +423,7 @@ mod tests {
     async fn rejects_command_not_declared_by_node() {
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join("src.txt");
-        std::fs::write(&local, b"x").unwrap();
+        tokio::fs::write(&local, b"x").await.unwrap();
         let (reg, _rx, _ch) = registry_with_node(vec!["bash"]); // no file.write
         let tool = NodeFileTool::new(reg);
         let err = tool
@@ -440,3 +440,4 @@ mod tests {
         assert!(err.to_string().contains("not declared"), "{err}");
     }
 }
+

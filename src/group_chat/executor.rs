@@ -226,12 +226,11 @@ impl GroupChatExecutor {
                 .participants
                 .iter()
                 .find(|p| p.id == respondent.persona_id)
-                .ok_or_else(|| GroupChatError::PersonaNotFound(respondent.persona_id.clone()))?
-                .clone();
+                .ok_or_else(|| GroupChatError::PersonaNotFound(respondent.persona_id.clone()))?;
 
             // Build persona prompt with cumulative prior discussion
             let persona_prompt = build_persona_prompt(
-                &persona,
+                persona,
                 user_message,
                 &prior_discussion,
                 &respondent.guidance,
@@ -241,7 +240,7 @@ impl GroupChatExecutor {
             // `model` / `thinking_level` are honored only when the persona sets
             // them; otherwise these resolve to `None` and the request is identical
             // to using the provider's defaults.
-            let provider = self.resolve_provider(&persona);
+            let provider = self.resolve_provider(persona);
             let think_level = persona
                 .thinking_level
                 .as_deref()
@@ -263,10 +262,13 @@ impl GroupChatExecutor {
                     .text_content()
             };
 
-            // Record the turn in session history
+            // Record the turn in session history. Clone the persona name up front
+            // so the immutable borrow of `session.participants` ends before the
+            // mutable `session.add_turn` below (the name is still needed later).
+            let persona_name = persona.name.clone();
             let speaker = Speaker::Persona {
                 id: persona.id.clone(),
-                name: persona.name.clone(),
+                name: persona_name.clone(),
             };
             session.add_turn(round, speaker.clone(), persona_response.clone());
 
@@ -275,7 +277,7 @@ impl GroupChatExecutor {
             persist_seq = persist_seq.saturating_add(1);
 
             // Accumulate prior discussion for the next persona
-            prior_discussion.push_str(&format!("[{}]: {}\n\n", persona.name, persona_response));
+            prior_discussion.push_str(&format!("[{}]: {}\n\n", persona_name, persona_response));
 
             // Build output message
             let is_final = i == total_respondents - 1;

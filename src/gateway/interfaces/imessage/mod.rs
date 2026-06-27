@@ -1,14 +1,12 @@
 //! iMessage Channel Implementation
 //!
-//! Provides iMessage integration for the Gateway using:
-//! - `SQLite` database polling for receiving messages
-//! - `AppleScript` for sending messages
+//! Provides iMessage integration for the Gateway using two transports:
 //!
-//! # Requirements
-//!
-//! - macOS only
-//! - Full Disk Access permission (to read chat.db)
-//! - Automation permission (to control Messages.app)
+//! - **Local** (`IMessageChannel`): SQLite database polling for receiving +
+//!   AppleScript for sending. Requires macOS, Full Disk Access, and
+//!   Automation permission — only *registered* on macOS.
+//! - **BlueBubbles** (`BlueBubblesChannel`): REST + webhook against a running
+//!   BlueBubbles server. Pure HTTP — compiles and runs on any OS.
 //!
 //! # Configuration
 //!
@@ -19,11 +17,13 @@
 //! poll_interval_ms = 1000
 //! ```
 
+pub mod bluebubbles;
 pub mod config;
 mod db;
 mod sender;
 mod target;
 
+pub use bluebubbles::{BlueBubblesChannel, BlueBubblesConfig};
 pub use config::{
     DmPolicy as IMessageDmPolicy, GroupPolicy as IMessageGroupPolicy, IMessageConfig,
 };
@@ -80,11 +80,11 @@ impl IMessageChannel {
                 images: true,
                 audio: true,
                 video: true,
-                reactions: true,
-                replies: false, // iMessage supports tapbacks but not threading
+                reactions: false,            // AppleScript cannot send tapbacks
+                replies: false,
                 editing: false,
                 deletion: false,
-                typing_indicator: false, // Would need more complex integration
+                typing_indicator: false,
                 read_receipts: false,
                 rich_text: false,
                 max_message_length: 20000,              // Approximate limit
@@ -287,11 +287,32 @@ impl Channel for IMessageChannel {
 
         let target = message.conversation_id.as_str();
 
-        // Send text
+        // Route by parsed target: chat_id:/chat_guid: prefixed targets use
+        // chat-id send (group chat); phone/email/bare identifiers fall through
+        // to participant send_text (existing behaviour).
+        // Note: inbound group messages carry a bare chat_identifier (no prefix),
+        // so they still route to send_text — fully fixing AppleScript group
+        // replies requires macOS-runtime chat-GUID resolution (out of scope;
+        // BlueBubbles transport handles groups robustly).
         if !message.text.is_empty() {
-            MessageSender::send_text(target, &message.text)
-                .await
-                .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+            match parse_target(target) {
+                Ok(IMessageTarget::ChatId { id }) => {
+                    MessageSender::send_to_chat(&format!("chat_id:{id}"), &message.text)
+                        .await
+                        .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                }
+                Ok(IMessageTarget::ChatGuid { guid }) => {
+                    MessageSender::send_to_chat(&guid, &message.text)
+                        .await
+                        .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                }
+                // Phone / Email / parse error: participant send (existing behavior)
+                _ => {
+                    MessageSender::send_text(target, &message.text)
+                        .await
+                        .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                }
+            }
         }
 
         // Send attachments
@@ -359,5 +380,29 @@ mod tests {
         assert_eq!(channel.info().id.as_str(), "imessage");
         assert_eq!(channel.info().channel_type, "imessage");
         assert!(channel.capabilities().attachments);
+    }
+
+    #[test]
+    fn local_capabilities_are_honest() {
+        let channel = IMessageChannel::new(IMessageConfig::default());
+        let caps = &channel.info().capabilities;
+        assert!(!caps.reactions, "AppleScript cannot send tapbacks");
+        assert!(!caps.replies);
+        assert!(!caps.typing_indicator);
+        assert!(!caps.read_receipts);
+        assert!(caps.attachments);
+    }
+
+    #[test]
+    fn group_chat_target_routes_to_chat_send() {
+        // chat_id: prefix and chat_guid: must parse to chat targets, which the
+        // send path must route via send_to_chat (not participant send_text).
+        assert!(matches!(parse_target("chat_id:42").unwrap(), IMessageTarget::ChatId { .. }));
+        assert!(matches!(
+            parse_target("chat_guid:iMessage;+;chat123").unwrap(),
+            IMessageTarget::ChatGuid { .. }
+        ));
+        // a plain phone stays a Phone target (participant send_text)
+        assert!(matches!(parse_target("+15551234567").unwrap(), IMessageTarget::Phone { .. }));
     }
 }

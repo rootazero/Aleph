@@ -235,7 +235,7 @@ fn qq_factory_creator(
 }
 
 pub fn register_with_plugin() {
-    crate::gateway::interfaces::plugin::register("qq", qq_factory_creator);
+    let _ = crate::gateway::interfaces::plugin::register("qq", qq_factory_creator);
 }
 
 #[cfg(test)]
