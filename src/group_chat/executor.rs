@@ -262,10 +262,13 @@ impl GroupChatExecutor {
                     .text_content()
             };
 
-            // Record the turn in session history
+            // Record the turn in session history. Clone the persona name up front
+            // so the immutable borrow of `session.participants` ends before the
+            // mutable `session.add_turn` below (the name is still needed later).
+            let persona_name = persona.name.clone();
             let speaker = Speaker::Persona {
                 id: persona.id.clone(),
-                name: persona.name.clone(),
+                name: persona_name.clone(),
             };
             session.add_turn(round, speaker.clone(), persona_response.clone());
 
@@ -274,7 +277,7 @@ impl GroupChatExecutor {
             persist_seq = persist_seq.saturating_add(1);
 
             // Accumulate prior discussion for the next persona
-            prior_discussion.push_str(&format!("[{}]: {}\n\n", persona.name, persona_response));
+            prior_discussion.push_str(&format!("[{}]: {}\n\n", persona_name, persona_response));
 
             // Build output message
             let is_final = i == total_respondents - 1;
