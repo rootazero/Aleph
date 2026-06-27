@@ -29,6 +29,9 @@ pub enum PanelMode {
     Teams,
     Extensions,
     Settings,
+    /// Phone-only ••• tab landing — a sections menu for the management modes
+    /// that aren't primary phone tabs. Desktop never routes here.
+    More,
 }
 
 impl PanelMode {
@@ -45,11 +48,24 @@ impl PanelMode {
             Self::Extensions
         } else if path.starts_with("/dashboard") {
             Self::Dashboard
+        } else if path.starts_with("/more") {
+            Self::More
         } else if path.starts_with("/settings") {
             Self::Settings
         } else {
             Self::Chat
         }
+    }
+
+    /// True for the sections reached through the phone More (•••) tab. The
+    /// ••• tab stays highlighted while inside any of them (iOS "More"
+    /// convention). Phone-only concept; desktop never routes to these via More.
+    #[must_use]
+    pub const fn under_more(self) -> bool {
+        matches!(
+            self,
+            Self::More | Self::Dashboard | Self::Teams | Self::Extensions
+        )
     }
 }
 
@@ -74,6 +90,8 @@ pub fn ModeSidebar() -> impl IntoView {
                     PanelMode::Teams => view! { <crate::views::teams::TeamsSidebar /> }.into_any(),
                     PanelMode::Extensions => view! { <crate::views::extensions::ExtensionsSidebar /> }.into_any(),
                     PanelMode::Settings => view! { <SettingsSidebar /> }.into_any(),
+                    // /more is a phone-only route; desktop never reaches it.
+                    PanelMode::More => ().into_any(),
                 }}
             </div>
 
@@ -145,6 +163,42 @@ fn SidebarBrand() -> impl IntoView {
                 </button>
             </div>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PanelMode;
+
+    #[test]
+    fn from_path_classifies_more() {
+        assert_eq!(PanelMode::from_path("/more"), PanelMode::More);
+        assert_eq!(PanelMode::from_path("/more/"), PanelMode::More);
+        // /more must not shadow, nor be shadowed by, the other sections.
+        assert_eq!(PanelMode::from_path("/memory"), PanelMode::Memory);
+        assert_eq!(PanelMode::from_path("/dashboard"), PanelMode::Dashboard);
+        assert_eq!(PanelMode::from_path("/settings"), PanelMode::Settings);
+        assert_eq!(PanelMode::from_path("/"), PanelMode::Chat);
+    }
+
+    #[test]
+    fn under_more_covers_more_sections() {
+        for m in [
+            PanelMode::More,
+            PanelMode::Dashboard,
+            PanelMode::Teams,
+            PanelMode::Extensions,
+        ] {
+            assert!(m.under_more(), "{m:?} should be under More");
+        }
+        for m in [
+            PanelMode::Chat,
+            PanelMode::Memory,
+            PanelMode::Agents,
+            PanelMode::Settings,
+        ] {
+            assert!(!m.under_more(), "{m:?} should not be under More");
+        }
     }
 }
 

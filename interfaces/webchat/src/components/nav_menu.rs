@@ -36,6 +36,7 @@ const fn route_of(mode: PanelMode) -> &'static str {
         PanelMode::Agents => "/agents",
         PanelMode::Teams => "/teams",
         PanelMode::Extensions => "/extensions",
+        PanelMode::More => "/more",
         PanelMode::Settings => "/settings",
     }
 }
@@ -49,6 +50,7 @@ fn label_of(mode: PanelMode, i18n: I18nContext<Locale>) -> String {
         PanelMode::Agents => t_string!(i18n, nav.agents).to_string(),
         PanelMode::Teams => t_string!(i18n, nav.teams).to_string(),
         PanelMode::Extensions => t_string!(i18n, nav.extensions).to_string(),
+        PanelMode::More => "More".to_string(),
         PanelMode::Settings => t_string!(i18n, nav.settings).to_string(),
     }
 }
@@ -73,6 +75,9 @@ const fn icon_of(mode: PanelMode) -> &'static str {
         }
         PanelMode::Extensions => {
             r#"<path d="M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4a2 2 0 0 0-2 2v3.8h1.5a2.2 2.2 0 1 1 0 4.4H2V19a2 2 0 0 0 2 2h3.8v-1.5a2.2 2.2 0 1 1 4.4 0V21H17a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z"/>"#
+        }
+        PanelMode::More => {
+            r#"<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>"#
         }
         PanelMode::Settings => {
             r#"<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>"#
