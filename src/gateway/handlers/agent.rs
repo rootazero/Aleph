@@ -234,6 +234,18 @@ impl AgentRunManager {
         let mut metadata = HashMap::new();
         metadata.insert("channel_id".to_string(), params.channel.unwrap_or_default());
         metadata.insert("sender_id".to_string(), "websocket".to_string());
+        // The Panel is a WebRich surface. Stamp `platform=webchat` so the
+        // run-loop (`run_loop::inner`) derives a WebRich InteractionManifest.
+        // Without it `metadata["platform"]` is absent → the manifest is `None`
+        // → `prompt_build` falls back to the `Background` paradigm, whose
+        // `SilentReply` capability makes `ProtocolTokensLayer` teach the model
+        // `ALEPH_SILENT_COMPLETE`. The model then emits that literal token as a
+        // silent completion and it leaks verbatim into the chat bubble — the
+        // interactive path has no protocol-token suppression (only cron's
+        // `deliverable_text` strips it). Mirrors the team-broadcast
+        // (`member_run_metadata`) and channel-inbound paths that already tag
+        // platform; this direct Panel-run path was the one that missed it.
+        metadata.insert("platform".to_string(), "webchat".to_string());
         if let Some(peer_id) = &params.peer_id {
             metadata.insert("peer_id".to_string(), peer_id.clone());
         }
@@ -748,6 +760,84 @@ mod tests {
         let result = manager.start_run(params).await.unwrap();
         assert!(!result.run_id.is_empty());
         assert!(result.session_key.starts_with("agent:main:"));
+    }
+
+    // Regression: a Panel run must stamp `metadata["platform"]="webchat"` so the
+    // run-loop derives a WebRich (interactive) InteractionManifest. Without the
+    // tag the manifest falls back to `Background`, whose `SilentReply` capability
+    // makes `ProtocolTokensLayer` teach `ALEPH_SILENT_COMPLETE`; the model then
+    // emits that literal token on a silent completion and it leaks into the chat
+    // bubble. This captures the RunRequest the handler hands to the execution
+    // adapter and asserts the platform tag is present.
+    #[tokio::test]
+    async fn panel_run_tags_webchat_platform() {
+        struct CapturingAdapter {
+            platform: Arc<std::sync::Mutex<Option<Option<String>>>>,
+        }
+        #[async_trait]
+        impl ExecutionAdapter for CapturingAdapter {
+            async fn execute(
+                &self,
+                request: RunRequest,
+                _agent: Arc<AgentInstance>,
+                _emitter: Arc<dyn EventEmitter + Send + Sync>,
+            ) -> Result<(), ExecutionError> {
+                *self.platform.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(request.metadata.get("platform").cloned());
+                Ok(())
+            }
+            async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+                Err(ExecutionError::RunNotFound(run_id.to_string()))
+            }
+            async fn get_status(&self, _run_id: &str) -> Option<EngineRunStatus> {
+                None
+            }
+            async fn active_run_count(&self) -> usize {
+                0
+            }
+        }
+
+        let captured: Arc<std::sync::Mutex<Option<Option<String>>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let adapter = Arc::new(CapturingAdapter {
+            platform: captured.clone(),
+        });
+        let (agent_registry, _tmp) = registry_with_main_agent().await;
+        let manager = AgentRunManager::new(
+            Arc::new(AgentRouter::new()),
+            Arc::new(GatewayEventBus::new()),
+            agent_registry,
+            adapter,
+        );
+        let params = AgentRunParams {
+            input: "hi".to_string(),
+            session_key: None,
+            channel: None,
+            peer_id: None,
+            stream: false,
+            thinking: None,
+            attachments: vec![],
+            agent_id: None,
+            project_root: None,
+            model_override: None,
+        };
+        manager.start_run(params).await.expect("start_run");
+
+        // Execution is spawned (`tokio::spawn`), so poll until the adapter
+        // records the RunRequest the handler built.
+        let mut captured_platform = None;
+        for _ in 0..200 {
+            if let Some(p) = captured.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+                captured_platform = Some(p);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            captured_platform,
+            Some(Some("webchat".to_string())),
+            "Panel run must tag platform=webchat (else Background paradigm → ALEPH_SILENT_COMPLETE leaks)"
+        );
     }
 
     // Regression: Panel runs must honor the global `behavior.output_mode`
