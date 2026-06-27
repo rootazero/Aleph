@@ -270,9 +270,10 @@ fn topo_levels(manifest: &WorkflowManifest) -> Option<Vec<Vec<usize>>> {
     let mut placed = 0usize;
     let mut levels: Vec<Vec<usize>> = Vec::new();
     let mut current: Vec<usize> = (0..n).filter(|&i| indegree[i] == 0).collect();
+    let mut next: Vec<usize> = Vec::new();
     while !current.is_empty() {
         placed += current.len();
-        let mut next: Vec<usize> = Vec::new();
+        next.clear();
         for &i in &current {
             for &c in &dependents[i] {
                 indegree[c] -= 1;
@@ -283,7 +284,7 @@ fn topo_levels(manifest: &WorkflowManifest) -> Option<Vec<Vec<usize>>> {
         }
         next.sort_unstable(); // keep deterministic list order within a layer
         levels.push(current);
-        current = next;
+        current = std::mem::take(&mut next);
     }
     if placed != n {
         return None;

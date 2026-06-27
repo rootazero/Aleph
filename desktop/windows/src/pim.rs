@@ -371,6 +371,6 @@ mod tests {
 
     #[test]
     fn create_default() {
-        let _pim = WindowsPim;
+        WindowsPim;
     }
 }

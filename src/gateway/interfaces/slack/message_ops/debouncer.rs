@@ -90,9 +90,12 @@ impl SlackDebouncer {
                 .messages
                 .into_iter()
                 .next()
-                .expect("length checked above")
+                .unwrap_or_else(|| unreachable!("length checked above"))
         } else {
-            let last = entry.messages.last().expect("non-empty checked above");
+            let last = entry
+                .messages
+                .last()
+                .unwrap_or_else(|| unreachable!("non-empty checked above"));
             let combined_text = entry
                 .messages
                 .iter()

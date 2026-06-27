@@ -1,5 +1,7 @@
 //! Output formatting utilities for CLI commands.
 
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use serde::Serialize;
 use std::io;
 
@@ -51,8 +53,8 @@ pub fn print_list_table(headers: &[&str], rows: &[Vec<String>]) {
     let mut widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
-            if i < widths.len() {
-                widths[i] = widths[i].max(cell.len());
+            if let Some(width) = widths.get_mut(i) {
+                *width = (*width).max(cell.len());
             }
         }
     }
@@ -62,7 +64,8 @@ pub fn print_list_table(headers: &[&str], rows: &[Vec<String>]) {
         if i > 0 {
             print!("  ");
         }
-        print!("{:width$}", header.to_uppercase(), width = widths[i]);
+        let width = widths.get(i).copied().unwrap_or(0);
+        print!("{:width$}", header.to_uppercase(), width = width);
     }
     println!();
 
@@ -81,8 +84,8 @@ pub fn print_list_table(headers: &[&str], rows: &[Vec<String>]) {
             if i > 0 {
                 print!("  ");
             }
-            if i < widths.len() {
-                print!("{:width$}", cell, width = widths[i]);
+            if let Some(width) = widths.get(i) {
+                print!("{:width$}", cell, width = *width);
             }
         }
         println!();

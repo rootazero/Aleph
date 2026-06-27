@@ -155,7 +155,9 @@ impl AlephClient {
             // Only process as response if we have a valid id
             if !id.is_empty() {
                 let mut pending_guard = pending.write().await;
-                if let Some(req) = pending_guard.remove(&id) {
+                let maybe_req = pending_guard.remove(&id);
+                drop(pending_guard);
+                if let Some(req) = maybe_req {
                     let result = if let Some(error) = response.error {
                         Err(error)
                     } else {
@@ -172,15 +174,13 @@ impl AlephClient {
         // Try to parse as request (from Server)
         if let Ok(request) = serde_json::from_str::<JsonRpcRequest>(text) {
             // Check if this is a request (has non-null id) or notification (no id or null id)
-            let is_request = match &request.id {
-                Some(Value::Null) => false, // null id means notification
-                Some(_) => true,            // non-null id means request
-                None => false,              // no id means notification
+            let id = match &request.id {
+                Some(Value::Null) | None => None, // null/no id means notification
+                Some(id) => Some(id.clone()),     // non-null id means request
             };
 
-            if is_request {
+            if let Some(id) = id {
                 // This is a request from Server that needs a response
-                let id = request.id.clone().unwrap();
                 debug!(method = %request.method, "Received request from Server");
                 Self::handle_server_request(&request, id, write).await;
                 return;
@@ -352,6 +352,7 @@ impl AlephClient {
     pub async fn close(&self) -> CliResult<()> {
         let mut write = self.write.lock().await;
         write.send(Message::Close(None)).await?;
+        drop(write);
         self.connected
             .store(false, std::sync::atomic::Ordering::SeqCst);
         Ok(())

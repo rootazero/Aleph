@@ -118,11 +118,10 @@ impl CommandEntry {
             .children
             .iter()
             .map(|child| {
-                let label = if let Some(ref ph) = child.param_hint {
-                    format!("{} {}", child.name, ph)
-                } else {
-                    child.name.clone()
-                };
+                let label = child.param_hint.as_ref().map_or_else(
+                    || child.name.clone(),
+                    |ph| format!("{} {}", child.name, ph),
+                );
                 DisplayEntry {
                     label,
                     hint: child.hint.clone(),
@@ -225,14 +224,14 @@ mod tests {
         let entries = vec![
             CommandEntry {
                 name: "session".into(),
-                hint: "".into(),
+                hint: String::new(),
                 is_namespace: true,
                 param_hint: None,
                 children: vec![],
             },
             CommandEntry {
                 name: "search".into(),
-                hint: "".into(),
+                hint: String::new(),
                 is_namespace: false,
                 param_hint: None,
                 children: vec![],

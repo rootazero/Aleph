@@ -37,7 +37,7 @@ pub async fn handle_shutdown(request: JsonRpcRequest) -> JsonRpcResponse {
     // Schedule shutdown after response is sent. We use process exit directly
     // rather than libc::kill/SIGTERM so the gateway core stays platform-neutral
     // (architecture redline R1). The binary's own SIGTERM handler does the same.
-    tokio::spawn(async {
+    tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         tracing::info!("Initiating graceful shutdown");
         std::process::exit(0);
@@ -73,7 +73,7 @@ pub async fn handle_logs(request: JsonRpcRequest) -> JsonRpcResponse {
     let log_file = find_latest_log(&log_dir);
 
     match log_file {
-        Some(path) => match std::fs::read_to_string(&path) {
+        Some(path) => match tokio::fs::read_to_string(&path).await {
             Ok(content) => {
                 let mut lines: Vec<&str> = content.lines().collect();
 

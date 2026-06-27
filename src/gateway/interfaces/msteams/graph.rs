@@ -831,7 +831,7 @@ fn encode_uri_component(value: &str) -> String {
             '/' => result.push_str("%2F"),
             _ => {
                 for byte in c.to_string().as_bytes() {
-                    write!(&mut result, "%{byte:02X}").unwrap();
+                    let _ = write!(&mut result, "%{byte:02X}");
                 }
             }
         }

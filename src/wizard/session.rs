@@ -100,7 +100,7 @@ impl WizardSession {
             step_rx: Arc::new(tokio::sync::Mutex::new(step_rx)),
             answers,
             error: Arc::new(RwLock::new(None)),
-            finish_data: finish_data.clone(),
+            finish_data,
             cancel_tx: Arc::new(RwLock::new(Some(cancel_tx))),
         };
 

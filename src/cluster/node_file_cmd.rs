@@ -31,11 +31,12 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 /// 任何最终 canonical 路径必须仍在 workspace 之下（绝对路径越界 → 拒）。
 /// 复用 `file_ops` 的 canonicalize + deny-list，再补一道 containment 闸门
 /// （`check_and_resolve_path` 本身不强制 containment，只用 base 解析相对路径）。
-fn resolve_in_jail(path: &str, workspace_dir: &Path) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(workspace_dir)
+async fn resolve_in_jail(path: &str, workspace_dir: &Path) -> Result<PathBuf, String> {
+    tokio::fs::create_dir_all(workspace_dir)
+        .await
         .map_err(|e| format!("workspace dir unavailable: {e}"))?;
-    let root = workspace_dir
-        .canonicalize()
+    let root = tokio::fs::canonicalize(workspace_dir)
+        .await
         .map_err(|e| format!("workspace root unresolved: {e}"))?;
     let resolved = check_and_resolve_path(Path::new(path), &get_denied_paths(), Some(&root))
         .map_err(|e| format!("path rejected: {e}"))?;
@@ -77,6 +78,13 @@ impl NodeCommand for FileWriteCommand {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        let max_b64_len = MAX_FILE_BYTES * 4 / 3 + 4;
+        if content_b64.len() > max_b64_len {
+            return Err(format!(
+                "file.write: base64 payload exceeds {MAX_FILE_BYTES} byte cap"
+            ));
+        }
+
         let bytes = B64
             .decode(content_b64)
             .map_err(|e| format!("file.write: invalid base64: {e}"))?;
@@ -90,8 +98,12 @@ impl NodeCommand for FileWriteCommand {
             return Err("file.write: sha256 mismatch".to_string());
         }
 
-        let dest = resolve_in_jail(path, &self.workspace_dir)?;
-        if dest.exists() && !overwrite {
+        let dest = resolve_in_jail(path, &self.workspace_dir).await?;
+        if tokio::fs::try_exists(&dest)
+            .await
+            .map_err(|e| format!("file.write: {e}"))?
+            && !overwrite
+        {
             return Err("file.write: target exists (set overwrite)".to_string());
         }
         if let Some(parent) = dest.parent() {
@@ -128,13 +140,13 @@ impl NodeCommand for FileReadCommand {
             .get("path")
             .and_then(|v| v.as_str())
             .ok_or("file.read: missing string field `path`")?;
-        let src = resolve_in_jail(path, &self.workspace_dir)?;
-        if !src.exists() {
+        let src = resolve_in_jail(path, &self.workspace_dir).await?;
+        if !tokio::fs::try_exists(&src).await.map_err(|e| format!("file.read: {e}"))? {
             return Err("file.read: not found".to_string());
         }
         // Compare the raw u64 before any cast: `len() as usize` truncates on a
         // 32-bit node, letting a huge file whose size mod 2^32 is under the cap
-        // pass the check and then OOM in std::fs::read below.
+        // pass the check and then OOM in tokio::fs::read below.
         let size = tokio::fs::metadata(&src).await
             .map_err(|e| format!("file.read: {e}"))?
             .len();
@@ -144,6 +156,12 @@ impl NodeCommand for FileReadCommand {
             ));
         }
         let bytes = tokio::fs::read(&src).await.map_err(|e| format!("file.read: {e}"))?;
+        if bytes.len() > MAX_FILE_BYTES {
+            return Err(format!(
+                "file.read: {} bytes exceeds {MAX_FILE_BYTES} cap",
+                bytes.len()
+            ));
+        }
         Ok(json!({
             "content_b64": B64.encode(&bytes),
             "sha256": sha256_hex(&bytes),

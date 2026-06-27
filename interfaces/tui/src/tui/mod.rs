@@ -39,6 +39,10 @@ use slash::{LocalCommand, ParsedInput, ToolProgressMode};
 ///
 /// Sets up the terminal, spawns the event collector, and runs the main loop
 /// until the user quits. Terminal is always restored on exit (including panics).
+///
+/// # Errors
+///
+/// Returns an error if terminal setup, the gateway handshake, or the main loop fails.
 pub async fn run(
     client: AlephClient,
     mut gateway_events: mpsc::Receiver<StreamEvent>,
@@ -155,7 +159,7 @@ async fn main_loop(
         // Wait for next event
         let action = tokio::select! {
             Some(te) = term_events.recv() => {
-                handle_terminal_event(state, textarea, te)
+                handle_terminal_event(state, textarea, &te)
             }
             Some(ge) = gateway_events.recv() => {
                 state.handle_gateway_event(ge)
@@ -351,9 +355,9 @@ async fn main_loop(
 fn handle_terminal_event(
     state: &mut AppState,
     textarea: &mut TextArea,
-    event: event::TermEvent,
+    event: &event::TermEvent,
 ) -> Action {
-    match event {
+    match *event {
         event::TermEvent::Key(key) => handle_key_event(state, textarea, key),
         event::TermEvent::Resize => {
             // Terminal resize is handled automatically by ratatui
@@ -473,72 +477,79 @@ fn handle_input_key(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
 
         // Up arrow: browse history or focus chat
         KeyCode::Up => {
-            // If the textarea has only one line and it's empty (or matches history),
-            // browse input history
             let lines = textarea.lines();
-            if lines.len() <= 1 {
-                let current_text = lines.first().map_or("", std::string::String::as_str);
-
-                if state.send_history.is_empty() {
-                    return Action::FocusChat;
-                }
-
-                let next_index = match state.history_index {
-                    None => {
-                        if current_text.is_empty() {
-                            Some(state.send_history.len() - 1)
-                        } else {
-                            return Action::FocusChat;
-                        }
-                    }
-                    Some(idx) => {
-                        if idx > 0 {
-                            Some(idx - 1)
-                        } else {
-                            Some(0)
-                        }
-                    }
-                };
-
-                if let Some(idx) = next_index {
-                    state.history_index = Some(idx);
-                    let history_text = state.send_history[idx].clone();
-                    textarea.select_all();
-                    textarea.delete_char();
-                    textarea.insert_str(&history_text);
-                }
-
-                Action::None
-            } else {
+            if lines.len() > 1 {
                 // Multi-line: let textarea handle cursor movement
                 textarea.input(Input::from(crossterm::event::Event::Key(key)));
-                Action::None
+                return Action::None;
             }
+
+            // Single-line: browse input history
+            let current_text = lines.first().map_or("", std::string::String::as_str);
+
+            if state.send_history.is_empty() {
+                return Action::FocusChat;
+            }
+
+            let next_index = match state.history_index {
+                None => {
+                    if current_text.is_empty() {
+                        Some(state.send_history.len() - 1)
+                    } else {
+                        return Action::FocusChat;
+                    }
+                }
+                Some(idx) => {
+                    if idx > 0 {
+                        Some(idx - 1)
+                    } else {
+                        Some(0)
+                    }
+                }
+            };
+
+            if let Some(idx) = next_index {
+                state.history_index = Some(idx);
+                let history_text = state
+                    .send_history
+                    .get(idx)
+                    .cloned()
+                    .expect("history index was just validated");
+                textarea.select_all();
+                textarea.delete_char();
+                textarea.insert_str(&history_text);
+            }
+
+            Action::None
         }
 
         // Down arrow: browse history forward
         KeyCode::Down => {
             let lines = textarea.lines();
-            if lines.len() <= 1 {
-                if let Some(idx) = state.history_index {
-                    if idx + 1 < state.send_history.len() {
-                        state.history_index = Some(idx + 1);
-                        let history_text = state.send_history[idx + 1].clone();
-                        textarea.select_all();
-                        textarea.delete_char();
-                        textarea.insert_str(&history_text);
-                    } else {
-                        // Past the end of history, clear
-                        state.history_index = None;
-                        textarea.select_all();
-                        textarea.delete_char();
-                    }
-                }
-                Action::None
-            } else {
+            if lines.len() > 1 {
                 textarea.input(Input::from(crossterm::event::Event::Key(key)));
-                Action::None
+                return Action::None;
             }
+
+            if let Some(idx) = state.history_index {
+                if idx + 1 < state.send_history.len() {
+                    state.history_index = Some(idx + 1);
+                    let history_text = state
+                        .send_history
+                        .get(idx + 1)
+                        .cloned()
+                        .expect("history index was just validated");
+                    textarea.select_all();
+                    textarea.delete_char();
+                    textarea.insert_str(&history_text);
+                } else {
+                    // Past the end of history, clear
+                    state.history_index = None;
+                    textarea.select_all();
+                    textarea.delete_char();
+                }
+            }
+            Action::None
         }
 
         // Tab: cycle focus
@@ -716,19 +727,15 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
             Action::None
         }
         KeyCode::Enter => {
-            if let Some(dialog) = &state.dialog {
-                if let Some(choice) = dialog.options.get(dialog.selected) {
-                    let run_id = dialog.run_id.clone();
-                    Action::RespondToDialog {
-                        run_id,
-                        choice: choice.clone(),
-                    }
-                } else {
-                    Action::None
+            let Some(dialog) = &state.dialog else {
+                return Action::None;
+            };
+            dialog.options.get(dialog.selected).map_or(Action::None, |choice| {
+                Action::RespondToDialog {
+                    run_id: dialog.run_id.clone(),
+                    choice: choice.clone(),
                 }
-            } else {
-                Action::None
-            }
+            })
         }
         _ => Action::None,
     }
@@ -741,7 +748,7 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
 /// Execute a local slash command (TUI-only, no Gateway RPC needed).
 async fn execute_local_command(
     state: &mut AppState,
-    textarea: &mut TextArea<'_>,
+    textarea: &TextArea<'_>,
     client: &AlephClient,
     cmd: LocalCommand,
 ) {
@@ -777,7 +784,7 @@ async fn execute_local_command(
                 .call::<_, AgentTraceReplay>("trace.get", Some(params))
                 .await
             {
-                Ok(replay) => state.load_trace_replay(replay),
+                Ok(replay) => state.load_trace_replay(&replay),
                 Err(e) => state.add_system_message(format!("Replay load error: {e}")),
             }
         }
@@ -1110,14 +1117,14 @@ fn build_help_text(state: &AppState) -> String {
 /// Gracefully degrades to empty list if the Gateway doesn't support commands.list.
 /// Parses tree-structured command responses with namespace support.
 async fn fetch_gateway_commands(client: &AlephClient) -> Vec<command_tree::CommandEntry> {
-    match client
+    client
         .call::<_, Value>("commands.list", Some(json!({"interface": "tui"})))
         .await
-    {
-        Ok(result) => command_tree::CommandEntry::parse_from_json(&result),
-        Err(_) => {
-            // Old Gateway or connection issue — graceful degradation
-            Vec::new()
-        }
-    }
+        .map_or_else(
+            |_| {
+                // Old Gateway or connection issue — graceful degradation
+                Vec::new()
+            },
+            |result| command_tree::CommandEntry::parse_from_json(&result),
+        )
 }

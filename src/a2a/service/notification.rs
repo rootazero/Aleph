@@ -7,7 +7,7 @@ use crate::a2a::port::A2AResult;
 use crate::sync_primitives::AsyncRwLock;
 
 /// Configuration for push notifications on a task
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PushNotificationConfig {
     pub task_id: String,
@@ -16,6 +16,17 @@ pub struct PushNotificationConfig {
     pub token: Option<String>,
     #[serde(default)]
     pub events: Vec<String>, // "status-update", "artifact-update"
+}
+
+impl std::fmt::Debug for PushNotificationConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PushNotificationConfig")
+            .field("task_id", &self.task_id)
+            .field("url", &self.url)
+            .field("token", &self.token.as_deref().map(|_| "[REDACTED]"))
+            .field("events", &self.events)
+            .finish()
+    }
 }
 
 /// Push notification service — manages webhook configs and fires notifications
@@ -78,7 +89,7 @@ impl NotificationService {
         };
 
         if let Some(config) = config {
-            if config.events.is_empty() || config.events.contains(&"status-update".to_string()) {
+            if config.events.is_empty() || config.events.iter().any(|e| e == "status-update") {
                 self.send_webhook(
                     &config,
                     &serde_json::json!({
@@ -99,7 +110,7 @@ impl NotificationService {
         };
 
         if let Some(config) = config {
-            if config.events.is_empty() || config.events.contains(&"artifact-update".to_string()) {
+            if config.events.is_empty() || config.events.iter().any(|e| e == "artifact-update") {
                 self.send_webhook(
                     &config,
                     &serde_json::json!({

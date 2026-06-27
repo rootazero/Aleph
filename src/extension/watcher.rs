@@ -199,12 +199,10 @@ impl ExtensionWatcher {
                 match result {
                     Ok(events) => {
                         // Collect all changed paths
-                        let changed_paths: Vec<PathBuf> = events
+                        let changed_paths: HashSet<PathBuf> = events
                             .iter()
                             .flat_map(|e| e.paths.iter().cloned())
                             .filter(|p| Self::should_watch_file(p))
-                            .collect::<HashSet<_>>()
-                            .into_iter()
                             .collect();
 
                         if changed_paths.is_empty() {
@@ -230,6 +228,8 @@ impl ExtensionWatcher {
                         };
 
                         debug!(?changed_paths, ?change_type, "Extension files changed");
+
+                        let changed_paths: Vec<PathBuf> = changed_paths.into_iter().collect();
 
                         callback(ExtensionChangeEvent {
                             changed_paths,

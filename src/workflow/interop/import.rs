@@ -456,7 +456,10 @@ fn read_clarify_choices(chars: &[char], start: usize) -> Vec<String> {
                 None => break,
             },
             // Identifier / expression element → dynamic menu, abstain entirely.
-            _ => return Vec::new(),
+            _ => {
+                out.clear();
+                return out;
+            }
         }
     }
     out

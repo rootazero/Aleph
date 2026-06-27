@@ -933,7 +933,8 @@ impl OsSandboxDriverTrait for SeatbeltDriver {
         let profile_file = tempfile::NamedTempFile::new().map_err(|e| {
             SandboxError::Io(format!("failed to create temp file for profile: {e}"))
         })?;
-        std::fs::write(profile_file.path(), &profile.contents)
+        tokio::fs::write(profile_file.path(), &profile.contents)
+            .await
             .map_err(|e| SandboxError::Io(format!("failed to write profile: {e}")))?;
 
         debug!(

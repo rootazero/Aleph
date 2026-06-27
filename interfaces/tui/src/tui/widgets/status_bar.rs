@@ -88,7 +88,7 @@ mod tests {
         assert_eq!(format_tokens(1000), "1.0k tok");
         assert_eq!(format_tokens(1234), "1.2k tok");
         assert_eq!(format_tokens(3200), "3.2k tok");
-        assert_eq!(format_tokens(999999), "1000.0k tok");
+        assert_eq!(format_tokens(999_999), "1000.0k tok");
     }
 
     #[test]

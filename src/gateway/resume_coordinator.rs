@@ -212,9 +212,9 @@ impl ResumeCoordinator {
     ) {
         // The dangling RunStarted is the last marker (classify_markers
         // guarantees `markers` is non-empty here).
-        let last = markers
-            .last()
-            .expect("Interrupted verdict implies non-empty markers");
+        let Some(last) = markers.last() else {
+            return;
+        };
 
         // Recency filter — abandon runs interrupted too long ago.
         let age_ms = now_ms().saturating_sub(last.created_at_ms);

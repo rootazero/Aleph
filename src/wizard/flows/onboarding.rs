@@ -153,20 +153,8 @@ impl OnboardingFlow {
                 .with_hint("macOS (local) or BlueBubbles (any OS)"),
         ]
     }
-}
 
-impl Default for OnboardingFlow {
-    fn default() -> Self {
-        Self
-    }
-}
-
-#[async_trait]
-impl WizardFlow for OnboardingFlow {
-    async fn run(&self, prompter: &RpcPrompter) -> Result<(), WizardSessionError> {
-        let mut data = OnboardingData::default();
-
-        // ===== Stage 1: Welcome =====
+    async fn welcome(prompter: &RpcPrompter) -> Result<(), WizardSessionError> {
         prompter.intro("Welcome to Aleph").await?;
         prompter
             .note(
@@ -179,8 +167,13 @@ impl WizardFlow for OnboardingFlow {
                 Some("About this wizard"),
             )
             .await?;
+        Ok(())
+    }
 
-        // ===== Stage 2: Provider Selection =====
+    async fn configure_primary(
+        prompter: &RpcPrompter,
+        data: &mut OnboardingData,
+    ) -> Result<(), WizardSessionError> {
         let primary_provider: String = prompter
             .select(
                 "Which AI provider would you like to use?",
@@ -189,7 +182,6 @@ impl WizardFlow for OnboardingFlow {
             .await?;
         data.primary_provider = Some(primary_provider.clone());
 
-        // ===== Stage 3: Credentials Input =====
         if primary_provider != "ollama" {
             let api_key = prompter
                 .text(
@@ -209,7 +201,6 @@ impl WizardFlow for OnboardingFlow {
                 .await?;
         }
 
-        // ===== Stage 4: Primary Model =====
         let primary_model: String = prompter
             .select(
                 "Select your primary model:",
@@ -217,8 +208,13 @@ impl WizardFlow for OnboardingFlow {
             )
             .await?;
         data.primary_model = Some(primary_model);
+        Ok(())
+    }
 
-        // ===== Stage 5: Secondary Model (Optional) =====
+    async fn configure_secondary(
+        prompter: &RpcPrompter,
+        data: &mut OnboardingData,
+    ) -> Result<(), WizardSessionError> {
         let wants_secondary = prompter
             .confirm(
                 "Would you like to configure a secondary model for failover?",
@@ -226,30 +222,22 @@ impl WizardFlow for OnboardingFlow {
             )
             .await?;
 
-        if wants_secondary {
-            let secondary_provider: String = prompter
-                .select("Select secondary provider:", Self::provider_options())
-                .await?;
-            data.secondary_provider = Some(secondary_provider.clone());
+        if !wants_secondary {
+            return Ok(());
+        }
 
-            if secondary_provider != "ollama" {
-                let api_key = if secondary_provider == primary_provider {
-                    let use_same = prompter
-                        .confirm("Use the same API key as the primary provider?", true)
-                        .await?;
-                    if use_same {
-                        data.primary_api_key.clone()
-                    } else {
-                        Some(
-                            prompter
-                                .text(
-                                    &format!("Enter your {secondary_provider} API key:"),
-                                    Some("sk-..."),
-                                    true,
-                                )
-                                .await?,
-                        )
-                    }
+        let secondary_provider: String = prompter
+            .select("Select secondary provider:", Self::provider_options())
+            .await?;
+        data.secondary_provider = Some(secondary_provider.clone());
+
+        if secondary_provider != "ollama" {
+            let api_key = if Some(&secondary_provider) == data.primary_provider.as_ref() {
+                let use_same = prompter
+                    .confirm("Use the same API key as the primary provider?", true)
+                    .await?;
+                if use_same {
+                    data.primary_api_key.clone()
                 } else {
                     Some(
                         prompter
@@ -260,26 +248,46 @@ impl WizardFlow for OnboardingFlow {
                             )
                             .await?,
                     )
-                };
-                data.secondary_api_key = api_key;
-            }
-
-            let secondary_model: String = prompter
-                .select(
-                    "Select secondary model:",
-                    Self::model_options(&secondary_provider),
+                }
+            } else {
+                Some(
+                    prompter
+                        .text(
+                            &format!("Enter your {secondary_provider} API key:"),
+                            Some("sk-..."),
+                            true,
+                        )
+                        .await?,
                 )
-                .await?;
-            data.secondary_model = Some(secondary_model);
+            };
+            data.secondary_api_key = api_key;
         }
 
-        // ===== Stage 6: Thinking Level =====
+        let secondary_model: String = prompter
+            .select(
+                "Select secondary model:",
+                Self::model_options(&secondary_provider),
+            )
+            .await?;
+        data.secondary_model = Some(secondary_model);
+        Ok(())
+    }
+
+    async fn configure_thinking(
+        prompter: &RpcPrompter,
+        data: &mut OnboardingData,
+    ) -> Result<(), WizardSessionError> {
         let thinking: String = prompter
             .select("Choose the AI thinking level:", Self::thinking_options())
             .await?;
         data.thinking_level = Some(thinking);
+        Ok(())
+    }
 
-        // ===== Stage 7: Messaging Apps =====
+    async fn configure_messaging(
+        prompter: &RpcPrompter,
+        data: &mut OnboardingData,
+    ) -> Result<(), WizardSessionError> {
         let apps: Vec<String> = prompter
             .multi_select(
                 "Which messaging apps would you like to connect? (Optional)",
@@ -287,8 +295,13 @@ impl WizardFlow for OnboardingFlow {
             )
             .await?;
         data.messaging_apps = apps;
+        Ok(())
+    }
 
-        // ===== Stage 8: Review =====
+    async fn review_and_finalize(
+        prompter: &RpcPrompter,
+        data: &OnboardingData,
+    ) -> Result<(), WizardSessionError> {
         let review_text = format!(
             "Configuration Summary:\n\n\
              Primary Provider: {}\n\
@@ -317,26 +330,44 @@ impl WizardFlow for OnboardingFlow {
 
         prompter.note(&review_text, Some("Review")).await?;
 
-        // ===== Stage 9: Finalize =====
         let confirmed = prompter.confirm("Apply this configuration?", true).await?;
 
         if !confirmed {
             return Err(WizardSessionError::Cancelled);
         }
 
-        // Apply configuration (in real implementation, save to config file)
         let progress = prompter.progress("Applying configuration");
         progress.update("Validating API keys...");
-        // Simulate validation delay
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         progress.update("Saving configuration...");
         tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
         progress.finish("Configuration saved");
 
-        // ===== Stage 10: Complete =====
         prompter
             .outro("Aleph is ready! Run 'aleph chat' to start.")
             .await?;
+
+        Ok(())
+    }
+}
+
+impl Default for OnboardingFlow {
+    fn default() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl WizardFlow for OnboardingFlow {
+    async fn run(&self, prompter: &RpcPrompter) -> Result<(), WizardSessionError> {
+        let mut data = OnboardingData::default();
+
+        Self::welcome(prompter).await?;
+        Self::configure_primary(prompter, &mut data).await?;
+        Self::configure_secondary(prompter, &mut data).await?;
+        Self::configure_thinking(prompter, &mut data).await?;
+        Self::configure_messaging(prompter, &mut data).await?;
+        Self::review_and_finalize(prompter, &data).await?;
 
         Ok(())
     }

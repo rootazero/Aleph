@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn create_default() {
-        let _m = LinuxMedia;
+        LinuxMedia;
     }
 
     #[test]

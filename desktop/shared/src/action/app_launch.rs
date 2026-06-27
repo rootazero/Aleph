@@ -196,7 +196,7 @@ fn windows_quit_app(app_name: &str) -> Result<()> {
                 return BOOL(1);
             }
             let mut pid: u32 = 0;
-            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            GetWindowThreadProcessId(hwnd, Some(std::ptr::addr_of_mut!(pid)));
             if pid == 0 {
                 return BOOL(1);
             }
@@ -204,12 +204,12 @@ fn windows_quit_app(app_name: &str) -> Result<()> {
                 return BOOL(1);
             };
             let mut buf = [0u16; 512];
-            let mut size = buf.len() as u32;
+            let mut size = 512u32;
             let exe = if QueryFullProcessImageNameW(
                 handle,
                 PROCESS_NAME_WIN32,
                 windows::core::PWSTR(buf.as_mut_ptr()),
-                &mut size,
+                std::ptr::addr_of_mut!(size),
             )
             .is_ok()
             {
@@ -237,7 +237,7 @@ fn windows_quit_app(app_name: &str) -> Result<()> {
     unsafe {
         let _ = EnumWindows(
             Some(enum_proc),
-            LPARAM(&mut state as *mut EnumState as isize),
+            LPARAM(std::ptr::addr_of_mut!(state) as isize),
         );
     }
 

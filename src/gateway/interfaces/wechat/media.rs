@@ -27,7 +27,9 @@ pub fn aes128_ecb_decrypt(ciphertext: &[u8], key: &[u8; 16]) -> Result<Vec<u8>, 
 
     let mut plaintext = vec![0u8; ciphertext.len()];
     for (i, chunk) in ciphertext.chunks_exact(AES_BLOCK_SIZE).enumerate() {
-        let mut block: Array<u8, U16> = chunk.try_into().unwrap();
+        let mut block: Array<u8, U16> = chunk
+            .try_into()
+            .map_err(|e| format!("invalid AES block: {e}"))?;
         cipher.decrypt_block(&mut block);
         plaintext[i * AES_BLOCK_SIZE..(i + 1) * AES_BLOCK_SIZE].copy_from_slice(&block);
     }

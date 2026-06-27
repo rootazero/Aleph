@@ -38,21 +38,27 @@ impl ArenaManager {
         &mut self,
         manifest: ArenaManifest,
     ) -> Result<(ArenaId, HashMap<AgentId, ArenaHandle>), String> {
-        let mut arena = SharedArena::new(manifest.clone());
+        let participants: Vec<_> = manifest
+            .participants
+            .iter()
+            .map(|p| (p.agent_id.clone(), p.role, p.permissions.clone()))
+            .collect();
+
+        let mut arena = SharedArena::new(manifest);
         arena.activate()?;
 
         let arena_id = arena.id().clone();
         let shared = Arc::new(RwLock::new(arena));
 
         let mut handles = HashMap::new();
-        for participant in &manifest.participants {
+        for (agent_id, role, permissions) in participants {
             let handle = ArenaHandle::new(
                 Arc::clone(&shared),
-                participant.agent_id.clone(),
-                participant.role,
-                participant.permissions.clone(),
+                agent_id.clone(),
+                role,
+                permissions,
             );
-            handles.insert(participant.agent_id.clone(), handle);
+            handles.insert(agent_id, handle);
         }
 
         self.arenas.insert(arena_id.clone(), shared);

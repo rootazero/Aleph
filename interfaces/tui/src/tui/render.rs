@@ -28,15 +28,19 @@ pub fn render(frame: &mut Frame, state: &AppState, textarea: &TextArea) {
     ])
     .split(frame.area());
 
+    let chat_area = chunks.get(0).copied().expect("vertical layout must produce three areas");
+    let input_area = chunks.get(1).copied().expect("vertical layout must produce three areas");
+    let status_area = chunks.get(2).copied().expect("vertical layout must produce three areas");
+
     // Chat area
-    render_chat_area(frame, state, chunks[0]);
+    render_chat_area(frame, state, chat_area);
 
     // Input area
     let input_widget = InputWidget {
         textarea,
         focused: state.focus == Focus::Input,
     };
-    input_widget.render(frame, chunks[1]);
+    input_widget.render(frame, input_area);
 
     // Status bar
     let status = StatusBar {
@@ -46,11 +50,11 @@ pub fn render(frame: &mut Frame, state: &AppState, textarea: &TextArea) {
         is_connected: state.is_connected,
         tool_progress_mode: state.tool_progress_mode,
     };
-    status.render(frame, chunks[2]);
+    status.render(frame, status_area);
 
     // Overlays (rendered last, on top)
     if let Some(palette) = &state.palette {
-        render_command_palette(frame, palette, chunks[1]);
+        render_command_palette(frame, palette, input_area);
     }
     if let Some(dialog) = &state.dialog {
         render_dialog(frame, dialog, frame.area());

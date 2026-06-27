@@ -141,14 +141,14 @@ impl GeminiProtocol {
                         _ => {
                             let output = content
                                 .iter()
-                                .map(|b| match b {
+                                .filter_map(|b| match b {
                                     crate::providers::message::ContentBlock::Text {
                                         text, ..
-                                    } => text.clone(),
+                                    } => Some(text.clone()),
                                     crate::providers::message::ContentBlock::Json { value } => {
-                                        serde_json::to_string(value).unwrap_or_default()
+                                        Some(serde_json::to_string(value).unwrap_or_default())
                                     }
-                                    _ => String::new(),
+                                    _ => None,
                                 })
                                 .collect::<Vec<_>>()
                                 .join("\n");

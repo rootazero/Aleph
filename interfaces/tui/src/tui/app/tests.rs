@@ -10,7 +10,7 @@ fn new_state_has_welcome_message() {
             assert!(content.contains("test-session"));
             assert!(content.contains("claude-3"));
         }
-        other => panic!("Expected System message, got: {:?}", other),
+        other => panic!("Expected System message, got: {other:?}"),
     }
     assert!(state.auto_scroll);
     assert_eq!(state.focus, Focus::Input);
@@ -102,7 +102,7 @@ fn add_user_message_appended() {
     assert_eq!(state.messages.len(), 2);
     match &state.messages[1] {
         ChatMessage::User { content, .. } => assert_eq!(content, "hello"),
-        other => panic!("Expected User message, got: {:?}", other),
+        other => panic!("Expected User message, got: {other:?}"),
     }
 }
 
@@ -186,13 +186,13 @@ fn switch_session_clears_messages() {
     state.add_user_message("hello".into());
     assert_eq!(state.messages.len(), 2);
 
-    state.switch_session("s2".into());
+    state.switch_session("s2");
     assert_eq!(state.session_key, "s2");
     // Should have 1 message: the switch notification
     assert_eq!(state.messages.len(), 1);
     match &state.messages[0] {
         ChatMessage::System { content } => assert!(content.contains("s2")),
-        other => panic!("Expected System message, got: {:?}", other),
+        other => panic!("Expected System message, got: {other:?}"),
     }
 }
 
@@ -208,7 +208,7 @@ fn clear_screen_keeps_session() {
     assert_eq!(state.messages.len(), 1);
     match &state.messages[0] {
         ChatMessage::System { content } => assert!(content.contains("cleared")),
-        other => panic!("Expected System message, got: {:?}", other),
+        other => panic!("Expected System message, got: {other:?}"),
     }
 }
 
@@ -281,7 +281,7 @@ fn handle_response_chunk_appends_content() {
         ChatMessage::Assistant { content, .. } => {
             assert_eq!(content, "Hello World");
         }
-        other => panic!("Expected Assistant message, got: {:?}", other),
+        other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }
 
@@ -321,7 +321,7 @@ fn handle_agent_trace_text_events_populate_assistant_content_and_reasoning() {
             assert_eq!(content, "Replay loaded");
             assert_eq!(reasoning.as_deref(), Some("Inspecting replay trace"));
         }
-        other => panic!("Expected Assistant message, got: {:?}", other),
+        other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }
 
@@ -366,7 +366,7 @@ fn handle_agent_trace_session_completed_updates_totals_and_closes_stream() {
     assert!(!state.current_run_uses_agent_trace);
     match &state.messages[1] {
         ChatMessage::Assistant { is_streaming, .. } => assert!(!is_streaming),
-        other => panic!("Expected Assistant message, got: {:?}", other),
+        other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }
 
@@ -418,7 +418,7 @@ fn handle_agent_trace_decision_events_append_shared_projection_reasoning() {
                 )
             );
         }
-        other => panic!("Expected Assistant message, got: {:?}", other),
+        other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }
 
@@ -426,7 +426,7 @@ fn handle_agent_trace_decision_events_append_shared_projection_reasoning() {
 fn load_trace_replay_records_session_summary_in_reasoning() {
     let mut state = AppState::new("s".into(), "m".into());
 
-    state.load_trace_replay(AgentTraceReplay {
+    let replay = AgentTraceReplay {
         task: aleph_protocol::AgentTraceTaskSummary {
             task_id: "task-1".into(),
             session_id: "session-1".into(),
@@ -461,7 +461,8 @@ fn load_trace_replay_records_session_summary_in_reasoning() {
                 },
             },
         ],
-    });
+    };
+    state.load_trace_replay(&replay);
 
     match &state.messages[1] {
         ChatMessage::Assistant {
@@ -473,7 +474,7 @@ fn load_trace_replay_records_session_summary_in_reasoning() {
                 Some("Turn started (iteration 1)\nSession completed (completed) — iterations: 1, tools: 0, tokens: 33 — done")
             );
         }
-        other => panic!("Expected Assistant message, got: {:?}", other),
+        other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }
 
@@ -593,7 +594,7 @@ fn handle_agent_trace_tool_lifecycle_takes_precedence() {
             assert_eq!(tools[0].duration, Some(Duration::from_millis(120)));
             assert_eq!(reasoning.as_deref(), Some("Listed the current directory"));
         }
-        other => panic!("Expected Assistant message, got: {:?}", other),
+        other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }
 
@@ -621,12 +622,12 @@ fn handle_run_complete_clears_run() {
 
     assert!(state.current_run.is_none());
     assert_eq!(state.total_tokens, 500);
-    assert_eq!(state.last_run_duration, Some(Duration::from_millis(5000)));
+    assert_eq!(state.last_run_duration, Some(Duration::from_secs(5)));
 
     // Assistant message should no longer be streaming
     match &state.messages.last().unwrap() {
         ChatMessage::Assistant { is_streaming, .. } => assert!(!is_streaming),
-        other => panic!("Expected Assistant message, got: {:?}", other),
+        other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }
 
@@ -691,7 +692,7 @@ fn handle_run_error_adds_system_message() {
         ChatMessage::System { content } => {
             assert!(content.contains("something went wrong"));
         }
-        other => panic!("Expected System message, got: {:?}", other),
+        other => panic!("Expected System message, got: {other:?}"),
     }
 }
 
@@ -736,6 +737,6 @@ fn handle_reasoning_appends() {
         ChatMessage::Assistant { reasoning, .. } => {
             assert_eq!(reasoning.as_deref(), Some("Let me think about this..."));
         }
-        other => panic!("Expected Assistant message, got: {:?}", other),
+        other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }

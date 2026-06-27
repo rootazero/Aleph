@@ -16,7 +16,7 @@ use crate::tui::theme::DEFAULT_THEME;
 pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
     // Calculate dialog dimensions
     let dialog_width = area.width.clamp(20, 50);
-    let option_count = dialog.options.len() as u16;
+    let option_count = u16::try_from(dialog.options.len()).unwrap_or(u16::MAX);
     // Height: 2 borders + 1 blank + question lines (estimate 2) + 1 blank + options + 1 hint
     let dialog_height = (option_count.saturating_add(7)).min(area.height);
 
@@ -48,13 +48,17 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
     ])
     .split(inner);
 
+    let question_area = chunks.get(1).copied().expect("dialog layout has question area");
+    let options_area = chunks.get(3).copied().expect("dialog layout has options area");
+    let hint_area = chunks.get(4).copied().expect("dialog layout has hint area");
+
     // Render question
     let question = Paragraph::new(Line::from(Span::styled(
         dialog.question.clone(),
         Style::default().fg(DEFAULT_THEME.primary),
     )))
     .wrap(Wrap { trim: true });
-    frame.render_widget(question, chunks[1]);
+    frame.render_widget(question, question_area);
 
     // Render options
     let option_lines: Vec<Line> = dialog
@@ -75,14 +79,14 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
         .collect();
 
     let options_widget = Paragraph::new(option_lines);
-    frame.render_widget(options_widget, chunks[3]);
+    frame.render_widget(options_widget, options_area);
 
     // Render hint
     let hint = Paragraph::new(Line::from(Span::styled(
         "Press number key to select, Enter to confirm".to_string(),
         Style::default().fg(DEFAULT_THEME.muted),
     )));
-    frame.render_widget(hint, chunks[4]);
+    frame.render_widget(hint, hint_area);
 }
 
 /// Calculate a centered rect within the given area.

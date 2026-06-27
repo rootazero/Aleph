@@ -144,7 +144,9 @@ impl ApprovalRequester for OperatorApprovalRequester {
                 session_key: session_key_str,
             },
         };
-        let _ = self.event_bus.publish_frame(&frame);
+        if let Err(e) = self.event_bus.publish_frame(&frame) {
+            tracing::warn!(error = %e, "failed to publish final approval event for config approval");
+        }
 
         decision_to_outcome(decision)
     }

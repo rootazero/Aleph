@@ -104,6 +104,7 @@ pub struct CommandNode {
 
 impl CommandNode {
     /// Create a new command node with source type (flat namespace mode)
+    #[must_use]
     pub fn new_with_source(
         key: impl Into<String>,
         description: impl Into<String>,
@@ -122,18 +123,21 @@ impl CommandNode {
     }
 
     /// Builder: set icon
+    #[must_use]
     pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
         self.icon = icon.into();
         self
     }
 
     /// Builder: set hint
+    #[must_use]
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
         self
     }
 
     /// Builder: set `source_id`
+    #[must_use]
     pub fn with_source_id(mut self, source_id: impl Into<String>) -> Self {
         self.source_id = Some(source_id.into());
         self

@@ -104,7 +104,8 @@ pub fn verify_signature(
 /// Sign a token with HMAC-SHA256
 #[must_use]
 pub fn hmac_sign(secret: &[u8], token: &str) -> String {
-    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(secret)
+        .unwrap_or_else(|_| unreachable!("HMAC accepts any key length"));
     mac.update(token.as_bytes());
     hex::encode(mac.finalize().into_bytes())
 }

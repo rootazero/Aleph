@@ -127,12 +127,12 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
             } => {
                 let output = content
                     .iter()
-                    .map(|b| match b {
-                        ContentBlock::Text { text, .. } => text.clone(),
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text, .. } => Some(text.clone()),
                         ContentBlock::Json { value } => {
-                            serde_json::to_string(value).unwrap_or_default()
+                            Some(serde_json::to_string(value).unwrap_or_default())
                         }
-                        _ => String::new(),
+                        _ => None,
                     })
                     .collect::<Vec<_>>()
                     .join("\n");

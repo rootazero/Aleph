@@ -130,7 +130,7 @@ pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
 
     let disabled_marker = plugin_path.join(".disabled");
     if disabled_marker.exists() {
-        if let Err(e) = std::fs::remove_file(&disabled_marker) {
+        if let Err(e) = tokio::fs::remove_file(&disabled_marker).await {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -181,7 +181,7 @@ pub async fn handle_disable(request: JsonRpcRequest) -> JsonRpcResponse {
 
     let disabled_marker = plugin_path.join(".disabled");
     if !disabled_marker.exists() {
-        if let Err(e) = std::fs::write(&disabled_marker, "") {
+        if let Err(e) = tokio::fs::write(&disabled_marker, "").await {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,

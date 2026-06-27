@@ -18,11 +18,13 @@ use crate::tools::AlephTool;
 // =============================================================================
 
 /// Shared `ClawHubTool` — also exposes the inner `ClawHubClient` for direct use.
-fn get_tool() -> &'static ClawHubTool {
-    static TOOL: OnceLock<ClawHubTool> = OnceLock::new();
+fn get_tool() -> Result<&'static ClawHubTool, String> {
+    static TOOL: OnceLock<Result<ClawHubTool, String>> = OnceLock::new();
     TOOL.get_or_init(|| {
-        ClawHubTool::new().expect("ClawHubTool::new() should not fail with standard config")
+        ClawHubTool::new().map_err(|e| format!("ClawHubTool initialization failed: {e}"))
     })
+    .as_ref()
+    .map_err(String::clone)
 }
 
 // =============================================================================
@@ -47,7 +49,11 @@ pub async fn handle_search(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => return e,
     };
 
-    match get_tool()
+    let tool = match get_tool() {
+        Ok(t) => t,
+        Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
+    };
+    match tool
         .client()
         .search(&params.query, params.limit)
         .await
@@ -94,7 +100,11 @@ pub async fn handle_browse(request: JsonRpcRequest) -> JsonRpcResponse {
         None => SortOrder::Downloads,
     };
 
-    match get_tool()
+    let tool = match get_tool() {
+        Ok(t) => t,
+        Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
+    };
+    match tool
         .client()
         .browse(sort, params.limit, params.cursor.as_deref())
         .await
@@ -131,7 +141,11 @@ pub async fn handle_detail(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => return e,
     };
 
-    match get_tool().client().get_skill(&params.slug).await {
+    let tool = match get_tool() {
+        Ok(t) => t,
+        Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
+    };
+    match tool.client().get_skill(&params.slug).await {
         Ok(skill) => JsonRpcResponse::success(request.id, json!({ "skill": skill })),
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -169,7 +183,11 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
         version: params.version,
     };
 
-    match get_tool().call(args).await {
+    let tool = match get_tool() {
+        Ok(t) => t,
+        Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
+    };
+    match tool.call(args).await {
         Ok(output) => JsonRpcResponse::success(
             request.id,
             json!({

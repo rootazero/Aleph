@@ -1009,7 +1009,11 @@ pub(crate) fn canonical_json_string(value: &Value) -> String {
             other => other.clone(),
         }
     }
-    serde_json::to_string(&canon(value)).expect("canonical JSON serialization should never fail")
+    // serde_json::to_string on a serde_json::Value is infallible for all
+    // values produced by the harness (non-finite floats are the only failure
+    // mode and do not occur in tool args/results). The empty fallback is
+    // defensive and is never exercised in practice.
+    serde_json::to_string(&canon(value)).unwrap_or_default()
 }
 
 /// Find the most recent `TurnStarted` id; generate a fresh one if none exists.

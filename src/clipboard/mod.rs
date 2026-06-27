@@ -1,10 +1,10 @@
+//! Image types for AI provider integration
+//!
+//! NOTE: Clipboard operations are now handled by Swift `ClipboardManager`.
+//! These types are kept only for AI provider image encoding/decoding.
+//!
+//! See: refactor-native-api-separation proposal
 use crate::error::{AlephError, Result};
-/// Image types for AI provider integration
-///
-/// NOTE: Clipboard operations are now handled by Swift `ClipboardManager`.
-/// These types are kept only for AI provider image encoding/decoding.
-///
-/// See: refactor-native-api-separation proposal
 use base64::{engine::general_purpose, Engine as _};
 
 /// Maximum allowed image size in bytes (20 MB)
@@ -86,15 +86,9 @@ impl ImageData {
             AlephError::other("Invalid Base64 data URI format: missing comma separator".to_string())
         })?;
 
-        if !header.starts_with("data:") {
-            return Err(AlephError::other(format!(
-                "Invalid Base64 data URI format: expected 'data:' prefix, got: {header}"
-            )));
-        }
-
         let after_data = header.strip_prefix("data:").ok_or_else(|| {
             AlephError::other(format!(
-                "Invalid Base64 data URI format: missing 'data:' prefix in header: {header}"
+                "Invalid Base64 data URI format: expected 'data:' prefix, got: {header}"
             ))
         })?;
 

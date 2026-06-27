@@ -81,7 +81,7 @@ impl DiscordResolver {
                 let c = candidates
                     .into_iter()
                     .next()
-                    .expect("candidates length is 1 per match guard");
+                    .ok_or_else(|| ChannelResolutionError::NotFound(input.to_string()))?;
                 Ok(ResolvedChannel {
                     channel_id: c.channel_id,
                     guild_id: c.guild_id,

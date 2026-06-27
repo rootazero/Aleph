@@ -215,24 +215,26 @@ pub async fn load_skills_from_dir(dir: impl Into<PathBuf>) -> Vec<MarkdownCliToo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     #[tokio::test]
     async fn test_load_valid_skill() {
         let temp_dir = tempfile::tempdir().unwrap();
         let skill_path = temp_dir.path().join("test-skill/SKILL.md");
 
-        std::fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
-        let mut file = std::fs::File::create(&skill_path).unwrap();
-
-        writeln!(file, "---").unwrap();
-        writeln!(file, "name: test-tool").unwrap();
-        writeln!(file, "description: A test").unwrap();
-        writeln!(file, "metadata:").unwrap();
-        writeln!(file, "  requires:").unwrap();
-        writeln!(file, "    bins: [\"echo\"]").unwrap();
-        writeln!(file, "---").unwrap();
-        writeln!(file, "Test content").unwrap();
+        fs::create_dir_all(skill_path.parent().unwrap()).await.unwrap();
+        fs::write(
+            &skill_path,
+            "---\n\
+name: test-tool\n\
+description: A test\n\
+metadata:\n\
+  requires:\n\
+    bins: [\"echo\"]\n\
+---\n\
+Test content\n",
+        )
+        .await
+        .unwrap();
 
         let loader = SkillLoader::new(temp_dir.path());
         let (tools, errors) = loader.load_all().await;
@@ -248,17 +250,20 @@ mod tests {
 
         // Valid skill
         let valid = temp_dir.path().join("valid/SKILL.md");
-        std::fs::create_dir_all(valid.parent().unwrap()).unwrap();
-        std::fs::write(
+        fs::create_dir_all(valid.parent().unwrap()).await.unwrap();
+        fs::write(
             &valid,
             "---\nname: good\ndescription: ok\nmetadata:\n  requires:\n    bins: []\n---\nContent",
         )
+        .await
         .unwrap();
 
         // Invalid skill (malformed YAML)
         let invalid = temp_dir.path().join("invalid/SKILL.md");
-        std::fs::create_dir_all(invalid.parent().unwrap()).unwrap();
-        std::fs::write(&invalid, "---\n{{{invalid yaml\n---\n").unwrap();
+        fs::create_dir_all(invalid.parent().unwrap()).await.unwrap();
+        fs::write(&invalid, "---\n{{{invalid yaml\n---\n")
+            .await
+            .unwrap();
 
         let loader = SkillLoader::new(temp_dir.path());
         let (tools, errors) = loader.load_all().await;

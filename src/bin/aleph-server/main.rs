@@ -194,9 +194,9 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             return match action {
                 PluginsAction::List => commands::handle_plugins_list().await,
                 PluginsAction::Install { url } => commands::handle_plugins_install(&url).await,
-                PluginsAction::Uninstall { name } => commands::handle_plugins_uninstall(&name),
-                PluginsAction::Enable { name } => commands::handle_plugins_enable(&name),
-                PluginsAction::Disable { name } => commands::handle_plugins_disable(&name),
+                PluginsAction::Uninstall { name } => commands::handle_plugins_uninstall(&name).await,
+                PluginsAction::Enable { name } => commands::handle_plugins_enable(&name).await,
+                PluginsAction::Disable { name } => commands::handle_plugins_disable(&name).await,
             };
         }
         Some(Command::Gateway { action }) => {
@@ -225,9 +225,9 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                 PluginAction::Update { name, force, scope } => {
                     commands::handle_plugin_update(name, force, &scope).await
                 }
-                PluginAction::Uninstall { name } => commands::handle_plugins_uninstall(&name),
-                PluginAction::Enable { name } => commands::handle_plugins_enable(&name),
-                PluginAction::Disable { name } => commands::handle_plugins_disable(&name),
+                PluginAction::Uninstall { name } => commands::handle_plugins_uninstall(&name).await,
+                PluginAction::Enable { name } => commands::handle_plugins_enable(&name).await,
+                PluginAction::Disable { name } => commands::handle_plugins_disable(&name).await,
                 PluginAction::Marketplace { action: mkt_action } => {
                     commands::handle_marketplace_command(mkt_action).await
                 }

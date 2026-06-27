@@ -152,6 +152,14 @@ pub fn find_template(name: &str) -> Result<String> {
         });
     }
 
+    // Reject path traversal attempts; template names must be plain filenames.
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(AlephError::Other {
+            message: format!("Template name '{name}' contains path separators"),
+            suggestion: Some("Use a plain template name from ~/.aleph/templates/".to_string()),
+        });
+    }
+
     let home = dirs::home_dir().ok_or_else(|| AlephError::Other {
         message: "Cannot determine home directory".to_string(),
         suggestion: None,

@@ -370,7 +370,14 @@ impl AgentRuntime {
             "SubagentEnd: sub-agent completed"
         );
 
-        persist_transcript(&transcript, &self.child_chain.chain_id);
+        // Persist on the blocking pool so the async runtime thread is not held
+        // by filesystem I/O. Transcript persistence is best-effort; errors are
+        // logged inside `persist_transcript`.
+        let transcript_for_persist = transcript.clone();
+        let chain_id_for_persist = self.child_chain.chain_id.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            persist_transcript(&transcript_for_persist, &chain_id_for_persist);
+        });
 
         // SubagentStop lifecycle hook (observer-only). Carries the completion
         // outcome so hooks can react to delegation results without re-reading
@@ -527,8 +534,12 @@ fn cleanup_old_transcripts(base_dir: &std::path::Path) {
 /// Persist a subagent transcript to disk for future retrieval.
 /// Best-effort: errors are logged but not propagated.
 pub fn persist_transcript(transcript: &SubagentTranscript, session_id: &str) {
+    // Sanitize path components so a user/project-controlled agent id or
+    // session id cannot traverse out of the transcript directory.
+    let safe_session = session_id.replace(['/', '\\'], "_").replace("..", "_");
+    let safe_agent_id = transcript.agent_id.replace(['/', '\\'], "_").replace("..", "_");
     let base = match dirs::home_dir() {
-        Some(h) => h.join(".aleph/data/transcripts").join(session_id),
+        Some(h) => h.join(".aleph/data/transcripts").join(safe_session),
         None => {
             tracing::warn!("Cannot resolve home dir for transcript persistence");
             return;
@@ -538,7 +549,7 @@ pub fn persist_transcript(transcript: &SubagentTranscript, session_id: &str) {
         tracing::warn!(error = %e, "Failed to create transcript directory");
         return;
     }
-    let path = base.join(format!("{}.json", transcript.agent_id));
+    let path = base.join(format!("{safe_agent_id}.json"));
     match serde_json::to_string_pretty(transcript) {
         Ok(json) => {
             if let Err(e) = std::fs::write(&path, json) {

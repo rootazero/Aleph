@@ -219,8 +219,8 @@ fn verify_generic_signature(
 
 /// Compute HMAC-SHA256
 fn compute_hmac_sha256(secret: &str, data: &[u8]) -> Vec<u8> {
-    let mut mac =
-        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+        .unwrap_or_else(|_| unreachable!("HMAC can take key of any size"));
     mac.update(data);
     mac.finalize().into_bytes().to_vec()
 }

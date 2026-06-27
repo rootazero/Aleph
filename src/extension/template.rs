@@ -13,8 +13,10 @@ use std::sync::LazyLock;
 /// Regex for matching file references: @./path or @/path
 /// Matches @./relative/path or @/absolute/path, stopping at whitespace or common delimiters
 static FILE_REF_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    // Pattern: @./path or @/path, stopping at whitespace or delimiters
-    Regex::new(r#"@(\.?/[^\s\]\)>`"']+)"#).expect("Invalid file reference regex")
+    // Pattern: @./path or @/path, stopping at whitespace or delimiters.
+    // The regex is a compile-time constant; a parse failure is a programmer error.
+    Regex::new(r#"@(\.?/[^\s\]\)>`"']+)"#)
+        .unwrap_or_else(|e| panic!("Invalid file reference regex: {e}"))
 });
 
 /// Skill template processor

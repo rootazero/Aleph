@@ -77,7 +77,7 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
     let plugins_dir = default_plugins_dir();
 
     // Ensure plugins directory exists
-    if !plugins_dir.exists() {
+    if !tokio::fs::try_exists(&plugins_dir).await.unwrap_or(false) {
         tokio::fs::create_dir_all(&plugins_dir).await?;
     }
 
@@ -103,14 +103,20 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
     }
     let dest_path = plugins_dir.join(repo_name);
 
-    if dest_path.exists() {
+    if tokio::fs::try_exists(&dest_path).await.unwrap_or(false) {
         eprintln!("Error: Plugin already exists at: {}", dest_path.display());
         std::process::exit(1);
     }
 
-    // Clone the repository
+    // Clone the repository off the async executor; git2 is synchronous.
     println!("Cloning repository...");
-    match git2::Repository::clone(url, &dest_path) {
+    let url = url.to_string();
+    let dest_path_clone = dest_path.clone();
+    let clone_result = tokio::task::spawn_blocking(move || {
+        git2::Repository::clone(&url, &dest_path_clone)
+    })
+    .await?;
+    match clone_result {
         Ok(_) => {
             println!("Repository cloned successfully.");
 
@@ -151,13 +157,13 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
 }
 
 /// Handle plugins uninstall command
-pub fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::default_plugins_dir;
 
     let plugins_dir = default_plugins_dir();
     let plugin_path = plugins_dir.join(name);
 
-    if !plugin_path.exists() {
+    if !tokio::fs::try_exists(&plugin_path).await.unwrap_or(false) {
         eprintln!("Error: Plugin not found: {name}");
         eprintln!("Plugin directory: {}", plugin_path.display());
         std::process::exit(1);
@@ -167,7 +173,7 @@ pub fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::error::Er
     println!("Uninstalling plugin: {name}");
     println!("Path: {}", plugin_path.display());
 
-    match std::fs::remove_dir_all(&plugin_path) {
+    match tokio::fs::remove_dir_all(&plugin_path).await {
         Ok(()) => {
             println!("Plugin uninstalled successfully.");
         }
@@ -181,21 +187,21 @@ pub fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::error::Er
 }
 
 /// Handle plugins enable command
-pub fn handle_plugins_enable(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn handle_plugins_enable(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::default_plugins_dir;
 
     let plugins_dir = default_plugins_dir();
     let plugin_path = plugins_dir.join(name);
 
-    if !plugin_path.exists() {
+    if !tokio::fs::try_exists(&plugin_path).await.unwrap_or(false) {
         eprintln!("Error: Plugin not found: {name}");
         std::process::exit(1);
     }
 
     // Check for disabled marker file
     let disabled_marker = plugin_path.join(".disabled");
-    if disabled_marker.exists() {
-        std::fs::remove_file(&disabled_marker)?;
+    if tokio::fs::try_exists(&disabled_marker).await.unwrap_or(false) {
+        tokio::fs::remove_file(&disabled_marker).await?;
         println!("Plugin enabled: {name}");
     } else {
         println!("Plugin is already enabled: {name}");
@@ -205,23 +211,23 @@ pub fn handle_plugins_enable(name: &str) -> Result<(), Box<dyn std::error::Error
 }
 
 /// Handle plugins disable command
-pub fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::default_plugins_dir;
 
     let plugins_dir = default_plugins_dir();
     let plugin_path = plugins_dir.join(name);
 
-    if !plugin_path.exists() {
+    if !tokio::fs::try_exists(&plugin_path).await.unwrap_or(false) {
         eprintln!("Error: Plugin not found: {name}");
         std::process::exit(1);
     }
 
     // Create disabled marker file
     let disabled_marker = plugin_path.join(".disabled");
-    if disabled_marker.exists() {
+    if tokio::fs::try_exists(&disabled_marker).await.unwrap_or(false) {
         println!("Plugin is already disabled: {name}");
     } else {
-        std::fs::write(&disabled_marker, "")?;
+        tokio::fs::write(&disabled_marker, "").await?;
         println!("Plugin disabled: {name}");
     }
 

@@ -357,7 +357,7 @@ impl<H: NativeStreamHandler + Clone + 'static> NativeStreamHandler for StreamCoa
             let mut pending_map = self.pending.write().await;
             let entry = pending_map
                 .entry(stream_key.clone())
-                .or_insert_with(|| PendingStream::new(tokio::spawn(async {})));
+                .or_insert_with(|| PendingStream::new(tokio::spawn(async move {})));
             entry.buffer.push_str(text);
             entry.sequence = sequence;
             entry.buffer.len() >= self.min_chars

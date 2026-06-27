@@ -25,11 +25,11 @@ static PII_PATTERNS: OnceLock<PiiPatterns> = OnceLock::new();
 /// Get or initialize PII patterns
 fn get_patterns() -> &'static PiiPatterns {
     PII_PATTERNS.get_or_init(|| PiiPatterns {
-        email: Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap(),
-        phone: Regex::new(r"\b(\+?1?[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b").unwrap(),
-        ssn: Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap(),
-        credit_card: Regex::new(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b").unwrap(),
-        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|Bearer\s+[a-zA-Z0-9._\-]{8,})\b").unwrap(),
+        email: Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").expect("static PII regex is valid"),
+        phone: Regex::new(r"\b(\+?1?[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b").expect("static PII regex is valid"),
+        ssn: Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").expect("static PII regex is valid"),
+        credit_card: Regex::new(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b").expect("static PII regex is valid"),
+        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|Bearer\s+[a-zA-Z0-9._\-]{8,})\b").expect("static PII regex is valid"),
         // Catch arbitrary secrets assigned to a credential-like key, regardless of
         // vendor prefix: `password=...`, `api_key: ...`, `token = "..."`, etc.
         // Preserves the key name; redacts only the value. Conservative over-match
@@ -37,11 +37,11 @@ fn get_patterns() -> &'static PiiPatterns {
         generic_secret: Regex::new(
             r#"(?i)(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?token|authorization)(\s*[:=]\s*)("?)([^\s",}]+)"#,
         )
-        .unwrap(),
-        china_mobile: Regex::new(r"\b1[3-9]\d{9}\b").unwrap(),
-        china_id: Regex::new(r"\b\d{17}[\dXx]\b").unwrap(),
+        .expect("static PII regex is valid"),
+        china_mobile: Regex::new(r"\b1[3-9]\d{9}\b").expect("static PII regex is valid"),
+        china_id: Regex::new(r"\b\d{17}[\dXx]\b").expect("static PII regex is valid"),
         // Covers major card networks: Visa (4...), Mastercard (51-55...), Amex (34/37...), UnionPay (62...), Discover (6...)
-        bank_card: Regex::new(r"\b(?:4\d{15}|5[1-5]\d{14}|3[47]\d{13}|6\d{15}|62\d{14,17})\b").unwrap(),
+        bank_card: Regex::new(r"\b(?:4\d{15}|5[1-5]\d{14}|3[47]\d{13}|6\d{15}|62\d{14,17})\b").expect("static PII regex is valid"),
     })
 }
 

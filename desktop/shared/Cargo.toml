@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+categories = ["development-tools"]
+keywords = ["aleph", "desktop", "automation", "ocr"]
+readme = "README.md"
 
 [dependencies]
 # Async runtime

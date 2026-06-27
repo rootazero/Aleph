@@ -5,7 +5,7 @@ use crate::error::{DesktopError, Result};
 #[allow(unused_imports)]
 use crate::OcrResult;
 
-/// Perform OCR using the Windows WinRT `OcrEngine` API.
+/// Perform OCR using the Windows `WinRT` `OcrEngine` API.
 ///
 /// Steps:
 /// 1. Decode PNG bytes into a `SoftwareBitmap` via `BitmapDecoder`.
@@ -124,10 +124,10 @@ pub(super) fn windows_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
             let word: WinOcr::OcrWord = word;
             if let Ok(rect) = word.BoundingRect() {
                 has_bounds = true;
-                min_x = min_x.min(rect.X as f64);
-                min_y = min_y.min(rect.Y as f64);
-                max_x = max_x.max((rect.X + rect.Width) as f64);
-                max_y = max_y.max((rect.Y + rect.Height) as f64);
+                min_x = min_x.min(f64::from(rect.X));
+                min_y = min_y.min(f64::from(rect.Y));
+                max_x = max_x.max(f64::from(rect.X + rect.Width));
+                max_y = max_y.max(f64::from(rect.Y + rect.Height));
             }
         }
 

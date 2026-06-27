@@ -252,7 +252,7 @@ pub async fn spawn_host_bridge(
     // A leftover socket inode would make bind() fail with EADDRINUSE; the
     // per-run dir is fresh, but be defensive against a reused path.
     if uds_path.exists() {
-        let _ = std::fs::remove_file(uds_path);
+        let _ = tokio::fs::remove_file(uds_path).await;
     }
     let listener = UnixListener::bind(uds_path)?;
 

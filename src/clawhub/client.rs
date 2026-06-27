@@ -9,6 +9,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use reqwest::Client;
+use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 
 /// Percent-encode set for URL path segments.
@@ -251,21 +252,6 @@ impl ClawHubClient {
             }
         }
 
-        // Stream the body and enforce the cap incrementally so a missing or
-        // dishonest Content-Length cannot exhaust memory.
-        let mut stream = resp.bytes_stream();
-        let mut bytes: Vec<u8> = Vec::new();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk
-                .map_err(|e| AlephError::network(format!("ClawHub download read error: {e}")))?;
-            if bytes.len() + chunk.len() > MAX_DOWNLOAD_BYTES {
-                return Err(AlephError::network(format!(
-                    "ClawHub download exceeds maximum size (> {MAX_DOWNLOAD_BYTES} bytes)"
-                )));
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-
         // Sanitize slug for filename: "owner/skill" → "owner-skill".
         // Keep only filename-safe characters so a crafted slug cannot create
         // subdirectories or use platform-reserved characters.
@@ -290,9 +276,38 @@ impl ClawHubClient {
             uuid::Uuid::new_v4()
         ));
 
-        tokio::fs::write(&temp_path, &bytes)
+        // Stream the body straight to the temp file and enforce the size cap
+        // incrementally so a missing or dishonest Content-Length cannot exhaust
+        // memory.
+        let mut file = tokio::fs::File::create(&temp_path)
             .await
-            .map_err(|e| AlephError::config(format!("Failed to write temp ZIP: {e}")))?;
+            .map_err(|e| AlephError::config(format!("Failed to create temp ZIP: {e}")))?;
+        let mut stream = resp.bytes_stream();
+        let mut downloaded = 0usize;
+        let result: std::result::Result<(), AlephError> = async move {
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk
+                    .map_err(|e| AlephError::network(format!("ClawHub download read error: {e}")))?;
+                if downloaded + chunk.len() > MAX_DOWNLOAD_BYTES {
+                    return Err(AlephError::network(format!(
+                        "ClawHub download exceeds maximum size (> {MAX_DOWNLOAD_BYTES} bytes)"
+                    )));
+                }
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|e| AlephError::config(format!("Failed to write temp ZIP: {e}")))?;
+                downloaded += chunk.len();
+            }
+            file.flush()
+                .await
+                .map_err(|e| AlephError::config(format!("Failed to flush temp ZIP: {e}")))?;
+            Ok(())
+        }
+        .await;
+        if let Err(e) = result {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(e);
+        }
 
         Ok(temp_path)
     }

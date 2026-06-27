@@ -413,14 +413,11 @@ fn build_x11grab_args(
 
     // Region capture uses an explicit size plus a +X,Y input offset; full-screen
     // omits the size and lets x11grab capture the whole root window.
-    let input = match &config.region {
-        Some(r) => {
-            args.push("-video_size".into());
-            args.push(format!("{}x{}", r.width, r.height));
-            format!("{display}+{},{}", r.x, r.y)
-        }
-        None => display.to_string(),
-    };
+    let input = config.region.as_ref().map_or(display.to_string(), |r| {
+        args.push("-video_size".into());
+        args.push(format!("{}x{}", r.width, r.height));
+        format!("{display}+{},{}", r.x, r.y)
+    });
     args.push("-i".into());
     args.push(input);
 

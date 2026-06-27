@@ -183,7 +183,7 @@ fn windows_window_list() -> Result<Vec<WindowInfo>> {
                         id: hwnd.0 as usize as u64,
                         title,
                         owner: String::new(),
-                        pid: pid as u64,
+                        pid: u64::from(pid),
                     });
                 }
             }
@@ -199,7 +199,7 @@ fn windows_window_list() -> Result<Vec<WindowInfo>> {
     unsafe {
         let _ = EnumWindows(
             Some(enum_proc),
-            LPARAM(&mut state as *mut EnumState as isize),
+            LPARAM(std::ptr::addr_of_mut!(state) as isize),
         );
     }
 

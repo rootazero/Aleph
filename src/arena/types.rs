@@ -1,6 +1,6 @@
 //! Core domain types for the `SharedArena` multi-agent collaboration system.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::path::PathBuf;
 
@@ -254,7 +254,7 @@ impl ArenaManifest {
             ));
         }
 
-        let unique_ids: std::collections::HashSet<_> = agent_ids.iter().collect();
+        let unique_ids: HashSet<_> = agent_ids.iter().collect();
         if unique_ids.len() != agent_ids.len() {
             return Err("Duplicate agent IDs are not allowed".to_string());
         }
@@ -280,9 +280,7 @@ impl ArenaManifest {
         }
 
         let strategy = match strategy_str {
-            "peer" => CoordinationStrategy::Peer {
-                coordinator: coord.clone(),
-            },
+            "peer" => CoordinationStrategy::Peer { coordinator: coord.clone() },
             "pipeline" => {
                 let stages = stages.unwrap_or_else(|| {
                     agent_ids
@@ -300,17 +298,17 @@ impl ArenaManifest {
                         .collect()
                 });
 
-                let participant_ids: std::collections::HashSet<_> =
-                    agent_ids.iter().cloned().collect();
+                let participant_ids: HashSet<&str> =
+                    agent_ids.iter().map(String::as_str).collect();
                 for stage in &stages {
-                    if !participant_ids.contains(&stage.agent_id) {
+                    if !participant_ids.contains(stage.agent_id.as_str()) {
                         return Err(format!(
                             "Stage agent '{}' is not a participant",
                             stage.agent_id
                         ));
                     }
                     for dep in &stage.depends_on {
-                        if !participant_ids.contains(dep) {
+                        if !participant_ids.contains(dep.as_str()) {
                             return Err(format!(
                                 "Stage '{}' depends on '{}' who is not a participant",
                                 stage.agent_id, dep
@@ -327,7 +325,7 @@ impl ArenaManifest {
                 // Kahn's-algorithm cycle check (which counts unique nodes vs.
                 // total stage entries) would always misreport duplicates as a
                 // cyclic dependency.
-                let mut seen_stage_agents = std::collections::HashSet::new();
+                let mut seen_stage_agents = HashSet::new();
                 for stage in &stages {
                     if !seen_stage_agents.insert(stage.agent_id.as_str()) {
                         return Err(format!(
@@ -337,10 +335,10 @@ impl ArenaManifest {
                     }
                 }
 
-                let stage_agent_ids: std::collections::HashSet<_> =
-                    stages.iter().map(|s| &s.agent_id).collect();
+                let stage_agent_ids: HashSet<&str> =
+                    stages.iter().map(|s| s.agent_id.as_str()).collect();
                 for id in agent_ids {
-                    if !stage_agent_ids.contains(id) {
+                    if !stage_agent_ids.contains(id.as_str()) {
                         return Err(format!(
                             "Participant '{id}' is not assigned to any pipeline stage"
                         ));
@@ -403,7 +401,7 @@ impl ArenaManifest {
             }
         }
 
-        let mut queue: std::collections::VecDeque<&str> = in_degree
+        let mut queue: VecDeque<&str> = in_degree
             .iter()
             .filter(|(_, &deg)| deg == 0)
             .map(|(id, _)| *id)

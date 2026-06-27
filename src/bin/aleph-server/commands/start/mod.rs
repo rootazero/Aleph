@@ -133,7 +133,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     tokio::spawn(runtime_startup_warmup());
-    validate_bind_address(args)?;
+    validate_bind_address(args).await?;
 
     let (full_config, final_bind, final_port, final_max_connections) = load_gateway_config(args)?;
 

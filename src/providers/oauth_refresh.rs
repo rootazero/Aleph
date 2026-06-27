@@ -17,7 +17,7 @@ fn oauth_client() -> &'static reqwest::Client {
         reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .expect("Failed to build OAuth HTTP client")
+            .unwrap_or_else(|_| reqwest::Client::new())
     })
 }
 

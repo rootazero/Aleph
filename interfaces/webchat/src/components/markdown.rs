@@ -32,14 +32,14 @@ fn render_markdown(content: &str) -> String {
             Event::Start(Tag::CodeBlock(kind)) => {
                 in_code_block = true;
                 code_content.clear();
-                code_lang = match kind {
-                    CodeBlockKind::Fenced(lang) => {
-                        let lang_str = lang.as_ref().trim();
-                        // Take only the first word (ignore metadata after space)
-                        lang_str.split_whitespace().next().unwrap_or("").to_string()
+                code_lang.clear();
+                if let CodeBlockKind::Fenced(lang) = kind {
+                    let lang_str = lang.as_ref().trim();
+                    // Take only the first word (ignore metadata after space)
+                    if let Some(first) = lang_str.split_whitespace().next() {
+                        code_lang.push_str(first);
                     }
-                    CodeBlockKind::Indented => String::new(),
-                };
+                }
             }
             Event::End(TagEnd::CodeBlock) => {
                 in_code_block = false;
@@ -101,10 +101,13 @@ fn highlight_code(code: &str, lang: &str) -> String {
     } else {
         "InspiredGitHub"
     };
-    let theme = ts
+    let Some(theme) = ts
         .themes
         .get(theme_name)
-        .unwrap_or_else(|| ts.themes.values().next().expect("no themes available"));
+        .or_else(|| ts.themes.values().next())
+    else {
+        return html_escape(code);
+    };
 
     match highlighted_html_for_string(code, ss, syntax, theme) {
         Ok(html) => strip_syntect_background(html),

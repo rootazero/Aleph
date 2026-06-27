@@ -486,20 +486,23 @@ impl ArtifactStore for SqliteArtifactStore {
         // Delete dependency rows for artifacts belonging to the given tasks first.
         // (The FK has ON DELETE CASCADE, but pragma foreign_keys may not be set;
         // deleting explicitly is always safe.)
-        conn.execute(
-            &format!(
+        let sql_deps = {
+            let mut s = String::from(
                 "DELETE FROM task_artifact_dependencies WHERE artifact_id IN \
-                 (SELECT id FROM task_artifacts WHERE task_id IN ({placeholders}))"
-            ),
-            params.as_slice(),
-        )
-        .map_err(db_err)?;
-        let n = conn
-            .execute(
-                &format!("DELETE FROM task_artifacts WHERE task_id IN ({placeholders})"),
-                params.as_slice(),
-            )
-            .map_err(db_err)?;
+                 (SELECT id FROM task_artifacts WHERE task_id IN (",
+            );
+            s.push_str(&placeholders);
+            s.push_str("))");
+            s
+        };
+        conn.execute(&sql_deps, params.as_slice()).map_err(db_err)?;
+        let sql_art = {
+            let mut s = String::from("DELETE FROM task_artifacts WHERE task_id IN (");
+            s.push_str(&placeholders);
+            s.push(')');
+            s
+        };
+        let n = conn.execute(&sql_art, params.as_slice()).map_err(db_err)?;
         Ok(n)
     }
 }

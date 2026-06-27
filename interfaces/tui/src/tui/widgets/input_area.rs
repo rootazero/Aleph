@@ -39,12 +39,11 @@ impl InputWidget<'_> {
         let mut ta = self.textarea.clone();
         ta.set_block(block);
 
-        // Set cursor line style based on focus
+        // Cursor line style is always reset; cursor style depends on focus.
+        ta.set_cursor_line_style(Style::default());
         if self.focused {
-            ta.set_cursor_line_style(Style::default());
             ta.set_cursor_style(Style::default().bg(Color::White).fg(Color::Black));
         } else {
-            ta.set_cursor_line_style(Style::default());
             ta.set_cursor_style(Style::default());
         }
 
@@ -57,7 +56,7 @@ impl InputWidget<'_> {
 ///
 /// The height includes 2 extra rows for the top and bottom borders.
 pub fn input_height(textarea: &TextArea, min: u16, max: u16) -> u16 {
-    let line_count = textarea.lines().len() as u16;
+    let line_count = u16::try_from(textarea.lines().len()).unwrap_or(u16::MAX);
     let desired = line_count.saturating_add(2); // +2 for borders
     desired.clamp(min, max)
 }
@@ -84,7 +83,7 @@ mod tests {
 
     #[test]
     fn input_height_clamped_max() {
-        let lines: Vec<String> = (0..20).map(|i| format!("line {}", i)).collect();
+        let lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
         let ta = TextArea::new(lines);
         // 20 lines + 2 = 22, but max is 10
         let h = input_height(&ta, 3, 10);

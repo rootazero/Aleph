@@ -23,7 +23,9 @@ use leptos_router::NavigateOptions;
 #[component]
 #[must_use]
 pub fn ServiceBlockingGate() -> impl IntoView {
-    let state = use_context::<DashboardState>().expect("DashboardState not provided");
+    let Some(state) = use_context::<DashboardState>() else {
+        return ().into_any();
+    };
     let i18n = use_i18n();
     let navigate = use_navigate();
 
@@ -169,7 +171,7 @@ pub fn ServiceBlockingGate() -> impl IntoView {
                 </div>
             </div>
         </Show>
-    }
+    }.into_any()
 }
 
 #[cfg(test)]

@@ -233,7 +233,9 @@ async fn install_from_zip(source: &str, skills_dir: &std::path::Path) -> Result<
     } else {
         // Read local ZIP file
         info!(path = %source, "Reading local ZIP archive");
-        std::fs::read(source).map_err(|e| format!("Failed to read ZIP file: {e}"))?
+        tokio::fs::read(source)
+            .await
+            .map_err(|e| format!("Failed to read ZIP file: {e}"))?
     };
 
     // Derive folder name from filename (strip .zip)
@@ -252,7 +254,9 @@ async fn install_from_zip(source: &str, skills_dir: &std::path::Path) -> Result<
     if dest_path.exists() {
         let _ = std::fs::remove_dir_all(&dest_path);
     }
-    std::fs::create_dir_all(&dest_path).map_err(|e| format!("Failed to create directory: {e}"))?;
+    tokio::fs::create_dir_all(&dest_path)
+        .await
+        .map_err(|e| format!("Failed to create directory: {e}"))?;
 
     archive
         .extract(&dest_path)
@@ -273,7 +277,7 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
 
     // Ensure skills directory exists
     let skills_dir = default_skills_dir();
-    if let Err(e) = std::fs::create_dir_all(&skills_dir) {
+    if let Err(e) = tokio::fs::create_dir_all(&skills_dir).await {
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,

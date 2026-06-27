@@ -52,8 +52,18 @@ pub(crate) fn sync_official_with_urls(
         .join("cache")
         .join("aleph-official");
     let cache = aleph_home.join("cache");
-    let _ = std::fs::create_dir_all(&skills_dir);
-    let _ = std::fs::create_dir_all(&plugins_cache);
+    if let Err(e) = std::fs::create_dir_all(&skills_dir) {
+        return Err(format!(
+            "failed to create skills directory {}: {e}",
+            skills_dir.display()
+        ));
+    }
+    if let Err(e) = std::fs::create_dir_all(&plugins_cache) {
+        return Err(format!(
+            "failed to create plugins cache directory {}: {e}",
+            plugins_cache.display()
+        ));
+    }
 
     let mut report = SyncReport {
         skills: false,
@@ -559,8 +569,19 @@ pub(crate) fn extract_skill_tree_from_dir(
 /// plugins checkout into the official marketplace cache dir.
 pub(crate) fn extract_plugins_from_dir(src_root: &Path, cache_dir: &Path) -> bool {
     let tmp_dir = cache_dir.with_extension("tmp");
-    if tmp_dir.exists() {
-        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+    // Use symlink_metadata to avoid following symlinks — prevents deletion
+    // outside the cache_dir if tmp_dir is a malicious symlink.
+    if let Ok(meta) = tmp_dir.symlink_metadata() {
+        if meta.is_dir() {
+            if let Err(e) = std::fs::remove_dir_all(&tmp_dir) {
+                warn!(error = %e, "Failed to remove old plugin cache temp directory");
+                return false;
+            }
+        } else {
+            warn!(path = %tmp_dir.display(), "Plugin cache temp path exists but is not a directory, skipping removal");
+            return false;
+        }
     }
     if let Err(e) = std::fs::create_dir_all(&tmp_dir) {
         warn!(error = %e, "Failed to create plugin cache temp dir");
@@ -588,7 +609,13 @@ fn copy_tree_with_prune(src: &Path, dst: &Path) -> std::io::Result<()> {
     use std::collections::HashSet;
     let mut keep: HashSet<std::ffi::OsString> = HashSet::new();
     for e in std::fs::read_dir(src)?.filter_map(|e| e.ok()) {
-        if !is_vcs_meta(&e.file_name()) {
+        if is_vcs_meta(&e.file_name()) {
+            continue;
+        }
+        // Use symlink_metadata so symlinks are not preserved; copying skips them,
+        // so leaving them in `keep` would leave stale/dangling symlinks behind.
+        let ft = std::fs::symlink_metadata(e.path())?.file_type();
+        if !ft.is_symlink() {
             keep.insert(e.file_name());
         }
     }
@@ -616,10 +643,16 @@ fn copy_dir_into(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
         let from = entry.path();
         let to = dst.join(&name);
-        if entry.file_type()?.is_dir() {
+        // Use symlink_metadata so we don't follow symlinks — prevents copying
+        // files from outside the source tree or recursing into symlinked dirs.
+        let ft = std::fs::symlink_metadata(entry.path())?.file_type();
+        if ft.is_dir() {
             copy_dir_into(&from, &to)?;
-        } else {
+        } else if ft.is_file() {
             std::fs::copy(&from, &to)?;
+        } else {
+            // Skip symlinks and other special files.
+            continue;
         }
     }
     Ok(())

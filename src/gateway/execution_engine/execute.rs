@@ -796,7 +796,11 @@ where
                                         cont_deps.gate.as_ref(),
                                         goal.gate_command.as_deref(),
                                     )
-                                    .expect("gate_configured implies effective_gate is Some");
+                                    .ok_or_else(|| {
+                                        ExecutionError::Failed(
+                                            "configured gate resolved to none".into(),
+                                        )
+                                    })?;
                                     let hctx = StopHookContext {
                                         final_text: Some(goal.objective.clone()),
                                         iterations: goal.continuations_used as usize,

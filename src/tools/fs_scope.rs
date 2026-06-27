@@ -150,7 +150,7 @@ mod tests {
     async fn task_local_does_not_cross_spawn_boundary() {
         let scope = FsScope::workspace(PathBuf::from("/scoped"));
         let observed = with_fs_scope(Some(scope), async {
-            tokio::spawn(async { current() }).await.unwrap()
+            tokio::spawn(async move { current() }).await.unwrap()
         })
         .await;
         assert!(observed.is_none());

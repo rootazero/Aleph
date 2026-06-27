@@ -6,6 +6,7 @@ use crate::sync_primitives::Arc;
 use crate::utils::paths::{get_config_dir, get_runtimes_dir};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use tokio::fs;
 use tracing::{info, warn};
 
 const CONFIG_SUBDIRS: &[&str] = &["logs", "cache", "output", "skills", "models"];
@@ -132,14 +133,24 @@ impl InitializationCoordinator {
         // pre-existing user data.
         let mut pre_existing_subdirs = BTreeSet::new();
         for subdir in CONFIG_SUBDIRS {
-            if self.config_dir.join(subdir).exists() {
+            if fs::try_exists(self.config_dir.join(subdir))
+                .await
+                .unwrap_or(false)
+            {
                 pre_existing_subdirs.insert(subdir.to_string());
             }
         }
         let pre_existing = PreExistingState {
-            database: self.config_dir.join("memory.db").exists(),
-            runtimes_dir: get_runtimes_dir().is_ok_and(|d| d.exists()),
-            skills_dir: self.config_dir.join("skills").exists(),
+            database: fs::try_exists(self.config_dir.join("memory.db"))
+                .await
+                .unwrap_or(false),
+            runtimes_dir: match get_runtimes_dir() {
+                Ok(d) => fs::try_exists(&d).await.unwrap_or(false),
+                Err(_) => false,
+            },
+            skills_dir: fs::try_exists(self.config_dir.join("skills"))
+                .await
+                .unwrap_or(false),
             subdirs: pre_existing_subdirs,
         };
 
@@ -250,8 +261,8 @@ impl InitializationCoordinator {
         let skills_dir = self.config_dir.join("skills");
         if pre_existing.skills_dir {
             warn!(dir = ?skills_dir, "Skills directory pre-existed; skipping rollback to preserve user skills");
-        } else if skills_dir.exists() {
-            if let Err(e) = tokio::fs::remove_dir_all(&skills_dir).await {
+        } else if fs::try_exists(&skills_dir).await.unwrap_or(false) {
+            if let Err(e) = fs::remove_dir_all(&skills_dir).await {
                 warn!(error = %e, dir = ?skills_dir, "Failed to remove skills directory during rollback");
                 errors.push(format!("skills dir: {e}"));
             }
@@ -263,8 +274,8 @@ impl InitializationCoordinator {
             Ok(runtimes_dir) => {
                 if pre_existing.runtimes_dir {
                     warn!(dir = ?runtimes_dir, "Runtimes directory pre-existed; skipping rollback to preserve installed runtimes");
-                } else if runtimes_dir.exists() {
-                    if let Err(e) = tokio::fs::remove_dir_all(&runtimes_dir).await {
+                } else if fs::try_exists(&runtimes_dir).await.unwrap_or(false) {
+                    if let Err(e) = fs::remove_dir_all(&runtimes_dir).await {
                         warn!(error = %e, dir = ?runtimes_dir, "Failed to remove runtimes directory during rollback");
                         errors.push(format!("runtimes dir: {e}"));
                     }
@@ -288,8 +299,8 @@ impl InitializationCoordinator {
         }
         for suffix in ["-wal", "-shm"] {
             let wal_path = self.config_dir.join(format!("memory.db{suffix}"));
-            if wal_path.exists() {
-                if let Err(e) = tokio::fs::remove_file(&wal_path).await {
+            if fs::try_exists(&wal_path).await.unwrap_or(false) {
+                if let Err(e) = fs::remove_file(&wal_path).await {
                     warn!(error = %e, path = ?wal_path, "Failed to remove WAL file during rollback");
                     errors.push(format!("wal {suffix}: {e}"));
                 }
@@ -308,11 +319,11 @@ impl InitializationCoordinator {
             if pre_existing.subdirs.contains(*subdir) {
                 continue;
             }
-            if path.exists() {
-                match tokio::fs::read_dir(&path).await {
+            if fs::try_exists(&path).await.unwrap_or(false) {
+                match fs::read_dir(&path).await {
                     Ok(mut entries) => match entries.next_entry().await {
                         Ok(None) => {
-                            if let Err(e) = tokio::fs::remove_dir(&path).await {
+                            if let Err(e) = fs::remove_dir(&path).await {
                                 warn!(error = %e, dir = ?path, "Failed to remove empty directory during rollback");
                                 errors.push(format!("dir {subdir}: {e}"));
                             }
@@ -385,7 +396,7 @@ impl InitializationCoordinator {
         let config_path = self.config_dir.join("config.toml");
 
         // Don't overwrite existing config
-        if config_path.exists() {
+        if fs::try_exists(&config_path).await.unwrap_or(false) {
             info!("Config already exists, skipping");
             return Ok(());
         }
@@ -425,9 +436,31 @@ impl InitializationCoordinator {
 
         info!(path = ?db_path, "Initializing memory database (SQLite + sqlite-vec)");
 
-        let db = SqliteMemoryBackend::new(&db_path)
-            .map_err(|e| InitError::new("database", format!("Failed to create database: {e}")))?;
-        drop(db);
+        // Database creation performs synchronous file I/O and schema init;
+        // run it on the blocking thread pool.
+        tokio::task::spawn_blocking(move || {
+            SqliteMemoryBackend::new(&db_path).map(|_| ()).map_err(|e| format!("{e}"))
+        })
+        .await
+        .map_err(|e| {
+            let msg = if e.is_panic() {
+                if let Ok(payload) = e.try_into_panic() {
+                    if let Some(s) = payload.downcast_ref::<String>() {
+                        format!("Database init task panicked: {s}")
+                    } else if let Some(s) = payload.downcast_ref::<&str>() {
+                        format!("Database init task panicked: {s}")
+                    } else {
+                        "Database init task panicked (unknown payload)".to_string()
+                    }
+                } else {
+                    "Database init task panicked".to_string()
+                }
+            } else {
+                format!("Database init task cancelled: {e}")
+            };
+            InitError::new("database", msg)
+        })?
+        .map_err(|e| InitError::new("database", format!("Failed to create database: {e}")))?;
 
         info!("Memory database initialized");
         Ok(())

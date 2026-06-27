@@ -38,7 +38,8 @@ impl MatrixSdkClient {
 
         let state_path = config.state_store_path();
         if let Some(parent) = Path::new(&state_path).parent() {
-            std::fs::create_dir_all(parent)
+            tokio::fs::create_dir_all(parent)
+                .await
                 .map_err(|e| ChannelError::Internal(format!("Failed to create state dir: {e}")))?;
         }
 

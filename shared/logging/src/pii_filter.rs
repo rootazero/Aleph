@@ -64,11 +64,12 @@ where
                 write!(writer, "{}", if seen { ":" } else { " in " })?;
                 seen = true;
 
-                let ext = span.extensions();
-                let fields = ext
-                    .get::<tracing_subscriber::fmt::FormattedFields<N>>()
-                    .map(|fields| scrub_pii(fields.as_str()))
-                    .unwrap_or_default();
+                let fields = {
+                    let ext = span.extensions();
+                    ext.get::<tracing_subscriber::fmt::FormattedFields<N>>()
+                        .map(|fields| scrub_pii(fields.as_str()))
+                        .unwrap_or_default()
+                };
 
                 write!(writer, "{}{{", span.name())?;
                 if !fields.is_empty() {

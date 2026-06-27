@@ -13,13 +13,16 @@ use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::{GatewayConfig as FullGatewayConfig, SessionManager};
 
 /// Validate that the bind address is available, or return an error if not.
-pub(super) fn validate_bind_address(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+pub(super) async fn validate_bind_address(
+    args: &Args,
+) -> Result<(), Box<dyn std::error::Error>> {
     let addr = resolve_socket_addr(args)?;
     if !args.force {
-        if let Err(e) = std::net::TcpListener::bind(addr) {
+        if let Err(e) = tokio::net::TcpListener::bind(addr).await {
             return Err(format!(
                 "Error: Cannot bind to {addr}: {e}\nHint: Use --force to attempt to start anyway, or choose a different port with --port"
-            ).into());
+            )
+            .into());
         }
     }
     Ok(())

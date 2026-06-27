@@ -816,7 +816,7 @@ name: Test Skill
 description: A test skill for unit tests
 ---
 You are a test expert."#;
-        std::fs::write(&skill_file, content).unwrap();
+        tokio::fs::write(&skill_file, content).await.unwrap();
 
         let system = SkillSystem::new();
         system.init(vec![dir.path().to_path_buf()]).await.unwrap();
@@ -840,7 +840,7 @@ name: Version Test
 description: Tests version increments
 ---
 Content."#;
-        std::fs::write(&skill_file, content).unwrap();
+        tokio::fs::write(&skill_file, content).await.unwrap();
 
         let system = SkillSystem::new();
         system.init(vec![dir.path().to_path_buf()]).await.unwrap();
@@ -863,8 +863,8 @@ Content."#;
 
         // Create two skill subdirectories with SKILL.md files
         let sub1 = dir.path().join("skill1");
-        std::fs::create_dir(&sub1).unwrap();
-        std::fs::write(
+        tokio::fs::create_dir(&sub1).await.unwrap();
+        tokio::fs::write(
             sub1.join("SKILL.md"),
             r#"---
 name: Skill One
@@ -872,11 +872,12 @@ description: First skill
 ---
 Content one."#,
         )
+        .await
         .unwrap();
 
         let sub2 = dir.path().join("skill2");
-        std::fs::create_dir(&sub2).unwrap();
-        std::fs::write(
+        tokio::fs::create_dir(&sub2).await.unwrap();
+        tokio::fs::write(
             sub2.join("SKILL.md"),
             r#"---
 name: Skill Two
@@ -884,6 +885,7 @@ description: Second skill
 ---
 Content two."#,
         )
+        .await
         .unwrap();
 
         let system = SkillSystem::new();
@@ -902,7 +904,7 @@ Content two."#,
         let dir = tempfile::TempDir::new().unwrap();
         let skill_file = dir.path().join("SKILL.md");
 
-        std::fs::write(
+        tokio::fs::write(
             &skill_file,
             r#"---
 name: Status Test
@@ -910,6 +912,7 @@ description: Tests status reporting
 ---
 Content."#,
         )
+        .await
         .unwrap();
 
         let system = SkillSystem::new();

@@ -117,7 +117,7 @@ impl AutomationCapability for WindowsAutomation {
         #[cfg(windows)]
         {
             let name = name.to_string();
-            let input = input.map(|s| s.to_string());
+            let input = input.map(str::to_string);
 
             let script = format!(
                 r#"$lnk = Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -Recurse -Filter '{0}.lnk' | Select-Object -First 1; if ($lnk) {{ $shell = New-Object -ComObject WScript.Shell; $shortcut = $shell.CreateShortcut($lnk.FullName); & $shortcut.TargetPath $shortcut.Arguments }} else {{ exit 1 }}"#,

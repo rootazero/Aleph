@@ -639,11 +639,15 @@ impl Certificate {
         let cert_re = regex::Regex::new(
             r"-----BEGIN CERTIFICATE-----\s*([A-Za-z0-9+/=\s]+)\s*-----END CERTIFICATE-----",
         )
-        .unwrap();
-        let key_re = regex::Regex::new(r"-----BEGIN (?:RSA )?PRIVATE KEY-----\s*([A-Za-z0-9+/=\s]+)\s*-----END (?:RSA )?PRIVATE KEY-----").unwrap();
+        .map_err(|e| CertificateError::ParseError(format!("invalid certificate regex: {e}")))?;
+        let key_re = regex::Regex::new(r"-----BEGIN (?:RSA )?PRIVATE KEY-----\s*([A-Za-z0-9+/=\s]+)\s*-----END (?:RSA )?PRIVATE KEY-----")
+            .map_err(|e| CertificateError::ParseError(format!("invalid private key regex: {e}")))?;
 
         if let Some(caps) = cert_re.captures(&pem_str) {
-            let base64_content = caps.get(1).unwrap().as_str();
+            let base64_content = caps
+                .get(1)
+                .ok_or_else(|| CertificateError::ParseError("certificate capture missing".into()))?
+                .as_str();
             let cleaned: String = base64_content
                 .chars()
                 .filter(|c| !c.is_whitespace())
@@ -659,7 +663,10 @@ impl Certificate {
         }
 
         if let Some(caps) = key_re.captures(&pem_str) {
-            let base64_content = caps.get(1).unwrap().as_str();
+            let base64_content = caps
+                .get(1)
+                .ok_or_else(|| CertificateError::ParseError("private key capture missing".into()))?
+                .as_str();
             let cleaned: String = base64_content
                 .chars()
                 .filter(|c| !c.is_whitespace())
@@ -809,7 +816,9 @@ impl JwtAssertionGenerator {
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| {
+                MsTeamsAuthError::TokenExchangeError(format!("system clock error: {e}"))
+            })?
             .as_secs() as i64;
 
         #[derive(serde::Serialize)]

@@ -216,7 +216,7 @@ impl SkillWatcher {
         for skill_dir in skill_dirs {
             info!(dir = %skill_dir.display(), "Reloading skill");
 
-            let loader = SkillLoader::new(skill_dir.clone());
+            let loader = SkillLoader::new(skill_dir);
             let (tools, errors) = loader.load_all().await;
 
             for (path, error) in errors {

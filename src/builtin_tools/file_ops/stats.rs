@@ -4,9 +4,8 @@
 //! forced the LLM to make N round-trips just to answer "how many lines does
 //! this directory contain?".
 
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
 use std::path::Path;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, info};
 
 use super::path_utils::check_and_resolve_path;
@@ -65,7 +64,7 @@ pub async fn execute_stats(
             }
         };
 
-        let metadata = match fs::metadata(&path) {
+        let metadata = match tokio::fs::metadata(&path).await {
             Ok(m) => m,
             Err(_) => continue,
         };
@@ -81,7 +80,7 @@ pub async fn execute_stats(
             skipped += 1;
             None
         } else {
-            match count_lines(&path) {
+            match count_lines(&path).await {
                 Ok(n) => {
                     total_lines = total_lines.saturating_add(n);
                     Some(n)
@@ -149,14 +148,15 @@ pub async fn execute_stats(
 
 /// Count newline-terminated lines. Files without a trailing newline still
 /// count their last line (matches `wc -l` semantics for non-empty files).
-fn count_lines(path: &Path) -> std::io::Result<u64> {
-    let file = File::open(path)?;
+async fn count_lines(path: &Path) -> std::io::Result<u64> {
+    let file = tokio::fs::File::open(path).await?;
     let reader = BufReader::new(file);
     let mut count: u64 = 0;
-    for line in reader.lines() {
+    let mut lines = reader.lines();
+    while let Some(line) = lines.next_line().await? {
         // Surface I/O errors (e.g. invalid UTF-8 in a "text" file) so the
         // caller can mark the file as skipped instead of double-counting.
-        let _ = line?;
+        let _ = line;
         count += 1;
     }
     Ok(count)

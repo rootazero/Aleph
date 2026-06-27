@@ -91,7 +91,7 @@ impl GroupChatExecutor {
     }
 
     /// Persist a conversation turn to the database (best-effort).
-    fn persist_turn(
+    async fn persist_turn(
         &self,
         session_id: &str,
         round: u32,
@@ -99,26 +99,47 @@ impl GroupChatExecutor {
         speaker: &Speaker,
         content: &str,
     ) {
-        let Some(db) = &self.db else { return };
-        let (speaker_type, speaker_id, speaker_name) = match speaker {
-            Speaker::Coordinator => ("coordinator", None, "Coordinator"),
-            Speaker::System => ("system", None, "System"),
-            Speaker::Persona { id, name } => ("persona", Some(id.as_str()), name.as_str()),
-        };
-        if let Err(e) = db.insert_group_chat_turn(
-            session_id,
-            round,
-            sequence,
-            speaker_type,
-            speaker_id,
-            speaker_name,
-            content,
-        ) {
-            tracing::warn!(
-                subsystem = "group_chat",
-                error = %e,
-                "failed to persist group chat turn to database"
-            );
+        let Some(db) = self.db.clone() else { return };
+        let session_id = session_id.to_string();
+        let speaker = speaker.clone();
+        let content = content.to_string();
+
+        let result = tokio::task::spawn_blocking(move || {
+            let (speaker_type, speaker_id, speaker_name) = match &speaker {
+                Speaker::Coordinator => ("coordinator", None, "Coordinator"),
+                Speaker::System => ("system", None, "System"),
+                Speaker::Persona { id, name } => {
+                    ("persona", Some(id.as_str()), name.as_str())
+                }
+            };
+            db.insert_group_chat_turn(
+                &session_id,
+                round,
+                sequence,
+                speaker_type,
+                speaker_id,
+                speaker_name,
+                &content,
+            )
+        })
+        .await;
+
+        match result {
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    subsystem = "group_chat",
+                    error = %e,
+                    "failed to persist group chat turn to database"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    subsystem = "group_chat",
+                    error = %e,
+                    "failed to persist group chat turn to database"
+                );
+            }
+            Ok(Ok(())) => {}
         }
     }
 
@@ -154,7 +175,8 @@ impl GroupChatExecutor {
 
         // Step 1: Record user message as a System turn
         session.add_turn(round, Speaker::System, user_message.to_string());
-        self.persist_turn(&session.id, round, 0, &Speaker::System, user_message);
+        self.persist_turn(&session.id, round, 0, &Speaker::System, user_message)
+            .await;
 
         // Step 2: Build coordinator prompt and call LLM
         let history = session.build_history_text();
@@ -200,7 +222,8 @@ impl GroupChatExecutor {
         if self.coordinator_visible {
             let speaker = Speaker::Coordinator;
             session.add_turn(round, speaker.clone(), coordinator_raw.clone());
-            self.persist_turn(&session.id, round, persist_seq, &speaker, &coordinator_raw);
+            self.persist_turn(&session.id, round, persist_seq, &speaker, &coordinator_raw)
+                .await;
             persist_seq += 1;
 
             messages.push(GroupChatMessage {
@@ -273,7 +296,8 @@ impl GroupChatExecutor {
             session.add_turn(round, speaker.clone(), persona_response.clone());
 
             let sequence = i.try_into().unwrap_or(u32::MAX).saturating_add(seq_offset);
-            self.persist_turn(&session.id, round, persist_seq, &speaker, &persona_response);
+            self.persist_turn(&session.id, round, persist_seq, &speaker, &persona_response)
+                .await;
             persist_seq = persist_seq.saturating_add(1);
 
             // Accumulate prior discussion for the next persona

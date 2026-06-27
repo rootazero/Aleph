@@ -399,12 +399,38 @@ impl SessionManager {
             ("messages", "output_tokens", "INTEGER DEFAULT 0"),
         ];
 
+        fn is_safe_identifier(s: &str) -> bool {
+            !s.is_empty()
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        }
+
+        fn is_safe_column_def(s: &str) -> bool {
+            !s.is_empty()
+                && s.bytes().all(|b| {
+                    b.is_ascii_alphanumeric()
+                        || b.is_ascii_whitespace()
+                        || b == b'_'
+                        || b == b'\''
+                        || b == b'('
+                        || b == b')'
+                        || b == b','
+                })
+        }
+
         for (table, column, def) in migrations {
+            if !is_safe_identifier(table)
+                || !is_safe_identifier(column)
+                || !is_safe_column_def(def)
+            {
+                return Err(SessionManagerError::DatabaseError(format!(
+                    "Refusing unsafe migration identifier: {table}.{column} {def}"
+                )));
+            }
+
             let has_col: Result<bool, _> = conn.query_row(
-                &format!(
-                    "SELECT COUNT(*) > 0 FROM pragma_table_info('{table}') WHERE name='{column}'"
-                ),
-                [],
+                "SELECT COUNT(*) > 0 FROM pragma_table_info(?1) WHERE name = ?2",
+                [*table, *column],
                 |row| row.get(0),
             );
 

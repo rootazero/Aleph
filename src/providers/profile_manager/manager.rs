@@ -180,9 +180,11 @@ impl AuthProfileManager {
                 let remaining = status
                     .and_then(|s| s.cooldown_remaining_ms())
                     .unwrap_or(u64::MAX);
-                if best_cooldown_profile.is_none()
-                    || remaining < best_cooldown_profile.as_ref().unwrap().2
-                {
+                if let Some((_, _, prev_remaining)) = best_cooldown_profile {
+                    if remaining < prev_remaining {
+                        best_cooldown_profile = Some((profile_id, config, remaining));
+                    }
+                } else {
                     best_cooldown_profile = Some((profile_id, config, remaining));
                 }
             }

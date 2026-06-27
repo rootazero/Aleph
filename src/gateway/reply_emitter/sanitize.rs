@@ -20,10 +20,10 @@ pub(crate) fn sanitize_llm_output(text: &str) -> Cow<'_, str> {
     // Fast path: quick probe for any tag-like pattern before doing real work.
     static QUICK_PROBE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"<(?:think|thinking|thought|antthinking|completion-check|task-complete)[\s/>]")
-            .expect("quick probe regex")
+            .unwrap_or_else(|_| unreachable!("quick probe regex is statically valid"))
     });
     static BLANK_LINES_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\n{3,}").expect("blank-lines regex"));
+        LazyLock::new(|| Regex::new(r"\n{3,}").unwrap_or_else(|_| unreachable!("blank-lines regex is statically valid")));
 
     let has_tags = QUICK_PROBE.is_match(text);
     let has_trailing = text.ends_with("[[") || text.ends_with('[');
@@ -251,7 +251,8 @@ fn strip_trailing_incomplete(text: &str) -> String {
 /// preserved, preventing accidental extraction from example code.
 pub(crate) fn split_reasoning(text: &str) -> (Option<String>, String) {
     static QUICK_PROBE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)<(?:think|thinking|thought|antthinking)[\s/>]").expect("quick probe regex")
+        Regex::new(r"(?i)<(?:think|thinking|thought|antthinking)[\s/>]")
+            .unwrap_or_else(|_| unreachable!("quick probe regex is statically valid"))
     });
 
     if !QUICK_PROBE.is_match(text) {

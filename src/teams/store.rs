@@ -216,22 +216,31 @@ fn add_column_if_missing(
     column: &str,
     type_decl: &str,
 ) -> crate::error::Result<()> {
-    let mut stmt = conn
-        .prepare(&format!("PRAGMA table_info({table})"))
-        .map_err(db_err)?;
+    let pragma_sql = format!("PRAGMA table_info({})", quote_sql_identifier(table));
+    let mut stmt = conn.prepare(&pragma_sql).map_err(db_err)?;
     let exists = stmt
         .query_map([], |row| row.get::<_, String>(1))
         .map_err(db_err)?
         .filter_map(Result::ok)
         .any(|name| name == column);
     if !exists {
-        conn.execute(
-            &format!("ALTER TABLE {table} ADD COLUMN {column} {type_decl}"),
-            [],
-        )
-        .map_err(db_err)?;
+        let alter_sql = format!(
+            "ALTER TABLE {} ADD COLUMN {} {}",
+            quote_sql_identifier(table),
+            quote_sql_identifier(column),
+            type_decl
+        );
+        conn.execute(&alter_sql, []).map_err(db_err)?;
     }
     Ok(())
+}
+
+/// Quote an SQLite identifier with double quotes and escape embedded quotes.
+///
+/// This prevents identifier-based SQL injection when we have to build DDL
+/// strings where bind parameters are not allowed (table/column names).
+fn quote_sql_identifier(ident: &str) -> String {
+    format!("\"{}\"", ident.replace('"', "\"\""))
 }
 
 // ---------------------------------------------------------------------------

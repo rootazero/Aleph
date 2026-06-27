@@ -26,8 +26,9 @@ use crate::tools::AlephTool;
 /// `file_edit` must round-trip the file faithfully, so — unlike `file_read` —
 /// it cannot use lossy decoding: a lossy decode followed by write-back would
 /// permanently replace every non-UTF-8 byte with U+FFFD.
-fn read_text_file(path: &Path) -> std::result::Result<String, ToolError> {
-    let bytes = std::fs::read(path)
+async fn read_text_file(path: &Path) -> std::result::Result<String, ToolError> {
+    let bytes = tokio::fs::read(path)
+        .await
         .map_err(|e| ToolError::Execution(format!("Failed to read {}: {}", path.display(), e)))?;
     if is_binary(&bytes) {
         return Err(ToolError::InvalidArgs(format!(
@@ -217,7 +218,7 @@ impl FileEditTool {
         let _path_guard = crate::tools::path_locks::lock_path(&canonical).await;
 
         // Read current content — binary / non-UTF-8 files are refused.
-        let content = read_text_file(&canonical).inspect_err(|e| {
+        let content = read_text_file(&canonical).await.inspect_err(|e| {
             notify_tool_result("file_edit", &e.to_string(), false);
         })?;
 

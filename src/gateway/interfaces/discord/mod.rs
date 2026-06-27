@@ -217,10 +217,7 @@ impl DiscordChannel {
             .ok_or_else(|| ChannelError::NotConnected("HTTP client not initialized".to_string()))?;
 
         if conversation_id.as_str().starts_with("dm:") {
-            let user_id: u64 = conversation_id
-                .as_str()
-                .strip_prefix("dm:")
-                .unwrap()
+            let user_id: u64 = conversation_id.as_str()[3..]
                 .parse()
                 .map_err(|e| ChannelError::Internal(format!("Invalid user ID: {e}")))?;
 
@@ -768,11 +765,7 @@ impl Channel for DiscordChannel {
         let channel_id =
             if message.conversation_id.as_str().starts_with("dm:") {
                 // For DMs, we need to create a DM channel first
-                let user_id: u64 = message
-                    .conversation_id
-                    .as_str()
-                    .strip_prefix("dm:")
-                    .unwrap()
+                let user_id: u64 = message.conversation_id.as_str()[3..]
                     .parse()
                     .map_err(|e| ChannelError::SendFailed(format!("Invalid user ID: {e}")))?;
 

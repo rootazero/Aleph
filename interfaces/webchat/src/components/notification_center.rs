@@ -24,8 +24,12 @@ use leptos::task::spawn_local;
 #[component]
 #[must_use]
 pub fn NotificationCenter() -> impl IntoView {
-    let dashboard = use_context::<DashboardState>().expect("DashboardState not provided");
-    let notif = use_context::<NotificationsState>().expect("NotificationsState not provided");
+    let Some(dashboard) = use_context::<DashboardState>() else {
+        return ().into_any();
+    };
+    let Some(notif) = use_context::<NotificationsState>() else {
+        return ().into_any();
+    };
 
     let alerts = dashboard.alerts;
     let pending_approvals = dashboard.pending_approvals;
@@ -303,7 +307,7 @@ pub fn NotificationCenter() -> impl IntoView {
                 </div>
             </div>
         </Show>
-    }
+    }.into_any()
 }
 
 #[cfg(test)]

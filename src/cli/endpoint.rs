@@ -19,7 +19,7 @@ pub struct IpcEndpoint {
 impl IpcEndpoint {
     pub fn current(url: impl Into<String>) -> Self {
         Self {
-            version: 1,
+            version: CURRENT_ENDPOINT_VERSION,
             url: url.into(),
             pid: std::process::id(),
             started_at: chrono::Utc::now().to_rfc3339(),
@@ -124,13 +124,6 @@ mod tests {
     fn read_returns_none_when_missing() {
         let dir = tempfile::tempdir().unwrap();
         assert!(read_endpoint(dir.path()).unwrap().is_none());
-    }
-
-    #[test]
-    fn read_endpoint_path_handles_missing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = read_endpoint(dir.path()).unwrap();
-        assert!(result.is_none());
     }
 
     #[test]

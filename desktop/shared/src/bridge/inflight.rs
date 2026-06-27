@@ -23,14 +23,14 @@ impl InflightTable {
     }
 
     pub async fn complete(&self, id: u64, value: serde_json::Value) -> Result<()> {
-        if let Some(tx) = self.inner.lock().await.remove(&id) {
-            let _ = tx.send(Ok(value));
-            Ok(())
-        } else {
-            Err(DesktopError::BridgeFailed(format!(
-                "inflight id={id} not found"
-            )))
-        }
+        let tx = self
+            .inner
+            .lock()
+            .await
+            .remove(&id)
+            .ok_or_else(|| DesktopError::BridgeFailed(format!("inflight id={id} not found")))?;
+        let _ = tx.send(Ok(value));
+        Ok(())
     }
 
     pub async fn fail(&self, id: u64, reason: impl Into<String>) {

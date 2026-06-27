@@ -234,7 +234,8 @@ impl NodeRegistry {
         let id = Self::match_id(&inner, name_or_id)?;
         let s = inner.nodes_by_id.get(&id).ok_or_else(|| ResolveError::NodeNotFound {
             name_or_id: name_or_id.to_string(),
-        })?;        Ok((s.channel.clone(), s.declared_commands.clone()))
+        })?;
+        Ok((s.channel.clone(), s.declared_commands.clone()))
     }
 
     /// 同 [`resolve`] 的多级匹配，但只回 `node_id` —— `cluster.deregister` 用它把

@@ -35,7 +35,9 @@ pub fn load_persisted_sessions() -> Vec<crate::acp::session::PersistedAcpSession
 pub fn save_persisted_sessions(sessions: &[crate::acp::session::PersistedAcpSession]) {
     let path = acp_sessions_path();
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            warn!("Failed to create ACP sessions directory: {}", e);
+        }
     }
     match serde_json::to_string_pretty(sessions) {
         Ok(json) => {
@@ -55,7 +57,10 @@ pub async fn wire_persistence(manager: &AcpAdapterManager) {
     let sessions = Arc::new(Mutex::new(
         tokio::task::spawn_blocking(load_persisted_sessions)
             .await
-            .unwrap_or_default(),
+            .unwrap_or_else(|e| {
+                warn!("ACP session load task failed: {}", e);
+                Vec::new()
+            }),
     ));
 
     let sessions_ref = Arc::clone(&sessions);
