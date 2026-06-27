@@ -124,6 +124,14 @@ pub struct AgentHarness {
     /// via [`TokenBreakdown::accumulate`]. Read after the run via
     /// [`AgentHarness::token_breakdown`].
     token_breakdown: Mutex<TokenBreakdown>,
+    /// Most recent LLM call's raw usage (last-writer-wins snapshot), refreshed
+    /// in [`AgentHarness::accumulate_token_breakdown`] alongside the cumulative
+    /// [`token_breakdown`]. Unlike the cumulative counter this is *replaced*
+    /// each call, so it reflects current context-window occupancy (last prompt
+    /// sent + that call's output) rather than the run total — the cumulative
+    /// input would blow past the window and peg the gauge at 100%. Read after
+    /// the run via [`AgentHarness::last_turn_context_tokens`].
+    last_turn_usage: Mutex<Option<crate::providers::adapter::TokenUsage>>,
     /// Wall-clock start of `run()`. Read after the run via
     /// [`AgentHarness::duration_ms`] to derive elapsed milliseconds.
     started_at: OnceLock<Instant>,
@@ -183,6 +191,7 @@ impl AgentHarness {
             terminate_reason: Mutex::new(TerminateReason::Completed),
             tool_timeline: Mutex::new(Vec::new()),
             token_breakdown: Mutex::new(TokenBreakdown::default()),
+            last_turn_usage: Mutex::new(None),
             started_at: OnceLock::new(),
             final_session_id: Mutex::new(None),
             recent_failures: Mutex::new(std::collections::HashSet::new()),
@@ -284,6 +293,20 @@ impl AgentHarness {
             .clone()
     }
 
+    /// Tokens occupying the model's context window as of the most recent LLM
+    /// call: the last prompt actually sent plus that call's output. `0` when no
+    /// LLM round-trip happened this run. Gauge numerator — distinct from the
+    /// run-cumulative [`AgentHarness::total_tokens`].
+    pub fn last_turn_context_tokens(&self) -> u32 {
+        let occupancy = self
+            .last_turn_usage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map_or(0, crate::providers::adapter::TokenUsage::context_occupancy_tokens);
+        u32::try_from(occupancy).unwrap_or(u32::MAX)
+    }
+
     /// Tool invocation timeline in run order. Sourced from the same trace
     /// emissions the harness sends to `ToolCallCompleted`, so trace
     /// consumers and the `FlowOutcome` see the same metadata.
@@ -365,6 +388,14 @@ impl AgentHarness {
                     u.cache_creation_tokens,
                     u.thinking_tokens,
                 );
+            // Snapshot the latest call's usage (last-writer-wins) so the
+            // orchestrator can report *current* context-window occupancy, not
+            // the run-cumulative input. Kept in lockstep with the cumulative
+            // fold above — both update from the same `usage` in one place.
+            *self
+                .last_turn_usage
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(u.clone());
         }
     }
 
@@ -1416,6 +1447,39 @@ mod tests {
             cost: None,
         });
         assert_eq!(super::turn_token_total(&usage), 18);
+    }
+
+    #[test]
+    fn last_turn_context_tokens_reflects_latest_call_not_cumulative() {
+        use crate::providers::adapter::TokenUsage;
+        let (session, _sid) = empty_session("gauge-snapshot");
+        let harness = followup_harness(session);
+
+        // No LLM call yet → gauge numerator is 0.
+        assert_eq!(harness.last_turn_context_tokens(), 0);
+
+        let first = Some(TokenUsage {
+            input_tokens: 100,
+            output_tokens: 10,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            thinking_tokens: None,
+            cost: None,
+        });
+        let second = Some(TokenUsage {
+            input_tokens: 300,
+            output_tokens: 20,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            thinking_tokens: None,
+            cost: None,
+        });
+        harness.accumulate_token_breakdown(&first);
+        harness.accumulate_token_breakdown(&second);
+
+        // last-writer-wins: reflects the SECOND call (300 prompt + 20 output =
+        // 320), NOT the run-cumulative 100+10+300+20 = 430.
+        assert_eq!(harness.last_turn_context_tokens(), 320);
     }
 
     #[tokio::test]

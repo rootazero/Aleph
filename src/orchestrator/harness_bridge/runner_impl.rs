@@ -528,22 +528,29 @@ impl HarnessRunner for AgentHarnessRunner {
         // `None` when the run produced no tokens (no LLM call observed) —
         // the renderer treats `None` and `Unknown` differently (None ==
         // "did not attempt"; Unknown == "attempted, no rate").
+        // Resolve the model id once — both the cost estimate and the context
+        // gauge denominator key off it. Falls back to the provider name when
+        // the brain carries no explicit model.
+        let model: &str = match &spec.brain {
+            crate::orchestrator::flow_spec::BrainRef::Strict { model: Some(m), .. } => m.as_str(),
+            _ => provider_name.as_str(),
+        };
         let estimated_cost =
             if token_breakdown == crate::orchestrator::dispatch::TokenBreakdown::default() {
                 None
             } else {
-                let model: &str = match &spec.brain {
-                    crate::orchestrator::flow_spec::BrainRef::Strict { model: Some(m), .. } => {
-                        m.as_str()
-                    }
-                    _ => provider_name.as_str(),
-                };
                 Some(crate::pricing::estimate(
                     &provider_name,
                     model,
                     &token_breakdown,
                 ))
             };
+        // Gauge: authoritative per-model context window (R7 — the lookup is
+        // core's, not the panel's) plus the current occupancy snapshot from the
+        // harness's last LLM call. `context_tokens` is 0 when no call ran, so the
+        // panel self-hides the gauge.
+        let context_window = crate::providers::model_catalog::resolve_context_window(model);
+        let context_tokens = harness.last_turn_context_tokens();
         let outcome = FlowOutcome {
             final_text,
             iterations,
@@ -555,6 +562,8 @@ impl HarnessRunner for AgentHarnessRunner {
             token_breakdown,
             tool_timeline: harness.tool_timeline(),
             estimated_cost,
+            context_tokens,
+            context_window,
         };
 
         // P4: single-source the terminal `Complete(outcome)` emit. The

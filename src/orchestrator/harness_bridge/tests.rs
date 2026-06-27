@@ -96,6 +96,8 @@ fn broadcast_callback_on_complete_with_outcome_emits_terminal_event() {
         },
         tool_timeline: Vec::new(),
         estimated_cost: None,
+        context_tokens: 0,
+        context_window: 0,
     };
     cb.on_complete_with_outcome(&outcome);
 

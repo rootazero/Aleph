@@ -101,6 +101,14 @@ pub struct FlowOutcome {
     /// could not resolve the provider/model — pricing is non-load-bearing
     /// (see [`crate::pricing`]).
     pub estimated_cost: Option<crate::pricing::CostEstimate>,
+    /// Tokens occupying the model's context window as of the run's most recent
+    /// LLM call (last prompt sent + that call's output). Gauge numerator —
+    /// distinct from cumulative [`total_tokens`]. `0` when no LLM call ran.
+    pub context_tokens: u32,
+    /// Authoritative context-window size (tokens) for this run's model, with a
+    /// conservative fallback for unknown models. Gauge denominator. `0` only on
+    /// default/test fixtures.
+    pub context_window: u32,
 }
 
 /// Loop-exit cause for an agent run. Each variant corresponds to a distinct

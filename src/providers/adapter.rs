@@ -462,6 +462,18 @@ impl TokenUsage {
             input.saturating_add(cache_creation)
         }
     }
+
+    /// Tokens occupying the model's context window as of this call: the full
+    /// prompt actually sent ([`Self::prompt_tokens_total`]) plus the tokens
+    /// generated on this call (which join the context for the next turn).
+    /// Provider-aware via `prompt_tokens_total` — no cache double-count. This
+    /// is the display-gauge numerator (current occupancy), distinct from the
+    /// run-cumulative token counters.
+    #[must_use]
+    pub fn context_occupancy_tokens(&self) -> u64 {
+        self.prompt_tokens_total()
+            .saturating_add(u64::from(self.output_tokens))
+    }
 }
 
 #[cfg(test)]
@@ -690,5 +702,35 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(usage.prompt_tokens_total(), 1234);
+    }
+
+    #[test]
+    fn context_occupancy_folds_prompt_plus_output_anthropic_shape() {
+        // Anthropic shape: input excludes cache; cache_read > input ⇒ disjoint.
+        let u = TokenUsage {
+            input_tokens: 100,
+            output_tokens: 40,
+            cache_read_tokens: Some(900),
+            cache_creation_tokens: Some(50),
+            thinking_tokens: None,
+            cost: None,
+        };
+        // prompt = 100 + 900 + 50 = 1050; + output 40 = 1090
+        assert_eq!(u.context_occupancy_tokens(), 1090);
+    }
+
+    #[test]
+    fn context_occupancy_no_double_count_openai_shape() {
+        // OpenAI shape: input already includes cache_read (cache_read <= input).
+        let u = TokenUsage {
+            input_tokens: 1000,
+            output_tokens: 30,
+            cache_read_tokens: Some(200),
+            cache_creation_tokens: None,
+            thinking_tokens: None,
+            cost: None,
+        };
+        // prompt = 1000（cache 已在内）; + output 30 = 1030
+        assert_eq!(u.context_occupancy_tokens(), 1030);
     }
 }

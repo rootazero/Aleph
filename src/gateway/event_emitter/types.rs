@@ -334,10 +334,12 @@ impl ToolResult {
 
 /// Summary of a completed agent run.
 ///
-/// Mirrors `aleph_protocol::RunSummary` field-for-field — kept in parallel
-/// because the gateway internal `StreamEvent` enum is distinct from the
-/// wire-protocol enum (see `events.rs` comment). Every new field carries
-/// `#[serde(default)]` so legacy producers round-trip cleanly.
+/// Mirrors `aleph_protocol::RunSummary` — kept in parallel because the gateway
+/// internal `StreamEvent` enum is distinct from the wire-protocol enum (see
+/// `events.rs` comment). The trailing `context_tokens` / `context_window` gauge
+/// fields are gateway-only (they ride the panel-bound `RunComplete` frame, which
+/// moves this struct directly; the protocol struct does not carry them). Every
+/// new field carries `#[serde(default)]` so legacy producers round-trip cleanly.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunSummary {
     pub total_tokens: u64,
@@ -356,6 +358,14 @@ pub struct RunSummary {
     pub terminate_detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_breakdown: Option<aleph_protocol::TokenBreakdownView>,
+    /// Current context-window occupancy (tokens) after the latest turn. Gauge
+    /// numerator on the panel. `#[serde(default)]` so legacy payloads → 0.
+    #[serde(default)]
+    pub context_tokens: u32,
+    /// Authoritative context-window size (tokens) for the run's model. Gauge
+    /// denominator on the panel. `#[serde(default)]` so legacy payloads → 0.
+    #[serde(default)]
+    pub context_window: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

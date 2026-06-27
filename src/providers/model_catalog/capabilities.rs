@@ -682,6 +682,22 @@ pub fn capabilities_for(model: &str) -> Option<ModelCapabilities> {
         .map(|(_, caps)| *caps)
 }
 
+/// Conservative context window (tokens) for models absent from the capability
+/// catalogue — keeps the occupancy gauge meaningful for custom / local models
+/// instead of failing. Matches the panel's prior unknown-model fallback so the
+/// migration to core-authoritative windows is behaviour-preserving for them.
+pub const CONSERVATIVE_CONTEXT_WINDOW: u32 = 128_000;
+
+/// Authoritative context-window size for a model id, with a conservative
+/// fallback. Display/occupancy consumers use this as the gauge denominator
+/// (R7 — the window lookup is business logic and lives in core, not the panel).
+#[must_use]
+pub fn resolve_context_window(model: &str) -> u32 {
+    capabilities_for(model)
+        .map(|c| c.context_window)
+        .unwrap_or(CONSERVATIVE_CONTEXT_WINDOW)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -896,5 +912,26 @@ mod tests {
             capabilities_for("sonar-pro").unwrap().context_window,
             200_000
         );
+    }
+
+    #[test]
+    fn resolve_context_window_uses_catalog_for_known_models() {
+        // claude-opus-4-8 is an exact prefix in the catalog (context_window =
+        // 1_000_000, see the "claude-opus-4-8" row in CAPABILITY_TABLE).
+        assert_eq!(resolve_context_window("claude-opus-4-8"), 1_000_000);
+        assert_ne!(
+            resolve_context_window("claude-opus-4-8"),
+            CONSERVATIVE_CONTEXT_WINDOW,
+            "known model must not hit the fallback"
+        );
+    }
+
+    #[test]
+    fn resolve_context_window_falls_back_for_unknown_models() {
+        assert_eq!(
+            resolve_context_window("totally-unknown-model"),
+            CONSERVATIVE_CONTEXT_WINDOW
+        );
+        assert_eq!(resolve_context_window(""), CONSERVATIVE_CONTEXT_WINDOW);
     }
 }

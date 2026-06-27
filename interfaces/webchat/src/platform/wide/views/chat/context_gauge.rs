@@ -4,51 +4,12 @@
 //! already emits (`run_complete` summary → [`ChatState::context_usage`]), so no
 //! backend protocol change is required.
 //!
-//! The gauge is purely presentational: it reads the published snapshot and
-//! self-hides until the first usage figure lands. The only logic it owns is the
-//! window-size heuristic ([`context_window_for`]) — kept here (next to its
-//! tests) because the panel is an I/O-only interface (R4) and cannot reach
-//! core's model catalogue.
+//! The gauge is purely presentational (R4): it reads the published snapshot —
+//! both the occupancy and the per-model window are computed by core — and
+//! self-hides until the first usage figure lands.
 
 use super::state::ChatState;
 use leptos::prelude::*;
-
-/// Best-effort context-window size (tokens) for a model id.
-///
-/// Keyed on well-known family substrings. A display gauge tolerates
-/// approximation — correctness never depends on this value, so an unknown model
-/// falls back to a conservative 128k rather than failing. Order matters:
-/// most-specific families first.
-#[must_use]
-pub fn context_window_for(model: &str) -> u32 {
-    let m = model.to_ascii_lowercase();
-    if m.contains("gpt-3.5") {
-        16_385
-    } else if m.contains("gpt-4o")
-        || m.contains("gpt-4.1")
-        || m.contains("gpt-4-turbo")
-        || m.contains("o1")
-        || m.contains("o3")
-        || m.contains("o4")
-    {
-        128_000
-    } else if m.contains("claude") {
-        // Claude 3.x / 4.x default surface (1M is a beta opt-in, not assumed).
-        200_000
-    } else if m.contains("kimi") || m.contains("moonshot") {
-        200_000
-    } else if m.contains("gemini") {
-        1_000_000
-    } else if m.contains("qwen") {
-        131_072
-    } else if m.contains("glm") {
-        128_000
-    } else if m.contains("deepseek") {
-        65_536
-    } else {
-        128_000
-    }
-}
 
 /// Pick a token-tinted color for the ring by occupancy fraction.
 fn gauge_color(frac: f64) -> &'static str {
@@ -110,22 +71,6 @@ pub fn ContextGauge() -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn known_families_resolve_expected_windows() {
-        assert_eq!(context_window_for("claude-opus-4-8"), 200_000);
-        assert_eq!(context_window_for("kimi-k2"), 200_000);
-        assert_eq!(context_window_for("gpt-4o-mini"), 128_000);
-        assert_eq!(context_window_for("gpt-3.5-turbo"), 16_385);
-        assert_eq!(context_window_for("gemini-2.5-pro"), 1_000_000);
-        assert_eq!(context_window_for("qwen2.5-72b"), 131_072);
-    }
-
-    #[test]
-    fn unknown_model_falls_back_conservatively() {
-        assert_eq!(context_window_for("some-future-model"), 128_000);
-        assert_eq!(context_window_for(""), 128_000);
-    }
 
     #[test]
     fn gauge_color_tracks_thresholds() {

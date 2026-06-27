@@ -136,13 +136,11 @@ pub struct ProviderRetryNotice {
     pub max_attempts: u32,
 }
 
-/// Context-window occupancy snapshot for the composer gauge.
-///
-/// Populated from each `run_complete` summary (`token_breakdown.input` is the
-/// last turn's context tokens, `total_tokens` the run's running total). The
-/// window denominator is resolved client-side by
-/// [`super::context_gauge::context_window_for`] since the panel — an I/O-only
-/// interface (R4) — cannot reach core's model catalogue.
+/// Context-window occupancy snapshot for the composer gauge. All three figures
+/// are computed by core and shipped on the `run_complete` summary — the panel
+/// is a pure renderer (R4): `used_tokens` = current occupancy
+/// (`prompt_tokens_total` + last output), `window_tokens` = the model's
+/// authoritative context window, `total_tokens` = the run's cumulative total.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextUsage {
     /// Input/context tokens occupying the window after the latest turn.
@@ -830,6 +828,7 @@ impl ChatState {
         self.prompt_queue.set(Vec::new());
         self.strip_open.set(std::collections::HashMap::new());
         self.plan.set(None);
+        self.context_usage.set(None);
     }
 
     /// Clear session state but keep `agent_id` (for new chat within same agent).
@@ -846,6 +845,7 @@ impl ChatState {
         self.team_members.set(Vec::new());
         self.strip_open.set(std::collections::HashMap::new());
         self.plan.set(None);
+        self.context_usage.set(None);
         // agent_id is intentionally preserved
     }
 
@@ -898,6 +898,7 @@ impl ChatState {
         // collapse choices / Todo panel don't leak into the restored session.
         self.strip_open.set(std::collections::HashMap::new());
         self.plan.set(None);
+        self.context_usage.set(None);
     }
 }
 
@@ -1174,5 +1175,42 @@ mod step_tests {
         assert_eq!(msg.agent_id.as_deref(), Some("alice"));
         let v = serde_json::to_value(&msg).unwrap();
         assert_eq!(v.get("agent_id").and_then(|a| a.as_str()), Some("alice"));
+    }
+
+    #[test]
+    fn context_usage_is_cleared_on_session_transitions() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        let seed = || {
+            chat.context_usage.set(Some(ContextUsage {
+                used_tokens: 10_000,
+                window_tokens: 200_000,
+                total_tokens: 12_000,
+            }))
+        };
+
+        seed();
+        chat.clear();
+        assert!(
+            chat.context_usage.get_untracked().is_none(),
+            "clear() must reset the context gauge"
+        );
+
+        seed();
+        chat.clear_session();
+        assert!(
+            chat.context_usage.get_untracked().is_none(),
+            "clear_session() must reset the context gauge"
+        );
+
+        // restore_from must not inherit a prior session's gauge. context_usage is
+        // ephemeral (excluded from SessionSnapshot), so any captured snapshot works.
+        seed();
+        chat.restore_from(chat.capture_snapshot());
+        assert!(
+            chat.context_usage.get_untracked().is_none(),
+            "restore_from() must reset the context gauge"
+        );
     }
 }

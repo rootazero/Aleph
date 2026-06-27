@@ -336,6 +336,8 @@ pub(crate) fn build_run_summary(outcome: &FlowOutcome) -> RunSummary {
         terminate_reason: Some(outcome.terminate_reason.as_static_str().to_string()),
         terminate_detail,
         token_breakdown,
+        context_tokens: outcome.context_tokens,
+        context_window: outcome.context_window,
         estimated_cost_usd,
         cost_status,
         tool_summaries,
@@ -724,9 +726,14 @@ mod tests {
                 },
             ],
             estimated_cost: None,
+            context_tokens: 1234,
+            context_window: 200_000,
         };
 
         let summary = super::build_run_summary(&outcome);
+
+        assert_eq!(summary.context_tokens, 1234);
+        assert_eq!(summary.context_window, 200_000);
 
         // Legacy fields unchanged.
         assert_eq!(summary.total_tokens, 1500);
