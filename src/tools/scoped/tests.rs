@@ -704,7 +704,9 @@ async fn after_tool_hook_observer_fires_on_success() {
         .await
         .expect("execute should succeed");
 
-    let contents = std::fs::read_to_string(&marker).expect("observer must have written marker");
+    let contents = tokio::fs::read_to_string(&marker)
+        .await
+        .expect("observer must have written marker");
     assert_eq!(contents.trim(), "echo");
 }
 
@@ -753,8 +755,9 @@ async fn after_tool_failure_hook_fires_when_tool_errors() {
         .expect_err("tool returns error");
     assert!(matches!(err, ToolError::Execution { .. }));
 
-    let contents =
-        std::fs::read_to_string(&marker).expect("failure observer must have written marker");
+    let contents = tokio::fs::read_to_string(&marker)
+        .await
+        .expect("failure observer must have written marker");
     assert_eq!(contents.trim(), "boom");
 }
 

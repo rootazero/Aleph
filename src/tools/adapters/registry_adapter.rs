@@ -297,6 +297,7 @@ pub fn build_tool_adapters_from_tools<R: ToolRegistry + 'static>(
     default_working_dir: Option<String>,
 ) -> Vec<Box<dyn LoopTool>> {
     let mut adapters: Vec<Box<dyn LoopTool>> = Vec::new();
+    let default_working_dir = default_working_dir.clone();
 
     for tool in unified_tools {
         if !tool.is_active {
