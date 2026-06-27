@@ -34,7 +34,7 @@ impl fmt::Display for ToolProgressMode {
 
 impl ToolProgressMode {
     /// Single-character glyph for the status bar.
-    pub const fn glyph(&self) -> char {
+    pub const fn glyph(self) -> char {
         match self {
             Self::Off => '-',
             Self::New => 'n',
@@ -119,11 +119,10 @@ pub fn parse_input(input: &str) -> ParsedInput {
     }
 
     // Split into command and argument parts
-    let cmd = match trimmed.find(char::is_whitespace) {
-        Some(pos) => &trimmed[..pos],
-        None => trimmed,
+    let (cmd, args) = match trimmed.split_once(char::is_whitespace) {
+        Some((cmd, args)) => (cmd, args.trim()),
+        None => (trimmed, ""),
     };
-    let args = trimmed[cmd.len()..].trim();
 
     // Normalize command to lowercase
     let cmd_lower = cmd.to_lowercase();

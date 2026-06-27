@@ -130,9 +130,6 @@ fn parse_heading(line: &str) -> Option<Line<'static>> {
         1 => Style::default()
             .fg(DEFAULT_THEME.heading)
             .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        2 => Style::default()
-            .fg(DEFAULT_THEME.heading)
-            .add_modifier(Modifier::BOLD),
         _ => Style::default()
             .fg(DEFAULT_THEME.heading)
             .add_modifier(Modifier::BOLD),
@@ -152,40 +149,45 @@ fn parse_inline(text: &str, base_style: Style) -> Vec<Span<'static>> {
     let mut plain_start = 0;
 
     while i < len {
-        let (byte_idx, ch) = chars[i];
+        let Some(&(byte_idx, ch)) = chars.get(i) else {
+            break;
+        };
 
         match ch {
             '*' => {
                 // Check for bold (**) or italic (*)
-                if i + 1 < len && chars[i + 1].1 == '*' {
+                let is_bold = chars
+                    .get(i + 1)
+                    .map_or(false, |&(_, c)| c == '*');
+                if is_bold {
                     // Bold: **text**
                     if let Some(end) = find_double_marker(&chars, i + 2, '*') {
                         // Flush plain text before this marker
                         flush_plain(text, plain_start, byte_idx, base_style, &mut spans);
-                        let inner_start = chars[i + 2].0;
-                        let inner_end = chars[end].0;
+                        let inner_start = chars.get(i + 2).map_or(text.len(), |c| c.0);
+                        let inner_end = chars.get(end).map_or(text.len(), |c| c.0);
                         let inner = text.get(inner_start..inner_end).unwrap_or("");
                         spans.push(Span::styled(
                             inner.to_string(),
                             base_style.add_modifier(Modifier::BOLD),
                         ));
                         i = end + 2; // skip past closing **
-                        plain_start = if i < len { chars[i].0 } else { text.len() };
+                        plain_start = chars.get(i).map_or(text.len(), |c| c.0);
                         continue;
                     }
                 }
                 // Single italic: *text*
                 if let Some(end) = find_single_marker(&chars, i + 1, '*') {
                     flush_plain(text, plain_start, byte_idx, base_style, &mut spans);
-                    let inner_start = chars[i + 1].0;
-                    let inner_end = chars[end].0;
+                    let inner_start = chars.get(i + 1).map_or(text.len(), |c| c.0);
+                    let inner_end = chars.get(end).map_or(text.len(), |c| c.0);
                     let inner = text.get(inner_start..inner_end).unwrap_or("");
                     spans.push(Span::styled(
                         inner.to_string(),
                         base_style.add_modifier(Modifier::ITALIC),
                     ));
                     i = end + 1;
-                    plain_start = if i < len { chars[i].0 } else { text.len() };
+                    plain_start = chars.get(i).map_or(text.len(), |c| c.0);
                     continue;
                 }
                 i += 1;
@@ -194,15 +196,15 @@ fn parse_inline(text: &str, base_style: Style) -> Vec<Span<'static>> {
                 // Inline code: `text`
                 if let Some(end) = find_single_marker(&chars, i + 1, '`') {
                     flush_plain(text, plain_start, byte_idx, base_style, &mut spans);
-                    let inner_start = chars[i + 1].0;
-                    let inner_end = chars[end].0;
+                    let inner_start = chars.get(i + 1).map_or(text.len(), |c| c.0);
+                    let inner_end = chars.get(end).map_or(text.len(), |c| c.0);
                     let inner = text.get(inner_start..inner_end).unwrap_or("");
                     spans.push(Span::styled(
                         inner.to_string(),
                         Style::default().bg(DEFAULT_THEME.code_bg),
                     ));
                     i = end + 1;
-                    plain_start = if i < len { chars[i].0 } else { text.len() };
+                    plain_start = chars.get(i).map_or(text.len(), |c| c.0);
                     continue;
                 }
                 i += 1;
@@ -218,7 +220,7 @@ fn parse_inline(text: &str, base_style: Style) -> Vec<Span<'static>> {
                             .add_modifier(Modifier::UNDERLINED),
                     ));
                     i = after_link_idx;
-                    plain_start = if i < len { chars[i].0 } else { text.len() };
+                    plain_start = chars.get(i).map_or(text.len(), |c| c.0);
                     continue;
                 }
                 i += 1;
@@ -253,13 +255,17 @@ fn flush_plain(text: &str, start: usize, end: usize, style: Style, spans: &mut V
 
 /// Find a single closing marker character, returning the char index (not byte index).
 fn find_single_marker(chars: &[(usize, char)], from: usize, marker: char) -> Option<usize> {
-    (from..chars.len()).find(|&idx| chars[idx].1 == marker)
+    (from..chars.len()).find(|&idx| chars.get(idx).map_or(false, |c| c.1 == marker))
 }
 
 /// Find a double closing marker (e.g., **), returning the char index of the first char.
 fn find_double_marker(chars: &[(usize, char)], from: usize, marker: char) -> Option<usize> {
     let len = chars.len();
-    (from..len.saturating_sub(1)).find(|&idx| chars[idx].1 == marker && chars[idx + 1].1 == marker)
+    (from..len.saturating_sub(1)).find(|&idx| {
+        let first = chars.get(idx).map_or(false, |c| c.1 == marker);
+        let second = chars.get(idx + 1).map_or(false, |c| c.1 == marker);
+        first && second
+    })
 }
 
 /// Parse a markdown link: [text](url). Returns (`link_text`, `char_index_after_closing_paren`).
@@ -267,7 +273,7 @@ fn parse_link(chars: &[(usize, char)], text: &str, start: usize) -> Option<(Stri
     // start is at '['
     // Find closing ']'
     let mut i = start + 1;
-    while i < chars.len() && chars[i].1 != ']' {
+    while chars.get(i).map_or(false, |&(_, c)| c != ']') {
         i += 1;
     }
     if i >= chars.len() {
@@ -277,13 +283,13 @@ fn parse_link(chars: &[(usize, char)], text: &str, start: usize) -> Option<(Stri
 
     // Next char must be '('
     i += 1;
-    if i >= chars.len() || chars[i].1 != '(' {
+    if chars.get(i).map_or(true, |&(_, c)| c != '(') {
         return None;
     }
 
     // Find closing ')'
     i += 1;
-    while i < chars.len() && chars[i].1 != ')' {
+    while chars.get(i).map_or(false, |&(_, c)| c != ')') {
         i += 1;
     }
     if i >= chars.len() {
@@ -291,8 +297,8 @@ fn parse_link(chars: &[(usize, char)], text: &str, start: usize) -> Option<(Stri
     }
 
     // Extract link text
-    let text_start = chars[start + 1].0;
-    let text_end = chars[bracket_close].0;
+    let text_start = chars.get(start + 1).map_or(text.len(), |c| c.0);
+    let text_end = chars.get(bracket_close).map_or(text.len(), |c| c.0);
     let link_text = text.get(text_start..text_end).unwrap_or("").to_string();
 
     Some((link_text, i + 1))

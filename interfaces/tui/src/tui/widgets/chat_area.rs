@@ -46,12 +46,12 @@ pub fn render_chat_area(frame: &mut Frame, state: &AppState, area: Rect) {
     let visible_lines = if state.auto_scroll {
         // Show the last visible_height lines
         let start = total_lines.saturating_sub(visible_height);
-        &all_lines[start..]
+        all_lines.get(start..).unwrap_or(&[])
     } else {
         // scroll_offset = how many lines from the bottom we've scrolled up
         let end = total_lines.saturating_sub(state.scroll_offset);
         let start = end.saturating_sub(visible_height);
-        &all_lines[start..end]
+        all_lines.get(start..end).unwrap_or(&[])
     };
 
     let paragraph = Paragraph::new(visible_lines.to_vec()).wrap(Wrap { trim: false });

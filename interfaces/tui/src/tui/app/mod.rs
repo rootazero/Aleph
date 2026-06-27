@@ -161,7 +161,7 @@ pub struct PaletteState {
     pub input: String,
     pub filtered: Vec<DisplayEntry>,
     pub selected: usize,
-    /// Stack of namespace names we have browsed into (e.g. ["session"])
+    /// Stack of namespace names we have browsed into (e.g. `["session"]`)
     pub namespace_stack: Vec<String>,
 }
 
@@ -370,12 +370,10 @@ impl AppState {
                 }
             }
 
-            if let Some(ns) = found_ns {
+            found_ns.map_or_else(Vec::new, |ns| {
                 let path = namespace_stack.join(" ");
                 CommandEntry::namespace_display_entries(ns, &path)
-            } else {
-                Vec::new()
-            }
+            })
         }
     }
 
@@ -414,9 +412,8 @@ impl AppState {
     pub fn palette_enter_namespace(&mut self, ns_name: &str) {
         // Build the new stack, then compute entries without holding a mutable borrow
         let new_stack = {
-            let palette = match &self.palette {
-                Some(p) => p,
-                None => return,
+            let Some(palette) = &self.palette else {
+                return;
             };
             let mut stack = palette.namespace_stack.clone();
             stack.push(ns_name.to_string());
@@ -436,9 +433,8 @@ impl AppState {
     pub fn palette_go_back(&mut self) -> bool {
         // Build the new stack, then compute entries without holding a mutable borrow
         let new_stack = {
-            let palette = match &self.palette {
-                Some(p) => p,
-                None => return false,
+            let Some(palette) = &self.palette else {
+                return false;
             };
             if palette.namespace_stack.is_empty() {
                 return false;
@@ -477,8 +473,8 @@ impl AppState {
 
     /// Switch to a different session and reset transient chat/run UI state.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn switch_session(&mut self, session_key: String) {
-        self.session_key = session_key.clone();
+    pub fn switch_session(&mut self, session_key: &str) {
+        self.session_key = session_key.to_string();
         self.messages.clear();
         self.current_run = None;
         self.current_run_uses_agent_trace = false;
@@ -594,7 +590,7 @@ impl AppState {
     }
 
     fn update_total_tokens_from_trace(&mut self, total_tokens: usize) {
-        let bounded = total_tokens.min(u64::MAX as usize) as u64;
+        let bounded = u64::try_from(total_tokens).unwrap_or(u64::MAX);
         self.total_tokens = self.total_tokens.saturating_add(bounded);
     }
 
@@ -631,10 +627,11 @@ impl AppState {
             | AgentTraceEvent::VerifierVeto { .. } => {
                 self.append_reasoning_entry(presentation.content.clone());
             }
-            AgentTraceEvent::ToolCallStarted { .. } | AgentTraceEvent::ToolCallCompleted { .. } => {
-            }
-            // Observability passthrough — no TUI rendering for these schema variants.
-            AgentTraceEvent::WorktreeCreated { .. }
+            // Tool-call lifecycle is rendered by ToolStart/ToolEnd gateway events;
+            // observability passthrough variants have no TUI rendering.
+            AgentTraceEvent::ToolCallStarted { .. }
+            | AgentTraceEvent::ToolCallCompleted { .. }
+            | AgentTraceEvent::WorktreeCreated { .. }
             | AgentTraceEvent::WorktreeCleanedUp { .. }
             | AgentTraceEvent::McpScopeAttached { .. }
             | AgentTraceEvent::McpScopeCleaned { .. }
@@ -702,7 +699,7 @@ impl AppState {
         }
     }
 
-    pub fn load_trace_replay(&mut self, replay: AgentTraceReplay) {
+    pub fn load_trace_replay(&mut self, replay: &AgentTraceReplay) {
         let summary = format!(
             "Loaded replay {} from session {} [{}] via {}.",
             replay.task.task_id, replay.task.session_id, replay.task.status, replay.task.agent_id

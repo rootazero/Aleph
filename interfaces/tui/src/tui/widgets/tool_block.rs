@@ -39,7 +39,7 @@ pub fn render_tool_block(
         ToolStatus::Running => {
             let frame = spinner_frame % SPINNER_FRAMES.len();
             (
-                format!("\u{27f3} {}", SPINNER_FRAMES[frame]), // ⟳ + spinner
+                format!("\u{27f3} {}", SPINNER_FRAMES.get(frame).copied().unwrap_or("")), // ⟳ + spinner
                 DEFAULT_THEME.tool_running,
             )
         }
@@ -90,7 +90,7 @@ pub fn render_tool_block(
 
     // Error line (only if failed and error exists)
     if tool.status == ToolStatus::Failed {
-        if let Some(ref err) = tool.error {
+        if let Some(err) = tool.error {
             let error_prefix = "Error: ";
             let max_err_len = inner_width.saturating_sub(error_prefix.len() + 2);
             let error_display = truncate_to_width(err, max_err_len);

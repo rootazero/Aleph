@@ -23,7 +23,7 @@ pub fn render_command_palette(frame: &mut Frame, palette: &PaletteState, area: R
         return;
     }
 
-    let item_count = palette.filtered.len() as u16;
+    let item_count = u16::try_from(palette.filtered.len()).unwrap_or(u16::MAX);
     let visible_count = item_count.min(MAX_VISIBLE_ITEMS);
     // Height = visible items + 2 (borders) + 1 (input line at top)
     let overlay_height = visible_count.saturating_add(3);

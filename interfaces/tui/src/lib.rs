@@ -17,6 +17,10 @@ pub use aleph_client::{AlephClient, CliConfig, CliResult};
 /// * `session` — Optional session key; a new one is generated if `None`
 /// * `config` — CLI configuration (auth token, default session, etc.)
 /// * `verbose` — Enable verbose logging (reserved for future use)
+///
+/// # Errors
+///
+/// Returns an error if the gateway connection, handshake, or TUI launch fails.
 pub async fn run(
     server_url: &str,
     _agent: Option<&str>,
