@@ -75,14 +75,16 @@ pub fn validate_agent_id(id: &str) -> std::result::Result<(), String> {
     if id.len() > 64 {
         return Err(format!("Agent ID too long ({} chars, max 64)", id.len()));
     }
-    let mut chars = id.chars();
-    let first = chars.next().unwrap(); // safe: checked non-empty above
+    let first = match id.chars().next() {
+        Some(c) => c,
+        None => unreachable!("id checked non-empty above"),
+    };
     if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
         return Err(format!(
             "Agent ID must start with a lowercase letter or digit, got '{first}'"
         ));
     }
-    for ch in chars {
+    for ch in id.chars().skip(1) {
         if !ch.is_ascii_lowercase() && !ch.is_ascii_digit() && ch != '_' && ch != '-' {
             return Err(format!(
                 "Agent ID contains invalid character '{ch}'. Allowed: a-z, 0-9, _, -"

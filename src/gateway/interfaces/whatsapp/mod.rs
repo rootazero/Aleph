@@ -359,7 +359,7 @@ fn whatsapp_factory_creator(
 /// can instantiate it. Without this the entire `WhatsApp` channel is
 /// unreachable through configuration.
 pub fn register_with_plugin() {
-    crate::gateway::interfaces::plugin::register("whatsapp", whatsapp_factory_creator);
+    let _ = crate::gateway::interfaces::plugin::register("whatsapp", whatsapp_factory_creator);
 }
 
 #[cfg(test)]

@@ -248,7 +248,7 @@ fn add_column_if_missing(
 ) -> crate::error::Result<()> {
     fn is_safe_identifier(s: &str) -> bool {
         !s.is_empty()
-            && s.chars().next().unwrap().is_ascii_alphabetic()
+            && s.starts_with(|c: char| c.is_ascii_alphabetic())
             && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
     }
     fn is_safe_type_decl(s: &str) -> bool {

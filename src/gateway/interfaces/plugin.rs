@@ -1,7 +1,7 @@
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 
-use crate::gateway::channel::{ChannelConfig, ChannelFactory, ChannelResult};
+use crate::gateway::channel::{ChannelConfig, ChannelError, ChannelFactory, ChannelResult};
 
 type ChannelFactoryFn = fn(ChannelConfig) -> ChannelResult<Arc<dyn ChannelFactory>>;
 
@@ -10,14 +10,17 @@ static PLUGINS: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| crate::sync_primitives::RwLock::new(HashMap::new()));
 
 // Duplicate registration is a static wiring bug (each channel registers its
-// factory exactly once at startup), not a runtime condition — fail loudly.
-#[allow(clippy::panic)]
-pub fn register(channel_type: &'static str, create: ChannelFactoryFn) {
+// factory exactly once at startup). Return an error instead of panicking so
+// library callers remain in control.
+pub fn register(channel_type: &'static str, create: ChannelFactoryFn) -> ChannelResult<()> {
     let mut guard = PLUGINS.write().unwrap_or_else(|e| e.into_inner());
     if guard.contains_key(channel_type) {
-        panic!("Duplicate ChannelFactory registration for type: {channel_type}");
+        return Err(ChannelError::ConfigError(format!(
+            "Duplicate ChannelFactory registration for type: {channel_type}"
+        )));
     }
     guard.insert(channel_type, create);
+    Ok(())
 }
 
 pub fn get_factory(channel_type: &str) -> Option<ChannelFactoryFn> {

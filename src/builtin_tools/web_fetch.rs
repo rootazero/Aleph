@@ -45,32 +45,32 @@ pub enum Extractor {
 // Pre-compiled regexes for HTML cleaning (compiled once, reused forever)
 // ---------------------------------------------------------------------------
 
-static RE_COMMENTS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)<!--.*?-->").expect("valid regex"));
+static RE_COMMENTS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)<!--.*?-->").unwrap_or_else(|e| panic!("invalid regex RE_COMMENTS: {e}")));
 static RE_SCRIPT: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?si)<script(\s[^>]*)?>.*?</script\s*>").expect("valid regex"));
+    Lazy::new(|| Regex::new(r"(?si)<script(\s[^>]*)?>.*?</script\s*>").unwrap_or_else(|e| panic!("invalid regex RE_SCRIPT: {e}")));
 static RE_STYLE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?si)<style(\s[^>]*)?>.*?</style\s*>").expect("valid regex"));
+    Lazy::new(|| Regex::new(r"(?si)<style(\s[^>]*)?>.*?</style\s*>").unwrap_or_else(|e| panic!("invalid regex RE_STYLE: {e}")));
 static RE_NOSCRIPT: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?si)<noscript(\s[^>]*)?>.*?</noscript\s*>").expect("valid regex"));
+    Lazy::new(|| Regex::new(r"(?si)<noscript(\s[^>]*)?>.*?</noscript\s*>").unwrap_or_else(|e| panic!("invalid regex RE_NOSCRIPT: {e}")));
 static RE_HIDDEN_ATTR: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?si)<[^>]+\shidden(\s[^>]*)?>.*?</[^>]+>").expect("valid regex"));
+    Lazy::new(|| Regex::new(r"(?si)<[^>]+\shidden(\s[^>]*)?>.*?</[^>]+>").unwrap_or_else(|e| panic!("invalid regex RE_HIDDEN_ATTR: {e}")));
 static RE_ARIA_HIDDEN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"(?si)<[^>]+\saria-hidden\s*=\s*["']true["'][^>]*>.*?</[^>]+>"#)
-        .expect("valid regex")
+        .unwrap_or_else(|e| panic!("invalid regex RE_ARIA_HIDDEN: {e}"))
 });
 static RE_DISPLAY_NONE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r#"(?si)<[^>]+\sstyle\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"']*["'][^>]*>.*?</[^>]+>"#,
     )
-    .expect("valid regex")
+    .unwrap_or_else(|e| panic!("invalid regex RE_DISPLAY_NONE: {e}"))
 });
 static RE_SR_CLASSES: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r#"(?si)<[^>]+\sclass\s*=\s*["'][^"']*(?:sr-only|visually-hidden|d-none|screen-reader-only)[^"']*["'][^>]*>.*?</[^>]+>"#,
     )
-    .expect("valid regex")
+    .unwrap_or_else(|e| panic!("invalid regex RE_SR_CLASSES: {e}"))
 });
-static RE_STRIP_TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").expect("valid regex"));
+static RE_STRIP_TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").unwrap_or_else(|e| panic!("invalid regex RE_STRIP_TAGS: {e}")));
 
 // Surface `<time datetime="…">` machine timestamps into the element's own
 // text. News/listing pages frequently carry the absolute publication time
@@ -80,14 +80,14 @@ static RE_STRIP_TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").expect("
 // is what made fetched pages report "publish time: not provided".
 static RE_TIME_DATETIME: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"(?si)<time\b[^>]*\bdatetime\s*=\s*["']([^"']+)["'][^>]*>(.*?)</time>"#)
-        .expect("valid regex")
+        .unwrap_or_else(|e| panic!("invalid regex RE_TIME_DATETIME: {e}"))
 });
 
 // Match `href="…"` / `src="…"` attribute values for base-URL resolution so
 // extracted Markdown links point at usable absolute "original article" URLs
 // rather than the relative paths an index page ships.
 static RE_HREF_SRC: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?i)(\s(?:href|src)\s*=\s*["'])([^"']*)(["'])"#).expect("valid regex")
+    Regex::new(r#"(?i)(\s(?:href|src)\s*=\s*["'])([^"']*)(["'])"#).unwrap_or_else(|e| panic!("invalid regex RE_HREF_SRC: {e}"))
 });
 
 // ---------------------------------------------------------------------------

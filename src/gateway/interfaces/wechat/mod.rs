@@ -266,5 +266,5 @@ fn wechat_factory_creator(
 }
 
 pub fn register_with_plugin() {
-    crate::gateway::interfaces::plugin::register("wechat", wechat_factory_creator);
+    let _ = crate::gateway::interfaces::plugin::register("wechat", wechat_factory_creator);
 }

@@ -983,7 +983,7 @@ fn telegram_factory_creator(
 }
 
 pub fn register_with_plugin() {
-    crate::gateway::interfaces::plugin::register("telegram", telegram_factory_creator);
+    let _ = crate::gateway::interfaces::plugin::register("telegram", telegram_factory_creator);
 }
 
 #[cfg(test)]

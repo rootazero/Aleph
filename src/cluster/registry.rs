@@ -51,6 +51,8 @@ pub enum ResolveError {
     NotFound,
     /// 多个在线节点匹配——附带可读候选标签（`name (short-id)`），供 LLM 收窄。
     Ambiguous(Vec<String>),
+    /// 内部状态不一致：match_id 返回的 id 在 nodes_by_id 中缺失。
+    NodeNotFound { name_or_id: String },
 }
 
 impl std::fmt::Display for ResolveError {
@@ -58,6 +60,10 @@ impl std::fmt::Display for ResolveError {
         match self {
             Self::NotFound => write!(f, "no online node matches"),
             Self::Ambiguous(c) => write!(f, "ambiguous — matches: {}", c.join(", ")),
+            Self::NodeNotFound { name_or_id } => write!(
+                f,
+                "internal node lookup failed for '{name_or_id}'"
+            ),
         }
     }
 }
@@ -226,11 +232,9 @@ impl NodeRegistry {
     ) -> std::result::Result<(ReverseRpcChannel, Vec<CommandDescriptor>), ResolveError> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let id = Self::match_id(&inner, name_or_id)?;
-        let s = inner
-            .nodes_by_id
-            .get(&id)
-            .expect("match_id returns an id that is present in nodes_by_id");
-        Ok((s.channel.clone(), s.declared_commands.clone()))
+        let s = inner.nodes_by_id.get(&id).ok_or_else(|| ResolveError::NodeNotFound {
+            name_or_id: name_or_id.to_string(),
+        })?;        Ok((s.channel.clone(), s.declared_commands.clone()))
     }
 
     /// 同 [`resolve`] 的多级匹配，但只回 `node_id` —— `cluster.deregister` 用它把

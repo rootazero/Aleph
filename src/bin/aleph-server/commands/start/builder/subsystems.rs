@@ -60,7 +60,7 @@ pub(in crate::commands::start) fn initialize_vault(
                 );
                 alephcore::gateway::security::SecurityStore::in_memory()
             })
-            .expect("Fatal: Failed to create in-memory security store fallback"),
+            .unwrap_or_else(|e| panic!("Fatal: Failed to create in-memory security store fallback: {e}")),
     );
 
     let mdns_broadcaster = match alephcore::gateway::MdnsBroadcaster::new(port, "aleph") {

@@ -129,7 +129,7 @@ pub async fn handle_cluster_deregister(
                 )
             }
         },
-        Err(e @ ResolveError::Ambiguous(_)) => {
+        Err(e @ (ResolveError::Ambiguous(_) | ResolveError::NodeNotFound { .. })) => {
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,

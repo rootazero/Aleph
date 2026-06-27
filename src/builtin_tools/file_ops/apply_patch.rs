@@ -617,7 +617,11 @@ fn parse_patch(input: &str) -> std::result::Result<Vec<PatchOp>, String> {
                 match lines.peek() {
                     Some(next) if next.starts_with("***") => break,
                     Some(_) => {
-                        let next = lines.next().unwrap().trim_end_matches('\r');
+                        let next = match lines.next() {
+                            Some(v) => v,
+                            None => return Err("Add File `{path}`: missing next line".to_string()),
+                        };
+                        let next = next.trim_end_matches('\r');
                         if let Some(stripped) = next.strip_prefix('+') {
                             buf.push(stripped.to_string());
                         } else if next.is_empty() {
@@ -660,7 +664,11 @@ fn parse_patch(input: &str) -> std::result::Result<Vec<PatchOp>, String> {
                         break
                     }
                     Some(_) => {
-                        let raw = lines.next().unwrap().trim_end_matches('\r');
+                        let raw = match lines.next() {
+                            Some(v) => v,
+                            None => return Err("Update File `{path}`: missing hunk line".to_string()),
+                        };
+                        let raw = raw.trim_end_matches('\r');
                         if let Some(rest) = raw.strip_prefix("@@") {
                             if let Some(h) = current.take() {
                                 hunks.push(h);
@@ -742,7 +750,7 @@ fn current_mut(slot: &mut Option<Hunk>) -> &mut Hunk {
             eof_anchor: false,
         });
     }
-    slot.as_mut().expect("just initialised")
+    slot.as_mut().unwrap_or_else(|| unreachable!("just initialised"))
 }
 
 // =============================================================================

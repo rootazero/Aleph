@@ -1,4 +1,4 @@
-use crate::gateway::channel::ChannelResult;
+use crate::gateway::channel::{ChannelError, ChannelResult};
 use crate::gateway::interfaces::telegram::delivery::TelegramDelivery;
 use crate::sync_primitives::Arc;
 use tokio::sync::Mutex;
@@ -33,7 +33,7 @@ impl LaneHandle {
         let mut tracker = self.tracker.lock().await;
         let state = tracker
             .get_mut(self.lane_id)
-            .expect("lane always initialized in tracker");
+            .ok_or_else(|| ChannelError::Internal("lane not initialized in tracker".to_string()))?;
 
         let message_id = if let Some(id) = state.preview_message_id {
             id
@@ -55,7 +55,7 @@ impl LaneHandle {
         let mut tracker = self.tracker.lock().await;
         let state = tracker
             .get_mut(self.lane_id)
-            .expect("lane always initialized in tracker");
+            .ok_or_else(|| ChannelError::Internal("lane not initialized in tracker".to_string()))?;
 
         let message_id = if let Some(id) = state.preview_message_id {
             id
@@ -74,7 +74,7 @@ impl LaneHandle {
         let mut tracker = self.tracker.lock().await;
         let state = tracker
             .get_mut(self.lane_id)
-            .expect("lane always initialized in tracker");
+            .ok_or_else(|| ChannelError::Internal("lane not initialized in tracker".to_string()))?;
         state.final_message_id = Some(message_id);
         state.is_streaming = false;
         Ok(message_id)
