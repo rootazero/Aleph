@@ -886,17 +886,17 @@ mod trace_tests {
             source_notes: vec!["raw-ev1".into()],
             ..Default::default()
         };
-        db.index_note(&note, "default", "habits").await.unwrap();
+        db.index_note(&note, "main", "habits").await.unwrap();
 
         // Insert the raw so evidence resolves (non-pruned).
         let mut raw = RawMemory::new("user: I run daily".into(), RawMemorySource::Transcript);
         raw.id = "raw-ev1".into();
-        raw.agent_id = "default".into();
+        raw.agent_id = "main".into();
         db.insert_raw_memory(&raw).await.unwrap();
 
         let req = JsonRpcRequest::with_id(
             "memory.trace",
-            Some(json!({ "target": "habits/exercise", "kind": "note" })),
+            Some(json!({ "agent_id": "main", "target": "habits/exercise", "kind": "note" })),
             json!(1),
         );
         let resp = handle_trace(req, db).await;
