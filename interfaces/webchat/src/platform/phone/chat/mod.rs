@@ -1,10 +1,10 @@
-//! Native iPhone Chat screens (single-agent). Mirrors the Settings phone
-//! pattern: a session-list landing (`/`) drilling into a conversation
-//! (`/chat`). Reuses ChatState / ChatApi / MessageList; only the list and a
-//! minimal composer are phone-specific.
+//! Native iPhone Chat screens (single-agent). The chat surface is the tab
+//! landing (`/`); the session history is reached via the surface's history
+//! button (`/chat/history`). Reuses ChatState / ChatApi / MessageList; only the
+//! history list and a minimal composer are phone-specific.
 
 pub mod composer;
-pub mod list;
+pub mod history;
 pub mod thread;
 
 use leptos::prelude::*;
@@ -16,13 +16,13 @@ use crate::state::layout::WorkspaceState;
 use crate::views::chat::events::subscribe_run_events;
 use crate::views::chat::ChatState;
 
-use self::list::PhoneChatList;
+use self::history::PhoneChatHistory;
 use self::thread::PhoneChatThread;
 
 /// Phone Chat router. Owns the `run.*` streaming subscription (mirrors the wide
 /// `ChatView`); exactly one of {ChatView, PhoneChat} mounts per form factor, so
-/// there is no double-subscribe. Renders the list at `/` and the thread at
-/// `/chat`.
+/// there is no double-subscribe. Renders the chat surface at `/` and the
+/// session history at `/chat/history`.
 #[component]
 #[must_use]
 pub fn PhoneChat() -> impl IntoView {
@@ -59,10 +59,10 @@ pub fn PhoneChat() -> impl IntoView {
 
     let location = use_location();
     move || {
-        if location.pathname.get() == "/chat" {
-            view! { <PhoneChatThread/> }.into_any()
+        if location.pathname.get() == "/chat/history" {
+            view! { <PhoneChatHistory/> }.into_any()
         } else {
-            view! { <PhoneChatList/> }.into_any()
+            view! { <PhoneChatThread/> }.into_any()
         }
     }
 }
