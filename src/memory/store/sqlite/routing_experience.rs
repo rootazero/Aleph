@@ -237,6 +237,20 @@ mod tests {
     }
 
     #[test]
+    fn prune_keeps_newest_by_recency_not_distance() {
+        let backend = temp_backend();
+        backend.record_routing_experience(&row("1", "a", "m1", 1), &emb(1.0), 768).unwrap(); // nearest, oldest
+        backend.record_routing_experience(&row("2", "a", "m2", 2), &emb(2.0), 768).unwrap();
+        backend.record_routing_experience(&row("3", "a", "m3", 3), &emb(3.0), 768).unwrap();
+        backend.prune_routing_experiences("a", 768, 2).unwrap();
+        let got = backend.recall_routing_experience(&emb(0.0), 768, "a", 5).unwrap();
+        let models: Vec<String> = got.iter().map(|n| n.model_id.clone()).collect();
+        assert!(!models.contains(&"m1".to_string())); // oldest pruned despite being nearest
+        assert!(models.contains(&"m2".to_string()));
+        assert!(models.contains(&"m3".to_string()));
+    }
+
+    #[test]
     fn record_targets_routing_dim_table_and_not_notes() {
         let backend = temp_backend();
         backend.record_routing_experience(&row("1", "a", "m1", 1), &emb(1.0), 768).unwrap();
