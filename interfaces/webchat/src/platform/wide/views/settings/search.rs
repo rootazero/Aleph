@@ -502,6 +502,8 @@ fn ProviderDetailPanel(
     let form_api_key = RwSignal::new(String::new());
     let form_base_url = RwSignal::new(String::new());
     let form_engine_id = RwSignal::new(String::new());
+    // SearXNG only — comma-separated engines to pin (e.g. "bing").
+    let form_engines = RwSignal::new(String::new());
     // Whether the selected backend already has a key in the vault. The secret is
     // never echoed; the field starts empty and an empty value on save keeps it.
     let provider_has_key = RwSignal::new(false);
@@ -528,6 +530,7 @@ fn ProviderDetailPanel(
                 provider_has_key.set(backend.has_api_key);
                 form_base_url.set(backend.base_url.clone().unwrap_or_default());
                 form_engine_id.set(backend.engine_id.clone().unwrap_or_default());
+                form_engines.set(backend.engines.clone().unwrap_or_default());
             } else {
                 // No saved backend — use preset default base_url
                 form_api_key.set(String::new());
@@ -538,6 +541,7 @@ fn ProviderDetailPanel(
                         .unwrap_or_default(),
                 );
                 form_engine_id.set(String::new());
+                form_engines.set(String::new());
             }
         }
     });
@@ -549,6 +553,7 @@ fn ProviderDetailPanel(
         api_key: String,
         base_url: String,
         engine_id: String,
+        engines: String,
     ) -> Vec<SearchBackendEntry> {
         let mut backends: Vec<SearchBackendEntry> = existing
             .iter()
@@ -572,6 +577,11 @@ fn ProviderDetailPanel(
             } else {
                 Some(engine_id)
             },
+            engines: if engines.is_empty() {
+                None
+            } else {
+                Some(engines)
+            },
             has_api_key: false,
             verified: false,
         });
@@ -592,6 +602,7 @@ fn ProviderDetailPanel(
         let api_key = form_api_key.get();
         let base_url = form_base_url.get();
         let engine_id = form_engine_id.get();
+        let engines = form_engines.get();
 
         spawn_local(async move {
             match SearchConfigApi::test_connection(
@@ -611,6 +622,11 @@ fn ProviderDetailPanel(
                     None
                 } else {
                     Some(engine_id)
+                },
+                if engines.is_empty() {
+                    None
+                } else {
+                    Some(engines)
                 },
             )
             .await
@@ -665,6 +681,7 @@ fn ProviderDetailPanel(
             form_api_key.get(),
             form_base_url.get(),
             form_engine_id.get(),
+            form_engines.get(),
         );
 
         spawn_local(async move {
@@ -703,6 +720,7 @@ fn ProviderDetailPanel(
             form_api_key.get(),
             form_base_url.get(),
             form_engine_id.get(),
+            form_engines.get(),
         );
 
         spawn_local(async move {
@@ -896,6 +914,29 @@ fn ProviderDetailPanel(
                                                     />
                                                     <p class="mt-1 text-xs text-text-tertiary">
                                                         {t!(i18n, settings.search.engine_id_hint)}
+                                                    </p>
+                                                </div>
+                                            }.into_any()
+                                        } else {
+                                            view! { <span></span> }.into_any()
+                                        }}
+
+                                        // Engines (SearXNG only) — pin upstream engines to dodge rate-limited ones
+                                        {if p.name == "searxng" {
+                                            view! {
+                                                <div>
+                                                    <label class="block text-sm font-medium text-text-secondary mb-1">
+                                                        "Engines"
+                                                    </label>
+                                                    <input
+                                                        type="text"
+                                                        prop:value=move || form_engines.get()
+                                                        on:input=move |ev| form_engines.set(event_target_value(&ev))
+                                                        placeholder="bing,brave  ·  leave empty for SearXNG defaults"
+                                                        class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
+                                                    />
+                                                    <p class="mt-1 text-xs text-text-tertiary">
+                                                        "逗号分隔的上游引擎，把搜索钉在抗限流引擎上（如 bing,baidu），避免某引擎被限流/被墙导致空结果。Comma-separated upstream engines to pin."
                                                     </p>
                                                 </div>
                                             }.into_any()
@@ -1166,6 +1207,7 @@ fn AddCustomSearchProviderPanel(
                     Some(v)
                 }
             },
+            engines: None,
             has_api_key: false,
             verified: false,
         });

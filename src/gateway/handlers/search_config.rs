@@ -22,6 +22,10 @@ pub struct SearchBackendDto {
     pub base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_id: Option<String>,
+    /// `SearXNG` only — comma-separated upstream engines to pin (e.g. "bing").
+    /// Maps to [`crate::config::types::SearchBackendConfig::engines`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engines: Option<String>,
     /// Reported on get (never echoes the secret); ignored on update.
     #[serde(default)]
     pub has_api_key: bool,
@@ -90,6 +94,7 @@ pub async fn handle_get(
                     api_key: None,
                     base_url: backend.base_url.clone(),
                     engine_id: backend.engine_id.clone(),
+                    engines: backend.engines.clone(),
                     has_api_key,
                     verified: backend.verified,
                 }
@@ -238,6 +243,7 @@ pub async fn handle_update(
                 entry.api_key = None;
                 entry.base_url = backend_dto.base_url.clone();
                 entry.engine_id = backend_dto.engine_id.clone();
+                entry.engines = backend_dto.engines.clone();
                 entry.verified = false; // Config change resets verified
             }
         }
@@ -319,6 +325,9 @@ pub async fn handle_test(
         base_url: Option<String>,
         #[serde(default)]
         engine_id: Option<String>,
+        /// `SearXNG` only — comma-separated upstream engines to pin for the probe.
+        #[serde(default)]
+        engines: Option<String>,
     }
 
     let mut params: Params = match super::parse_params(&request) {
@@ -442,9 +451,10 @@ pub async fn handle_test(
             let base_url = params
                 .base_url
                 .unwrap_or_else(|| "http://localhost:8888".to_string());
-            // Connectivity test: no engine pin, no throttle (Some(0)) so the
-            // probe returns promptly.
-            match SearxngProvider::new(base_url, None, Some(0)) {
+            // Connectivity test: pin the same engines the operator configured
+            // (so a default-engine-set that returns nothing isn't mistaken for a
+            // broken backend), no throttle (Some(0)) so the probe returns promptly.
+            match SearxngProvider::new(base_url, params.engines.clone(), Some(0)) {
                 Ok(provider) => {
                     let opts = SearchOptions {
                         max_results: 1,
@@ -777,5 +787,24 @@ mod tests {
             "stored secret must never be echoed back"
         );
         assert!(!result.to_string().contains("super-secret-key"));
+    }
+
+    // The SearXNG `engines` pin must survive the RPC boundary in both
+    // directions (panel update -> gateway, gateway get -> panel).
+    #[test]
+    fn search_backend_dto_round_trips_engines() {
+        let dto = SearchBackendDto {
+            name: "searxng".to_string(),
+            api_key: None,
+            base_url: Some("http://searxng:8080".to_string()),
+            engine_id: None,
+            engines: Some("bing".to_string()),
+            has_api_key: false,
+            verified: false,
+        };
+        let json = serde_json::to_value(&dto).unwrap();
+        assert_eq!(json["engines"], "bing");
+        let back: SearchBackendDto = serde_json::from_value(json).unwrap();
+        assert_eq!(back.engines.as_deref(), Some("bing"));
     }
 }

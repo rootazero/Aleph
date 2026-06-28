@@ -11,6 +11,9 @@ pub struct SearchBackendEntry {
     pub base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_id: Option<String>,
+    /// SearXNG only — comma-separated upstream engines to pin (e.g. "bing").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engines: Option<String>,
     /// A key is stored in the vault (reported by get; the secret is never echoed).
     #[serde(default)]
     pub has_api_key: bool,
@@ -59,12 +62,14 @@ impl SearchConfigApi {
         api_key: Option<String>,
         base_url: Option<String>,
         engine_id: Option<String>,
+        engines: Option<String>,
     ) -> Result<SearchTestResult, String> {
         let params = serde_json::json!({
             "name": name,
             "api_key": api_key,
             "base_url": base_url,
             "engine_id": engine_id,
+            "engines": engines,
         });
         let result = state.rpc_call("search_config.test", params).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
