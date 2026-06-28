@@ -1,7 +1,7 @@
-//! Native iPhone Chat screens (single-agent). Mirrors the Settings phone
-//! pattern: a session-list landing (`/`) drilling into a conversation
-//! (`/chat`). Reuses ChatState / ChatApi / MessageList; only the list and a
-//! minimal composer are phone-specific.
+//! Native iPhone Chat screens (single-agent). The chat surface is the tab
+//! landing (`/`); the session history is reached via the surface's history
+//! button (`/chat/history`). Reuses ChatState / ChatApi / MessageList; only the
+//! history list and a minimal composer are phone-specific.
 
 pub mod composer;
 pub mod history;
