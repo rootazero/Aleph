@@ -147,6 +147,7 @@ impl AgentHarnessRunner {
         channel_manifest: Option<&crate::thinker::InteractionManifest>,
         sandbox: &dyn Sandbox,
         workspace: Option<&std::path::Path>,
+        routing_text: Option<String>,
     ) -> Option<(
         String,
         Vec<crate::thinker::prompt_builder::SystemPromptPart>,
@@ -346,6 +347,9 @@ impl AgentHarnessRunner {
         let memory_chars = memory_text.as_ref().map_or(0, String::len);
         if let Some(text) = memory_text {
             builder = builder.with_memory_user_message(text);
+        }
+        if let Some(text) = routing_text {
+            builder = builder.with_routing_experience_message(text);
         }
         let identity_chars = identity_files.as_ref().map_or(0, |f| {
             f.files
