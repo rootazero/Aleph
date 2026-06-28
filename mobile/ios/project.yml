@@ -40,7 +40,11 @@ targets:
       properties:
         CFBundleDisplayName: Aleph Panel
         CFBundleShortVersionString: ${ALEPH_VERSION}
-        CFBundleVersion: ${ALEPH_VERSION}
+        CFBundleVersion: ${ALEPH_BUILD}
+        # App uses only OS-standard HTTPS/TLS (exempt under the standard
+        # encryption exemption). Declaring this removes the per-upload export-
+        # compliance prompt in App Store Connect / TestFlight.
+        ITSAppUsesNonExemptEncryption: false
         UILaunchScreen:
           UIColorName: ""
         UIRequiresFullScreen: true

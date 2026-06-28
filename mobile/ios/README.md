@@ -66,3 +66,55 @@ the server must be bound to `0.0.0.0` (see SECURITY.md trust model).
 
 Clone the repo, then `cp launch-local.sh.example launch-local.sh` and fill in your
 own IP + token. The secret stays in that gitignored copy and never enters git.
+
+## Distribution (TestFlight)
+
+The app ships to real devices via **TestFlight internal testing**, driven by one
+local script (`release-testflight.sh`). The build carries no baked `PANEL_URL` —
+testers pair to their own `aleph-server`, exactly like the sim/dev flow.
+
+### Prerequisites (one-time)
+
+1. **Apple Developer Program** membership ($99/yr).
+2. **App Store Connect app record** for bundle ID `ai.aleph.panel` (app name
+   "Aleph Panel", an SKU, a primary language) — created once in the App Store
+   Connect web UI.
+3. **App Store Connect API key** (Users and Access → Integrations → Keys):
+   download the `.p8` once; note the **Key ID** and **Issuer ID**. Place the key
+   at `~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8` (where `altool` and
+   `xcodebuild` look it up).
+4. **Team ID** — note it for `ALEPH_TEAM_ID`.
+5. **Internal testers** — in App Store Connect → TestFlight, add up to 100 people
+   (anyone with an Account Holder / Admin / App Manager / Developer / Marketing
+   role). Internal testing needs no Beta App Review.
+
+### Usage
+
+```bash
+export ALEPH_TEAM_ID=ABCDE12345          # your Apple Developer Team ID
+export ASC_KEY_ID=XXXXXXXXXX             # App Store Connect API Key ID
+export ASC_ISSUER_ID=aaaa-bbbb-cccc      # App Store Connect API Issuer ID
+export ASC_KEY_PATH=~/.appstoreconnect/private_keys/AuthKey_XXXXXXXXXX.p8
+
+just ios-testflight        # or: cd mobile/ios && ./release-testflight.sh
+```
+
+The script resolves the CalVer marketing version from `VERSION`, computes a
+unique build number (integer minutes since the Unix epoch), archives a signed
+Release build (signing passed on the `xcodebuild` CLI), exports a signed IPA,
+and uploads it. After processing, the build appears under App Store Connect →
+TestFlight for your internal testers.
+
+> After a release run, the local `AlephPaneliOS/Resources/Info.plist` holds the
+> resolved version/build. Run `./generate.sh` (or
+> `git checkout AlephPaneliOS/Resources/Info.plist`) before committing to restore
+> the `${ALEPH_VERSION}`/`${ALEPH_BUILD}` placeholders.
+
+### No secrets in source
+
+| Artifact | Committed? | Why safe |
+|------|-----------|---------|
+| `release-testflight.sh`, `project.yml`, `generate.sh`, README, `justfile` | yes | placeholders / runtime resolution only — no IDs, no keys |
+| `.p8` API key, Key ID, Issuer ID, `ALEPH_TEAM_ID` | **no** (env + `~/.appstoreconnect/`) | personal credentials |
+| `build/ExportOptions.plist` (teamID baked), `*.xcarchive`, `*.ipa` | **no** (`build/` is gitignored) | personal ID / build output |
+| distribution build's connection target | **n/a** | ships the pairing screen — no `PANEL_URL` baked |

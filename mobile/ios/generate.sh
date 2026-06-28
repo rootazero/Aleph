@@ -13,6 +13,11 @@ cd "$(dirname "$0")"
 # Version strings come from the repo's single VERSION source (CalVer), mirrored
 # into the generated Info.plist the same way PANEL_URL is injected into the scheme.
 export ALEPH_VERSION="$(cat ../../VERSION | tr -d '[:space:]')"
+# TestFlight requires a unique CFBundleVersion per upload, but CalVer is one/day.
+# Decouple: marketing version = CalVer (ALEPH_VERSION); build number =
+# integer minutes since the Unix epoch (monotonic, stateless). The dev/sim flow
+# only needs *a* value so the ${ALEPH_BUILD} placeholder resolves on generate.
+export ALEPH_BUILD="$(( $(date +%s) / 60 ))"
 
 ROUTE="${1:-/settings}"   # /settings | / | /memory ...
 
