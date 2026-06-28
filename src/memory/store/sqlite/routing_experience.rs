@@ -195,6 +195,56 @@ impl SqliteMemoryBackend {
         neighbors.truncate(k);
         Ok(neighbors)
     }
+
+    pub fn prune_routing_experiences(
+        &self,
+        agent_id: &str,
+        dim: u32,
+        cap: usize,
+    ) -> Result<(), AlephError> {
+        let table = vec::routing_exp_vec_table_for_dim(dim)?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        let drop_ids: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id FROM routing_experiences WHERE agent_id = ?1 \
+                     ORDER BY created_at DESC LIMIT -1 OFFSET ?2",
+                )
+                .map_err(|e| AlephError::config(format!("prune_routing_experiences select: {e}")))?;
+            let rows = stmt
+                .query_map(params![agent_id, cap as i64], |r| r.get::<_, String>(0))
+                .map_err(|e| AlephError::config(format!("prune_routing_experiences query: {e}")))?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r.map_err(|e| AlephError::config(format!("prune_routing_experiences row: {e}")))?);
+            }
+            out
+        };
+
+        for id in drop_ids {
+            let rowid: Option<i64> = conn
+                .query_row(
+                    "SELECT rowid FROM routing_exp_vec_map WHERE agent_id = ?1 AND routing_exp_id = ?2",
+                    params![agent_id, id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| AlephError::config(format!("prune_routing_experiences map: {e}")))?;
+            if let Some(rowid) = rowid {
+                conn.execute(&format!("DELETE FROM {table} WHERE rowid = ?1"), params![rowid])
+                    .map_err(|e| AlephError::config(format!("prune_routing_experiences vec del: {e}")))?;
+                conn.execute("DELETE FROM routing_exp_vec_map WHERE rowid = ?1", params![rowid])
+                    .map_err(|e| AlephError::config(format!("prune_routing_experiences map del: {e}")))?;
+            }
+            conn.execute("DELETE FROM routing_experiences WHERE id = ?1", params![id])
+                .map_err(|e| AlephError::config(format!("prune_routing_experiences exp del: {e}")))?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
