@@ -4,8 +4,8 @@
 
 use super::paths::{
     aleph_home_dir, claude_home_dir, find_dir_upward, find_file_upward, find_git_root,
-    validate_path_component, AGENT_FILE, CLAUDE_HOME_DIR, MCP_CONFIG_FILE, PLUGINS_DIR,
-    PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE, SKILL_FILE,
+    validate_path_component, AGENT_FILE, ALEPH_HOME_DIR, CLAUDE_HOME_DIR, MCP_CONFIG_FILE,
+    PLUGINS_DIR, PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE, SKILL_FILE,
 };
 use super::types::{DiscoveredPath, DiscoverySource, ScanDirectory};
 use super::{DiscoveryConfig, DiscoveryError, DiscoveryResult};
@@ -75,6 +75,8 @@ impl DirectoryScanner {
     /// 1. Claude global (~/.claude/) - priority 0
     /// 2. Aleph global (~/.aleph/) - priority 10
     /// 3. Project-level .claude/ directories - priority 20+
+    /// 4. Project-level .aleph/ directories - priority 40+ (native, wins over
+    ///    the project `.claude/` compat dirs on a name clash)
     pub fn get_all_directories(&self) -> DiscoveryResult<Vec<ScanDirectory>> {
         let mut dirs = Vec::new();
 
@@ -109,6 +111,28 @@ impl DirectoryScanner {
             // Reverse to get proper priority (deeper = higher priority)
             for (i, dir) in claude_dirs.into_iter().rev().enumerate() {
                 let priority = 20u32.saturating_add(i as u32);
+                dirs.push(ScanDirectory::new(dir, DiscoverySource::Project, priority));
+            }
+
+            // 4. Project-level .aleph/ directories (upward traversal). Native
+            //    Aleph project skills/commands/agents — the parity counterpart of
+            //    the `.claude/` block above, previously missing so a project's
+            //    `.aleph/skills` never reached the `<available_skills>` index.
+            //    Higher priority than the project `.claude/` compat dirs.
+            let aleph_dirs = find_dir_upward(
+                ALEPH_HOME_DIR,
+                &self.working_dir,
+                stop,
+                self.config.max_upward_depth,
+            )?;
+            for (i, dir) in aleph_dirs.into_iter().rev().enumerate() {
+                // The upward walk can re-discover the global `~/.aleph` when no
+                // git root bounds it; skip it so it is not double-counted with
+                // the AlephGlobal entry added above.
+                if dir == self.aleph_home {
+                    continue;
+                }
+                let priority = 40u32.saturating_add(i as u32);
                 dirs.push(ScanDirectory::new(dir, DiscoverySource::Project, priority));
             }
         }
@@ -503,6 +527,89 @@ mod tests {
         // Should find my-skill and project-skill
         assert!(!skills.is_empty());
         assert!(skills.iter().any(|s| s.name == "my-skill"));
+    }
+
+    #[test]
+    fn test_scanner_discovers_project_aleph_skills() {
+        // Regression: a project's `.aleph/skills` must be discovered (it was
+        // previously missing — only project `.claude/` was walked — so native
+        // project skills never reached the SkillSystem `<available_skills>`).
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        std::fs::create_dir(root.join(".git")).unwrap();
+
+        let skill = root.join("project/.aleph/skills/proj-aleph-skill");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "---\nname: proj-aleph-skill\n---\n").unwrap();
+
+        // Aleph global points at a separate empty dir so the only hit is the
+        // project-level `.aleph/skills`.
+        let empty_home = TempDir::new().unwrap();
+        let scanner = DirectoryScanner {
+            aleph_home: empty_home.path().to_path_buf(),
+            claude_home: None,
+            git_root: Some(root.to_path_buf()),
+            working_dir: root.join("project"),
+            config: DiscoveryConfig {
+                working_dir: root.join("project"),
+                scan_claude_dirs: false,
+                scan_project_dirs: true,
+                max_upward_depth: 10,
+            },
+        };
+
+        let skills = scanner.discover_component("skills").unwrap();
+        assert!(
+            skills.iter().any(|s| s.name == "proj-aleph-skill"),
+            "project .aleph/skills must be discovered, got {:?}",
+            skills.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_project_aleph_outranks_project_claude_on_clash() {
+        // Same skill id in both project `.aleph/skills` and `.claude/skills`:
+        // the native `.aleph` entry must carry the higher priority so it wins
+        // conflict resolution.
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        std::fs::create_dir(root.join(".git")).unwrap();
+
+        for flavor in [".aleph", ".claude"] {
+            let d = root.join(format!("project/{flavor}/skills/dup-skill"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("SKILL.md"), "---\nname: dup-skill\n---\n").unwrap();
+        }
+
+        let empty_home = TempDir::new().unwrap();
+        let scanner = DirectoryScanner {
+            aleph_home: empty_home.path().to_path_buf(),
+            claude_home: None,
+            git_root: Some(root.to_path_buf()),
+            working_dir: root.join("project"),
+            config: DiscoveryConfig {
+                working_dir: root.join("project"),
+                scan_claude_dirs: true,
+                scan_project_dirs: true,
+                max_upward_depth: 10,
+            },
+        };
+
+        let skills = scanner.discover_component("skills").unwrap();
+        let aleph_entry = skills
+            .iter()
+            .find(|s| s.path.to_string_lossy().contains(".aleph"))
+            .expect("aleph entry present");
+        let claude_entry = skills
+            .iter()
+            .find(|s| s.path.to_string_lossy().contains(".claude"))
+            .expect("claude entry present");
+        assert!(
+            aleph_entry.priority > claude_entry.priority,
+            "native .aleph (prio {}) must outrank .claude (prio {})",
+            aleph_entry.priority,
+            claude_entry.priority
+        );
     }
 
     #[test]
