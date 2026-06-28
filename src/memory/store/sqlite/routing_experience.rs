@@ -315,4 +315,13 @@ mod tests {
             .unwrap();
         assert_eq!(notes_count, 0, "routing write must not touch notes_vec_768");
     }
+
+    #[test]
+    fn ddl_has_no_judgment_columns() {
+        let ddl = crate::memory::store::sqlite::schema::ddl::ROUTING_EXPERIENCE_DDL.to_lowercase();
+        assert!(!ddl.contains("success"));
+        assert!(!ddl.contains("score"));
+        assert!(!ddl.contains("rank"));
+        assert!(!ddl.contains("best_for"));
+    }
 }
