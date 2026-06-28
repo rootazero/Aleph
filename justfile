@@ -110,7 +110,21 @@ shell-build: build
     set -euo pipefail
     just _stage-shell-binaries release
     version="$(tr -d '[:space:]' < VERSION)"
-    cd {{shell_dir}} && CI=true cargo tauri build --config "{\"version\":\"$version\"}"
+    root="$PWD"
+    (cd {{shell_dir}} && CI=true cargo tauri build --config "{\"version\":\"$version\"}")
+    # macOS: Tauri signs the bundled aleph-server with the linker's per-build
+    # ad-hoc identifier and ignores its embedded Info.plist. Re-sign so codesign
+    # adopts the STABLE CFBundleIdentifier (ai.aleph.server), then re-seal the
+    # outer app. The daemon detaches (--daemon: double-fork + setsid) so it is
+    # its own macOS Local Network Privacy subject; a stable identity is what
+    # lets its LAN-host access (self-hosted SearXNG / Firecrawl, …) be granted
+    # once and persist across rebuilds instead of silently blocked.
+    # See src/bin/aleph-server/Info.plist + build.rs.
+    if [[ "$OSTYPE" == darwin* ]]; then
+        app="$root/{{release_dir}}/bundle/macos/Aleph.app"
+        codesign -s - -f "$app/Contents/MacOS/aleph-server"
+        codesign -s - -f "$app"
+    fi
     echo "✓ Installers: {{release_dir}}/bundle/"
 
 # Build the panel-only desktop shell (no embedded aleph-server daemon).

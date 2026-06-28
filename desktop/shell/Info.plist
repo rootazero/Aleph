@@ -7,6 +7,14 @@
          access outright, regardless of the in-webview grant wry performs. -->
     <key>NSMicrophoneUsageDescription</key>
     <string>Aleph uses the microphone to transcribe your speech into chat messages. Audio is sent only to your local Aleph daemon for transcription.</string>
+    <!-- The Panel-only (lite) shell points the webview at a user-chosen remote
+         aleph-server that is often a LAN address (e.g. a home server); the full
+         app talks to the loopback daemon (exempt). macOS gates connections to
+         local-network hosts behind this consent string — without it the OS can
+         silently block the shell from reaching a LAN core. (The bundled daemon
+         carries its own copy of this key; see src/bin/aleph-server/Info.plist.) -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Aleph connects to an aleph-server you choose on your local network, and to search backends such as a self-hosted SearXNG or Firecrawl instance.</string>
     <!-- The Panel-only (lite) shell points WKWebView at a user-chosen remote
          aleph-server over plain HTTP (a LAN IP, or a direct host:18790). Default
          ATS blocks cleartext HTTP and does NOT exempt IP-literal hosts inside

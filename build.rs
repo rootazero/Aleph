@@ -37,6 +37,26 @@ fn main() {
         );
     }
 
+    // macOS: embed an Info.plist into the `aleph-server` binary so the detached
+    // daemon gets a STABLE, grantable Local Network Privacy identity. The
+    // desktop shell launches it with `--daemon` (double-fork + setsid), which
+    // severs the shell's TCC "responsible process" chain — the daemon then
+    // becomes its own Local Network subject. Without a CFBundleIdentifier it is
+    // ad-hoc/linker-signed under a per-build-random id that never appears in
+    // System Settings → Privacy & Security → Local Network, so its requests to
+    // LAN hosts (self-hosted SearXNG / Firecrawl, …) are silently blocked.
+    // Embedded at link time so the codesign step (Tauri/packaging) covers — and
+    // adopts the identifier from — this section. See src/bin/aleph-server/Info.plist.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        let manifest_dir =
+            std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo");
+        let plist = format!("{manifest_dir}/src/bin/aleph-server/Info.plist");
+        println!("cargo:rerun-if-changed=src/bin/aleph-server/Info.plist");
+        println!(
+            "cargo:rustc-link-arg-bin=aleph-server=-Wl,-sectcreate,__TEXT,__info_plist,{plist}"
+        );
+    }
+
     #[cfg(feature = "control-plane")]
     {
         use std::path::Path;

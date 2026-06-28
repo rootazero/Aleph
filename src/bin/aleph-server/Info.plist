@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Embedded into the `aleph-server` Mach-O via build.rs (-sectcreate __TEXT
+  __info_plist) on macOS.
+
+  Why a bare executable needs an Info.plist: the desktop shell launches the
+  daemon with `--daemon`, which double-fork + setsid detaches it (R5/R6: the
+  server outlives the GUI). Detaching severs the shell's macOS TCC
+  "responsible process" chain, so the daemon becomes its OWN Local Network
+  Privacy subject. Without a CFBundleIdentifier it is only ad-hoc /
+  linker-signed under a per-build-random identifier that never surfaces in
+  System Settings -> Privacy & Security -> Local Network — so every request to
+  a LAN host (self-hosted SearXNG / Firecrawl, etc.) is silently blocked.
+
+  A stable CFBundleIdentifier gives the daemon a fixed, grantable identity that
+  appears in that list and persists across rebuilds; NSLocalNetworkUsageDescription
+  is the string macOS shows when prompting for the grant. codesign (run later by
+  Tauri / packaging) reads this section, so the ad-hoc signature inherits the
+  stable identifier too.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>ai.aleph.server</string>
+    <key>CFBundleName</key>
+    <string>aleph-server</string>
+    <key>CFBundleDisplayName</key>
+    <string>Aleph Server</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Aleph connects to search backends and other services you configure on your local network, such as a self-hosted SearXNG or Firecrawl instance.</string>
+</dict>
+</plist>
