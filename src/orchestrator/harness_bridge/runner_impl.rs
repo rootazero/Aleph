@@ -287,6 +287,23 @@ impl HarnessRunner for AgentHarnessRunner {
         let robustness_profile =
             crate::verification::ModelRobustnessProfile::for_behavior(Some(&*behavior_name))
                 .clamped();
+        // Wrap the per-run sink so this run's SessionCompleted is observed —
+        // harness-external (R10). Subagents already hold the RAW sink (captured
+        // before this wrap in the gateway run loop), so they are never routed
+        // into this observer (v1: top-level runs only; no cross-agent leakage).
+        let trace_sink = match (trace_sink, self.routing_store.as_ref()) {
+            (Some(parent), Some(store)) => Some(std::sync::Arc::new(
+                crate::routing::OutcomeObserver::new(
+                    parent,
+                    store.clone(),
+                    routing_attribution.clone(),
+                    routing_model_id.clone(),
+                    provider_name.clone(),
+                    spec.agent.clone(),
+                ),
+            ) as std::sync::Arc<dyn crate::harness::TraceSink>),
+            (other, _) => other,
+        };
         let deps = HarnessDeps {
             session: self.session_service.clone(),
             tools,
