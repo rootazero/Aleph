@@ -6,7 +6,7 @@ use super::error::ToolError;
 use crate::config::WebFetchPolicy;
 use crate::error::Result;
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
-use crate::security::ssrf::{safe_fetch, validate_url, SafeFetchRequest, SsrfPolicy};
+use crate::security::ssrf::{safe_fetch, validate_url_async, SafeFetchRequest, SsrfPolicy};
 use crate::sync_primitives::Mutex;
 use crate::tools::AlephTool;
 use async_trait::async_trait;
@@ -432,9 +432,10 @@ impl WebFetchTool {
         // so the agent can't use crawl4ai to reach internal hosts. On any
         // backend failure, fall through to the built-in fetch below.
         if let Some(ref backend) = self.crawl4ai {
-            // Reject unsafe targets outright — the built-in path would
-            // reject them too, so there is nothing to fall through to.
-            validate_url(&args.url, &self.ssrf_policy).map_err(|e| {
+            // SSRF-validate the target with DNS resolution (matching the built-in
+            // safe_fetch path) so the agent can't use crawl4ai to reach internal
+            // hosts via a hostname that resolves to a private IP. Reject outright.
+            validate_url_async(&args.url, &self.ssrf_policy).await.map_err(|e| {
                 let msg = format!("Fetch blocked or failed: {e}");
                 notify_tool_result(Self::NAME, &msg, false);
                 ToolError::Network(msg)
