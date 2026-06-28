@@ -21,8 +21,8 @@ use self::thread::PhoneChatThread;
 
 /// Phone Chat router. Owns the `run.*` streaming subscription (mirrors the wide
 /// `ChatView`); exactly one of {ChatView, PhoneChat} mounts per form factor, so
-/// there is no double-subscribe. Renders the list at `/` and the thread at
-/// `/chat`.
+/// there is no double-subscribe. Renders the chat surface at `/` and the
+/// session history at `/chat/history`.
 #[component]
 #[must_use]
 pub fn PhoneChat() -> impl IntoView {
