@@ -1,0 +1,442 @@
+//! Fetch configuration RPC handlers
+//!
+//! Provides RPC methods for managing fetch backend settings (URL→markdown providers),
+//! parallel to `search_config`. Token storage uses the vault (`fetch:<name>`);
+//! the Firecrawl fetch backend shares the `[search]` Firecrawl config and vault key.
+
+use crate::config::types::FetchBackendConfig;
+use crate::config::types::FetchConfigInternal;
+use crate::config::Config;
+use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::security::SharedTokenManager;
+use crate::sync_primitives::Arc;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use tokio::sync::RwLock;
+use tracing::error;
+
+use super::normalize_optional_string;
+
+// =============================================================================
+// DTOs
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchBackendDto {
+    pub name: String,
+    pub provider_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+    /// Inbound only (never echoed). Stored to vault on update.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub has_api_key: bool,
+    #[serde(default)]
+    pub verified: bool,
+    /// True for providers that reuse the [search] config (firecrawl).
+    #[serde(default)]
+    pub shares_search: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchConfigDto {
+    pub enabled: bool,
+    pub default_provider: String,
+    #[serde(default)]
+    pub backends: Vec<FetchBackendDto>,
+}
+
+// =============================================================================
+// Vault helpers
+// =============================================================================
+
+/// Primary vault key for a fetch backend (non-firecrawl).
+fn vault_key(backend_name: &str) -> String {
+    format!("fetch:{backend_name}")
+}
+
+/// Back-compat legacy vault key (crawl4ai was previously stored under web_fetch:).
+fn legacy_vault_key(backend_name: &str) -> String {
+    format!("web_fetch:{backend_name}")
+}
+
+/// Vault key for the firecrawl search/fetch shared credentials.
+fn firecrawl_vault_key() -> &'static str {
+    "search:firecrawl"
+}
+
+/// Resolve API key for a fetch backend. Checks `fetch:<name>` first, then
+/// falls back to `web_fetch:<name>` (legacy crawl4ai key).
+fn resolve_fetch_api_key(name: &str, vault: &SharedTokenManager) -> Option<String> {
+    super::resolve_vault_secret(&vault_key(name), vault)
+        .or_else(|| super::resolve_vault_secret(&legacy_vault_key(name), vault))
+}
+
+/// Resolve API key for the firecrawl backend (shared with search).
+fn resolve_firecrawl_api_key(vault: &SharedTokenManager) -> Option<String> {
+    super::resolve_vault_secret(firecrawl_vault_key(), vault)
+}
+
+// =============================================================================
+// handle_get
+// =============================================================================
+
+/// Get fetch configuration
+pub async fn handle_get(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
+) -> JsonRpcResponse {
+    let cfg = config.read().await;
+
+    let dto = if let Some(fetch) = &cfg.fetch {
+        let backends: Vec<FetchBackendDto> = fetch
+            .backends
+            .iter()
+            .map(|(name, backend)| {
+                let (has_api_key, shares_search) = if name == "firecrawl" {
+                    (resolve_firecrawl_api_key(&vault).is_some(), true)
+                } else {
+                    (resolve_fetch_api_key(name, &vault).is_some(), false)
+                };
+                tracing::debug!(
+                    backend = %name,
+                    has_key = has_api_key,
+                    "fetch_config.get: resolved API key presence"
+                );
+                // Security: report presence only, never echo the secret.
+                FetchBackendDto {
+                    name: name.clone(),
+                    provider_type: backend.provider_type.clone(),
+                    base_url: backend.base_url.clone(),
+                    timeout_seconds: backend.timeout_seconds,
+                    api_key: None,
+                    has_api_key,
+                    verified: backend.verified,
+                    shares_search,
+                }
+            })
+            .collect();
+        FetchConfigDto {
+            enabled: fetch.enabled,
+            default_provider: fetch.default_provider.clone(),
+            backends,
+        }
+    } else {
+        // No fetch config present — return a sensible empty default.
+        FetchConfigDto {
+            enabled: false,
+            default_provider: String::new(),
+            backends: Vec::new(),
+        }
+    };
+
+    match serde_json::to_value(dto) {
+        Ok(v) => JsonRpcResponse::success(request.id, v),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to serialize config: {e}"),
+        ),
+    }
+}
+
+// =============================================================================
+// handle_update
+// =============================================================================
+
+/// Update fetch configuration
+pub async fn handle_update(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
+) -> JsonRpcResponse {
+    let params = match request.params {
+        Some(p) => p,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Missing params".to_string(),
+            )
+        }
+    };
+
+    let dto: FetchConfigDto = match serde_json::from_value(params) {
+        Ok(d) => d,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Invalid params: {e}"),
+            )
+        }
+    };
+
+    {
+        let mut cfg = config.write().await;
+
+        // Create fetch config if it doesn't exist
+        if cfg.fetch.is_none() {
+            cfg.fetch = Some(FetchConfigInternal {
+                enabled: false,
+                default_provider: String::new(),
+                fallback_providers: None,
+                backends: std::collections::HashMap::new(),
+            });
+        }
+
+        if let Some(fetch) = &mut cfg.fetch {
+            fetch.enabled = dto.enabled;
+            fetch.default_provider = dto.default_provider.clone();
+
+            for backend_dto in &dto.backends {
+                // Firecrawl shares search credentials — never write a fetch: vault key.
+                let is_firecrawl = backend_dto.name == "firecrawl";
+
+                // Store API key in vault if provided (non-firecrawl only)
+                if !is_firecrawl {
+                    if let Some(ref api_key) =
+                        normalize_optional_string(backend_dto.api_key.clone())
+                    {
+                        if let Err(e) =
+                            vault.store_secret(&vault_key(&backend_dto.name), api_key)
+                        {
+                            error!(error = %e, "Failed to store fetch API key in vault");
+                            return JsonRpcResponse::error(
+                                request.id,
+                                INTERNAL_ERROR,
+                                format!("Failed to store API key: {e}"),
+                            );
+                        }
+                    }
+                }
+
+                let entry = fetch
+                    .backends
+                    .entry(backend_dto.name.clone())
+                    .or_insert_with(|| FetchBackendConfig {
+                        provider_type: backend_dto.provider_type.clone(),
+                        api_key: None,
+                        base_url: None,
+                        timeout_seconds: None,
+                        verified: false,
+                    });
+
+                entry.provider_type = backend_dto.provider_type.clone();
+                // api_key stays None in config — vault is the source
+                entry.api_key = None;
+                entry.base_url = backend_dto.base_url.clone();
+                entry.timeout_seconds = backend_dto.timeout_seconds;
+                entry.verified = false; // Config change resets verified
+            }
+        }
+
+        if let Err(e) = cfg.save_incremental(&["fetch"]).map_err(|e| e.to_string()) {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to save config: {e}"),
+            );
+        }
+    }
+
+    // Broadcast config change event
+    let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
+        section: Some("fetch".to_string()),
+        value: serde_json::to_value(&dto).unwrap_or(Value::Null),
+        timestamp: chrono::Utc::now().timestamp_millis(),
+    });
+    let _ = event_bus.publish_json(&event);
+
+    JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
+}
+
+// =============================================================================
+// handle_test
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchTestResult {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Test a fetch backend connection
+pub async fn handle_test(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
+) -> JsonRpcResponse {
+    #[derive(Deserialize)]
+    struct Params {
+        /// Backend name (used to persist verified=true on success)
+        name: String,
+        #[serde(default)]
+        provider_type: Option<String>,
+        #[serde(default)]
+        api_key: Option<String>,
+        #[serde(default)]
+        base_url: Option<String>,
+        #[serde(default)]
+        timeout_seconds: Option<u64>,
+    }
+
+    let mut params: Params = match super::parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    // Determine provider type from config or fallback to name
+    let provider_type = {
+        let cfg = config.read().await;
+        let from_config = cfg
+            .fetch
+            .as_ref()
+            .and_then(|f| f.backends.get(&params.name))
+            .map(|b| b.provider_type.clone());
+
+        // Also pick up base_url from config if not in params
+        if params.base_url.is_none() {
+            params.base_url = cfg
+                .fetch
+                .as_ref()
+                .and_then(|f| f.backends.get(&params.name))
+                .and_then(|b| b.base_url.clone());
+        }
+
+        from_config
+            .or_else(|| params.provider_type.clone())
+            .unwrap_or_else(|| params.name.clone())
+    };
+
+    use crate::fetch::providers::{Crawl4aiFetchProvider, FirecrawlFetchProvider};
+    use crate::fetch::FetchProvider;
+
+    let test_result: FetchTestResult = match provider_type.as_str() {
+        "crawl4ai" => {
+            // Resolve token: inline param > fetch:<name> > web_fetch:<name> (back-compat)
+            let resolved_key = params
+                .api_key
+                .clone()
+                .or_else(|| resolve_fetch_api_key(&params.name, &vault));
+
+            let backend_cfg = FetchBackendConfig {
+                provider_type: "crawl4ai".to_string(),
+                api_key: resolved_key,
+                base_url: params.base_url.clone(),
+                timeout_seconds: params.timeout_seconds,
+                verified: false,
+            };
+
+            match Crawl4aiFetchProvider::from_backend(&backend_cfg) {
+                Some(provider) => match provider.fetch("https://example.com").await {
+                    Ok(_) => FetchTestResult {
+                        success: true,
+                        message: "Connection successful".to_string(),
+                    },
+                    Err(e) => FetchTestResult {
+                        success: false,
+                        message: format!("Fetch failed: {e}"),
+                    },
+                },
+                None => FetchTestResult {
+                    success: false,
+                    message: "No base URL configured for crawl4ai".to_string(),
+                },
+            }
+        }
+        "firecrawl" => {
+            // Firecrawl shares search credentials
+            let Some(api_key) = resolve_firecrawl_api_key(&vault) else {
+                return JsonRpcResponse::success(
+                    request.id,
+                    serde_json::json!({"success": false, "message": "API key is required for Firecrawl (configure in Search settings)"}),
+                );
+            };
+
+            let Some(base_url) = params.base_url.clone() else {
+                return JsonRpcResponse::success(
+                    request.id,
+                    serde_json::json!({"success": false, "message": "Base URL is required for Firecrawl"}),
+                );
+            };
+
+            match FirecrawlFetchProvider::new(base_url, api_key) {
+                Ok(provider) => match provider.fetch("https://example.com").await {
+                    Ok(_) => FetchTestResult {
+                        success: true,
+                        message: "Connection successful".to_string(),
+                    },
+                    Err(e) => FetchTestResult {
+                        success: false,
+                        message: format!("Fetch failed: {e}"),
+                    },
+                },
+                Err(e) => FetchTestResult {
+                    success: false,
+                    message: format!("Failed to create provider: {e}"),
+                },
+            }
+        }
+        _ => FetchTestResult {
+            success: false,
+            message: format!("Unknown provider type: {provider_type}"),
+        },
+    };
+
+    // Persist verified=true on success
+    if test_result.success {
+        let mut cfg = config.write().await;
+        if let Some(fetch) = &mut cfg.fetch {
+            if let Some(backend) = fetch.backends.get_mut(&params.name) {
+                backend.verified = true;
+                if let Err(e) = cfg.save_incremental(&["fetch"]) {
+                    tracing::error!(error = %e, "Failed to save config after fetch test");
+                }
+            }
+        }
+    }
+
+    match serde_json::to_value(test_result) {
+        Ok(v) => JsonRpcResponse::success(request.id, v),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to serialize result: {e}"),
+        ),
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backend_dto_never_serializes_token_and_round_trips() {
+        let dto = FetchBackendDto {
+            name: "crawl4ai".into(),
+            provider_type: "crawl4ai".into(),
+            base_url: Some("http://x:11235".into()),
+            timeout_seconds: Some(60),
+            api_key: None,
+            has_api_key: true,
+            verified: false,
+            shares_search: false,
+        };
+        let v = serde_json::to_value(&dto).unwrap();
+        assert_eq!(v["has_api_key"], true);
+        assert!(v.get("api_key").is_none() || v["api_key"].is_null());
+        let back: FetchBackendDto = serde_json::from_value(v).unwrap();
+        assert_eq!(back.base_url.as_deref(), Some("http://x:11235"));
+    }
+}

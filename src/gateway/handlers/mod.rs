@@ -61,6 +61,7 @@ pub mod embedding_providers;
 pub mod events;
 pub mod exec_approvals;
 pub mod execution_config;
+pub mod fetch_config;
 pub mod flow_admin;
 pub mod fs;
 pub mod gateway_credentials;

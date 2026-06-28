@@ -80,6 +80,7 @@ mod event_handler;
 pub mod exec;
 pub mod executor;
 pub mod extension;
+pub mod fetch;
 pub mod generation;
 pub mod goal;
 pub mod guardrails;

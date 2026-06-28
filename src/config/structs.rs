@@ -4,9 +4,9 @@
 
 use crate::config::types::{
     AcpConfig, AgentsConfig, BehaviorConfig, ContextBudgetToml, CoworkConfigToml,
-    DispatcherConfigToml, EvolutionConfig, ExecutionConfig, FallbackProviderToml, GeneralConfig,
-    GenerationConfig, GroupChatConfig, GuardrailsToml, McpConfig, MediaConfig, MemoryConfig,
-    OrchestratorConfig, PersonaConfig, PoliciesConfig, PrivacyConfig, ProfileConfig,
+    DispatcherConfigToml, EvolutionConfig, ExecutionConfig, FallbackProviderToml, FetchConfigInternal,
+    GeneralConfig, GenerationConfig, GroupChatConfig, GuardrailsToml, McpConfig, MediaConfig,
+    MemoryConfig, OrchestratorConfig, PersonaConfig, PoliciesConfig, PrivacyConfig, ProfileConfig,
     PromptSectionConfig, ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, SearchConfig,
     SearchConfigInternal, SecretMapping, SecretProviderConfig, SecretsConfig, ShellSecurityConfig,
     SkillsConfig, SmartFlowConfig, SmartMatchingConfig, StabilityToml, StopHookConfig,
@@ -75,6 +75,9 @@ pub struct Config {
     /// Search configuration (Search Capability Integration)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search: Option<SearchConfigInternal>,
+    /// Fetch (URL→markdown) provider configuration. Parallel to `search`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch: Option<FetchConfigInternal>,
     /// Skills configuration (Claude Agent Skills standard)
     #[serde(default)]
     pub skills: SkillsConfig,
@@ -421,6 +424,7 @@ impl Default for Config {
             rules: vec![],
             behavior: Some(BehaviorConfig::default()),
             search: None,
+            fetch: None,
             skills: SkillsConfig::default(),
             tools: ToolsConfig::default(),
             mcp: McpConfig::default(),
@@ -494,6 +498,38 @@ impl Config {
     pub fn local_voice(&self) -> &VoiceLocalConfig {
         &self.voice_local.local
     }
+
+    /// One-time fold of the legacy `[policies.web_fetch.crawl4ai]` backend into
+    /// the new `[fetch]` section. No-op when `[fetch]` is already present (new
+    /// config wins) or the legacy backend is unconfigured. The legacy vault key
+    /// `web_fetch:crawl4ai` is still read by the fetch registry as a fallback,
+    /// so secrets survive without rewrite.
+    pub fn migrate_fetch(&mut self) {
+        if self.fetch.is_some() {
+            return;
+        }
+        let c4 = &self.policies.web_fetch.crawl4ai;
+        if c4.base_url.is_empty() && !c4.enabled {
+            return;
+        }
+        let mut backends = std::collections::HashMap::new();
+        backends.insert(
+            "crawl4ai".to_string(),
+            crate::config::types::FetchBackendConfig {
+                provider_type: "crawl4ai".into(),
+                api_key: None,
+                base_url: (!c4.base_url.is_empty()).then(|| c4.base_url.clone()),
+                timeout_seconds: Some(c4.timeout_seconds),
+                verified: false,
+            },
+        );
+        self.fetch = Some(crate::config::types::FetchConfigInternal {
+            enabled: c4.enabled,
+            default_provider: "crawl4ai".into(),
+            fallback_providers: None,
+            backends,
+        });
+    }
 }
 
 #[cfg(test)]
@@ -525,5 +561,38 @@ mod session_block_tests {
             !toml_str.contains("[session]"),
             "default config should not emit a [session] block, got:\n{toml_str}"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_crawl4ai_migrates_into_fetch_section() {
+        let mut cfg = Config::default();
+        cfg.policies.web_fetch.crawl4ai.enabled = true;
+        cfg.policies.web_fetch.crawl4ai.base_url = "http://10.10.10.3:11235".into();
+        cfg.policies.web_fetch.crawl4ai.timeout_seconds = 60;
+        assert!(cfg.fetch.is_none());
+
+        cfg.migrate_fetch();
+
+        let f = cfg.fetch.expect("fetch populated");
+        assert!(f.enabled);
+        assert_eq!(f.default_provider, "crawl4ai");
+        let b = &f.backends["crawl4ai"];
+        assert_eq!(b.provider_type, "crawl4ai");
+        assert_eq!(b.base_url.as_deref(), Some("http://10.10.10.3:11235"));
+        assert_eq!(b.timeout_seconds, Some(60));
+    }
+
+    #[test]
+    fn migrate_is_noop_when_fetch_already_present() {
+        let mut cfg = Config::default();
+        cfg.fetch = Some(crate::config::types::FetchConfigInternal::default());
+        cfg.policies.web_fetch.crawl4ai.enabled = true;
+        cfg.migrate_fetch();
+        assert!(cfg.fetch.as_ref().unwrap().backends.is_empty(), "existing [fetch] wins");
     }
 }

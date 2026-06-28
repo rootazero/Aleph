@@ -196,6 +196,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     use alephcore::gateway::handlers::rerank_config;
     use alephcore::gateway::handlers::route_config;
     use alephcore::gateway::handlers::routing_rules;
+    use alephcore::gateway::handlers::fetch_config;
     use alephcore::gateway::handlers::search_config;
     use alephcore::gateway::handlers::security_config;
     use alephcore::gateway::handlers::voice;
@@ -692,6 +693,30 @@ pub(in crate::commands::start) fn register_config_handlers(
         search_config::handle_delete_backend,
         config,
         event_bus,
+        shared_token_mgr
+    );
+
+    // Fetch config (vault-backed API key storage)
+    register_handler!(
+        server,
+        "fetch_config.get",
+        fetch_config::handle_get,
+        config,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "fetch_config.update",
+        fetch_config::handle_update,
+        config,
+        event_bus,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "fetch_config.test",
+        fetch_config::handle_test,
+        config,
         shared_token_mgr
     );
 
