@@ -44,6 +44,7 @@ pub mod command_canonicalize;
 pub mod config_audit;
 pub mod config_guide;
 pub mod cron_manage;
+pub mod crawl4ai;
 pub mod ctx_search;
 pub mod desktop;
 pub mod doctor;
