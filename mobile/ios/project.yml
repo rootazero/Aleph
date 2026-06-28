@@ -13,7 +13,7 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-    TARGETED_DEVICE_FAMILY: "1"
+    TARGETED_DEVICE_FAMILY: "1,2"
 
 targets:
   AlephPaneliOSTests:
@@ -43,8 +43,14 @@ targets:
         CFBundleVersion: ${ALEPH_VERSION}
         UILaunchScreen:
           UIColorName: ""
+        UIRequiresFullScreen: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         # WKWebView loads cleartext http (remote public-IP core, or local
         # 127.0.0.1). NSAllowsArbitraryLoads alone disables ATS for ALL hosts
         # (public IP + loopback). Do NOT also add NSAllowsLocalNetworking: on
