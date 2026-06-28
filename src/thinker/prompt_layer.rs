@@ -95,6 +95,9 @@ pub struct LayerInput<'a> {
     /// When set, `MemoryAugmentationLayer` injects this text verbatim into the
     /// system prompt.  Takes precedence over the legacy `memory_context` field.
     pub memory_user_message: Option<String>,
+    /// Pre-rendered routing-experience text from `RoutingRecall`. When set,
+    /// `MemoryAugmentationLayer` injects this verbatim after memory.
+    pub routing_experience_user_message: Option<String>,
     /// Whether the conversation history contains compressed session summaries.
     ///
     /// Set to `true` when session compaction has produced at least one
@@ -167,6 +170,7 @@ impl<'a> LayerInput<'a> {
             inbound: None,
             identity_files: None,
             memory_user_message: None,
+            routing_experience_user_message: None,
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
@@ -194,6 +198,7 @@ impl<'a> LayerInput<'a> {
             inbound: None,
             identity_files: None,
             memory_user_message: None,
+            routing_experience_user_message: None,
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
@@ -225,6 +230,7 @@ impl<'a> LayerInput<'a> {
             inbound: None,
             identity_files: None,
             memory_user_message: None,
+            routing_experience_user_message: None,
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
@@ -252,6 +258,7 @@ impl<'a> LayerInput<'a> {
             inbound: None,
             identity_files: None,
             memory_user_message: None,
+            routing_experience_user_message: None,
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
@@ -321,6 +328,13 @@ impl<'a> LayerInput<'a> {
     #[must_use]
     pub fn with_memory_user_message(mut self, text: String) -> Self {
         self.memory_user_message = Some(text);
+        self
+    }
+
+    /// Attach pre-rendered routing-experience text from `RoutingRecall`.
+    #[must_use]
+    pub fn with_routing_experience_message(mut self, text: String) -> Self {
+        self.routing_experience_user_message = Some(text);
         self
     }
 
