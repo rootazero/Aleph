@@ -268,6 +268,40 @@ CREATE TABLE IF NOT EXISTS notes_vec_map (
 CREATE INDEX IF NOT EXISTS idx_notes_vec_map_agent ON notes_vec_map(agent_id);
 "#;
 
+pub const ROUTING_EXPERIENCE_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS routing_experiences (
+    id                  TEXT PRIMARY KEY,
+    agent_id            TEXT NOT NULL,
+    model_id            TEXT NOT NULL,
+    provider_id         TEXT NOT NULL,
+    terminate_reason    TEXT NOT NULL,
+    iterations          INTEGER NOT NULL,
+    tool_calls          INTEGER NOT NULL,
+    tool_error_count    INTEGER NOT NULL,
+    tool_call_total     INTEGER NOT NULL,
+    tok_input           INTEGER NOT NULL,
+    tok_output          INTEGER NOT NULL,
+    tok_cache_read      INTEGER NOT NULL,
+    tok_cache_creation  INTEGER NOT NULL,
+    tok_reasoning       INTEGER NOT NULL,
+    estimated_cost      REAL,
+    duration_ms         INTEGER NOT NULL,
+    context_tokens      INTEGER NOT NULL,
+    context_window      INTEGER NOT NULL,
+    created_at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_routing_experiences_agent
+    ON routing_experiences(agent_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS routing_exp_vec_map (
+    rowid           INTEGER PRIMARY KEY AUTOINCREMENT,
+    routing_exp_id  TEXT NOT NULL,
+    agent_id        TEXT NOT NULL DEFAULT 'default',
+    dim             INTEGER NOT NULL DEFAULT 768,
+    UNIQUE(agent_id, routing_exp_id)
+);
+CREATE INDEX IF NOT EXISTS idx_routing_exp_vec_map_agent ON routing_exp_vec_map(agent_id);
+"#;
+
 #[must_use]
 pub fn vec_table_ddl(dim: u32, table_name: &str) -> String {
     format!(

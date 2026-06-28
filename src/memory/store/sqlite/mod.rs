@@ -15,6 +15,7 @@ pub mod notes;
 pub mod query_filed;
 pub mod raw_memories;
 pub mod recall_signals;
+pub mod routing_experience;
 mod sessions;
 
 use crate::error::AlephError;

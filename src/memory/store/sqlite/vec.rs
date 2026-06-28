@@ -44,6 +44,20 @@ pub fn notes_vec_table_for_dim(dim: u32) -> Result<&'static str, AlephError> {
     }
 }
 
+/// Map an embedding dimension to the corresponding routing experience vec0 table name.
+///
+/// Returns an error if `dim` is not one of 768, 1024, or 1536.
+pub fn routing_exp_vec_table_for_dim(dim: u32) -> Result<&'static str, AlephError> {
+    match dim {
+        768 => Ok("routing_exp_vec_768"),
+        1024 => Ok("routing_exp_vec_1024"),
+        1536 => Ok("routing_exp_vec_1536"),
+        _ => Err(AlephError::config(format!(
+            "unsupported embedding dimension: {dim} (expected 768, 1024, or 1536)"
+        ))),
+    }
+}
+
 /// Serialize a float embedding to a little-endian byte blob for sqlite-vec.
 #[must_use]
 pub fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
