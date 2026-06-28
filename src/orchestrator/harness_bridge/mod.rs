@@ -219,6 +219,13 @@ pub struct AgentHarnessRunner {
     /// already applies (`deps_builder::derive_token_budget`). `None` (unset /
     /// tests) keeps the gauge on the per-model catalog window.
     pub primary_context_window: Option<u32>,
+
+    /// Routing-experience store (record path). `None` when no embedder is
+    /// configured. Lives on the runner, never on `HarnessDeps` (R10).
+    pub routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
+    /// Run-start routing recall (read path). `None` when no embedder is
+    /// configured. Invoked once per run, pre-loop.
+    pub routing_recall: Option<Arc<crate::routing::RoutingRecall>>,
 }
 
 /// Hard fallback iteration cap — used only when both the per-flow override
