@@ -178,9 +178,9 @@ pub fn SearchView() -> impl IntoView {
     });
 
     view! {
-        <div class="flex h-full aleph-content-top">
+        <div class="flex h-full aleph-content-top aleph-md">
             // Left panel: Presets + Settings
-            <div class="flex flex-col w-5/12 min-w-0 border-r border-border">
+            <div class="flex flex-col w-5/12 min-w-0 border-r border-border aleph-md-list">
                 // Header
                 <div class="px-6 pb-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">{t!(i18n, settings.search.title)}</h1>
@@ -227,7 +227,7 @@ pub fn SearchView() -> impl IntoView {
             </div>
 
             // Right panel: Detail or Add form
-            <div class="w-7/12 min-w-0 overflow-y-auto">
+            <div class="w-7/12 min-w-0 overflow-y-auto aleph-md-detail">
                 {move || {
                     if show_add_form.get() {
                         view! {

@@ -159,6 +159,35 @@ fn AppContent() -> impl IntoView {
         });
     }
 
+    // Tablet auto-collapses the sidebar so the main content gets full width;
+    // the `.ff-tablet` shell class (added below) makes a *revealed* sidebar a
+    // slide-over overlay rather than an in-flow column. The Effect's prev-value
+    // tracks the previous band: it skips its Wide branch on the initial run so
+    // a Wide boot honors the persisted localStorage preference, while a Tablet
+    // boot still collapses. Manual toggles within a band don't re-fire it (it
+    // only depends on `form_factor`), so they are preserved.
+    {
+        let mem_for_ff = expect_context::<MemoryState>();
+        let ff = expect_context::<FormFactorState>();
+        Effect::new(move |prev_band: Option<FormFactor>| -> FormFactor {
+            let now = ff.form_factor.get();
+            match prev_band {
+                None => {
+                    if now == FormFactor::Tablet {
+                        mem_for_ff.sidebar_collapsed.set(true);
+                    }
+                }
+                Some(was) if was != now => match now {
+                    FormFactor::Tablet => mem_for_ff.sidebar_collapsed.set(true),
+                    FormFactor::Wide => mem_for_ff.sidebar_collapsed.set(false),
+                    FormFactor::Phone => {}
+                },
+                Some(_) => {}
+            }
+            now
+        });
+    }
+
     // Setup WebSocket connection and alert subscriptions on mount
     Effect::new(move || {
         let state = state;
@@ -192,12 +221,14 @@ fn AppContent() -> impl IntoView {
     });
 
     let mem_for_shell = expect_context::<MemoryState>();
+    let ff_for_shell = expect_context::<FormFactorState>();
 
     view! {
         // Two-column shell (Codex) floating on the drifting light-field.
         <div
             class="aleph-shell flex h-screen text-text-primary font-sans selection:bg-primary/30"
             class:sidebar-collapsed=move || mem_for_shell.sidebar_collapsed.get()
+            class:ff-tablet=move || ff_for_shell.form_factor.get() == FormFactor::Tablet
         >
             // No global title-bar drag strip on the shell root — the macOS
             // Overlay title bar is carved out from the chrome buttons by
