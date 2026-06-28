@@ -128,6 +128,15 @@ pub(crate) fn apply_trace_event(
             };
             chat.begin_step(run_id, iteration);
             workspace.set_current_iteration(run_id, iteration);
+            // Turn boundary reached with prompts still queued → ask the composer
+            // (which owns the send pipeline) to steer them into the live run.
+            // Guarded so we only wake the flush Effect when there's something to
+            // flush.
+            if chat.active_run_id.get_untracked().is_some()
+                && !chat.prompt_queue.get_untracked().is_empty()
+            {
+                chat.flush_pulse.update(|n| *n = n.wrapping_add(1));
+            }
         }
         "text_emitted" => {
             let Some(iteration) = trace_event
