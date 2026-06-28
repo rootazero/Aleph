@@ -55,6 +55,7 @@ impl BuiltinToolRegistry {
             if let Some(ref cfg) = config.config {
                 let cfg_guard = cfg.read().await;
                 tool = tool.with_ssrf_policy(cfg_guard.ssrf.clone());
+                tool = tool.with_crawl4ai(&cfg_guard.policies.web_fetch.crawl4ai);
             }
             tool
         };
