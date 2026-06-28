@@ -263,6 +263,8 @@ pub(super) fn InputArea() -> impl IntoView {
     // `active_run_id` is owned by the `run_accepted` event, and a steered send
     // emits none (execute.rs returns Ok before the RunAccepted emit).
     let flush_queue = move || {
+        // Single-agent path: in team chat `active_run_id` is never set, so the
+        // queue/flush is gated off entirely (team runs route via TeamChatApi).
         let batch = chat.drain_all_queued();
         if batch.is_empty() {
             return;

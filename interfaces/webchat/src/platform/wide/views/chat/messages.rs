@@ -353,6 +353,7 @@ fn QueuedGhosts() -> impl IntoView {
                     children=move |(idx, entry)| {
                         let label = queue_preview_label(&entry);
                         let edit_text = entry.text.clone();
+                        let edit_attachments = entry.attachments.clone();
                         view! {
                             <div class="flex justify-end group">
                                 <div
@@ -361,8 +362,13 @@ fn QueuedGhosts() -> impl IntoView {
                                            cursor-text transition-colors hover:bg-primary/15"
                                     title=move || t_string!(i18n, chat.queued).to_string()
                                     on:click=move |_| {
-                                        // Edit: pull back into the composer, drop from queue.
+                                        // Edit: pull the full prompt (text + attachments) back
+                                        // into the composer, drop it from the queue. The composer's
+                                        // attachments are backed by `chat.pending_attachments`;
+                                        // `draft_seed` feeds the textarea. Restoring both avoids
+                                        // silently dropping a queued prompt's files on edit.
                                         chat.draft_seed.set(Some(edit_text.clone()));
+                                        chat.pending_attachments.set(edit_attachments.clone());
                                         chat.remove_queued_prompt(idx);
                                     }
                                 >
