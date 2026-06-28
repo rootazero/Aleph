@@ -9,11 +9,13 @@ pub mod config;
 pub mod experience_store;
 pub mod identity_links;
 pub mod observer;
+pub mod recall;
 pub mod resolve;
 pub mod session_key;
 
 pub use experience_store::{RoutingExperienceStore, RoutingOutcome};
 pub use observer::{outcome_from_session_completed, OutcomeObserver};
+pub use recall::{provider_availability_from_config, ProviderAvailability, RoutingRecall};
 
 pub use config::{MatchRule, PeerMatchConfig, RouteBinding, SessionConfig};
 pub use resolve::{resolve_route, MatchedBy, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind};
