@@ -9,7 +9,6 @@
 
 mod attachments;
 mod palette;
-mod queue_bar;
 mod voice;
 
 use super::mention_palette::{update_mention_palette, MentionPaletteView};
@@ -18,8 +17,6 @@ use palette::{
     build_palette_entries, doctor_command_info, expand_doctor_command, parse_command_info,
     CommandInfo, PaletteEntry, PaletteLabels, SlashPaletteView,
 };
-use queue_bar::QueuedPromptBar;
-
 use super::project_menu::ProjectMenu;
 use super::TodoPanel;
 use super::state::{ChatSendError, ChatSendErrorCode, ChatState, QueuedPrompt, TeamMemberView};
@@ -791,8 +788,6 @@ pub(super) fn InputArea() -> impl IntoView {
                 // for its height, so messages never hide behind it.
                 <TodoPanel />
                 <AttachmentPreviewBar attachments=attachments />
-
-                <QueuedPromptBar queue=chat.prompt_queue />
 
                 // Team chat: most-salient task pill, above the input box.
                 <TeamTaskStrip />

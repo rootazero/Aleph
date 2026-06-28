@@ -5,7 +5,7 @@
 //! the chat module (`pub(super)`).
 
 use super::reasoning::ReasoningPanel;
-use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState};
+use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState, QueuedPrompt};
 use super::PlanArchiveCell;
 use super::timeline::{self, TimelineRow};
 use crate::components::markdown::{MarkdownRenderer, TypewriterRenderer};
@@ -255,6 +255,10 @@ pub(crate) fn MessageList() -> impl IntoView {
                                     </div>
                                 </Show>
                             </Show>
+                            // Pending follow-up ghosts — bottom of the stream,
+                            // above the composer; flow into the transcript on
+                            // insert. Replaces the old chip strip.
+                            <QueuedGhosts />
                         </div>
                     }
                 >
@@ -317,6 +321,79 @@ fn SendErrorBanner() -> impl IntoView {
                     }
                 })
             }}
+        </Show>
+    }
+}
+
+/// Pending follow-up prompts rendered as right-aligned "ghost" bubbles at the
+/// tail of the conversation stream. They stay here until inserted: at a turn
+/// boundary (Steer) they solidify into real user bubbles, or the user can ✕
+/// remove / click-to-edit (pull back into the composer via `draft_seed`) /
+/// Esc·⚡ force-insert. Replaces the old above-the-input chip strip so the
+/// queue lives in the stream and never fights the sticky Todo panel for the
+/// fixed bottom slot.
+#[component]
+fn QueuedGhosts() -> impl IntoView {
+    use crate::views::chat::state::queue_preview_label;
+    let chat = expect_context::<ChatState>();
+    let i18n = use_i18n();
+
+    let enumerated = move || {
+        let items: Vec<(usize, QueuedPrompt)> =
+            chat.prompt_queue.get().into_iter().enumerate().collect();
+        items
+    };
+
+    view! {
+        <Show when=move || !chat.prompt_queue.get().is_empty()>
+            <div class="space-y-2 pt-1">
+                <For
+                    each=enumerated
+                    key=|(idx, e)| format!("{}:{}", idx, e.text)
+                    children=move |(idx, entry)| {
+                        let label = queue_preview_label(&entry);
+                        let edit_text = entry.text.clone();
+                        view! {
+                            <div class="flex justify-end group">
+                                <div
+                                    class="relative max-w-[80%] px-3.5 py-2 rounded-2xl rounded-br-md text-sm
+                                           border border-dashed border-primary/60 bg-primary/10 text-primary/90
+                                           cursor-text transition-colors hover:bg-primary/15"
+                                    title=move || t_string!(i18n, chat.queued).to_string()
+                                    on:click=move |_| {
+                                        // Edit: pull back into the composer, drop from queue.
+                                        chat.draft_seed.set(Some(edit_text.clone()));
+                                        chat.remove_queued_prompt(idx);
+                                    }
+                                >
+                                    <span class="absolute -top-2 right-2 text-[9px] px-1.5 rounded-full
+                                                 bg-surface-sunken border border-primary/50 text-primary/80">
+                                        {(idx + 1).to_string()}
+                                    </span>
+                                    {label}
+                                    <button
+                                        class="absolute -top-2 -left-2 w-4 h-4 rounded-full bg-surface-raised
+                                               border border-border text-text-tertiary text-[10px] leading-none
+                                               flex items-center justify-center hover:text-danger hover:border-danger/50"
+                                        title=move || t_string!(i18n, chat.remove).to_string()
+                                        on:click=move |ev: web_sys::MouseEvent| {
+                                            ev.stop_propagation();
+                                            chat.remove_queued_prompt(idx);
+                                        }
+                                    >
+                                        "✕"
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    }
+                />
+                <div class="flex justify-end">
+                    <span class="text-[10px] text-text-tertiary pr-1">
+                        {move || t_string!(i18n, chat.queue_hint).to_string()}
+                    </span>
+                </div>
+            </div>
         </Show>
     }
 }

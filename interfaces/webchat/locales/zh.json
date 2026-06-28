@@ -221,6 +221,7 @@
     "remove": "移除",
     "clear": "清空草稿",
     "force_insert": "立即插入（中断当前任务）",
+    "queue_hint": "下个回合自动插入 · Esc/⚡ 立即插入",
     "voice_start": "语音输入",
     "voice_stop": "停止录音",
     "voice_transcribing": "转写中…",

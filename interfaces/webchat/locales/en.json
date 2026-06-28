@@ -221,6 +221,7 @@
     "remove": "Remove",
     "clear": "Clear draft",
     "force_insert": "Insert now (interrupt current task)",
+    "queue_hint": "Auto-inserts next turn · Esc/⚡ to insert now",
     "voice_start": "Voice input",
     "voice_stop": "Stop recording",
     "voice_transcribing": "Transcribing…",
