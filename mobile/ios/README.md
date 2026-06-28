@@ -21,9 +21,11 @@ The `PANEL_URL` launch env still takes priority (used by `generate.sh` /
 
 ## No secrets in source
 
-The connection target (server **IP + token**) is **never** committed. It is
-resolved at runtime via the `PANEL_URL` env var; the Swift `ContentView` reads it,
-falling back to `UserDefaults`, then `about:blank`. Concretely:
+The connection target (server **IP + token**) is **never** committed. `PANEL_URL`
+env still takes priority (used by `generate.sh` / `launch-local.sh` for sim/dev);
+otherwise the app shows the native pairing screen and persists the chosen target
+(with its token) in the **Keychain** — there is no `UserDefaults` token and no
+`about:blank` fallback. Concretely:
 
 | File | Committed? | Secret? |
 |------|-----------|---------|

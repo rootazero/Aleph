@@ -20,7 +20,7 @@ struct PairingTarget: Equatable {
         guard let p = URLComponents(url: url, resolvingAgainstBaseURL: false)?.port else {
             return Self.defaultPort
         }
-        return UInt16(p)
+        return UInt16(exactly: p) ?? Self.defaultPort
     }
 
     /// Parse user/raw input into a target. See `PairingError` for rejections.
@@ -42,6 +42,11 @@ struct PairingTarget: Equatable {
         }
         guard let host = components.host, !host.isEmpty else {
             return .failure(.noHost)
+        }
+        // Reject an explicit port that overflows UInt16 — the user typed something
+        // like :99999 which would crash the `port` accessor later.
+        if let explicitPort = components.port, !(0...65535).contains(explicitPort) {
+            return .failure(.invalidURL)
         }
         // URLComponents.port is non-nil only when the user wrote an explicit
         // port (it does NOT apply scheme defaults), so this cleanly injects the

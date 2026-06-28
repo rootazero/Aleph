@@ -56,4 +56,9 @@ import Foundation
         let noPort = try PairingTarget.parse("http://[::1]").get()
         #expect(noPort.port == 18790)
     }
+
+    @Test("out-of-range port rejected, not crashing")
+    func outOfRangePortRejected() {
+        #expect(PairingTarget.parse("http://host:99999") == .failure(.invalidURL))
+    }
 }

@@ -73,7 +73,8 @@ schemes:
       # from the shell at generate time → the resolved value is written only into
       # the GENERATED .xcodeproj scheme, which is gitignored. project.yml itself
       # keeps just the ${PANEL_URL} placeholder. Regenerate via ./generate.sh
-      # (it reads a fresh token). Empty/unset → app falls to about:blank (no leak).
+      # (it reads a fresh token). Empty/unset → the app shows the native pairing
+      # screen (no leak).
       environmentVariables:
         - variable: PANEL_URL
           value: ${PANEL_URL}
