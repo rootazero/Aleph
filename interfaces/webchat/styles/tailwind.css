@@ -1880,6 +1880,25 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
     overflow: hidden;
 }
 
+/* Tablet: the sidebar is a slide-over overlay, not an in-flow column.
+   Revealing it floats over content (absolute) instead of pushing the 256px
+   column back into flow and re-cramping the main pane. `.aleph-shell` is
+   already a positioning context. Width is kept at 16rem in both states so
+   collapse/reveal is a clean horizontal slide, not a width grow. */
+.aleph-shell.ff-tablet .aleph-sidebar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 60;
+    width: 16rem;
+}
+.aleph-shell.ff-tablet.sidebar-collapsed .aleph-sidebar {
+    width: 16rem;
+    transform: translateX(-100%);
+    overflow: hidden;
+}
+
 /* ── Collapsible workspace pane (chat right overlay) ───────────────
    The pane FLOATS over the chat surface (absolute, right-anchored) so
    opening/closing it never reflows the chat detail. Collapse eases by
