@@ -63,3 +63,94 @@ mod model_precedence_tests {
         assert_eq!(resolve_routing_model_id(None, None, "NATIVE"), "NATIVE");
     }
 }
+
+#[cfg(test)]
+mod integration_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use crate::error::AlephError;
+    use crate::harness::trace::{LoopTraceEvent, LoopTraceSessionOutcome};
+    use crate::harness::TraceSink;
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::memory::EmbeddingProvider;
+    use crate::orchestrator::dispatch::{TerminateReason, TokenBreakdown, ToolInvocation};
+
+    use super::{OutcomeObserver, RoutingAttribution, RoutingExperienceStore};
+
+    fn emb(seed: f32) -> Vec<f32> { let mut v = vec![0.0f32; 768]; v[0] = seed; v }
+    fn temp_backend() -> SqliteMemoryBackend {
+        let dir = std::env::temp_dir().join(format!("aleph-routing-int-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap()
+    }
+    struct StubEmbedder { vec: Vec<f32> }
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for StubEmbedder {
+        async fn embed(&self, _t: &str) -> Result<Vec<f32>, AlephError> { Ok(self.vec.clone()) }
+        async fn embed_batch(&self, t: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> { Ok(t.iter().map(|_| self.vec.clone()).collect()) }
+        fn dimensions(&self) -> usize { 768 }
+        fn model_name(&self) -> &str { "stub" }
+        fn provider_id(&self) -> &str { "stub" }
+    }
+    #[derive(Default)]
+    struct SpySink { session_completed: AtomicUsize }
+    impl TraceSink for SpySink {
+        fn on_trace(&self, event: &LoopTraceEvent) {
+            if matches!(event, LoopTraceEvent::SessionCompleted { .. }) {
+                self.session_completed.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        fn flush(&self) {}
+    }
+    fn session_completed() -> LoopTraceEvent {
+        LoopTraceEvent::SessionCompleted {
+            outcome: LoopTraceSessionOutcome::Completed,
+            iterations: 2,
+            tool_calls_made: 1,
+            total_tokens: 30,
+            hit_limit: false,
+            final_text: Some("done".into()),
+            terminate_reason: Some(TerminateReason::Completed),
+            duration_ms: Some(123),
+            token_breakdown: Some(TokenBreakdown { input: 10, output: 20, cache_read: 0, cache_creation: 0, reasoning: 0 }),
+            tool_timeline: vec![ToolInvocation { id: "1".into(), name: "bash".into(), duration_ms: 5, success: true, error: None }],
+        }
+    }
+    async fn drain_until_row(store: &RoutingExperienceStore, agent: &str) -> Vec<crate::memory::store::sqlite::routing_experience::RoutingNeighbor> {
+        // `#[tokio::test]` is current-thread: yielding lets the spawned
+        // fire-and-forget record task run. Bounded poll → deterministic.
+        let mut got = Vec::new();
+        for _ in 0..200 {
+            tokio::task::yield_now().await;
+            got = store.recall(agent, &emb(0.0), 5).await.unwrap();
+            if !got.is_empty() { break; }
+        }
+        got
+    }
+
+    #[tokio::test]
+    async fn observer_on_trace_records_through_real_sink() {
+        let backend = Arc::new(temp_backend());
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
+        let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
+        let spy = Arc::new(SpySink::default());
+        let attribution = Arc::new(RoutingAttribution::new("run".into()));
+        attribution.task_emb.set(emb(1.0)).unwrap(); // recall would have set this
+        let observer = OutcomeObserver::new(
+            spy.clone() as Arc<dyn TraceSink>,
+            store.clone(),
+            attribution,
+            "MODEL_X".into(), "PROV_Y".into(), "agentA".into(),
+        );
+        observer.on_trace(&session_completed());
+        let got = drain_until_row(&store, "agentA").await;
+        assert_eq!(spy.session_completed.load(Ordering::SeqCst), 1, "forwarded unchanged");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].model_id, "MODEL_X");
+        assert_eq!(got[0].provider_id, "PROV_Y");
+        assert_eq!(got[0].agent_id, "agentA");
+        assert_eq!(got[0].iterations, 2);
+        assert_eq!(got[0].tool_call_total, 1);
+    }
+}
