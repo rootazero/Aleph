@@ -58,6 +58,7 @@ pub fn subscribe_team_events(dashboard: &DashboardState, chat: ChatState) -> usi
                     is_final: true,
                     text_finalized: true,
                     agent_id: Some(agent_id),
+                    plan_archive: None,
                 });
             });
         } else if event.topic.ends_with(".activity") {

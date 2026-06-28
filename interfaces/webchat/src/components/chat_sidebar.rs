@@ -81,6 +81,7 @@ fn team_history_item_to_message(index: usize, item: TeamMessageItem) -> ChatMess
         is_final: true,
         text_finalized: true,
         agent_id: if is_user { None } else { Some(item.from_agent) },
+        plan_archive: None,
     }
 }
 
@@ -177,6 +178,7 @@ pub(crate) async fn hydrate_session_history(
                             is_final: false,
                             text_finalized: false,
                             agent_id: None,
+                            plan_archive: None,
                         });
                     });
                 }

@@ -212,6 +212,13 @@ pub struct ChatMessage {
     /// to None). `Some(..)` → MessageBubble renders attribution (color + name).
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// Sunk archive of a finished/superseded scratchpad plan. `Some` ⇒ this
+    /// message renders as a compact "completed task" capsule instead of normal
+    /// text. Reconstructed identically by live projection and `replay_run`
+    /// (both drive the same archive call sites), so it survives a tab swap (via
+    /// `messages` in `SessionSnapshot`) and a full reload (via replay).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_archive: Option<super::plan::PlanView>,
 }
 
 /// Minimal tool call record for display.
@@ -254,6 +261,15 @@ pub enum ChatPhase {
     Thinking,
     Streaming,
     Error,
+}
+
+/// Which sink trigger is archiving the active plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveGate {
+    /// New `set_plan` / `clear` — archive only a worked-on plan (`has_activity`).
+    Activity,
+    /// Next-turn start — archive only an already-complete plan.
+    Completed,
 }
 
 /// Reactive state container provided via Leptos context.
@@ -439,6 +455,39 @@ impl ChatState {
         }
     }
 
+    /// Which sink trigger is calling — decides the archive gate.
+    pub fn archive_active_plan(&self, gate: ArchiveGate) {
+        let Some(p) = self.plan.get_untracked() else { return };
+        let should = match gate {
+            ArchiveGate::Activity => p.has_activity(),
+            ArchiveGate::Completed => p.complete,
+        };
+        if !should {
+            return; // leave the slot for the caller to overwrite/hide
+        }
+        let seq = self.next_msg_id.get_untracked();
+        self.next_msg_id.set(seq + 1);
+        self.messages.update(|msgs| {
+            msgs.push(ChatMessage {
+                id: format!("plan-archive-{seq}"),
+                role: "assistant".into(),
+                content: String::new(),
+                tool_calls: vec![],
+                is_streaming: false,
+                is_intermediate: false,
+                error: None,
+                model_info: None,
+                is_final: false,
+                text_finalized: false,
+                timestamp: Some(super::timeline::now_millis()),
+                iteration: None,
+                agent_id: None,
+                plan_archive: Some(p),
+            });
+        });
+        self.plan.set(None);
+    }
+
     /// Record a provider-retry status (`stream.run_retrying`).
     pub fn set_provider_retry(&self, notice: ProviderRetryNotice) {
         self.provider_retry.set(Some(notice));
@@ -551,6 +600,7 @@ impl ChatState {
                 timestamp: Some(super::timeline::now_millis()),
                 iteration: None,
                 agent_id: None,
+                plan_archive: None,
             });
         });
         self.error_message.set(None);
@@ -558,6 +608,10 @@ impl ChatState {
 
     /// Start a new assistant message placeholder (streaming).
     pub fn start_assistant_message(&self, run_id: &str) {
+        // Next-turn sink: a finished plan retires into the conversation flow
+        // when the next run begins. Both live (`run_accepted`) and replay
+        // (`replay_run`) call this, so the capsule reconstructs identically.
+        self.archive_active_plan(ArchiveGate::Completed);
         let id = format!("assistant-{run_id}");
         self.messages.update(|msgs| {
             msgs.push(ChatMessage {
@@ -574,6 +628,7 @@ impl ChatState {
                 timestamp: Some(super::timeline::now_millis()),
                 iteration: None,
                 agent_id: None,
+                plan_archive: None,
             });
         });
         self.active_run_id.set(Some(run_id.to_string()));
@@ -623,6 +678,7 @@ impl ChatState {
                         is_final: false,
                         text_finalized: false,
                         agent_id: None,
+                        plan_archive: None,
                     });
                 } else {
                     msgs[idx].iteration = Some(iteration);
@@ -1175,6 +1231,78 @@ mod step_tests {
         assert_eq!(msg.agent_id.as_deref(), Some("alice"));
         let v = serde_json::to_value(&msg).unwrap();
         assert_eq!(v.get("agent_id").and_then(|a| a.as_str()), Some("alice"));
+    }
+
+    use super::super::plan::{PlanItemStatusView, PlanItemView, PlanView};
+
+    fn plan(items: &[(&str, PlanItemStatusView)], complete: bool) -> PlanView {
+        PlanView {
+            objective: Some("Obj".into()),
+            items: items
+                .iter()
+                .map(|(t, s)| PlanItemView { text: (*t).into(), status: s.clone() })
+                .collect(),
+            complete,
+        }
+    }
+
+    fn archive_count(chat: &ChatState) -> usize {
+        chat.messages.with(|m| m.iter().filter(|x| x.plan_archive.is_some()).count())
+    }
+
+    #[test]
+    fn archive_activity_sinks_worked_plan_and_clears_slot() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.plan.set(Some(plan(&[("a", PlanItemStatusView::Completed)], false)));
+        chat.archive_active_plan(ArchiveGate::Activity);
+        assert_eq!(archive_count(&chat), 1, "worked plan sinks one capsule");
+        assert!(chat.plan.get_untracked().is_none(), "slot cleared after archive");
+    }
+
+    #[test]
+    fn archive_activity_skips_pristine_plan() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.plan.set(Some(plan(&[("a", PlanItemStatusView::Pending)], false)));
+        chat.archive_active_plan(ArchiveGate::Activity);
+        assert_eq!(archive_count(&chat), 0, "pristine plan is not archived");
+        assert!(chat.plan.get_untracked().is_some(), "slot left for overwrite");
+    }
+
+    #[test]
+    fn archive_completed_gate_ignores_incomplete() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.plan.set(Some(plan(&[("a", PlanItemStatusView::InProgress)], false)));
+        chat.archive_active_plan(ArchiveGate::Completed);
+        assert_eq!(archive_count(&chat), 0, "in-progress plan not sunk on Completed gate");
+        assert!(chat.plan.get_untracked().is_some());
+    }
+
+    #[test]
+    fn start_assistant_message_sinks_completed_plan() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.plan.set(Some(plan(&[("a", PlanItemStatusView::Completed)], true)));
+        chat.start_assistant_message("r2");
+        assert_eq!(archive_count(&chat), 1, "completed plan sinks at next run start");
+        assert!(chat.plan.get_untracked().is_none());
+    }
+
+    #[test]
+    fn start_assistant_message_keeps_incomplete_plan() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.plan.set(Some(plan(&[("a", PlanItemStatusView::InProgress)], false)));
+        chat.start_assistant_message("r2");
+        assert_eq!(archive_count(&chat), 0, "in-progress plan stays in the sticky slot");
+        assert!(chat.plan.get_untracked().is_some());
     }
 
     #[test]

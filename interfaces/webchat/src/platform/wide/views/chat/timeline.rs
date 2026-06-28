@@ -322,6 +322,7 @@ mod tests {
             timestamp: ts,
             iteration: None,
             agent_id: None,
+            plan_archive: None,
         }
     }
 
@@ -340,6 +341,7 @@ mod tests {
             iteration: None,
             timestamp: None,
             agent_id: None,
+            plan_archive: None,
         }
     }
 
@@ -358,6 +360,7 @@ mod tests {
             iteration: Some(it),
             timestamp: None,
             agent_id: None,
+            plan_archive: None,
         }
     }
 
@@ -376,6 +379,7 @@ mod tests {
             iteration: None,
             timestamp: None,
             agent_id: None,
+            plan_archive: None,
         }
     }
 
@@ -447,6 +451,7 @@ mod tests {
             iteration: Some(it),
             timestamp: None,
             agent_id: None,
+            plan_archive: None,
         }
     }
 
@@ -469,6 +474,7 @@ mod tests {
             iteration: Some(it),
             timestamp: None,
             agent_id: None,
+            plan_archive: None,
         }
     }
 

@@ -100,6 +100,7 @@ mod tests {
             is_final: false,
             text_finalized: false,
             agent_id: None,
+            plan_archive: None,
         }
     }
 
