@@ -47,7 +47,10 @@ struct NWReachabilityProbe: ReachabilityProbing {
 }
 
 /// Resumes a continuation at most once and cancels the connection on first fire.
-private final class ResumeOnce {
+/// Thread-safe: the `NSLock` serializes all reads and writes of `done`; the
+/// other stored properties are immutable. Hence safe to capture in the
+/// `@Sendable` NWConnection state/timeout closures.
+private final class ResumeOnce: @unchecked Sendable {
     private var done = false
     private let lock = NSLock()
     private let continuation: CheckedContinuation<Bool, Never>
