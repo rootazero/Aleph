@@ -16,6 +16,20 @@ settings:
     TARGETED_DEVICE_FAMILY: "1"
 
 targets:
+  AlephPaneliOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - AlephPaneliOSTests
+    dependencies:
+      - target: AlephPaneliOS
+    settings:
+      base:
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/AlephPaneliOS.app/AlephPaneliOS"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        PRODUCT_BUNDLE_IDENTIFIER: ai.aleph.panel.iossim.tests
+        GENERATE_INFOPLIST_FILE: YES
+
   AlephPaneliOS:
     type: application
     platform: iOS
@@ -49,6 +63,9 @@ schemes:
     build:
       targets:
         AlephPaneliOS: all
+    test:
+      targets:
+        - AlephPaneliOSTests
     run:
       config: Debug
       # The connection target is injected via the PANEL_URL env so NO secret
