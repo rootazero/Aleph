@@ -371,6 +371,10 @@ impl PromptBuilder {
             Some(text) => input.with_memory_user_message(text.clone()),
             None => input,
         };
+        let input = match &self.routing_experience_user_message {
+            Some(text) => input.with_routing_experience_message(text.clone()),
+            None => input,
+        };
         let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
         let input = input.with_chain_context_opt(self.chain_context.as_ref());
         let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
