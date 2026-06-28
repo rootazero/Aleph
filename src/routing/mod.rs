@@ -6,9 +6,12 @@
 //! a regex layer here.
 
 pub mod config;
+pub mod experience_store;
 pub mod identity_links;
 pub mod resolve;
 pub mod session_key;
+
+pub use experience_store::{RoutingExperienceStore, RoutingOutcome};
 
 pub use config::{MatchRule, PeerMatchConfig, RouteBinding, SessionConfig};
 pub use resolve::{resolve_route, MatchedBy, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind};
