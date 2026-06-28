@@ -2287,7 +2287,7 @@ html[data-platform="macos"] .aleph-shell.sidebar-collapsed .aleph-roster-wrap {
 @media (max-width: 720px) {
   .aleph-md { flex-direction: column; overflow-y: auto; }
   .aleph-md > .aleph-md-list,
-  .aleph-md > .aleph-md-detail { width: 100%; min-width: 0; }
+  .aleph-md > .aleph-md-detail { width: 100%; min-width: 0; flex: none; }
   .aleph-md > .aleph-md-list { border-right: 0; }
 }
 
