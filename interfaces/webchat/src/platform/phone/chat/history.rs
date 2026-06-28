@@ -1,4 +1,6 @@
-//! Phone Chat landing — the session list.
+//! Phone Chat history — the session list, reached via the chat surface's
+//! history button. Tapping a row loads that session into ChatState and returns
+//! to the chat surface (`/`).
 
 use serde::Deserialize;
 
@@ -42,11 +44,11 @@ pub(crate) fn sort_sessions_desc(mut rows: Vec<SessionRow>) -> Vec<SessionRow> {
     rows
 }
 
-/// Phone Chat landing: a "+ New chat" row plus the session list. Tapping a row
-/// loads that session into the shared ChatState and drills into `/chat`.
+/// Phone Chat history: the session list. Tapping a row loads that session into
+/// the shared ChatState and returns to the chat surface (`/`).
 #[component]
 #[must_use]
-pub fn PhoneChatList() -> impl IntoView {
+pub fn PhoneChatHistory() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
     let workspace = expect_context::<WorkspaceState>();
@@ -92,22 +94,13 @@ pub fn PhoneChatList() -> impl IntoView {
         }
     });
 
-    // New chat: clear the current session (keeps agent) → the first send creates
-    // a fresh session server-side. No RPC needed up front.
-    let on_new = {
-        let navigate = navigate.clone();
-        move |_| {
-            chat.clear_session();
-            navigate("/chat", NavigateOptions::default());
-        }
-    };
-
-    // Select a session: set ChatState, restore project root, load history, drill in.
+    // Select a session: set ChatState, restore project root, load history, return
+    // to the chat surface.
     let on_select = move |row: SessionRow| {
         let navigate = navigate.clone();
         let dash = dashboard;
         if chat.session_key.get_untracked().as_deref() == Some(row.key.as_str()) {
-            navigate("/chat", NavigateOptions::default());
+            navigate("/", NavigateOptions::default());
             return;
         }
         chat.clear_session();
@@ -120,25 +113,14 @@ pub fn PhoneChatList() -> impl IntoView {
             Some(workspace),
             row.key.clone(),
         ));
-        navigate("/chat", NavigateOptions::default());
+        navigate("/", NavigateOptions::default());
     };
 
     view! {
-        <PhoneShell title="Chat">
-            // Single element child for PhoneShell; the static "+ New chat" list
-            // and the dynamic session list are normal siblings inside it (a bare
-            // dynamic block as a direct component child dropped the static head).
+        <PhoneShell title="History" back="/" back_label="Chat">
+            // Single wrapping element for PhoneShell children (the dynamic list
+            // block must not be a bare direct child).
             <div style="display:flex; flex-direction:column; gap:20px;">
-            <div class="list">
-                <div class="cell" on:click=on_new>
-                    <span class="cell-leading">
-                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                    </span>
-                    <div class="cell-body"><div class="cell-title">"New chat"</div></div>
-                    <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
-                </div>
-            </div>
-
             {move || {
                 if loading.get() {
                     // Distinguish "waiting for the socket" from "fetch in flight"

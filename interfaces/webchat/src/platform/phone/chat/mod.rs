@@ -4,7 +4,7 @@
 //! minimal composer are phone-specific.
 
 pub mod composer;
-pub mod list;
+pub mod history;
 pub mod thread;
 
 use leptos::prelude::*;
@@ -16,7 +16,7 @@ use crate::state::layout::WorkspaceState;
 use crate::views::chat::events::subscribe_run_events;
 use crate::views::chat::ChatState;
 
-use self::list::PhoneChatList;
+use self::history::PhoneChatHistory;
 use self::thread::PhoneChatThread;
 
 /// Phone Chat router. Owns the `run.*` streaming subscription (mirrors the wide
@@ -60,7 +60,7 @@ pub fn PhoneChat() -> impl IntoView {
     let location = use_location();
     move || {
         if location.pathname.get() == "/chat/history" {
-            view! { <PhoneChatList/> }.into_any()
+            view! { <PhoneChatHistory/> }.into_any()
         } else {
             view! { <PhoneChatThread/> }.into_any()
         }
