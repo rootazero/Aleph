@@ -431,3 +431,12 @@ test-speech-e2e: swift-bridge
 # End-to-end: OCR via the Swift helper. Requires no TCC (image is supplied directly).
 test-ocr-e2e: swift-bridge
     cargo test -p aleph-desktop-macos --test ocr_e2e -- --ignored --nocapture
+
+# ─── iOS Distribution ───
+
+# Build + upload an iOS Panel distribution build to TestFlight (internal testing).
+# Requires a paid Apple Developer membership + the ASC env vars
+# (ALEPH_TEAM_ID / ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH).
+# See mobile/ios/README.md → Distribution (TestFlight).
+ios-testflight:
+    cd mobile/ios && ./release-testflight.sh
