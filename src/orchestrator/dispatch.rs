@@ -668,20 +668,28 @@ impl Orchestrator {
             // read the ambient `current_project_root()` — without this they see
             // `None` and `memory.project_scoped` silently no-ops to the base
             // namespace, leaking notes across projects.
-            let outcome = crate::projects::with_project_root(
-                workspace_override.clone(),
-                harness.run(
-                    session_key,
-                    spec_clone,
-                    input_clone,
-                    sandbox_clone,
-                    event_tx,
-                    cancel_clone,
-                    tool_service_override,
-                    trace_sink,
-                    interaction_manifest,
-                    workspace_override,
-                    max_iterations_override,
+            // Re-establish the active-agent task-local too (same `tokio::spawn`
+            // task-local loss as the project root): agent-scoped skill discovery
+            // (`~/.aleph/agents/<id>/skills`) reads `current_agent_id()`. Capture
+            // the id before `spec_clone` is moved into `harness.run`.
+            let agent_id_for_scope = spec_clone.agent.clone();
+            let outcome = crate::agents::with_agent_id(
+                Some(agent_id_for_scope),
+                crate::projects::with_project_root(
+                    workspace_override.clone(),
+                    harness.run(
+                        session_key,
+                        spec_clone,
+                        input_clone,
+                        sandbox_clone,
+                        event_tx,
+                        cancel_clone,
+                        tool_service_override,
+                        trace_sink,
+                        interaction_manifest,
+                        workspace_override,
+                        max_iterations_override,
+                    ),
                 ),
             )
             .await;

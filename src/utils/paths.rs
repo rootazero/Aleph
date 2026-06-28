@@ -238,7 +238,11 @@ pub fn find_git_root(start: &std::path::Path) -> Option<PathBuf> {
 
 /// Get all skills directories in priority order
 ///
-/// Implements multi-location skill discovery following `OpenCode`'s pattern:
+/// Implements multi-location skill discovery following `OpenCode`'s pattern,
+/// in descending precedence:
+///
+/// 0. **Agent level** (highest precedence, only when a run is active):
+///    - `~/.aleph/agents/<id>/skills` - the currently-active agent's private skills
 ///
 /// 1. **Project level** (traverse up from current directory to git root):
 ///    - `.aleph/skills/` - Aleph native
@@ -299,10 +303,44 @@ fn collect_project_skills_dirs(
     dirs
 }
 
+/// True when `agent_id` is a single safe path component (non-empty, no path
+/// separators, no parent refs, no NUL). Mirrors [`get_agent_config_dir`]'s
+/// guard so skill discovery can build `~/.aleph/agents/<id>/skills` without
+/// risking traversal outside the agents root.
+fn is_safe_agent_id(agent_id: &str) -> bool {
+    !agent_id.is_empty()
+        && !agent_id.contains('/')
+        && !agent_id.contains('\\')
+        && !agent_id.contains("..")
+        && !agent_id.contains('\0')
+}
+
 pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<PathBuf>> {
     use tracing::info;
 
     let mut dirs = Vec::new();
+
+    // 0. Agent level (highest precedence): the currently-active agent's private
+    //    skills at `~/.aleph/agents/<id>/skills`, so an agent can ship/override
+    //    skills for its own runs. The id comes from the per-run task-local
+    //    (`with_agent_id`, set by the gateway run loop); absent outside a run /
+    //    in tests, in which case this is skipped. The directory is only READ —
+    //    never created — and the id is validated to stay inside the agents root.
+    if let Some(agent_id) = crate::agents::current_agent_id() {
+        if is_safe_agent_id(&agent_id) {
+            if let Ok(config_dir) = get_config_dir() {
+                let agent_skills = config_dir.join("agents").join(&agent_id).join("skills");
+                if agent_skills.is_dir() && !dirs.contains(&agent_skills) {
+                    info!(
+                        path = %agent_skills.display(),
+                        agent_id = %agent_id,
+                        "Found agent-level ~/.aleph/agents/<id>/skills"
+                    );
+                    dirs.push(agent_skills);
+                }
+            }
+        }
+    }
 
     // Determine start directory
     let start_dir = match project_dir {

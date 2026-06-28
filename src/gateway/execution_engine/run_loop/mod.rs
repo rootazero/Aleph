@@ -146,21 +146,28 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 crate::tools::fs_scope::FsScope::workspace(scope_workspace.join("output/documents"))
             }
         };
-        let mut result = crate::projects::with_project_root(
-            request.workspace_override.clone(),
-            crate::tools::fs_scope::with_fs_scope(
-                Some(fs_scope),
-                self.run_agent_loop_inner(
-                    run_id,
-                    request,
-                    agent.clone(),
-                    emitter,
-                    deadline,
-                    trace_task_id,
-                    cancel_token,
-                    extension_manager,
-                    hook_executor.clone(),
-                    hook_session_id.clone(),
+        // Publish the active agent id as a task-local for the whole run so
+        // agent-scoped tools (skill_list / skill_read) can resolve this agent's
+        // `~/.aleph/agents/<id>/skills` directory. Mirrors the project-root
+        // scope below; `None` outside this scope keeps non-agent paths intact.
+        let mut result = crate::agents::with_agent_id(
+            Some(agent.id().to_string()),
+            crate::projects::with_project_root(
+                request.workspace_override.clone(),
+                crate::tools::fs_scope::with_fs_scope(
+                    Some(fs_scope),
+                    self.run_agent_loop_inner(
+                        run_id,
+                        request,
+                        agent.clone(),
+                        emitter,
+                        deadline,
+                        trace_task_id,
+                        cancel_token,
+                        extension_manager,
+                        hook_executor.clone(),
+                        hook_session_id.clone(),
+                    ),
                 ),
             ),
         )
