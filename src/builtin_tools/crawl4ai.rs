@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn extract_markdown_string_form() {
-        let r = parse(r#"{"success": true, "results": [{"markdown": "# Hello\n\nbody"}]}"#);
+        let r = parse(r##"{"success": true, "results": [{"markdown": "# Hello\n\nbody"}]}"##);
         assert_eq!(
             Crawl4aiBackend::extract_markdown(r).unwrap(),
             "# Hello\n\nbody"
