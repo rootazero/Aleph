@@ -6,5 +6,6 @@
 //! - `providers/`: crawl4ai, firecrawl (Task 6)
 
 pub mod provider;
+pub mod providers;
 
 pub use provider::FetchProvider;
