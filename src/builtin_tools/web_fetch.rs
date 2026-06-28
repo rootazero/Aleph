@@ -18,7 +18,7 @@ use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Content extraction mode
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -462,7 +462,7 @@ impl WebFetchTool {
                         return Ok(apply_focus_prompt(bare, args.prompt.as_deref()));
                     }
                     Err(e) => {
-                        debug!("fetch provider '{}' failed, trying next: {e}", provider.name());
+                        warn!("fetch provider '{}' failed, trying next: {e}", provider.name());
                     }
                 }
             }

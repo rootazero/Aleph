@@ -1662,7 +1662,7 @@ fn FetchProvidersSection() -> impl IntoView {
                                         d="M5 13l4 4L19 7"
                                     />
                                 </svg>
-                                "Saved successfully"
+                                "保存成功"
                             </div>
                         }
                     })
@@ -1740,7 +1740,7 @@ fn FetchProvidersSection() -> impl IntoView {
                 let cfg = fetch_config.get();
                 let fc_backend = cfg.backends.iter().find(|b| b.name == "firecrawl").cloned();
                 // "Configured" = server reports has_api_key=true (key lives in search:firecrawl vault)
-                let fc_configured = fc_backend.as_ref().is_some_and(|b| b.has_api_key);
+                let fc_configured = fc_backend.as_ref().is_some_and(|b| b.shares_search && b.has_api_key);
                 let fc_verified = fc_backend.as_ref().is_some_and(|b| b.verified);
 
                 if fc_configured {

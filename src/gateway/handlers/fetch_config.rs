@@ -103,7 +103,7 @@ pub async fn handle_get(
                 } else {
                     (resolve_fetch_api_key(name, &vault).is_some(), false)
                 };
-                tracing::info!(
+                tracing::debug!(
                     backend = %name,
                     has_key = has_api_key,
                     "fetch_config.get: resolved API key presence"
