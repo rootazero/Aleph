@@ -182,4 +182,17 @@ mod integration_tests {
         assert!(p.iter().all(|n| n.model_id == "M")); // parent never absorbs child
         assert!(c.iter().all(|n| n.model_id == "N")); // child never written to parent's model
     }
+
+    #[test]
+    fn build_prompt_path_never_references_routing_recall() {
+        // Source-level guard: recall is run-start only; the per-turn prompt
+        // assembly (`prompt.rs::build_prompt`, called by `think.rs`) must never
+        // touch routing recall (R10 — loop stays dumb).
+        let prompt_src = include_str!("../harness/agent/prompt.rs");
+        let think_src = include_str!("../harness/agent/think.rs");
+        for needle in ["RoutingRecall", "build_routing_experience_message", "routing_recall"] {
+            assert!(!prompt_src.contains(needle), "prompt.rs must not reference {needle}");
+            assert!(!think_src.contains(needle), "think.rs must not reference {needle}");
+        }
+    }
 }
