@@ -4,14 +4,19 @@ import WebKit
 /// Full-screen `WKWebView` hosting the Aleph WASM panel.
 struct PanelWebView: UIViewRepresentable {
     let url: URL
+    var onLoadFailure: (String) -> Void = { _ in }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onLoadFailure: onLoadFailure)
+    }
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
 
         // The panel's static viewport meta omits `viewport-fit=cover`, so iOS
         // reports zero safe-area insets and the phone shell's
-        // `env(safe-area-inset-*)` padding (notch / home indicator) collapses.
-        // Rewrite the meta at document end so the insets resolve correctly.
+        // `env(safe-area-inset-*)` padding collapses. Rewrite the meta at
+        // document end so the insets resolve correctly.
         let coverJS = """
         (function () {
           var m = document.querySelector('meta[name=viewport]');
@@ -30,12 +35,29 @@ struct PanelWebView: UIViewRepresentable {
         config.allowsInlineMediaPlayback = true
 
         let webView = WKWebView(frame: .zero, configuration: config)
+        webView.navigationDelegate = context.coordinator
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.scrollView.bounces = false
-        webView.isInspectable = true // Safari ▸ Develop ▸ Simulator for live debugging
+        webView.isInspectable = true
         webView.load(URLRequest(url: url))
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {}
+
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        let onLoadFailure: (String) -> Void
+
+        init(onLoadFailure: @escaping (String) -> Void) {
+            self.onLoadFailure = onLoadFailure
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            onLoadFailure(error.localizedDescription)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            onLoadFailure(error.localizedDescription)
+        }
+    }
 }

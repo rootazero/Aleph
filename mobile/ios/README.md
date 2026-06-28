@@ -7,6 +7,18 @@ served by an `aleph-server`. This shell only loads that panel and adapts the pho
 form-factor (safe-area insets / `viewport-fit=cover`). See R2 (single source of UI
 truth) and R6 (one core, many channels) in the root `CLAUDE.md`.
 
+## Connecting
+
+On first launch the app shows a native **pairing screen**: enter your Aleph
+server address (`host`, `host:port`, or `http(s)://host[/route]?token=…`). The
+target is probed for reachability, then stored in the **Keychain** (the token
+never touches `UserDefaults`). To re-configure later, **shake the device** to
+return to the pairing screen; an unreachable server also falls back to it
+automatically.
+
+The `PANEL_URL` launch env still takes priority (used by `generate.sh` /
+`launch-local.sh` for sim/dev), so existing test flows are unchanged.
+
 ## No secrets in source
 
 The connection target (server **IP + token**) is **never** committed. It is
