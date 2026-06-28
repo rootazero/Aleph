@@ -326,9 +326,9 @@ pub struct WebFetchTool {
     enable_readability: bool,
     /// SSRF protection policy
     ssrf_policy: SsrfPolicy,
-    /// Optional crawl4ai backend. When present, fetches route through it
-    /// first and fall back to the built-in path on failure.
-    crawl4ai: Option<crate::builtin_tools::crawl4ai::Crawl4aiBackend>,
+    /// Configured fetch providers (from `[fetch]`), tried in order before the
+    /// built-in path. Empty → built-in reqwest+readability only.
+    fetch_providers: Vec<std::sync::Arc<dyn crate::fetch::FetchProvider>>,
 }
 
 impl WebFetchTool {
@@ -363,7 +363,7 @@ impl WebFetchTool {
             timeout_secs: Self::DEFAULT_TIMEOUT_SECS,
             enable_readability: true,
             ssrf_policy: SsrfPolicy::default(),
-            crawl4ai: None,
+            fetch_providers: Vec::new(),
         }
     }
 
@@ -384,15 +384,17 @@ impl WebFetchTool {
             timeout_secs: policy.timeout_seconds,
             enable_readability: policy.enable_readability,
             ssrf_policy: SsrfPolicy::default(),
-            crawl4ai: None,
+            fetch_providers: Vec::new(),
         }
     }
 
-    /// Attach a crawl4ai backend built from config. A disabled or invalid
-    /// config leaves the backend unset (built-in fetch only).
+    /// Inject the selected fetch providers (from `[fetch]`). Empty = built-in only.
     #[must_use]
-    pub fn with_crawl4ai(mut self, cfg: &crate::config::Crawl4aiConfig) -> Self {
-        self.crawl4ai = crate::builtin_tools::crawl4ai::Crawl4aiBackend::from_config(cfg);
+    pub fn with_fetch_providers(
+        mut self,
+        providers: Vec<std::sync::Arc<dyn crate::fetch::FetchProvider>>,
+    ) -> Self {
+        self.fetch_providers = providers;
         self
     }
 
@@ -427,41 +429,41 @@ impl WebFetchTool {
             return Ok(result);
         }
 
-        // crawl4ai backend (if configured): URL → markdown via the
-        // operator's crawl4ai server. SSRF-validate the *target* URL first
-        // so the agent can't use crawl4ai to reach internal hosts. On any
-        // backend failure, fall through to the built-in fetch below.
-        if let Some(ref backend) = self.crawl4ai {
-            // SSRF-validate the target with DNS resolution (matching the built-in
-            // safe_fetch path) so the agent can't use crawl4ai to reach internal
-            // hosts via a hostname that resolves to a private IP. Reject outright.
+        // Configured fetch providers (if any): URL → markdown via an operator-
+        // hosted backend. SSRF-validate the *target* URL once so the agent can't
+        // use a provider to reach internal hosts. On any provider failure, fall
+        // through to the next provider, then the built-in fetch below.
+        if !self.fetch_providers.is_empty() {
             validate_url_async(&args.url, &self.ssrf_policy).await.map_err(|e| {
                 let msg = format!("Fetch blocked or failed: {e}");
                 notify_tool_result(Self::NAME, &msg, false);
                 ToolError::Network(msg)
             })?;
-            match backend.fetch_markdown(&args.url).await {
-                Ok(markdown) => {
-                    let content = self.truncate_content(markdown);
-                    let summary = format!("已获取网页内容 ({} 字符, crawl4ai)", content.len());
-                    notify_tool_result(Self::NAME, &summary, true);
-                    let wrapped = wrap_external_content(
-                        &content,
-                        ContentSource::WebFetch {
+            for provider in &self.fetch_providers {
+                match provider.fetch(&args.url).await {
+                    Ok(markdown) => {
+                        let content = self.truncate_content(markdown);
+                        let summary =
+                            format!("已获取网页内容 ({} 字符, {})", content.len(), provider.name());
+                        notify_tool_result(Self::NAME, &summary, true);
+                        let wrapped = wrap_external_content(
+                            &content,
+                            ContentSource::WebFetch {
+                                url: args.url.clone(),
+                            },
+                        );
+                        let bare = WebFetchResult {
                             url: args.url.clone(),
-                        },
-                    );
-                    let bare = WebFetchResult {
-                        url: args.url.clone(),
-                        title: None,
-                        content: wrapped,
-                        extractor: Extractor::Crawl4ai,
-                    };
-                    cache_store(key, bare.clone());
-                    return Ok(apply_focus_prompt(bare, args.prompt.as_deref()));
-                }
-                Err(e) => {
-                    debug!("crawl4ai backend failed, falling back to built-in fetch: {e}");
+                            title: None,
+                            content: wrapped,
+                            extractor: Extractor::Crawl4ai,
+                        };
+                        cache_store(key, bare.clone());
+                        return Ok(apply_focus_prompt(bare, args.prompt.as_deref()));
+                    }
+                    Err(e) => {
+                        debug!("fetch provider '{}' failed, trying next: {e}", provider.name());
+                    }
                 }
             }
         }
@@ -795,7 +797,7 @@ impl Clone for WebFetchTool {
             timeout_secs: self.timeout_secs,
             enable_readability: self.enable_readability,
             ssrf_policy: self.ssrf_policy.clone(),
-            crawl4ai: self.crawl4ai.clone(),
+            fetch_providers: self.fetch_providers.clone(),
         }
     }
 }
@@ -1451,15 +1453,44 @@ mod tests {
     }
 
     #[test]
-    fn new_tool_has_no_crawl4ai_backend() {
+    fn new_tool_has_no_fetch_providers() {
         let tool = WebFetchTool::new();
-        assert!(tool.crawl4ai.is_none(), "default tool must not enable crawl4ai");
+        assert!(
+            tool.fetch_providers.is_empty(),
+            "default tool must have no fetch providers"
+        );
     }
 
-    #[test]
-    fn with_crawl4ai_disabled_config_stays_none() {
-        use crate::config::Crawl4aiConfig;
-        let tool = WebFetchTool::new().with_crawl4ai(&Crawl4aiConfig::default());
-        assert!(tool.crawl4ai.is_none(), "disabled config must not build a backend");
+    #[tokio::test]
+    async fn uses_fetch_provider_before_builtin() {
+        struct TestProvider;
+        #[async_trait::async_trait]
+        impl crate::fetch::FetchProvider for TestProvider {
+            async fn fetch(&self, _url: &str) -> crate::error::Result<String> {
+                Ok("# FROM-PROVIDER\n\nbody".into())
+            }
+            fn name(&self) -> &str {
+                "test"
+            }
+            fn is_available(&self) -> bool {
+                true
+            }
+        }
+        let tool = WebFetchTool::new()
+            .with_ssrf_policy(SsrfPolicy::disabled())
+            .with_fetch_providers(vec![std::sync::Arc::new(TestProvider)]);
+        let result = tool
+            .call_impl(WebFetchArgs {
+                url: "https://example.com/fetch-provider-test".to_string(),
+                extract_mode: ExtractMode::Markdown,
+                prompt: None,
+            })
+            .await
+            .unwrap();
+        assert!(
+            result.content.contains("FROM-PROVIDER"),
+            "expected provider content in result; got: {:?}",
+            &result.content[..result.content.len().min(200)]
+        );
     }
 }

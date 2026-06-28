@@ -55,7 +55,24 @@ impl BuiltinToolRegistry {
             if let Some(ref cfg) = config.config {
                 let cfg_guard = cfg.read().await;
                 tool = tool.with_ssrf_policy(cfg_guard.ssrf.clone());
-                tool = tool.with_crawl4ai(&cfg_guard.policies.web_fetch.crawl4ai);
+                if let Some(ref fetch_cfg) = cfg_guard.fetch {
+                    if fetch_cfg.enabled {
+                        let vault = config.shared_token_manager.clone();
+                        let resolve = move |k: &str| -> Option<String> {
+                            vault
+                                .as_ref()
+                                .and_then(|m| m.get_secret(k).ok().flatten())
+                                .map(|s| s.expose().to_string())
+                        };
+                        let ctx = crate::fetch::factory::FetchBuildCtx {
+                            search: cfg_guard.search.as_ref(),
+                            resolve_secret: &resolve,
+                        };
+                        let registry =
+                            crate::fetch::FetchRegistry::from_config(fetch_cfg, &ctx);
+                        tool = tool.with_fetch_providers(registry.select());
+                    }
+                }
             }
             tool
         };
