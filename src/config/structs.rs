@@ -4,9 +4,9 @@
 
 use crate::config::types::{
     AcpConfig, AgentsConfig, BehaviorConfig, ContextBudgetToml, CoworkConfigToml,
-    DispatcherConfigToml, EvolutionConfig, ExecutionConfig, FallbackProviderToml, GeneralConfig,
-    GenerationConfig, GroupChatConfig, GuardrailsToml, McpConfig, MediaConfig, MemoryConfig,
-    OrchestratorConfig, PersonaConfig, PoliciesConfig, PrivacyConfig, ProfileConfig,
+    DispatcherConfigToml, EvolutionConfig, ExecutionConfig, FallbackProviderToml, FetchConfigInternal,
+    GeneralConfig, GenerationConfig, GroupChatConfig, GuardrailsToml, McpConfig, MediaConfig,
+    MemoryConfig, OrchestratorConfig, PersonaConfig, PoliciesConfig, PrivacyConfig, ProfileConfig,
     PromptSectionConfig, ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, SearchConfig,
     SearchConfigInternal, SecretMapping, SecretProviderConfig, SecretsConfig, ShellSecurityConfig,
     SkillsConfig, SmartFlowConfig, SmartMatchingConfig, StabilityToml, StopHookConfig,
@@ -75,6 +75,9 @@ pub struct Config {
     /// Search configuration (Search Capability Integration)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search: Option<SearchConfigInternal>,
+    /// Fetch (URL→markdown) provider configuration. Parallel to `search`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch: Option<FetchConfigInternal>,
     /// Skills configuration (Claude Agent Skills standard)
     #[serde(default)]
     pub skills: SkillsConfig,
@@ -421,6 +424,7 @@ impl Default for Config {
             rules: vec![],
             behavior: Some(BehaviorConfig::default()),
             search: None,
+            fetch: None,
             skills: SkillsConfig::default(),
             tools: ToolsConfig::default(),
             mcp: McpConfig::default(),
