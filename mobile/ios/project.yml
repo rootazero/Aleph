@@ -39,8 +39,8 @@ targets:
       path: AlephPaneliOS/Resources/Info.plist
       properties:
         CFBundleDisplayName: Aleph Panel
-        CFBundleShortVersionString: "0.1"
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: ${ALEPH_VERSION}
+        CFBundleVersion: ${ALEPH_VERSION}
         UILaunchScreen:
           UIColorName: ""
         UISupportedInterfaceOrientations:
@@ -54,7 +54,7 @@ targets:
           NSAllowsArbitraryLoads: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ai.aleph.panel.iossim
+        PRODUCT_BUNDLE_IDENTIFIER: ai.aleph.panel
         PRODUCT_NAME: AlephPaneliOS
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 

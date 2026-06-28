@@ -10,6 +10,9 @@
 # After running this, open AlephPaneliOS.xcodeproj and just press > Run.
 set -euo pipefail
 cd "$(dirname "$0")"
+# Version strings come from the repo's single VERSION source (CalVer), mirrored
+# into the generated Info.plist the same way PANEL_URL is injected into the scheme.
+export ALEPH_VERSION="$(cat ../../VERSION | tr -d '[:space:]')"
 
 ROUTE="${1:-/settings}"   # /settings | / | /memory ...
 
