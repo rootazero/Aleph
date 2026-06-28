@@ -1,7 +1,10 @@
-//! Phone Chat conversation view. Manual iOS chrome (a dynamic title isn't
-//! expressible through PhoneShell's `&'static str` title, and the body must be
-//! flush so MessageList controls its own scroll) reusing PhoneTabBar. Renders
-//! the shared `MessageList` + `PhoneComposer` against the app-root ChatState.
+//! Phone Chat conversation surface — the Chat tab landing. Manual iOS chrome
+//! (a dynamic title isn't expressible through PhoneShell's `&'static str` title,
+//! and the body must be flush so MessageList controls its own scroll) reusing
+//! PhoneTabBar. The top bar carries a history button (left) and a new-chat
+//! button (right); there is no back button because this surface is the tab root.
+//! Renders the shared `MessageList` + `PhoneComposer` against the app-root
+//! ChatState (preserved across tab switches; empty on a cold boot = new chat).
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
@@ -10,12 +13,18 @@ use leptos_router::NavigateOptions;
 use crate::platform::phone::chat::composer::PhoneComposer;
 use crate::platform::phone::shell::PhoneTabBar;
 use crate::views::chat::messages::MessageList;
+use crate::views::chat::ChatState;
 
 #[component]
 #[must_use]
 pub fn PhoneChatThread() -> impl IntoView {
+    let chat = expect_context::<ChatState>();
     let navigate = use_navigate();
-    let back = move |_| navigate("/", NavigateOptions::default());
+    let open_history = move |_| navigate("/chat/history", NavigateOptions::default());
+    // New chat: clear the current session (agent_id is preserved by
+    // clear_session) → MessageList falls back to the welcome hero. Already on the
+    // chat surface, so no navigation is needed.
+    let new_chat = move |_| chat.clear_session();
 
     view! {
         <div
@@ -24,16 +33,23 @@ pub fn PhoneChatThread() -> impl IntoView {
         >
             <div
                 class="glass"
-                style="position:relative; flex:none; display:flex; align-items:center; gap:8px; min-height:50px; padding:calc(4px + env(safe-area-inset-top)) 14px 8px; z-index:4; background-color:color-mix(in oklch, var(--color-surface-overlay) 78%, transparent);"
+                style="position:relative; flex:none; display:flex; align-items:center; min-height:50px; padding:calc(4px + env(safe-area-inset-top)) 14px 8px; z-index:4; background-color:color-mix(in oklch, var(--color-surface-overlay) 78%, transparent);"
             >
                 <button
-                    style="position:absolute; left:10px; top:50%; transform:translateY(-10%); display:flex; align-items:center; gap:2px; background:none; border:0; cursor:pointer; color:var(--color-primary); font:inherit; font-size:16px; padding:4px 6px 4px 0;"
-                    on:click=back
+                    style="position:absolute; left:8px; top:50%; transform:translateY(-10%); display:flex; align-items:center; justify-content:center; background:none; border:0; cursor:pointer; color:var(--color-primary); padding:6px;"
+                    on:click=open_history
+                    aria-label="History"
                 >
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 6 9 12 15 18"></polyline></svg>
-                    "Chat"
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15.5 14"></polyline></svg>
                 </button>
-                <span style="width:100%; text-align:center; font-size:17px; font-weight:600; letter-spacing:-0.01em; color:var(--color-text-primary);">"Conversation"</span>
+                <span style="width:100%; text-align:center; font-size:17px; font-weight:600; letter-spacing:-0.01em; color:var(--color-text-primary);">"Aleph"</span>
+                <button
+                    style="position:absolute; right:8px; top:50%; transform:translateY(-10%); display:flex; align-items:center; justify-content:center; background:none; border:0; cursor:pointer; color:var(--color-primary); padding:6px;"
+                    on:click=new_chat
+                    aria-label="New chat"
+                >
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a 2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>
+                </button>
             </div>
 
             <div style="flex:1; min-height:0; display:flex; flex-direction:column;">

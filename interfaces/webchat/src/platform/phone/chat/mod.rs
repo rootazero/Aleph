@@ -59,10 +59,10 @@ pub fn PhoneChat() -> impl IntoView {
 
     let location = use_location();
     move || {
-        if location.pathname.get() == "/chat" {
-            view! { <PhoneChatThread/> }.into_any()
-        } else {
+        if location.pathname.get() == "/chat/history" {
             view! { <PhoneChatList/> }.into_any()
+        } else {
+            view! { <PhoneChatThread/> }.into_any()
         }
     }
 }
