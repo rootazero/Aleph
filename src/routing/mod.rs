@@ -153,4 +153,33 @@ mod integration_tests {
         assert_eq!(got[0].iterations, 2);
         assert_eq!(got[0].tool_call_total, 1);
     }
+
+    #[tokio::test]
+    async fn parent_and_child_attribution_isolated() {
+        let backend = Arc::new(temp_backend());
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
+        let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
+
+        // Two independently-constructed observers (the per-run sink-construction
+        // model: each run freezes its own model + agent + attribution).
+        let attr_p = Arc::new(RoutingAttribution::new("p".into()));
+        attr_p.task_emb.set(emb(1.0)).unwrap();
+        let obs_p = OutcomeObserver::new(
+            Arc::new(SpySink::default()) as Arc<dyn TraceSink>,
+            store.clone(), attr_p, "M".into(), "P".into(), "parent".into(),
+        );
+        let attr_c = Arc::new(RoutingAttribution::new("c".into()));
+        attr_c.task_emb.set(emb(2.0)).unwrap();
+        let obs_c = OutcomeObserver::new(
+            Arc::new(SpySink::default()) as Arc<dyn TraceSink>,
+            store.clone(), attr_c, "N".into(), "P".into(), "child".into(),
+        );
+
+        obs_p.on_trace(&session_completed());
+        obs_c.on_trace(&session_completed());
+        let p = drain_until_row(&store, "parent").await;
+        let c = drain_until_row(&store, "child").await;
+        assert!(p.iter().all(|n| n.model_id == "M")); // parent never absorbs child
+        assert!(c.iter().all(|n| n.model_id == "N")); // child never written to parent's model
+    }
 }
