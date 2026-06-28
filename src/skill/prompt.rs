@@ -52,15 +52,23 @@ pub const DEFERRED_LOADING_GUIDANCE: &str =
 
 /// Default cap on the number of skills listed in the injected prompt index.
 ///
-/// Mirrors the budgeting that codex (token budget) and openclaw
-/// (`maxSkillsInPrompt`) apply: a large skill library (the host's
-/// `~/.aleph/skills` plus `~/.claude/skills` can hold 100+) must not bloat
-/// every system prompt. Skills beyond the cap are still fully usable — the
-/// model is told to call `skill_list` to enumerate them.
-pub const DEFAULT_MAX_SKILLS_IN_PROMPT: usize = 64;
+/// This is the bound on the **compact tail**: once the full-description tier
+/// has spent the char budget ([`DEFAULT_MAX_SKILLS_PROMPT_CHARS`]), every
+/// remaining skill is still rendered in cheap compact form (name + trigger)
+/// until this count is reached. It is set generously so a host carrying the
+/// official `~/.aleph/skills` plus a large `~/.claude/skills` library (100+
+/// combined) stays fully discoverable to the model in a single prompt, rather
+/// than having the lowest-priority (Bundled, i.e. Claude-compat) skills
+/// silently dropped. Skills beyond this count are still usable — the model is
+/// told to call `skill_list` to enumerate them.
+pub const DEFAULT_MAX_SKILLS_IN_PROMPT: usize = 256;
 
-/// Default cap on the total character length of the rendered `<skill>` body.
-/// ~12k chars ≈ 3k tokens — a generous ceiling that bounds worst-case bloat.
+/// Default cap on the character length spent on **full** `<skill>` fragments
+/// (those carrying the inline `<description>`). ~12k chars ≈ 3k tokens — a
+/// ceiling that bounds description bloat. Skills past this budget are not
+/// dropped: they degrade to compact (name + trigger) rendering, which is not
+/// char-gated, so the index stays exhaustive while only the *descriptions* are
+/// rationed.
 pub const DEFAULT_MAX_SKILLS_PROMPT_CHARS: usize = 12_000;
 
 /// Budget controlling how many skills (and how many characters) the
@@ -76,9 +84,13 @@ pub const DEFAULT_MAX_SKILLS_PROMPT_CHARS: usize = 12_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SkillPromptBudget {
-    /// Maximum number of `<skill>` entries to render (`0` = unlimited).
+    /// Maximum number of `<skill>` entries to render — full and compact alike
+    /// (`0` = unlimited). This is the sole bound on the compact tail.
     pub max_skills: usize,
-    /// Maximum total characters across all `<skill>` fragments (`0` = unlimited).
+    /// Maximum characters spent on **full** `<skill>` fragments — those with an
+    /// inline `<description>` (`0` = unlimited). Skills past this budget are not
+    /// omitted; they degrade to compact (name + trigger) rendering, which is not
+    /// counted against this cap, so the index stays exhaustive up to `max_skills`.
     pub max_chars: usize,
 }
 
@@ -187,12 +199,17 @@ pub fn build_skills_prompt_xml(skills: &[&SkillManifest]) -> String {
 ///    allows — the first entry is always admitted even if it alone exceeds the
 ///    cap.
 /// 2. **Compact** ([`render_skill_fragment_compact`]: `<name>` + `<when>`, the
-///    description elided) for the remainder, so a surviving skill stays
-///    nameable and the model can still `skill_read` it on demand.
+///    description elided) for every remaining entry. Compact fragments are
+///    **not** char-gated: once the char budget is spent on descriptions, the
+///    rest of the library still appears in cheap name-only form so it stays
+///    discoverable (the model can `skill_read` it on demand). This is what
+///    keeps a large lowest-priority library (e.g. `~/.claude/skills`, all
+///    classified `Bundled`) from vanishing from the model's view.
 ///
 /// `max_skills` caps the total number of rendered entries (full and compact
-/// alike). Only skills that fit in neither tier are omitted, and a `<note>`
-/// element then tells the model how many were dropped and to call `skill_list`.
+/// alike) and is therefore the sole bound on the compact tail. Skills beyond
+/// that count are omitted, and a `<note>` element then tells the model how many
+/// were dropped and to call `skill_list`.
 ///
 /// [`SkillSource`]: crate::domain::skill::SkillSource
 pub fn build_skills_prompt_xml_with_budget(
@@ -238,26 +255,26 @@ pub fn build_skills_prompt_xml_with_budget(
     let mut selected: Vec<Cow<'_, str>> = Vec::new();
     let mut used = 0usize;
     for &idx in &order {
-        // `max_skills` caps the total rendered entries (full + compact alike).
+        // `max_skills` caps the total rendered entries (full + compact alike)
+        // and is the sole bound on the compact tail.
         if selected.len() >= cap_skills {
             break;
         }
         let full = fragments[idx].as_str();
-        // Tier 1 — full fragment. Always admit the first entry even if it alone
-        // exceeds the char cap.
+        // Tier 1 — full fragment, bounded by the char budget. Always admit the
+        // first entry even if it alone exceeds the cap. A shorter lower-priority
+        // entry may still render full after a longer one was compacted.
         if selected.is_empty() || used + full.len() <= cap_chars {
             used += full.len();
             selected.push(Cow::Borrowed(full));
             continue;
         }
-        // Tier 2 — compact fragment (name + when). Keeps the skill discoverable
-        // at a fraction of the cost; omit only if even this overflows. Keep
-        // scanning so a shorter lower-priority entry may still fit.
-        let compact = render_skill_fragment_compact(skills[idx]);
-        if used + compact.len() <= cap_chars {
-            used += compact.len();
-            selected.push(Cow::Owned(compact));
-        }
+        // Tier 2 — compact fragment (name + when + version). Deliberately NOT
+        // char-gated: once the description budget is spent, every remaining
+        // skill still appears in cheap name-only form so it stays discoverable.
+        // Dropping these is exactly what made large `~/.claude/skills` libraries
+        // invisible to the model; the `max_skills` count bounds this tail.
+        selected.push(Cow::Owned(render_skill_fragment_compact(skills[idx])));
     }
 
     let omitted = skills.len() - selected.len();
@@ -470,10 +487,13 @@ mod tests {
     }
 
     #[test]
-    fn char_budget_truncates() {
-        // Each fragment is well over 40 chars; a 1-char budget keeps exactly one.
+    fn char_budget_bounds_full_tier_tail_goes_compact() {
+        // The char budget rations *descriptions*, not the index itself. With a
+        // 1-char budget and unlimited count, the first skill renders full (the
+        // always-admit-first rule) and the rest degrade to compact (name +
+        // version, description elided) — none are omitted.
         let skills: Vec<SkillManifest> = (0..4)
-            .map(|i| make_skill(&format!("Skill{i}"), "d"))
+            .map(|i| make_skill(&format!("Skill{i}"), "a description long enough to exceed the cap"))
             .collect();
         let refs: Vec<&SkillManifest> = skills.iter().collect();
         let budget = SkillPromptBudget {
@@ -482,9 +502,50 @@ mod tests {
         };
 
         let xml = build_skills_prompt_xml_with_budget(&refs, &budget);
-        // Always include at least one even if it alone exceeds the char cap.
-        assert_eq!(xml.matches("<skill>").count(), 1);
-        assert!(xml.contains("3 additional skill(s) omitted"));
+        // All four stay in the index; nothing omitted by the char budget alone.
+        assert_eq!(xml.matches("<skill>").count(), 4);
+        assert!(!xml.contains("<note>"), "char budget must not omit, only compact");
+        // Exactly one full <description> (the always-admitted first); the rest
+        // are compact (description elided).
+        assert_eq!(xml.matches("<description>").count(), 1);
+    }
+
+    #[test]
+    fn default_budget_keeps_large_library_discoverable() {
+        // Regression: a host carrying ~/.aleph/skills + a large ~/.claude/skills
+        // library (150 here, vs the ~142 observed in the wild) must stay fully
+        // discoverable under the DEFAULT budget. Before the count cap was raised
+        // and the compact tail decoupled from the char budget, everything past
+        // the first ~64 (and especially the lowest-priority Bundled, i.e.
+        // Claude-compat, skills) was silently omitted — the model "couldn't
+        // locate" them. Every skill must now appear (head full, tail compact),
+        // none omitted.
+        let skills: Vec<SkillManifest> = (0..150)
+            .map(|i| {
+                make_skill(
+                    &format!("Skill{i:03}"),
+                    "a realistic-length skill description that consumes the char \
+                     budget so the long tail must degrade to compact rendering",
+                )
+            })
+            .collect();
+        let refs: Vec<&SkillManifest> = skills.iter().collect();
+
+        let xml = build_skills_prompt_xml(&refs); // default budget
+
+        assert_eq!(
+            xml.matches("<skill>").count(),
+            150,
+            "every skill in a large library must stay in the index"
+        );
+        assert!(!xml.contains("<note>"), "no skill should be omitted under default budget");
+        // The char budget still rations descriptions: the head renders full,
+        // the tail compact — so not all 150 carry an inline <description>.
+        let full = xml.matches("<description>").count();
+        assert!(
+            full > 0 && full < 150,
+            "expected a full head and compact tail, got {full} full descriptions"
+        );
     }
 
     #[test]
@@ -632,20 +693,28 @@ mod tests {
     }
 
     #[test]
-    fn compact_tier_still_omits_and_notes_when_even_compact_overflows() {
-        // A 1-char budget cannot fit even a compact fragment, so the tail is
-        // truly omitted and the note is emitted — preserving the prior contract.
-        let skills: Vec<SkillManifest> = (0..3)
-            .map(|i| make_skill_with_when(&format!("Skill{i}"), "d", &format!("trig{i}")))
+    fn count_cap_omits_compact_tail_and_notes() {
+        // The char budget never omits (it only degrades to compact); the
+        // `max_skills` count is the hard bound that drops the tail. Even with a
+        // 1-char budget (everything past the first is compact), a count cap of 2
+        // yields exactly 2 entries and omits the remaining 3 with a note.
+        let skills: Vec<SkillManifest> = (0..5)
+            .map(|i| {
+                make_skill_with_when(
+                    &format!("Skill{i}"),
+                    "a description long enough to exceed the char cap",
+                    &format!("trig{i}"),
+                )
+            })
             .collect();
         let refs: Vec<&SkillManifest> = skills.iter().collect();
         let budget = SkillPromptBudget {
-            max_skills: 0,
+            max_skills: 2,
             max_chars: 1,
         };
 
         let xml = build_skills_prompt_xml_with_budget(&refs, &budget);
-        assert_eq!(xml.matches("<skill>").count(), 1);
-        assert!(xml.contains("2 additional skill(s) omitted"));
+        assert_eq!(xml.matches("<skill>").count(), 2);
+        assert!(xml.contains("3 additional skill(s) omitted"));
     }
 }
