@@ -547,4 +547,36 @@ mod tests {
         // Should find the skills dir at project root
         assert!(dirs.iter().any(|d| d == &aleph_skills));
     }
+
+    #[test]
+    fn is_safe_agent_id_accepts_plain_ids() {
+        assert!(is_safe_agent_id("researcher"));
+        assert!(is_safe_agent_id("my-agent_01"));
+    }
+
+    #[test]
+    fn is_safe_agent_id_rejects_traversal_and_separators() {
+        assert!(!is_safe_agent_id(""));
+        assert!(!is_safe_agent_id("a/b"));
+        assert!(!is_safe_agent_id("a\\b"));
+        assert!(!is_safe_agent_id(".."));
+        assert!(!is_safe_agent_id("a..b"));
+        assert!(!is_safe_agent_id("a\0b"));
+    }
+
+    #[test]
+    fn agent_skills_dir_absent_without_active_agent_scope() {
+        // Outside any `with_agent_id` scope, discovery must not inject an
+        // agent-level dir (byte-identical to the pre-wiring behaviour).
+        let temp_dir = TempDir::new().unwrap();
+        let project = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir(project.join(".git")).unwrap();
+
+        let dirs = get_all_skills_dirs(Some(&project)).unwrap();
+        assert!(
+            !dirs.iter().any(|d| d.to_string_lossy().contains("/agents/")),
+            "no agent dir without an active agent scope, got {dirs:?}"
+        );
+    }
 }
