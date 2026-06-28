@@ -101,6 +101,15 @@ pub(crate) fn apply_trace_event(
                     .as_ref()
                     .or(output)
                     .and_then(|o| o.get("snapshot"));
+                // Sink the prior plan before the new snapshot overwrites it.
+                // Only a fresh decomposition (`set_plan`) or explicit teardown
+                // (`clear`) supersedes — `start_item`/`complete_item`/
+                // `set_objective` are in-place updates to the SAME plan and must
+                // not archive. Gated on `has_activity` so a pristine refinement
+                // is silently replaced.
+                if action == "set_plan" || action == "clear" {
+                    chat.archive_active_plan(super::state::ArchiveGate::Activity);
+                }
                 chat.apply_plan_update(super::plan::scratchpad_plan_update(action, snapshot));
             }
         }
@@ -536,6 +545,115 @@ mod projection_tests {
         assert_eq!(plan.total(), 3);
         assert_eq!(plan.done_count(), 1);
         assert!(plan.has_content());
+    }
+
+    fn scratchpad_event(action: &str, items: &[(&str, &str)]) -> serde_json::Value {
+        // Build the real wire shape: Success.output is a JSON-encoded STRING
+        // whose `snapshot` carries the plan.
+        let items_json: Vec<serde_json::Value> = items
+            .iter()
+            .map(|(status, text)| json!({ "status": status, "text": text }))
+            .collect();
+        let complete = !items.is_empty()
+            && items.iter().all(|(s, _)| *s == "completed");
+        let snapshot = json!({ "complete": complete, "objective": "Obj", "items": items_json });
+        let output = serde_json::to_string(&json!({
+            "success": true, "message": "ok", "snapshot": snapshot
+        }))
+        .unwrap();
+        json!({
+            "kind": "tool_call_completed", "iteration": 1,
+            "call": { "tool_id": "s1", "tool_name": "scratchpad", "duration_ms": 1,
+                      "input": { "action": action } },
+            "result": { "Success": { "output": output } }
+        })
+    }
+
+    fn archive_count(chat: &ChatState) -> usize {
+        chat.messages.with(|m| m.iter().filter(|x| x.plan_archive.is_some()).count())
+    }
+
+    #[test]
+    fn set_plan_supersede_archives_worked_prior() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        let ws = WorkspaceState::new();
+        chat.start_assistant_message("r1");
+        // plan A, then start an item (activity), then a fresh set_plan B
+        apply_trace_event(chat, ws, "r1", &scratchpad_event("set_plan", &[("in_progress", "a")]));
+        apply_trace_event(chat, ws, "r1", &scratchpad_event("set_plan", &[("pending", "b")]));
+        assert_eq!(archive_count(&chat), 1, "worked prior plan A sinks");
+        let plan = chat.plan.get_untracked().expect("new plan B shown");
+        assert_eq!(plan.items[0].text, "b");
+    }
+
+    #[test]
+    fn set_plan_supersede_skips_pristine_prior() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        let ws = WorkspaceState::new();
+        chat.start_assistant_message("r1");
+        // plan A pristine (all pending), immediately replaced → silent
+        apply_trace_event(chat, ws, "r1", &scratchpad_event("set_plan", &[("pending", "a")]));
+        apply_trace_event(chat, ws, "r1", &scratchpad_event("set_plan", &[("pending", "b")]));
+        assert_eq!(archive_count(&chat), 0, "pristine prior A is silently replaced");
+        assert_eq!(chat.plan.get_untracked().unwrap().items[0].text, "b");
+    }
+
+    #[test]
+    fn clear_archives_completed_then_hides() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        let ws = WorkspaceState::new();
+        chat.start_assistant_message("r1");
+        apply_trace_event(chat, ws, "r1", &scratchpad_event("set_plan", &[("completed", "a")]));
+        apply_trace_event(chat, ws, "r1", &scratchpad_event("clear", &[]));
+        assert_eq!(archive_count(&chat), 1, "completed plan sinks on clear");
+        assert!(chat.plan.get_untracked().is_none(), "panel hidden after clear");
+    }
+
+    #[test]
+    fn start_item_update_does_not_archive() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        let ws = WorkspaceState::new();
+        chat.start_assistant_message("r1");
+        apply_trace_event(chat, ws, "r1", &scratchpad_event("set_plan", &[("pending", "a"), ("pending", "b")]));
+        // a same-plan update (start_item) must NOT sink a capsule
+        apply_trace_event(chat, ws, "r1", &scratchpad_event("start_item", &[("in_progress", "a"), ("pending", "b")]));
+        assert_eq!(archive_count(&chat), 0, "in-place update is not a supersede");
+    }
+
+    #[test]
+    fn replay_reconstructs_same_archive_capsules() {
+        let owner = Owner::new();
+        owner.set();
+        // Live path
+        let live = ChatState::new();
+        let ws1 = WorkspaceState::new();
+        live.start_assistant_message("r1");
+        apply_trace_event(live, ws1, "r1", &scratchpad_event("set_plan", &[("completed", "a")]));
+        live.start_assistant_message("r2"); // next-turn sink of completed A
+        let live_caps = live.messages.with(|m| {
+            m.iter().filter_map(|x| x.plan_archive.clone()).collect::<Vec<_>>()
+        });
+
+        // Replay path: same two runs reconstructed via replay_run
+        let rep = ChatState::new();
+        let ws2 = WorkspaceState::new();
+        replay_run(rep, ws2, "r1", &[scratchpad_event("set_plan", &[("completed", "a")])], "done");
+        replay_run(rep, ws2, "r2", &[], "next");
+        let rep_caps = rep.messages.with(|m| {
+            m.iter().filter_map(|x| x.plan_archive.clone()).collect::<Vec<_>>()
+        });
+
+        assert_eq!(live_caps.len(), 1, "live sinks one capsule");
+        assert_eq!(rep_caps.len(), 1, "replay reconstructs the same one");
+        assert_eq!(live_caps, rep_caps, "live and replay capsules are identical");
     }
 
     #[test]
