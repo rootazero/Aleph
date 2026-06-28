@@ -1,30 +1,32 @@
-import XCTest
+import Testing
 import Foundation
 @testable import AlephPaneliOS
 
-final class KeychainConnectionStoreTests: XCTestCase {
+// Serialized: all three tests share one keychain entry (same service+account),
+// so they must not run in parallel (Swift Testing's default) or they race.
+@Suite(.serialized) struct KeychainConnectionStoreTests {
     let store = KeychainConnectionStore()
 
-    override func setUp() {
-        super.setUp()
-        store.clear() // isolate each test from prior keychain state
-    }
+    init() { store.clear() } // isolate each test from prior keychain state
 
-    func testRoundTrip() throws {
+    @Test("save then load round-trips the full URL")
+    func roundTrip() throws {
         let url = URL(string: "http://127.0.0.1:18790/?token=aleph-xyz")!
         try store.save(url)
-        XCTAssertEqual(store.load(), url)
+        #expect(store.load() == url)
     }
 
-    func testOverwrite() throws {
+    @Test("save overwrites a previous value")
+    func overwrite() throws {
         try store.save(URL(string: "http://a.lan:18790")!)
         try store.save(URL(string: "http://b.lan:9000")!)
-        XCTAssertEqual(store.load(), URL(string: "http://b.lan:9000")!)
+        #expect(store.load() == URL(string: "http://b.lan:9000")!)
     }
 
-    func testClearRemoves() throws {
+    @Test("clear removes the value")
+    func clearRemoves() throws {
         try store.save(URL(string: "http://a.lan:18790")!)
         store.clear()
-        XCTAssertNil(store.load())
+        #expect(store.load() == nil)
     }
 }
