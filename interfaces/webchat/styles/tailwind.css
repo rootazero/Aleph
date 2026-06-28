@@ -2291,3 +2291,17 @@ html[data-platform="macos"] .aleph-shell.sidebar-collapsed .aleph-roster-wrap {
   .aleph-md > .aleph-md-list { border-right: 0; }
 }
 
+/* Touch / coarse-pointer: reveal hover-gated ACTION affordances. Tailwind
+   emits `.group-hover\:opacity-100` and `.hover\:opacity-100` gated on a
+   hovering pointer, so on touch the element stays at its `opacity-0`. Forcing
+   the bare utility classes visible reveals every such affordance (session
+   delete/edit, message copy/delete, memory note actions, JSON copy, …). The
+   rule lives in `@media (hover: none)` so hover-capable pointers (desktop, an
+   iPad with a trackpad) are unaffected; it targets only `opacity-100`, so
+   decorative `group-hover:scale-*` / color flourishes are untouched. This
+   block is unlayered, so it beats the layered `.opacity-0` utility. */
+@media (hover: none) {
+  .group-hover\:opacity-100,
+  .hover\:opacity-100 { opacity: 1; }
+}
+
