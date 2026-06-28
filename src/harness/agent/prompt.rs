@@ -50,6 +50,22 @@ pub(crate) fn build_prompt(
     // assistant turn) is never wrapped; later real user messages are.
     let mut assistant_emitted = false;
 
+    // Mid-loop steering ordering guard. The gateway injects a steering message
+    // straight into the live log (`gateway::execution_engine::steering`), so it
+    // can land physically *between* an assistant `tool_use` and its
+    // `tool_result`(s). Replayed verbatim that yields `assistant[tool_use] →
+    // user → tool_result`, where the results no longer immediately follow their
+    // tool_use — Anthropic rejects it (HTTP 400) and lenient OpenAI-compatible
+    // proxies silently return an empty completion (which the empty-response
+    // retry then exhausts → "模型连续返回空响应"). Hold back any user message
+    // that arrives while the current turn still owes tool results and re-emit it
+    // once they have all landed, keeping the pairing intact. Mechanical /
+    // positional (R10-safe): the prompt is rebuilt fresh each turn and never
+    // persisted, so this reorders only what the model sees, never the log.
+    let mut expected_results: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut deferred_user_msgs: Vec<UnifiedMessage> = Vec::new();
+
     // Walk the FULL conversation in order, emitting one message per event.
     //
     // History must be complete: in an autonomous tool loop (cron / subagent),
@@ -63,6 +79,13 @@ pub(crate) fn build_prompt(
     for (idx, record) in events.iter().enumerate() {
         match &record.event {
             SessionEvent::AssistantMessage { content, .. } => {
+                // A new assistant turn closes any prior turn's result window. If a
+                // user message is still buffered (the prior turn's results never
+                // all landed in this window), flush it now so it is never dropped.
+                if !deferred_user_msgs.is_empty() {
+                    messages.append(&mut deferred_user_msgs);
+                }
+                expected_results.clear();
                 // call_ids whose ToolResult/ToolError appears after this turn.
                 // tool_use blocks without one are "orphans" (the turn was
                 // interrupted before `act()` persisted a result) and Anthropic-
@@ -78,6 +101,16 @@ pub(crate) fn build_prompt(
                 if let Some(blocks) = reconstruct_assistant_blocks(content, &resolved) {
                     messages.push(UnifiedMessage::Assistant { content: blocks });
                     assistant_emitted = true;
+                    // Record which surviving (non-orphan) tool_use call_ids this
+                    // turn still owes results for, so a user message injected
+                    // before they all land is held back below.
+                    for raw in &content.blocks {
+                        if let Some(ContentBlock::ToolCall { id, .. }) = parse_tool_use_block(raw) {
+                            if resolved.contains(id.as_str()) {
+                                expected_results.insert(id);
+                            }
+                        }
+                    }
                 }
             }
             SessionEvent::UserMessage {
@@ -103,7 +136,15 @@ pub(crate) fn build_prompt(
                 } else {
                     content.text.as_str()
                 };
-                messages.push(UnifiedMessage::user(text));
+                let msg = UnifiedMessage::user(text);
+                // While the current assistant turn still owes tool results, this
+                // user message would split the tool_use/tool_result pairing — buffer
+                // it and re-emit once the results have all landed (below).
+                if expected_results.is_empty() {
+                    messages.push(msg);
+                } else {
+                    deferred_user_msgs.push(msg);
+                }
             }
             SessionEvent::ToolResult {
                 call_id, output, ..
@@ -131,6 +172,12 @@ pub(crate) fn build_prompt(
                     content,
                     is_error: false,
                 });
+                // This result closes one of the turn's owed call_ids; once they
+                // are all in, release any buffered steering message after them.
+                expected_results.remove(call_id);
+                if expected_results.is_empty() && !deferred_user_msgs.is_empty() {
+                    messages.append(&mut deferred_user_msgs);
+                }
             }
             SessionEvent::ToolError { call_id, error, .. } => {
                 let tool_name = resolve_tool_name(events, idx, call_id).unwrap_or("unknown");
@@ -143,6 +190,12 @@ pub(crate) fn build_prompt(
                     }],
                     is_error: true,
                 });
+                // This error closes one of the turn's owed call_ids; once they
+                // are all in, release any buffered steering message after them.
+                expected_results.remove(call_id);
+                if expected_results.is_empty() && !deferred_user_msgs.is_empty() {
+                    messages.append(&mut deferred_user_msgs);
+                }
             }
             SessionEvent::RunFinished {
                 outcome: RunOutcome::Cancelled,
@@ -156,6 +209,12 @@ pub(crate) fn build_prompt(
             }
             _ => {}
         }
+    }
+
+    // Any user message still buffered (the log ends mid-turn, or the turn's
+    // results were windowed out) is emitted last so it is never silently dropped.
+    if !deferred_user_msgs.is_empty() {
+        messages.append(&mut deferred_user_msgs);
     }
 
     // P2: run-level tool-failure aggregator. Returns `Some(text)` only
@@ -596,6 +655,108 @@ mod tests {
         assert!(assistant_blocks
             .iter()
             .any(|b| matches!(b, ContentBlock::Text { text, .. } if text == "Let me check.")));
+    }
+
+    /// REGRESSION (mid-loop steering ordering): the gateway injects a user
+    /// message straight into the live log, so it can land *between* an assistant
+    /// `tool_use` and its `tool_result`(s). Replayed verbatim that produces
+    /// `assistant[tool_use] → user → tool_result`, which Anthropic rejects with
+    /// HTTP 400 and lenient OpenAI-compatible proxies answer with an *empty*
+    /// completion — exhausting the empty-response retry and surfacing
+    /// "模型连续返回空响应". The builder must keep every tool result contiguous
+    /// with its assistant turn and re-emit the injected user message AFTER them.
+    #[test]
+    fn steering_message_mid_tool_turn_keeps_results_contiguous() {
+        let turn = uuid::Uuid::new_v4();
+        let events: Vec<SessionEventRecord> = vec![
+            mk_record(SessionEvent::UserMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: "do the task".into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+                synthetic: false,
+            }),
+            mk_record(SessionEvent::AssistantMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: String::new(),
+                    blocks: vec![
+                        json!({"type": "tool_use", "id": "c1", "name": "tool_a", "input": {}}),
+                        json!({"type": "tool_use", "id": "c2", "name": "tool_b", "input": {}}),
+                    ],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+            }),
+            mk_record(SessionEvent::ToolResult {
+                turn_id: turn,
+                call_id: "c1".into(),
+                output: ToolOutput {
+                    value: json!("result-1"),
+                    metadata: ToolOutputMetadata::default(),
+                },
+                at: now_ms(),
+            }),
+            // The steering message lands mid-turn, before c2's result.
+            mk_record(SessionEvent::UserMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: "STEER: also handle the edge case".into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+                synthetic: false,
+            }),
+            mk_record(SessionEvent::ToolResult {
+                turn_id: turn,
+                call_id: "c2".into(),
+                output: ToolOutput {
+                    value: json!("result-2"),
+                    metadata: ToolOutputMetadata::default(),
+                },
+                at: now_ms(),
+            }),
+        ];
+
+        let messages = build_prompt(&events, 1);
+
+        // Position of the injected steering message and of each tool result.
+        let steer_idx = messages
+            .iter()
+            .position(|m| match m {
+                UnifiedMessage::User { content } => content.iter().any(|b| {
+                    matches!(b, ContentBlock::Text { text, .. }
+                        if text.contains("STEER: also handle the edge case"))
+                }),
+                _ => false,
+            })
+            .expect("steering message must survive in the prompt");
+        let tool_result_positions: Vec<usize> = messages
+            .iter()
+            .enumerate()
+            .filter_map(|(i, m)| matches!(m, UnifiedMessage::ToolResult { .. }).then_some(i))
+            .collect();
+
+        assert_eq!(
+            tool_result_positions.len(),
+            2,
+            "both tool results must be present; messages={messages:#?}",
+        );
+        // The whole point: every tool result precedes the injected user message,
+        // so tool_use/tool_result stay paired and the conversation is valid.
+        assert!(
+            tool_result_positions.iter().all(|&p| p < steer_idx),
+            "steering message must be re-emitted AFTER all tool results; \
+             got steer at {steer_idx}, results at {tool_result_positions:?}; \
+             messages={messages:#?}",
+        );
     }
 
     /// Boundary case: when ALL tool_use blocks in the previous assistant
