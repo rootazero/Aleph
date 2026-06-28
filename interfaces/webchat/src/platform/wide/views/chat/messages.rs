@@ -6,6 +6,7 @@
 
 use super::reasoning::ReasoningPanel;
 use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState};
+use super::PlanArchiveCell;
 use super::timeline::{self, TimelineRow};
 use crate::components::markdown::{MarkdownRenderer, TypewriterRenderer};
 use crate::components::tool_card::ToolCard;
@@ -215,9 +216,13 @@ pub(crate) fn MessageList() -> impl IntoView {
                                     TimelineRow::DaySeparator { label, .. } => view! {
                                         <DaySeparator label=label />
                                     }.into_any(),
-                                    TimelineRow::Message { message, clock } => view! {
-                                        <MessageBubble message=message clock=clock />
-                                    }.into_any(),
+                                    TimelineRow::Message { message, clock } => {
+                                        if let Some(p) = message.plan_archive.clone() {
+                                            view! { <PlanArchiveCell plan=p /> }.into_any()
+                                        } else {
+                                            view! { <MessageBubble message=message clock=clock /> }.into_any()
+                                        }
+                                    }
                                     TimelineRow::StepStrip { steps, completed, .. } => view! {
                                         <StepStrip steps=steps completed=completed />
                                     }

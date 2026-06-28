@@ -14,10 +14,12 @@ pub mod team_events;
 pub mod team_task_logic;
 pub mod timeline;
 mod todo_panel;
+mod plan_archive_cell;
 pub mod transcript;
 pub mod view;
 pub mod voice_playback;
 
 pub use state::ChatState;
 pub use todo_panel::TodoPanel;
+pub use plan_archive_cell::PlanArchiveCell;
 pub use view::ChatView;

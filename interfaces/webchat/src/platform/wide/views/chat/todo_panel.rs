@@ -33,7 +33,7 @@ pub fn TodoPanel() -> impl IntoView {
                 let header_label = current
                     .clone()
                     .map(|c| format!("正在：{c}"))
-                    .unwrap_or_else(|| if complete { "已完成".into() } else { "待开始".into() });
+                    .unwrap_or_else(|| if complete { "✓ 已完成".into() } else { "待开始".into() });
                 view! {
                     <div class="aleph-todo-wrap" class:done=move || complete>
                         // ── header (always visible) — click to toggle ──
