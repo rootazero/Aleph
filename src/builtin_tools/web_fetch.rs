@@ -6,7 +6,7 @@ use super::error::ToolError;
 use crate::config::WebFetchPolicy;
 use crate::error::Result;
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
-use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
+use crate::security::ssrf::{safe_fetch, validate_url_async, SafeFetchRequest, SsrfPolicy};
 use crate::sync_primitives::Mutex;
 use crate::tools::AlephTool;
 use async_trait::async_trait;
@@ -39,6 +39,8 @@ pub enum Extractor {
     Readability,
     /// CSS selector-based fallback
     Selector,
+    /// crawl4ai backend (operator-hosted headless crawler → markdown)
+    Crawl4ai,
 }
 
 // Pre-compiled regexes for HTML cleaning (compiled once, reused forever).
@@ -324,6 +326,9 @@ pub struct WebFetchTool {
     enable_readability: bool,
     /// SSRF protection policy
     ssrf_policy: SsrfPolicy,
+    /// Optional crawl4ai backend. When present, fetches route through it
+    /// first and fall back to the built-in path on failure.
+    crawl4ai: Option<crate::builtin_tools::crawl4ai::Crawl4aiBackend>,
 }
 
 impl WebFetchTool {
@@ -358,6 +363,7 @@ impl WebFetchTool {
             timeout_secs: Self::DEFAULT_TIMEOUT_SECS,
             enable_readability: true,
             ssrf_policy: SsrfPolicy::default(),
+            crawl4ai: None,
         }
     }
 
@@ -378,7 +384,16 @@ impl WebFetchTool {
             timeout_secs: policy.timeout_seconds,
             enable_readability: policy.enable_readability,
             ssrf_policy: SsrfPolicy::default(),
+            crawl4ai: None,
         }
+    }
+
+    /// Attach a crawl4ai backend built from config. A disabled or invalid
+    /// config leaves the backend unset (built-in fetch only).
+    #[must_use]
+    pub fn with_crawl4ai(mut self, cfg: &crate::config::Crawl4aiConfig) -> Self {
+        self.crawl4ai = crate::builtin_tools::crawl4ai::Crawl4aiBackend::from_config(cfg);
+        self
     }
 
     /// Fetch and extract content from a URL (internal implementation)
@@ -410,6 +425,45 @@ impl WebFetchTool {
             let summary = format!("已获取网页内容 ({} 字符, cached)", result.content.len());
             notify_tool_result(Self::NAME, &summary, true);
             return Ok(result);
+        }
+
+        // crawl4ai backend (if configured): URL → markdown via the
+        // operator's crawl4ai server. SSRF-validate the *target* URL first
+        // so the agent can't use crawl4ai to reach internal hosts. On any
+        // backend failure, fall through to the built-in fetch below.
+        if let Some(ref backend) = self.crawl4ai {
+            // SSRF-validate the target with DNS resolution (matching the built-in
+            // safe_fetch path) so the agent can't use crawl4ai to reach internal
+            // hosts via a hostname that resolves to a private IP. Reject outright.
+            validate_url_async(&args.url, &self.ssrf_policy).await.map_err(|e| {
+                let msg = format!("Fetch blocked or failed: {e}");
+                notify_tool_result(Self::NAME, &msg, false);
+                ToolError::Network(msg)
+            })?;
+            match backend.fetch_markdown(&args.url).await {
+                Ok(markdown) => {
+                    let content = self.truncate_content(markdown);
+                    let summary = format!("已获取网页内容 ({} 字符, crawl4ai)", content.len());
+                    notify_tool_result(Self::NAME, &summary, true);
+                    let wrapped = wrap_external_content(
+                        &content,
+                        ContentSource::WebFetch {
+                            url: args.url.clone(),
+                        },
+                    );
+                    let bare = WebFetchResult {
+                        url: args.url.clone(),
+                        title: None,
+                        content: wrapped,
+                        extractor: Extractor::Crawl4ai,
+                    };
+                    cache_store(key, bare.clone());
+                    return Ok(apply_focus_prompt(bare, args.prompt.as_deref()));
+                }
+                Err(e) => {
+                    debug!("crawl4ai backend failed, falling back to built-in fetch: {e}");
+                }
+            }
         }
 
         info!("Fetching URL: {}", args.url);
@@ -480,6 +534,7 @@ impl WebFetchTool {
         let extractor_name = match &extractor {
             Extractor::Readability => "readability",
             Extractor::Selector => "selector",
+            Extractor::Crawl4ai => "crawl4ai",
         };
         let result_summary = format!(
             "已获取网页内容 ({} 字符, {})",
@@ -740,6 +795,7 @@ impl Clone for WebFetchTool {
             timeout_secs: self.timeout_secs,
             enable_readability: self.enable_readability,
             ssrf_policy: self.ssrf_policy.clone(),
+            crawl4ai: self.crawl4ai.clone(),
         }
     }
 }
@@ -1380,5 +1436,30 @@ mod tests {
         // Clipped at 512 chars of prompt content.
         let prompt_text = &marker_text["[fetch_focus: ".len()..];
         assert!(prompt_text.chars().count() <= 512);
+    }
+
+    #[test]
+    fn extractor_crawl4ai_serializes_to_lowercase() {
+        let result = WebFetchResult {
+            url: "https://example.com".to_string(),
+            title: None,
+            content: "# Hello".to_string(),
+            extractor: Extractor::Crawl4ai,
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["extractor"], "crawl4ai");
+    }
+
+    #[test]
+    fn new_tool_has_no_crawl4ai_backend() {
+        let tool = WebFetchTool::new();
+        assert!(tool.crawl4ai.is_none(), "default tool must not enable crawl4ai");
+    }
+
+    #[test]
+    fn with_crawl4ai_disabled_config_stays_none() {
+        use crate::config::Crawl4aiConfig;
+        let tool = WebFetchTool::new().with_crawl4ai(&Crawl4aiConfig::default());
+        assert!(tool.crawl4ai.is_none(), "disabled config must not build a backend");
     }
 }

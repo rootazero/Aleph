@@ -48,7 +48,7 @@ pub use retry::RetryPolicy;
 pub use text::TextFormatPolicy;
 pub use tool_permissions::ToolPermissionsConfig;
 pub use tool_safety::ToolSafetyPolicy;
-pub use web_fetch::WebFetchPolicy;
+pub use web_fetch::{Crawl4aiConfig, WebFetchPolicy};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

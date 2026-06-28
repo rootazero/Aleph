@@ -52,6 +52,10 @@ pub struct WebFetchPolicy {
     /// Default: true
     #[serde(default = "default_enable_readability")]
     pub enable_readability: bool,
+
+    /// crawl4ai backend (optional). Disabled by default.
+    #[serde(default)]
+    pub crawl4ai: Crawl4aiConfig,
 }
 
 impl Default for WebFetchPolicy {
@@ -65,6 +69,7 @@ impl Default for WebFetchPolicy {
             max_redirects: default_max_redirects(),
             content_selectors: default_content_selectors(),
             enable_readability: default_enable_readability(),
+            crawl4ai: Crawl4aiConfig::default(),
         }
     }
 }
@@ -106,6 +111,49 @@ fn default_content_selectors() -> Vec<String> {
         "#content".to_string(),
         "body".to_string(),
     ]
+}
+
+const fn default_crawl4ai_timeout() -> u64 {
+    60
+}
+
+/// crawl4ai web_fetch backend configuration.
+///
+/// When `enabled`, `web_fetch` routes page fetches through the configured
+/// crawl4ai server (URL → markdown) and falls back to the built-in fetch on
+/// any failure. Disabled by default → no behavior change.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Crawl4aiConfig {
+    /// Whether the crawl4ai backend is active. Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Base URL of the crawl4ai server, e.g. "http://10.10.10.3:11235".
+    #[serde(default)]
+    pub base_url: String,
+
+    /// Request timeout in seconds. crawl4ai drives a headless browser, so it
+    /// is slower than a plain HTTP GET. Default: 60.
+    #[serde(default = "default_crawl4ai_timeout")]
+    pub timeout_seconds: u64,
+
+    /// Runtime-only bearer token, injected from the encrypted vault at
+    /// startup (vault key `web_fetch:crawl4ai`). Never persisted to
+    /// config.toml — mirrors `SearchBackendConfig::api_key`.
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
+    pub token: Option<String>,
+}
+
+impl Default for Crawl4aiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: String::new(),
+            timeout_seconds: default_crawl4ai_timeout(),
+            token: None,
+        }
+    }
 }
 
 impl WebFetchPolicy {
@@ -164,5 +212,56 @@ mod tests {
         // Defaults for unspecified
         assert_eq!(policy.min_content_length, 100);
         assert_eq!(policy.timeout_seconds, 30);
+    }
+
+    #[test]
+    fn crawl4ai_defaults_are_off_with_60s_timeout() {
+        let cfg = Crawl4aiConfig::default();
+        assert!(!cfg.enabled);
+        assert!(cfg.base_url.is_empty());
+        assert_eq!(cfg.timeout_seconds, 60);
+        assert!(cfg.token.is_none());
+    }
+
+    #[test]
+    fn web_fetch_policy_without_crawl4ai_section_uses_defaults() {
+        // A pre-existing config with no [crawl4ai] table must still parse and
+        // leave the backend disabled (back-compat / zero regression).
+        let toml = r#"
+            max_content_length = 20000
+        "#;
+        let policy: WebFetchPolicy = toml::from_str(toml).unwrap();
+        assert!(!policy.crawl4ai.enabled);
+        assert_eq!(policy.crawl4ai.timeout_seconds, 60);
+    }
+
+    #[test]
+    fn crawl4ai_section_parses_enabled_base_url_timeout() {
+        let toml = r#"
+            [crawl4ai]
+            enabled = true
+            base_url = "http://10.10.10.3:11235"
+            timeout_seconds = 45
+        "#;
+        let policy: WebFetchPolicy = toml::from_str(toml).unwrap();
+        assert!(policy.crawl4ai.enabled);
+        assert_eq!(policy.crawl4ai.base_url, "http://10.10.10.3:11235");
+        assert_eq!(policy.crawl4ai.timeout_seconds, 45);
+        // token never comes from TOML
+        assert!(policy.crawl4ai.token.is_none());
+    }
+
+    #[test]
+    fn crawl4ai_token_is_never_serialized() {
+        // Runtime-only vault field: a token set in memory must NOT round-trip
+        // into serialized config (mirrors SearchBackendConfig::api_key).
+        let cfg = Crawl4aiConfig {
+            enabled: true,
+            base_url: "http://x".into(),
+            timeout_seconds: 60,
+            token: Some("secret".into()),
+        };
+        let json = serde_json::to_value(&cfg).unwrap();
+        assert!(json.get("token").is_none(), "token must be skip_serializing");
     }
 }
