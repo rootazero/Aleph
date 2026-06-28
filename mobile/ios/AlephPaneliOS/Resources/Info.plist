@@ -19,7 +19,9 @@
 	<key>CFBundleShortVersionString</key>
 	<string>${ALEPH_VERSION}</string>
 	<key>CFBundleVersion</key>
-	<string>${ALEPH_VERSION}</string>
+	<string>${ALEPH_BUILD}</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
