@@ -156,9 +156,9 @@ pub fn GenerationProvidersView() -> impl IntoView {
         move |preset_id: &str| providers.get().into_iter().find(|p| p.name == preset_id);
 
     view! {
-        <div class="flex h-full aleph-content-top">
+        <div class="flex h-full aleph-content-top aleph-md">
             // Left panel - Provider list + Generation settings
-            <div class="flex flex-col w-5/12 min-w-[400px] border-r border-border">
+            <div class="flex flex-col w-5/12 min-w-[400px] border-r border-border aleph-md-list">
                 // Header
                 <div class="px-6 pb-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">
@@ -336,7 +336,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
             </div>
 
             // Right panel - Provider details or Add form
-            <div class="w-7/12 min-w-[320px] bg-surface">
+            <div class="w-7/12 min-w-[320px] bg-surface aleph-md-detail">
                 {move || {
                     if show_add_form.get() {
                         view! {

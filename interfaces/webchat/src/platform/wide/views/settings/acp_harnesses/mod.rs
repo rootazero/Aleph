@@ -97,9 +97,9 @@ pub fn AcpHarnessesView() -> impl IntoView {
     };
 
     view! {
-        <div class="flex h-full aleph-content-top">
+        <div class="flex h-full aleph-content-top aleph-md">
             // Left panel — harness list
-            <div class="flex flex-col w-5/12 min-w-[400px] border-r border-border">
+            <div class="flex flex-col w-5/12 min-w-[400px] border-r border-border aleph-md-list">
                 <div class="px-6 pb-4 border-b border-border">
                     <div class="flex items-center justify-between">
                         <div>
@@ -335,7 +335,7 @@ pub fn AcpHarnessesView() -> impl IntoView {
             </div>
 
             // Right panel — detail / add form
-            <div class="flex-1 flex flex-col overflow-hidden">
+            <div class="flex-1 flex flex-col overflow-hidden aleph-md-detail">
                 {move || {
                     if loading.get() {
                         view! { <div></div> }.into_any()

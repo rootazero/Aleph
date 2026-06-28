@@ -77,9 +77,9 @@ pub fn ProvidersView() -> impl IntoView {
     });
 
     view! {
-        <div class="flex h-full aleph-content-top">
+        <div class="flex h-full aleph-content-top aleph-md">
             // Left panel: Presets + Configured providers
-            <div class="flex flex-col w-5/12 min-w-0 border-r border-border">
+            <div class="flex flex-col w-5/12 min-w-0 border-r border-border aleph-md-list">
                 // Header
                 <div class="px-6 pb-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">{t!(i18n, settings.providers.title)}</h1>
@@ -123,7 +123,7 @@ pub fn ProvidersView() -> impl IntoView {
             </div>
 
             // Right panel: Detail/Editor
-            <div class="w-7/12 min-w-0 overflow-y-auto">
+            <div class="w-7/12 min-w-0 overflow-y-auto aleph-md-detail">
                 <ProviderDetailPanel
                     providers=providers
                     selected=selected
