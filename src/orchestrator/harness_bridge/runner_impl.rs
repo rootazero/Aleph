@@ -144,6 +144,41 @@ impl HarnessRunner for AgentHarnessRunner {
             self.default_max_iterations,
         );
 
+        // Per-run routing handle: co-locates recall backfill (writer) with the
+        // completion observer (reader). §6/§7. Lives outside the harness (R10).
+        let routing_attribution =
+            std::sync::Arc::new(crate::routing::RoutingAttribution::new(session_id.to_key_string()));
+
+        // Frozen model id for attribution — same precedence the spawn chain uses
+        // (explicit > model_hint > native). `explicit` folds the dynamic
+        // select_model pick and the BrainRef::Strict model.
+        let routing_explicit_model: Option<String> =
+            crate::providers::session_model_handle::get_session_model(&session_pref_key)
+                .map(|p| p.model)
+                .or_else(|| match &spec.brain {
+                    crate::orchestrator::flow_spec::BrainRef::Strict { model: Some(m), .. } => Some(m.clone()),
+                    _ => None,
+                });
+        let routing_model_hint: Option<String> =
+            self.agent_registry.get(&spec.agent).and_then(|d| d.model_hint);
+        let routing_model_id = crate::routing::resolve_routing_model_id(
+            routing_explicit_model.as_deref(),
+            routing_model_hint.as_deref(),
+            &provider_name,
+        );
+
+        // Run-start recall (ONCE, pre-loop) → fenced String for the builder;
+        // also backfills routing_attribution.task_emb for the observer (symmetry).
+        let routing_text: Option<String> = if let Some(recall) = self.routing_recall.as_ref() {
+            recall
+                .build_routing_experience_message(&user_query, &spec.agent, None, &routing_attribution)
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+
         // Step 5b (BUG-2/BUG-3 fix, Phase 6 follow-up): assemble the system
         // prompt from per-agent curated memory + hybrid retrieval before the
         // harness loop starts. Failures are warned and degraded to `None` so
@@ -158,6 +193,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 interaction_manifest.as_ref(),
                 sandbox.as_ref(),
                 workspace_override.as_deref(),
+                routing_text,
             )
             .await
         {
