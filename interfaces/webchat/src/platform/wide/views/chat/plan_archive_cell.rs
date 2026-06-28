@@ -13,7 +13,7 @@ pub fn PlanArchiveCell(plan: PlanView) -> impl IntoView {
     let (glyph, label) = plan.archive_summary();
     let objective = plan.objective.clone().unwrap_or_default();
     let complete = plan.complete;
-    let items = plan.items.clone();
+    let items = StoredValue::new(plan.items.clone());
     view! {
         <style>{ARCHIVE_CELL_CSS}</style>
         <div class="aleph-plan-cap" class:done=move || complete>
@@ -26,7 +26,7 @@ pub fn PlanArchiveCell(plan: PlanView) -> impl IntoView {
             <Show when=move || expanded.get()>
                 <ul class="aleph-plan-cap-rows">
                     <For
-                        each=move || items.clone()
+                        each=move || items.get_value()
                         key=|it| (it.text.clone(), it.status.clone())
                         let:it
                     >
