@@ -184,6 +184,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn record_and_recall_share_one_embedding_key() {
+        let backend = Arc::new(temp_backend());
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(0.7) });
+        let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
+        let avail: ProviderAvailability = Arc::new(|_p: &str| true);
+        let recall = RoutingRecall::new(store.clone(), avail);
+        let attribution = RoutingAttribution::new("s".into());
+        let _ = recall
+            .build_routing_experience_message("same text", "a", None, &attribution)
+            .await
+            .unwrap();
+        let recalled_key = attribution.task_emb.get().cloned().unwrap();
+        let direct = store.embed_task("same text").await.unwrap();
+        assert_eq!(recalled_key, direct); // observer attributes with the key recall queried with
+    }
+
+    #[tokio::test]
     async fn recalled_unavailable_model_is_marked() {
         let backend = Arc::new(temp_backend());
         backend
