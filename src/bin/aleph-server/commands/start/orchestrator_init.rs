@@ -253,6 +253,13 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // tiers become reachable on the production harness path. Default
         // `full` → byte-identical to the prior always-Full assembly.
         default_prompt_mode: config.execution.prompt_mode,
+        // Gauge denominator override: honor `[providers.<primary>] context_window`
+        // so the occupancy ring matches the agent's token budget (both prefer
+        // the configured window over the catalog). `None` keeps the catalog window.
+        primary_context_window: config
+            .providers
+            .get(primary_provider_key)
+            .and_then(|p| p.context_window),
         power,
         memory_context_provider,
         memory_backend,

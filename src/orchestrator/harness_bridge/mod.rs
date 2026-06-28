@@ -212,6 +212,13 @@ pub struct AgentHarnessRunner {
     /// `Some(0..=1)` / `None` disables the fast path. Default `Some(8)`
     /// (production gateway) — byte-identical to the prior hardcoded value.
     pub parallel_tool_concurrency: Option<usize>,
+
+    /// Primary provider's `[providers.*] context_window` override, captured at
+    /// boot. Used as the context-gauge denominator before the catalog fallback
+    /// so the occupancy gauge honors the same override the agent's token budget
+    /// already applies (`deps_builder::derive_token_budget`). `None` (unset /
+    /// tests) keeps the gauge on the per-model catalog window.
+    pub primary_context_window: Option<u32>,
 }
 
 /// Hard fallback iteration cap — used only when both the per-flow override

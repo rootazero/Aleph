@@ -966,6 +966,7 @@ impl ChatState {
             active_project_name: self.active_project_name.get_untracked(),
             selected_model: self.selected_model.get_untracked(),
             next_msg_id: self.next_msg_id.get_untracked(),
+            context_usage: self.context_usage.get_untracked(),
         }
     }
 
@@ -986,11 +987,13 @@ impl ChatState {
         self.active_project_name.set(snap.active_project_name);
         self.selected_model.set(snap.selected_model);
         self.next_msg_id.set(snap.next_msg_id);
+        // Carried in the snapshot so the occupancy gauge survives a tab swap
+        // (None for a fresh/empty tab, which correctly hides the gauge).
+        self.context_usage.set(snap.context_usage);
         // Ephemeral (not in the snapshot): reset so the outgoing tab's
         // collapse choices / Todo panel don't leak into the restored session.
         self.strip_open.set(std::collections::HashMap::new());
         self.plan.set(None);
-        self.context_usage.set(None);
     }
 }
 
@@ -1012,6 +1015,9 @@ pub struct SessionSnapshot {
     pub active_project_name: Option<String>,
     pub selected_model: Option<crate::api::providers::ModelOverride>,
     pub next_msg_id: u64,
+    /// Last completed turn's context-window occupancy, so the gauge survives a
+    /// tab swap instead of blanking until the next turn finishes.
+    pub context_usage: Option<ContextUsage>,
 }
 
 #[cfg(test)]
@@ -1342,7 +1348,7 @@ mod step_tests {
     }
 
     #[test]
-    fn context_usage_is_cleared_on_session_transitions() {
+    fn context_usage_clears_on_reset_but_survives_tab_swap() {
         let owner = Owner::new();
         owner.set();
         let chat = ChatState::new();
@@ -1368,13 +1374,29 @@ mod step_tests {
             "clear_session() must reset the context gauge"
         );
 
-        // restore_from must not inherit a prior session's gauge. context_usage is
-        // ephemeral (excluded from SessionSnapshot), so any captured snapshot works.
+        // Tab swap = capture outgoing tab → restore incoming tab. The gauge now
+        // rides in SessionSnapshot, so a tab that already ran a turn keeps its
+        // occupancy across the swap instead of blanking out (the user-visible
+        // "switching tabs hides the gauge" complaint).
         seed();
-        chat.restore_from(chat.capture_snapshot());
+        let snap = chat.capture_snapshot();
+        chat.context_usage.set(None);
+        chat.restore_from(snap);
+        assert_eq!(
+            chat.context_usage.get_untracked(),
+            Some(ContextUsage {
+                used_tokens: 10_000,
+                window_tokens: 200_000,
+                total_tokens: 12_000,
+            }),
+            "restore_from() must rehydrate the captured gauge so it survives tab swaps"
+        );
+
+        // A fresh/empty tab (default snapshot) still shows no gauge.
+        chat.restore_from(SessionSnapshot::default());
         assert!(
             chat.context_usage.get_untracked().is_none(),
-            "restore_from() must reset the context gauge"
+            "restoring an empty snapshot must leave the gauge hidden"
         );
     }
 }

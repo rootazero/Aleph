@@ -549,7 +549,10 @@ impl HarnessRunner for AgentHarnessRunner {
         // core's, not the panel's) plus the current occupancy snapshot from the
         // harness's last LLM call. `context_tokens` is 0 when no call ran, so the
         // panel self-hides the gauge.
-        let context_window = crate::providers::model_catalog::resolve_context_window(model);
+        let context_window = crate::providers::model_catalog::resolve_context_window_with_override(
+            self.primary_context_window,
+            model,
+        );
         let context_tokens = harness.last_turn_context_tokens();
         let outcome = FlowOutcome {
             final_text,

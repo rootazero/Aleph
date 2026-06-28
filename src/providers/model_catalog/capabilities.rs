@@ -698,6 +698,19 @@ pub fn resolve_context_window(model: &str) -> u32 {
         .unwrap_or(CONSERVATIVE_CONTEXT_WINDOW)
 }
 
+/// Context window honoring an explicit per-provider `context_window` override
+/// before falling back to the catalogue. Mirrors the precedence the agent's
+/// token budget already applies in `deps_builder::derive_token_budget`
+/// (config ▸ catalog ▸ conservative), so the occupancy gauge and the
+/// compaction budget agree on the denominator instead of silently diverging
+/// when a user pins a custom window in `[providers.*] context_window`.
+#[must_use]
+pub fn resolve_context_window_with_override(override_window: Option<u32>, model: &str) -> u32 {
+    override_window
+        .filter(|&w| w > 0)
+        .unwrap_or_else(|| resolve_context_window(model))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -933,5 +946,39 @@ mod tests {
             CONSERVATIVE_CONTEXT_WINDOW
         );
         assert_eq!(resolve_context_window(""), CONSERVATIVE_CONTEXT_WINDOW);
+    }
+
+    #[test]
+    fn override_wins_over_catalog_and_falls_back_when_absent() {
+        // Explicit config override takes precedence over the catalog value.
+        assert_eq!(
+            resolve_context_window_with_override(Some(300_000), "claude-opus-4-8"),
+            300_000
+        );
+        // No override → identical to the catalog lookup.
+        assert_eq!(
+            resolve_context_window_with_override(None, "claude-opus-4-8"),
+            resolve_context_window("claude-opus-4-8")
+        );
+        // Override on an unknown model still wins (lets users window a custom id).
+        assert_eq!(
+            resolve_context_window_with_override(Some(64_000), "totally-unknown-model"),
+            64_000
+        );
+        // A zero override is treated as "unset" so a mis-declared 0 can't peg
+        // the gauge denominator at 1-token / 100%.
+        assert_eq!(
+            resolve_context_window_with_override(Some(0), "claude-opus-4-8"),
+            resolve_context_window("claude-opus-4-8")
+        );
+    }
+
+    /// The user's real config: `Kimi-K2.7` must resolve to the 256K K2 window
+    /// via the `kimi-k2` prefix (NOT the generic `kimi`=200K row), so the gauge
+    /// percentage is honest without needing any override.
+    #[test]
+    fn kimi_k2_7_resolves_to_256k_window() {
+        assert_eq!(resolve_context_window("Kimi-K2.7"), 262_144);
+        assert_eq!(resolve_context_window("kimi-k2.7"), 262_144);
     }
 }

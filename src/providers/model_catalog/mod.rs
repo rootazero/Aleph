@@ -25,6 +25,7 @@ pub mod endpoint;
 
 pub use alias::{canonical_provider_id, canonicalize_model_id, infer_vendor};
 pub use capabilities::{
-    capabilities_for, resolve_context_window, ModelCapabilities, CONSERVATIVE_CONTEXT_WINDOW,
+    capabilities_for, resolve_context_window, resolve_context_window_with_override,
+    ModelCapabilities, CONSERVATIVE_CONTEXT_WINDOW,
 };
 pub use endpoint::{endpoint_kind_for_base_url, EndpointKind};
