@@ -184,6 +184,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recalled_unavailable_model_is_marked() {
+        let backend = Arc::new(temp_backend());
+        backend
+            .record_routing_experience(&row("1", "a", "m-dead", "deadprov"), &emb(1.0), 768)
+            .unwrap();
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
+        let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
+        let avail: ProviderAvailability = Arc::new(|p: &str| p != "deadprov");
+        let recall = RoutingRecall::new(store, avail);
+        let attribution = RoutingAttribution::new("s".into());
+        let msg = recall
+            .build_routing_experience_message("do X", "a", None, &attribution)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(msg.contains("UNAVAILABLE")); // O4: marked, not filtered
+        assert!(msg.contains("m-dead")); // still visible to the LLM
+        assert!(msg.contains("memory-context")); // fence-wrapped
+    }
+
+    #[tokio::test]
     async fn cold_start_returns_none() {
         let backend = Arc::new(temp_backend());
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
