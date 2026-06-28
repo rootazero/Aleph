@@ -28,6 +28,26 @@ pub struct QueuedPrompt {
     pub attachments: Vec<PendingAttachment>,
 }
 
+/// One-line preview for a queued prompt: trimmed text (UTF-8-safe truncation,
+/// P7), or an attachment-count fallback when attachments-only. Pure — the
+/// ghost bubble renders whatever this returns.
+#[must_use]
+pub fn queue_preview_label(entry: &QueuedPrompt) -> String {
+    const MAX: usize = 64;
+    let text = entry.text.trim();
+    if !text.is_empty() {
+        let truncated: String = text.chars().take(MAX).collect();
+        if truncated.chars().count() < text.chars().count() {
+            format!("{truncated}…")
+        } else {
+            truncated
+        }
+    } else {
+        let n = entry.attachments.len();
+        format!("📎 {n}")
+    }
+}
+
 /// Stable, machine-readable code for a chat send / delivery failure.
 ///
 /// Mirrors openhuman's `chatSendError.ts` taxonomy so analytics and tests
@@ -325,6 +345,11 @@ pub struct ChatState {
     /// the composer (which owns the send pipeline) actually fires the send
     /// without prop drilling a callback through every bubble.
     pub retry_pulse: RwSignal<u32>,
+    /// One-shot pulse asking the composer to flush the prompt queue into the
+    /// live run at a turn boundary (bumped by `events.rs` on
+    /// `agent_trace.turn_started`). Ephemeral, like `retry_pulse` — excluded
+    /// from [`SessionSnapshot`], so it neither snapshots nor needs clearing.
+    pub flush_pulse: RwSignal<u32>,
     /// Pulse signal that asks the composer to run the doctor + LLM-repair
     /// flow (G1, `f` hotkey): each bump increments by 1. Bumped by the global
     /// keydown listener via [`HotkeyState`]; the composer seeds a diagnostic
@@ -411,6 +436,7 @@ impl ChatState {
             context_usage: RwSignal::new(None),
             prompt_queue: RwSignal::new(Vec::new()),
             retry_pulse: RwSignal::new(0),
+            flush_pulse: RwSignal::new(0),
             repair_pulse: RwSignal::new(0),
             active_project_root: RwSignal::new(None),
             active_project_name: RwSignal::new(None),
@@ -529,6 +555,16 @@ impl ChatState {
                 q.remove(index);
             }
         });
+    }
+
+    /// Remove and return every queued prompt (FIFO order preserved), leaving
+    /// the queue empty. Flushes the whole batch in one shot — at a turn
+    /// boundary (Steer) or on the busy→idle settle.
+    #[must_use]
+    pub fn drain_all_queued(&self) -> Vec<QueuedPrompt> {
+        let mut out = Vec::new();
+        self.prompt_queue.update(|q| out = std::mem::take(q));
+        out
     }
 
     /// Register a run whose final assistant reply should be spoken aloud.
@@ -1340,5 +1376,55 @@ mod step_tests {
             chat.context_usage.get_untracked().is_none(),
             "restore_from() must reset the context gauge"
         );
+    }
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+
+    fn prompt(text: &str, attachments: usize) -> QueuedPrompt {
+        QueuedPrompt {
+            text: text.to_string(),
+            attachments: (0..attachments)
+                .map(|i| PendingAttachment {
+                    name: format!("f{i}"),
+                    mime_type: "text/plain".into(),
+                    data_base64: String::new(),
+                    size: 0,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn label_uses_trimmed_text() {
+        assert_eq!(queue_preview_label(&prompt("  hello  ", 0)), "hello");
+    }
+
+    #[test]
+    fn label_truncates_on_codepoint_boundary() {
+        let long = "a".repeat(100);
+        let out = queue_preview_label(&prompt(&long, 0));
+        assert!(out.ends_with('…'));
+        assert_eq!(out.chars().count(), 65); // 64 chars + ellipsis
+    }
+
+    #[test]
+    fn label_falls_back_to_attachment_count() {
+        assert_eq!(queue_preview_label(&prompt("   ", 2)), "📎 2");
+    }
+
+    #[test]
+    fn drain_all_queued_empties_and_preserves_order() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.enqueue_prompt(prompt("a", 0));
+        chat.enqueue_prompt(prompt("b", 0));
+        let drained = chat.drain_all_queued();
+        let texts: Vec<_> = drained.iter().map(|p| p.text.clone()).collect();
+        assert_eq!(texts, vec!["a", "b"]);
+        assert!(chat.prompt_queue.get_untracked().is_empty());
     }
 }

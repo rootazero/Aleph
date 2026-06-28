@@ -35,6 +35,16 @@ pub const fn should_auto_drain_on_settle(
     queue_len > 0
 }
 
+/// Decide whether queued prompts should be flushed mid-run at a turn
+/// boundary (the agent just crossed into a new Think iteration). Unlike
+/// [`should_auto_drain_on_settle`], this fires *while the run is still
+/// active* — the flush rides the gateway's Steer path so the agent weaves
+/// the queued prompts into the ongoing run at its next turn.
+#[must_use]
+pub const fn should_flush_on_turn_boundary(queue_len: usize, is_busy: bool) -> bool {
+    is_busy && queue_len > 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,5 +76,20 @@ mod tests {
         assert!(!should_auto_drain_on_settle(true, false, 2, true));
         // ...but a subsequent natural settle (flag reset) drains again.
         assert!(should_auto_drain_on_settle(true, false, 2, false));
+    }
+
+    #[test]
+    fn flushes_on_boundary_when_busy_with_queue() {
+        assert!(should_flush_on_turn_boundary(1, true));
+    }
+
+    #[test]
+    fn no_flush_when_queue_empty() {
+        assert!(!should_flush_on_turn_boundary(0, true));
+    }
+
+    #[test]
+    fn no_flush_when_idle() {
+        assert!(!should_flush_on_turn_boundary(2, false));
     }
 }

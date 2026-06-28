@@ -9,7 +9,6 @@
 
 mod attachments;
 mod palette;
-mod queue_bar;
 mod voice;
 
 use super::mention_palette::{update_mention_palette, MentionPaletteView};
@@ -18,8 +17,6 @@ use palette::{
     build_palette_entries, doctor_command_info, expand_doctor_command, parse_command_info,
     CommandInfo, PaletteEntry, PaletteLabels, SlashPaletteView,
 };
-use queue_bar::QueuedPromptBar;
-
 use super::project_menu::ProjectMenu;
 use super::TodoPanel;
 use super::state::{ChatSendError, ChatSendErrorCode, ChatState, QueuedPrompt, TeamMemberView};
@@ -32,7 +29,7 @@ use leptos::task::spawn_local;
 use shared_ui_logic::safety::{
     check_prompt_injection, prompt_guard_message, PromptInjectionVerdict,
 };
-use shared_ui_logic::state::should_auto_drain_on_settle;
+use shared_ui_logic::state::{should_auto_drain_on_settle, should_flush_on_turn_boundary};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
@@ -257,6 +254,77 @@ pub(super) fn InputArea() -> impl IntoView {
         current_namespace.set(None);
     };
 
+    // Flush the entire prompt queue into the live run in one batch. Each prompt
+    // rides the normal ChatApi::send path: while a run is active the gateway
+    // Steer-injects it into the live session (picked up at the next turn
+    // boundary); when idle the first send starts a fresh run and the rest steer
+    // into it. Sends are awaited sequentially so the backend coalesces them in
+    // order. The returned run_id of a steered send is intentionally ignored —
+    // `active_run_id` is owned by the `run_accepted` event, and a steered send
+    // emits none (execute.rs returns Ok before the RunAccepted emit).
+    let flush_queue = move || {
+        // Single-agent path: in team chat `active_run_id` is never set, so the
+        // queue/flush is gated off entirely (team runs route via TeamChatApi).
+        let batch = chat.drain_all_queued();
+        if batch.is_empty() {
+            return;
+        }
+        let session_key = chat.session_key.get_untracked();
+        let agent_id = chat.agent_id.get_untracked();
+        let project_root = chat.active_project_root.get_untracked();
+        let model_override = chat.selected_model.get_untracked();
+        let dash = dashboard;
+        spawn_local(async move {
+            for entry in batch {
+                chat.push_user_message(&entry.text);
+                let api_attachments: Vec<ChatAttachment> = entry
+                    .attachments
+                    .into_iter()
+                    .map(|f| ChatAttachment {
+                        name: f.name,
+                        mime_type: f.mime_type,
+                        data_base64: f.data_base64,
+                        size: f.size,
+                    })
+                    .collect();
+                match ChatApi::send(
+                    &dash,
+                    &entry.text,
+                    session_key.as_deref(),
+                    api_attachments,
+                    agent_id.as_deref(),
+                    project_root.as_deref(),
+                    model_override.as_ref(),
+                )
+                .await
+                {
+                    Ok(resp) => chat.session_key.set(Some(resp.session_key)),
+                    Err(e) => chat.set_send_error(ChatSendError::classify(e)),
+                }
+            }
+        });
+    };
+
+    // Force-insert (B7): the user won't wait for the next turn boundary. Fold
+    // the current draft into the queue, then interrupt the running task WITHOUT
+    // setting `user_interrupted` — so the resulting busy→idle settle runs the
+    // normal auto-drain (Task 3), flushing the whole queue as a fresh run. With
+    // no active run it degrades to a normal send (B10).
+    let force_insert = move || {
+        if chat.active_run_id.get_untracked().is_none() {
+            send_message();
+            return;
+        }
+        enqueue_message(); // no-op when the draft is empty
+        user_interrupted.set(false); // ensure the upcoming settle is NOT suppressed
+        if let Some(run_id) = chat.active_run_id.get_untracked() {
+            let dash = dashboard;
+            spawn_local(async move {
+                let _ = ChatApi::abort(&dash, &run_id).await;
+            });
+        }
+    };
+
     // G4 retry plumbing — MessageBubble's Retry button bumps
     // `chat.retry_pulse`; we re-take the most recent user message and
     // route it through the normal send pipeline so prompt-guard +
@@ -326,17 +394,31 @@ pub(super) fn InputArea() -> impl IntoView {
                 queue_len,
                 user_interrupted.get_untracked(),
             ) {
-                if let Some(entry) = chat.dequeue_prompt_front() {
-                    input_text.set(entry.text);
-                    attachments.set(entry.attachments);
-                    send_message();
-                }
+                flush_queue();
             }
             // Reset the one-shot interrupt flag once we've crossed the edge.
             if was_busy && !is_busy {
                 user_interrupted.set(false);
             }
             is_busy
+        });
+    }
+
+    // Turn-boundary flush — `events.rs` bumps `flush_pulse` when the agent
+    // crosses into a new Think iteration with prompts still queued. Steer the
+    // whole batch into the live run now (the pure decision is host-tested in
+    // `shared_ui_logic::state::should_flush_on_turn_boundary`).
+    {
+        Effect::new(move |prev: Option<u32>| {
+            let pulse = chat.flush_pulse.get();
+            if prev.is_some() && Some(pulse) != prev {
+                let is_busy = chat.active_run_id.get_untracked().is_some();
+                let queue_len = chat.prompt_queue.get_untracked().len();
+                if should_flush_on_turn_boundary(queue_len, is_busy) {
+                    flush_queue();
+                }
+            }
+            pulse
         });
     }
 
@@ -581,6 +663,15 @@ pub(super) fn InputArea() -> impl IntoView {
                 }
                 return;
             }
+            // Esc while a run is active = force-insert: interrupt now and flush
+            // the queue (+ the current draft) as a fresh run (B7). Palette/
+            // mention Esc is handled in the branch above (it returns early), so
+            // this only fires in the normal composing context.
+            if ev.key() == "Escape" && chat.active_run_id.get_untracked().is_some() {
+                ev.prevent_default();
+                force_insert();
+                return;
+            }
             // Guided mode — "/namespace" + Enter → drill into the children
             // instead of sending.
             if ev.key() == "Enter" && !ev.shift_key() {
@@ -624,6 +715,15 @@ pub(super) fn InputArea() -> impl IntoView {
     // HTTP window, not the whole run).
     let has_draft =
         Memo::new(move |_| !input_text.get().trim().is_empty() || !attachments.get().is_empty());
+
+    // Force-insert is available while a run is active and there's *something*
+    // to insert — queued ghosts or the current draft.
+    let can_force = Memo::new(move |_| {
+        chat.active_run_id.get().is_some()
+            && (!chat.prompt_queue.get().is_empty()
+                || !input_text.get().trim().is_empty()
+                || !attachments.get().is_empty())
+    });
 
     let on_attach_click = move |_: web_sys::MouseEvent| {
         if let Some(input) = file_input_ref.get() {
@@ -690,8 +790,6 @@ pub(super) fn InputArea() -> impl IntoView {
                 // for its height, so messages never hide behind it.
                 <TodoPanel />
                 <AttachmentPreviewBar attachments=attachments />
-
-                <QueuedPromptBar queue=chat.prompt_queue />
 
                 // Team chat: most-salient task pill, above the input box.
                 <TeamTaskStrip />
@@ -891,6 +989,23 @@ pub(super) fn InputArea() -> impl IntoView {
                                         <path fill-rule="evenodd"
                                               d="M10 3a.75.75 0 0 1 .75.75v5.5h5.5a.75.75 0 0 1 0 1.5h-5.5v5.5a.75.75 0 0 1-1.5 0v-5.5h-5.5a.75.75 0 0 1 0-1.5h5.5v-5.5A.75.75 0 0 1 10 3Z"
                                               clip-rule="evenodd" />
+                                    </svg>
+                                </button>
+                            </Show>
+
+                            // Force-insert ⚡ — interrupt now and flush the queue
+                            // (+ draft) immediately instead of waiting for the
+                            // next turn boundary. Mirrors Esc.
+                            <Show when=move || can_force.get()>
+                                <button
+                                    class="w-8 h-8 rounded-full bg-primary/15 text-primary flex items-center
+                                           justify-center hover:bg-primary/25 transition-colors flex-shrink-0"
+                                    title=move || t_string!(i18n, chat.force_insert).to_string()
+                                    on:click=move |_| force_insert()
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4"
+                                         viewBox="0 0 20 20" fill="currentColor">
+                                        <path d="M11 3 4 11h4l-1 6 7-8h-4l1-6Z" />
                                     </svg>
                                 </button>
                             </Show>
