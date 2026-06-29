@@ -37,7 +37,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ5RDdGMTkxREREM0RFQ0EKUldUSzN0UGRrZkhYMmQ0S0c5cDB3UEtGWVo1R05IZExyVlB6R3NXdDJkbnpGdlpYUWp4ejdMcU8K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ0Q0U3MENDQTlGQjhGMUMKUldRY2ovdXB6SERPUkdpREt2UHc5Vnc5cXB1cXo1UndHQmRTcko3SGVCQmMySklGVzZ4UHAxNXMK",
       "endpoints": [
         "https://github.com/rootazero/Aleph/releases/latest/download/latest.json"
       ]
