@@ -92,6 +92,7 @@ impl HarnessRunner for AgentHarnessRunner {
                         .get(&spec.agent)
                         .and_then(|d| d.model_hint.map(|m| (d.provider_hint, m)))
                 });
+        let routing_directive = model_directive.clone();
         let llm = match model_directive {
             Some((provider_opt, model)) => {
                 let base = provider_opt
@@ -149,23 +150,22 @@ impl HarnessRunner for AgentHarnessRunner {
         let routing_attribution =
             std::sync::Arc::new(crate::routing::RoutingAttribution::new(session_id.to_key_string()));
 
-        // Frozen model id for attribution — same precedence the spawn chain uses
-        // (explicit > model_hint > native). `explicit` folds the dynamic
-        // select_model pick and the BrainRef::Strict model.
-        let routing_explicit_model: Option<String> =
-            crate::providers::session_model_handle::get_session_model(&session_pref_key)
-                .map(|p| p.model)
-                .or_else(|| match &spec.brain {
-                    crate::orchestrator::flow_spec::BrainRef::Strict { model: Some(m), .. } => Some(m.clone()),
-                    _ => None,
-                });
-        let routing_model_hint: Option<String> =
-            self.agent_registry.get(&spec.agent).and_then(|d| d.model_hint);
-        let routing_model_id = crate::routing::resolve_routing_model_id(
-            routing_explicit_model.as_deref(),
-            routing_model_hint.as_deref(),
-            &provider_name,
-        );
+        // Frozen attribution: the EXACT (provider, model) this run resolved.
+        // model_directive already folds the select_model session pick and the agent
+        // model_hint (with its provider_hint); the dynamic pick_llm(brain) path uses
+        // BrainRef::Strict's pinned model when present, else "(dynamic)" (genuinely
+        // unresolved at run-start — never the meaningless wrapper name "failover").
+        let (routing_model_id, routing_provider_id): (String, Option<String>) =
+            match routing_directive {
+                Some((provider_opt, model)) => (model, provider_opt),
+                None => match &spec.brain {
+                    crate::orchestrator::flow_spec::BrainRef::Strict {
+                        model: Some(m),
+                        provider: p,
+                    } => (m.clone(), Some(p.clone())),
+                    _ => ("(dynamic)".to_string(), None),
+                },
+            };
 
         // Run-start recall (ONCE, pre-loop) → fenced String for the builder;
         // also backfills routing_attribution.task_emb for the observer (symmetry).
@@ -297,8 +297,8 @@ impl HarnessRunner for AgentHarnessRunner {
                     parent,
                     store.clone(),
                     routing_attribution.clone(),
-                    routing_model_id.clone(),
-                    provider_name.clone(),
+                    routing_model_id,
+                    routing_provider_id.unwrap_or_default(),
                     spec.agent.clone(),
                 ),
             ) as std::sync::Arc<dyn crate::harness::TraceSink>),

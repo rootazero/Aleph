@@ -15,7 +15,7 @@ pub mod session_key;
 
 pub use experience_store::{RoutingExperienceStore, RoutingOutcome};
 pub use observer::{outcome_from_session_completed, OutcomeObserver};
-pub use recall::{provider_availability_from_config, ProviderAvailability, RoutingRecall};
+pub use recall::{provider_availability_from_config, ProviderAvailability, ProviderStatus, RoutingRecall};
 
 pub use config::{MatchRule, PeerMatchConfig, RouteBinding, SessionConfig};
 pub use resolve::{resolve_route, MatchedBy, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind};
@@ -41,28 +41,6 @@ impl RoutingAttribution {
     }
 }
 
-/// Frozen-model precedence for routing attribution — mirrors the subagent
-/// spawn chain `explicit > model_hint > native` (subagent_spawner/mod.rs:297).
-#[must_use]
-pub fn resolve_routing_model_id(
-    explicit: Option<&str>,
-    model_hint: Option<&str>,
-    native_default: &str,
-) -> String {
-    explicit.or(model_hint).unwrap_or(native_default).to_string()
-}
-
-#[cfg(test)]
-mod model_precedence_tests {
-    use super::resolve_routing_model_id;
-
-    #[test]
-    fn routing_model_precedence_explicit_then_hint_then_native() {
-        assert_eq!(resolve_routing_model_id(Some("EXPLICIT"), Some("HINT"), "NATIVE"), "EXPLICIT");
-        assert_eq!(resolve_routing_model_id(None, Some("HINT"), "NATIVE"), "HINT");
-        assert_eq!(resolve_routing_model_id(None, None, "NATIVE"), "NATIVE");
-    }
-}
 
 #[cfg(test)]
 mod integration_tests {
