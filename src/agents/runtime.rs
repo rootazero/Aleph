@@ -456,6 +456,8 @@ impl AgentRuntime {
             plugin_registry: self.plugin_registry.clone(),
             // A2 — subagent concurrency cap.
             subagent_semaphore: self.subagent_semaphore.clone(),
+            // VESR v1.1 (b) — wired in Task 3 (None here so this task compiles).
+            routing_store: None,
         };
         let req = SpawnRequest {
             agent_def: &config.agent_def,

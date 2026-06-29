@@ -93,6 +93,11 @@ pub struct SpawnerBase {
     /// the cap (direct test callers); `Some(_)` makes `spawn()` acquire a
     /// permit held for the child's full lifetime.
     pub subagent_semaphore: Option<Arc<tokio::sync::Semaphore>>,
+    /// VESR v1.1 (b) — routing-experience store. `Some` makes `spawn()` wrap the
+    /// child trace sink with its own `OutcomeObserver`, recording the subagent's
+    /// run under `agent_def.id`. Holds the embedder via `embed_task`. `None`
+    /// keeps the child sink raw (today's behavior — no capture).
+    pub routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
 }
 
 /// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
@@ -255,6 +260,52 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             req.agent_def.context_mode.clone(),
             req.task,
         );
+        // VESR v1.1 (b) — capture this subagent's run under its own agent_id by
+        // wrapping the child trace sink with a dedicated OutcomeObserver.
+        // Subagents bypass the top-level wrap (runner_impl.rs), so we mirror it
+        // here at the spawn seam. Borrows `effective_task` before it moves into
+        // the UserMessage below. `None` store / `None` sink → child keeps the
+        // raw sink (today's behavior, no capture).
+        let child_trace_sink: Option<Arc<dyn crate::harness::TraceSink>> =
+            match (base.trace_sink.as_ref(), base.routing_store.as_ref()) {
+                (Some(sink), Some(store)) => {
+                    // Attribute from spawn-seam directives only (the parent's
+                    // resolved model/provider are not reachable here). Explicit
+                    // model choice = the high-value routing case; full
+                    // inheritance → "(dynamic)".
+                    let child_model = req
+                        .model
+                        .map(str::to_string)
+                        .or_else(|| req.agent_def.model_hint.clone())
+                        .unwrap_or_else(|| "(dynamic)".to_string());
+                    let child_provider = req
+                        .agent_def
+                        .provider_hint
+                        .clone()
+                        .unwrap_or_else(|| "(dynamic)".to_string());
+                    match store.embed_task(&effective_task).await {
+                        Ok(task_emb) => {
+                            let attribution = Arc::new(
+                                crate::routing::RoutingAttribution::new(child_id.to_key_string()),
+                            );
+                            let _ = attribution.task_emb.set(task_emb);
+                            Some(Arc::new(crate::routing::OutcomeObserver::new(
+                                sink.clone(),
+                                store.clone(),
+                                attribution,
+                                child_model,
+                                child_provider,
+                                req.agent_def.id.clone(),
+                            )) as Arc<dyn crate::harness::TraceSink>)
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "subagent routing embed failed; capture skipped");
+                            base.trace_sink.clone()
+                        }
+                    }
+                }
+                _ => base.trace_sink.clone(),
+            };
         base.session
             .emit_event(
                 &child_id,
@@ -358,8 +409,10 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             context_budget: None,
             context_compactor: None,
             preflight_pipeline: None,
-            // Stage A (P1) — was None; now inherited from parent SpawnerBase.
-            trace_sink: base.trace_sink.clone(),
+            // Stage A (P1) — inherited from parent SpawnerBase. VESR v1.1 (b):
+            // when routing capture is on, this is the child's own OutcomeObserver
+            // wrapping that sink; otherwise the raw sink (unchanged).
+            trace_sink: child_trace_sink,
             system_prompt: Some(system_prompt),
             system_prompt_parts: None,
             // Stage 4 (#11): stamp the descended child chain on the inner harness
