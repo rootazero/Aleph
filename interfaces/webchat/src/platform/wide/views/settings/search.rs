@@ -1427,7 +1427,8 @@ fn FetchProvidersSection() -> impl IntoView {
 
         spawn_local(async move {
             let old_cfg = fetch_config.get();
-            // Keep all non-crawl4ai backends (e.g. firecrawl shared entry)
+            // Keep other backends; drop crawl4ai (re-pushed below) and the
+            // synthesized firecrawl entry (Strategy V — never persisted to [fetch]).
             let mut backends: Vec<FetchBackendEntry> = old_cfg
                 .backends
                 .into_iter()
