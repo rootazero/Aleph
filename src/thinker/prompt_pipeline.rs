@@ -522,6 +522,7 @@ mod mode_tests {
             "chain_context",
             "session_resume",
             "special_actions",
+            "multi_step_conduct",
             "guidelines",
             "thinking_guidance",
             "skill_mode",
