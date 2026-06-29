@@ -159,6 +159,7 @@ async fn h_t1_worktree_isolation_happy_path() {
         // P3 Stage I:
         plugin_registry: None,
         subagent_semaphore: None,
+        routing_store: None,
     };
 
     let agent_def =

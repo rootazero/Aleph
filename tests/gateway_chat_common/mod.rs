@@ -211,6 +211,9 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
         prompt_extra_files: None,
         mcp_handle: None,
         parallel_tool_concurrency: None,
+        primary_context_window: None,
+        routing_store: None,
+        routing_recall: None,
     };
 
     Arc::new(Orchestrator::new(

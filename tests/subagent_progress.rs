@@ -36,7 +36,15 @@ fn background_subagent_check_status_returns_progress() {
     let token = CancellationToken::new();
     tracker.register("test-rid".into(), token, "task".into());
 
-    let wrapper = ForwardingTraceSink::new(inner.clone(), tracker.clone(), "test-rid".into());
+    // Empty root_session → `emit_tree_event` no-ops, so this sync `#[test]`
+    // needs no Tokio runtime; tracker-side progress is what's asserted.
+    let wrapper = ForwardingTraceSink::new(
+        inner.clone(),
+        tracker.clone(),
+        "test-rid".into(),
+        "test-agent".into(),
+        String::new(),
+    );
 
     // Emit a sequence representing one tool call cycle.
     wrapper.on_trace(&LoopTraceEvent::TurnStateEntered {

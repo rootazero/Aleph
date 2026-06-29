@@ -191,6 +191,7 @@ fn base_with_hanging_llm(cancel: CancellationToken) -> SpawnerBase {
         // P3 Stage I:
         plugin_registry: None,
         subagent_semaphore: None,
+        routing_store: None,
     }
 }
 
@@ -226,6 +227,7 @@ fn base_with_hanging_tool(cancel: CancellationToken) -> SpawnerBase {
         // P3 Stage I:
         plugin_registry: None,
         subagent_semaphore: None,
+        routing_store: None,
     }
 }
 

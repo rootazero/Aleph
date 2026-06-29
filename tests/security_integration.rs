@@ -51,6 +51,9 @@ async fn test_outbound_inbound_roundtrip_blocks_echo() {
             // or the text should be redacted. For this test we just continue.
             return;
         }
+        // `GuardResult` is #[non_exhaustive]; any future non-text variant is
+        // skipped like the Blocked case rather than failing this flow.
+        _ => return,
     };
 
     // Verify placeholder was replaced

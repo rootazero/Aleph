@@ -196,6 +196,9 @@ impl OrchestratorFixture {
             prompt_extra_files: None,
             mcp_handle: None,
             parallel_tool_concurrency: None,
+            primary_context_window: None,
+            routing_store: None,
+            routing_recall: None,
         });
 
         let orchestrator = Orchestrator::new(
