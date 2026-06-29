@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use crate::error::AlephError;
-use crate::memory::store::sqlite::routing_experience::{RoutingExperienceRow, RoutingNeighbor};
+use crate::memory::store::sqlite::routing_experience::{
+    ModelAggregate, RoutingExperienceRow, RoutingNeighbor,
+};
 use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::memory::EmbeddingProvider;
 use crate::orchestrator::dispatch::TokenBreakdown;
@@ -85,6 +87,15 @@ impl RoutingExperienceStore {
     ) -> Result<Vec<RoutingNeighbor>, AlephError> {
         let dim = self.embedder.dimensions() as u32;
         self.backend.recall_routing_experience(task_emb, dim, agent_id, k)
+    }
+
+    /// Per-(model, provider) lifetime aggregate for one agent (VESR v1.1 a).
+    /// Raw facts only — the recall block renders these for the LLM to weigh.
+    pub async fn aggregate_by_model(
+        &self,
+        agent_id: &str,
+    ) -> Result<Vec<ModelAggregate>, AlephError> {
+        self.backend.aggregate_routing_experiences_by_model(agent_id)
     }
 }
 

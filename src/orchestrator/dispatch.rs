@@ -503,6 +503,14 @@ pub trait HarnessRunner: Send + Sync {
     fn guardrails(&self) -> Option<Arc<crate::guardrails::GuardrailRegistry>> {
         None
     }
+
+    /// VESR v1.1 (b) — the routing-experience store this runner records into,
+    /// if any. The gateway threads it into `SubagentTool` so spawned subagents
+    /// capture their own routing experience under their agent_id. Default `None`
+    /// keeps test mocks and the simple engine capture-free.
+    fn routing_store(&self) -> Option<Arc<crate::routing::RoutingExperienceStore>> {
+        None
+    }
 }
 
 impl Orchestrator {

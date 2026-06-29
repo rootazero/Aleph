@@ -133,6 +133,50 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    async fn observer_enriches_known_model_usd_cost() {
+        let backend = Arc::new(temp_backend());
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
+        let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
+        let attribution = Arc::new(RoutingAttribution::new("run".into()));
+        attribution.task_emb.set(emb(1.0)).unwrap();
+        // anthropic / claude-sonnet-4-6 is in the static price table → priced.
+        let observer = OutcomeObserver::new(
+            Arc::new(SpySink::default()) as Arc<dyn TraceSink>,
+            store.clone(),
+            attribution,
+            "claude-sonnet-4-6".into(),
+            "anthropic".into(),
+            "agentCost".into(),
+        );
+        observer.on_trace(&session_completed());
+        let got = drain_until_row(&store, "agentCost").await;
+        assert_eq!(got.len(), 1);
+        let cost = got[0].estimated_cost.expect("known model must price");
+        assert!(cost > 0.0, "non-zero tokens x known rate must be > 0");
+    }
+
+    #[tokio::test]
+    async fn observer_leaves_unknown_provider_cost_none() {
+        let backend = Arc::new(temp_backend());
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
+        let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
+        let attribution = Arc::new(RoutingAttribution::new("run".into()));
+        attribution.task_emb.set(emb(1.0)).unwrap();
+        let observer = OutcomeObserver::new(
+            Arc::new(SpySink::default()) as Arc<dyn TraceSink>,
+            store.clone(),
+            attribution,
+            "(dynamic)".into(),
+            "(dynamic)".into(),
+            "agentDyn".into(),
+        );
+        observer.on_trace(&session_completed());
+        let got = drain_until_row(&store, "agentDyn").await;
+        assert_eq!(got.len(), 1);
+        assert!(got[0].estimated_cost.is_none(), "unknown provider -> no estimate");
+    }
+
+    #[tokio::test]
     async fn parent_and_child_attribution_isolated() {
         let backend = Arc::new(temp_backend());
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });

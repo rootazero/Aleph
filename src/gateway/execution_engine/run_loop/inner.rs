@@ -767,6 +767,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 if let Some(g) = orchestrator.harness.guardrails() {
                     t = t.with_guardrails(g);
                 }
+                // VESR v1.1 (b) — thread the routing store so spawned subagents
+                // capture their own routing experience under their agent_id.
+                if let Some(rs) = orchestrator.harness.routing_store() {
+                    t = t.with_routing_store(rs);
+                }
                 if let Some(ref mgr) = self.teammate_manager {
                     t = t.with_teammate_manager(mgr.clone());
                 }

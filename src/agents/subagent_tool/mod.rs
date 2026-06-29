@@ -106,6 +106,10 @@ pub struct SubagentTool {
     /// share the run-global strategy. `None` (the `new()` default) keeps
     /// subagents strategy-free, byte-identical to the pre-strategy build.
     pub(super) strategy: Option<String>,
+    /// VESR v1.1 (b) — routing store threaded into every child `AgentRuntime`
+    /// so spawned subagents capture their own routing experience. `None` (the
+    /// `new()` default) keeps subagents capture-free.
+    pub(super) routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
 }
 
 impl SubagentTool {
@@ -152,6 +156,7 @@ impl SubagentTool {
             provider_overrides: HashMap::new(),
             guardrails: None,
             strategy: None,
+            routing_store: None,
         }
     }
 
@@ -258,6 +263,17 @@ impl SubagentTool {
     /// be observed via `ForwardingTraceSink`. Only wired on the background path.
     pub fn with_trace_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
         self.trace_sink = Some(sink);
+        self
+    }
+
+    /// VESR v1.1 (b) — thread the routing-experience store so spawned subagents
+    /// capture their own routing experience.
+    #[must_use]
+    pub fn with_routing_store(
+        mut self,
+        store: Arc<crate::routing::RoutingExperienceStore>,
+    ) -> Self {
+        self.routing_store = Some(store);
         self
     }
 
