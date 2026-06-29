@@ -57,6 +57,35 @@ pub struct RoutingNeighbor {
     pub distance: f32,
 }
 
+/// Per-(model, provider) lifetime aggregate for ONE agent. R7: raw facts only —
+/// no `success_rate`, no score, no ranking, no `best_for`. The LLM interprets
+/// these; the code never derives a verdict. `terminate_reason_counts` is the raw
+/// distribution of the verbatim `terminate_reason` discriminant ("kind").
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelAggregate {
+    pub model_id: String,
+    pub provider_id: String,
+    pub n_runs: u32,
+    /// (`terminate_reason` kind, count), ordered count-desc then name for
+    /// determinism. NOT a success metric — just how runs ended.
+    pub terminate_reason_counts: Vec<(String, u32)>,
+    pub avg_iterations: f64,
+    pub avg_tool_errors: f64,
+    pub avg_total_tokens: f64,
+    /// Mean over runs with a known cost (NULL costs ignored); `None` if none.
+    pub avg_cost: Option<f64>,
+    pub last_used_unix: i64,
+}
+
+/// Extract the verbatim variant tag ("kind") from a serialized `TerminateReason`
+/// JSON string. Pure string handling — no JSON1 SQL dependency.
+fn terminate_kind(raw: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(String::from))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 impl SqliteMemoryBackend {
     pub fn record_routing_experience(
         &self,
@@ -245,6 +274,119 @@ impl SqliteMemoryBackend {
         }
         Ok(())
     }
+
+    /// Per-(model, provider) lifetime aggregate for one agent. Read-side fold
+    /// over the relational table (no vec table, no DDL). Bounded by the
+    /// retention cap (<=5000 rows/agent). R7: raw aggregates only.
+    pub fn aggregate_routing_experiences_by_model(
+        &self,
+        agent_id: &str,
+    ) -> Result<Vec<ModelAggregate>, AlephError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT model_id, provider_id, terminate_reason, iterations, tool_error_count, \
+                 tok_input + tok_output + tok_cache_read + tok_cache_creation + tok_reasoning, \
+                 estimated_cost, created_at \
+                 FROM routing_experiences WHERE agent_id = ?1",
+            )
+            .map_err(|e| AlephError::config(format!("aggregate prepare: {e}")))?;
+        let rows = stmt
+            .query_map(params![agent_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, Option<f64>>(6)?,
+                    r.get::<_, i64>(7)?,
+                ))
+            })
+            .map_err(|e| AlephError::config(format!("aggregate query: {e}")))?;
+
+        struct Acc {
+            model_id: String,
+            provider_id: String,
+            n: u64,
+            sum_iter: u64,
+            sum_tool_err: u64,
+            sum_tok: u64,
+            cost_sum: f64,
+            cost_n: u64,
+            last_used: i64,
+            kinds: std::collections::HashMap<String, u32>,
+        }
+        let mut accs: std::collections::HashMap<(String, String), Acc> =
+            std::collections::HashMap::new();
+        for r in rows {
+            let (model_id, provider_id, tr, iters, tool_err, tok, cost, created) =
+                r.map_err(|e| AlephError::config(format!("aggregate row: {e}")))?;
+            let kind = terminate_kind(&tr);
+            let acc = accs
+                .entry((model_id.clone(), provider_id.clone()))
+                .or_insert_with(|| Acc {
+                    model_id,
+                    provider_id,
+                    n: 0,
+                    sum_iter: 0,
+                    sum_tool_err: 0,
+                    sum_tok: 0,
+                    cost_sum: 0.0,
+                    cost_n: 0,
+                    last_used: 0,
+                    kinds: std::collections::HashMap::new(),
+                });
+            acc.n += 1;
+            acc.sum_iter += iters.max(0) as u64;
+            acc.sum_tool_err += tool_err.max(0) as u64;
+            acc.sum_tok += tok.max(0) as u64;
+            if let Some(c) = cost {
+                acc.cost_sum += c;
+                acc.cost_n += 1;
+            }
+            if created > acc.last_used {
+                acc.last_used = created;
+            }
+            *acc.kinds.entry(kind).or_insert(0) += 1;
+        }
+
+        let mut out: Vec<ModelAggregate> = accs
+            .into_values()
+            .map(|a| {
+                let n = a.n.max(1) as f64;
+                let mut kinds: Vec<(String, u32)> = a.kinds.into_iter().collect();
+                kinds.sort_by(|x, y| y.1.cmp(&x.1).then_with(|| x.0.cmp(&y.0)));
+                ModelAggregate {
+                    model_id: a.model_id,
+                    provider_id: a.provider_id,
+                    n_runs: a.n.min(u32::MAX as u64) as u32,
+                    terminate_reason_counts: kinds,
+                    avg_iterations: a.sum_iter as f64 / n,
+                    avg_tool_errors: a.sum_tool_err as f64 / n,
+                    avg_total_tokens: a.sum_tok as f64 / n,
+                    avg_cost: if a.cost_n > 0 {
+                        Some(a.cost_sum / a.cost_n as f64)
+                    } else {
+                        None
+                    },
+                    last_used_unix: a.last_used,
+                }
+            })
+            .collect();
+        // D5: neutral order — most recently used first, NEVER by an outcome
+        // metric (sorting by quality would be an implicit ranking = R7 breach).
+        out.sort_by(|x, y| {
+            y.last_used_unix
+                .cmp(&x.last_used_unix)
+                .then_with(|| x.model_id.cmp(&y.model_id))
+        });
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -323,5 +465,57 @@ mod tests {
         assert!(!ddl.contains("score"));
         assert!(!ddl.contains("rank"));
         assert!(!ddl.contains("best_for"));
+    }
+
+    #[test]
+    fn aggregate_groups_by_model_with_raw_facts() {
+        let backend = temp_backend();
+        let mut r1 = row("1", "a", "m1", 10);
+        r1.iterations = 2;
+        r1.tok_input = 100;
+        r1.estimated_cost = Some(0.01);
+        let mut r2 = row("2", "a", "m1", 20);
+        r2.iterations = 4;
+        r2.tok_output = 50;
+        r2.estimated_cost = Some(0.03);
+        let mut r3 = row("3", "a", "m2", 30);
+        r3.terminate_reason = "{\"kind\":\"max_iterations\"}".into();
+        r3.tool_error_count = 2;
+        backend.record_routing_experience(&r1, &emb(1.0), 768).unwrap();
+        backend.record_routing_experience(&r2, &emb(2.0), 768).unwrap();
+        backend.record_routing_experience(&r3, &emb(3.0), 768).unwrap();
+
+        let aggs = backend.aggregate_routing_experiences_by_model("a").unwrap();
+        assert_eq!(aggs.len(), 2);
+        // Neutral order = most recently used first → m2 (30) before m1 (max 20).
+        assert_eq!(aggs[0].model_id, "m2");
+        assert_eq!(aggs[1].model_id, "m1");
+
+        let m1 = &aggs[1];
+        assert_eq!(m1.n_runs, 2);
+        assert_eq!(m1.avg_iterations, 3.0); // (2+4)/2
+        assert_eq!(m1.avg_total_tokens, 75.0); // (100 + 50)/2
+        assert_eq!(m1.avg_cost, Some(0.02)); // (0.01 + 0.03)/2
+        assert_eq!(m1.terminate_reason_counts, vec![("completed".to_string(), 2)]);
+
+        let m2 = &aggs[0];
+        assert_eq!(m2.n_runs, 1);
+        assert_eq!(m2.avg_tool_errors, 2.0);
+        assert_eq!(m2.terminate_reason_counts, vec![("max_iterations".to_string(), 1)]);
+    }
+
+    #[test]
+    fn aggregate_isolates_agents_and_handles_missing_cost() {
+        let backend = temp_backend();
+        let mut ra = row("1", "a", "m1", 1);
+        ra.estimated_cost = None;
+        let rb = row("2", "b", "mb", 2);
+        backend.record_routing_experience(&ra, &emb(1.0), 768).unwrap();
+        backend.record_routing_experience(&rb, &emb(2.0), 768).unwrap();
+
+        let aggs = backend.aggregate_routing_experiences_by_model("a").unwrap();
+        assert_eq!(aggs.len(), 1); // agent "b" excluded
+        assert_eq!(aggs[0].model_id, "m1");
+        assert_eq!(aggs[0].avg_cost, None); // no run had a known cost
     }
 }
