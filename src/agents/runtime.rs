@@ -149,6 +149,11 @@ pub struct AgentRuntime {
     /// `AgentRuntimeConfig`. `None` (the `new()` default) keeps the legacy
     /// no-strategy path.
     strategy: Option<String>,
+    /// VESR v1.1 (b) — routing-experience store threaded into every
+    /// `SpawnerBase` so spawned subagents capture their run under
+    /// `agent_def.id`. `None` (the `new()` default) keeps subagents
+    /// capture-free.
+    routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
 }
 
 impl AgentRuntime {
@@ -182,6 +187,7 @@ impl AgentRuntime {
             plugin_registry: None,
             provider_overrides: HashMap::new(),
             strategy: None,
+            routing_store: None,
         }
     }
 
@@ -253,6 +259,16 @@ impl AgentRuntime {
     /// Stage A (P1) — wire the trace sink. Subagents emit into the same sink.
     pub fn with_trace_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
         self.trace_sink = Some(sink);
+        self
+    }
+
+    /// VESR v1.1 (b) — wire the routing-experience store inherited by subagents.
+    #[must_use]
+    pub fn with_routing_store(
+        mut self,
+        store: Arc<crate::routing::RoutingExperienceStore>,
+    ) -> Self {
+        self.routing_store = Some(store);
         self
     }
 
@@ -456,8 +472,8 @@ impl AgentRuntime {
             plugin_registry: self.plugin_registry.clone(),
             // A2 — subagent concurrency cap.
             subagent_semaphore: self.subagent_semaphore.clone(),
-            // VESR v1.1 (b) — wired in Task 3 (None here so this task compiles).
-            routing_store: None,
+            // VESR v1.1 (b) — threaded from the gateway so subagents capture.
+            routing_store: self.routing_store.clone(),
         };
         let req = SpawnRequest {
             agent_def: &config.agent_def,

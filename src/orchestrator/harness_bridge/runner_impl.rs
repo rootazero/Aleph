@@ -29,6 +29,10 @@ impl HarnessRunner for AgentHarnessRunner {
         self.guardrails.clone()
     }
 
+    fn routing_store(&self) -> Option<Arc<crate::routing::RoutingExperienceStore>> {
+        self.routing_store.clone()
+    }
+
     async fn run(
         &self,
         session_key: String,
@@ -288,9 +292,11 @@ impl HarnessRunner for AgentHarnessRunner {
             crate::verification::ModelRobustnessProfile::for_behavior(Some(&*behavior_name))
                 .clamped();
         // Wrap the per-run sink so this run's SessionCompleted is observed —
-        // harness-external (R10). Subagents already hold the RAW sink (captured
-        // before this wrap in the gateway run loop), so they are never routed
-        // into this observer (v1: top-level runs only; no cross-agent leakage).
+        // harness-external (R10). Subagents hold the RAW sink (captured before
+        // this wrap in the gateway run loop), so they are never routed into THIS
+        // observer. v1.1 (b) captures them via their OWN OutcomeObserver wrapped
+        // at the spawn seam (subagent_spawner::spawn) — each run records under
+        // its own agent_id; no cross-agent leakage.
         let trace_sink = match (trace_sink, self.routing_store.as_ref()) {
             (Some(parent), Some(store)) => Some(std::sync::Arc::new(
                 crate::routing::OutcomeObserver::new(

@@ -1007,6 +1007,53 @@ mod tests {
         assert_eq!(got[0].provider_id, "anthropic");       // from provider_hint
     }
 
+    // -- VESR v1.1 (b): production threading test ----------------------------
+
+    #[tokio::test]
+    async fn agent_runtime_threads_routing_store_to_capture() {
+        use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig};
+
+        let store = routing_store_for_test();
+        let provider = ScriptedProvider::new(vec![ProviderResponse::text_only("ok".to_string())]);
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let event_store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(event_store));
+
+        // child_chain must be descended (depth > 0) — spawn_subagent debug_asserts it.
+        let chain = ChainContext::new().child().expect("descended chain");
+
+        let runtime = AgentRuntime::new(
+            provider,
+            chain,
+            CancellationToken::new(),
+            session,
+            Arc::new(AlwaysOkTools),
+            Arc::new(crate::sandbox::NoopSandbox),
+        )
+        .with_trace_sink(Arc::new(NoopTraceSink) as Arc<dyn crate::harness::TraceSink>)
+        .with_routing_store(store.clone());
+
+        let config = AgentRuntimeConfig {
+            agent_def: agent_with_allowed("planner", vec!["*"])
+                .with_model_hint("claude-opus-4-8")
+                .with_provider_hint("anthropic"),
+            task: "plan it".to_string(),
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            strategy: None,
+        };
+
+        runtime.run(config).await.expect("spawn ok");
+
+        let got = drain_routing_row(&store, "planner").await;
+        assert_eq!(got.len(), 1, "production threading reaches the spawn-seam observer");
+        assert_eq!(got[0].model_id, "claude-opus-4-8");
+        assert_eq!(got[0].provider_id, "anthropic");
+    }
+
     // -- B5: context_mode authoritative --------------------------------------
 
     #[test]

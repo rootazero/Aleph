@@ -285,6 +285,9 @@ impl SubagentTool {
         if let Some(sink) = self.trace_sink.clone() {
             runtime = runtime.with_trace_sink(sink);
         }
+        if let Some(rs) = self.routing_store.clone() {
+            runtime = runtime.with_routing_store(rs);
+        }
         if let Some(sc) = self.stall_config.clone() {
             runtime = runtime.with_stall_config(sc);
         }
