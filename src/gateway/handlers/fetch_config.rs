@@ -244,24 +244,28 @@ pub async fn handle_update(
             fetch.default_provider = dto.default_provider.clone();
 
             for backend_dto in &dto.backends {
-                // Firecrawl shares search credentials — never write a fetch: vault key.
-                let is_firecrawl = backend_dto.name == "firecrawl";
+                // Strategy V: firecrawl shares the [search] config and the
+                // `search:firecrawl` vault key. It is never persisted as a
+                // [fetch] backend entry, nor given a `fetch:` vault key. The
+                // Panel already filters firecrawl out of the outbound payload;
+                // this guard is server-side defense-in-depth for any future
+                // client that does not.
+                if backend_dto.name == "firecrawl" {
+                    continue;
+                }
 
-                // Store API key in vault if provided (non-firecrawl only)
-                if !is_firecrawl {
-                    if let Some(ref api_key) =
-                        normalize_optional_string(backend_dto.api_key.clone())
+                // Store API key in vault if provided
+                if let Some(ref api_key) =
+                    normalize_optional_string(backend_dto.api_key.clone())
+                {
+                    if let Err(e) = vault.store_secret(&vault_key(&backend_dto.name), api_key)
                     {
-                        if let Err(e) =
-                            vault.store_secret(&vault_key(&backend_dto.name), api_key)
-                        {
-                            error!(error = %e, "Failed to store fetch API key in vault");
-                            return JsonRpcResponse::error(
-                                request.id,
-                                INTERNAL_ERROR,
-                                format!("Failed to store API key: {e}"),
-                            );
-                        }
+                        error!(error = %e, "Failed to store fetch API key in vault");
+                        return JsonRpcResponse::error(
+                            request.id,
+                            INTERNAL_ERROR,
+                            format!("Failed to store API key: {e}"),
+                        );
                     }
                 }
 
@@ -533,5 +537,76 @@ mod tests {
             Some("https://api.firecrawl.dev")
         );
         assert!(firecrawl_base_url_from_search(None).is_none());
+    }
+
+    // Strategy V defense-in-depth: even if a client includes a firecrawl entry
+    // in the update payload, handle_update must NOT persist it as a [fetch]
+    // backend nor write a fetch:firecrawl vault key (firecrawl shares [search]).
+    // Other backends (crawl4ai) and default_provider still round-trip.
+    #[tokio::test]
+    async fn handle_update_never_persists_firecrawl_backend() {
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ALEPH_HOME").ok();
+        // SAFETY: single-threaded test mutates a process env var so the config
+        // save lands in the tempdir, not the real ~/.aleph. Restored below.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", dir.path());
+        }
+
+        let base = Config {
+            fetch: Some(FetchConfigInternal {
+                enabled: false,
+                default_provider: String::new(),
+                fallback_providers: None,
+                backends: std::collections::HashMap::new(),
+            }),
+            ..Default::default()
+        };
+        let config = Arc::new(RwLock::new(base));
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
+        let vault = Arc::new(SharedTokenManager::new(
+            store,
+            dir.path().join("test.vault").to_string_lossy().to_string(),
+        ));
+        let _ = vault.generate_token();
+
+        // A hostile/legacy client sends firecrawl alongside crawl4ai.
+        let params = serde_json::json!({
+            "enabled": true,
+            "default_provider": "firecrawl",
+            "backends": [
+                { "name": "crawl4ai", "provider_type": "crawl4ai", "base_url": "http://x:11235" },
+                { "name": "firecrawl", "provider_type": "firecrawl", "base_url": "http://evil", "api_key": "leak-me" }
+            ]
+        });
+        let request =
+            JsonRpcRequest::with_id("fetch_config.update", Some(params), serde_json::json!(1));
+        let response = handle_update(request, config.clone(), event_bus, vault.clone()).await;
+        assert!(response.is_success(), "update should succeed: {response:?}");
+
+        {
+            let cfg = config.read().await;
+            let fetch = cfg.fetch.as_ref().unwrap();
+            assert_eq!(
+                fetch.default_provider, "firecrawl",
+                "default_provider round-trips even without a firecrawl backend entry"
+            );
+            assert!(fetch.backends.contains_key("crawl4ai"), "crawl4ai persisted");
+            assert!(
+                !fetch.backends.contains_key("firecrawl"),
+                "Strategy V: firecrawl must never be persisted as a [fetch] backend"
+            );
+        }
+        // The inline api_key must have been dropped — no fetch:firecrawl key.
+        assert!(
+            resolve_fetch_api_key("firecrawl", &vault).is_none(),
+            "no fetch:firecrawl vault key may be written"
+        );
+
+        match prev {
+            Some(v) => unsafe { std::env::set_var("ALEPH_HOME", v) },
+            None => unsafe { std::env::remove_var("ALEPH_HOME") },
+        }
     }
 }
