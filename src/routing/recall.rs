@@ -19,8 +19,20 @@ use crate::memory::store::sqlite::routing_experience::RoutingNeighbor;
 use super::experience_store::RoutingExperienceStore;
 use super::RoutingAttribution;
 
+/// Availability of a recalled experience's provider, for render-time gating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderStatus {
+    /// Currently has a usable credential (config api_key or vault secret).
+    Available,
+    /// A KNOWN config provider that currently has no credential → warn.
+    Deconfigured,
+    /// Not a recognized config provider (e.g. "", "failover", "(dynamic)")
+    /// → fail OPEN: do not penalize what we cannot identify.
+    Unknown,
+}
+
 /// Currently-configured predicate over a provider id.
-pub type ProviderAvailability = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+pub type ProviderAvailability = Arc<dyn Fn(&str) -> ProviderStatus + Send + Sync>;
 
 /// Build the availability gate from boot config + vault. Lives in the lib so it
 /// can call the `pub(crate)` `resolve_vault_secret`; the binary calls only this
@@ -31,15 +43,24 @@ pub fn provider_availability_from_config(
     token_manager: Option<Arc<SharedTokenManager>>,
 ) -> ProviderAvailability {
     Arc::new(move |provider: &str| {
-        if providers.get(provider).and_then(|c| c.api_key.as_ref()).is_some() {
-            return true;
-        }
-        match &token_manager {
-            Some(tm) => {
-                crate::gateway::handlers::resolve_vault_secret(&format!("ai:{provider}"), tm)
+        let available = providers.get(provider).and_then(|c| c.api_key.as_ref()).is_some()
+            || match &token_manager {
+                Some(tm) => {
+                    crate::gateway::handlers::resolve_vault_secret(
+                        &format!("ai:{provider}"),
+                        tm,
+                    )
                     .is_some()
-            }
-            None => false,
+                }
+                None => false,
+            };
+        if available {
+            return ProviderStatus::Available;
+        }
+        if providers.contains_key(provider) {
+            ProviderStatus::Deconfigured
+        } else {
+            ProviderStatus::Unknown
         }
     })
 }
@@ -87,10 +108,11 @@ fn render_neighbors(neighbors: &[RoutingNeighbor], availability: &ProviderAvaila
          NOT a recommendation — weigh them yourself; discount far/old/low-sample entries):\n",
     );
     for n in neighbors {
-        let avail_tag = if (availability)(&n.provider_id) {
-            ""
-        } else {
-            " [UNAVAILABLE: provider not currently configured — do NOT select]"
+        let avail_tag = match (availability)(&n.provider_id) {
+            ProviderStatus::Available | ProviderStatus::Unknown => "",
+            ProviderStatus::Deconfigured => {
+                " [UNAVAILABLE: provider not currently configured — do NOT select]"
+            }
         };
         out.push_str(&format!(
             "- model={} provider={}{} distance={:.4} terminate_reason={} iterations={} \
@@ -188,7 +210,7 @@ mod tests {
         let backend = Arc::new(temp_backend());
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(0.7) });
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
-        let avail: ProviderAvailability = Arc::new(|_p: &str| true);
+        let avail: ProviderAvailability = Arc::new(|_p: &str| ProviderStatus::Available);
         let recall = RoutingRecall::new(store.clone(), avail);
         let attribution = RoutingAttribution::new("s".into());
         let _ = recall
@@ -208,7 +230,9 @@ mod tests {
             .unwrap();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
-        let avail: ProviderAvailability = Arc::new(|p: &str| p != "deadprov");
+        let avail: ProviderAvailability = Arc::new(|p: &str| {
+            if p == "deadprov" { ProviderStatus::Deconfigured } else { ProviderStatus::Available }
+        });
         let recall = RoutingRecall::new(store, avail);
         let attribution = RoutingAttribution::new("s".into());
         let msg = recall
@@ -226,7 +250,7 @@ mod tests {
         let backend = Arc::new(temp_backend());
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
-        let avail: ProviderAvailability = Arc::new(|_p: &str| true);
+        let avail: ProviderAvailability = Arc::new(|_p: &str| ProviderStatus::Available);
         let recall = RoutingRecall::new(store, avail);
         let attribution = RoutingAttribution::new("s".into());
         let msg = recall
@@ -235,5 +259,30 @@ mod tests {
             .unwrap();
         assert!(msg.is_none());
         assert!(attribution.task_emb.get().is_some()); // embed still happened
+    }
+
+    #[tokio::test]
+    async fn unknown_provider_is_not_marked_unavailable() {
+        // Regression: "failover" / "" / "(dynamic)" provider ids must FAIL OPEN —
+        // they must never appear as [UNAVAILABLE] in the recall block.
+        let backend = Arc::new(temp_backend());
+        backend
+            .record_routing_experience(&row("1", "a", "claude-3-5-sonnet", "failover"), &emb(1.0), 768)
+            .unwrap();
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
+        let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
+        // Gate returns Unknown for "failover" (not a recognized config provider).
+        let avail: ProviderAvailability = Arc::new(|p: &str| {
+            if p == "failover" { ProviderStatus::Unknown } else { ProviderStatus::Available }
+        });
+        let recall = RoutingRecall::new(store, avail);
+        let attribution = RoutingAttribution::new("s".into());
+        let msg = recall
+            .build_routing_experience_message("do X", "a", None, &attribution)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(msg.contains("claude-3-5-sonnet"), "model must be visible");
+        assert!(!msg.contains("UNAVAILABLE"), "unknown provider must not be tagged UNAVAILABLE");
     }
 }
