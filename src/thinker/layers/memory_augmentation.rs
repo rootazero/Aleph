@@ -44,6 +44,11 @@ impl PromptLayer for MemoryAugmentationLayer {
                 output.push_str(text);
             }
         }
+        if let Some(text) = &input.routing_experience_user_message {
+            if !text.trim().is_empty() {
+                output.push_str(text);
+            }
+        }
     }
 }
 

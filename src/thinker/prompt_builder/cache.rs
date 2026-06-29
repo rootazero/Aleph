@@ -69,6 +69,10 @@ impl PromptBuilder {
             Some(text) => input.with_memory_user_message(text.clone()),
             None => input,
         };
+        let input = match &self.routing_experience_user_message {
+            Some(text) => input.with_routing_experience_message(text.clone()),
+            None => input,
+        };
         let input = input
             .with_curated_envelope(self.curated_memory_envelope.clone())
             .with_chain_context_opt(self.chain_context.as_ref())
@@ -204,6 +208,22 @@ mod tests {
             parts[0].content.contains("## Citation Standards"),
             "cached Full prompt must carry memory citation standards"
         );
+    }
+
+    #[test]
+    fn routing_experience_message_injected_exactly_once() {
+        let marker = "ROUTING_EXP_MARKER_7f3a";
+        let builder = PromptBuilder::new(PromptConfig::default())
+            .with_memory_user_message("MEM_BODY".to_string())
+            .with_routing_experience_message(marker.to_string());
+        let parts = builder.build_system_prompt_cached_with_mode(&[], PromptMode::Full);
+        let full: String = parts.iter().map(|p| p.content.clone()).collect::<Vec<_>>().join("");
+        assert_eq!(
+            full.matches(marker).count(),
+            1,
+            "routing text must be emitted exactly once"
+        );
+        assert!(full.contains("MEM_BODY"), "memory still emitted alongside routing");
     }
 
     #[test]

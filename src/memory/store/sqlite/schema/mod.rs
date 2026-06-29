@@ -129,12 +129,25 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
 
     migrations::drop_obsolete_facts_tables(conn)?;
 
+    conn.execute_batch(ddl::ROUTING_EXPERIENCE_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create routing_experiences table: {e}")))?;
+
     Ok(())
 }
 
 /// Initialize the sqlite-vec virtual tables for notes (768, 1024, 1536 dimensions).
 pub fn init_vec_tables(conn: &Connection) -> Result<(), AlephError> {
     init_notes_vec_tables(conn)?;
+
+    for (dim, name) in [
+        (768u32, "routing_exp_vec_768"),
+        (1024u32, "routing_exp_vec_1024"),
+        (1536u32, "routing_exp_vec_1536"),
+    ] {
+        conn.execute_batch(&ddl::vec_table_ddl(dim, name))
+            .map_err(|e| AlephError::config(format!("Failed to create {name}: {e}")))?;
+    }
+
     Ok(())
 }
 

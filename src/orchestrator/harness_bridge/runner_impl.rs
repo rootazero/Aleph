@@ -92,6 +92,7 @@ impl HarnessRunner for AgentHarnessRunner {
                         .get(&spec.agent)
                         .and_then(|d| d.model_hint.map(|m| (d.provider_hint, m)))
                 });
+        let routing_directive = model_directive.clone();
         let llm = match model_directive {
             Some((provider_opt, model)) => {
                 let base = provider_opt
@@ -144,6 +145,40 @@ impl HarnessRunner for AgentHarnessRunner {
             self.default_max_iterations,
         );
 
+        // Per-run routing handle: co-locates recall backfill (writer) with the
+        // completion observer (reader). §6/§7. Lives outside the harness (R10).
+        let routing_attribution =
+            std::sync::Arc::new(crate::routing::RoutingAttribution::new(session_id.to_key_string()));
+
+        // Frozen attribution: the EXACT (provider, model) this run resolved.
+        // model_directive already folds the select_model session pick and the agent
+        // model_hint (with its provider_hint); the dynamic pick_llm(brain) path uses
+        // BrainRef::Strict's pinned model when present, else "(dynamic)" (genuinely
+        // unresolved at run-start — never the meaningless wrapper name "failover").
+        let (routing_model_id, routing_provider_id): (String, Option<String>) =
+            match routing_directive {
+                Some((provider_opt, model)) => (model, provider_opt),
+                None => match &spec.brain {
+                    crate::orchestrator::flow_spec::BrainRef::Strict {
+                        model: Some(m),
+                        provider: p,
+                    } => (m.clone(), Some(p.clone())),
+                    _ => ("(dynamic)".to_string(), None),
+                },
+            };
+
+        // Run-start recall (ONCE, pre-loop) → fenced String for the builder;
+        // also backfills routing_attribution.task_emb for the observer (symmetry).
+        let routing_text: Option<String> = if let Some(recall) = self.routing_recall.as_ref() {
+            recall
+                .build_routing_experience_message(&user_query, &spec.agent, None, &routing_attribution)
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+
         // Step 5b (BUG-2/BUG-3 fix, Phase 6 follow-up): assemble the system
         // prompt from per-agent curated memory + hybrid retrieval before the
         // harness loop starts. Failures are warned and degraded to `None` so
@@ -158,6 +193,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 interaction_manifest.as_ref(),
                 sandbox.as_ref(),
                 workspace_override.as_deref(),
+                routing_text,
             )
             .await
         {
@@ -251,6 +287,23 @@ impl HarnessRunner for AgentHarnessRunner {
         let robustness_profile =
             crate::verification::ModelRobustnessProfile::for_behavior(Some(&*behavior_name))
                 .clamped();
+        // Wrap the per-run sink so this run's SessionCompleted is observed —
+        // harness-external (R10). Subagents already hold the RAW sink (captured
+        // before this wrap in the gateway run loop), so they are never routed
+        // into this observer (v1: top-level runs only; no cross-agent leakage).
+        let trace_sink = match (trace_sink, self.routing_store.as_ref()) {
+            (Some(parent), Some(store)) => Some(std::sync::Arc::new(
+                crate::routing::OutcomeObserver::new(
+                    parent,
+                    store.clone(),
+                    routing_attribution.clone(),
+                    routing_model_id,
+                    routing_provider_id.unwrap_or_default(),
+                    spec.agent.clone(),
+                ),
+            ) as std::sync::Arc<dyn crate::harness::TraceSink>),
+            (other, _) => other,
+        };
         let deps = HarnessDeps {
             session: self.session_service.clone(),
             tools,

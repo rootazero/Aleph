@@ -3,6 +3,26 @@
 use super::super::*;
 use crate::thinker::soul::SoulManifest;
 
+#[test]
+fn routing_experience_injected_once_on_noncached_path() {
+    // Regression: non-cached build_system_prompt must mirror the cached path
+    // and thread routing_experience_user_message into LayerInput.
+    let marker = "ROUTING_NC_MARKER_9b2e";
+    let builder = PromptBuilder::new(PromptConfig::default())
+        .with_memory_user_message("MEM_BODY_NC".to_string())
+        .with_routing_experience_message(marker.to_string());
+    let prompt = builder.build_system_prompt(&[]);
+    assert_eq!(
+        prompt.matches(marker).count(),
+        1,
+        "routing text must be emitted exactly once on non-cached path"
+    );
+    assert!(
+        prompt.contains("MEM_BODY_NC"),
+        "memory still emitted alongside routing on non-cached path"
+    );
+}
+
 // ========== Integration tests: public API via Pipeline ==========
 
 #[test]

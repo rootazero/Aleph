@@ -151,6 +151,9 @@ pub struct PromptBuilder {
     /// When set, threaded into every `LayerInput` as `memory_user_message` so
     /// `MemoryAugmentationLayer` can inject it verbatim into the system prompt.
     memory_user_message: Option<String>,
+    /// Pre-rendered routing-experience text. Threaded into `LayerInput` on the
+    /// cached production path so `MemoryAugmentationLayer` renders it.
+    routing_experience_user_message: Option<String>,
     /// Pre-rendered curated memory envelope (`<CuratedMemory>` + `<UserProfile>`).
     ///
     /// When set, threaded into every `LayerInput` as `curated_memory_envelope`
@@ -205,6 +208,7 @@ impl PromptBuilder {
             soul: None,
             identity_files: None,
             memory_user_message: None,
+            routing_experience_user_message: None,
             curated_memory_envelope: None,
             chain_context: None,
             resolved_context: None,
@@ -268,6 +272,13 @@ impl PromptBuilder {
     /// so `MemoryAugmentationLayer` injects it verbatim into the system prompt.
     pub fn with_memory_user_message(mut self, text: String) -> Self {
         self.memory_user_message = Some(text);
+        self
+    }
+
+    /// Attach pre-rendered routing-experience text from `RoutingRecall`.
+    #[must_use]
+    pub fn with_routing_experience_message(mut self, text: String) -> Self {
+        self.routing_experience_user_message = Some(text);
         self
     }
 
@@ -358,6 +369,10 @@ impl PromptBuilder {
         };
         let input = match &self.memory_user_message {
             Some(text) => input.with_memory_user_message(text.clone()),
+            None => input,
+        };
+        let input = match &self.routing_experience_user_message {
+            Some(text) => input.with_routing_experience_message(text.clone()),
             None => input,
         };
         let input = input.with_curated_envelope(self.curated_memory_envelope.clone());

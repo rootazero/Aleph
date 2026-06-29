@@ -56,6 +56,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // SQLite memory backend, threaded into the per-run `ContextCompactor` so it
     // can reuse hierarchical session summaries for zero-API-cost compaction.
     memory_backend: Option<alephcore::memory::store::MemoryBackend>,
+    embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     // Tool catalog — owns the `ToolHealthCache` whose snapshot
     // feeds `runtime_state_blocks`. Threaded so `build_system_prompt` can
     // populate `<tool_runtime_state>` fragments.
@@ -219,6 +220,20 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // built for subagent routing — no second construction.)
     let named_providers = provider_chain.agent_overrides.clone();
 
+    let routing_store = match (embedder.clone(), memory_backend.clone()) {
+        (Some(embedder), Some(backend)) => Some(std::sync::Arc::new(
+            alephcore::routing::RoutingExperienceStore::new(backend, embedder),
+        )),
+        _ => None,
+    };
+    let routing_recall = routing_store.clone().map(|store| {
+        let availability = alephcore::routing::provider_availability_from_config(
+            config.providers.clone(),
+            Some(shared_token_mgr.clone()),
+        );
+        std::sync::Arc::new(alephcore::routing::RoutingRecall::new(store, availability))
+    });
+
     let (stall_cfg, failure_cap, turn_to) = build_stability_triple(config);
     let harness = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),
@@ -280,6 +295,8 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // Act-phase fast-path cap is operator-tunable instead of a hardcoded
         // literal. `Some(8)` keeps the prior behaviour byte-identical.
         parallel_tool_concurrency: config.tool_service.parallel_tool_concurrency_opt(),
+        routing_store,
+        routing_recall,
     });
 
     // PHASE-6: thread routing overrides from `aleph.toml [flow_routing]`.
