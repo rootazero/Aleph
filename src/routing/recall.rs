@@ -14,7 +14,7 @@ use crate::config::ProviderConfig;
 use crate::error::AlephError;
 use crate::gateway::security::SharedTokenManager;
 use crate::memory::assembler::context_block::wrap_memory_context;
-use crate::memory::store::sqlite::routing_experience::RoutingNeighbor;
+use crate::memory::store::sqlite::routing_experience::{ModelAggregate, RoutingNeighbor};
 
 use super::experience_store::RoutingExperienceStore;
 use super::RoutingAttribution;
@@ -90,10 +90,19 @@ impl RoutingRecall {
         let _ = attribution.task_emb.set(task_emb.clone());
 
         let neighbors = self.store.recall(agent_id, &task_emb, self.k).await?;
-        if neighbors.is_empty() {
+        // v1.1 (a): per-model lifetime aggregate for THIS agent — task-agnostic,
+        // independent of the kNN query. Appended after the task-similar neighbors.
+        let aggregates = self.store.aggregate_by_model(agent_id).await?;
+        if neighbors.is_empty() && aggregates.is_empty() {
             return Ok(None); // cold start: behave exactly like today's blind selection (D1)
         }
-        let rendered = render_neighbors(&neighbors, &self.availability);
+        let mut rendered = String::new();
+        if !neighbors.is_empty() {
+            rendered.push_str(&render_neighbors(&neighbors, &self.availability));
+        }
+        if !aggregates.is_empty() {
+            rendered.push_str(&render_aggregates(&aggregates, &self.availability));
+        }
         if rendered.trim().is_empty() {
             return Ok(None);
         }
@@ -139,6 +148,47 @@ fn render_neighbors(neighbors: &[RoutingNeighbor], availability: &ProviderAvaila
         "Models without observations on this kind of task are unproven, not bad — you may \
          explore one if it fits.\n",
     );
+    out
+}
+
+fn render_aggregates(aggregates: &[ModelAggregate], availability: &ProviderAvailability) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "Lifetime per-model track record for THIS agent (raw aggregates across ALL past \
+         tasks, NOT a ranking — weigh them yourself):\n",
+    );
+    for a in aggregates {
+        let avail_tag = match (availability)(&a.provider_id) {
+            ProviderStatus::Available | ProviderStatus::Unknown => "",
+            ProviderStatus::Deconfigured => {
+                " [UNAVAILABLE: provider not currently configured — do NOT select]"
+            }
+        };
+        let kinds = a
+            .terminate_reason_counts
+            .iter()
+            .map(|(k, c)| format!("{k}:{c}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let cost = match a.avg_cost {
+            Some(c) => format!("{c:.4}"),
+            None => "n/a".to_string(),
+        };
+        out.push_str(&format!(
+            "- model={} provider={}{} runs={} terminate_reasons={} avg_iterations={:.1} \
+             avg_tool_errors={:.2} avg_tokens={:.0} avg_cost_usd={} last_used_unix={}\n",
+            a.model_id,
+            a.provider_id,
+            avail_tag,
+            a.n_runs,
+            kinds,
+            a.avg_iterations,
+            a.avg_tool_errors,
+            a.avg_total_tokens,
+            cost,
+            a.last_used_unix,
+        ));
+    }
     out
 }
 
@@ -284,5 +334,33 @@ mod tests {
             .unwrap();
         assert!(msg.contains("claude-3-5-sonnet"), "model must be visible");
         assert!(!msg.contains("UNAVAILABLE"), "unknown provider must not be tagged UNAVAILABLE");
+    }
+
+    #[tokio::test]
+    async fn recall_block_includes_per_model_aggregate_section() {
+        let backend = Arc::new(temp_backend());
+        // Two completed runs on m1 for agent "a".
+        backend
+            .record_routing_experience(&row("1", "a", "m1", "p"), &emb(1.0), 768)
+            .unwrap();
+        backend
+            .record_routing_experience(&row("2", "a", "m1", "p"), &emb(1.0), 768)
+            .unwrap();
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
+        let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
+        let avail: ProviderAvailability = Arc::new(|_p: &str| ProviderStatus::Available);
+        let recall = RoutingRecall::new(store, avail);
+        let attribution = RoutingAttribution::new("s".into());
+
+        let msg = recall
+            .build_routing_experience_message("do X", "a", None, &attribution)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(msg.contains("Lifetime per-model track record")); // aggregate section
+        assert!(msg.contains("runs=2")); // raw N
+        assert!(msg.contains("terminate_reasons=completed:2")); // raw distribution
+        assert!(msg.contains("Verified routing experience")); // neighbors section still present
     }
 }
