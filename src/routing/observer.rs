@@ -89,9 +89,19 @@ impl TraceSink for OutcomeObserver {
             iterations, tool_calls_made, terminate_reason, token_breakdown, duration_ms, tool_timeline, ..
         } = event
         {
-            let outcome = outcome_from_session_completed(
+            let mut outcome = outcome_from_session_completed(
                 *iterations, *tool_calls_made, terminate_reason, token_breakdown, duration_ms, tool_timeline,
             );
+            // v1.1 (c): enrich with USD from the static price table, keyed on the
+            // REAL injected provider+model (never the FailoverProvider wrapper
+            // name). Best-effort — unknown provider/model degrades to None, never
+            // errors. Same enrichment for top-level and subagent observers.
+            let est = crate::pricing::estimate(&self.provider_id, &self.model_id, &outcome.token_breakdown);
+            outcome.estimated_cost = match est.status {
+                crate::pricing::CostStatus::Complete
+                | crate::pricing::CostStatus::PartialMissingPrice => Some(est.usd),
+                crate::pricing::CostStatus::Unknown => None,
+            };
             if let Some(task_emb) = self.attribution.task_emb.get().cloned() {
                 tracing::debug!(
                     session_id = %self.attribution.session_id,
