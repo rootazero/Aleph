@@ -1,4 +1,4 @@
-use crate::config::types::FetchConfigInternal;
+use crate::config::types::{FetchBackendConfig, FetchConfigInternal};
 use crate::fetch::factory::{FetchBuildCtx, FetchProviderFactoryRegistry};
 use crate::fetch::FetchProvider;
 use std::collections::HashMap;
@@ -17,12 +17,32 @@ impl FetchRegistry {
         for (name, backend) in &cfg.backends {
             if let Some(factory) = factories.get(&backend.provider_type) {
                 match factory.build(backend, ctx) {
-                    Ok(Some(p)) => { providers.insert(name.clone(), p); }
+                    Ok(Some(p)) => {
+                        providers.insert(name.clone(), p);
+                    }
                     Ok(None) => log::warn!("fetch backend '{name}' skipped (unconfigured)"),
                     Err(e) => log::warn!("fetch backend '{name}' build failed: {e}"),
                 }
             }
         }
+
+        // Strategy V: Firecrawl shares the [search] config (Decision A) and needs
+        // no [fetch] backend entry. Derive it from search when not already built.
+        if !providers.contains_key("firecrawl") {
+            if let Some(factory) = factories.get("firecrawl") {
+                let synthetic = FetchBackendConfig {
+                    provider_type: "firecrawl".to_string(),
+                    api_key: None,
+                    base_url: None,
+                    timeout_seconds: None,
+                    verified: false,
+                };
+                if let Ok(Some(p)) = factory.build(&synthetic, ctx) {
+                    providers.insert("firecrawl".to_string(), p);
+                }
+            }
+        }
+
         let mut order = Vec::new();
         let push = |n: &str, order: &mut Vec<String>| {
             if providers.contains_key(n) && !order.iter().any(|x| x == n) {
@@ -31,7 +51,15 @@ impl FetchRegistry {
         };
         push(&cfg.default_provider, &mut order);
         if let Some(fb) = &cfg.fallback_providers {
-            for n in fb { push(n, &mut order); }
+            for n in fb {
+                push(n, &mut order);
+            }
+        }
+        // Auto-fallback tail: every other built provider, in stable (sorted) order.
+        let mut rest: Vec<String> = providers.keys().cloned().collect();
+        rest.sort();
+        for n in &rest {
+            push(n, &mut order);
         }
         Self { providers, order }
     }
@@ -47,7 +75,7 @@ impl FetchRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::types::{FetchBackendConfig, FetchConfigInternal};
+    use crate::config::types::{FetchBackendConfig, FetchConfigInternal, SearchConfigInternal};
     use std::collections::HashMap;
 
     fn ctx_no_search() -> FetchBuildCtx<'static> {
@@ -84,5 +112,77 @@ mod tests {
         };
         let reg = FetchRegistry::from_config(&cfg, &ctx_no_search());
         assert!(reg.select().is_empty(), "no search firecrawl config → no provider");
+    }
+
+    fn search_with_firecrawl() -> SearchConfigInternal {
+        serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "default_provider": "firecrawl",
+            "backends": {
+                "firecrawl": { "provider_type": "firecrawl", "base_url": "https://api.firecrawl.dev" }
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn firecrawl_built_from_search_without_fetch_backend() {
+        let search = search_with_firecrawl();
+        let resolve = |k: &str| -> Option<String> {
+            (k == "search:firecrawl").then(|| "fc-token".to_string())
+        };
+        let ctx = FetchBuildCtx { search: Some(&search), resolve_secret: &resolve };
+        let cfg = FetchConfigInternal {
+            enabled: true,
+            default_provider: "firecrawl".into(),
+            fallback_providers: None,
+            backends: HashMap::new(), // no [fetch] backend entry for firecrawl
+        };
+        let reg = FetchRegistry::from_config(&cfg, &ctx);
+        let sel = reg.select();
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel[0].name(), "firecrawl");
+    }
+
+    #[test]
+    fn default_firecrawl_orders_first_then_crawl4ai_fallback() {
+        let search = search_with_firecrawl();
+        let resolve = |k: &str| -> Option<String> {
+            (k == "search:firecrawl").then(|| "fc-token".to_string())
+        };
+        let ctx = FetchBuildCtx { search: Some(&search), resolve_secret: &resolve };
+        let mut backends = HashMap::new();
+        backends.insert("crawl4ai".into(), FetchBackendConfig {
+            provider_type: "crawl4ai".into(), api_key: None,
+            base_url: Some("http://x:11235".into()), timeout_seconds: Some(60), verified: false,
+        });
+        let cfg = FetchConfigInternal {
+            enabled: true, default_provider: "firecrawl".into(),
+            fallback_providers: None, backends,
+        };
+        let sel = FetchRegistry::from_config(&cfg, &ctx).select();
+        let names: Vec<&str> = sel.iter().map(|p| p.name()).collect();
+        assert_eq!(names, vec!["firecrawl", "crawl4ai"]);
+    }
+
+    #[test]
+    fn auto_fallback_appends_other_built_after_default() {
+        let search = search_with_firecrawl();
+        let resolve = |k: &str| -> Option<String> {
+            (k == "search:firecrawl").then(|| "fc-token".to_string())
+        };
+        let ctx = FetchBuildCtx { search: Some(&search), resolve_secret: &resolve };
+        let mut backends = HashMap::new();
+        backends.insert("crawl4ai".into(), FetchBackendConfig {
+            provider_type: "crawl4ai".into(), api_key: None,
+            base_url: Some("http://x:11235".into()), timeout_seconds: Some(60), verified: false,
+        });
+        let cfg = FetchConfigInternal {
+            enabled: true, default_provider: "crawl4ai".into(),
+            fallback_providers: None, backends,
+        };
+        let sel = FetchRegistry::from_config(&cfg, &ctx).select();
+        let names: Vec<&str> = sel.iter().map(|p| p.name()).collect();
+        assert_eq!(names, vec!["crawl4ai", "firecrawl"]);
     }
 }
