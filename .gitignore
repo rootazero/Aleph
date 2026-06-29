@@ -85,6 +85,9 @@ graphify-out/
 .codegraph/
 .superpowers/
 .omc/
+# Agent-tool worktree / review scratch dirs (stray source copies + run reports)
+.claire/
+.context/
 # rust-doctor per-crate diagnostic cache (regenerated on each scan)
 .rust-doctor-cache.json
 **/.rust-doctor-cache.json
