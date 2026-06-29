@@ -31,8 +31,18 @@ dest_dir="/usr/local/bin"
 mkdir -p "$dest_dir"
 
 echo "Downloading $asset -> $dest_dir/aleph-server"
-curl -fsSL "$url" -o "$dest_dir/aleph-server"
-chmod +x "$dest_dir/aleph-server"
+# Download to a temp file on the same filesystem, then atomically rename it into
+# place. A plain `curl -o` straight over the destination fails with ETXTBSY on
+# Linux when that path is the currently-running binary (e.g. `aleph-server
+# update` re-running this installer to replace itself); rename(2) swaps the
+# directory entry without touching the busy inode, so running processes keep
+# their old binary until they restart onto the freshly-installed one.
+tmp="$(mktemp "$dest_dir/.aleph-server.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
+curl -fsSL "$url" -o "$tmp"
+chmod +x "$tmp"
+mv -f "$tmp" "$dest_dir/aleph-server"
+trap - EXIT
 
 echo "Installed. Start it with:  aleph-server start"
 echo "LAN access: set [gateway] host = \"0.0.0.0\" in ~/.aleph/config.toml (trusts your whole LAN)."

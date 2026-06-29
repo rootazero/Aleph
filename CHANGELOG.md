@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Standalone server self-update on Linux** — the installer now downloads the
+  new `aleph-server` binary to a temp file and atomically renames it into place
+  instead of writing straight over the destination. Overwriting the
+  currently-running binary in place failed with `ETXTBSY` ("Text file busy") on
+  Linux — which is exactly what `aleph-server update` does when it re-runs the
+  installer to replace itself — so in-place updates of a running server now
+  succeed. (Also back-ported to the `install.sh` asset on the v26.6.29 release.)
+
 ## [26.6.29]
 
 A big multi-day release. The headlines are a brand-new **iMessage channel via
