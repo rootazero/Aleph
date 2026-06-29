@@ -293,6 +293,15 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
 mod tests {
     use super::*;
 
+    // Serialize the tests that create real git worktrees in *this* repo:
+    // concurrent `git worktree add`/`remove` contend on the same `.git` locks,
+    // which under heavy load (the `test-proptest` stage) makes those git
+    // invocations slow or flaky. One shared mutex makes the shared-repo fixture
+    // a serial section; the pure-logic tests below don't take it and still run
+    // in parallel.
+    static WORKTREE_REPO_SERIAL: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
     #[test]
     fn worktree_error_displays_create_message() {
         let e = WorktreeError::Create("git command not found".into());
@@ -302,6 +311,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_succeeds_in_a_git_repo() {
+        let _serial = WORKTREE_REPO_SERIAL.lock().await;
         let repo_root = std::env::current_dir().expect("cwd");
         // Aleph repo is itself a git repo; safe to use as parent.
         let h = create(&repo_root, "task3-create", None)
@@ -317,6 +327,7 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_removes_worktree_dir() {
+        let _serial = WORKTREE_REPO_SERIAL.lock().await;
         let repo_root = std::env::current_dir().expect("cwd");
         let h = create(&repo_root, "task4-cleanup", None)
             .await
@@ -338,6 +349,7 @@ mod tests {
 
     #[tokio::test]
     async fn drop_without_cleanup_logs_and_removes_dir() {
+        let _serial = WORKTREE_REPO_SERIAL.lock().await;
         let repo_root = std::env::current_dir().expect("cwd");
         let path = {
             let h = create(&repo_root, "task5-drop", None)
@@ -346,8 +358,13 @@ mod tests {
             h.path().to_path_buf()
             // h dropped here without cleanup() called
         };
-        // Drop spawns blocking removal; allow time for it.
-        for _ in 0..50 {
+        // Drop spawns a detached `git worktree remove` thread (fire-and-forget,
+        // best-effort). Under heavy parallel load — e.g. the `test-proptest`
+        // stage saturating every core while sibling worktree tests contend on
+        // this repo's `.git` locks — that git invocation can take many seconds.
+        // Poll with a generous ceiling; the early break keeps the common case
+        // sub-second, so the high bound only buys patience under contention.
+        for _ in 0..300 {
             if !path.exists() {
                 break;
             }
@@ -361,6 +378,7 @@ mod tests {
 
     #[tokio::test]
     async fn worktree_sandbox_executes_at_worktree_path() {
+        let _serial = WORKTREE_REPO_SERIAL.lock().await;
         let repo_root = std::env::current_dir().expect("cwd");
         let h = create(&repo_root, "task7-sandbox", None)
             .await
