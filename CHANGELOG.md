@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [26.6.29]
+
+A big multi-day release. The headlines are a brand-new **iMessage channel via
+BlueBubbles** (so Aleph can reach you over iMessage on any OS), the **iOS Panel
+growing into a real iPhone + iPad app** (native pairing, iPad multitasking,
+TestFlight), and **VESR dynamic model routing** — Aleph now learns which model
+actually performs from its own verified track record instead of a hard-coded
+router. Plus first-class **web-fetch providers**, a much richer **multi-agent
+teams / kanban** surface, and the ability to **type into a chat while it's still
+running**.
+
+### Added
+
+- **iMessage channel via BlueBubbles** — a new messaging channel that reaches
+  you over iMessage on any OS (BlueBubbles transport, with local macOS send
+  gated separately). Outbound text and attachments, inbound webhook + catch-up
+  polling with offset reconciliation and GUID dedup, group/chat sends, and
+  reactions / typing / read-receipts (gated on the BlueBubbles private API).
+- **iOS Panel is now a real iPhone + iPad app** — a native pairing screen
+  (shake-to-reconfigure, Keychain-backed connection store, load-failure
+  fallback), full iPad support (device family, full-screen, orientations,
+  Split View / Stage Manager multitasking, tablet-specific layout, touch
+  ergonomics), and internal **TestFlight** distribution. The phone UI is split
+  into tabs — Chat lands directly on the conversation (history behind a button),
+  with Dashboard / Teams / Extensions drill-down menus under "More".
+- **VESR dynamic model routing** — instead of a deterministic router, Aleph
+  records every completed run's outcome and recalls a per-model track record at
+  run start (k-NN over sqlite-vec), so the model sees which models have actually
+  performed for this kind of work. Includes per-agent / per-model lifetime
+  aggregates, USD-cost enrichment, and subagent routing capture.
+- **Web-fetch provider category** — `crawl4ai` and `firecrawl` are now
+  first-class, UI-configurable fetch providers (URL → markdown) with
+  vault-stored keys, automatically falling back to the built-in fetch on
+  failure. Firecrawl shares its configuration with the search side.
+- **Richer multi-agent teams / kanban** — the kanban drawer now drives the full
+  task lifecycle (approve / reject, plus waiting-review / paused / skipped
+  columns so tasks stop vanishing), a live subagent-tree (node identity, live
+  events, tree RPC), operator-tunable broadcast storm-prevention guards, and
+  per-task execution-timeout overrides.
+- **Type into a chat while it's still running** — queued messages render as
+  in-stream "ghost" bubbles and are flushed at the next turn boundary via
+  steering, or force-inserted immediately (Esc + ⚡). Available on both the wide
+  and phone layouts.
+- **Sticky single-chat Todo / plan panel** — an always-visible plan widget above
+  the input box; when the plan changes, the previous plan sinks into the chat
+  stream as a capsule.
+- **Real per-model context-usage gauge** — core-authoritative occupancy and
+  window (honoring any `context_window` config override), persisted across tab
+  switches.
+- **MCP enhancements** — advertises the sampling capability, negotiates the
+  protocol version, wires `max_failures`, adds a `post_install` field, and ships
+  `zhipu-vision` and `unreal-engine` presets.
+- **Tool improvements** — `file_read` now supports images (`image_read`), and
+  unchanged file reads are de-duplicated across turns via a read-cache.
+- **Soul archetype selector** in Panel agent creation, and a 3D memory-galaxy
+  visual/perf pass (per-node twinkle, curved bezier edges, highlight chains,
+  bloom retune, vertex-shader idle drift, render-skip when hidden).
+
+### Fixed
+
+- **"Model returned empty response" when steering mid-run** — injecting a
+  message between a tool call and its result no longer produces an illegal
+  message sequence; tool results are kept contiguous so OpenAI-compatible
+  proxies don't silently return empty responses.
+- **macOS Local Network privacy** — the daemon now embeds a stable
+  `CFBundleIdentifier` Info.plist and is re-signed on build, so it appears in
+  the Local Network privacy list and self-hosted SearXNG / Firecrawl stop
+  failing with "Network error".
+- **Routing failover attribution** — frozen model + provider are attributed from
+  the model directive rather than the `failover` wrapper name, fixing collapsed
+  availability/attribution.
+- **firecrawl is never persisted as a `[fetch]` backend** (it is derived from
+  the search config), and the gateway closes remote sessions on token rotation
+  while leaving loopback intact.
+- **iOS out-of-range port crash** is guarded, and the iMessage group reply now
+  routes through `send_to_chat`.
+
 ## [26.6.24]
 
 A small, focused follow-up centered on **faster remote-panel cold-load** and
