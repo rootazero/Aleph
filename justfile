@@ -238,8 +238,14 @@ test-desktop-macos:
     cargo test -p aleph-desktop-macos --lib
 
 # Run desktop integration tests
+# Serialized: the desktop tool is a process singleton (one physical desktop,
+# one HELD_LOCKS table). Running these 117 tests in parallel races a
+# desktop-specific global on teardown — a non-deterministic SIGTRAP/SIGABRT
+# (~60%) that never reproduces single-threaded or inside the full lib run.
+# Logic all passes; --test-threads=1 is the correct isolation for singleton
+# tests and keeps `just test-all` green.
 test-desktop-integration:
-    cargo test -p alephcore --lib builtin_tools::desktop
+    cargo test -p alephcore --lib builtin_tools::desktop -- --test-threads=1
 
 # Run all desktop-related tests
 test-desktop-all: test-desktop test-desktop-macos test-desktop-integration
