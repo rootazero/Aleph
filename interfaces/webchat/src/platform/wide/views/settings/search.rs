@@ -1333,6 +1333,7 @@ fn FetchProvidersSection() -> impl IntoView {
 
     // Form signals for the crawl4ai card
     let form_enabled = RwSignal::new(false);
+    let form_default_provider = RwSignal::new(String::from("crawl4ai"));
     let form_base_url = RwSignal::new(String::new());
     let form_api_key = RwSignal::new(String::new()); // write-only; never pre-filled
     let form_has_api_key = RwSignal::new(false);
@@ -1353,6 +1354,11 @@ fn FetchProvidersSection() -> impl IntoView {
     spawn_local(async move {
         if let Ok(cfg) = FetchConfigApi::get(&state).await {
             form_enabled.set(cfg.enabled);
+            form_default_provider.set(if cfg.default_provider.is_empty() {
+                "crawl4ai".to_string()
+            } else {
+                cfg.default_provider.clone()
+            });
             if let Some(b) = cfg.backends.iter().find(|b| b.name == "crawl4ai") {
                 form_base_url.set(b.base_url.clone().unwrap_or_default());
                 form_has_api_key.set(b.has_api_key);
@@ -1361,6 +1367,52 @@ fn FetchProvidersSection() -> impl IntoView {
             fetch_config.set(cfg);
         }
     });
+
+    // Section-level settings (enabled + default_provider) save on change. Each
+    // sends the full config, preserving the persisted backends. Strategy V: the
+    // synthesized firecrawl entry is filtered out so it is never written to
+    // [fetch].backends.
+    let persist_section = move || {
+        let enabled = form_enabled.get();
+        let default_provider = form_default_provider.get();
+        spawn_local(async move {
+            let cur = fetch_config.get();
+            let backends: Vec<FetchBackendEntry> = cur
+                .backends
+                .iter()
+                .filter(|b| b.name != "firecrawl")
+                .map(|b| FetchBackendEntry {
+                    name: b.name.clone(),
+                    provider_type: b.provider_type.clone(),
+                    base_url: b.base_url.clone(),
+                    timeout_seconds: b.timeout_seconds,
+                    api_key: None, // vault is the source; never re-send
+                    has_api_key: false,
+                    verified: false,
+                    shares_search: b.shares_search,
+                })
+                .collect();
+            let new_cfg = FetchConfig { enabled, default_provider, backends };
+            if FetchConfigApi::update(&state, new_cfg).await.is_ok() {
+                if let Ok(refreshed) = FetchConfigApi::get(&state).await {
+                    fetch_config.set(refreshed);
+                }
+            }
+        });
+    };
+
+    let on_toggle_enabled = move |ev: web_sys::Event| {
+        form_enabled.set(event_target_checked(&ev));
+        persist_section();
+    };
+    let on_select_crawl4ai = move |_| {
+        form_default_provider.set("crawl4ai".to_string());
+        persist_section();
+    };
+    let on_select_firecrawl = move |_| {
+        form_default_provider.set("firecrawl".to_string());
+        persist_section();
+    };
 
     // ── Save handler ─────────────────────────────────────────────────────────
     let on_save = move |_| {
@@ -1375,11 +1427,12 @@ fn FetchProvidersSection() -> impl IntoView {
 
         spawn_local(async move {
             let old_cfg = fetch_config.get();
-            // Keep all non-crawl4ai backends (e.g. firecrawl shared entry)
+            // Keep other backends; drop crawl4ai (re-pushed below) and the
+            // synthesized firecrawl entry (Strategy V — never persisted to [fetch]).
             let mut backends: Vec<FetchBackendEntry> = old_cfg
                 .backends
                 .into_iter()
-                .filter(|b| b.name != "crawl4ai")
+                .filter(|b| b.name != "crawl4ai" && b.name != "firecrawl")
                 .collect();
             backends.push(FetchBackendEntry {
                 name: "crawl4ai".to_string(),
@@ -1393,7 +1446,7 @@ fn FetchProvidersSection() -> impl IntoView {
             });
             let new_cfg = FetchConfig {
                 enabled,
-                default_provider: "crawl4ai".to_string(),
+                default_provider: form_default_provider.get(),
                 backends,
             };
             match FetchConfigApi::update(&state, new_cfg).await {
@@ -1531,6 +1584,79 @@ fn FetchProvidersSection() -> impl IntoView {
                 "URL → Markdown 抓取后端，供 web_fetch 工具使用。"
             </p>
 
+            // ── Section header: master toggle + default-provider selector ─────
+            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4 mb-4">
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || form_enabled.get()
+                        on:change=on_toggle_enabled
+                        class="w-4 h-4 rounded"
+                    />
+                    <div>
+                        <span class="text-sm text-text-primary">"启用 Fetch 供应商"</span>
+                        <p class="text-xs text-text-tertiary">
+                            "开启后 web_fetch 优先使用所选默认供应商，失败时自动回退其它已配置供应商，再回退内置抓取"
+                        </p>
+                    </div>
+                </label>
+
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
+                        "默认供应商"
+                    </label>
+                    <div class="space-y-2">
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input
+                                type="radio"
+                                name="fetch_default"
+                                prop:checked=move || form_default_provider.get() == "crawl4ai"
+                                on:change=on_select_crawl4ai
+                                class="w-4 h-4"
+                            />
+                            <span class="text-sm text-text-primary">"crawl4ai"</span>
+                        </label>
+                        {move || {
+                            let fc_available = fetch_config
+                                .get()
+                                .backends
+                                .iter()
+                                .find(|b| b.name == "firecrawl")
+                                .is_some_and(|b| b.shares_search && b.has_api_key);
+                            view! {
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="radio"
+                                        name="fetch_default"
+                                        prop:checked=move || form_default_provider.get() == "firecrawl"
+                                        prop:disabled=!fc_available
+                                        on:change=on_select_firecrawl
+                                        class="w-4 h-4"
+                                    />
+                                    <span class=move || {
+                                        if fc_available {
+                                            "text-sm text-text-primary"
+                                        } else {
+                                            "text-sm text-text-tertiary"
+                                        }
+                                    }>
+                                        "Firecrawl"
+                                    </span>
+                                    {(!fc_available)
+                                        .then(|| {
+                                            view! {
+                                                <span class="text-xs text-text-tertiary">
+                                                    "（请先在 Search 里配置 Firecrawl）"
+                                                </span>
+                                            }
+                                        })}
+                                </label>
+                            }
+                        }}
+                    </div>
+                </div>
+            </div>
+
             // ── crawl4ai card ─────────────────────────────────────────────────
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4 mb-4">
                 // Provider header
@@ -1565,22 +1691,6 @@ fn FetchProvidersSection() -> impl IntoView {
                         }
                     }}
                 </div>
-
-                // Enable toggle (master switch for the whole fetch subsystem)
-                <label class="flex items-center gap-3 cursor-pointer">
-                    <input
-                        type="checkbox"
-                        prop:checked=move || form_enabled.get()
-                        on:change=move |ev| form_enabled.set(event_target_checked(&ev))
-                        class="w-4 h-4 rounded"
-                    />
-                    <div>
-                        <span class="text-sm text-text-primary">"启用 Fetch 供应商"</span>
-                        <p class="text-xs text-text-tertiary">
-                            "开启后 web_fetch 工具优先使用 crawl4ai 后端"
-                        </p>
-                    </div>
-                </label>
 
                 // Base URL
                 <div>
