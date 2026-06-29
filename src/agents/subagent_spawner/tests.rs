@@ -1021,7 +1021,7 @@ mod tests {
         let event_store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
         let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(event_store));
 
-        // child_chain must be descended (depth > 0) — spawn_subagent debug_asserts it.
+        // child_chain must be descended (depth > 0) — execute_via_harness debug_asserts it.
         let chain = ChainContext::new().child().expect("descended chain");
 
         let runtime = AgentRuntime::new(
