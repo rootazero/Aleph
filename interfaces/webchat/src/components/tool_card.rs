@@ -305,7 +305,7 @@ pub fn ToolCard(
     tool_id: String,
     tool_name: String,
     #[prop(optional)] surface: ToolSurface,
-    #[prop(optional)] iteration: Option<usize>,
+    #[prop(optional_no_strip)] iteration: Option<usize>,
 ) -> impl IntoView {
     let workspace = use_context::<WorkspaceState>();
     let chat = expect_context::<ChatState>();
