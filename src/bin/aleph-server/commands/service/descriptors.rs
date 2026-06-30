@@ -6,6 +6,7 @@ use std::path::Path;
 
 /// macOS LaunchAgent plist. `RunAtLoad` + `KeepAlive` → starts at login and is
 /// resurrected if it exits. Runs the foreground `start` (no `--daemon`).
+#[allow(dead_code)] // cross-platform descriptor set: each generator is used in production on one OS and tested on all
 pub fn launchd_plist(exe: &Path, home: &Path) -> String {
     let exe = exe.display();
     let home = home.display();
@@ -38,6 +39,7 @@ pub fn launchd_plist(exe: &Path, home: &Path) -> String {
 /// systemd *user* unit. `Type=simple` foreground process the user manager keeps
 /// alive; `WantedBy=default.target` so `enable` arms it for login (boot too,
 /// once linger is enabled — see the install op).
+#[allow(dead_code)] // cross-platform descriptor set: each generator is used in production on one OS and tested on all
 pub fn systemd_unit(exe: &Path) -> String {
     let exe = exe.display();
     format!(
@@ -60,6 +62,7 @@ pub fn systemd_unit(exe: &Path) -> String {
 /// Task Scheduler task (logon trigger). Runs `wscript.exe <launcher.vbs>` so the
 /// console window stays hidden (the vbs shim launches the server with window
 /// style 0). `InteractiveToken` → runs in the user session, no stored password.
+#[allow(dead_code)] // cross-platform descriptor set: each generator is used in production on one OS and tested on all
 pub fn scheduled_task_xml(launcher: &Path) -> String {
     let launcher = launcher.display();
     format!(
@@ -99,6 +102,7 @@ pub fn scheduled_task_xml(launcher: &Path) -> String {
 
 /// VBScript shim: launch `<exe> start` with window style 0 (hidden) and don't
 /// wait. The standard windowless-console-launch trick on Windows.
+#[allow(dead_code)] // cross-platform descriptor set: each generator is used in production on one OS and tested on all
 pub fn vbs_shim(exe: &Path) -> String {
     let exe = exe.display();
     format!(
