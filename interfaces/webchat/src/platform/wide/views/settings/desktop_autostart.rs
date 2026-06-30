@@ -2,19 +2,22 @@
 //!
 //! Launch-at-login is a property of the *local* Tauri shell, not the (possibly
 //! remote) server this Panel talks to, so it bypasses the gateway JSON-RPC and
-//! calls the shell's `get_autostart`/`set_autostart` commands directly over
-//! Tauri IPC (`window.__TAURI__.core.invoke`, available because the shell sets
-//! `withGlobalTauri: true`). The section renders only when (a) we are inside the
-//! native shell AND (b) the IPC probe succeeds — which is false for a
-//! remote-origin Panel (the lite shell, or a full App pointed at a remote
-//! server), where the IPC capability blocks the call. The lite shell exposes
-//! the toggle in its tray menu instead; a full App pointed at a remote server
-//! has no in-app launch-at-login control — switch back to Local mode (which
-//! restores loopback IPC) to change it. The OS login item persists across the
-//! switch, so this is a discoverability gap, not a loss of control.
+//! calls the `tauri-plugin-autostart` commands directly over Tauri IPC
+//! (`window.__TAURI__.core.invoke`, available because the shell sets
+//! `withGlobalTauri: true` and the `default` capability grants `autostart:*` to
+//! the loopback Panel origin via its `remote.urls`). The section renders only
+//! when (a) we are inside the native shell AND (b) the IPC probe succeeds —
+//! which is false for a remote-origin Panel (the lite shell, or a full App
+//! pointed at a remote server), whose foreign origin sits outside the
+//! capability's `remote.urls`, so the plugin command is rejected. The lite shell
+//! exposes the toggle in its tray menu instead; a full App pointed at a remote
+//! server has no in-app launch-at-login control — switch back to Local mode
+//! (which restores the loopback origin) to change it. The OS login item persists
+//! across the switch, so this is a discoverability gap, not a loss of control.
 
+use crate::i18n::{t, use_i18n};
 use crate::platform::wide::views::voice::audio::is_native_shell;
-use js_sys::{Function, Object, Promise, Reflect};
+use js_sys::{Function, Promise, Reflect};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::{JsCast, JsValue};
@@ -43,27 +46,26 @@ async fn invoke(cmd: &str, args: JsValue) -> Result<JsValue, String> {
     let promise: Promise = ret
         .dyn_into()
         .map_err(|_| "invoke did not return a Promise".to_string())?;
-    JsFuture::from(promise)
-        .await
-        .map_err(|e| format!("{e:?}"))
+    JsFuture::from(promise).await.map_err(|e| format!("{e:?}"))
 }
 
+/// Read launch-at-login state via the autostart plugin's `is_enabled` command.
 async fn get_autostart() -> Result<bool, String> {
-    invoke("get_autostart", JsValue::NULL)
+    invoke("plugin:autostart|is_enabled", JsValue::NULL)
         .await?
         .as_bool()
-        .ok_or_else(|| "get_autostart did not return a bool".to_string())
+        .ok_or_else(|| "is_enabled did not return a bool".to_string())
 }
 
+/// Enable or disable launch-at-login via the autostart plugin. The plugin's
+/// `enable` / `disable` commands are idempotent and take no arguments.
 async fn set_autostart(enabled: bool) -> Result<(), String> {
-    let args = Object::new();
-    Reflect::set(
-        &args,
-        &JsValue::from_str("enabled"),
-        &JsValue::from_bool(enabled),
-    )
-    .map_err(|_| "could not build args".to_string())?;
-    invoke("set_autostart", args.into()).await.map(|_| ())
+    let cmd = if enabled {
+        "plugin:autostart|enable"
+    } else {
+        "plugin:autostart|disable"
+    };
+    invoke(cmd, JsValue::NULL).await.map(|_| ())
 }
 
 /// Launch-at-login toggle for the local desktop shell. Self-hiding: renders
@@ -71,6 +73,7 @@ async fn set_autostart(enabled: bool) -> Result<(), String> {
 #[component]
 #[must_use]
 pub fn DesktopAutostartSection() -> impl IntoView {
+    let i18n = use_i18n();
     // `available`: probe resolved AND we are in the shell. `enabled`: current state.
     let (available, set_available) = signal(false);
     let (enabled, set_enabled) = signal(false);
@@ -101,20 +104,26 @@ pub fn DesktopAutostartSection() -> impl IntoView {
     move || {
         available.get().then(|| {
             view! {
-                <div class="border border-border rounded-lg p-4">
-                    <div class="flex items-start justify-between gap-4">
+                <div class="bg-surface-raised border border-border rounded-xl p-6">
+                    <div class="flex items-center justify-between gap-4">
                         <div>
-                            <h3 class="font-medium text-text-primary">"This device"</h3>
-                            <p class="text-sm text-text-secondary mt-1">
-                                "Launch Aleph automatically when you log in to this computer."
+                            <h2 class="text-xl font-semibold text-text-primary mb-2">
+                                {t!(i18n, settings.general.autostart.title)}
+                            </h2>
+                            <p class="text-sm text-text-secondary">
+                                {t!(i18n, settings.general.autostart.description)}
                             </p>
                         </div>
-                        <input
-                            type="checkbox"
-                            class="mt-1"
-                            prop:checked=move || enabled.get()
-                            on:change=on_toggle
-                        />
+                        // Panel-canonical iOS-style switch (matches settings/policies, plugins).
+                        <label class="relative inline-flex items-center cursor-pointer shrink-0">
+                            <input
+                                type="checkbox"
+                                class="sr-only peer"
+                                prop:checked=move || enabled.get()
+                                on:change=on_toggle
+                            />
+                            <div class="w-11 h-6 bg-surface-sunken peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                        </label>
                     </div>
                 </div>
             }

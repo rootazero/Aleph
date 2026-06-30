@@ -10,7 +10,6 @@
     windows_subsystem = "windows"
 )]
 
-mod autostart;
 mod connection;
 // First-run connection setup (address entry + mDNS discovery) is panel-only:
 // the full app brings its bundled daemon up and never needs a connect-first
@@ -161,8 +160,6 @@ fn main() {
         connection::set_connection_target,
         connection::clear_connection_target,
         connection::is_lite_shell,
-        autostart::get_autostart,
-        autostart::set_autostart,
     ]);
     #[cfg(not(feature = "embedded-core"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -170,8 +167,6 @@ fn main() {
         connection::set_connection_target,
         connection::clear_connection_target,
         connection::is_lite_shell,
-        autostart::get_autostart,
-        autostart::set_autostart,
         connect_setup::discover_servers,
         connect_setup::connect_to,
     ]);

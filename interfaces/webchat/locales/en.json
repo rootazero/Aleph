@@ -443,6 +443,10 @@
         "button": "Reload Config",
         "reloading": "Reloading...",
         "no_config": "No configuration loaded"
+      },
+      "autostart": {
+        "title": "This device",
+        "description": "Launch Aleph automatically when you log in to this computer."
       }
     },
     "behavior": {

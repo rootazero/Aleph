@@ -443,6 +443,10 @@
         "button": "重载配置",
         "reloading": "重载中...",
         "no_config": "未加载配置"
+      },
+      "autostart": {
+        "title": "此设备",
+        "description": "登录此电脑时自动启动 Aleph。"
       }
     },
     "behavior": {
