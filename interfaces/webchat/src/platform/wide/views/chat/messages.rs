@@ -886,7 +886,11 @@ fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
         Memo::new(move |_| chat.strip_is_open(&run, false))
     };
     let count = steps.len();
-    let word = t_string!(i18n, chat.steps).to_string();
+    let word = if count == 1 {
+        t_string!(i18n, chat.step).to_string()
+    } else {
+        t_string!(i18n, chat.steps).to_string()
+    };
 
     // 收起态摘要文案：运行中 = 最新动作 headline；完成 = 末步摘要。
     let steps_for_summary = steps.clone();

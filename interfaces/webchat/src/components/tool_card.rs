@@ -73,6 +73,18 @@ pub enum ToolSurface {
 /// 左侧内联详情封顶行数；右侧详情栏不封顶。
 pub const MAX_INLINE_LINES: usize = 8;
 
+impl ToolSurface {
+    /// Max body lines for this surface: `Inline` caps at `MAX_INLINE_LINES`,
+    /// `Detail` is uncapped.
+    #[must_use]
+    const fn cap(self) -> usize {
+        match self {
+            ToolSurface::Inline => MAX_INLINE_LINES,
+            ToolSurface::Detail => usize::MAX,
+        }
+    }
+}
+
 use serde_json::Value;
 use similar::{ChangeTag, TextDiff};
 
@@ -478,7 +490,7 @@ fn render_body(
     };
     if let Some(res) = p.result.as_ref() {
         if let Some(err) = error_message(res) {
-            return view! { <pre class=format!("{MONO_BLOCK} text-danger")>{err}</pre> }.into_any();
+            return capped_block(&err, "text-danger", surface, detail_label, on_overflow);
         }
     }
     match kind {
@@ -541,24 +553,23 @@ fn capped_diff(
     detail_label: String,
     on_overflow: impl Fn() + Clone + 'static,
 ) -> AnyView {
-    let cap = match surface {
-        ToolSurface::Inline => MAX_INLINE_LINES,
-        ToolSurface::Detail => usize::MAX,
-    };
+    let cap = surface.cap();
     let total = lines.len();
     let hidden = total.saturating_sub(cap);
     let shown: Vec<DiffLine> = lines.into_iter().take(cap).collect();
     view! {
-        <div class=format!("{MONO_BLOCK} rounded-md glass-inset overflow-x-auto")>
-            {shown.into_iter().map(|l| {
-                let cls = match l.sign {
-                    '+' => "block px-2 bg-success/10 text-success",
-                    '-' => "block px-2 bg-danger/10 text-danger",
-                    _ => "block px-2 text-text-secondary",
-                };
-                let line = format!("{} {}", l.sign, l.text);
-                view! { <span class=cls>{line}</span> }
-            }).collect_view()}
+        <div>
+            <div class=format!("{MONO_BLOCK} rounded-md glass-inset overflow-x-auto")>
+                {shown.into_iter().map(|l| {
+                    let cls = match l.sign {
+                        '+' => "block px-2 bg-success/10 text-success",
+                        '-' => "block px-2 bg-danger/10 text-danger",
+                        _ => "block px-2 text-text-secondary",
+                    };
+                    let line = format!("{} {}", l.sign, l.text);
+                    view! { <span class=cls>{line}</span> }
+                }).collect_view()}
+            </div>
             {(hidden > 0).then(|| overflow_line(hidden, detail_label.clone(), on_overflow.clone()))}
         </div>
     }
@@ -575,10 +586,7 @@ fn capped_block(
     detail_label: String,
     on_overflow: impl Fn() + Clone + 'static,
 ) -> AnyView {
-    let cap = match surface {
-        ToolSurface::Inline => MAX_INLINE_LINES,
-        ToolSurface::Detail => usize::MAX,
-    };
+    let cap = surface.cap();
     let (shown, hidden) = split_preview(text, cap);
     view! {
         <div>
@@ -691,7 +699,7 @@ fn search_body(
     if hits.is_empty() {
         return default_body(p, surface, detail_label, on_overflow);
     }
-    let cap = match surface { ToolSurface::Inline => MAX_INLINE_LINES, ToolSurface::Detail => usize::MAX };
+    let cap = surface.cap();
     let total = hits.len();
     let hidden = total.saturating_sub(cap);
     let shown: Vec<_> = hits.into_iter().take(cap).collect();
@@ -731,7 +739,7 @@ fn default_body(
         let compact = serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string());
         return capped_block(&compact, "text-text-secondary", surface, detail_label, on_overflow);
     }
-    let cap = match surface { ToolSurface::Inline => MAX_INLINE_LINES, ToolSurface::Detail => usize::MAX };
+    let cap = surface.cap();
     let total = kv.len();
     let hidden = total.saturating_sub(cap);
     let shown: Vec<_> = kv.into_iter().take(cap).collect();
