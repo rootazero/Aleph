@@ -249,6 +249,26 @@ impl WorkspaceState {
         }
     }
 
+    /// 打开右栏 + 聚焦该步 + 幂等确保该工具展开。
+    ///
+    /// `default_open` 由调用方按 `ToolKind` 传入（与卡片渲染同源），因为
+    /// `toggle_event` 存的是「相对 `default_open` **翻转过**的集合」，
+    /// 即 `expanded = default_open ^ is_event_toggled`。仅当前折叠时才
+    /// `toggle_event`，所以重复调用是幂等的，绝不误折叠已展开的卡。
+    pub fn reveal_tool(
+        &self,
+        run_id: impl Into<String>,
+        iteration: usize,
+        tool_id: &str,
+        default_open: bool,
+    ) {
+        self.focus_step(run_id, iteration); // 已会在非 Split 时自动 set_layout(Split)
+        let expanded_now = default_open ^ self.is_event_toggled(tool_id);
+        if !expanded_now {
+            self.toggle_event(tool_id);
+        }
+    }
+
     /// True when `(run_id, iteration)` is the focused step.
     #[must_use]
     pub fn is_step_focused(&self, run_id: &str, iteration: usize) -> bool {
@@ -477,5 +497,32 @@ mod tests {
         // In Split, further activity does not accrue.
         ws.note_activity();
         assert_eq!(ws.unseen_activity.get_untracked(), 0);
+    }
+
+    #[test]
+    fn reveal_tool_expands_only_when_collapsed() {
+        let ws = test_ws(LayoutMode::Split);
+        // default_open=false, 未 toggle → 当前折叠 → reveal 应翻开（toggle_event 置位）
+        assert!(!ws.is_event_toggled("t1"));
+        ws.reveal_tool("r1", 2, "t1", false);
+        assert!(ws.is_event_toggled("t1"), "collapsed-by-default tool should be toggled open");
+        // 再次 reveal 幂等：已展开不再翻转（仍为 toggled）
+        ws.reveal_tool("r1", 2, "t1", false);
+        assert!(ws.is_event_toggled("t1"), "second reveal must not collapse an open tool");
+    }
+
+    #[test]
+    fn reveal_tool_default_open_stays_open() {
+        let ws = test_ws(LayoutMode::Split);
+        // default_open=true, 未 toggle → 当前已展开 → reveal 不应 toggle（保持未翻转）
+        ws.reveal_tool("r1", 1, "t2", true);
+        assert!(!ws.is_event_toggled("t2"), "default-open tool must stay open without toggling");
+    }
+
+    #[test]
+    fn reveal_tool_focuses_step() {
+        let ws = test_ws(LayoutMode::Split);
+        ws.reveal_tool("rX", 3, "t3", false);
+        assert!(ws.is_step_focused("rX", 3));
     }
 }
