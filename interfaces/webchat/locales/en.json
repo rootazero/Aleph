@@ -1877,9 +1877,6 @@
   "session_tabs": {
     "close_tab": "Close tab (⌘W)"
   },
-  "json_viewer": {
-    "copy": "Copy"
-  },
   "layout_toggle": {
     "open_pane": "Open workspace pane",
     "close_pane": "Close workspace pane"

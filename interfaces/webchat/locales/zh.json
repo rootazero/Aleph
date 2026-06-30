@@ -1877,9 +1877,6 @@
   "session_tabs": {
     "close_tab": "关闭标签页 (⌘W)"
   },
-  "json_viewer": {
-    "copy": "复制"
-  },
   "layout_toggle": {
     "open_pane": "打开工作区面板",
     "close_pane": "关闭工作区面板"

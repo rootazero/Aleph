@@ -10,7 +10,6 @@ pub mod directory_browser;
 pub mod extensions;
 pub mod forms;
 pub mod json_schema_form;
-pub mod json_viewer;
 pub mod layout_toggle;
 pub mod layouts;
 pub mod markdown;
