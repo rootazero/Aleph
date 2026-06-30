@@ -20,7 +20,7 @@ use crate::i18n::{t_string, use_i18n};
 use leptos::prelude::*;
 
 /// Number of trailing lines shown as a live preview while reasoning is active.
-const PREVIEW_TAIL_LINES: usize = 3;
+const PREVIEW_TAIL_LINES: usize = 2;
 
 /// Return the last `n` lines of `text`, joined by newlines. UTF-8 safe — it
 /// iterates over `str::lines()` rather than slicing by byte offset.
