@@ -219,7 +219,8 @@ pub(crate) async fn hydrate_session_history(
             // authoritative source on reload — it overrides the `clear_session`
             // wipe that runs just before hydrate, so switching to/back from any
             // history conversation shows that conversation's own occupancy
-            // (None ⇒ gauge correctly hidden for sessions with no LLM turn).
+            // (None = no real occupancy yet ⇒ fall back to a core estimate
+            // below; the gauge stays hidden only if that estimate also fails).
             match occupancy_from_history(&history) {
                 Some(real) => chat.context_usage.set(Some(real)),
                 None => {
