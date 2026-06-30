@@ -125,6 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args.command {
         Some(Command::Stop) => return daemon::handle_stop(&args.pid_file),
         Some(Command::Secret { action }) => return commands::handle_secret_command(action),
+        Some(Command::Service { action }) => return commands::handle_service_command(action),
         // Print the shared Gateway token: pure read of the 0600 security.db,
         // no tokio runtime and no instance lock required (mirrors `secret`).
         Some(Command::BootstrapToken) => return commands::handle_bootstrap_token(),
@@ -265,6 +266,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         Some(
             Command::Stop
             | Command::Secret { .. }
+            | Command::Service { .. }
             | Command::BootstrapToken
             | Command::Update { .. }
             | Command::Status { .. }

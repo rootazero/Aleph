@@ -119,6 +119,11 @@ pub enum Command {
         #[command(subcommand)]
         action: GatewayAction,
     },
+    /// Manage start-on-boot for the standalone server (launchd / systemd / Task Scheduler)
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
     /// Audit tool risk and execution history
     Audit {
         #[command(subcommand)]
@@ -262,6 +267,21 @@ pub enum GatewayAction {
         #[arg(long, default_value = "30000")]
         timeout: u64,
     },
+}
+
+/// Service (start-on-boot) subcommands
+#[derive(Subcommand, Debug)]
+pub enum ServiceAction {
+    /// Write the platform service descriptor, enable it, and start now
+    Install,
+    /// Stop and remove the service descriptor
+    Uninstall,
+    /// Arm the service to start on boot/login (no descriptor changes)
+    Enable,
+    /// Stop the service from starting on boot/login
+    Disable,
+    /// Report installed / enabled / running state
+    Status,
 }
 
 /// Audit subcommands
