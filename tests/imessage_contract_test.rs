@@ -22,7 +22,7 @@ fn test_imessage_properties() {
     assert_eq!(channel.channel_type(), "imessage");
     assert!(channel.capabilities().images);
     assert!(channel.capabilities().audio);
-    assert!(channel.capabilities().reactions);
+    assert!(!channel.capabilities().reactions); // AppleScript cannot send tapbacks; BlueBubbles backend handles reactions
     assert!(!channel.capabilities().replies);
     assert_eq!(channel.capabilities().max_message_length, 20000);
 }
