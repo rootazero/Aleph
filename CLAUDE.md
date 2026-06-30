@@ -168,6 +168,8 @@
 
 > F13（pre-fetch context）已由 assembler 主动召回满足，仅在审计文档备注，不立条款。
 
+> F7 的"人在环"有两条腿：R5 的非阻塞多端推送（push / 通知）+ `ask_user` / `ClarificationManager` 的**阻塞式澄清**（HITL P4——模型可中途提问并 park 在 oneshot 上等待用户回复，等价于 Claude Code 的 `AskUserQuestion`）。表中只标 R5 易被误读成"只有推送"；阻塞澄清能力一直存在且默认开启，锚点 `src/builtin_tools/ask_user.rs` + `src/clarification/`，详见 [TWELVE_FACTOR_AUDIT.md](docs/reference/TWELVE_FACTOR_AUDIT.md) §F7。
+
 ### 采纳条款 (Adoption Clauses)
 
 **A1 · 自有 Context Window (Own Your Context Window, F3)**
