@@ -37,6 +37,8 @@ mod context_blocks;
 mod prompt_build;
 mod runner_impl;
 
+pub mod context_estimate;
+
 #[cfg(test)]
 mod tests;
 
