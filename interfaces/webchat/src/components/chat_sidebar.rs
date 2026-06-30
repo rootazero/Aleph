@@ -220,7 +220,21 @@ pub(crate) async fn hydrate_session_history(
             // wipe that runs just before hydrate, so switching to/back from any
             // history conversation shows that conversation's own occupancy
             // (None ⇒ gauge correctly hidden for sessions with no LLM turn).
-            chat.context_usage.set(occupancy_from_history(&history));
+            match occupancy_from_history(&history) {
+                Some(real) => chat.context_usage.set(Some(real)),
+                None => {
+                    // No real occupancy recorded → ask core for a next-prompt
+                    // estimate so a freshly-opened conversation still shows a
+                    // `≈N%` gauge. Null/err ⇒ leave it hidden.
+                    let est = ChatApi::context_estimate(&dash, &key).await.ok().flatten();
+                    chat.context_usage.set(est.map(|e| ContextUsage {
+                        used_tokens: e.used_tokens,
+                        window_tokens: e.window_tokens,
+                        total_tokens: u64::from(e.used_tokens),
+                        is_estimate: true,
+                    }));
+                }
+            }
         }
         Err(e) => {
             web_sys::console::error_1(&format!("Failed to load history: {e}").into());
