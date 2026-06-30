@@ -4,10 +4,13 @@
 //! no state and makes no decisions of its own.
 
 use tauri::{
-    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager,
 };
+
+#[cfg(not(feature = "embedded-core"))]
+use tauri::menu::CheckMenuItem;
 
 /// Build the tray icon and its menu, wiring menu/click events.
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
