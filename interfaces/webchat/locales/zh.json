@@ -242,6 +242,7 @@
     "new_messages": "新消息",
     "step": "步骤",
     "steps": "步骤",
+    "working": "正在工作",
     "today": "今天",
     "yesterday": "昨天",
     "dismiss": "关闭",
@@ -1897,6 +1898,7 @@
     "cat_read": "读取",
     "cat_run": "执行",
     "cat_search": "搜索",
-    "cat_tool": "工具"
+    "cat_tool": "工具",
+    "to_detail": "详情栏"
   }
 }

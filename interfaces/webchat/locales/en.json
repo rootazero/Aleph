@@ -242,6 +242,7 @@
     "new_messages": "New messages",
     "step": "step",
     "steps": "steps",
+    "working": "Working",
     "today": "Today",
     "yesterday": "Yesterday",
     "dismiss": "Dismiss",
@@ -1897,6 +1898,7 @@
     "cat_read": "read",
     "cat_run": "run",
     "cat_search": "search",
-    "cat_tool": "tool"
+    "cat_tool": "tool",
+    "to_detail": "detail panel"
   }
 }
