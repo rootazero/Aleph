@@ -51,8 +51,10 @@ Write-Host "Installed."
 # Enable start-on-boot by default (per-user logon task). Opt out with ALEPH_AUTOSTART=0.
 if ($env:ALEPH_AUTOSTART -ne '0') {
     Write-Host "Enabling start-on-boot (set ALEPH_AUTOSTART=0 to skip)…"
-    try { & $destExe service install }
-    catch { Write-Warning "Could not enable autostart: $_. Run '$destExe service install' later." }
+    & $destExe service install
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Could not enable autostart (exit $LASTEXITCODE). Run '$destExe service install' later."
+    }
 } else {
     Write-Host "Start it with:  aleph-server start"
 }
