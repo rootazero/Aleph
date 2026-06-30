@@ -511,6 +511,17 @@ pub trait HarnessRunner: Send + Sync {
     fn routing_store(&self) -> Option<Arc<crate::routing::RoutingExperienceStore>> {
         None
     }
+
+    /// Estimate the context-window occupancy of this session's *next* prompt,
+    /// for sessions that never ran an LLM turn (no persisted real occupancy).
+    /// Deterministic token counting only — no LLM call (R7). Default `None`
+    /// keeps test mocks / the simple engine gauge-less.
+    async fn estimate_context(
+        &self,
+        _session_key: &str,
+    ) -> Option<crate::orchestrator::harness_bridge::context_estimate::ContextEstimate> {
+        None
+    }
 }
 
 impl Orchestrator {

@@ -643,4 +643,83 @@ impl HarnessRunner for AgentHarnessRunner {
 
         Ok(outcome)
     }
+
+    async fn estimate_context(
+        &self,
+        session_key: &str,
+    ) -> Option<crate::orchestrator::harness_bridge::context_estimate::ContextEstimate> {
+        use crate::orchestrator::harness_bridge::context_estimate as est;
+
+        // 1. Resolve agent_id + session id straight from the key (no store hit).
+        let session_id = crate::routing::session_key::SessionKey::from_key_string(session_key)?;
+        let agent_id = session_id.agent_id().to_string();
+
+        // 2. Resolve the model the next turn would use: session pin → agent
+        //    hint → none. Same precedence as `run` (Step 3); empty string falls
+        //    back through `resolve_context_window_with_override` to the configured
+        //    override or the conservative default.
+        let model: String =
+            crate::providers::session_model_handle::get_session_model(&session_id.to_key_string())
+                .map(|p| p.model)
+                .or_else(|| {
+                    self.agent_registry
+                        .get(&agent_id)
+                        .and_then(|d| d.model_hint)
+                })
+                .unwrap_or_default();
+
+        // 3. Window = exactly what `run` resolves (runner_impl.rs:611): the
+        //    configured per-provider override first, else the model catalog.
+        let window = crate::providers::model_catalog::resolve_context_window_with_override(
+            self.primary_context_window,
+            &model,
+        );
+
+        let ratio = est::ESTIMATE_RATIO;
+
+        // 4. Static overhead (system prompt + tool schemas), cached per (agent, model).
+        let overhead = if let Some(o) = self.estimate_overhead_cache.get(&agent_id, &model) {
+            o
+        } else {
+            // user_query="" skips the expensive memory recall (prompt_build.rs:181)
+            // while still assembling skills / identity / tool-description layers.
+            let provider = self.default_provider.current();
+            let sandbox: std::sync::Arc<dyn crate::sandbox::Sandbox> =
+                std::sync::Arc::new(crate::sandbox::NoopSandbox);
+            let system_prompt = self
+                .build_system_prompt(
+                    &agent_id,
+                    &session_id,
+                    "",
+                    provider.as_ref(),
+                    self.default_max_iterations,
+                    None,
+                    sandbox.as_ref(),
+                    None,
+                    None,
+                )
+                .await
+                .map(|(s, _parts)| s)
+                .unwrap_or_default();
+            let sp_tokens =
+                crate::context::budget::pressure::estimate_tokens_aware(&system_prompt, ratio);
+            let tools = self.tool_service.metadata_schema();
+            let tool_tokens = est::tool_schema_tokens(&tools, ratio);
+            let o = sp_tokens + tool_tokens;
+            self.estimate_overhead_cache.insert(&agent_id, &model, o);
+            o
+        };
+
+        // 5. History messages this session already carries → the same
+        //    UnifiedMessage projection the harness uses (think.rs:463).
+        let events = self
+            .session_service
+            .get_events(&session_id, None, None)
+            .await
+            .unwrap_or_default();
+        let history = crate::harness::agent::prompt::build_prompt(&events, 0);
+
+        // 6. used = overhead + history tokens; against the resolved window.
+        Some(est::compose_estimate(overhead, &history, window, ratio))
+    }
 }

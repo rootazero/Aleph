@@ -228,6 +228,13 @@ pub struct AgentHarnessRunner {
     /// Run-start routing recall (read path). `None` when no embedder is
     /// configured. Invoked once per run, pre-loop.
     pub routing_recall: Option<Arc<crate::routing::RoutingRecall>>,
+
+    /// Per-(agent_id, model) static-overhead cache for the context-occupancy
+    /// estimate. Populated on demand by `estimate_context`; never evicted
+    /// (spec D5). Shared `Arc` so the gauge estimate is cheap on repeated
+    /// history switches.
+    pub estimate_overhead_cache:
+        std::sync::Arc<crate::orchestrator::harness_bridge::context_estimate::OverheadCache>,
 }
 
 /// Hard fallback iteration cap — used only when both the per-flow override
