@@ -4,6 +4,7 @@ pub mod behavior;
 pub mod browser;
 pub mod browser_runtime_banner;
 pub mod channels;
+pub mod desktop_autostart;
 pub mod embedding_providers;
 pub mod execution;
 pub mod general;

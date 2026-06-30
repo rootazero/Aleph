@@ -3,6 +3,7 @@ use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n, Locale};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use super::desktop_autostart::DesktopAutostartSection;
 
 #[component]
 #[must_use]
@@ -124,6 +125,8 @@ pub fn GeneralView() -> impl IntoView {
                             />
 
                             <ConfigReloadSection />
+
+                            <DesktopAutostartSection />
 
                             {move || {
                                 if saving.get() {
