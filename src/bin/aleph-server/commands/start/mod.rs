@@ -1200,6 +1200,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         tracing::warn!("Failed to set orchestrator cell: cell already initialized");
                     }
                 }
+                // Register chat.context_estimate now that the orchestrator (and its harness)
+                // exist. Captures the harness handle so the gauge can show an estimated
+                // occupancy for sessions that never ran an LLM turn. Registered here (not in
+                // register_common_handlers) because that seam has no orchestrator handle.
+                {
+                    let harness = orch.harness.clone();
+                    server.handlers_mut().register("chat.context_estimate", move |req| {
+                        let harness = harness.clone();
+                        async move {
+                            crate::gateway::handlers::chat::handle_context_estimate(req, harness).await
+                        }
+                    });
+                }
                 server.orchestrator = Some(orch);
                 if !args.daemon {
                     println!("Orchestrator: assembled (Phase 5)");

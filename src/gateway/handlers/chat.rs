@@ -132,6 +132,12 @@ const fn default_keep_system() -> bool {
     true
 }
 
+/// Params for chat.context_estimate.
+#[derive(Debug, serde::Deserialize)]
+pub struct EstimateParams {
+    pub session_key: String,
+}
+
 /// A chat message in the history
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -343,6 +349,31 @@ pub async fn handle_clear(
     }
 }
 
+/// Handle chat.context_estimate RPC.
+///
+/// Returns an estimated next-prompt occupancy for sessions that never ran an
+/// LLM turn (so the gauge can show `≈N%`). `null` when core can't resolve the
+/// session/model — the panel then keeps the gauge hidden (graceful, P7).
+pub async fn handle_context_estimate(
+    request: JsonRpcRequest,
+    harness: Arc<dyn crate::orchestrator::dispatch::HarnessRunner>,
+) -> JsonRpcResponse {
+    let params: EstimateParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    match harness.estimate_context(&params.session_key).await {
+        Some(est) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "used_tokens": est.used_tokens,
+                "window_tokens": est.window_tokens,
+            }),
+        ),
+        None => JsonRpcResponse::success(request.id, serde_json::Value::Null),
+    }
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -498,5 +529,12 @@ mod tests {
         let json = serde_json::to_value(&message).unwrap();
         assert_eq!(json["role"], "user");
         assert!(!json.as_object().unwrap().contains_key("run_id"));
+    }
+
+    #[test]
+    fn estimate_params_parses_session_key() {
+        let v = serde_json::json!({ "session_key": "main:agentA" });
+        let p: super::EstimateParams = serde_json::from_value(v).unwrap();
+        assert_eq!(p.session_key, "main:agentA");
     }
 }
