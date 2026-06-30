@@ -66,7 +66,7 @@ pub fn systemd_unit(exe: &Path) -> String {
 pub fn scheduled_task_xml(launcher: &Path) -> String {
     let launcher = launcher.display();
     format!(
-        r#"<?xml version="1.0" encoding="UTF-16"?>
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>Aleph Server</Description>
