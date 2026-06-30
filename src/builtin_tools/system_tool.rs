@@ -90,12 +90,16 @@ impl SystemTool {
 /// Arguments for the system tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SystemArgs {
-    /// Action to perform: "`launch_app`", "`quit_app`", "`list_running_apps`",
-    /// "`send_notification`", "`clipboard_read`", "`clipboard_write`", "`system_info`"
+    /// Action to perform: "`launch_app`", "`quit_app`", "`open_path`",
+    /// "`list_running_apps`", "`send_notification`", "`clipboard_read`",
+    /// "`clipboard_write`", "`system_info`"
     pub action: String,
     /// Application name or bundle ID (required for `launch_app`, `quit_app`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_name: Option<String>,
+    /// File path or URL to open with the default app (required for `open_path`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     /// Notification title (required for `send_notification`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -123,6 +127,7 @@ Actions:
 - launch_app: Launch an application. Required: app_name
 - quit_app: Quit a running application. Required: app_name
 - restart_app: Quit then relaunch an application. Required: app_name
+- open_path: Open a file or URL with the OS default app (like double-clicking it). Use this to show the user a file you created — e.g. an .html report opens in their browser. Required: path (absolute file path or URL)
 - list_running_apps: List currently running applications
 - send_notification: Send a system notification. Required: title, body
 - clipboard_read: Read current clipboard content
@@ -134,6 +139,8 @@ Examples:
 {"action":"launch_app","app_name":"Safari"}
 {"action":"quit_app","app_name":"Safari"}
 {"action":"restart_app","app_name":"Safari"}
+{"action":"open_path","path":"/Users/me/output/report.html"}
+{"action":"open_path","path":"https://example.com"}
 {"action":"list_running_apps"}
 {"action":"send_notification","title":"Reminder","body":"Meeting in 5 minutes"}
 {"action":"clipboard_read"}
@@ -168,6 +175,13 @@ Examples:
             "launch_app" | "quit_app" | "restart_app" => Some((
                 ActionType::DesktopLaunchApp,
                 args.app_name.clone().unwrap_or_default(),
+            )),
+            // Opening a file/URL launches its default app — gate it like launch_app
+            // so it can't bypass the DesktopLaunchApp approval. "open" is accepted
+            // as an alias because models reach for it by analogy to `open`/`xdg-open`.
+            "open_path" | "open" => Some((
+                ActionType::DesktopLaunchApp,
+                args.path.clone().unwrap_or_default(),
             )),
             "clipboard_write" => Some((
                 ActionType::DesktopType,
@@ -251,6 +265,37 @@ Examples:
                         success: true,
                         data: None,
                         message: None,
+                    }),
+                    Err(e) => Ok(SystemOutput {
+                        success: false,
+                        data: None,
+                        message: Some(e.to_string()),
+                    }),
+                }
+            }
+
+            "open_path" | "open" => {
+                let target = match args.path {
+                    Some(ref p) if !p.trim().is_empty() => p.as_str(),
+                    _ => {
+                        return Ok(SystemOutput {
+                            success: false,
+                            data: None,
+                            message: Some(
+                                "open_path requires a non-empty 'path' parameter \
+                                 (an absolute file path or a URL)."
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                };
+                match sys.open_path(target).await {
+                    Ok(()) => Ok(SystemOutput {
+                        success: true,
+                        data: None,
+                        message: Some(format!(
+                            "Opened {target} with the default application."
+                        )),
                     }),
                     Err(e) => Ok(SystemOutput {
                         success: false,
@@ -381,10 +426,155 @@ Examples:
                 data: None,
                 message: Some(format!(
                     "Unknown action: '{unknown}'. Valid actions: launch_app, quit_app, \
-                     restart_app, list_running_apps, send_notification, clipboard_read, \
-                     clipboard_write, system_info, user_idle_time"
+                     restart_app, open_path, list_running_apps, send_notification, \
+                     clipboard_read, clipboard_write, system_info, user_idle_time"
                 )),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aleph_desktop::system_types::{AppInfo, ClipboardContent, SystemInfo};
+    use aleph_desktop::traits::SystemCapability;
+    use aleph_desktop::{DesktopError, DesktopPlatform};
+    use aleph_desktop::Result as DesktopResult;
+    use async_trait::async_trait;
+    use std::sync::Mutex;
+
+    /// Records `open_path` targets so we can assert the tool forwards them.
+    struct RecordingSystem {
+        opened: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl SystemCapability for RecordingSystem {
+        async fn launch_app(&self, _: &str) -> DesktopResult<()> {
+            unimplemented!()
+        }
+        async fn quit_app(&self, _: &str) -> DesktopResult<()> {
+            unimplemented!()
+        }
+        async fn list_running_apps(&self) -> DesktopResult<Vec<AppInfo>> {
+            unimplemented!()
+        }
+        async fn send_notification(&self, _: &str, _: &str) -> DesktopResult<()> {
+            unimplemented!()
+        }
+        async fn clipboard_read(&self) -> DesktopResult<ClipboardContent> {
+            unimplemented!()
+        }
+        async fn clipboard_write(&self, _: &str) -> DesktopResult<()> {
+            unimplemented!()
+        }
+        async fn system_info(&self) -> DesktopResult<SystemInfo> {
+            unimplemented!()
+        }
+        // Override the trait default so the test never spawns a real handler.
+        async fn open_path(&self, target: &str) -> DesktopResult<()> {
+            if target.trim().is_empty() {
+                return Err(DesktopError::InputFailed("empty".into()));
+            }
+            self.opened.lock().unwrap().push(target.to_string());
+            Ok(())
+        }
+    }
+
+    struct RecordingPlatform {
+        sys: RecordingSystem,
+    }
+
+    impl DesktopPlatform for RecordingPlatform {
+        fn platform_name(&self) -> &str {
+            "TestOS"
+        }
+        fn screen(&self) -> Option<&dyn aleph_desktop::traits::ScreenCapability> {
+            None
+        }
+        fn pim(&self) -> Option<&dyn aleph_desktop::traits::PimCapability> {
+            None
+        }
+        fn system(&self) -> Option<&dyn SystemCapability> {
+            Some(&self.sys)
+        }
+        fn automation(&self) -> Option<&dyn aleph_desktop::traits::AutomationCapability> {
+            None
+        }
+        fn permission(&self) -> Option<&dyn aleph_desktop::traits::PermissionCapability> {
+            None
+        }
+        fn media(&self) -> Option<&dyn aleph_desktop::traits::MediaCapability> {
+            None
+        }
+    }
+
+    fn tool_with_recorder() -> (SystemTool, Arc<Mutex<Vec<String>>>) {
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let platform = Arc::new(RecordingPlatform {
+            sys: RecordingSystem {
+                opened: Arc::clone(&opened),
+            },
+        });
+        (SystemTool::new(platform), opened)
+    }
+
+    #[tokio::test]
+    async fn open_path_forwards_target_to_capability() {
+        let (tool, opened) = tool_with_recorder();
+        let out = tool
+            .call(SystemArgs {
+                action: "open_path".into(),
+                app_name: None,
+                path: Some("/Users/me/output/report.html".into()),
+                title: None,
+                body: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(out.success, "expected success, got: {:?}", out.message);
+        assert_eq!(
+            opened.lock().unwrap().as_slice(),
+            &["/Users/me/output/report.html".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn open_alias_also_routes_to_open_path() {
+        let (tool, opened) = tool_with_recorder();
+        let out = tool
+            .call(SystemArgs {
+                action: "open".into(),
+                app_name: None,
+                path: Some("https://example.com".into()),
+                title: None,
+                body: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(out.success);
+        assert_eq!(opened.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn open_path_without_path_returns_friendly_error() {
+        let (tool, opened) = tool_with_recorder();
+        let out = tool
+            .call(SystemArgs {
+                action: "open_path".into(),
+                app_name: None,
+                path: None,
+                title: None,
+                body: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!out.success);
+        assert!(out.message.unwrap().contains("requires"));
+        assert!(opened.lock().unwrap().is_empty());
     }
 }

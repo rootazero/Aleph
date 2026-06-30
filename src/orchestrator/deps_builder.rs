@@ -300,7 +300,8 @@ pub fn build_failover_chain(
     // provider that failed to build) the helper auto-derives a chain from every
     // other enabled provider — so a throttled primary always has somewhere to
     // migrate instead of hard-failing the run on a 429.
-    let fallbacks = assemble_fallbacks(config, primary_provider_key, &built, &model_catalog);
+    let (fallbacks, auto_derived) =
+        assemble_fallbacks(config, primary_provider_key, &built, &model_catalog);
 
     tracing::info!(
         primary = %primary_provider_key,
@@ -346,6 +347,15 @@ pub fn build_failover_chain(
     let global_provider = match route_handle.clone() {
         Some(h) => global_provider.with_route_live(h),
         None => global_provider,
+    };
+    // Auto-derived chains (no operator `[fallback_provider].chain`) derive the
+    // fallback set live from the registry each turn, so a provider added or
+    // removed at runtime joins/leaves the fallback set without a restart. An
+    // explicit chain keeps the static snapshot built above.
+    let global_provider = if auto_derived {
+        global_provider.with_live_fallback_derivation()
+    } else {
+        global_provider
     };
     let global: Arc<dyn AiProvider> = Arc::new(global_provider);
     let default: Arc<dyn DefaultProviderHandle> = Arc::new(StaticDefault::new(global.clone()));
@@ -417,12 +427,17 @@ pub fn build_failover_chain(
 ///
 /// An explicit, non-empty chain is always honored verbatim — auto-derivation
 /// only fills a vacuum, it never overrides operator intent.
+/// Returns the ordered fallback nodes plus whether they were *auto-derived*
+/// (`true`) rather than taken from an explicit operator chain. The global chain
+/// uses the flag to enable live, registry-backed fallback derivation so a
+/// provider added/removed at runtime is reflected without a restart; an explicit
+/// chain stays a static snapshot.
 fn assemble_fallbacks(
     config: &Config,
     primary_provider_key: &str,
     built: &HashMap<String, Arc<dyn AiProvider>>,
     model_catalog: &HashMap<String, Vec<String>>,
-) -> Vec<FailoverNode> {
+) -> (Vec<FailoverNode>, bool) {
     // Build one node from a name + its already-constructed provider. Tier comes
     // from the provider's base_url host so the route policy can order/gate this
     // fallback by local-vs-cloud.
@@ -489,7 +504,9 @@ fn assemble_fallbacks(
     // derived from every other enabled provider. Same-protocol providers are
     // preferred (listed first) so an auto-derived chain stays homogeneous when
     // possible; name-sort breaks ties for determinism.
+    let mut auto_derived = false;
     if fallbacks.is_empty() && !built.is_empty() {
+        auto_derived = true;
         let mut names: Vec<&String> = built.keys().collect();
         names.sort();
         if let Some(prim) = &primary_protocol {
@@ -510,7 +527,7 @@ fn assemble_fallbacks(
         );
     }
 
-    fallbacks
+    (fallbacks, auto_derived)
 }
 
 /// Build the P0 rescue triple from `[stability]`. Each field is independent.
@@ -1581,7 +1598,8 @@ mod tests {
             ],
         );
         let built = built_map(&["aux1", "aux2"]);
-        let nodes = assemble_fallbacks(&cfg, "primary", &built, &HashMap::new());
+        let (nodes, auto_derived) = assemble_fallbacks(&cfg, "primary", &built, &HashMap::new());
+        assert!(auto_derived, "no configured chain → auto-derived");
         assert_eq!(fallback_names(&nodes), vec!["aux1", "aux2"]);
     }
 
@@ -1604,7 +1622,8 @@ mod tests {
         );
         // `kimi` is the primary, so only `x302` is in the built set.
         let built = built_map(&["x302"]);
-        let nodes = assemble_fallbacks(&cfg, "kimi", &built, &HashMap::new());
+        let (nodes, auto_derived) = assemble_fallbacks(&cfg, "kimi", &built, &HashMap::new());
+        assert!(auto_derived, "all chain entries invalid → auto-derived");
         assert_eq!(fallback_names(&nodes), vec!["x302"]);
     }
 
@@ -1623,7 +1642,8 @@ mod tests {
             ],
         );
         let built = built_map(&["a_openai", "z_anthropic"]);
-        let nodes = assemble_fallbacks(&cfg, "primary", &built, &HashMap::new());
+        let (nodes, auto_derived) = assemble_fallbacks(&cfg, "primary", &built, &HashMap::new());
+        assert!(auto_derived, "no configured chain → auto-derived");
         // Same-protocol (anthropic) first despite the later name, then the
         // cross-protocol one — protocol affinity beats the name-sort tiebreak.
         assert_eq!(fallback_names(&nodes), vec!["z_anthropic", "a_openai"]);
@@ -1646,7 +1666,8 @@ mod tests {
             ],
         );
         let built = built_map(&["fb", "aux"]);
-        let nodes = assemble_fallbacks(&cfg, "primary", &built, &HashMap::new());
+        let (nodes, auto_derived) = assemble_fallbacks(&cfg, "primary", &built, &HashMap::new());
+        assert!(!auto_derived, "explicit chain → honored static, not auto-derived");
         assert_eq!(fallback_names(&nodes), vec!["fb"]);
     }
 

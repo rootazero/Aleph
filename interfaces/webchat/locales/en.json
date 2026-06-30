@@ -208,7 +208,7 @@
     "back": ".. back",
     "back_desc": "Return to top level",
     "thinking": "Thinking...",
-    "provider_retrying": "Provider connection failed, retrying",
+    "provider_retrying": "Provider temporarily unavailable, retrying",
     "reasoning": "Reasoning",
     "reasoning_active": "Reasoning…",
     "reasoning_expand": "Show reasoning",

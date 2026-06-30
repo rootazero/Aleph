@@ -182,6 +182,20 @@ pub(crate) fn normalize_optional_string(value: Option<String>) -> Option<String>
     })
 }
 
+/// Remove every occurrence of `name` from a fallback/failover chain,
+/// returning `true` when the chain actually changed.
+///
+/// Provider and search-backend deletion call this so a removed provider does
+/// not linger as a dangling chain reference. An orphan chain entry is skipped
+/// at chain-build time, but it silently survives in the config file — which
+/// surprised operators who deleted a provider from the panel and still saw it
+/// in `[fallback_provider].chain`.
+pub(crate) fn remove_from_chain(chain: &mut Vec<String>, name: &str) -> bool {
+    let before = chain.len();
+    chain.retain(|entry| entry != name);
+    chain.len() != before
+}
+
 /// Parse and deserialize JSON-RPC request params into a typed struct.
 ///
 /// Returns `Err(JsonRpcResponse)` with `INVALID_PARAMS` on missing or
@@ -941,6 +955,32 @@ mod tests {
         assert!(registry.has_method("health"));
         assert!(registry.has_method("echo"));
         assert!(registry.has_method("version"));
+    }
+
+    #[test]
+    fn remove_from_chain_drops_named_entry_and_reports_change() {
+        // Deleting a provider that is present in the failover chain must scrub
+        // it and signal the caller to persist the change. Regression guard for
+        // the panel-delete bug that left `302ai` dangling in the chain.
+        let mut chain = vec!["kimi-for-coding".to_string(), "302ai".to_string()];
+        assert!(remove_from_chain(&mut chain, "302ai"));
+        assert_eq!(chain, vec!["kimi-for-coding".to_string()]);
+    }
+
+    #[test]
+    fn remove_from_chain_is_noop_when_absent() {
+        // A provider that was never in the chain leaves it untouched and reports
+        // "unchanged" so the caller skips an unnecessary section write.
+        let mut chain = vec!["kimi-for-coding".to_string()];
+        assert!(!remove_from_chain(&mut chain, "302ai"));
+        assert_eq!(chain, vec!["kimi-for-coding".to_string()]);
+    }
+
+    #[test]
+    fn remove_from_chain_drops_every_duplicate() {
+        let mut chain = vec!["a".to_string(), "x".to_string(), "a".to_string()];
+        assert!(remove_from_chain(&mut chain, "a"));
+        assert_eq!(chain, vec!["x".to_string()]);
     }
 
     #[tokio::test]

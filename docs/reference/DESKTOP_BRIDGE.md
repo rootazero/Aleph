@@ -312,3 +312,40 @@ Rust FFI in `desktop/macos/src/sleep_inhibitor.rs`, not by the Swift helper.
 This keeps the inhibitor in the same process as the agent loop so the
 assertion is automatically released if the server exits without calling
 `Drop`.
+
+## 9. Adding a typed desktop capability (playbook)
+
+Desktop reach grows by **typed intents added one at a time**, never by a
+speculative "run any desktop command" framework. The latter would duplicate the
+sandboxed `bash` / `code_exec` tools and violate R3 / R10 / P6 (zero-consumer
+abstractions get withdrawn, not kept "for the future"). Arbitrary command
+execution intentionally stays sandboxed in `bash` / `code_exec`; that posture
+does not change when a new typed intent lands.
+
+**Before adding one, pass the "3 questions" gate (CLAUDE.md R10):** is there a
+real consumer *today* (not a hypothetical)? Is it scaffolding rather than
+reasoning the model should do itself (R7)? Will a stronger model still need it?
+A "no" means don't add it yet.
+
+**Each intent is the same three pieces:**
+
+1. **Capability method** on the relevant trait in `desktop/shared/src/traits/`
+   (e.g. `SystemCapability`, `ScreenCapability`). If the behavior is uniform
+   across platforms, give it a **default** that delegates to a cross-platform
+   helper in `desktop/shared/src/action/` (cfg-gated per OS) — every platform
+   impl and test double then inherits it from one source. Only when an OS needs
+   genuinely different native code do you override in `desktop/{macos,linux,windows}`.
+2. **Gated tool action** on the `system` / `desktop` tool in
+   `src/builtin_tools/` — a new `action` arm plus any argument field, routed
+   through the existing approval gate (reuse an `ActionType` such as
+   `DesktopLaunchApp`; the permissive default keeps it byte-identical until a
+   policy tightens it). Document it in the tool `DESCRIPTION` with an example so
+   the model can discover it.
+3. **A unit test** asserting the tool forwards the right argument to the
+   capability and rejects missing/empty input with a friendly message.
+
+**Worked example — `system.open_path`** (open a file/URL with the OS default
+app, the `open` / `xdg-open` / `start` primitive): default
+`SystemCapability::open_path` → `action::open` (one cfg-gated helper);
+`open_path` action on the `system` tool gated under `DesktopLaunchApp`; three
+`system_tool` unit tests. No per-platform override, no new framework.

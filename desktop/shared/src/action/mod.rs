@@ -10,6 +10,7 @@
 pub mod app_launch;
 pub mod input;
 pub mod key_parse;
+pub mod open_path;
 // Wayland input fallback via `ydotool`. The argv/keycode helpers are pure and
 // host-testable; their only non-test callers are gated to Linux, so suppress
 // dead-code lints on other platforms where the runtime side is compiled out.
@@ -18,6 +19,7 @@ pub mod wayland_input;
 pub mod window;
 
 pub use app_launch::{launch_app, quit_app};
+pub use open_path::open;
 pub use input::{
     click, clipboard_read, clipboard_write, cursor_position, double_click, drag, hover, key_button,
     key_combo, mouse_button, scroll, type_text,

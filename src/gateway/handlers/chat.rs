@@ -150,6 +150,16 @@ pub struct ChatMessage {
     /// Optional run ID that generated this message
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    /// Last-turn context-window occupancy (provider-reported prompt tokens),
+    /// persisted on assistant turns so the Panel gauge re-projects on reload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u32>,
+    /// The model's authoritative context window for that turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+    /// Run-cumulative token total (gauge tooltip).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
 }
 
 // ============================================================================
@@ -267,17 +277,23 @@ pub async fn handle_history(
         Ok(messages) => {
             let chat_messages: Vec<ChatMessage> = messages
                 .into_iter()
-                .map(|m| ChatMessage {
-                    role: m.role,
-                    content: m.content,
-                    timestamp: chrono::DateTime::from_timestamp(m.timestamp, 0)
-                        .map(|dt| dt.to_rfc3339())
-                        .unwrap_or_default(),
-                    run_id: m.metadata.and_then(|meta| {
-                        meta.get("run_id")
-                            .and_then(|r| r.as_str())
-                            .map(String::from)
-                    }),
+                .map(|m| {
+                    // Occupancy was persisted as string-valued metadata (see
+                    // `agent_instance::build_message_metadata`), so read every
+                    // field as a string and parse the numeric ones back.
+                    let meta = m.metadata;
+                    let field = |k: &str| meta.as_ref().and_then(|mt| mt.get(k))?.as_str();
+                    ChatMessage {
+                        role: m.role,
+                        content: m.content,
+                        timestamp: chrono::DateTime::from_timestamp(m.timestamp, 0)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_default(),
+                        run_id: field("run_id").map(String::from),
+                        context_tokens: field("context_tokens").and_then(|s| s.parse().ok()),
+                        context_window: field("context_window").and_then(|s| s.parse().ok()),
+                        total_tokens: field("total_tokens").and_then(|s| s.parse().ok()),
+                    }
                 })
                 .collect();
 
@@ -508,6 +524,9 @@ mod tests {
             content: "Hello!".to_string(),
             timestamp: "2024-01-01T12:00:00Z".to_string(),
             run_id: Some("run-789".to_string()),
+            context_tokens: Some(42_000),
+            context_window: Some(200_000),
+            total_tokens: Some(55_000),
         };
 
         let json = serde_json::to_value(&message).unwrap();
@@ -515,6 +534,9 @@ mod tests {
         assert_eq!(json["content"], "Hello!");
         assert_eq!(json["timestamp"], "2024-01-01T12:00:00Z");
         assert_eq!(json["run_id"], "run-789");
+        assert_eq!(json["context_tokens"], 42_000);
+        assert_eq!(json["context_window"], 200_000);
+        assert_eq!(json["total_tokens"], 55_000);
     }
 
     #[test]
@@ -524,11 +546,45 @@ mod tests {
             content: "Hi".to_string(),
             timestamp: "2024-01-01T12:00:00Z".to_string(),
             run_id: None,
+            context_tokens: None,
+            context_window: None,
+            total_tokens: None,
         };
 
         let json = serde_json::to_value(&message).unwrap();
         assert_eq!(json["role"], "user");
-        assert!(!json.as_object().unwrap().contains_key("run_id"));
+        // Absent occupancy + run_id must be omitted, not serialized as null.
+        let obj = json.as_object().unwrap();
+        assert!(!obj.contains_key("run_id"));
+        assert!(!obj.contains_key("context_tokens"));
+        assert!(!obj.contains_key("context_window"));
+        assert!(!obj.contains_key("total_tokens"));
+    }
+
+    #[test]
+    fn history_metadata_string_occupancy_parses_into_typed_fields() {
+        // Mirrors the persisted shape: occupancy stored as STRING metadata
+        // (HashMap<String,String>-safe). `handle_history` parses them back.
+        let meta = json!({
+            "run_id": "r1",
+            "context_tokens": "42000",
+            "context_window": "200000",
+            "total_tokens": "55000",
+        });
+        let field = |k: &str| meta.get(k).and_then(|v| v.as_str());
+        assert_eq!(field("run_id").map(String::from), Some("r1".to_string()));
+        assert_eq!(
+            field("context_tokens").and_then(|s| s.parse::<u32>().ok()),
+            Some(42_000)
+        );
+        assert_eq!(
+            field("context_window").and_then(|s| s.parse::<u32>().ok()),
+            Some(200_000)
+        );
+        assert_eq!(
+            field("total_tokens").and_then(|s| s.parse::<u64>().ok()),
+            Some(55_000)
+        );
     }
 
     #[test]

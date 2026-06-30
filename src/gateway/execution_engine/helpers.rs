@@ -28,6 +28,21 @@ use crate::orchestrator::{
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::session::events::MessageContent;
 
+/// Last completed turn's context-window occupancy, captured from the
+/// authoritative [`FlowOutcome`] so the gateway can persist it onto the
+/// assistant message. The Panel re-projects it onto the occupancy gauge when a
+/// session is reloaded from history — the gauge no longer depends on a live
+/// `run_complete` event surviving in memory.
+#[derive(Debug, Clone, Copy)]
+pub struct RunContextOccupancy {
+    /// Current window occupancy (provider-reported prompt tokens of the last call).
+    pub context_tokens: u32,
+    /// The model's authoritative context window (core's lookup, honoring overrides).
+    pub context_window: u32,
+    /// Run-cumulative token total — rides along for the gauge tooltip.
+    pub total_tokens: u64,
+}
+
 /// Convert a `Vec<UnifiedMessage>` loop-history into an `orchestrator::FlowInput::History`.
 ///
 /// The harness's `seed_session` replays each turn as the corresponding session
@@ -135,9 +150,20 @@ pub async fn run_dispatch_and_drain(
     cancel_token: CancellationToken,
     locale: Locale,
 ) -> Result<String, ExecutionError> {
-    run_dispatch_and_drain_classified(orchestrator, req, emitter, run_id, cancel_token, locale)
-        .await
-        .map_err(ExecutionError::from)
+    // Integration-test wrapper: occupancy persistence is the production loop's
+    // concern, so discard it through a throwaway slot.
+    let occupancy = std::sync::Mutex::new(None);
+    run_dispatch_and_drain_classified(
+        orchestrator,
+        req,
+        emitter,
+        run_id,
+        cancel_token,
+        locale,
+        &occupancy,
+    )
+    .await
+    .map_err(ExecutionError::from)
 }
 
 /// Same as `run_dispatch_and_drain` but returns a classified `DispatchFailure`
@@ -151,6 +177,7 @@ pub async fn run_dispatch_and_drain_classified(
     run_id: &str,
     cancel_token: CancellationToken,
     locale: Locale,
+    occupancy_out: &std::sync::Mutex<Option<RunContextOccupancy>>,
 ) -> Result<String, DispatchFailure> {
     // 1. Dispatch.
     let handle = orchestrator.dispatch(req).await.map_err(map_flow_error)?;
@@ -223,6 +250,21 @@ pub async fn run_dispatch_and_drain_classified(
             return Err(DispatchFailure::Fatal(format!("completion dropped: {e}")));
         }
     };
+
+    // Capture the authoritative context-window occupancy for persistence onto
+    // the assistant message (so the gauge survives a session reload). Only when
+    // a real LLM call ran (`context_tokens > 0`) and core resolved a window —
+    // a no-LLM run leaves the slot untouched so the gauge stays hidden. On a
+    // provider-fallback retry the last successful attempt overwrites the slot.
+    if outcome.context_tokens > 0 && outcome.context_window > 0 {
+        if let Ok(mut slot) = occupancy_out.lock() {
+            *slot = Some(RunContextOccupancy {
+                context_tokens: outcome.context_tokens,
+                context_window: outcome.context_window,
+                total_tokens: u64::from(outcome.total_tokens),
+            });
+        }
+    }
 
     // 4. Let the drain task finish forwarding any in-flight events. The
     //    drain is the single source of the terminal `RunComplete` (the

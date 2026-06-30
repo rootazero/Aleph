@@ -22,6 +22,22 @@ pub trait SystemCapability: Send + Sync {
         self.launch_app(app_name).await
     }
 
+    /// Open a file or URL with the OS default application — the "double-click it"
+    /// primitive (`open` / `xdg-open` / `start`).
+    ///
+    /// `target` is an absolute filesystem path or a URL. Unlike [`launch_app`](Self::launch_app),
+    /// which resolves an *application*, this opens a *document* with whatever
+    /// handler the OS registered for it (e.g. an `.html` file → default browser).
+    ///
+    /// The default delegates to the cross-platform [`crate::action::open`]; it
+    /// runs on a blocking thread because the underlying handler is a subprocess.
+    async fn open_path(&self, target: &str) -> Result<()> {
+        let target = target.to_string();
+        tokio::task::spawn_blocking(move || crate::action::open(&target))
+            .await
+            .map_err(|e| crate::DesktopError::InputFailed(format!("open_path task join error: {e}")))?
+    }
+
     /// List currently running applications.
     async fn list_running_apps(&self) -> Result<Vec<AppInfo>>;
 

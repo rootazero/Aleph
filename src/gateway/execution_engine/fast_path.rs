@@ -44,6 +44,8 @@ where
                 MessageRole::Assistant,
                 &response,
                 Some(run_id),
+                // Fast path runs no LLM call, so there is no occupancy to gauge.
+                None,
             )
             .await;
         let _ = emitter
@@ -117,6 +119,8 @@ where
                 MessageRole::Assistant,
                 &error_response,
                 Some(run_id),
+                // Fast path runs no LLM call, so there is no occupancy to gauge.
+                None,
             )
             .await;
         let _ = emitter

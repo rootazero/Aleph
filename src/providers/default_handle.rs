@@ -21,6 +21,23 @@ use crate::sync_primitives::Arc;
 pub trait DefaultProviderHandle: Send + Sync {
     /// Return the provider currently configured as default.
     fn current(&self) -> Arc<dyn AiProvider>;
+
+    /// Live names of every registered provider, for auto-derived failover.
+    ///
+    /// Default empty — a handle with no live registry behind it (tests,
+    /// [`StaticDefault`]) keeps the boot-time static fallback chain. A
+    /// registry-backed handle overrides this so a provider added/removed at
+    /// runtime is reflected in the next turn's fallback set without a restart.
+    fn provider_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Resolve a registered provider by its exact name, for auto-derived
+    /// failover. Default `None` (no live registry); a registry-backed handle
+    /// overrides it.
+    fn provider_by_name(&self, _name: &str) -> Option<Arc<dyn AiProvider>> {
+        None
+    }
 }
 
 /// Trivial handle that always returns the same provider. Used by tests and any

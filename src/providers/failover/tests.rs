@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use super::*;
 use crate::providers::message::UnifiedMessage;
-use crate::providers::StaticDefault;
+use crate::providers::{DefaultProviderHandle, StaticDefault};
 use crate::sync_primitives::Mutex;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -165,6 +165,129 @@ fn node(name: &str, provider: Arc<dyn AiProvider>) -> FailoverNode {
 /// Node with an explicit endpoint tier, for route-mode tests.
 fn tiered_node(name: &str, provider: Arc<dyn AiProvider>, tier: EndpointTier) -> FailoverNode {
     FailoverNode::with_tier(name.to_string(), Vec::new(), provider, tier)
+}
+
+/// A `DefaultProviderHandle` backed by a *mutable* provider set, so live
+/// fallback derivation can be exercised — including a provider added after the
+/// `FailoverProvider` was built (proving the derivation reads the registry each
+/// turn, not a boot snapshot). Mirrors `MultiProviderRegistry`'s overrides.
+struct LivePool {
+    default: Arc<dyn AiProvider>,
+    providers: Mutex<Vec<(String, Arc<dyn AiProvider>)>>,
+}
+
+impl LivePool {
+    fn new(default: Arc<dyn AiProvider>, providers: Vec<(&str, Arc<dyn AiProvider>)>) -> Arc<Self> {
+        Arc::new(Self {
+            default,
+            providers: Mutex::new(
+                providers
+                    .into_iter()
+                    .map(|(n, p)| (n.to_string(), p))
+                    .collect(),
+            ),
+        })
+    }
+
+    fn add(&self, name: &str, provider: Arc<dyn AiProvider>) {
+        self.providers
+            .lock()
+            .unwrap()
+            .push((name.to_string(), provider));
+    }
+}
+
+impl DefaultProviderHandle for LivePool {
+    fn current(&self) -> Arc<dyn AiProvider> {
+        self.default.clone()
+    }
+    fn provider_names(&self) -> Vec<String> {
+        self.providers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(n, _)| n.clone())
+            .collect()
+    }
+    fn provider_by_name(&self, name: &str) -> Option<Arc<dyn AiProvider>> {
+        self.providers
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, p)| p.clone())
+    }
+}
+
+#[tokio::test]
+async fn live_derivation_serves_registry_fallback() {
+    // No static fallbacks, but the live pool has a healthy sibling: the
+    // primary's 429 fails over to the registry-derived fallback.
+    let primary = ScriptProvider::err("primary", "HTTP 429 too many requests");
+    let fb = ScriptProvider::ok("fb1");
+    let pool = LivePool::new(
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![
+            ("primary", primary as Arc<dyn AiProvider>),
+            ("fb1", fb as Arc<dyn AiProvider>),
+        ],
+    );
+    let fp = FailoverProvider::new(
+        pool,
+        vec![],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    )
+    .with_live_fallback_derivation();
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "fb1");
+}
+
+#[tokio::test]
+async fn live_derivation_picks_up_provider_added_at_runtime() {
+    // The core promise of live derivation: a provider registered AFTER the
+    // FailoverProvider was built (mirrors `providers.create` → registry) is
+    // used on the very next turn, with no chain rebuild / restart.
+    let primary = ScriptProvider::err("primary", "HTTP 429 too many requests");
+    let pool = LivePool::new(
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![("primary", primary as Arc<dyn AiProvider>)],
+    );
+    let fp = FailoverProvider::new(
+        pool.clone(),
+        vec![],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    )
+    .with_live_fallback_derivation();
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // Pool has only the (throttled) primary → nowhere to fail over yet.
+    assert!(fp.process(RequestPayload::new(&msgs)).await.is_err());
+
+    // Register a healthy provider at runtime → next turn uses it immediately.
+    pool.add("added-at-runtime", ScriptProvider::ok("added-at-runtime"));
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "added-at-runtime");
+}
+
+#[tokio::test]
+async fn live_derivation_falls_back_to_static_when_handle_has_no_registry() {
+    // `with_live_fallback_derivation()` is set, but the handle (StaticDefault)
+    // exposes no live providers → the boot-time static snapshot is used,
+    // byte-identical to non-live failover (the safe degrade for tests / a
+    // non-registry boot path).
+    let primary = ScriptProvider::err("primary", "HTTP 429 too many requests");
+    let fb = ScriptProvider::ok("static-fb");
+    let fp = build(primary, vec![], vec![node("static-fb", fb)]).with_live_fallback_derivation();
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "static-fb");
 }
 
 // --- decide() unit tests ----------------------------------------------

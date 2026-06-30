@@ -705,6 +705,14 @@ pub async fn handle_delete_backend(
 
         search.backends.remove(&params.name);
 
+        // Scrub the deleted backend from the fallback list so it does not
+        // linger as a dangling reference (mirrors AI-provider deletion). The
+        // whole `[search]` section is re-serialized on save below, so the
+        // change persists without naming an extra section.
+        if let Some(fallbacks) = search.fallback_providers.as_mut() {
+            crate::gateway::handlers::remove_from_chain(fallbacks, &params.name);
+        }
+
         // Delete API key from vault
         if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
             warn!(backend = %params.name, error = %e, "Failed to delete search API key from vault");
