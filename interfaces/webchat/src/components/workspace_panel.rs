@@ -9,7 +9,7 @@
 
 use crate::api::fs::{DirEntry, FsApi, ReadFileResult};
 use crate::components::markdown::MarkdownRenderer;
-use crate::components::tool_card::{summarize_tools, ToolCard, ToolKind};
+use crate::components::tool_card::{summarize_tools, ToolCard, ToolKind, ToolSurface};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::{FilePreview, LayoutMode, WorkspaceState};
@@ -273,7 +273,13 @@ fn StepCard(group: StepGroup) -> impl IntoView {
                     .into_iter()
                     .map(|(tool_id, tool_name)| {
                         view! {
-                            <ToolCard run_id=run_id.clone() tool_id=tool_id tool_name=tool_name />
+                            <ToolCard
+                                run_id=run_id.clone()
+                                tool_id=tool_id
+                                tool_name=tool_name
+                                surface=ToolSurface::Detail
+                                iteration=Some(iteration)
+                            />
                         }
                     })
                     .collect_view()}
