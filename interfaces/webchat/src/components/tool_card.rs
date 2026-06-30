@@ -4,7 +4,6 @@
 //! 纯逻辑（ToolKind 分流、diff、截断、汇总）与视图组件分离：逻辑可在
 //! 宿主机 `cargo test -p aleph-panel --lib` 下测试。
 
-use crate::components::json_viewer::JsonViewer;
 use crate::i18n::{t_string, use_i18n};
 use crate::state::layout::{ToolPayload, WorkspaceState};
 use crate::views::chat::state::ChatState;
@@ -58,6 +57,31 @@ impl ToolKind {
     #[must_use]
     pub const fn default_open(self) -> bool {
         matches!(self, Self::FileEdit | Self::FileWrite | Self::ApplyPatch)
+    }
+}
+
+/// 卡片渲染表面：左侧聊天（封顶）vs 右侧详情栏（全量）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToolSurface {
+    /// 左侧聊天：内联只一层扁平，封顶 `MAX_INLINE_LINES`，溢出指向详情栏。
+    #[default]
+    Inline,
+    /// 右侧「工具·详情栏」：全量扁平，不封顶。
+    Detail,
+}
+
+/// 左侧内联详情封顶行数；右侧详情栏不封顶。
+pub const MAX_INLINE_LINES: usize = 8;
+
+impl ToolSurface {
+    /// Max body lines for this surface: `Inline` caps at `MAX_INLINE_LINES`,
+    /// `Detail` is uncapped.
+    #[must_use]
+    const fn cap(self) -> usize {
+        match self {
+            ToolSurface::Inline => MAX_INLINE_LINES,
+            ToolSurface::Detail => usize::MAX,
+        }
     }
 }
 
@@ -119,6 +143,54 @@ pub fn split_preview(text: &str, max_lines: usize) -> (String, usize) {
     }
     let shown = lines[..max_lines].join("\n");
     (shown, lines.len() - max_lines)
+}
+
+/// 从搜索结果 `Success.output.results[]` 提取扁平命中列表 `(title, url)`。
+/// 字段缺失时 title/url 各自回落（title: `title`→`name`→`"(untitled)"`；
+/// url: `url`→`link`→None）。非预期形状返回空。
+#[must_use]
+pub fn search_hits(result: &Value) -> Vec<(String, Option<String>)> {
+    let Some(arr) = success_output(result)
+        .and_then(|o| o.get("results"))
+        .and_then(|v| v.as_array())
+    else {
+        return Vec::new();
+    };
+    arr.iter()
+        .map(|item| {
+            let title = item
+                .get("title")
+                .or_else(|| item.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("(untitled)")
+                .to_string();
+            let url = item
+                .get("url")
+                .or_else(|| item.get("link"))
+                .and_then(|v| v.as_str())
+                .map(std::string::ToString::to_string);
+            (title, url)
+        })
+        .collect()
+}
+
+/// 把一个 JSON 对象压成顶层 `key: value` 行；嵌套值用紧凑单行 JSON
+/// （`serde_json::to_string`，无缩进），不展开成可折叠子树。非对象返回空。
+#[must_use]
+pub fn flat_kv(value: &Value) -> Vec<(String, String)> {
+    let Some(map) = value.as_object() else {
+        return Vec::new();
+    };
+    map.iter()
+        .map(|(k, v)| {
+            let rendered = match v {
+                Value::String(s) => s.clone(),
+                Value::Null => "null".to_string(),
+                other => serde_json::to_string(other).unwrap_or_else(|_| other.to_string()),
+            };
+            (k.clone(), rendered)
+        })
+        .collect()
 }
 
 /// 按工具大类汇总计数，用于「无叙述」时合成占位标题。
@@ -240,7 +312,13 @@ pub fn tool_headline(kind: ToolKind, payload: &Option<ToolPayload>) -> Option<St
 /// 每卡本地信号：文件改动类默认展开，其余默认折叠。
 #[component]
 #[must_use]
-pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl IntoView {
+pub fn ToolCard(
+    run_id: String,
+    tool_id: String,
+    tool_name: String,
+    #[prop(optional)] surface: ToolSurface,
+    #[prop(optional_no_strip)] iteration: Option<usize>,
+) -> impl IntoView {
     let workspace = use_context::<WorkspaceState>();
     let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
@@ -261,6 +339,9 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
                 }
             })
     });
+
+    let run_for_overflow = run_id.clone();
+    let tid_for_overflow = tool_id.clone();
 
     let run_for_payload = run_id;
     let tid_for_payload = tool_id;
@@ -291,6 +372,13 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
             ws.toggle_event(&tid_for_expand);
         } else {
             local_toggled.update(|t| *t = !*t);
+        }
+    };
+
+    let detail_label = t_string!(i18n, tool_card.to_detail).to_string();
+    let on_overflow = move || {
+        if let (Some(ws), Some(it)) = (workspace, iteration) {
+            ws.reveal_tool(run_for_overflow.clone(), it, &tid_for_overflow, default_open);
         }
     };
 
@@ -373,7 +461,11 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
             </button>
             <Show when=move || expanded.get()>
                 <div class="pl-7 pr-2 pb-2">
-                    {move || render_body(kind, &payload.get())}
+                    {
+                        let oo = on_overflow.clone();
+                        let dl = detail_label.clone();
+                        move || render_body(kind, &payload.get(), surface, dl.clone(), oo.clone())
+                    }
                 </div>
             </Show>
         </div>
@@ -382,31 +474,33 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
 
 /// 单行等宽容器样式。
 const MONO_BLOCK: &str = "font-mono text-xs whitespace-pre-wrap break-words leading-relaxed";
-/// 大输出/大文件预览的最大行数。
-const MAX_PREVIEW_LINES: usize = 20;
 
-/// 按工具大类渲染卡片体。
-fn render_body(kind: ToolKind, payload: &Option<ToolPayload>) -> AnyView {
+/// 按工具大类渲染卡片体。`surface` 决定封顶：Inline 封顶 `MAX_INLINE_LINES`
+/// 并在溢出处显示「→ 详情栏」联动行；Detail 全量。`detail_label` 为已解析的
+/// 本地化「详情栏」文案。
+fn render_body(
+    kind: ToolKind,
+    payload: &Option<ToolPayload>,
+    surface: ToolSurface,
+    detail_label: String,
+    on_overflow: impl Fn() + Clone + 'static,
+) -> AnyView {
     let Some(p) = payload else {
         return view! { <span class="text-text-tertiary italic text-xs">"…"</span> }.into_any();
     };
-    // 错误优先：任何工具失败都先显示错误文案。
     if let Some(res) = p.result.as_ref() {
         if let Some(err) = error_message(res) {
-            return view! {
-                <pre class=format!("{MONO_BLOCK} text-danger")>{err}</pre>
-            }
-            .into_any();
+            return capped_block(&err, "text-danger", surface, detail_label, on_overflow);
         }
     }
     match kind {
-        ToolKind::FileEdit => edit_body(p),
-        ToolKind::FileWrite => write_body(p),
-        ToolKind::ApplyPatch => patch_body(p),
-        ToolKind::Bash => shell_body(p),
-        ToolKind::FileRead => read_body(p),
-        ToolKind::Search => search_body(p),
-        ToolKind::Default => default_body(p),
+        ToolKind::FileEdit => edit_body(p, surface, detail_label, on_overflow),
+        ToolKind::FileWrite => write_body(p, surface, detail_label, on_overflow),
+        ToolKind::ApplyPatch => patch_body(p, surface, detail_label, on_overflow),
+        ToolKind::Bash => shell_body(p, surface, detail_label, on_overflow),
+        ToolKind::FileRead => read_body(p, surface, detail_label, on_overflow),
+        ToolKind::Search => search_body(p, surface, detail_label, on_overflow),
+        ToolKind::Default => default_body(p, surface, detail_label, on_overflow),
     }
 }
 
@@ -418,71 +512,24 @@ fn arg_str<'a>(p: &'a ToolPayload, key: &str) -> &'a str {
         .unwrap_or("")
 }
 
-/// 把 diff 行渲染为红删/绿增/中性上下文。
-fn diff_view(lines: Vec<DiffLine>) -> AnyView {
-    view! {
-        <div class=format!("{MONO_BLOCK} rounded-md glass-inset overflow-x-auto")>
-            {lines.into_iter().map(|l| {
-                let cls = match l.sign {
-                    '+' => "block px-2 bg-success/10 text-success",
-                    '-' => "block px-2 bg-danger/10 text-danger",
-                    _ => "block px-2 text-text-secondary",
-                };
-                let line = format!("{} {}", l.sign, l.text);
-                view! { <span class=cls>{line}</span> }
-            }).collect_view()}
-        </div>
-    }
-    .into_any()
-}
-
-fn edit_body(p: &ToolPayload) -> AnyView {
+fn edit_body(
+    p: &ToolPayload,
+    surface: ToolSurface,
+    detail_label: String,
+    on_overflow: impl Fn() + Clone + 'static,
+) -> AnyView {
     let old = arg_str(p, "old_string");
     let new = arg_str(p, "new_string");
     let (lines, _a, _r) = diff_lines(old, new);
-    diff_view(lines)
+    capped_diff(lines, surface, detail_label, on_overflow)
 }
 
-/// 截断的等宽文本块 + 「展开全部 / 收起」（i18n）。
-#[component]
-fn CollapsibleText(text: String, extra_class: &'static str) -> impl IntoView {
-    let i18n = use_i18n();
-    let (preview, hidden) = split_preview(&text, MAX_PREVIEW_LINES);
-    if hidden == 0 {
-        return view! {
-            <pre class=format!("{MONO_BLOCK} {extra_class} overflow-x-auto")>{text}</pre>
-        }
-        .into_any();
-    }
-    let show_all = RwSignal::new(false);
-    let full = text;
-    view! {
-        <div>
-            <pre class=format!("{MONO_BLOCK} {extra_class} overflow-x-auto")>
-                {move || if show_all.get() { full.clone() } else { preview.clone() }}
-            </pre>
-            <button
-                type="button"
-                class="mt-1 text-[10px] uppercase tracking-wider text-text-tertiary hover:text-primary"
-                on:click=move |_| show_all.update(|s| *s = !*s)
-            >
-                {move || if show_all.get() {
-                    t_string!(i18n, tool_card.collapse).to_string()
-                } else {
-                    format!("{} (+{hidden})", t_string!(i18n, tool_card.expand_all))
-                }}
-            </button>
-        </div>
-    }
-    .into_any()
-}
-
-fn write_body(p: &ToolPayload) -> AnyView {
-    let content = arg_str(p, "content").to_string();
-    view! { <CollapsibleText text=content extra_class="" /> }.into_any()
-}
-
-fn patch_body(p: &ToolPayload) -> AnyView {
+fn patch_body(
+    p: &ToolPayload,
+    surface: ToolSurface,
+    detail_label: String,
+    on_overflow: impl Fn() + Clone + 'static,
+) -> AnyView {
     let patch = arg_str(p, "patch");
     let lines: Vec<DiffLine> = patch
         .lines()
@@ -492,62 +539,137 @@ fn patch_body(p: &ToolPayload) -> AnyView {
                 Some('-') => '-',
                 _ => ' ',
             };
-            DiffLine {
-                sign,
-                text: raw.to_string(),
-            }
+            DiffLine { sign, text: raw.to_string() }
         })
         .collect();
-    diff_view(lines)
+    capped_diff(lines, surface, detail_label, on_overflow)
 }
 
-fn shell_body(p: &ToolPayload) -> AnyView {
+/// 红删/绿增/中性上下文的 diff 渲染，按 surface 封顶（Inline 超 MAX_INLINE_LINES
+/// 截断 + 「→ 详情栏」），扁平无嵌套。
+fn capped_diff(
+    lines: Vec<DiffLine>,
+    surface: ToolSurface,
+    detail_label: String,
+    on_overflow: impl Fn() + Clone + 'static,
+) -> AnyView {
+    let cap = surface.cap();
+    let total = lines.len();
+    let hidden = total.saturating_sub(cap);
+    let shown: Vec<DiffLine> = lines.into_iter().take(cap).collect();
+    view! {
+        <div>
+            <div class=format!("{MONO_BLOCK} rounded-md glass-inset overflow-x-auto")>
+                {shown.into_iter().map(|l| {
+                    let cls = match l.sign {
+                        '+' => "block px-2 bg-success/10 text-success",
+                        '-' => "block px-2 bg-danger/10 text-danger",
+                        _ => "block px-2 text-text-secondary",
+                    };
+                    let line = format!("{} {}", l.sign, l.text);
+                    view! { <span class=cls>{line}</span> }
+                }).collect_view()}
+            </div>
+            {(hidden > 0).then(|| overflow_line(hidden, detail_label.clone(), on_overflow.clone()))}
+        </div>
+    }
+    .into_any()
+}
+
+/// 把多行文本按 surface 封顶渲染。Inline 超过 `MAX_INLINE_LINES` 时截断并
+/// 追加一行「… +N → 详情栏」（点击触发 `on_overflow`）；Detail 全量。
+/// 无内层折叠——这是扁平化的核心。
+fn capped_block(
+    text: &str,
+    extra_class: &'static str,
+    surface: ToolSurface,
+    detail_label: String,
+    on_overflow: impl Fn() + Clone + 'static,
+) -> AnyView {
+    let cap = surface.cap();
+    let (shown, hidden) = split_preview(text, cap);
+    view! {
+        <div>
+            <pre class=format!("{MONO_BLOCK} {extra_class} overflow-x-auto")>{shown}</pre>
+            {(hidden > 0).then(|| overflow_line(hidden, detail_label.clone(), on_overflow.clone()))}
+        </div>
+    }
+    .into_any()
+}
+
+/// 统一的「… +N → 详情栏」溢出联动行。`detail_label` 已是解析好的本地化
+/// 文案（如 "详情栏" / "detail panel"）。
+fn overflow_line(
+    hidden: usize,
+    detail_label: String,
+    on_overflow: impl Fn() + Clone + 'static,
+) -> AnyView {
+    let label = format!("\u{2026} +{hidden} \u{2192} {detail_label}");
+    view! {
+        <button
+            type="button"
+            class="mt-1 text-[10px] text-text-tertiary hover:text-primary"
+            on:click=move |ev: web_sys::MouseEvent| { ev.stop_propagation(); on_overflow(); }
+        >
+            {label}
+        </button>
+    }
+    .into_any()
+}
+
+fn write_body(
+    p: &ToolPayload,
+    surface: ToolSurface,
+    detail_label: String,
+    on_overflow: impl Fn() + Clone + 'static,
+) -> AnyView {
+    let content = arg_str(p, "content").to_string();
+    capped_block(&content, "", surface, detail_label, on_overflow)
+}
+
+fn shell_body(
+    p: &ToolPayload,
+    surface: ToolSurface,
+    detail_label: String,
+    on_overflow: impl Fn() + Clone + 'static,
+) -> AnyView {
     let cmd = {
         let v = arg_str(p, "cmd");
-        if v.is_empty() {
-            arg_str(p, "code")
-        } else {
-            v
-        }
-    }
-    .to_string();
+        if v.is_empty() { arg_str(p, "code") } else { v }
+    }.to_string();
     let out = p.result.as_ref().and_then(success_output).cloned();
-    let stdout = out
-        .as_ref()
-        .and_then(|o| o.get("stdout"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let stderr = out
-        .as_ref()
-        .and_then(|o| o.get("stderr"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let exit = out
-        .as_ref()
-        .and_then(|o| o.get("exit_code"))
-        .and_then(serde_json::Value::as_i64);
+    let stdout = out.as_ref().and_then(|o| o.get("stdout")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let stderr = out.as_ref().and_then(|o| o.get("stderr")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let exit = out.as_ref().and_then(|o| o.get("exit_code")).and_then(serde_json::Value::as_i64);
     let exit_badge = exit.map(|c| {
-        let cls = if c == 0 {
-            "text-success"
-        } else {
-            "text-danger"
-        };
+        let cls = if c == 0 { "text-success" } else { "text-danger" };
         view! { <span class=format!("text-[10px] font-mono {cls}")>{format!("exit {c}")}</span> }
     });
     view! {
         <div class="flex flex-col gap-1">
             <pre class=format!("{MONO_BLOCK} text-text-primary")>{format!("$ {cmd}")}</pre>
-            {(!stdout.is_empty()).then(|| view! { <CollapsibleText text=stdout extra_class="text-text-secondary" /> })}
-            {(!stderr.is_empty()).then(|| view! { <CollapsibleText text=stderr extra_class="text-danger/80" /> })}
+            {(!stdout.is_empty()).then({
+                let oo = on_overflow.clone();
+                let dl = detail_label.clone();
+                move || capped_block(&stdout, "text-text-secondary", surface, dl, oo)
+            })}
+            {(!stderr.is_empty()).then({
+                let oo = on_overflow.clone();
+                let dl = detail_label.clone();
+                move || capped_block(&stderr, "text-danger/80", surface, dl, oo)
+            })}
             {exit_badge}
         </div>
     }
     .into_any()
 }
 
-fn read_body(p: &ToolPayload) -> AnyView {
+fn read_body(
+    p: &ToolPayload,
+    surface: ToolSurface,
+    detail_label: String,
+    on_overflow: impl Fn() + Clone + 'static,
+) -> AnyView {
     let out = p.result.as_ref().and_then(success_output).cloned();
     let text = match out {
         Some(Value::String(s)) => s,
@@ -559,56 +681,77 @@ fn read_body(p: &ToolPayload) -> AnyView {
         None => String::new(),
     };
     if text.is_empty() {
-        return default_body(p);
+        return default_body(p, surface, detail_label, on_overflow);
     }
-    view! { <CollapsibleText text=text extra_class="text-text-secondary" /> }.into_any()
+    capped_block(&text, "text-text-secondary", surface, detail_label, on_overflow)
 }
 
-fn search_body(p: &ToolPayload) -> AnyView {
-    // 查询词已由头部标题展示，这里只渲染命中数 + 结果 JSON。
-    let out = p.result.as_ref().and_then(success_output).cloned();
-    let count = out
-        .as_ref()
-        .and_then(|o| o.get("results"))
-        .and_then(|v| v.as_array())
-        .map(std::vec::Vec::len);
+fn search_body(
+    p: &ToolPayload,
+    surface: ToolSurface,
+    detail_label: String,
+    on_overflow: impl Fn() + Clone + 'static,
+) -> AnyView {
+    let Some(res) = p.result.as_ref() else {
+        return default_body(p, surface, detail_label, on_overflow);
+    };
+    let hits = search_hits(res);
+    if hits.is_empty() {
+        return default_body(p, surface, detail_label, on_overflow);
+    }
+    let cap = surface.cap();
+    let total = hits.len();
+    let hidden = total.saturating_sub(cap);
+    let shown: Vec<_> = hits.into_iter().take(cap).collect();
     view! {
         <div class="flex flex-col gap-1 text-xs">
-            {count.map(|c| view! {
-                <span class="text-[10px] uppercase tracking-wider text-text-tertiary">
-                    {format!("{c} results")}
-                </span>
-            })}
-            {move || match out.clone() {
-                Some(v) => view! { <JsonViewer value=v /> }.into_any(),
-                None => view! { <span /> }.into_any(),
-            }}
+            <span class="text-[10px] uppercase tracking-wider text-text-tertiary">
+                {format!("{total} results")}
+            </span>
+            {shown.into_iter().map(|(title, url)| view! {
+                <div class="flex flex-col">
+                    <span class="text-text-primary truncate">{title}</span>
+                    {url.map(|u| view! {
+                        <span class="text-[10px] text-text-tertiary truncate">{u}</span>
+                    })}
+                </div>
+            }).collect_view()}
+            {(hidden > 0).then(|| overflow_line(hidden, detail_label.clone(), on_overflow.clone()))}
         </div>
     }
     .into_any()
 }
 
-fn default_body(p: &ToolPayload) -> AnyView {
+fn default_body(
+    p: &ToolPayload,
+    surface: ToolSurface,
+    detail_label: String,
+    on_overflow: impl Fn() + Clone + 'static,
+) -> AnyView {
+    // 优先展示 result，其次 args；都压成顶层扁平 key:value 行。
+    let source = p.result.clone().or_else(|| p.args.clone());
+    let Some(v) = source else {
+        return view! { <span class="text-text-tertiary italic text-xs">"…"</span> }.into_any();
+    };
+    let kv = flat_kv(&v);
+    if kv.is_empty() {
+        // 非对象（数组/标量）→ 紧凑 pretty JSON，按 surface 封顶。
+        let compact = serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string());
+        return capped_block(&compact, "text-text-secondary", surface, detail_label, on_overflow);
+    }
+    let cap = surface.cap();
+    let total = kv.len();
+    let hidden = total.saturating_sub(cap);
+    let shown: Vec<_> = kv.into_iter().take(cap).collect();
     view! {
-        <div class="flex flex-col gap-2 text-xs">
-            {match p.args.clone() {
-                Some(v) => view! {
-                    <details class="rounded-md glass-inset">
-                        <summary class="px-3 py-1.5 cursor-pointer text-text-tertiary font-mono uppercase tracking-wider">"input"</summary>
-                        <div class="px-3 py-2 overflow-x-auto"><JsonViewer value=v /></div>
-                    </details>
-                }.into_any(),
-                None => view! { <span /> }.into_any(),
-            }}
-            {match p.result.clone() {
-                Some(v) => view! {
-                    <details class="rounded-md glass-inset" open=true>
-                        <summary class="px-3 py-1.5 cursor-pointer text-text-tertiary font-mono uppercase tracking-wider">"result"</summary>
-                        <div class="px-3 py-2 overflow-x-auto"><JsonViewer value=v /></div>
-                    </details>
-                }.into_any(),
-                None => view! { <span /> }.into_any(),
-            }}
+        <div class="flex flex-col gap-0.5 text-xs font-mono">
+            {shown.into_iter().map(|(k, val)| view! {
+                <div class="flex gap-2 min-w-0">
+                    <span class="text-text-tertiary shrink-0">{format!("{k}:")}</span>
+                    <span class="text-text-secondary truncate">{val}</span>
+                </div>
+            }).collect_view()}
+            {(hidden > 0).then(|| overflow_line(hidden, detail_label.clone(), on_overflow.clone()))}
         </div>
     }
     .into_any()
@@ -787,5 +930,53 @@ mod tests {
         assert!(!ToolKind::Search.default_open());
         assert!(!ToolKind::FileRead.default_open());
         assert!(!ToolKind::Default.default_open());
+    }
+
+    #[test]
+    fn search_hits_extracts_title_url() {
+        let result = serde_json::json!({
+            "Success": { "output": { "results": [
+                { "title": "美股暴跌", "url": "https://a.com" },
+                { "name": "关税新闻", "link": "https://b.com" },
+                { "title": "无链接条目" }
+            ] } }
+        });
+        let hits = search_hits(&result);
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0], ("美股暴跌".to_string(), Some("https://a.com".to_string())));
+        assert_eq!(hits[1], ("关税新闻".to_string(), Some("https://b.com".to_string())));
+        assert_eq!(hits[2], ("无链接条目".to_string(), None));
+    }
+
+    #[test]
+    fn search_hits_empty_when_no_results() {
+        assert!(search_hits(&serde_json::json!({"Success": {"output": {}}})).is_empty());
+        assert!(search_hits(&serde_json::json!({"Error": {"error": "x"}})).is_empty());
+    }
+
+    #[test]
+    fn flat_kv_top_level_only_compact_nested() {
+        let v = serde_json::json!({
+            "name": "alpha",
+            "count": 3,
+            "nested": { "a": 1, "b": [2, 3] }
+        });
+        let kv = flat_kv(&v);
+        // 顶层三个键；nested 的值压成紧凑单行 JSON，不展开成子树
+        let map: std::collections::HashMap<_, _> = kv.into_iter().collect();
+        assert_eq!(map.get("name").map(String::as_str), Some("alpha"));
+        assert_eq!(map.get("count").map(String::as_str), Some("3"));
+        assert_eq!(map.get("nested").map(String::as_str), Some("{\"a\":1,\"b\":[2,3]}"));
+    }
+
+    #[test]
+    fn flat_kv_non_object_is_empty() {
+        assert!(flat_kv(&serde_json::json!([1, 2, 3])).is_empty());
+        assert!(flat_kv(&serde_json::json!("scalar")).is_empty());
+    }
+
+    #[test]
+    fn tool_surface_defaults_inline() {
+        assert_eq!(ToolSurface::default(), ToolSurface::Inline);
     }
 }

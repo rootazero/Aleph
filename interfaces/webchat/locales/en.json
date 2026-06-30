@@ -242,6 +242,7 @@
     "new_messages": "New messages",
     "step": "step",
     "steps": "steps",
+    "working": "Working",
     "today": "Today",
     "yesterday": "Yesterday",
     "dismiss": "Dismiss",
@@ -1876,9 +1877,6 @@
   "session_tabs": {
     "close_tab": "Close tab (⌘W)"
   },
-  "json_viewer": {
-    "copy": "Copy"
-  },
   "layout_toggle": {
     "open_pane": "Open workspace pane",
     "close_pane": "Close workspace pane"
@@ -1897,6 +1895,7 @@
     "cat_read": "read",
     "cat_run": "run",
     "cat_search": "search",
-    "cat_tool": "tool"
+    "cat_tool": "tool",
+    "to_detail": "detail panel"
   }
 }
