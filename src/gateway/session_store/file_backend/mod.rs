@@ -14,6 +14,33 @@ use crate::gateway::session_store::types::{
 use crate::gateway::session_store::SessionStore;
 use crate::sync_primitives::Arc;
 
+/// Sanitize a session key into a filesystem-safe directory name.
+///
+/// Path separators and NUL are replaced on every platform. On Windows the
+/// additional NTFS-reserved characters `:*?"<>|` are also replaced — session
+/// keys use `:` as a separator (e.g. `agent:main:reflect`), which is illegal in
+/// a Windows filename (os error 123). POSIX names stay byte-for-byte stable so
+/// existing on-disk sessions remain locatable.
+///
+/// Single source of truth for `session_dir`, `get_current_epoch`, and the
+/// startup directory-name normalization migration
+/// (`session_store::migration::normalize_session_dir_names`).
+pub(crate) fn sanitize_key_for_dir(key: &str) -> String {
+    // Path separators + NUL are unsafe in a dir name on every platform.
+    #[cfg(not(windows))]
+    {
+        key.replace(['/', '\\', '\0'], "_")
+    }
+    // Windows additionally forbids `:*?"<>|`; session keys use `:` as a
+    // separator, so those are mapped too. POSIX names stay byte-for-byte
+    // stable (the branch above) so existing on-disk sessions remain locatable.
+    #[cfg(windows)]
+    {
+        key.replace(['/', '\\', '\0'], "_")
+            .replace([':', '*', '?', '"', '<', '>', '|'], "_")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FileSessionStoreConfig {
     pub base_dir: PathBuf,
@@ -112,16 +139,7 @@ impl FileSessionStore {
     }
 
     fn session_dir(&self, key: &str) -> PathBuf {
-        // Replace path separators and NUL on every platform.
-        let safe = key.replace(['/', '\\', '\0'], "_");
-        // Windows additionally forbids : * ? " < > | in filenames, and session
-        // keys use ':' as a separator (e.g. "agent:main:reflect"), which makes
-        // the directory name invalid (os error 123). Sanitize those on Windows
-        // only, so POSIX directory names stay byte-for-byte stable and existing
-        // on-disk sessions remain locatable.
-        #[cfg(windows)]
-        let safe = safe.replace([':', '*', '?', '"', '<', '>', '|'], "_");
-        self.config.base_dir.join(safe)
+        self.config.base_dir.join(sanitize_key_for_dir(key))
     }
 
     fn metadata_path(&self, key: &str) -> PathBuf {
@@ -864,12 +882,7 @@ impl SessionStore for FileSessionStore {
         // Directory names are sanitized in `session_dir`; match the same
         // sanitized form so epoch detection works on Windows (where ':' is
         // replaced by '_') as well as POSIX.
-        let sanitized_pattern = {
-            let safe = base_key_pattern.replace(['/', '\\', '\0'], "_");
-            #[cfg(windows)]
-            let safe = safe.replace([':', '*', '?', '"', '<', '>', '|'], "_");
-            safe
-        };
+        let sanitized_pattern = sanitize_key_for_dir(base_key_pattern);
         let mut entries = tokio::fs::read_dir(&self.config.base_dir)
             .await
             .map_err(|e| SessionStoreError::DatabaseError(format!("Read dir failed: {e}")))?;

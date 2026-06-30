@@ -266,7 +266,16 @@ pub fn ChatSidebar() -> impl IntoView {
                             // Auto-select default agent if none selected.
                             // Routing through SessionMap.activate opens the
                             // first tab — Cmd+1 will focus it.
-                            if selected_agent.get_untracked().is_none() {
+                            // Bail if the component was disposed while the
+                            // request was in flight (cold-start remount race):
+                            // `selected_agent` is owned by this component, so a
+                            // plain `get_untracked` panics on a disposed signal.
+                            // `try_*` + early return turns the late async task
+                            // into a no-op instead.
+                            let Some(sel) = selected_agent.try_get_untracked() else {
+                                return;
+                            };
+                            if sel.is_none() {
                                 let default_id = list
                                     .iter()
                                     .find(|a| a.is_default)
@@ -301,7 +310,9 @@ pub fn ChatSidebar() -> impl IntoView {
             }
 
             // Fetch teams for the selected agent (drives the 群聊 section).
-            if let Some(agent_id) = selected_agent.get_untracked() {
+            // `try_get_untracked`: outer `None` = component disposed, inner
+            // `None` = no agent selected — either way skip.
+            if let Some(Some(agent_id)) = selected_agent.try_get_untracked() {
                 match TeamsApi::agent_teams(&dash, &agent_id).await {
                     Ok(team_list) => groups.set(team_list),
                     Err(e) => {
@@ -515,8 +526,12 @@ pub fn ChatSidebar() -> impl IntoView {
                 }
             };
             // 2. Build id→AgentEntry map from current agents signal for name/emoji resolution.
-            let agent_map: std::collections::HashMap<String, AgentEntry> = agents
-                .get_untracked()
+            //    `agents` is owned by this component; if it was disposed while
+            //    `teams.get` was in flight, bail rather than panic.
+            let Some(agent_list) = agents.try_get_untracked() else {
+                return;
+            };
+            let agent_map: std::collections::HashMap<String, AgentEntry> = agent_list
                 .into_iter()
                 .map(|a| (a.id.clone(), a))
                 .collect();

@@ -169,6 +169,21 @@ pub(super) async fn initialize_session_store(
                 if let Some(writer) = raw_memory_writer {
                     store = store.with_raw_memory_writer(writer);
                 }
+                // Heal session dirs whose on-disk names don't match this
+                // platform's session_dir(key) form — e.g. a `~/.aleph` copied
+                // from macOS (':' separators) onto Windows (':'→'_'), where the
+                // transferred dir names no longer resolve so history lookups
+                // miss. Idempotent; a no-op when names already match. Runs
+                // before the legacy SQLite import (which always writes canonical
+                // names). Best-effort: never blocks startup.
+                let normalized =
+                    alephcore::gateway::session_store::migration::normalize_session_dir_names(
+                        store.config().base_dir.as_path(),
+                    )
+                    .await;
+                if normalized > 0 && !daemon {
+                    println!("Normalized {normalized} migrated session directory name(s)");
+                }
                 if alephcore::gateway::session_store::migration::migration_needed(
                     &store.config().base_dir,
                 ) {
