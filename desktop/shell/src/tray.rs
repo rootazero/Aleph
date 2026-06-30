@@ -9,6 +9,9 @@ use tauri::{
     AppHandle, Manager,
 };
 
+#[cfg(not(feature = "embedded-core"))]
+use tauri::menu::CheckMenuItem;
+
 /// Build the tray icon and its menu, wiring menu/click events.
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show Aleph", true, None::<&str>)?;
@@ -39,6 +42,25 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let quit_stop = MenuItem::with_id(app, "quit_stop", "Quit & Stop Aleph", true, None::<&str>)?;
+    // Panel-only (lite) shell: the remote-origin Panel cannot reach the
+    // autostart IPC commands, so launch-at-login lives here as a native,
+    // shell-local toggle. The full app uses Settings → General instead.
+    #[cfg(not(feature = "embedded-core"))]
+    let autostart_item = {
+        use tauri_plugin_autostart::ManagerExt;
+        let enabled = app.autolaunch().is_enabled().unwrap_or(false);
+        CheckMenuItem::with_id(
+            app,
+            "autostart",
+            "Launch at Login",
+            true,
+            enabled,
+            None::<&str>,
+        )?
+    };
+    #[cfg(not(feature = "embedded-core"))]
+    let autostart_for_event = autostart_item.clone();
+    #[cfg(feature = "embedded-core")]
     let menu = Menu::with_items(
         app,
         &[
@@ -51,12 +73,26 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             &quit_stop,
         ],
     )?;
+    #[cfg(not(feature = "embedded-core"))]
+    let menu = Menu::with_items(
+        app,
+        &[
+            &show,
+            &update_item,
+            &connect_remote,
+            &connect_local,
+            &separator,
+            &autostart_item,
+            &quit,
+            &quit_stop,
+        ],
+    )?;
 
     let mut builder = TrayIconBuilder::with_id("aleph-tray")
         .tooltip("Aleph")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
+        .on_menu_event(move |app, event| match event.id.as_ref() {
             "show" => crate::focus_window(app),
             // Apply a staged update, or trigger a fresh check if none.
             "update" => {
@@ -87,6 +123,20 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
                 #[cfg(feature = "embedded-core")]
                 crate::daemon::stop_daemon();
                 app.exit(0);
+            }
+            // Toggle launch-at-login and reflect the new state in the checkmark.
+            #[cfg(not(feature = "embedded-core"))]
+            "autostart" => {
+                use tauri_plugin_autostart::ManagerExt;
+                let mgr = app.autolaunch();
+                let now = mgr.is_enabled().unwrap_or(false);
+                let res = if now { mgr.disable() } else { mgr.enable() };
+                match res {
+                    Ok(()) => {
+                        let _ = autostart_for_event.set_checked(!now);
+                    }
+                    Err(e) => tracing::warn!("toggle autostart failed: {e}"),
+                }
             }
             _ => {}
         })

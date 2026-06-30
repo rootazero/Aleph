@@ -47,5 +47,15 @@ if (-not ($userPath -split ';' | Where-Object { $_ -eq $destDir })) {
     Write-Host "Added $destDir to your user PATH (restart the terminal to pick it up everywhere)."
 }
 
-Write-Host "Installed. Start it with:  aleph-server start"
+Write-Host "Installed."
+# Enable start-on-boot by default (per-user logon task). Opt out with ALEPH_AUTOSTART=0.
+if ($env:ALEPH_AUTOSTART -ne '0') {
+    Write-Host "Enabling start-on-boot (set ALEPH_AUTOSTART=0 to skip)…"
+    & $destExe service install
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Could not enable autostart (exit $LASTEXITCODE). Run '$destExe service install' later."
+    }
+} else {
+    Write-Host "Start it with:  aleph-server start"
+}
 Write-Host 'LAN access: set [gateway] host = "0.0.0.0" in ~/.aleph/config.toml (trusts your whole LAN).'

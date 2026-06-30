@@ -13,6 +13,7 @@ pub mod plugins;
 pub mod prompt_size;
 pub mod sandbox_debug;
 pub mod secret;
+pub mod service;
 pub mod start;
 pub mod update;
 
@@ -25,5 +26,6 @@ pub use hooks::*;
 pub use plugins::*;
 pub use sandbox_debug::handle_sandbox_debug;
 pub use secret::*;
+pub use service::handle_service_command;
 pub use start::*;
 pub use update::handle_update;

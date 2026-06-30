@@ -44,5 +44,17 @@ chmod +x "$tmp"
 mv -f "$tmp" "$dest_dir/aleph-server"
 trap - EXIT
 
-echo "Installed. Start it with:  aleph-server start"
+echo "Installed."
+# Enable start-on-boot by default (per-user service). Opt out with ALEPH_AUTOSTART=0.
+# Skip when running as root: the service is per-user and would otherwise register
+# for root rather than the human user.
+if [ "${ALEPH_AUTOSTART:-1}" = "1" ] && [ "$(id -u)" != "0" ]; then
+  echo "Enabling start-on-boot (set ALEPH_AUTOSTART=0 to skip)…"
+  if ! "$dest_dir/aleph-server" service install; then
+    echo "  Could not enable autostart; run '$dest_dir/aleph-server service install' later."
+  fi
+else
+  echo "Start it with:  aleph-server start"
+  [ "$(id -u)" = "0" ] && echo "  (running as root: re-run 'aleph-server service install' as your normal user for boot autostart)"
+fi
 echo "LAN access: set [gateway] host = \"0.0.0.0\" in ~/.aleph/config.toml (trusts your whole LAN)."

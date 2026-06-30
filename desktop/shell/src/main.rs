@@ -10,6 +10,7 @@
     windows_subsystem = "windows"
 )]
 
+mod autostart;
 mod connection;
 // First-run connection setup (address entry + mDNS discovery) is panel-only:
 // the full app brings its bundled daemon up and never needs a connect-first
@@ -160,6 +161,8 @@ fn main() {
         connection::set_connection_target,
         connection::clear_connection_target,
         connection::is_lite_shell,
+        autostart::get_autostart,
+        autostart::set_autostart,
     ]);
     #[cfg(not(feature = "embedded-core"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -167,6 +170,8 @@ fn main() {
         connection::set_connection_target,
         connection::clear_connection_target,
         connection::is_lite_shell,
+        autostart::get_autostart,
+        autostart::set_autostart,
         connect_setup::discover_servers,
         connect_setup::connect_to,
     ]);
@@ -205,10 +210,6 @@ fn main() {
 
             // System tray — the resident, always-available face of the app.
             tray::build(&handle)?;
-
-            // A resident assistant should come back after a reboot; enable
-            // autostart once, then never fight the user's later choice.
-            ensure_autostart(&handle);
 
             // Global summon hotkey and the `aleph://` deep-link scheme.
             hotkey::setup(&handle);
@@ -906,27 +907,6 @@ async fn supervise_remote_lite(handle: tauri::AppHandle) {
             SupervisorAction::Relaunch => {}
         }
     }
-}
-
-/// Enable launch-at-login on first run only, leaving later user choices
-/// (toggling it off in OS settings) untouched.
-fn ensure_autostart(app: &tauri::AppHandle) {
-    use tauri_plugin_autostart::ManagerExt;
-
-    let Some(marker) = connection::marker_path("autostart") else {
-        return;
-    };
-    if marker.exists() {
-        return;
-    }
-    match app.autolaunch().enable() {
-        Ok(()) => tracing::info!("autostart enabled (first run)"),
-        Err(e) => tracing::warn!("could not enable autostart: {e}"),
-    }
-    if let Some(parent) = marker.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(&marker, "1");
 }
 
 /// Apply the macOS vibrancy material behind the transparent webview so the
