@@ -7,8 +7,11 @@
 //! `withGlobalTauri: true`). The section renders only when (a) we are inside the
 //! native shell AND (b) the IPC probe succeeds — which is false for a
 //! remote-origin Panel (the lite shell, or a full App pointed at a remote
-//! server), where the IPC capability blocks the call. Those users toggle
-//! autostart from the lite shell's tray instead.
+//! server), where the IPC capability blocks the call. The lite shell exposes
+//! the toggle in its tray menu instead; a full App pointed at a remote server
+//! has no in-app launch-at-login control — switch back to Local mode (which
+//! restores loopback IPC) to change it. The OS login item persists across the
+//! switch, so this is a discoverability gap, not a loss of control.
 
 use crate::platform::wide::views::voice::audio::is_native_shell;
 use js_sys::{Function, Object, Promise, Reflect};
