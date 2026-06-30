@@ -297,6 +297,9 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         parallel_tool_concurrency: config.tool_service.parallel_tool_concurrency_opt(),
         routing_store,
         routing_recall,
+        estimate_overhead_cache: std::sync::Arc::new(
+            alephcore::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
+        ),
     });
 
     // PHASE-6: thread routing overrides from `aleph.toml [flow_routing]`.

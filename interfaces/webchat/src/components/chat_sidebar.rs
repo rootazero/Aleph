@@ -103,6 +103,7 @@ pub(crate) fn occupancy_from_history(history: &[crate::api::chat::ChatMessage]) 
             used_tokens: used,
             window_tokens: window,
             total_tokens: m.total_tokens.unwrap_or(0),
+            is_estimate: false,
         })
     })
 }
@@ -218,8 +219,23 @@ pub(crate) async fn hydrate_session_history(
             // authoritative source on reload — it overrides the `clear_session`
             // wipe that runs just before hydrate, so switching to/back from any
             // history conversation shows that conversation's own occupancy
-            // (None ⇒ gauge correctly hidden for sessions with no LLM turn).
-            chat.context_usage.set(occupancy_from_history(&history));
+            // (None = no real occupancy yet ⇒ fall back to a core estimate
+            // below; the gauge stays hidden only if that estimate also fails).
+            match occupancy_from_history(&history) {
+                Some(real) => chat.context_usage.set(Some(real)),
+                None => {
+                    // No real occupancy recorded → ask core for a next-prompt
+                    // estimate so a freshly-opened conversation still shows a
+                    // `≈N%` gauge. Null/err ⇒ leave it hidden.
+                    let est = ChatApi::context_estimate(&dash, &key).await.ok().flatten();
+                    chat.context_usage.set(est.map(|e| ContextUsage {
+                        used_tokens: e.used_tokens,
+                        window_tokens: e.window_tokens,
+                        total_tokens: u64::from(e.used_tokens),
+                        is_estimate: true,
+                    }));
+                }
+            }
         }
         Err(e) => {
             web_sys::console::error_1(&format!("Failed to load history: {e}").into());
@@ -1629,6 +1645,13 @@ mod gauge_tests {
         assert_eq!(u.used_tokens, 42_000);
         assert_eq!(u.window_tokens, 200_000);
         assert_eq!(u.total_tokens, 55_000);
+    }
+
+    #[test]
+    fn real_occupancy_is_not_marked_estimate() {
+        let h = vec![assistant(Some(10_000), Some(200_000), Some(12_000))];
+        let u = occupancy_from_history(&h).expect("real occupancy present");
+        assert!(!u.is_estimate, "history-persisted occupancy is real, not an estimate");
     }
 
     #[test]

@@ -39,10 +39,23 @@ pub fn ContextGauge() -> impl IntoView {
                 let dash = circ * frac;
                 let gap = circ - dash;
                 let color = gauge_color(frac);
-                let title = format!(
-                    "上下文占用 {pct}% · {} / {} tokens（本轮累计 {}）",
-                    usage.used_tokens, usage.window_tokens, usage.total_tokens,
-                );
+                let (label, title) = if usage.is_estimate {
+                    (
+                        format!("≈{pct}%"),
+                        format!(
+                            "预估上下文占用 {pct}% · {} / {} tokens（首次对话后转为实测）",
+                            usage.used_tokens, usage.window_tokens,
+                        ),
+                    )
+                } else {
+                    (
+                        format!("{pct}%"),
+                        format!(
+                            "上下文占用 {pct}% · {} / {} tokens（本轮累计 {}）",
+                            usage.used_tokens, usage.window_tokens, usage.total_tokens,
+                        ),
+                    )
+                };
                 Some(view! {
                     <div
                         class="flex items-center gap-1 text-text-tertiary select-none"
@@ -60,7 +73,7 @@ pub fn ContextGauge() -> impl IntoView {
                                 transform="rotate(-90 9 9)"
                             />
                         </svg>
-                        <span class="text-[10px] tabular-nums">{format!("{pct}%")}</span>
+                        <span class="text-[10px] tabular-nums">{label}</span>
                     </div>
                 })
             }}

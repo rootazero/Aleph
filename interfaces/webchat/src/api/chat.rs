@@ -33,6 +33,14 @@ pub struct ChatSendResponse {
     pub streaming: bool,
 }
 
+/// Response from chat.context_estimate — a pre-run occupancy estimate for a
+/// session that never ran an LLM turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextEstimateResponse {
+    pub used_tokens: u32,
+    pub window_tokens: u32,
+}
+
 /// A file attachment to send with a chat message.
 #[derive(Debug, Clone)]
 pub struct ChatAttachment {
@@ -121,6 +129,21 @@ impl ChatApi {
         Ok(())
     }
 
+    /// Estimate a session's next-prompt occupancy (sessions with no real
+    /// occupancy recorded). `Ok(None)` when core returns null (unresolvable
+    /// session/model) → caller keeps the gauge hidden.
+    pub async fn context_estimate(
+        state: &DashboardState,
+        session_key: &str,
+    ) -> Result<Option<ContextEstimateResponse>, String> {
+        let params = serde_json::json!({ "session_key": session_key });
+        let result = state.rpc_call("chat.context_estimate", params).await?;
+        if result.is_null() {
+            return Ok(None);
+        }
+        serde_json::from_value(result).map(Some).map_err(|e| e.to_string())
+    }
+
     /// Create a new session by closing the current one and incrementing the epoch.
     /// Returns the new session key.
     pub async fn new_session(
@@ -138,5 +161,18 @@ impl ChatApi {
             .and_then(|v| v.as_str())
             .map(std::string::ToString::to_string)
             .ok_or_else(|| "Missing new_session_key in response".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn estimate_response_round_trips() {
+        let v = serde_json::json!({ "used_tokens": 12_000, "window_tokens": 200_000 });
+        let r: ContextEstimateResponse = serde_json::from_value(v).unwrap();
+        assert_eq!(r.used_tokens, 12_000);
+        assert_eq!(r.window_tokens, 200_000);
     }
 }
