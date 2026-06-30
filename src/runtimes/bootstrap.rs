@@ -199,10 +199,22 @@ async fn run_powershell(script: &str) -> Result<CmdOutcome, BootstrapError> {
 fn enrich_path_for_reprobe() {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
     let mut candidates: Vec<PathBuf> = Vec::new();
+    // Explicit `CARGO_HOME` override: rustup drops binaries in `$CARGO_HOME/bin`
+    // instead of `~/.cargo/bin` when it is set.
+    if let Some(cargo_home) = std::env::var_os("CARGO_HOME") {
+        candidates.push(PathBuf::from(cargo_home).join("bin"));
+    }
+    // asdf shims under an explicit `$ASDF_DATA_DIR` (the `~/.asdf` default is
+    // handled in the HOME block below).
+    if let Some(asdf_data) = std::env::var_os("ASDF_DATA_DIR") {
+        candidates.push(PathBuf::from(asdf_data).join("shims"));
+    }
     if let Some(h) = home {
         let home_path = PathBuf::from(&h);
         candidates.push(home_path.join(".cargo").join("bin"));
         candidates.push(home_path.join(".fnm"));
+        candidates.push(home_path.join(".asdf").join("shims"));
+        candidates.push(home_path.join(".nix-profile").join("bin"));
         #[cfg(windows)]
         {
             candidates.push(
@@ -219,12 +231,24 @@ fn enrich_path_for_reprobe() {
     {
         candidates.push(PathBuf::from("/opt/homebrew/bin"));
         candidates.push(PathBuf::from("/usr/local/bin"));
+        // Homebrew's `rustup` formula keeps cargo/rustc proxies in its keg
+        // (`$(brew --prefix)/opt/rustup/bin`), not linked into `…/bin`. Cover
+        // both the Apple-Silicon and Intel prefixes plus the MacPorts prefix.
+        candidates.push(PathBuf::from("/opt/homebrew/opt/rustup/bin"));
+        candidates.push(PathBuf::from("/usr/local/opt/rustup/bin"));
+        candidates.push(PathBuf::from("/opt/local/bin"));
         candidates.push(PathBuf::from("/Library/Developer/CommandLineTools/usr/bin"));
+        // Nix: multi-user default profile + nix-darwin system profile.
+        candidates.push(PathBuf::from("/nix/var/nix/profiles/default/bin"));
+        candidates.push(PathBuf::from("/run/current-system/sw/bin"));
     }
     #[cfg(target_os = "linux")]
     {
         candidates.push(PathBuf::from("/usr/local/bin"));
         candidates.push(PathBuf::from("/usr/bin"));
+        // Nix: multi-user default profile + NixOS system profile.
+        candidates.push(PathBuf::from("/nix/var/nix/profiles/default/bin"));
+        candidates.push(PathBuf::from("/run/current-system/sw/bin"));
     }
     #[cfg(target_os = "windows")]
     {

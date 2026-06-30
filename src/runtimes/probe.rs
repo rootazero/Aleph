@@ -160,16 +160,31 @@ fn extend_path(base: &OsStr, candidates: &[PathBuf]) -> OsString {
 }
 
 /// Directories where runtimes commonly install but a GUI-launched daemon's
-/// minimal PATH won't include: Homebrew, cargo/rustup, fnm + fnm-managed node,
-/// Xcode CLT, winget shims. Covers `uv` (`~/.local/bin`), `cargo` (`~/.cargo/bin`),
-/// `fnm` (its data-dir root), and `node` / `playwright-cli` (the fnm-managed
-/// `<root>/aliases/<alias>/bin`).
+/// minimal PATH won't include: Homebrew (incl. the keg-only `rustup` formula),
+/// MacPorts, cargo/rustup (`$CARGO_HOME`), fnm + fnm-managed node, asdf shims,
+/// Nix profiles, Xcode CLT, winget shims. Covers `uv` (`~/.local/bin`), `cargo`
+/// (`~/.cargo/bin`), `fnm` (its data-dir root), and `node` / `playwright-cli`
+/// (the fnm-managed `<root>/aliases/<alias>/bin`).
 fn install_dir_candidates() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
+    // Explicit `CARGO_HOME` override: rustup honors it and drops binaries in
+    // `$CARGO_HOME/bin` instead of `~/.cargo/bin`. Honor it before the default.
+    if let Some(cargo_home) = std::env::var_os("CARGO_HOME") {
+        dirs.push(PathBuf::from(cargo_home).join("bin"));
+    }
+    // asdf version manager routes every managed tool (node, python, rust, …)
+    // through a shim in `<data-dir>/shims`. `$ASDF_DATA_DIR` overrides the
+    // `~/.asdf` default (handled in the HOME block below).
+    if let Some(asdf_data) = std::env::var_os("ASDF_DATA_DIR") {
+        dirs.push(PathBuf::from(asdf_data).join("shims"));
+    }
     if let Some(h) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         let home = PathBuf::from(h);
         dirs.push(home.join(".cargo").join("bin"));
         dirs.push(home.join(".local").join("bin"));
+        // asdf default data dir + Nix per-user profile.
+        dirs.push(home.join(".asdf").join("shims"));
+        dirs.push(home.join(".nix-profile").join("bin"));
     }
     // fnm: the binary sits directly in its data-dir root, and fnm-managed node
     // (plus npm-global CLIs such as playwright-cli) live under
@@ -186,11 +201,25 @@ fn install_dir_candidates() -> Vec<PathBuf> {
     {
         dirs.push(PathBuf::from("/opt/homebrew/bin"));
         dirs.push(PathBuf::from("/usr/local/bin"));
+        // Homebrew's `rustup` formula keeps cargo/rustc proxies in its keg
+        // (`$(brew --prefix)/opt/rustup/bin`) and links ONLY rustup itself into
+        // `…/bin`, so the standard Homebrew bin above misses cargo. Cover both
+        // the Apple-Silicon (`/opt/homebrew`) and Intel (`/usr/local`) prefixes.
+        dirs.push(PathBuf::from("/opt/homebrew/opt/rustup/bin"));
+        dirs.push(PathBuf::from("/usr/local/opt/rustup/bin"));
+        // MacPorts default prefix (alternative package manager to Homebrew).
+        dirs.push(PathBuf::from("/opt/local/bin"));
         dirs.push(PathBuf::from("/Library/Developer/CommandLineTools/usr/bin"));
+        // Nix: multi-user default profile + nix-darwin system profile.
+        dirs.push(PathBuf::from("/nix/var/nix/profiles/default/bin"));
+        dirs.push(PathBuf::from("/run/current-system/sw/bin"));
     }
     #[cfg(target_os = "linux")]
     {
         dirs.push(PathBuf::from("/usr/local/bin"));
+        // Nix: multi-user default profile + NixOS system profile.
+        dirs.push(PathBuf::from("/nix/var/nix/profiles/default/bin"));
+        dirs.push(PathBuf::from("/run/current-system/sw/bin"));
     }
     #[cfg(target_os = "windows")]
     {
@@ -423,6 +452,57 @@ mod tests {
             vec![lts_bin],
             "the `lts` alias bin dir under the given root must be resolved"
         );
+    }
+
+    /// Regression: cargo installed via Homebrew's `rustup` formula lives in the
+    /// keg's opt dir (`/opt/homebrew/opt/rustup/bin`), NOT `/opt/homebrew/bin`
+    /// — which holds only `rustup`/`rustup-init` symlinks. A GUI-launched daemon
+    /// on a minimal PATH must still discover it, so the keg path (plus the Intel
+    /// prefix and MacPorts) has to be among the probe candidates.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_macos_candidates_cover_homebrew_rustup_keg_and_macports() {
+        let cands = install_dir_candidates();
+        for expected in [
+            "/opt/homebrew/opt/rustup/bin",
+            "/usr/local/opt/rustup/bin",
+            "/opt/local/bin",
+        ] {
+            assert!(
+                cands.contains(&PathBuf::from(expected)),
+                "macOS probe candidates must include {expected}; got {cands:?}"
+            );
+        }
+    }
+
+    /// asdf shims and Nix profiles are version-manager / package-manager install
+    /// targets that a GUI-launched (or service-launched) daemon's minimal PATH
+    /// omits. They must be among the probe candidates on every Unix platform.
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_candidates_cover_asdf_and_nix() {
+        let cands = install_dir_candidates();
+        // System Nix profiles are unconditional on macOS/Linux.
+        assert!(
+            cands.contains(&PathBuf::from("/nix/var/nix/profiles/default/bin")),
+            "Nix default profile must be a probe candidate; got {cands:?}"
+        );
+        assert!(
+            cands.contains(&PathBuf::from("/run/current-system/sw/bin")),
+            "NixOS / nix-darwin system profile must be a probe candidate; got {cands:?}"
+        );
+        // Home-based asdf shims + Nix per-user profile (only when HOME is known).
+        if let Some(h) = std::env::var_os("HOME") {
+            let home = PathBuf::from(h);
+            assert!(
+                cands.contains(&home.join(".asdf").join("shims")),
+                "asdf shims dir must be a probe candidate"
+            );
+            assert!(
+                cands.contains(&home.join(".nix-profile").join("bin")),
+                "Nix per-user profile must be a probe candidate"
+            );
+        }
     }
 
     /// Reproduces the GUI-minimal-PATH root cause: a binary that lives in a dir

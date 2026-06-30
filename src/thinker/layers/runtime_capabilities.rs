@@ -40,7 +40,13 @@ impl PromptLayer for RuntimeCapabilitiesLayer {
                 "\n**CRITICAL - Use Aleph Runtimes**: always invoke the full \"Executable\" path \
                  shown above (e.g. `/path/to/python script.py`), never bare `python3` / `python` \
                  — the system default may be missing or incompatible. Aleph's managed runtimes \
-                 guarantee the right versions and dependencies.\n\n",
+                 guarantee the right versions and dependencies.\n",
+            );
+            output.push_str(
+                "These paths were already detected and verified on this host — use them \
+                 directly. You do NOT need to re-check availability (no `which` / `command -v` / \
+                 `--version` probing) before each call. A runtime absent from this list is not \
+                 installed; don't hunt for it on PATH.\n\n",
             );
         }
     }
