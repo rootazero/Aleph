@@ -1209,7 +1209,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     server.handlers_mut().register("chat.context_estimate", move |req| {
                         let harness = harness.clone();
                         async move {
-                            crate::gateway::handlers::chat::handle_context_estimate(req, harness).await
+                            alephcore::gateway::handlers::chat::handle_context_estimate(req, harness).await
                         }
                     });
                 }

@@ -298,7 +298,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         routing_store,
         routing_recall,
         estimate_overhead_cache: std::sync::Arc::new(
-            crate::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
+            alephcore::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
         ),
     });
 
