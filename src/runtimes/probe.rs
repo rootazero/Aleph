@@ -204,9 +204,35 @@ fn install_dir_candidates() -> Vec<PathBuf> {
                     .join("Links"),
             );
         }
+        // npm's default global-bin on Windows for any non-fnm node (official
+        // MSI, winget, scoop, choco). `npm install -g @playwright/cli` drops
+        // `playwright-cli.cmd` here, so it must be on the probe search path.
+        if let Some(p) = std::env::var_os("APPDATA") {
+            dirs.push(PathBuf::from(p).join("npm"));
+        }
+        // scoop shims (e.g. a scoop-installed node / fnm / standalone CLI).
+        if let Some(scoop) = scoop_root() {
+            dirs.push(scoop.join("shims"));
+        }
+        // Chocolatey shim dir and Volta's managed bin — other common managers.
+        dirs.push(PathBuf::from(r"C:\ProgramData\chocolatey\bin"));
+        if let Some(p) = std::env::var_os("LOCALAPPDATA") {
+            dirs.push(PathBuf::from(p).join("Volta").join("bin"));
+        }
         dirs.push(PathBuf::from(r"C:\Program Files\Git\cmd"));
     }
     dirs
+}
+
+/// Scoop install root: honours an explicit `$SCOOP`, else the per-user default
+/// `%USERPROFILE%\scoop`. Used to locate scoop-managed shims and the
+/// scoop-installed fnm data dir.
+#[cfg(target_os = "windows")]
+fn scoop_root() -> Option<PathBuf> {
+    if let Some(s) = std::env::var_os("SCOOP") {
+        return Some(PathBuf::from(s));
+    }
+    std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).join("scoop"))
 }
 
 /// All fnm data-dir roots to probe *without invoking fnm* (fnm itself may be off
@@ -232,25 +258,53 @@ fn fnm_data_dir_candidates() -> Vec<PathBuf> {
         if let Some(p) = std::env::var_os("LOCALAPPDATA") {
             roots.push(PathBuf::from(p).join("fnm"));
         }
+        // fnm installed via scoop pins FNM_DIR into the scoop tree
+        // (`<scoop>\apps\fnm\current`), with node-versions/aliases persisted at
+        // `<scoop>\persist\fnm`. A service-launched daemon that doesn't inherit
+        // the session FNM_DIR still resolves node here.
+        if let Some(scoop) = scoop_root() {
+            roots.push(scoop.join("apps").join("fnm").join("current"));
+            roots.push(scoop.join("persist").join("fnm"));
+        }
     }
     roots
 }
 
-/// fnm-managed node bin dirs under one data-dir `root`. fnm keeps the active
-/// node — and every npm-global CLI installed through it, such as
-/// `playwright-cli` — under `<root>/aliases/{default,lts}/bin` (Unix). Aleph
-/// creates the `lts` alias post-install; `default` is fnm's own default alias.
-/// On Windows `node.exe` sits directly in the alias dir (no `bin` subdir).
+/// fnm-managed node bin dirs under one data-dir `root`. fnm keeps each node —
+/// and every npm-global CLI installed through it, such as `playwright-cli` —
+/// under `<root>/node-versions/<v>/installation[/bin]`, with `<root>/aliases/<name>`
+/// symlinked to a chosen installation. On Unix the bins live in a `bin` subdir;
+/// on Windows `node.exe` and the `.cmd` shims sit directly in the installation dir.
+///
+/// We enumerate *every* alias (not just `default`/`lts` — a user-managed fnm may
+/// name its blessed node `lts-latest` or anything else) and then *every* installed
+/// version, so a global CLI is found regardless of which alias/version holds it.
+/// Aliases are searched first (the blessed/active node), versions as a fallback.
 fn fnm_node_bin_dirs(root: &Path) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    for alias in ["default", "lts"] {
-        let alias_dir = root.join("aliases").join(alias);
-        let bin = alias_dir.join("bin");
+    fn read_sorted(dir: PathBuf) -> Vec<PathBuf> {
+        let mut entries: Vec<PathBuf> = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd.flatten().map(|e| e.path()).collect(),
+            Err(_) => Vec::new(),
+        };
+        entries.sort(); // deterministic order: `default` precedes `lts-latest`
+        entries
+    }
+    fn push_install(install_dir: PathBuf, out: &mut Vec<PathBuf>) {
+        let bin = install_dir.join("bin");
         if bin.is_dir() {
-            dirs.push(bin);
-        } else if alias_dir.is_dir() {
-            dirs.push(alias_dir);
+            out.push(bin);
+        } else if install_dir.is_dir() {
+            out.push(install_dir);
         }
+    }
+    let mut dirs = Vec::new();
+    // Aliases first (`default`, `lts`, `lts-latest`, or any user-named alias).
+    for alias_dir in read_sorted(root.join("aliases")) {
+        push_install(alias_dir, &mut dirs);
+    }
+    // Then every installed version: <root>/node-versions/<v>/installation[/bin].
+    for version_dir in read_sorted(root.join("node-versions")) {
+        push_install(version_dir.join("installation"), &mut dirs);
     }
     dirs
 }
@@ -422,6 +476,41 @@ mod tests {
             fnm_node_bin_dirs(root),
             vec![lts_bin],
             "the `lts` alias bin dir under the given root must be resolved"
+        );
+    }
+
+    /// A user-managed fnm may name its blessed node alias anything (`lts-latest`,
+    /// not just `default`/`lts`). The resolver must enumerate every alias, else
+    /// node/playwright-cli hide under a non-standard alias name — the Windows +
+    /// scoop regression observed in the field.
+    #[test]
+    fn test_fnm_node_bin_dirs_enumerates_arbitrary_alias() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let bin = root.join("aliases").join("lts-latest").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        assert!(
+            fnm_node_bin_dirs(root).contains(&bin),
+            "an arbitrarily named alias's bin dir must be resolved"
+        );
+    }
+
+    /// When no alias points at a version, the installed version's dir must still
+    /// be searched so a global CLI installed there is found. Mirrors the Windows
+    /// layout where the bins sit directly in `installation` (no `bin` subdir).
+    #[test]
+    fn test_fnm_node_bin_dirs_falls_back_to_node_versions() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let install = root
+            .join("node-versions")
+            .join("v20.0.0")
+            .join("installation");
+        std::fs::create_dir_all(&install).unwrap();
+        // No `bin` subdir → the installation dir itself is the bin dir (Windows).
+        assert!(
+            fnm_node_bin_dirs(root).contains(&install),
+            "an installed version's dir must be searched even without an alias"
         );
     }
 
