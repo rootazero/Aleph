@@ -54,6 +54,15 @@ mod platform {
         Ok(home()?.join("Library/LaunchAgents/ai.aleph.server.plist"))
     }
 
+    /// launchd service target for the modern enable/disable subcommands, which
+    /// toggle the persistent boot-start state WITHOUT loading/unloading (i.e.
+    /// without starting/stopping the running agent). Spec §4.1.
+    fn service_target() -> Result<String, Box<dyn Error>> {
+        let out = Command::new("id").arg("-u").output()?;
+        let uid = String::from_utf8(out.stdout)?.trim().to_string();
+        Ok(format!("gui/{uid}/ai.aleph.server"))
+    }
+
     pub fn install() -> Res {
         let plist = plist_path()?;
         if let Some(parent) = plist.parent() {
@@ -76,11 +85,11 @@ mod platform {
     }
 
     pub fn enable() -> Res {
-        run(Command::new("launchctl").arg("load").arg("-w").arg(plist_path()?), &[])
+        run(Command::new("launchctl").arg("enable").arg(service_target()?), &[])
     }
 
     pub fn disable() -> Res {
-        run(Command::new("launchctl").arg("unload").arg("-w").arg(plist_path()?), &[])
+        run(Command::new("launchctl").arg("disable").arg(service_target()?), &[])
     }
 
     pub fn status() -> Res {
@@ -136,11 +145,13 @@ mod platform {
     }
 
     pub fn enable() -> Res {
-        systemctl(&["enable", "--now", "aleph-server.service"])
+        // Arm for boot only; do not start the running process (spec §4.1).
+        systemctl(&["enable", "aleph-server.service"])
     }
 
     pub fn disable() -> Res {
-        systemctl(&["disable", "--now", "aleph-server.service"])
+        // Disarm boot only; do not stop the running process (spec §4.1).
+        systemctl(&["disable", "aleph-server.service"])
     }
 
     pub fn status() -> Res {
