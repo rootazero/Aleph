@@ -157,16 +157,17 @@ pub const SPECS: &[RuntimeSpec] = &[
                 subcommand: &["npm", "install", "-g", "@playwright/cli@latest"],
             },
         }],
-        post_install: &[
-            PostInstallAction::RunSubcommand {
-                args: &["install", "chromium"],
-                target_dir: None,
-            },
-            PostInstallAction::RunSubcommand {
-                args: &["install", "--skills", "--target"],
-                target_dir: Some("$HOME/.aleph/skills/playwright-cli"),
-            },
-        ],
+        // v0.1.14 renamed the browser-install subcommand: the legacy
+        // `install chromium` became `install-browser chromium` (`install` now
+        // only "initializes a workspace"). The old `install --skills --target
+        // <dir>` action was dropped: v0.1.14 removed `--target` (skills are
+        // written CWD-relative to `.claude/skills/`, not a redirectable dir), so
+        // it can't be ported 1:1. The model already knows the command set and
+        // gets usage from `llm_hint`, so we don't stage a filesystem skill.
+        post_install: &[PostInstallAction::RunSubcommand {
+            args: &["install-browser", "chromium"],
+            target_dir: None,
+        }],
         llm_hint: Some(
             "Browser automation CLI. Use `playwright-cli -s=<session> <command>`.",
         ),
@@ -396,6 +397,35 @@ mod tests {
                 );
             }
             _ => panic!("expected AssetProbe post-install for uv"),
+        }
+    }
+
+    /// Regression for the v0.1.14 CLI drift: `@playwright/cli@latest` renamed
+    /// `install chromium` → `install-browser chromium` and removed the
+    /// `install --skills --target <dir>` shape. The spec must use the new
+    /// browser subcommand and carry no stale skills action (which errored with
+    /// "too many arguments" / "Unknown option --target" on install).
+    #[test]
+    fn test_playwright_cli_post_install_uses_install_browser() {
+        let spec = find_spec("playwright-cli").expect("playwright-cli spec must exist");
+        assert_eq!(
+            spec.post_install.len(),
+            1,
+            "playwright-cli should have exactly one post-install action (browser install)"
+        );
+        match spec.post_install[0] {
+            PostInstallAction::RunSubcommand { args, target_dir } => {
+                assert_eq!(
+                    args,
+                    &["install-browser", "chromium"],
+                    "browser install must use the v0.1.14 `install-browser` subcommand"
+                );
+                assert!(
+                    target_dir.is_none(),
+                    "`install-browser chromium` takes no appended target dir"
+                );
+            }
+            _ => panic!("expected a RunSubcommand post-install for playwright-cli"),
         }
     }
 

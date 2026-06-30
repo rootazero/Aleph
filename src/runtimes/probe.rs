@@ -64,8 +64,9 @@ pub fn probe(name: &str) -> ProbeResult {
 
 fn probe_system_path(spec: &RuntimeSpec) -> Option<ProbeResult> {
     let bin_name = spec.binaries.iter().next()?;
-    let bin_path = find_on_path(bin_name)?;
-    let version = get_version(&bin_path, spec.version_flag, spec.version_regex);
+    let search_path = enriched_search_path();
+    let bin_path = find_on_path(bin_name, &search_path)?;
+    let version = get_version(&bin_path, spec.version_flag, spec.version_regex, &search_path);
     let version_warning = check_version_warning(spec, version.as_deref());
     Some(ProbeResult {
         found: true,
@@ -76,8 +77,8 @@ fn probe_system_path(spec: &RuntimeSpec) -> Option<ProbeResult> {
     })
 }
 
-/// Locate a binary on the system PATH, enriched with well-known runtime
-/// install directories.
+/// Build the enriched search PATH: the inherited PATH plus well-known runtime
+/// install directories (see [`install_dir_candidates`]).
 ///
 /// A GUI-launched daemon (macOS `.app` / launchd) inherits a minimal PATH
 /// (`/usr/bin:/bin:/usr/sbin:/sbin`) that excludes Homebrew (`/opt/homebrew/bin`),
@@ -86,15 +87,24 @@ fn probe_system_path(spec: &RuntimeSpec) -> Option<ProbeResult> {
 /// inherited PATH *plus* those known install dirs, without mutating the global
 /// process env (thread-safe; each probe gets a private enriched PATH).
 ///
+/// Shared by both binary lookup ([`find_on_path`]) and version detection
+/// ([`get_version`]): a node-shebang tool (`playwright-cli`, `#!/usr/bin/env
+/// node`) resolves its interpreter via PATH, so its `--version` probe must run
+/// with the same enriched PATH or `node` is "not found" and the version comes
+/// back empty.
+fn enriched_search_path() -> OsString {
+    extend_path(
+        &std::env::var_os("PATH").unwrap_or_default(),
+        &install_dir_candidates(),
+    )
+}
+
+/// Locate a binary on the (pre-enriched) `search_path`.
+///
 /// First tries the platform-native locator (`which` on Unix, `where` on Windows).
 /// Falls back to a manual PATH walk for minimal environments (e.g. containers
 /// without the `which` binary).
-fn find_on_path(bin_name: &str) -> Option<PathBuf> {
-    let search_path = extend_path(
-        &std::env::var_os("PATH").unwrap_or_default(),
-        &install_dir_candidates(),
-    );
-
+fn find_on_path(bin_name: &str, search_path: &OsStr) -> Option<PathBuf> {
     // 1. Try the native locator first (more reliable, handles aliases, etc.)
     let locator = if cfg!(target_os = "windows") {
         "where"
@@ -103,7 +113,7 @@ fn find_on_path(bin_name: &str) -> Option<PathBuf> {
     };
     trace!("looking for '{}' via {}", bin_name, locator);
     let mut cmd = Command::new(locator);
-    cmd.arg(bin_name).env("PATH", &search_path);
+    cmd.arg(bin_name).env("PATH", search_path);
     if let Ok(output) = cmd.no_window().output() {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -116,7 +126,7 @@ fn find_on_path(bin_name: &str) -> Option<PathBuf> {
 
     // 2. Fallback: manual traversal of the enriched PATH.
     trace!("falling back to manual PATH search for '{}'", bin_name);
-    find_in_dirs(bin_name, &search_path)
+    find_in_dirs(bin_name, search_path)
 }
 
 /// Manually walk `search_path` (a joined PATH string) looking for `bin_name`.
@@ -304,9 +314,18 @@ fn get_compiled_regex(pattern: &'static str) -> Option<Regex> {
     }
 }
 
-fn get_version(bin_path: &Path, version_flag: &str, version_regex: &'static str) -> Option<String> {
+fn get_version(
+    bin_path: &Path,
+    version_flag: &str,
+    version_regex: &'static str,
+    search_path: &OsStr,
+) -> Option<String> {
     let mut cmd = Command::new(bin_path);
-    cmd.arg(version_flag);
+    // Run the version probe with the enriched PATH: a node-shebang tool
+    // (`playwright-cli`, `#!/usr/bin/env node`) resolves its interpreter via
+    // PATH, so on a daemon's minimal PATH `node` would be "not found" and the
+    // version would come back empty even though the binary itself was located.
+    cmd.arg(version_flag).env("PATH", search_path);
     let output = cmd.no_window().output().ok()?;
     let combined = format!(
         "{}{}",
@@ -534,6 +553,54 @@ mod tests {
             find_in_dirs("mytool", &enriched).as_deref(),
             Some(bin.as_path()),
             "tool must be found once its dir is part of the enriched search path"
+        );
+    }
+
+    /// Regression: a node-shebang tool (`playwright-cli`, `#!/usr/bin/env node`)
+    /// resolves its interpreter via PATH, so `get_version` must run the version
+    /// probe with the *enriched* PATH. On a daemon's minimal PATH the interpreter
+    /// is missing and the version comes back empty (found=true, version=None) —
+    /// the bug this fix closes. Modelled with a tool that execs a helper which
+    /// only exists in the enriched dir.
+    #[cfg(unix)]
+    #[test]
+    fn test_get_version_runs_probe_with_enriched_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let set_exec = |p: &Path| {
+            let mut perms = std::fs::metadata(p).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(p, perms).unwrap();
+        };
+
+        let interp_dir = tempfile::TempDir::new().unwrap();
+        let tool_dir = tempfile::TempDir::new().unwrap();
+
+        // A helper that lives ONLY in the enriched dir; prints a version banner.
+        let helper = interp_dir.path().join("aleph-fake-interp");
+        std::fs::write(&helper, b"#!/bin/sh\necho 'tool version 9.8.7'\n").unwrap();
+        set_exec(&helper);
+
+        // The tool resolves `aleph-fake-interp` via PATH (mimics env-shebang).
+        let tool = tool_dir.path().join("mytool");
+        std::fs::write(&tool, b"#!/bin/sh\nexec aleph-fake-interp\n").unwrap();
+        set_exec(&tool);
+
+        let re = r"version (\d+\.\d+\.\d+)";
+
+        // Minimal PATH: interpreter unresolvable → no version captured (the bug).
+        let minimal = OsString::from("/usr/bin:/bin");
+        assert_eq!(
+            get_version(&tool, "--version", re, &minimal),
+            None,
+            "precondition: interpreter must be unresolvable on the minimal PATH"
+        );
+
+        // Enriched PATH includes the interpreter dir → version captured (the fix).
+        let enriched = extend_path(&minimal, std::slice::from_ref(&interp_dir.path().to_path_buf()));
+        assert_eq!(
+            get_version(&tool, "--version", re, &enriched).as_deref(),
+            Some("9.8.7"),
+            "version must be captured once the interpreter dir is on the enriched PATH"
         );
     }
 }
