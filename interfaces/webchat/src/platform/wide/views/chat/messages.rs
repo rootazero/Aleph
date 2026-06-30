@@ -9,7 +9,7 @@ use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState, QueuedP
 use super::PlanArchiveCell;
 use super::timeline::{self, TimelineRow};
 use crate::components::markdown::{MarkdownRenderer, TypewriterRenderer};
-use crate::components::tool_card::ToolCard;
+use crate::components::tool_card::{tool_headline, tool_icon, ToolCard, ToolKind};
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
@@ -420,6 +420,28 @@ pub(crate) fn run_id_from_message_id(message_id: &str) -> String {
     message_id.to_string()
 }
 
+/// 最后一个带工具调用的步骤的最后一个工具 `(tool_id, tool_name)`。
+/// 用于运行中状态行的「最新动作」。无任何工具时返回 None。
+fn latest_step_tool(steps: &[ChatMessage]) -> Option<(String, String)> {
+    steps
+        .iter()
+        .rev()
+        .find_map(|m| m.tool_calls.last())
+        .map(|t| (t.tool_id.clone(), t.tool_name.clone()))
+}
+
+/// 最后一个非空叙述的首行，UTF-8 安全截断到 `max_chars` 个字符。
+fn step_narration_head(steps: &[ChatMessage], max_chars: usize) -> Option<String> {
+    let raw = steps
+        .iter()
+        .rev()
+        .map(|m| m.content.trim())
+        .find(|c| !c.is_empty())?;
+    let first_line = raw.lines().next().unwrap_or(raw);
+    let truncated: String = first_line.chars().take(max_chars).collect();
+    Some(truncated)
+}
+
 /// Calendar-day separator row — a centered pill anchoring the run of messages
 /// that follow it to "Today" / "Yesterday" / an absolute date.
 #[component]
@@ -526,6 +548,7 @@ fn MessageBubble(
     let tool_calls_view = if has_tools {
         let tools = message.tool_calls.clone();
         let run_for_cards = message_run_id;
+        let it_for_cards = msg_iteration;
         Some(view! {
             <div class="mb-2 flex flex-col gap-1">
                 {tools.into_iter().map(|tc| {
@@ -534,6 +557,7 @@ fn MessageBubble(
                             run_id=run_for_cards.clone()
                             tool_id=tc.tool_id.clone()
                             tool_name=tc.tool_name
+                            iteration=it_for_cards
                         />
                     }
                 }).collect::<Vec<_>>()}
@@ -839,68 +863,80 @@ fn MessageBubble(
     }
 }
 
-/// A run's intermediate steps folded into a bounded, internally-scrolling
-/// strip. Running (`completed == false`) → expanded + scrollable, so a long
-/// run keeps the chat column short. Done (`completed == true`) → collapsed to a
-/// single summary line the user can click to expand.
+/// 一个 run 的中间步骤容器，三态：
+/// - 运行中（`!completed`）：默认收起成「一条会变的状态行」（图标 + 最新动作 +
+///   spinner，副行 `└ N 步 · 叙述`）；点击展开成扁平步骤流。
+/// - 完成（`completed`）：收起成 `✓ N 步 · 末步摘要`；点击展开。
+/// - 展开（任一态）：扁平步骤流，每步一行（无内层滚动条、无嵌套）。
+///
+/// 展开/收起按 `run_id` 存于 `ChatState`（`strip_open`），承受 keyed `<For>`
+/// 的每 token 重挂载（见 `ChatState::strip_open` 注释）。
 #[component]
 fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
-    // Default open while the run streams; collapse once it's done. The
-    // expand/collapse choice is keyed by `run_id` on `ChatState`, NOT a
-    // strip-local signal: `timeline::row_key` folds in content length, so this
-    // row remounts on every streamed token — a local signal would re-open a
-    // strip the user just collapsed mid-run. The hoisted override survives the
-    // remount (see `ChatState::strip_open`).
     let chat = expect_context::<ChatState>();
+    let workspace = use_context::<WorkspaceState>();
     let i18n = use_i18n();
     let run_id = steps
         .first()
         .map(|m| run_id_from_message_id(&m.id))
         .unwrap_or_default();
+    // 运行中默认收起（一条会变的行）；完成默认收起。两态默认都收起。
     let open = {
         let run = run_id.clone();
-        Memo::new(move |_| chat.strip_is_open(&run, !completed))
+        Memo::new(move |_| chat.strip_is_open(&run, false))
     };
     let count = steps.len();
-    let word = if count == 1 {
-        t_string!(i18n, chat.step).to_string()
-    } else {
-        t_string!(i18n, chat.steps).to_string()
-    };
-    let summary = format!("{count} {word}");
+    let word = t_string!(i18n, chat.steps).to_string();
 
-    // Stick the inner scroll window to its bottom so a running strip shows the
-    // latest step, not the first 220px. The row remounts on every streamed
-    // token (row_key folds in content length), so this Effect re-runs and
-    // re-pins to the bottom each update while the run is live; once complete it
-    // stops remounting, leaving the user free to scroll back through the steps.
-    let scroll_ref = NodeRef::<leptos::html::Div>::new();
-    Effect::new(move |_| {
-        if open.get() && !completed {
-            if let Some(el) = scroll_ref.get() {
-                let el: &web_sys::HtmlElement = &el;
-                el.set_scroll_top(el.scroll_height());
+    // 收起态摘要文案：运行中 = 最新动作 headline；完成 = 末步摘要。
+    let steps_for_summary = steps.clone();
+    let summary_main = {
+        let ws = workspace;
+        let run = run_id.clone();
+        move || {
+            if let Some((tool_id, tool_name)) = latest_step_tool(&steps_for_summary) {
+                let kind = ToolKind::from_name(&tool_name);
+                let payload = ws.and_then(|w| w.get_tool_payload(&run, &tool_id));
+                let icon = tool_icon(&tool_name, kind);
+                let headline = tool_headline(kind, &payload).unwrap_or_else(|| {
+                    step_narration_head(&steps_for_summary, 60)
+                        .unwrap_or_else(|| t_string!(i18n, chat.working).to_string())
+                });
+                format!("{icon} {headline}")
+            } else {
+                step_narration_head(&steps_for_summary, 60)
+                    .unwrap_or_else(|| t_string!(i18n, chat.working).to_string())
             }
         }
-    });
+    };
 
+    let run_for_toggle = run_id.clone();
     view! {
         <div class="my-1">
             <div class="w-full rounded-lg glass-inset">
                 <button
                     type="button"
-                    class="w-full flex items-center gap-2 px-3 py-1.5 text-left
-                           text-[11px] uppercase tracking-wider text-text-tertiary
-                           hover:text-text-secondary"
-                    on:click=move |_| chat.toggle_strip(&run_id, !completed)
+                    class="w-full flex flex-col gap-0.5 px-3 py-1.5 text-left
+                           text-text-tertiary hover:text-text-secondary"
+                    on:click=move |_| chat.toggle_strip(&run_for_toggle, false)
                 >
-                    <span>{summary}</span>
-                    <span class="ml-auto">
-                        {move || if open.get() { "▾" } else { "▸" }}
+                    <span class="flex items-center gap-2 text-sm">
+                        {move || if completed {
+                            view! { <span class="text-success shrink-0">"\u{2713}"</span> }.into_any()
+                        } else {
+                            view! { <span class="shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span> }.into_any()
+                        }}
+                        <span class="flex-1 min-w-0 truncate">{summary_main}</span>
+                        <span class="shrink-0 text-[10px]">
+                            {move || if open.get() { "\u{25BE}" } else { "\u{25B8}" }}
+                        </span>
+                    </span>
+                    <span class="text-[10px] uppercase tracking-wider text-text-tertiary/80 pl-3.5">
+                        {format!("{count} {word}")}
                     </span>
                 </button>
                 <Show when=move || open.get()>
-                    <div node_ref=scroll_ref class="max-h-[220px] overflow-y-auto px-2 pb-2 flex flex-col gap-1">
+                    <div class="px-2 pb-2 flex flex-col gap-1">
                         {steps
                             .clone()
                             .into_iter()
@@ -923,5 +959,88 @@ mod run_id_tests {
         assert_eq!(run_id_from_message_id("intermediate-r1-3"), "r1");
         assert_eq!(run_id_from_message_id("intermediate-run-x-7"), "run-x");
         assert_eq!(run_id_from_message_id("user-0"), "user-0");
+    }
+}
+
+#[cfg(test)]
+mod step_action_tests {
+    use super::{latest_step_tool, step_narration_head};
+    use crate::views::chat::state::{ChatMessage, ToolCallEntry};
+
+    fn msg(id: &str, content: &str, tools: Vec<(&str, &str)>) -> ChatMessage {
+        ChatMessage {
+            id: id.to_string(),
+            role: "assistant".into(),
+            content: content.to_string(),
+            tool_calls: tools.into_iter().map(|(tid, tn)| ToolCallEntry {
+                tool_id: tid.to_string(),
+                tool_name: tn.to_string(),
+                status: "completed".into(),
+                duration_ms: None,
+            }).collect(),
+            is_streaming: false,
+            is_intermediate: true,
+            error: None,
+            model_info: None,
+            iteration: Some(1),
+            timestamp: None,
+            is_final: false,
+            text_finalized: false,
+            agent_id: None,
+            plan_archive: None,
+        }
+    }
+
+    #[test]
+    fn latest_step_tool_picks_last_tool_of_last_step_with_tools() {
+        let steps = vec![
+            msg("intermediate-r1-1", "searching", vec![("t1", "search")]),
+            msg("intermediate-r1-2", "editing", vec![("t2", "file_edit"), ("t3", "bash")]),
+        ];
+        assert_eq!(
+            latest_step_tool(&steps),
+            Some(("t3".to_string(), "bash".to_string()))
+        );
+    }
+
+    #[test]
+    fn latest_step_tool_skips_toolless_tail() {
+        let steps = vec![
+            msg("intermediate-r1-1", "searching", vec![("t1", "search")]),
+            msg("intermediate-r1-2", "thinking out loud", vec![]),
+        ];
+        assert_eq!(
+            latest_step_tool(&steps),
+            Some(("t1".to_string(), "search".to_string()))
+        );
+    }
+
+    #[test]
+    fn latest_step_tool_none_when_no_tools() {
+        let steps = vec![msg("intermediate-r1-1", "just text", vec![])];
+        assert_eq!(latest_step_tool(&steps), None);
+    }
+
+    #[test]
+    fn step_narration_head_takes_last_nonempty_first_line_truncated() {
+        let steps = vec![
+            msg("intermediate-r1-1", "first step narration", vec![]),
+            msg("intermediate-r1-2", "second step\nwith two lines", vec![]),
+        ];
+        assert_eq!(
+            step_narration_head(&steps, 100).as_deref(),
+            Some("second step")
+        );
+        // 截断（UTF-8 安全）
+        assert_eq!(
+            step_narration_head(&steps, 6).as_deref(),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn step_narration_head_none_when_all_empty() {
+        let steps = vec![msg("intermediate-r1-1", "", vec![])];
+        assert_eq!(step_narration_head(&steps, 50), None);
     }
 }
