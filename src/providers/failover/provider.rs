@@ -99,6 +99,17 @@ pub struct FailoverProvider {
     /// Wired only in production (`build_failover_chain`), one registry cloned
     /// across all chains like [`FailoverHealth`].
     provider_cooldown: Option<ProviderCooldown>,
+    /// Derive the fallback set *live* from the primary handle's registry on
+    /// every request, instead of the boot-time static `fallbacks` snapshot.
+    ///
+    /// `false` (the default, tests, and any chain with an explicit
+    /// `[fallback_provider].chain`) keeps the static snapshot — byte-identical
+    /// to pre-live failover. `true` is set by `build_failover_chain` only when
+    /// the chain was *auto-derived* (no operator chain), so a provider
+    /// added/removed at runtime is reflected in the next turn's fallback set
+    /// without a restart. Falls back to the static snapshot if the handle
+    /// exposes no live providers (e.g. a non-registry boot path).
+    derive_fallbacks_live: bool,
 }
 
 impl FailoverProvider {
@@ -131,7 +142,19 @@ impl FailoverProvider {
             load: None,
             model_cooldown: None,
             provider_cooldown: None,
+            derive_fallbacks_live: false,
         }
+    }
+
+    /// Derive the fallback set live from the primary handle's registry on every
+    /// request, instead of the boot-time static snapshot. Set by
+    /// `build_failover_chain` only for an *auto-derived* global chain (no
+    /// operator `[fallback_provider].chain`), so runtime provider add/remove is
+    /// reflected without a restart. See [`Self::derive_fallbacks_live`].
+    #[must_use]
+    pub const fn with_live_fallback_derivation(mut self) -> Self {
+        self.derive_fallbacks_live = true;
+        self
     }
 
     /// Attach a local/cloud route preference and the escalation approval gate.
@@ -370,13 +393,40 @@ impl FailoverProvider {
             provider: primary,
             tier: self.primary_tier,
         };
-        let mut fallbacks: Vec<FailoverNode> = Vec::with_capacity(self.fallbacks.len());
-        for fb in &self.fallbacks {
-            if fb.name == primary_name {
-                continue; // dedup: the primary slot already covers it
+        // Raw fallback pool: live-derived from the primary handle's registry
+        // when configured (auto-derived chains), else the boot-time static
+        // snapshot. Live nodes are minimal — empty model list (→ the caller's
+        // model) and `Unknown` tier (→ always route-allowed) — so a provider
+        // added at runtime joins the chain without a restart. Falls back to the
+        // static snapshot when the handle exposes no live providers.
+        let live_names = if self.derive_fallbacks_live {
+            self.primary.provider_names()
+        } else {
+            Vec::new()
+        };
+        let fallbacks: Vec<FailoverNode> = if live_names.is_empty() {
+            let mut v = Vec::with_capacity(self.fallbacks.len());
+            for fb in &self.fallbacks {
+                if fb.name == primary_name {
+                    continue; // dedup: the primary slot already covers it
+                }
+                v.push(fb.clone());
             }
-            fallbacks.push(fb.clone());
-        }
+            v
+        } else {
+            live_names
+                .into_iter()
+                .filter(|name| name != &primary_name) // dedup: primary slot covers it
+                .filter_map(|name| {
+                    self.primary.provider_by_name(&name).map(|provider| FailoverNode {
+                        name,
+                        models: Vec::new(),
+                        provider,
+                        tier: EndpointTier::Unknown,
+                    })
+                })
+                .collect()
+        };
         let (mode, allow_escalation) = self.route_preference();
         let targets = self.route_targets();
 

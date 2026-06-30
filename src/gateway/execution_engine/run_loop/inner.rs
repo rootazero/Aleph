@@ -48,6 +48,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         extension_manager: Option<Arc<crate::extension::ExtensionManager>>,
         hook_executor: Option<Arc<HookExecutor>>,
         hook_session_id: String,
+        occupancy_out: Arc<std::sync::Mutex<Option<super::super::helpers::RunContextOccupancy>>>,
     ) -> Result<String, ExecutionError> {
         info!(run_id = run_id, "Starting agent loop (think->act)");
 
@@ -897,6 +898,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 run_id,
                 cancel_token.clone(),
                 locale,
+                &occupancy_out,
             )
             .await;
 

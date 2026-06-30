@@ -45,6 +45,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         deadline: Arc<tokio::sync::Mutex<tokio::time::Instant>>,
         trace_task_id: Option<String>,
         cancel_token: CancellationToken,
+        occupancy_out: Arc<std::sync::Mutex<Option<super::helpers::RunContextOccupancy>>>,
     ) -> Result<String, ExecutionError> {
         // Resolve the extension manager + snapshot its HookExecutor once for
         // the whole run. Both flow into `run_agent_loop_inner` so tool
@@ -167,6 +168,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         extension_manager,
                         hook_executor.clone(),
                         hook_session_id.clone(),
+                        occupancy_out,
                     ),
                 ),
             ),

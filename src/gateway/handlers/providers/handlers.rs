@@ -202,10 +202,37 @@ pub async fn handle_create(
     event_bus: Arc<GatewayEventBus>,
     vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
+    create_provider_inner(request, config, event_bus, vault, None).await
+}
+
+/// Like [`handle_create`] but also registers the new provider into the live
+/// `MultiProviderRegistry`, so it is immediately usable — and an auto-derived
+/// failover fallback — without a server restart.
+pub async fn handle_create_hot(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
+    multi_registry: Arc<crate::thinker::MultiProviderRegistry>,
+) -> JsonRpcResponse {
+    create_provider_inner(request, config, event_bus, vault, Some(multi_registry)).await
+}
+
+async fn create_provider_inner(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
+    multi_registry: Option<Arc<crate::thinker::MultiProviderRegistry>>,
+) -> JsonRpcResponse {
     let params: CreateParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    // Snapshot (name + config WITH api_key) for live registration, captured
+    // before the key is stripped for persistence. None when no registry.
+    let mut registration: Option<(String, ProviderConfig)> = None;
 
     // Create provider
     {
@@ -238,6 +265,11 @@ pub async fn handle_create(
                 );
             }
         }
+        // Capture the registration snapshot (with the key) before clearing it,
+        // so the live registry can build a working provider instance.
+        if multi_registry.is_some() {
+            registration = Some((params.name.clone(), provider_config.clone()));
+        }
         provider_config.api_key = None;
 
         // Insert provider
@@ -251,6 +283,23 @@ pub async fn handle_create(
                 INTERNAL_ERROR,
                 format!("Failed to save config: {e}"),
             );
+        }
+    }
+
+    // Hot-register into the live registry so the provider is usable and an
+    // auto-derived failover fallback without a restart (mirrors set_default's
+    // runtime swap). A build failure leaves the config saved — the provider
+    // becomes live on the next restart.
+    if let (Some(registry), Some((name, pc))) = (&multi_registry, registration) {
+        match crate::providers::create_provider(&name, pc) {
+            Ok(provider) => {
+                registry.register(name.clone(), provider);
+                info!(name = %name, "Provider registered in live registry");
+            }
+            Err(e) => error!(
+                name = %name, error = %e,
+                "Failed to build provider for live registration (config saved)"
+            ),
         }
     }
 
@@ -285,6 +334,29 @@ pub async fn handle_delete(
     event_bus: Arc<GatewayEventBus>,
     vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
+    delete_provider_inner(request, config, event_bus, vault, None).await
+}
+
+/// Like [`handle_delete`] but also removes the provider from the live
+/// `MultiProviderRegistry`, so it stops being an auto-derived failover fallback
+/// without a server restart.
+pub async fn handle_delete_hot(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
+    multi_registry: Arc<crate::thinker::MultiProviderRegistry>,
+) -> JsonRpcResponse {
+    delete_provider_inner(request, config, event_bus, vault, Some(multi_registry)).await
+}
+
+async fn delete_provider_inner(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
+    multi_registry: Option<Arc<crate::thinker::MultiProviderRegistry>>,
+) -> JsonRpcResponse {
     let params: DeleteParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -315,19 +387,39 @@ pub async fn handle_delete(
         // Remove provider
         cfg.providers.remove(&params.name);
 
+        // Scrub the deleted provider from the failover chain so deletion does
+        // not leave a dangling reference behind. The `[fallback_provider]`
+        // section is only persisted when the chain actually changed.
+        let mut sections: Vec<&str> = vec!["providers"];
+        if let Some(fb) = cfg.fallback_provider.as_mut() {
+            if crate::gateway::handlers::remove_from_chain(&mut fb.chain, &params.name) {
+                sections.push("fallback_provider");
+            }
+        }
+
         // Delete API key from vault
         if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
             tracing::warn!(provider = %params.name, error = %e, "Failed to delete API key from vault");
         }
 
         // Save to file
-        if let Err(e) = save_config(&cfg, &["providers"]) {
+        if let Err(e) = save_config(&cfg, &sections) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
                 format!("Failed to save config: {e}"),
             );
+        }
+    }
+
+    // Drop the provider from the live registry so it stops being dialed (as an
+    // auto-derived failover fallback) without a restart. The registry refuses
+    // to remove its last provider — harmless here since the default provider
+    // (guarded above) can never be the one being deleted.
+    if let Some(registry) = &multi_registry {
+        if let Err(e) = registry.remove(&params.name) {
+            tracing::warn!(provider = %params.name, error = %e, "Failed to remove provider from live registry");
         }
     }
 

@@ -15,6 +15,14 @@ pub struct ChatMessage {
     pub timestamp: Option<String>,
     #[serde(default)]
     pub metadata: Option<Value>,
+    /// Last-turn context-window occupancy persisted on assistant turns, so the
+    /// gauge re-projects when a session is reloaded from history.
+    #[serde(default)]
+    pub context_tokens: Option<u32>,
+    #[serde(default)]
+    pub context_window: Option<u32>,
+    #[serde(default)]
+    pub total_tokens: Option<u64>,
 }
 
 /// Response from chat.send

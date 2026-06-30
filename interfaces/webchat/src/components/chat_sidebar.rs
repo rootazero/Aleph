@@ -16,7 +16,9 @@ use crate::i18n::{t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
 use crate::views::chat::agent_identity::agent_color_for_id;
-use crate::views::chat::state::{ChatMessage, ChatState, MemberStatus, TeamMemberView};
+use crate::views::chat::state::{
+    ChatMessage, ChatState, ContextUsage, MemberStatus, TeamMemberView,
+};
 
 use web_sys::HtmlInputElement;
 
@@ -83,6 +85,26 @@ fn team_history_item_to_message(index: usize, item: TeamMessageItem) -> ChatMess
         agent_id: if is_user { None } else { Some(item.from_agent) },
         plan_archive: None,
     }
+}
+
+/// Pick the gauge occupancy for a freshly-loaded session: the most recent
+/// assistant turn carrying a persisted occupancy (core only stamps it when a
+/// real LLM call ran). `None` when no turn carries one, which correctly leaves
+/// the gauge hidden. Pure + sync so it is unit-testable without a Leptos owner.
+#[must_use]
+pub(crate) fn occupancy_from_history(history: &[crate::api::chat::ChatMessage]) -> Option<ContextUsage> {
+    history.iter().rev().find_map(|m| {
+        let used = m.context_tokens?;
+        let window = m.context_window?;
+        if used == 0 || window == 0 {
+            return None;
+        }
+        Some(ContextUsage {
+            used_tokens: used,
+            window_tokens: window,
+            total_tokens: m.total_tokens.unwrap_or(0),
+        })
+    })
 }
 
 /// Fetch a session's history (+ persisted run traces) and rebuild the
@@ -191,6 +213,13 @@ pub(crate) async fn hydrate_session_history(
                 ws.unseen_activity.set(0);
                 ws.current_iteration.set(None);
             }
+
+            // Re-project the gauge from the persisted occupancy. This is the
+            // authoritative source on reload — it overrides the `clear_session`
+            // wipe that runs just before hydrate, so switching to/back from any
+            // history conversation shows that conversation's own occupancy
+            // (None ⇒ gauge correctly hidden for sessions with no LLM turn).
+            chat.context_usage.set(occupancy_from_history(&history));
         }
         Err(e) => {
             web_sys::console::error_1(&format!("Failed to load history: {e}").into());
@@ -1546,5 +1575,73 @@ mod team_history_tests {
         assert_eq!(m.role, "assistant");
         assert_eq!(m.agent_id.as_deref(), Some("risk_analyst"));
         assert_eq!(m.id, "team-hist-3");
+    }
+}
+
+#[cfg(test)]
+mod gauge_tests {
+    use super::occupancy_from_history;
+    use crate::api::chat::ChatMessage;
+
+    fn user(content: &str) -> ChatMessage {
+        ChatMessage {
+            role: "user".into(),
+            content: content.into(),
+            run_id: None,
+            timestamp: None,
+            metadata: None,
+            context_tokens: None,
+            context_window: None,
+            total_tokens: None,
+        }
+    }
+
+    fn assistant(used: Option<u32>, window: Option<u32>, total: Option<u64>) -> ChatMessage {
+        ChatMessage {
+            role: "assistant".into(),
+            content: "ok".into(),
+            run_id: Some("r".into()),
+            timestamp: None,
+            metadata: None,
+            context_tokens: used,
+            context_window: window,
+            total_tokens: total,
+        }
+    }
+
+    #[test]
+    fn none_when_no_turn_carries_occupancy() {
+        // Pre-change sessions (or no-LLM turns) leave the gauge hidden.
+        let h = vec![user("hi"), assistant(None, None, None)];
+        assert!(occupancy_from_history(&h).is_none());
+    }
+
+    #[test]
+    fn picks_latest_assistant_occupancy() {
+        // Two completed turns → the most recent occupancy wins.
+        let h = vec![
+            user("a"),
+            assistant(Some(10_000), Some(200_000), Some(12_000)),
+            user("b"),
+            assistant(Some(42_000), Some(200_000), Some(55_000)),
+        ];
+        let u = occupancy_from_history(&h).expect("gauge");
+        assert_eq!(u.used_tokens, 42_000);
+        assert_eq!(u.window_tokens, 200_000);
+        assert_eq!(u.total_tokens, 55_000);
+    }
+
+    #[test]
+    fn skips_partial_or_zero_rows() {
+        // A trailing row missing the window, or with a zero, falls back to the
+        // last fully-populated turn rather than showing a broken denominator.
+        let h = vec![
+            assistant(Some(30_000), Some(200_000), Some(31_000)),
+            assistant(Some(40_000), None, Some(41_000)),
+            assistant(Some(0), Some(200_000), Some(0)),
+        ];
+        let u = occupancy_from_history(&h).expect("gauge");
+        assert_eq!(u.used_tokens, 30_000);
+        assert_eq!(u.window_tokens, 200_000);
     }
 }

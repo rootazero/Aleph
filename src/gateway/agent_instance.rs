@@ -168,6 +168,43 @@ pub enum MessageRole {
     Tool,
 }
 
+/// Build the persisted-message `metadata` JSON from the optional `run_id` and
+/// the optional last-turn context occupancy. Returns `None` when neither is
+/// present (so legacy rows keep persisting NULL metadata). The occupancy keys
+/// mirror the live `run_complete` summary fields so the Panel reads the gauge
+/// identically on reload and on live completion.
+#[must_use]
+pub(crate) fn build_message_metadata(
+    run_id: Option<&str>,
+    occupancy: Option<crate::gateway::execution_engine::helpers::RunContextOccupancy>,
+) -> Option<serde_json::Value> {
+    if run_id.is_none() && occupancy.is_none() {
+        return None;
+    }
+    let mut map = serde_json::Map::new();
+    if let Some(r) = run_id {
+        map.insert("run_id".to_string(), serde_json::Value::String(r.to_string()));
+    }
+    if let Some(o) = occupancy {
+        // Stored as strings, not JSON numbers: `SessionMessage::from_record`
+        // deserializes the whole metadata blob via `HashMap<String, String>`,
+        // which would reject numeric values and silently drop run_id too.
+        map.insert(
+            "context_tokens".to_string(),
+            serde_json::Value::String(o.context_tokens.to_string()),
+        );
+        map.insert(
+            "context_window".to_string(),
+            serde_json::Value::String(o.context_window.to_string()),
+        );
+        map.insert(
+            "total_tokens".to_string(),
+            serde_json::Value::String(o.total_tokens.to_string()),
+        );
+    }
+    Some(serde_json::Value::Object(map))
+}
+
 impl AgentInstance {
     /// Create a new agent instance with a session store
     pub fn new(
@@ -356,7 +393,8 @@ impl AgentInstance {
     /// Add a message to a session (delegated to session store) and capture
     /// it into the L0 `raw_memories` buffer when a writer is wired.
     pub async fn add_message(&self, key: &SessionKey, role: MessageRole, content: &str) {
-        self.add_message_with_run_id(key, role, content, None).await;
+        self.add_message_with_run_id(key, role, content, None, None)
+            .await;
     }
 
     /// Like [`add_message`], but stamps `metadata.run_id` on the persisted
@@ -371,6 +409,7 @@ impl AgentInstance {
         role: MessageRole,
         content: &str,
         run_id: Option<&str>,
+        occupancy: Option<crate::gateway::execution_engine::helpers::RunContextOccupancy>,
     ) {
         let key_str = key.to_key_string();
         let role_str = match role {
@@ -380,7 +419,7 @@ impl AgentInstance {
             MessageRole::Tool => "tool",
         };
 
-        let metadata = run_id.map(|r| serde_json::json!({ "run_id": r }));
+        let metadata = build_message_metadata(run_id, occupancy);
 
         // Ensure session exists, then add message
         if let Err(e) = self.session_store.get_or_create(key).await {
@@ -929,20 +968,66 @@ mod tests {
         // assistant turn back to its persisted observability trace, letting
         // the workspace panel rehydrate on session reload/switch.
         instance
-            .add_message_with_run_id(&key, MessageRole::Assistant, "Hi!", Some("run-xyz"))
+            .add_message_with_run_id(
+                &key,
+                MessageRole::Assistant,
+                "Hi!",
+                Some("run-xyz"),
+                Some(crate::gateway::execution_engine::helpers::RunContextOccupancy {
+                    context_tokens: 42_000,
+                    context_window: 200_000,
+                    total_tokens: 55_000,
+                }),
+            )
             .await;
 
         let history = instance.get_history(&key, None).await;
         let last = history.last().expect("one persisted message");
         assert_eq!(last.role, MessageRole::Assistant);
+        let meta = last
+            .metadata
+            .as_ref()
+            .expect("assistant turn must carry metadata");
         assert_eq!(
-            last.metadata
-                .as_ref()
-                .and_then(|m| m.get("run_id"))
-                .map(String::as_str),
+            meta.get("run_id").map(String::as_str),
             Some("run-xyz"),
             "assistant turn must carry run_id in metadata for trace replay"
         );
+        // Occupancy persisted as strings so the HashMap<String,String> decode in
+        // `from_record` keeps the whole blob (run_id included) intact.
+        assert_eq!(meta.get("context_tokens").map(String::as_str), Some("42000"));
+        assert_eq!(
+            meta.get("context_window").map(String::as_str),
+            Some("200000")
+        );
+        assert_eq!(meta.get("total_tokens").map(String::as_str), Some("55000"));
+    }
+
+    #[test]
+    fn build_message_metadata_combines_run_id_and_occupancy() {
+        use crate::gateway::execution_engine::helpers::RunContextOccupancy;
+        // None + None → no metadata row at all (legacy NULL behavior).
+        assert!(build_message_metadata(None, None).is_none());
+
+        // run_id only → just the run_id key (no occupancy noise).
+        let only_run = build_message_metadata(Some("r1"), None).expect("some");
+        assert_eq!(only_run.get("run_id").and_then(|v| v.as_str()), Some("r1"));
+        assert!(only_run.get("context_tokens").is_none());
+
+        // run_id + occupancy → numbers serialized as strings (HashMap-safe).
+        let full = build_message_metadata(
+            Some("r2"),
+            Some(RunContextOccupancy {
+                context_tokens: 10,
+                context_window: 20,
+                total_tokens: 30,
+            }),
+        )
+        .expect("some");
+        assert_eq!(full.get("run_id").and_then(|v| v.as_str()), Some("r2"));
+        assert_eq!(full.get("context_tokens").and_then(|v| v.as_str()), Some("10"));
+        assert_eq!(full.get("context_window").and_then(|v| v.as_str()), Some("20"));
+        assert_eq!(full.get("total_tokens").and_then(|v| v.as_str()), Some("30"));
     }
 
     #[tokio::test]

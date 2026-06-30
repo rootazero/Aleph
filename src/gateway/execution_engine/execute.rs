@@ -509,6 +509,12 @@ where
             tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs),
         ));
 
+        // Shared slot the dispatch drain fills with the last turn's authoritative
+        // context-window occupancy; read after the loop to stamp it onto the
+        // persisted assistant message (so the Panel gauge survives a reload).
+        let occupancy_out: Arc<std::sync::Mutex<Option<super::helpers::RunContextOccupancy>>> =
+            Arc::new(std::sync::Mutex::new(None));
+
         let result: Result<String, ExecutionError> = tokio::select! {
             result = self.run_agent_loop(
                 &run_id,
@@ -518,6 +524,7 @@ where
                 deadline.clone(),
                 trace_task_persisted.then(|| run_id.clone()),
                 cancel_token.clone(),
+                occupancy_out.clone(),
             ) => result,
 
             _ = cancel_rx.recv() => {
@@ -583,13 +590,16 @@ where
 
                 // Store assistant response, stamping the run_id so the
                 // workspace panel can rehydrate this turn's persisted trace
-                // on session reload/switch.
+                // on session reload/switch, plus the last turn's context-window
+                // occupancy so the Panel gauge re-projects on reload.
+                let occupancy = occupancy_out.lock().ok().and_then(|g| *g);
                 agent
                     .add_message_with_run_id(
                         &request.session_key,
                         MessageRole::Assistant,
                         response,
                         Some(&run_id),
+                        occupancy,
                     )
                     .await;
 

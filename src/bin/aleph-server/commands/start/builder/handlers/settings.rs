@@ -248,14 +248,29 @@ pub(in crate::commands::start) fn register_config_handlers(
         config,
         shared_token_mgr
     );
-    register_handler!(
-        server,
-        "providers.create",
-        providers::handle_create,
-        config,
-        event_bus,
-        shared_token_mgr
-    );
+    // create/delete register into / remove from the live registry when present,
+    // so a provider added/removed at runtime is usable and an auto-derived
+    // failover fallback without a restart (mirrors setDefault's hot path).
+    if let Some(ref registry) = multi_registry {
+        register_handler!(
+            server,
+            "providers.create",
+            providers::handle_create_hot,
+            config,
+            event_bus,
+            shared_token_mgr,
+            registry
+        );
+    } else {
+        register_handler!(
+            server,
+            "providers.create",
+            providers::handle_create,
+            config,
+            event_bus,
+            shared_token_mgr
+        );
+    }
     register_handler!(
         server,
         "providers.update",
@@ -264,14 +279,26 @@ pub(in crate::commands::start) fn register_config_handlers(
         event_bus,
         shared_token_mgr
     );
-    register_handler!(
-        server,
-        "providers.delete",
-        providers::handle_delete,
-        config,
-        event_bus,
-        shared_token_mgr
-    );
+    if let Some(ref registry) = multi_registry {
+        register_handler!(
+            server,
+            "providers.delete",
+            providers::handle_delete_hot,
+            config,
+            event_bus,
+            shared_token_mgr,
+            registry
+        );
+    } else {
+        register_handler!(
+            server,
+            "providers.delete",
+            providers::handle_delete,
+            config,
+            event_bus,
+            shared_token_mgr
+        );
+    }
     // providers.setDefault needs the swappable registry for hot-switching.
     // Pass vault so the runtime swap can inject api_key from vault into the cloned ProviderConfig
     // (api_key is #[serde(skip)] and never lives on disk).

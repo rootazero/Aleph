@@ -473,6 +473,22 @@ impl crate::providers::DefaultProviderHandle for MultiProviderRegistry {
     fn current(&self) -> crate::sync_primitives::Arc<dyn crate::providers::AiProvider> {
         <Self as ProviderRegistry>::default_provider(self)
     }
+
+    /// Live snapshot of every registered provider name, so an auto-derived
+    /// failover chain reflects runtime `register`/`remove` without a restart.
+    fn provider_names(&self) -> Vec<String> {
+        self.list_providers()
+    }
+
+    /// Exact-name lookup against the live registry (not model resolution), so
+    /// auto-derived fallback nodes bind to the current provider instance.
+    fn provider_by_name(
+        &self,
+        name: &str,
+    ) -> Option<crate::sync_primitives::Arc<dyn crate::providers::AiProvider>> {
+        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        state.providers.get(name).cloned()
+    }
 }
 
 /// Dummy provider returned when [`MultiProviderRegistry`] has no registered providers.

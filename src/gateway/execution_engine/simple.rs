@@ -183,6 +183,8 @@ impl SimpleExecutionEngine {
                         MessageRole::Assistant,
                         response,
                         Some(&run_id),
+                        // Simple engine does not surface per-turn occupancy yet.
+                        None,
                     )
                     .await;
 
