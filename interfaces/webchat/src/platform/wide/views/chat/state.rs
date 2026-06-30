@@ -169,6 +169,9 @@ pub struct ContextUsage {
     pub window_tokens: u32,
     /// Running total tokens billed for the run (shown in the tooltip).
     pub total_tokens: u64,
+    /// True when these figures are a pre-run estimate (no real LLM turn yet),
+    /// so the gauge renders `≈N%` instead of `N%`.
+    pub is_estimate: bool,
 }
 
 /// Model resolution info (mirrors core `ModelInfo`).
@@ -1357,6 +1360,7 @@ mod step_tests {
                 used_tokens: 10_000,
                 window_tokens: 200_000,
                 total_tokens: 12_000,
+                is_estimate: false,
             }))
         };
 
@@ -1388,6 +1392,7 @@ mod step_tests {
                 used_tokens: 10_000,
                 window_tokens: 200_000,
                 total_tokens: 12_000,
+                is_estimate: false,
             }),
             "restore_from() must rehydrate the captured gauge so it survives tab swaps"
         );

@@ -103,6 +103,7 @@ pub(crate) fn occupancy_from_history(history: &[crate::api::chat::ChatMessage]) 
             used_tokens: used,
             window_tokens: window,
             total_tokens: m.total_tokens.unwrap_or(0),
+            is_estimate: false,
         })
     })
 }
@@ -1629,6 +1630,13 @@ mod gauge_tests {
         assert_eq!(u.used_tokens, 42_000);
         assert_eq!(u.window_tokens, 200_000);
         assert_eq!(u.total_tokens, 55_000);
+    }
+
+    #[test]
+    fn real_occupancy_is_not_marked_estimate() {
+        let h = vec![assistant(Some(10_000), Some(200_000), Some(12_000))];
+        let u = occupancy_from_history(&h).expect("real occupancy present");
+        assert!(!u.is_estimate, "history-persisted occupancy is real, not an estimate");
     }
 
     #[test]

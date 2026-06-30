@@ -249,6 +249,7 @@ fn apply_context_gauge(chat: ChatState, summary: &serde_json::Value) {
             used_tokens: used,
             window_tokens: window,
             total_tokens: total,
+            is_estimate: false,
         }));
     }
 }
