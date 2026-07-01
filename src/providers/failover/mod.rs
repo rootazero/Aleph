@@ -68,16 +68,16 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// per-provider cooldown wait. Matches hermes' 120s `Retry-After` cap.
 const MAX_OVERLOAD_RETRY_DELAY: Duration = Duration::from_secs(120);
 /// In-place retry budget for a *transient server overload* — a 429 whose body
-/// says "please wait a moment and try again", or a 529 `overloaded`. Deeper
-/// than [`FailoverConfig::max_retries`] because in a single-provider setup
-/// there is no sibling to fail over to, and the server explicitly asked the
-/// client to wait and retry: a flat 2-retry budget gave up after ~4s and
-/// hard-failed the whole flow (the 08:00 scheduled job's 429 crash). With the
-/// exponential backoff applied in `process()` this rides out a throttle for up
-/// to ~60s (2+4+8+16+32) before advancing the chain — and honors a larger
-/// server `Retry-After` up to [`MAX_OVERLOAD_RETRY_DELAY`]. A genuine
-/// account/quota 429 stays `Fatal` upstream and never reaches this budget.
-const OVERLOAD_RETRY_BUDGET: u32 = 5;
+/// says "please wait a moment and try again", or a 529 `overloaded`. In a
+/// single-provider setup there is no sibling to fail over to, but endlessly
+/// retrying a provider that is consistently overloaded makes the UI appear to
+/// hang. One retry gives the server a brief moment to recover (~2s) without
+/// abandoning the request entirely; if it still fails we surface the error
+/// immediately. Operators who need deeper ride-out for scheduled jobs can
+/// configure `[stability] turn_timeout_secs` and/or a secondary provider.
+/// A genuine account/quota 429 stays `Fatal` upstream and never reaches this
+/// budget.
+const OVERLOAD_RETRY_BUDGET: u32 = 1;
 /// Default sideline window for a *model-specific* 429 when the server gave no
 /// `Retry-After` hint. Short enough that a transient per-model throttle clears
 /// quickly; a longer server hint wins (capped by [`MAX_COOLDOWN`]).

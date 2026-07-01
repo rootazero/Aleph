@@ -394,16 +394,14 @@ impl FailoverProvider {
             tier: self.primary_tier,
         };
         // Raw fallback pool: live-derived from the primary handle's registry
-        // when configured (auto-derived chains), else the boot-time static
-        // snapshot. Live nodes are minimal — empty model list (→ the caller's
-        // model) and `Unknown` tier (→ always route-allowed) — so a provider
-        // added at runtime joins the chain without a restart. Falls back to the
-        // static snapshot when the handle exposes no live providers.
-        let live_names = if self.derive_fallbacks_live {
-            self.primary.provider_names()
-        } else {
-            Vec::new()
-        };
+        // when configured (auto-derived chains). For explicit operator chains,
+        // still consult the live registry so a provider removed at runtime is
+        // dropped from the chain without a restart; the explicit order is
+        // preserved and unknown names are skipped. Live nodes are minimal —
+        // empty model list (→ the caller's model) and `Unknown` tier (→ always
+        // route-allowed). Falls back to the boot-time static snapshot only when
+        // the handle exposes no live providers (tests / non-registry boot paths).
+        let live_names = self.primary.provider_names();
         let fallbacks: Vec<FailoverNode> = if live_names.is_empty() {
             let mut v = Vec::with_capacity(self.fallbacks.len());
             for fb in &self.fallbacks {
@@ -413,7 +411,7 @@ impl FailoverProvider {
                 v.push(fb.clone());
             }
             v
-        } else {
+        } else if self.derive_fallbacks_live {
             live_names
                 .into_iter()
                 .filter(|name| name != &primary_name) // dedup: primary slot covers it
@@ -425,6 +423,15 @@ impl FailoverProvider {
                         tier: EndpointTier::Unknown,
                     })
                 })
+                .collect()
+        } else {
+            // Explicit `[fallback_provider].chain`: keep operator order but
+            // drop entries that no longer exist in the live registry.
+            let live_set: std::collections::HashSet<String> = live_names.into_iter().collect();
+            self.fallbacks
+                .iter()
+                .filter(|fb| fb.name != primary_name && live_set.contains(&fb.name))
+                .cloned()
                 .collect()
         };
         let (mode, allow_escalation) = self.route_preference();

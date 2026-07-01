@@ -427,7 +427,10 @@ impl ProviderRegistry for MultiProviderRegistry {
             }
         }
 
-        // Try each candidate
+        // Try each candidate in order, skipping unhealthy ones.
+        // FailoverProvider::candidates() already filters the explicit fallback
+        // chain against the live registry, so we will never select a provider
+        // that has been removed at runtime.
         for (i, (provider_name, candidate_model)) in candidates.into_iter().enumerate() {
             let health = state.health.get(&provider_name).cloned().unwrap_or_default();
             if !health.is_usable() {
