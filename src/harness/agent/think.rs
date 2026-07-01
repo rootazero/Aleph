@@ -578,9 +578,10 @@ impl AgentHarness {
         // 2c-split. `SplitSession` directive — attempt compaction-driven session
         // split. On success, return `TurnState::Continue` with the child session
         // id so `run()` can rebind `current_session`. On failure or when the
-        // registrar/compactor is not wired, fall back to the `FinalReply` path.
-        // R10-safe: mechanical dispatch to `perform_session_split` (lives outside
-        // the harness); no intent classification, no new heuristic.
+        // registrar/compactor is not wired, fall back to compact-to-fit and
+        // continue (never-break). R10-safe: mechanical dispatch to
+        // `perform_session_split` (lives outside the harness); no intent
+        // classification, no new heuristic.
         if matches!(budget_directive, Some(LoopDirective::SplitSession)) {
             let split_child = match (
                 self.deps.context_compactor.as_ref(),
@@ -612,13 +613,13 @@ impl AgentHarness {
                             tracing::warn!(
                                 ?session_id,
                                 %e,
-                                "session split failed; falling back to FinalReply",
+                                "session split failed; falling back to compact-to-fit",
                             );
                             None
                         }
                     }
                 }
-                _ => None, // compactor or registrar not wired — fall back to FinalReply
+                _ => None, // compactor or registrar not wired — fall back to compact-to-fit
             };
 
             if let Some(child) = split_child {
