@@ -6,6 +6,8 @@
 //! dropping the oldest non-tail messages. Zero LLM calls, fully deterministic.
 
 use crate::context::budget::pressure::estimate_message_tokens_aware;
+use crate::context::budget::ContextBudget;
+use crate::context::compact::compactor::ContextCompactor;
 use crate::providers::message::UnifiedMessage;
 
 /// Estimate the total token footprint of `messages`.
@@ -45,9 +47,6 @@ pub fn truncate_to_fit(
     before.saturating_sub(estimate_total(messages, prose_ratio))
 }
 
-use crate::context::budget::ContextBudget;
-use crate::context::compact::compactor::ContextCompactor;
-
 /// Guarantee the working message list fits under the budget's critical line,
 /// compacting as gently as possible: (1) try the LLM compactor if wired,
 /// (2) re-measure, (3) if still critical, apply the deterministic
@@ -83,7 +82,9 @@ pub async fn compact_to_fit(
     //    what the LLM call will actually carry.
     let budget_tokens = budget.token_budget() as usize;
     let overhead = p.overhead_tokens;
-    let target = ((budget_tokens as f64 * critical) as usize).saturating_sub(overhead);
+    let target = ((budget_tokens as f64 * critical) as usize)
+        .saturating_sub(overhead)
+        .saturating_sub(1); // strict: guarantee ratio < critical, not <=
     truncate_to_fit(messages, target, budget.fresh_tail_count(), ratio);
 }
 
