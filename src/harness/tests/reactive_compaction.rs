@@ -15,6 +15,7 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex};
 
+use crate::context::budget::{ContextBudget, ContextBudgetConfig};
 use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
 use crate::error::{AlephError, Result as AlephResult};
 use crate::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback, TurnState};
@@ -350,6 +351,23 @@ fn stub_compactor() -> Arc<ContextCompactor> {
     ))
 }
 
+/// A permissive budget so the reactive floor actually runs, while the large
+/// window + high thresholds keep the proactive `before_turn` path at `Continue`
+/// (it must not interfere with the reactive path under test).
+fn budget_config() -> ContextBudgetConfig {
+    ContextBudgetConfig {
+        token_budget: 200_000,
+        warning_threshold: 0.70,
+        critical_threshold: 0.85,
+        token_estimate_ratio: 4.0,
+        fresh_tail_count: 2,
+        circuit_breaker_max: 10,
+        diminishing_window: 16,
+        diminishing_threshold: 1,
+        max_splits: 3,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -424,11 +442,13 @@ async fn rescue_exhausts_when_retry_still_overflows() {
     );
 }
 
-/// No compactor wired: a `prompt_too_long` error must surface immediately
-/// as `HarnessError::Llm` with the `ReactiveCompactExhausted` terminate
-/// reason. No spurious retry calls.
+/// No LLM compactor wired: a `prompt_too_long` error no longer hard-stops
+/// immediately. The reactive fallback floors to fit (a no-op here — no budget
+/// wired) and retries the provider ONCE; the retry still overflows, so the
+/// helper surfaces `HarnessError::Llm` with `ReactiveCompactExhausted`. The
+/// never-break contract: always attempt recovery before giving up.
 #[tokio::test]
-async fn rescue_skipped_when_compactor_not_wired() {
+async fn overflow_floor_retries_then_propagates_when_no_compactor() {
     let session = MockSession::new(vec![turn_started_event(), user_message_event("oversized")]);
     let llm = PersistentOverflowProvider::new();
     let deps = build_deps(session.clone(), llm.clone(), None);
@@ -441,17 +461,57 @@ async fn rescue_skipped_when_compactor_not_wired() {
     assert!(result.is_err());
     assert_eq!(
         llm.call_count(),
-        1,
-        "no compactor → no retry, just propagate the original error",
+        2,
+        "no compactor → floor (no-op) + exactly one retry before propagating",
     );
     assert_eq!(
         harness.reactive_compact_attempts_for_tests(),
         0,
-        "rescue counter must NOT advance when compactor is None",
+        "the no-compactor exit does not consume an LLM-compaction rescue slot",
     );
     assert_eq!(
         harness.terminate_reason(),
         TerminateReason::ReactiveCompactExhausted,
+    );
+}
+
+/// Never-break recovery: an overflow with no compactor wired but a budget
+/// present floors the prompt to fit and retries ONCE; the retry succeeds, so the
+/// run completes cleanly and does NOT stamp `ReactiveCompactExhausted`. This is
+/// the core Task-5 behaviour: a full context window recovers instead of ending
+/// the run.
+#[tokio::test]
+async fn overflow_floor_retry_recovers_to_clean_completion() {
+    let session = MockSession::new(vec![
+        turn_started_event(),
+        user_message_event("oversized input"),
+    ]);
+    let llm = RecoverableOverflowProvider::new("recovered after floor");
+    let mut deps = build_deps(session.clone(), llm.clone(), None);
+    // Wire a budget so the deterministic floor in `compact_to_fit` actually runs.
+    deps.context_budget = Some(Arc::new(Mutex::new(ContextBudget::new(&budget_config()))));
+    let harness = AgentHarness::new(deps);
+
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("floor + retry must turn the overflow into a clean turn");
+
+    assert_eq!(state, TurnState::Done);
+    assert_eq!(
+        llm.call_count(),
+        2,
+        "provider called twice: initial overflow + post-floor retry",
+    );
+    assert_ne!(
+        harness.terminate_reason(),
+        TerminateReason::ReactiveCompactExhausted,
+        "a recovered overflow must NOT hard-stop as ReactiveCompactExhausted",
+    );
+    assert_eq!(
+        harness.reactive_compact_attempts_for_tests(),
+        0,
+        "the no-compactor floor path does not consume an LLM-compaction rescue slot",
     );
 }
 

@@ -1469,33 +1469,43 @@ impl AgentHarness {
         //    slot. `try_reserve_reactive_compact` is a one-shot
         //    `compare_exchange` so concurrent paths can never both rescue.
         let Some(compactor) = self.deps.context_compactor.as_ref() else {
-            self.emit(
-                || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+            // No LLM compactor wired — fall back to the deterministic floor + one
+            // retry instead of hard-stopping. A full context window must not end
+            // the run (never-break).
+            return self
+                .reactive_fit_and_retry(
+                    primary_err,
+                    session_id,
+                    messages,
+                    tools_ref,
+                    budget_tool_tokens,
+                    parent_cancel,
+                    started,
                     token_gap,
-                    succeeded: false,
-                },
-            );
-            self.set_terminate_reason(
-                crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
-            );
-            return Err(HarnessError::Llm(primary_err));
+                )
+                .await;
         };
         if !self.try_reserve_reactive_compact() {
+            // Rescue cap reached — the LLM-compaction budget for this run is spent.
+            // Fall back to the deterministic floor + one retry instead of
+            // hard-stopping (never-break).
             tracing::warn!(
                 ?session_id,
                 MAX_REACTIVE_COMPACT_ATTEMPTS,
-                "reactive-compaction rescue cap reached; surfacing original error",
+                "reactive-compaction rescue cap reached; flooring to fit and retrying once",
             );
-            self.emit(
-                || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+            return self
+                .reactive_fit_and_retry(
+                    primary_err,
+                    session_id,
+                    messages,
+                    tools_ref,
+                    budget_tool_tokens,
+                    parent_cancel,
+                    started,
                     token_gap,
-                    succeeded: false,
-                },
-            );
-            self.set_terminate_reason(
-                crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
-            );
-            return Err(HarnessError::Llm(primary_err));
+                )
+                .await;
         }
 
         // 3. Run the compactor on the in-flight message vec. Failure here
@@ -1511,21 +1521,27 @@ impl AgentHarness {
             .compact(messages, 0, Some(session_id_str.as_str()))
             .await
         {
+            // LLM compaction failed — fall back to the deterministic floor + one
+            // retry instead of hard-stopping (never-break). `reactive_fit_and_retry`
+            // re-runs `compact_to_fit`, whose floor guarantees fit even when the
+            // summariser is down.
             tracing::warn!(
                 ?session_id,
                 error = %e,
-                "reactive compactor failed; surfacing original provider error",
+                "reactive compactor failed; flooring to fit and retrying once",
             );
-            self.emit(
-                || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+            return self
+                .reactive_fit_and_retry(
+                    primary_err,
+                    session_id,
+                    messages,
+                    tools_ref,
+                    budget_tool_tokens,
+                    parent_cancel,
+                    started,
                     token_gap,
-                    succeeded: false,
-                },
-            );
-            self.set_terminate_reason(
-                crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
-            );
-            return Err(HarnessError::Llm(primary_err));
+                )
+                .await;
         }
 
         // 3a. Refresh the budget's `last_pressure` snapshot to the compacted
@@ -1571,6 +1587,89 @@ impl AgentHarness {
                     error = %retry_err,
                     "reactive-compaction retry still failed; surfacing retry error",
                 );
+                self.emit(
+                    || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                        token_gap,
+                        succeeded: false,
+                    },
+                );
+                self.set_terminate_reason(
+                    crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
+                );
+                Err(HarnessError::Llm(retry_err))
+            }
+        }
+    }
+
+    /// Reactive-overflow fallback: compact the in-flight prompt to fit the model
+    /// window (`compact_to_fit_in_place`: LLM compact if wired + deterministic
+    /// floor), then retry the provider ONCE. Replaces the old
+    /// `ReactiveCompactExhausted` hard-stops at the no-compactor / cap-exhausted /
+    /// compact-failed exits — a full context window must not end the run. Only a
+    /// non-overflow response is success; a still-overflowing OR erroring retry
+    /// surfaces honestly (the truncated prompt didn't fit ⇒ pathological config,
+    /// not "context full", which the floor already resolved). Loop-safe: never
+    /// returns `Ok(overflow)`, so the caller's drain loop always terminates.
+    /// R10-safe: mechanical floor + one retry, no policy.
+    #[allow(clippy::too_many_arguments)]
+    async fn reactive_fit_and_retry(
+        &self,
+        primary_err: crate::error::AlephError,
+        session_id: &SessionId,
+        messages: &mut Vec<UnifiedMessage>,
+        tools_ref: Option<&[crate::tool_metadata::ToolDefinition]>,
+        budget_tool_tokens: usize,
+        parent_cancel: &CancellationToken,
+        started: std::time::Instant,
+        token_gap: Option<usize>,
+    ) -> Result<ProviderResponse, HarnessError> {
+        // 1. Compact to fit (LLM compact if wired + deterministic floor).
+        let system_prompt = self.deps.system_prompt.as_deref().unwrap_or("");
+        self.compact_to_fit_in_place(session_id, messages, system_prompt, budget_tool_tokens)
+            .await;
+
+        // 2. Retry the provider once with the fitted prompt.
+        let payload = build_request_payload(
+            self.deps.system_prompt.as_deref(),
+            self.deps.system_prompt_parts.as_deref(),
+            messages,
+            tools_ref,
+            session_id,
+        );
+        match self
+            .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
+            .await?
+        {
+            Ok(resp)
+                if !matches!(
+                    resp.stop_reason,
+                    crate::providers::adapter::StopReason::ContextWindowExceeded
+                ) =>
+            {
+                self.emit(
+                    || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                        token_gap,
+                        succeeded: true,
+                    },
+                );
+                Ok(resp)
+            }
+            // Truncated prompt STILL overflows → pathological (configured window
+            // wider than the provider's real window). Surface honestly instead of
+            // looping. Loop-safe: return Err so the caller's `?` breaks the drain.
+            Ok(_still_overflow) => {
+                self.emit(
+                    || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                        token_gap,
+                        succeeded: false,
+                    },
+                );
+                self.set_terminate_reason(
+                    crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
+                );
+                Err(HarnessError::Llm(primary_err))
+            }
+            Err(retry_err) => {
                 self.emit(
                     || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
                         token_gap,
