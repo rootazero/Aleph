@@ -12,7 +12,7 @@ use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::message::UnifiedMessage;
 use reqwest::Client;
 
-use super::helpers::{body_of, build_body};
+use super::helpers::{body_of, build_body, build_http};
 
 #[test]
 fn build_request_wires_top_p_and_top_k_from_config() {
@@ -237,9 +237,11 @@ fn test_build_request_beta_header_present() {
         .get("anthropic-beta")
         .and_then(|v| v.to_str().ok());
     assert!(beta_header.is_some());
-    assert!(beta_header
-        .unwrap()
-        .contains("interleaved-thinking-2025-05-14"));
+    assert!(
+        beta_header
+            .unwrap()
+            .contains("interleaved-thinking-2025-05-14")
+    );
 }
 #[test]
 fn build_request_strips_sampling_params_when_thinking_enabled() {
@@ -287,4 +289,87 @@ fn build_request_keeps_temperature_without_thinking() {
         body.get("temperature").is_some(),
         "temperature preserved when thinking is off",
     );
+}
+
+#[test]
+fn build_request_kimi_coding_normalizes_model_id() {
+    let msgs = [UnifiedMessage::user("Hi")];
+    let payload = RequestPayload::new(&msgs).with_model(Some("Kimi-K2.7".to_string()));
+    let mut config = ProviderConfig::test_config("kimi-for-coding");
+    config.api_key = Some("test-key".to_string());
+    config.base_url = Some("https://api.kimi.com/coding/v1".to_string());
+
+    let body = build_body(&payload, &config);
+    assert_eq!(
+        body["model"], "kimi-for-coding",
+        "Kimi Coding endpoint expects the canonical model id"
+    );
+}
+
+#[test]
+fn build_request_kimi_coding_omits_beta_headers_and_adds_user_agent() {
+    use reqwest::header::{HeaderValue, USER_AGENT};
+
+    let msgs = [UnifiedMessage::user("Hi")];
+    let payload = RequestPayload::new(&msgs).with_model(Some("Kimi-K2.7".to_string()));
+    let mut config = ProviderConfig::test_config("kimi-for-coding");
+    config.api_key = Some("test-key".to_string());
+    config.base_url = Some("https://api.kimi.com/coding/v1".to_string());
+
+    let req = build_http(&payload, &config);
+    assert!(
+        req.headers().get("anthropic-beta").is_none(),
+        "Kimi Coding must not receive unknown anthropic-beta headers"
+    );
+    assert_eq!(
+        req.headers().get(USER_AGENT),
+        Some(&HeaderValue::from_static("claude-code/0.1.0")),
+        "Kimi Coding expects the claude-code User-Agent"
+    );
+}
+
+#[test]
+fn build_request_custom_endpoint_keeps_beta_headers() {
+    let msgs = [UnifiedMessage::user("Hi")];
+    let payload = RequestPayload::new(&msgs);
+    let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+    config.api_key = Some("test-key".to_string());
+    config.base_url = Some("https://generic-proxy.example.com/v1".to_string());
+
+    let req = build_http(&payload, &config);
+    assert!(
+        req.headers().get("anthropic-beta").is_some(),
+        "Generic custom endpoints still receive beta headers"
+    );
+}
+
+#[test]
+fn build_request_kimi_coding_strips_preplaced_cache_control() {
+    use crate::thinker::prompt_builder::SystemPromptPart;
+
+    let msgs = [UnifiedMessage::user("Hi")];
+    let parts = [
+        SystemPromptPart {
+            content: "stable identity".to_string(),
+            cache: true,
+        },
+        SystemPromptPart {
+            content: "dynamic instructions".to_string(),
+            cache: false,
+        },
+    ];
+    let payload = RequestPayload::new(&msgs)
+        .with_model(Some("Kimi-K2.7".to_string()))
+        .with_system_blocks(Some(&parts));
+    let mut config = ProviderConfig::test_config("kimi-for-coding");
+    config.api_key = Some("test-key".to_string());
+    config.base_url = Some("https://api.kimi.com/coding/v1".to_string());
+
+    let body = build_body(&payload, &config);
+    for block in body["system"].as_array().unwrap() {
+        assert!(
+            block.get("cache_control").is_none(),
+            "Kimi Coding must not receive pre-placed cache_control markers"
+        );
+    }
 }

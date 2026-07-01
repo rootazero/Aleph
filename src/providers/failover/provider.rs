@@ -9,22 +9,22 @@ use std::time::Instant;
 use crate::config::types::{LoadBalanceStrategy, RouteMode};
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
-use crate::providers::capability_gate::{retain_capable_models, RequestRequirements};
+use crate::providers::capability_gate::{RequestRequirements, retain_capable_models};
 use crate::providers::llm_retry::{backoff_delay, is_transient_overload};
 use crate::providers::load_stats::LoadStats;
 use crate::providers::route_handle::RouteHandle;
 use crate::providers::route_policy::{
-    classify_candidate, order_candidates, order_candidates_balanced, CandidateAction, EndpointTier,
-    RateLimits, RouteTargets,
+    CandidateAction, EndpointTier, RateLimits, RouteTargets, classify_candidate, order_candidates,
+    order_candidates_balanced,
 };
 use crate::providers::{AiProvider, DefaultProviderHandle};
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
 use crate::sync_primitives::Arc;
 
-use super::decision::{decide, Decision, FailureKind};
+use super::decision::{Decision, FailureKind, decide};
 use super::health::{CircuitState, FailoverHealth, ModelCooldown, ProviderCooldown};
 use super::{
-    FailoverConfig, FailoverNode, CIRCUIT_OPEN_THRESHOLD, DEFAULT_MODEL_COOLDOWN, MAX_COOLDOWN,
+    CIRCUIT_OPEN_THRESHOLD, DEFAULT_MODEL_COOLDOWN, FailoverConfig, FailoverNode, MAX_COOLDOWN,
     MAX_OVERLOAD_RETRY_DELAY, MAX_RETRY_DELAY,
 };
 
@@ -249,11 +249,7 @@ impl FailoverProvider {
                 kept.push(m.clone());
             }
         }
-        if kept.is_empty() {
-            models
-        } else {
-            kept
-        }
+        if kept.is_empty() { models } else { kept }
     }
 
     /// The load-balancing strategy to apply *now*: the live handle if attached,
@@ -416,12 +412,14 @@ impl FailoverProvider {
                 .into_iter()
                 .filter(|name| name != &primary_name) // dedup: primary slot covers it
                 .filter_map(|name| {
-                    self.primary.provider_by_name(&name).map(|provider| FailoverNode {
-                        name,
-                        models: Vec::new(),
-                        provider,
-                        tier: EndpointTier::Unknown,
-                    })
+                    self.primary
+                        .provider_by_name(&name)
+                        .map(|provider| FailoverNode {
+                            name,
+                            models: Vec::new(),
+                            provider,
+                            tier: EndpointTier::Unknown,
+                        })
                 })
                 .collect()
         } else {
@@ -463,10 +461,8 @@ impl FailoverProvider {
                 // tier to rank an *unpriced* model (free local vs unknown-cost
                 // cloud — see `unpriced_cost`); the metric closure only receives
                 // the provider name, so the tier rides in via this map.
-                let tier_by_name: HashMap<String, EndpointTier> = fallbacks
-                    .iter()
-                    .map(|n| (n.name.clone(), n.tier))
-                    .collect();
+                let tier_by_name: HashMap<String, EndpointTier> =
+                    fallbacks.iter().map(|n| (n.name.clone(), n.tier)).collect();
                 order_candidates_balanced(
                     fallbacks,
                     mode,
@@ -903,7 +899,7 @@ impl AiProvider for FailoverProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::{unpriced_cost, EndpointTier};
+    use super::{EndpointTier, unpriced_cost};
 
     #[test]
     fn unpriced_local_is_free_and_sorts_first() {

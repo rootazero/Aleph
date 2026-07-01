@@ -220,7 +220,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.kimi.com/coding/v1",
             "anthropic",
             "#6366f1",
-            "Kimi-K2.6",
+            "kimi-for-coding",
         )
         .with_aliases(&["kimi-coding"])
         .with_display("Kimi for Coding")
@@ -228,7 +228,8 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_signup("https://platform.moonshot.ai")
         .with_description("Anthropic-protocol endpoint for IDE agents")
         // Server manages temperature — sending one returns a fixed-value error.
-        .with_temperature_policy(super::TemperaturePolicy::Omit),
+        .with_temperature_policy(super::TemperaturePolicy::Omit)
+        .with_fallback_models(&["kimi-for-coding", "kimi-code", "k2p5"]),
     ),
     // ─── Chinese commercial LLMs ──────────────────────────────────────────────
     (

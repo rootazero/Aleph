@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::error::{AlephError, ErrorClass};
 use crate::providers::llm_retry::{
-    classify, classify_exhausted, extract_retry_after_str, is_transient_overload, RetryVerdict,
+    RetryVerdict, classify, classify_exhausted, extract_retry_after_str, is_transient_overload,
 };
 
 use super::{DEFAULT_TRANSIENT_DELAY, OVERLOAD_RETRY_BUDGET};
@@ -97,7 +97,12 @@ pub(crate) fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decisi
     // body says "please wait a moment", so they keep the shallow budget and are
     // never hammered in place.
     let retry_budget = if transient_delay.is_some() && is_transient_overload(&lower) {
-        max_retries.max(OVERLOAD_RETRY_BUDGET)
+        // Cap the overload ride-out so a large `max_retries` config cannot keep
+        // the UI stuck waiting while the same overloaded provider is hammered
+        // in place. A single extra attempt is enough for a transient spike;
+        // after that we escalate to the failover chain (or surface the error
+        // if there is no sibling).
+        max_retries.min(OVERLOAD_RETRY_BUDGET)
     } else {
         max_retries
     };

@@ -33,6 +33,27 @@ fn is_minimax_anthropic_endpoint(host: &str, path: &str) -> bool {
     (host == "api.minimax.io" || host == "api.minimaxi.com") && path.starts_with("/anthropic")
 }
 
+/// `Kimi for Coding` endpoint (`api.kimi.com/coding`). Anthropic-compatible but
+/// expects the single model id `kimi-for-coding` and rejects unknown
+/// `anthropic-beta` headers with a 429-shaped "engine overloaded" response.
+/// Matches the openclaw Kimi Coding extension contract.
+pub(crate) fn is_kimi_anthropic_endpoint(host: &str, path: &str) -> bool {
+    host == "api.kimi.com" && path.starts_with("/coding")
+}
+
+/// Convenience predicate that parses a raw `base_url` into host/path.
+pub(crate) fn is_kimi_anthropic_base_url(base_url: Option<&str>) -> bool {
+    let host = base_url
+        .and_then(extract_hostname)
+        .unwrap_or_default()
+        .to_lowercase();
+    let path = base_url
+        .and_then(extract_path)
+        .unwrap_or_default()
+        .to_lowercase();
+    is_kimi_anthropic_endpoint(&host, &path)
+}
+
 /// Azure AI Foundry's Anthropic-style endpoints (`*.azure.com`). Bearer-auth,
 /// needs `context-1m-2025-08-07` to unlock 1M context, accepts the other betas.
 fn is_azure_anthropic_endpoint(host: &str) -> bool {
@@ -43,6 +64,30 @@ fn is_azure_anthropic_endpoint(host: &str) -> bool {
 /// IAM-signed, needs `context-1m-2025-08-07` for 1M context.
 fn is_bedrock_anthropic_endpoint(host: &str) -> bool {
     host.starts_with("bedrock-runtime.") && host.ends_with(".amazonaws.com")
+}
+
+/// User-Agent the Kimi Coding endpoint expects on non-OAuth requests.
+/// Matches the openclaw Kimi Coding extension header.
+pub(crate) const KIMI_CODING_USER_AGENT: &str = "claude-code/0.1.0";
+
+/// The Kimi Coding endpoint exposes a single model id: `kimi-for-coding`.
+/// Legacy aliases (`kimi-code`, `k2p5`) and display-style ids (`Kimi-K2.7`,
+/// `Kimi-K2.6`) must be mapped to the canonical id. Mirrors
+/// `normalizeKimiCodingModelId` in the openclaw Kimi Coding extension.
+pub(crate) fn normalize_kimi_coding_model_id(model_id: &str) -> &str {
+    let lower = model_id.to_lowercase();
+    if lower == "kimi-for-coding" {
+        return model_id;
+    }
+    // Legacy aliases and any Kimi-K2.* display id resolve to the one coding model.
+    if lower == "kimi-code"
+        || lower == "k2p5"
+        || lower.starts_with("kimi-k2")
+        || lower.starts_with("kimi-k2.")
+    {
+        return "kimi-for-coding";
+    }
+    model_id
 }
 
 // =============================================================================
@@ -183,6 +228,14 @@ pub fn resolve_anthropic_capabilities(
                 caps.supports_context_1m = false;
             }
 
+            // Kimi for Coding: the coding endpoint is Anthropic-compatible but
+            // returns 429 "engine overloaded" when sent unknown beta headers.
+            // openclaw sends no anthropic-beta for this endpoint.
+            if is_kimi_anthropic_endpoint(&host, &path) {
+                caps.supports_fine_grained_tool_streaming = false;
+                caps.supports_interleaved_thinking = false;
+            }
+
             // Azure AI Foundry: needs context-1m for 1M context.
             if is_azure_anthropic_endpoint(&host) {
                 caps.supports_context_1m = true;
@@ -281,6 +334,27 @@ fn strip_output_config_effort(obj: &mut serde_json::Map<String, serde_json::Valu
     map.remove("effort");
     if map.is_empty() {
         obj.remove("output_config");
+    }
+}
+
+/// Recursively remove `cache_control` keys from a JSON value.
+///
+/// Used for endpoints like Kimi Coding that reject Anthropic prompt-caching
+/// markers even when they were pre-placed on stable system blocks.
+pub(crate) fn strip_cache_control(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.remove("cache_control");
+            for v in map.values_mut() {
+                strip_cache_control(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                strip_cache_control(item);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -413,6 +487,68 @@ mod tests {
             Some("https://api.minimaxi.com/anthropic/v1/messages"),
         );
         assert!(!caps.supports_fine_grained_tool_streaming);
+    }
+
+    #[test]
+    fn kimi_coding_drops_all_anthropic_beta_headers() {
+        let caps = resolve_anthropic_capabilities(
+            AnthropicEndpointClass::Custom,
+            Some("https://api.kimi.com/coding/v1"),
+        );
+        assert!(
+            !caps.supports_fine_grained_tool_streaming,
+            "Kimi Coding rejects unknown beta headers with 429 overload"
+        );
+        assert!(
+            !caps.supports_interleaved_thinking,
+            "Kimi Coding rejects unknown beta headers with 429 overload"
+        );
+        // Standard protocol bits stay on.
+        assert!(caps.supports_top_k);
+        assert!(caps.supports_top_p);
+        assert!(caps.supports_stop_sequences);
+    }
+
+    #[test]
+    fn kimi_coding_endpoint_detection_variants() {
+        assert!(is_kimi_anthropic_base_url(Some(
+            "https://api.kimi.com/coding/v1"
+        )));
+        assert!(is_kimi_anthropic_base_url(Some(
+            "https://api.kimi.com/coding/"
+        )));
+        assert!(!is_kimi_anthropic_base_url(Some(
+            "https://api.moonshot.cn/anthropic"
+        )));
+        assert!(!is_kimi_anthropic_base_url(Some(
+            "https://api.anthropic.com"
+        )));
+        assert!(!is_kimi_anthropic_base_url(None));
+    }
+
+    #[test]
+    fn normalize_kimi_coding_model_maps_known_ids() {
+        assert_eq!(
+            normalize_kimi_coding_model_id("kimi-for-coding"),
+            "kimi-for-coding"
+        );
+        assert_eq!(
+            normalize_kimi_coding_model_id("kimi-code"),
+            "kimi-for-coding"
+        );
+        assert_eq!(normalize_kimi_coding_model_id("k2p5"), "kimi-for-coding");
+        assert_eq!(
+            normalize_kimi_coding_model_id("Kimi-K2.7"),
+            "kimi-for-coding"
+        );
+        assert_eq!(
+            normalize_kimi_coding_model_id("kimi-k2.6"),
+            "kimi-for-coding"
+        );
+        assert_eq!(
+            normalize_kimi_coding_model_id("claude-sonnet-4-6"),
+            "claude-sonnet-4-6"
+        );
     }
 
     #[test]
@@ -585,7 +721,7 @@ mod tests {
     #[test]
     fn beta_headers_omits_fine_grained_when_capability_off() {
         use crate::providers::protocols::anthropic::provider_policy::{
-            resolve_anthropic_capabilities, AnthropicEndpointClass,
+            AnthropicEndpointClass, resolve_anthropic_capabilities,
         };
         let caps = resolve_anthropic_capabilities(
             AnthropicEndpointClass::Custom,
@@ -607,7 +743,7 @@ mod tests {
     #[test]
     fn beta_headers_includes_context_1m_on_azure_for_claude_4() {
         use crate::providers::protocols::anthropic::provider_policy::{
-            resolve_anthropic_capabilities, AnthropicEndpointClass,
+            AnthropicEndpointClass, resolve_anthropic_capabilities,
         };
         let caps = resolve_anthropic_capabilities(
             AnthropicEndpointClass::Custom,
@@ -625,7 +761,7 @@ mod tests {
     #[test]
     fn beta_headers_omits_context_1m_on_pre_claude_4_models_even_if_capability_on() {
         use crate::providers::protocols::anthropic::provider_policy::{
-            resolve_anthropic_capabilities, AnthropicEndpointClass,
+            AnthropicEndpointClass, resolve_anthropic_capabilities,
         };
         let caps = resolve_anthropic_capabilities(
             AnthropicEndpointClass::Custom,

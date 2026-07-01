@@ -19,13 +19,13 @@
 //! concurrent first-callers cannot both spawn a helper.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 
 use aleph_protocol::desktop_bridge::envelope::{Message, Request, RpcError};
 use aleph_protocol::desktop_bridge::errors::ERR_PERMISSION_DENIED;
@@ -114,7 +114,7 @@ impl SwiftBridge {
     /// reports `false`.
     #[must_use]
     pub fn is_running(&self) -> bool {
-        self.state.try_lock().map_or(false, |g| g.is_some())
+        self.state.try_lock().is_ok_and(|g| g.is_some())
     }
 
     /// Spawn the helper subprocess and wire up reader + stderr tasks.

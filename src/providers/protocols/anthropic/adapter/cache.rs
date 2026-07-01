@@ -10,8 +10,8 @@
 //! only resolve `None → Short` and place the markers; they do not decide
 //! whether injection happens — `build_request` does.
 
-use crate::config::types::provider::CacheRetention;
 use crate::config::ProviderConfig;
+use crate::config::types::provider::CacheRetention;
 use crate::providers::message::CacheControl;
 
 /// Resolve the effective prompt-cache retention for a request given the
@@ -284,12 +284,16 @@ mod tests {
         );
         // The 3 most recent messages tagged; the oldest (m0) untouched.
         assert_eq!(cached_message_count(&payload), 3);
-        assert!(payload["messages"][0]["content"][0]
-            .get("cache_control")
-            .is_none());
-        assert!(payload["messages"][3]["content"][0]
-            .get("cache_control")
-            .is_some());
+        assert!(
+            payload["messages"][0]["content"][0]
+                .get("cache_control")
+                .is_none()
+        );
+        assert!(
+            payload["messages"][3]["content"][0]
+                .get("cache_control")
+                .is_some()
+        );
     }
 
     #[test]
@@ -373,12 +377,16 @@ mod tests {
         );
         // The all-thinking message consumes no budget, so the older message
         // still receives the single available breakpoint.
-        assert!(payload["messages"][1]["content"][0]
-            .get("cache_control")
-            .is_none());
-        assert!(payload["messages"][0]["content"][0]
-            .get("cache_control")
-            .is_some());
+        assert!(
+            payload["messages"][1]["content"][0]
+                .get("cache_control")
+                .is_none()
+        );
+        assert!(
+            payload["messages"][0]["content"][0]
+                .get("cache_control")
+                .is_some()
+        );
     }
 
     #[test]
@@ -424,9 +432,11 @@ mod tests {
             recent[0].get("cache_control").is_none(),
             "no second marker added"
         );
-        assert!(payload["messages"][0]["content"][0]
-            .get("cache_control")
-            .is_none());
+        assert!(
+            payload["messages"][0]["content"][0]
+                .get("cache_control")
+                .is_none()
+        );
     }
 
     // ── retention / header signaling ──────────────────────────────────────────

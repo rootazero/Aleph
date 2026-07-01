@@ -7,6 +7,7 @@ use crate::sync_primitives::{AtomicUsize, Ordering};
 use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
 use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use crate::gateway::router::SessionKey;
+use crate::gateway::session_manager::SessionState;
 
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -103,6 +104,55 @@ async fn test_simple_execution_engine_basic() {
 
     assert!(has_run_accepted, "Should have RunAccepted event");
     assert!(has_run_complete, "Should have RunComplete event");
+}
+
+/// Regression: the persisted session state must return to Idle after a run
+/// completes. Without this, the Panel/session list continues to show the
+/// session as "running" even though the assistant response has already been
+/// written.
+#[tokio::test]
+async fn test_session_state_returns_to_idle_after_run() {
+    let temp = tempfile::tempdir().unwrap();
+    let sm = test_session_manager(&temp);
+    let config = AgentInstanceConfig {
+        agent_id: "test-idle".to_string(),
+        workspace: temp.path().join("workspace"),
+        agent_dir: temp.path().join("agents/test-idle"),
+        ..Default::default()
+    };
+
+    let agent = Arc::new(AgentInstance::new(config, sm).unwrap());
+    let emitter = Arc::new(TestEmitter::new());
+    let engine = SimpleExecutionEngine::default();
+
+    let session_key = SessionKey::main("test-idle");
+    let request = RunRequest {
+        run_id: "test-run-idle".to_string(),
+        input: "Hello, world!".to_string(),
+        session_key: session_key.clone(),
+        timeout_secs: None,
+        metadata: HashMap::new(),
+        attachments: Vec::new(),
+        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        sandbox_override: None,
+        workspace_override: None,
+        max_iterations_override: None,
+        model_override: None,
+    };
+
+    // Persisting the user message transitions the session to Running.
+    let result = engine
+        .execute(request, agent.clone(), emitter.clone())
+        .await;
+    assert!(result.is_ok());
+
+    // After the run finishes, the engine must reset the session state.
+    let final_state = agent.session_state(&session_key).await;
+    assert_eq!(
+        final_state,
+        Some(SessionState::Idle),
+        "session state should return to Idle after the run completes"
+    );
 }
 
 /// Regression: a brand-new session must be announced via `SessionUpdated` on the

@@ -4,17 +4,21 @@ use std::collections::VecDeque;
 
 use super::sse::parse_anthropic_sse_event;
 use super::{
-    sanitize_anthropic_tool_name, AnthropicProtocol, ToolNameMap, ANTHROPIC_VERSION,
-    CLAUDE_CODE_USER_AGENT,
+    ANTHROPIC_VERSION, AnthropicProtocol, CLAUDE_CODE_USER_AGENT, ToolNameMap,
+    sanitize_anthropic_tool_name,
 };
-use crate::config::types::provider::CacheRetention;
 use crate::config::ProviderConfig;
+use crate::config::types::provider::CacheRetention;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::anthropic::types::{Metadata, OutputConfig};
 use crate::providers::anthropic::{AnthropicTool, MessagesRequest, SystemBlock, ThinkingBlock};
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::{CacheControl, EphemeralTtl};
+use crate::providers::protocols::anthropic::provider_policy::{
+    KIMI_CODING_USER_AGENT, is_kimi_anthropic_base_url, normalize_kimi_coding_model_id,
+    strip_cache_control,
+};
 use crate::thinker::prompt_builder::SystemPromptPart;
 use crate::tool_metadata::DEFAULT_MAX_TOKENS;
 use async_trait::async_trait;
@@ -24,8 +28,8 @@ use tracing::{debug, warn};
 
 mod cache;
 use cache::{
-    effective_cache_retention, inject_cache_control_into_recent_messages,
-    inject_cache_control_into_system_array, promote_system_marker_ttl, MAX_CACHE_BREAKPOINTS,
+    MAX_CACHE_BREAKPOINTS, effective_cache_retention, inject_cache_control_into_recent_messages,
+    inject_cache_control_into_system_array, promote_system_marker_ttl,
 };
 
 /// Collapse a `SystemPromptPart` slice into Anthropic `SystemBlock`s,
@@ -260,7 +264,14 @@ impl ProtocolAdapter for AnthropicProtocol {
             .as_deref()
             .unwrap_or_else(|| config.default_model());
         let normalized_model = self.normalize_model_id(raw_model);
-        let actual_model = normalized_model.as_ref();
+        let mut actual_model = normalized_model.as_ref();
+        // The Kimi Coding endpoint only serves the single model id
+        // `kimi-for-coding`; display-style ids like `Kimi-K2.7` and legacy
+        // aliases (`kimi-code`, `k2p5`) must be mapped to it.
+        let is_kimi = is_kimi_anthropic_base_url(config.base_url.as_deref());
+        if is_kimi {
+            actual_model = normalize_kimi_coding_model_id(actual_model);
+        }
         let endpoint = Self::build_endpoint(config);
         let messages = Self::convert_messages(payload.messages);
 
@@ -583,20 +594,35 @@ impl ProtocolAdapter for AnthropicProtocol {
         // Cycle 4: strip capability-gated fields one last time.
         policy.apply(&mut body);
 
+        // Kimi Coding rejects pre-placed cache_control markers on system blocks
+        // and message content, even though it does not advertise cache support.
+        // Mirrors openclaw's `stripAnthropicCacheControlMarkers`.
+        if is_kimi {
+            if let Some(system) = body.get_mut("system") {
+                strip_cache_control(system);
+            }
+            if let Some(messages) = body.get_mut("messages") {
+                strip_cache_control(messages);
+            }
+        }
+
+        let beta_header = Self::build_beta_headers(
+            actual_model,
+            Some(api_key),
+            extended_cache_ttl,
+            &policy.capabilities,
+        );
         let mut req = self
             .client
             .post(&endpoint)
             .header("anthropic-version", ANTHROPIC_VERSION)
-            .header(
-                "anthropic-beta",
-                Self::build_beta_headers(
-                    actual_model,
-                    Some(api_key),
-                    extended_cache_ttl,
-                    &policy.capabilities,
-                ),
-            )
             .header("Content-Type", "application/json");
+        // Custom-compatible endpoints (e.g. Kimi Coding) may reject an empty or
+        // unknown `anthropic-beta` header with a 429 overload response. Only
+        // send the header when there is at least one real beta feature.
+        if !beta_header.is_empty() {
+            req = req.header("anthropic-beta", beta_header);
+        }
 
         // OAuth tokens authenticate via `Authorization: Bearer` and require
         // Claude Code identity headers; regular console API keys use
@@ -610,6 +636,11 @@ impl ProtocolAdapter for AnthropicProtocol {
                 .header("x-app", "cli");
         } else {
             req = req.header("x-api-key", api_key);
+            // Kimi Coding expects the claude-code User-Agent even for API-key
+            // auth; without it the endpoint may return 429 "engine overloaded".
+            if is_kimi {
+                req = req.header("User-Agent", KIMI_CODING_USER_AGENT);
+            }
         }
 
         Ok(req.json(&body))
@@ -905,8 +936,8 @@ mod normalize_model_id_tests {
 /// stream cut before its terminal `message_delta` is flagged for retry.
 #[cfg(test)]
 mod truncation_guard_tests {
-    use super::super::sse::parse_anthropic_sse_event;
     use super::super::ToolNameMap;
+    use super::super::sse::parse_anthropic_sse_event;
     use super::{queue_has_terminal, stream_was_truncated};
     use crate::error::Result;
     use crate::providers::delta::{IndexIdTracker, ProviderDelta};

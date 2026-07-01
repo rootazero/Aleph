@@ -70,6 +70,10 @@ where
             request.metadata.get("channel_id").map(String::as_str),
         );
 
+        // Clear the session-level "running" marker now that the final message
+        // has been persisted.
+        agent.set_session_idle(&request.session_key).await;
+
         // Remove from active runs after a short delay (same as normal path)
         let runs_clone = self.active_runs.clone();
         let run_id_owned = run_id.to_string();
@@ -160,6 +164,10 @@ where
             error = %error_msg,
             "Slash command fast path failed, returning error to user"
         );
+
+        // Clear the session-level "running" marker now that the error receipt
+        // has been persisted.
+        agent.set_session_idle(&request.session_key).await;
 
         // Remove from active runs after a short delay (same as normal path)
         let runs_clone = self.active_runs.clone();

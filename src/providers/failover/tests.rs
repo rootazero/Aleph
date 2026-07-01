@@ -1,11 +1,11 @@
-use super::decision::{decide, Decision, FailureKind};
+use super::decision::{Decision, FailureKind, decide};
 use crate::config::types::{LoadBalanceStrategy, RouteMode};
 use crate::error::{AlephError, Result};
+use crate::providers::AiProvider;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::load_stats::LoadStats;
 use crate::providers::route_handle::RouteHandle;
 use crate::providers::route_policy::EndpointTier;
-use crate::providers::AiProvider;
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
 use std::collections::HashMap;
 use std::future::Future;
@@ -305,10 +305,7 @@ async fn explicit_chain_skips_providers_removed_from_live_registry() {
     );
     let fp = FailoverProvider::new(
         pool,
-        vec![
-            node("deleted-fb", deleted_fb),
-            node("live-fb", live_fb),
-        ],
+        vec![node("deleted-fb", deleted_fb), node("live-fb", live_fb)],
         HashMap::new(),
         FailoverHealth::default(),
         FailoverConfig::default(),
@@ -411,9 +408,10 @@ fn decide_transient_overload_429_gets_limited_retry_budget() {
     // gets one brief in-place retry so a transient spike has a chance to
     // clear, but we no longer ride it out for tens of seconds: a provider
     // that is consistently overloaded should fail fast in interactive chat.
-    // Once retries are exhausted it escalates to the per-model cooldown path
-    // (RateLimited), which process() turns into a sibling-model migration and,
-    // only if the provider's models are exhausted, a provider advance.
+    // Once the single overload retry is exhausted it escalates to the
+    // per-model cooldown path (RateLimited), which process() turns into a
+    // sibling-model migration and, only if the provider's models are exhausted,
+    // a provider advance.
     let e = AlephError::RateLimitError {
         message: "Anthropic API rate limited (429): We're receiving too many \
                   requests at the moment. Please wait a moment and try again."
@@ -421,8 +419,40 @@ fn decide_transient_overload_429_gets_limited_retry_budget() {
         suggestion: None,
     };
     assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
-    assert!(matches!(decide(&e, 1, 2), Decision::RetrySame(_)));
-    assert_eq!(decide(&e, 2, 2), Decision::RateLimited(None));
+    assert_eq!(decide(&e, 1, 2), Decision::RateLimited(None));
+}
+
+#[test]
+fn decide_kimi_overloaded_429_fails_over_after_one_retry() {
+    // Kimi (via Anthropic protocol) returns HTTP 429 with the body containing
+    // "engine is currently overloaded". This must get exactly one in-place
+    // retry before we advance to the next provider — the bug that made the UI
+    // appear to "think forever" was that a high `max_retries` config allowed
+    // many back-to-back retries on the same overloaded provider.
+    let e = AlephError::provider(
+        "Rate limit error: Anthropic API rate limited (429): \
+         {\"error\":{\"type\":\"rate_limit_error\",\"message\":\"The engine is currently \
+         overloaded, please try again later\"},\"type\":\"error\"}",
+    );
+    assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
+    assert_eq!(
+        decide(&e, 1, 2),
+        Decision::NextProvider(FailureKind::Transient)
+    );
+}
+
+#[test]
+fn decide_overload_429_budget_is_independent_of_max_retries() {
+    // Even if the operator configures a large `max_retries`, an overload must
+    // not ride it out: the budget stays at one extra attempt.
+    let e = AlephError::RateLimitError {
+        message: "Anthropic API rate limited (429): We're receiving too many \
+                  requests at the moment. Please wait a moment and try again."
+            .into(),
+        suggestion: None,
+    };
+    assert!(matches!(decide(&e, 0, 10), Decision::RetrySame(_)));
+    assert_eq!(decide(&e, 1, 10), Decision::RateLimited(None));
 }
 
 #[test]
@@ -444,7 +474,8 @@ fn decide_account_quota_429_excluded_from_deep_budget() {
     // An account/quota 429 classifies `Fatal` upstream, so even though its
     // body says "please wait a moment" it must NOT be lifted into the deep
     // overload budget: it advances the chain at `max_retries`, whereas a
-    // genuine transient overload (above) is still `RetrySame` at attempt 2.
+    // genuine transient overload (above) is already in the cooldown path at
+    // attempt 1.
     let e = AlephError::provider("429 account quota exceeded; please wait a moment");
     assert_eq!(
         decide(&e, 2, 2),
@@ -785,6 +816,33 @@ async fn transient_error_retried_in_place_then_succeeds() {
     assert_eq!(resp.text_content(), "primary");
     assert_eq!(primary.call_count(), 2);
     assert_eq!(fallback.call_count(), 0);
+}
+
+#[tokio::test]
+async fn kimi_overloaded_fails_over_after_one_retry() {
+    // End-to-end: a Kimi-shaped 429 overload with a healthy fallback must not
+    // retry the primary more than once before failing over. This is the core
+    // "stuck thinking" regression: previously a high `max_retries` kept the
+    // request on the overloaded primary for many attempts.
+    let primary = ScriptProvider::err(
+        "kimi",
+        "Rate limit error: Anthropic API rate limited (429): \
+         {\"error\":{\"type\":\"rate_limit_error\",\"message\":\"The engine is currently \
+         overloaded, please try again later\"},\"type\":\"error\"}",
+    );
+    let fallback = ScriptProvider::ok("fallback");
+    let fp = build(
+        primary.clone(),
+        vec![],
+        vec![node("fallback", fallback.clone())],
+    );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "fallback");
+    // Initial attempt + one overload retry.
+    assert_eq!(primary.call_count(), 2);
+    assert_eq!(fallback.call_count(), 1);
 }
 
 #[tokio::test]

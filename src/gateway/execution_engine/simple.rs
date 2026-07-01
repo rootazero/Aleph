@@ -8,7 +8,7 @@ use crate::sync_primitives::{AtomicU32, AtomicU64};
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{info, warn};
 
 use super::{ActiveRun, ExecutionEngineConfig, ExecutionError, RunRequest, RunState, RunStatus};
@@ -149,7 +149,7 @@ impl SimpleExecutionEngine {
             }
         };
 
-        // Reset agent state
+        // Reset agent state so the agent can accept the next request.
         agent.set_state(AgentState::Idle).await;
 
         // Update run state and emit completion events
@@ -225,6 +225,10 @@ impl SimpleExecutionEngine {
                 Err(e)
             }
         };
+
+        // Clear the session-level "running" marker now that the final message
+        // (or error receipt) has been persisted.
+        agent.set_session_idle(&request.session_key).await;
 
         // Remove from active runs after a short delay (for status queries)
         let runs_clone = self.active_runs.clone();

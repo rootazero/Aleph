@@ -4,7 +4,7 @@ use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
 use crate::resilience::TaskStatus;
 use crate::sync_primitives::Arc;
-use crate::verification::stop_hooks::{execute_stop_hooks_arc, StopHookContext};
+use crate::verification::stop_hooks::{StopHookContext, execute_stop_hooks_arc};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -577,7 +577,7 @@ where
             }
         };
 
-        // Reset agent state
+        // Reset agent state so the agent can accept the next request.
         agent.set_state(AgentState::Idle).await;
 
         let final_result = match result {
@@ -1030,8 +1030,7 @@ where
                                 let bumped =
                                     state.clone().spent_iteration().with_next_wake_ms(None);
                                 let delay = crate::looping::pursuit::tick_delay_ms(&state, now_ms);
-                                let prompt =
-                                    crate::looping::pursuit::tick_prompt(&state, now_ms);
+                                let prompt = crate::looping::pursuit::tick_prompt(&state, now_ms);
                                 loop_reg.put(bumped);
                                 spawn_continuation_run(
                                     cont_deps.registry.clone(),
@@ -1102,6 +1101,11 @@ where
                 Err(e)
             }
         };
+
+        // Clear the session-level "running" marker now that the final assistant
+        // message (or error receipt) has been persisted. This keeps the session
+        // metadata from staying stuck in "running" after the turn ends.
+        agent.set_session_idle(&request.session_key).await;
 
         // Remove from active runs after a short delay (for status queries)
         let runs_clone = active_runs.clone();

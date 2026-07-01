@@ -12,6 +12,9 @@ use tracing::{debug, info, warn};
 use super::router::SessionKey;
 use super::session_store::SessionStore;
 
+#[cfg(test)]
+use super::session_manager::SessionState;
+
 /// Configuration for an agent instance
 #[derive(Debug, Clone)]
 pub struct AgentInstanceConfig {
@@ -183,7 +186,10 @@ pub(crate) fn build_message_metadata(
     }
     let mut map = serde_json::Map::new();
     if let Some(r) = run_id {
-        map.insert("run_id".to_string(), serde_json::Value::String(r.to_string()));
+        map.insert(
+            "run_id".to_string(),
+            serde_json::Value::String(r.to_string()),
+        );
     }
     if let Some(o) = occupancy {
         // Stored as strings, not JSON numbers: `SessionMessage::from_record`
@@ -305,6 +311,36 @@ impl AgentInstance {
             self.config.agent_id, *state, new_state
         );
         *state = new_state;
+    }
+
+    /// Transition the session's persisted lifecycle state to Idle.
+    ///
+    /// The execution engine calls this when a run finishes (success, error, or
+    /// cancellation) so the session metadata does not stay stuck in `Running`.
+    pub async fn set_session_idle(&self, key: &SessionKey) {
+        if let Err(e) = self.session_store.set_idle(key).await {
+            warn!(
+                "Failed to set session idle '{}': {}",
+                key.to_key_string(),
+                e
+            );
+        }
+    }
+
+    /// Read the session's persisted lifecycle state, if available.
+    #[cfg(test)]
+    pub(crate) async fn session_state(&self, key: &SessionKey) -> Option<SessionState> {
+        match self.session_store.get_state(key).await {
+            Ok(state) => Some(state),
+            Err(e) => {
+                warn!(
+                    "Failed to get session state '{}': {}",
+                    key.to_key_string(),
+                    e
+                );
+                None
+            }
+        }
     }
 
     /// Atomically transition from Idle to Running.
@@ -837,9 +873,13 @@ impl AgentRegistry {
         let agent_dir = home.join(".aleph/agents").join(id);
 
         // Create workspace directory (runtime output, project files)
-        tokio::fs::create_dir_all(&workspace_path).await.map_err(|e| {
-            AgentInstanceError::InitFailed(format!("Failed to create workspace for '{id}': {e}"))
-        })?;
+        tokio::fs::create_dir_all(&workspace_path)
+            .await
+            .map_err(|e| {
+                AgentInstanceError::InitFailed(format!(
+                    "Failed to create workspace for '{id}': {e}"
+                ))
+            })?;
 
         // Initialize all identity files (SOUL.md, AGENTS.md, IDENTITY.md, etc.)
         crate::config::agent_resolver::initialize_agent_identity(
@@ -856,9 +896,13 @@ impl AgentRegistry {
         // Overwrite SOUL.md with custom content if provided
         if !soul_content.is_empty() {
             let soul_path = agent_dir.join("SOUL.md");
-            tokio::fs::write(&soul_path, soul_content).await.map_err(|e| {
-                AgentInstanceError::InitFailed(format!("Failed to write SOUL.md for '{id}': {e}"))
-            })?;
+            tokio::fs::write(&soul_path, soul_content)
+                .await
+                .map_err(|e| {
+                    AgentInstanceError::InitFailed(format!(
+                        "Failed to write SOUL.md for '{id}': {e}"
+                    ))
+                })?;
         }
 
         let config = AgentInstanceConfig {
@@ -973,11 +1017,13 @@ mod tests {
                 MessageRole::Assistant,
                 "Hi!",
                 Some("run-xyz"),
-                Some(crate::gateway::execution_engine::helpers::RunContextOccupancy {
-                    context_tokens: 42_000,
-                    context_window: 200_000,
-                    total_tokens: 55_000,
-                }),
+                Some(
+                    crate::gateway::execution_engine::helpers::RunContextOccupancy {
+                        context_tokens: 42_000,
+                        context_window: 200_000,
+                        total_tokens: 55_000,
+                    },
+                ),
             )
             .await;
 
@@ -995,7 +1041,10 @@ mod tests {
         );
         // Occupancy persisted as strings so the HashMap<String,String> decode in
         // `from_record` keeps the whole blob (run_id included) intact.
-        assert_eq!(meta.get("context_tokens").map(String::as_str), Some("42000"));
+        assert_eq!(
+            meta.get("context_tokens").map(String::as_str),
+            Some("42000")
+        );
         assert_eq!(
             meta.get("context_window").map(String::as_str),
             Some("200000")
@@ -1025,9 +1074,18 @@ mod tests {
         )
         .expect("some");
         assert_eq!(full.get("run_id").and_then(|v| v.as_str()), Some("r2"));
-        assert_eq!(full.get("context_tokens").and_then(|v| v.as_str()), Some("10"));
-        assert_eq!(full.get("context_window").and_then(|v| v.as_str()), Some("20"));
-        assert_eq!(full.get("total_tokens").and_then(|v| v.as_str()), Some("30"));
+        assert_eq!(
+            full.get("context_tokens").and_then(|v| v.as_str()),
+            Some("10")
+        );
+        assert_eq!(
+            full.get("context_window").and_then(|v| v.as_str()),
+            Some("20")
+        );
+        assert_eq!(
+            full.get("total_tokens").and_then(|v| v.as_str()),
+            Some("30")
+        );
     }
 
     #[tokio::test]
