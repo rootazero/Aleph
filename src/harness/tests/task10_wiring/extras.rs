@@ -163,7 +163,7 @@ async fn split_session_failsoft_compacts_and_continues() {
     // Same budget config as above — trips SplitSession on first warning turn.
     let user_text = "y".repeat(80);
     let session = MockSession::new(vec![turn_started_event(), user_message_event(&user_text)]);
-    let provider = CountingProvider::new("grace summary");
+    let provider = CountingProvider::new("continued after compaction");
 
     let mut cfg = tiny_budget_config(100, 0.50, 0.90);
     cfg.circuit_breaker_max = 1;
@@ -200,7 +200,7 @@ async fn split_session_failsoft_compacts_and_continues() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-        // FailRegistrar always returns Err → split fails → fall back to FinalReply.
+        // FailRegistrar always returns Err → split fails → fail-soft compacts and continues.
         session_epoch_registrar: Some(Arc::new(FailRegistrar)
             as Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>),
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
