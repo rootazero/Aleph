@@ -273,6 +273,46 @@ impl AiProvider for StubCompactorProvider {
     }
 }
 
+/// Provider that always returns clean text (no overflow). The seeded history is
+/// compacted proactively *before* this call, so the call itself succeeds — the
+/// whole point of the never-break regression: a reloaded near-full session must
+/// reach a normal completion, not a hard-stop.
+struct PlainTextProvider {
+    calls: AtomicUsize,
+    text: String,
+}
+
+impl PlainTextProvider {
+    fn new(text: &str) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            text: text.to_string(),
+        })
+    }
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl AiProvider for PlainTextProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        let text = self.text.clone();
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ProviderResponse::text_only(text))
+        })
+    }
+    fn name(&self) -> &str {
+        "plain_text"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -365,6 +405,36 @@ fn budget_config() -> ContextBudgetConfig {
         diminishing_window: 16,
         diminishing_threshold: 1,
         max_splits: 3,
+    }
+}
+
+/// A near-full budget: `token_budget` small and 1 char ≈ 1 token, so the seeded
+/// history is critically over budget on turn 0 — exactly what reloading a
+/// near-full conversation looks like to `before_turn`.
+fn near_full_budget_config() -> ContextBudgetConfig {
+    ContextBudgetConfig {
+        token_budget: 100,
+        warning_threshold: 0.40,
+        critical_threshold: 0.85,
+        token_estimate_ratio: 1.0,
+        fresh_tail_count: 2,
+        circuit_breaker_max: 10,
+        diminishing_window: 16,
+        diminishing_threshold: 1,
+        max_splits: 3,
+    }
+}
+
+fn assistant_message_event(text: &str) -> SessionEvent {
+    SessionEvent::AssistantMessage {
+        turn_id: uuid::Uuid::new_v4(),
+        content: MessageContent {
+            text: text.to_string(),
+            blocks: Vec::new(),
+            thinking: None,
+            thinking_signature: None,
+        },
+        at: now_ms(),
     }
 }
 
@@ -541,4 +611,79 @@ async fn non_overflow_errors_bypass_rescue() {
     // Terminate reason stays at default `Completed` — the rescue helper
     // doesn't touch it on the pass-through path.
     assert_eq!(harness.terminate_reason(), TerminateReason::Completed);
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end never-break regression (the user's original bug). Distinct from
+// the reactive rescue tests above: this exercises the PROACTIVE path — a
+// reloaded near-full session that is critical on turn 0 must compact-to-fit and
+// continue, never hard-stopping on ContextBudgetExhausted / ReactiveCompactExhausted.
+// ---------------------------------------------------------------------------
+
+/// Reloading a near-full conversation and typing one more message must CONTINUE
+/// to a normal answer, not brick the session. A large seeded history + a small
+/// budget makes turn 0 critically over budget → `before_turn` returns
+/// `CompactToFit` → the harness floors to fit and falls through to the LLM,
+/// which answers cleanly. Neither the proactive (`ContextBudgetExhausted`) nor
+/// the reactive (`ReactiveCompactExhausted`) hard-stop may fire.
+#[tokio::test]
+async fn reloaded_near_full_session_continues_not_bricked() {
+    // Seed a realistic near-full history: alternating user/assistant turns whose
+    // combined length (~850 chars ≈ 850 tokens at ratio 1.0) dwarfs the 100-token
+    // budget, so turn 0 is critical.
+    let mut events = vec![turn_started_event()];
+    for i in 0..6 {
+        events.push(user_message_event(&format!(
+            "earlier user turn {i}: a chunk of prior conversation text padding the window"
+        )));
+        events.push(assistant_message_event(&format!(
+            "earlier assistant turn {i}: a chunk of prior reply text padding the window"
+        )));
+    }
+    // The freshly-typed message on the reloaded session.
+    events.push(user_message_event("open the html"));
+    let session = MockSession::new(events);
+
+    let llm = PlainTextProvider::new("here is the opened html");
+    let mut deps = build_deps(session.clone(), llm.clone(), None);
+    // Budget wired so turn 0 is critical and the proactive floor runs.
+    deps.context_budget =
+        Some(Arc::new(Mutex::new(ContextBudget::new(&near_full_budget_config()))));
+    let harness = AgentHarness::new(deps);
+
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("a reloaded near-full session must continue, not error out");
+
+    assert_eq!(state, TurnState::Done);
+    // Never-break: neither hard-stop reason may be stamped.
+    let reason = harness.terminate_reason();
+    assert_ne!(
+        reason,
+        TerminateReason::ContextBudgetExhausted,
+        "a full context window must not hard-stop the run (proactive P1)",
+    );
+    assert_ne!(
+        reason,
+        TerminateReason::ReactiveCompactExhausted,
+        "a full context window must not hard-stop the run (reactive P2)",
+    );
+    assert!(
+        llm.call_count() >= 1,
+        "the harness must compact and still issue the LLM request",
+    );
+    // The user gets a real, non-empty answer.
+    let recorded = session
+        .get_events(&sample_session_id(), None, None)
+        .await
+        .expect("get_events");
+    let answered = recorded.iter().any(|r| {
+        matches!(&r.event,
+            SessionEvent::AssistantMessage { content, .. } if content.text == "here is the opened html")
+    });
+    assert!(
+        answered,
+        "the run must persist the model's non-empty final text; got: {recorded:#?}",
+    );
 }
