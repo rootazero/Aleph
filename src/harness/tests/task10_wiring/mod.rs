@@ -260,20 +260,20 @@ fn tiny_budget_config(budget: u64, warn: f64, critical: f64) -> ContextBudgetCon
 }
 
 // =============================================================================
-// Test 1 — Budget FinalReply trips hit_limit and skips the grace turn when a
-// prior assistant text already exists on the log.
+// Test 1 — Critical context pressure with a prior assistant text: the harness
+// compacts to fit and continues into the normal LLM call. It never hard-stops.
 // =============================================================================
 #[tokio::test]
-async fn budget_final_reply_skips_grace_turn_when_text_already_present() {
+async fn budget_critical_compacts_and_continues_with_prior_text() {
     // 100-char user message, budget=10, critical=0.50 → ratio ~= 10 → Critical.
-    // Includes a prior assistant text — grace turn skips, LLM not called.
+    // Includes a prior assistant text — compact-then-continue fires, LLM IS called.
     let user_text = "x".repeat(100);
     let session = MockSession::new(vec![
         turn_started_event(),
         user_message_event(&user_text),
         assistant_message_event_with_text("here is your answer"),
     ]);
-    let provider = CountingProvider::new("should not fire");
+    let provider = CountingProvider::new("continued after compaction");
 
     let budget = ContextBudget::new(&tiny_budget_config(10, 0.40, 0.50));
     let deps = HarnessDeps {
@@ -308,33 +308,37 @@ async fn budget_final_reply_skips_grace_turn_when_text_already_present() {
     let state = harness
         .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
-        .expect("run_turn should succeed on FinalReply");
+        .expect("run_turn must succeed: critical pressure compacts and continues");
 
-    assert_eq!(
-        state,
-        TurnState::Done,
-        "FinalReply directive must produce TurnState::Done"
-    );
+    // Never-break: critical context pressure compacts in place, then the normal
+    // LLM call fires. The run must NOT hard-stop (no hit_limit, no
+    // ContextBudgetExhausted) even though a prior assistant text exists on the log.
+    assert_eq!(state, TurnState::Done, "compact-then-continue ends the turn via a normal LLM completion");
     assert!(
-        harness.hit_limit(),
-        "hit_limit must be set when the budget trips FinalReply"
+        !harness.hit_limit(),
+        "critical pressure must compact and continue, never set hit_limit",
+    );
+    assert_ne!(
+        harness.terminate_reason(),
+        crate::orchestrator::dispatch::TerminateReason::ContextBudgetExhausted,
+        "context fill must never terminate the run",
     );
     assert_eq!(
         provider.call_count(),
-        0,
-        "grace turn must skip when prior assistant text exists",
+        1,
+        "the LLM must be called exactly once after compaction (not skipped as in the old FinalReply path)",
     );
 }
 
 // =============================================================================
-// Test 1b — Grace turn FIRES on FinalReply when no assistant turn has produced
-// displayable text yet (would otherwise leave the user with a mid-thought hang).
+// Test 1b — Critical context pressure with no prior assistant text: compact to
+// fit, then the normal LLM call produces the terminal text. Never a hard-stop.
 // =============================================================================
 #[tokio::test]
-async fn budget_final_reply_fires_grace_turn_when_no_prior_text() {
+async fn budget_critical_compacts_and_continues_no_prior_text() {
     let user_text = "x".repeat(100);
     let session = MockSession::new(vec![turn_started_event(), user_message_event(&user_text)]);
-    let provider = CountingProvider::new("grace turn summary");
+    let provider = CountingProvider::new("continued after compaction");
 
     let budget = ContextBudget::new(&tiny_budget_config(10, 0.40, 0.50));
     let deps = HarnessDeps {
@@ -369,25 +373,29 @@ async fn budget_final_reply_fires_grace_turn_when_no_prior_text() {
     let state = harness
         .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
-        .expect("run_turn should succeed on FinalReply");
+        .expect("run_turn must succeed: critical pressure compacts and continues");
 
     assert_eq!(state, TurnState::Done);
-    assert!(harness.hit_limit());
+    assert!(
+        !harness.hit_limit(),
+        "critical pressure must compact and continue, never set hit_limit",
+    );
     assert_eq!(
         provider.call_count(),
         1,
-        "grace turn must fire exactly once when no prior assistant text exists"
+        "the LLM must be called exactly once after compaction",
     );
 
-    // The grace-turn assistant message must be on the log so the user sees it.
+    // The LLM's response after compaction must reach the session log (the user
+    // gets a real answer, not a hard-stop).
     let events = session.snapshot().await;
-    let grace_text_present = events.iter().any(|r| match &r.event {
-        SessionEvent::AssistantMessage { content, .. } => content.text == "grace turn summary",
+    let text_present = events.iter().any(|r| match &r.event {
+        SessionEvent::AssistantMessage { content, .. } => content.text == "continued after compaction",
         _ => false,
     });
     assert!(
-        grace_text_present,
-        "grace turn LLM response must be persisted as an AssistantMessage; got: {:#?}",
+        text_present,
+        "the post-compaction LLM response must be persisted as an AssistantMessage; got: {:#?}",
         events
     );
 }
@@ -396,67 +404,6 @@ async fn budget_final_reply_fires_grace_turn_when_no_prior_text() {
 // test on `last_assistant_has_text` in `src/harness/agent/think.rs` — driving
 // it as an integration test depends on the prompt-builder's handling of an
 // unmatched `tool_use`, which is not the behavior under test here.
-
-// =============================================================================
-// Test 1d — Grace turn fail-soft: LLM errors during the grace call must not
-// panic / propagate; harness still completes cleanly with hit_limit set.
-// =============================================================================
-#[tokio::test]
-async fn budget_final_reply_grace_turn_failsoft_on_llm_error() {
-    let user_text = "x".repeat(100);
-    let session = MockSession::new(vec![turn_started_event(), user_message_event(&user_text)]);
-
-    let budget = ContextBudget::new(&tiny_budget_config(10, 0.40, 0.50));
-    let deps = HarnessDeps {
-        session: session.clone(),
-        tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
-        // FailingProvider returns Err on every call, simulating "even the grace
-        // call fails (still out of context, network down, etc.)". The harness
-        // must swallow and complete.
-        llm: Arc::new(FailingProvider) as Arc<dyn AiProvider>,
-        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
-        verifier_chain: None,
-        context_budget: Some(Arc::new(AsyncMutex::new(budget))),
-        context_compactor: None,
-        preflight_pipeline: None,
-        trace_sink: None,
-        system_prompt: None,
-        system_prompt_parts: None,
-        chain_context: crate::harness::chain_context::ChainContext::default(),
-        guardrails: None,
-        max_iterations: None,
-        power: None,
-        stall_config: None,
-        consecutive_failure_cap: None,
-        turn_timeout: None,
-        turn_budget: None,
-        result_store: None,
-        session_epoch_registrar: None,
-        tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
-        in_flight_tool_calls: None,
-        parallel_tool_concurrency: None,
-    };
-    let harness = AgentHarness::new(deps);
-
-    let state = harness
-        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
-        .await
-        .expect("grace turn LLM failure must NOT bubble out of run_turn");
-
-    assert_eq!(state, TurnState::Done);
-    assert!(harness.hit_limit());
-    // No assistant message emitted (grace turn failed before persistence).
-    let events = session.snapshot().await;
-    let assistant_count = events
-        .iter()
-        .filter(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
-        .count();
-    assert_eq!(
-        assistant_count, 0,
-        "grace turn LLM error must not leave a partial assistant event"
-    );
-}
 
 // =============================================================================
 // Test 2 — CompactAndContinue invokes the attached compactor before the LLM

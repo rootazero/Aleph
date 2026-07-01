@@ -46,18 +46,10 @@ impl crate::providers::DeltaSink for CallbackSink<'_> {
     }
 }
 
-/// Ephemeral nudge appended on the grace turn when the budget hits
-/// critical — the single tool-less LLM call given when
-/// `LoopDirective::FinalReply` fires and the prior assistant turn ended
-/// on an unresolved `tool_use`. Tools are also stripped at the request
-/// layer (no `.with_tools(...)`), so the model cannot loop further.
-const GRACE_NUDGE_BUDGET: &str = "You are out of context budget and cannot call any more tools. \
-     Respond now with a final summary for the user based on what you have so far.";
-
 /// Ephemeral nudge for the grace turn fired by
-/// `LoopDirective::StopDiminishing` — same shape as
-/// `GRACE_NUDGE_BUDGET` but framed around lack of measurable progress
-/// rather than budget exhaustion.
+/// `LoopDirective::StopDiminishing` — a single tool-less LLM call framed
+/// around lack of measurable progress. Tools are also stripped at the
+/// request layer (no `.with_tools(...)`), so the model cannot loop further.
 const GRACE_NUDGE_DIMINISHING: &str = "You have not been making measurable progress on this task. \
      Stop calling tools and summarize what you have found so far for the user.";
 
@@ -167,8 +159,6 @@ const MAX_OUTPUT_TOKENS_RESUME_NUDGE: &str =
 /// the call path is identical.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GraceReason {
-    /// `LoopDirective::FinalReply` — context-budget critical.
-    Budget,
     /// `LoopDirective::StopDiminishing` — diminishing-returns detector trip.
     Diminishing,
     /// `max_iterations` cap reached in the outer loop.
@@ -188,7 +178,6 @@ pub(crate) enum GraceReason {
 impl GraceReason {
     const fn nudge(self) -> &'static str {
         match self {
-            Self::Budget => GRACE_NUDGE_BUDGET,
             Self::Diminishing => GRACE_NUDGE_DIMINISHING,
             Self::MaxIterations => GRACE_NUDGE_MAX_ITERATIONS,
             Self::VerifierVeto => GRACE_NUDGE_VERIFIER_VETO,
@@ -569,12 +558,30 @@ impl AgentHarness {
             }
         }
 
+        // 2c-fit. `CompactToFit` directive — critical pressure (or a split cap
+        // reached). Compact aggressively down to the model's window, then FALL
+        // THROUGH to the normal LLM call. A run must never end just because
+        // context filled (never-break guarantee). R10-safe: mechanical dispatch
+        // to the external fit helper; no policy, no completion judgement.
+        if matches!(budget_directive, Some(LoopDirective::CompactToFit)) {
+            self.compact_to_fit_in_place(
+                session_id,
+                &mut messages,
+                system_prompt,
+                budget_tool_tokens,
+                true,
+            )
+            .await;
+            // no early return — control falls through to the LLM call below.
+        }
+
         // 2c-split. `SplitSession` directive — attempt compaction-driven session
         // split. On success, return `TurnState::Continue` with the child session
         // id so `run()` can rebind `current_session`. On failure or when the
-        // registrar/compactor is not wired, fall back to the `FinalReply` path.
-        // R10-safe: mechanical dispatch to `perform_session_split` (lives outside
-        // the harness); no intent classification, no new heuristic.
+        // registrar/compactor is not wired, fall back to compact-to-fit and
+        // continue (never-break). R10-safe: mechanical dispatch to
+        // `perform_session_split` (lives outside the harness); no intent
+        // classification, no new heuristic.
         if matches!(budget_directive, Some(LoopDirective::SplitSession)) {
             let split_child = match (
                 self.deps.context_compactor.as_ref(),
@@ -606,13 +613,13 @@ impl AgentHarness {
                             tracing::warn!(
                                 ?session_id,
                                 %e,
-                                "session split failed; falling back to FinalReply",
+                                "session split failed; falling back to compact-to-fit",
                             );
                             None
                         }
                     }
                 }
-                _ => None, // compactor or registrar not wired — fall back to FinalReply
+                _ => None, // compactor or registrar not wired — fall back to compact-to-fit
             };
 
             if let Some(child) = split_child {
@@ -624,50 +631,20 @@ impl AgentHarness {
                     split_child: Some(child),
                 });
             }
-            // Fail-soft: behave like the FinalReply branch.
-            self.hit_limit.store(true, Ordering::Relaxed);
-            self.set_terminate_reason(
-                crate::orchestrator::dispatch::TerminateReason::ContextBudgetExhausted,
-            );
-            self.fire_grace_turn(
+            // Fail-soft: registrar/compactor unavailable or the split failed.
+            // Rather than hard-stop (the old ContextBudgetExhausted + grace),
+            // compact to fit and FALL THROUGH to the normal LLM call — the
+            // never-break guarantee. R10-safe: same mechanical fit helper as the
+            // `CompactToFit` arm; no policy, no error-recovery strategy choice.
+            self.compact_to_fit_in_place(
                 session_id,
-                &events,
-                &messages,
-                callback,
-                iterations,
-                GraceReason::Budget,
-                parent_cancel,
+                &mut messages,
+                system_prompt,
+                budget_tool_tokens,
+                true,
             )
             .await;
-            return Ok(TurnStep::done());
-        }
-
-        // 2d. `FinalReply` directive — record hit_limit and short-circuit to
-        // Done. Hermes-inspired grace turn: if the most recent assistant
-        // turn ended without text (unresolved tool_use, or no assistant
-        // turn yet), issue exactly one tool-less LLM call so the user
-        // gets a terminal text response instead of a mid-thought hang.
-        // Tools are stripped both via `.with_tools(None)` (implicit by
-        // omitting the call) and via the grace nudge message, so the LLM
-        // cannot recurse. Fail-soft: any error falls through silently.
-        // R10-safe: one extra LLM call gated by an existing directive,
-        // no new policy, no state machine.
-        if matches!(budget_directive, Some(LoopDirective::FinalReply)) {
-            self.hit_limit.store(true, Ordering::Relaxed);
-            self.set_terminate_reason(
-                crate::orchestrator::dispatch::TerminateReason::ContextBudgetExhausted,
-            );
-            self.fire_grace_turn(
-                session_id,
-                &events,
-                &messages,
-                callback,
-                iterations,
-                GraceReason::Budget,
-                parent_cancel,
-            )
-            .await;
-            return Ok(TurnStep::done());
+            // no early return — control falls through to the LLM call below.
         }
 
         // 2d-G1. Last-step soft hint (opencode parity). When the iteration
@@ -1452,33 +1429,43 @@ impl AgentHarness {
         //    slot. `try_reserve_reactive_compact` is a one-shot
         //    `compare_exchange` so concurrent paths can never both rescue.
         let Some(compactor) = self.deps.context_compactor.as_ref() else {
-            self.emit(
-                || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+            // No LLM compactor wired — fall back to the deterministic floor + one
+            // retry instead of hard-stopping. A full context window must not end
+            // the run (never-break).
+            return self
+                .reactive_fit_and_retry(
+                    primary_err,
+                    session_id,
+                    messages,
+                    tools_ref,
+                    budget_tool_tokens,
+                    parent_cancel,
+                    started,
                     token_gap,
-                    succeeded: false,
-                },
-            );
-            self.set_terminate_reason(
-                crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
-            );
-            return Err(HarnessError::Llm(primary_err));
+                )
+                .await;
         };
         if !self.try_reserve_reactive_compact() {
+            // Rescue cap reached — the LLM-compaction budget for this run is spent.
+            // Fall back to the deterministic floor + one retry instead of
+            // hard-stopping (never-break).
             tracing::warn!(
                 ?session_id,
                 MAX_REACTIVE_COMPACT_ATTEMPTS,
-                "reactive-compaction rescue cap reached; surfacing original error",
+                "reactive-compaction rescue cap reached; flooring to fit and retrying once",
             );
-            self.emit(
-                || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+            return self
+                .reactive_fit_and_retry(
+                    primary_err,
+                    session_id,
+                    messages,
+                    tools_ref,
+                    budget_tool_tokens,
+                    parent_cancel,
+                    started,
                     token_gap,
-                    succeeded: false,
-                },
-            );
-            self.set_terminate_reason(
-                crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
-            );
-            return Err(HarnessError::Llm(primary_err));
+                )
+                .await;
         }
 
         // 3. Run the compactor on the in-flight message vec. Failure here
@@ -1494,21 +1481,27 @@ impl AgentHarness {
             .compact(messages, 0, Some(session_id_str.as_str()))
             .await
         {
+            // LLM compaction failed — fall back to the deterministic floor + one
+            // retry instead of hard-stopping (never-break). `reactive_fit_and_retry`
+            // re-runs `compact_to_fit`, whose floor guarantees fit even when the
+            // summariser is down.
             tracing::warn!(
                 ?session_id,
                 error = %e,
-                "reactive compactor failed; surfacing original provider error",
+                "reactive compactor failed; flooring to fit and retrying once",
             );
-            self.emit(
-                || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+            return self
+                .reactive_fit_and_retry(
+                    primary_err,
+                    session_id,
+                    messages,
+                    tools_ref,
+                    budget_tool_tokens,
+                    parent_cancel,
+                    started,
                     token_gap,
-                    succeeded: false,
-                },
-            );
-            self.set_terminate_reason(
-                crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
-            );
-            return Err(HarnessError::Llm(primary_err));
+                )
+                .await;
         }
 
         // 3a. Refresh the budget's `last_pressure` snapshot to the compacted
@@ -1549,11 +1542,123 @@ impl AgentHarness {
                 Ok(resp)
             }
             Err(retry_err) => {
+                // I1: if the retry ALSO failed with a context-overflow error (the
+                // OpenAI-compatible-proxy shape that surfaces overflow as an `Err`
+                // rather than a `ContextWindowExceeded` stop_reason), the LLM
+                // summary alone wasn't enough — fall back to the deterministic
+                // floor + one more retry before giving up (never-break). Only a
+                // genuine non-context error surfaces immediately. Loop-safe:
+                // `reactive_fit_and_retry` floors once and retries once, never
+                // returning `Ok(overflow)`, so the caller's drain loop terminates.
+                if matches!(
+                    classify(&retry_err.to_string()),
+                    RetryVerdict::CompactAndRetry { .. }
+                ) {
+                    return self
+                        .reactive_fit_and_retry(
+                            retry_err,
+                            session_id,
+                            messages,
+                            tools_ref,
+                            budget_tool_tokens,
+                            parent_cancel,
+                            started,
+                            token_gap,
+                        )
+                        .await;
+                }
                 tracing::warn!(
                     ?session_id,
                     error = %retry_err,
-                    "reactive-compaction retry still failed; surfacing retry error",
+                    "reactive-compaction retry failed with a non-context error; surfacing",
                 );
+                self.emit(
+                    || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                        token_gap,
+                        succeeded: false,
+                    },
+                );
+                self.set_terminate_reason(
+                    crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
+                );
+                Err(HarnessError::Llm(retry_err))
+            }
+        }
+    }
+
+    /// Reactive-overflow fallback: floor the in-flight prompt to fit the model
+    /// window DETERMINISTICALLY (`compact_to_fit_in_place` with
+    /// `use_llm_compactor: false` — the LLM summariser was already tried on the
+    /// main path), then retry the provider ONCE. Backs the no-compactor /
+    /// cap-exhausted / compact-failed exits AND the still-overflow retry error
+    /// (I1) — a full context window must not end the run. Only a
+    /// non-overflow response is success; a still-overflowing OR erroring retry
+    /// surfaces honestly (the truncated prompt didn't fit ⇒ pathological config,
+    /// not "context full", which the floor already resolved). Loop-safe: never
+    /// returns `Ok(overflow)`, so the caller's drain loop always terminates.
+    /// R10-safe: mechanical floor + one retry, no policy.
+    #[allow(clippy::too_many_arguments)]
+    async fn reactive_fit_and_retry(
+        &self,
+        primary_err: crate::error::AlephError,
+        session_id: &SessionId,
+        messages: &mut Vec<UnifiedMessage>,
+        tools_ref: Option<&[crate::tool_metadata::ToolDefinition]>,
+        budget_tool_tokens: usize,
+        parent_cancel: &CancellationToken,
+        started: std::time::Instant,
+        token_gap: Option<usize>,
+    ) -> Result<ProviderResponse, HarnessError> {
+        // 1. Compact to fit — DETERMINISTIC floor only (`use_llm_compactor: false`).
+        // The LLM summariser was already attempted on the main reactive path
+        // before we got here, so re-running it would waste a call and soften the
+        // reactive rescue cap; the floor alone guarantees fit.
+        let system_prompt = self.deps.system_prompt.as_deref().unwrap_or("");
+        self.compact_to_fit_in_place(session_id, messages, system_prompt, budget_tool_tokens, false)
+            .await;
+
+        // 2. Retry the provider once with the fitted prompt.
+        let payload = build_request_payload(
+            self.deps.system_prompt.as_deref(),
+            self.deps.system_prompt_parts.as_deref(),
+            messages,
+            tools_ref,
+            session_id,
+        );
+        match self
+            .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
+            .await?
+        {
+            Ok(resp)
+                if !matches!(
+                    resp.stop_reason,
+                    crate::providers::adapter::StopReason::ContextWindowExceeded
+                ) =>
+            {
+                self.emit(
+                    || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                        token_gap,
+                        succeeded: true,
+                    },
+                );
+                Ok(resp)
+            }
+            // Truncated prompt STILL overflows → pathological (configured window
+            // wider than the provider's real window). Surface honestly instead of
+            // looping. Loop-safe: return Err so the caller's `?` breaks the drain.
+            Ok(_still_overflow) => {
+                self.emit(
+                    || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                        token_gap,
+                        succeeded: false,
+                    },
+                );
+                self.set_terminate_reason(
+                    crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
+                );
+                Err(HarnessError::Llm(primary_err))
+            }
+            Err(retry_err) => {
                 self.emit(
                     || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
                         token_gap,
@@ -1640,6 +1745,53 @@ impl AgentHarness {
             started,
         )
         .await
+    }
+
+    /// Compact the in-flight prompt down to fit the model's context window, then
+    /// return so the caller can fall through to the normal LLM call. Shared by the
+    /// `CompactToFit` directive and the `SplitSession` fail-soft path — both must
+    /// reduce pressure and continue, never hard-stop (the never-break guarantee).
+    /// R10-safe: mechanical delegation to `context::compact::fit::compact_to_fit`
+    /// (lives outside the harness); no policy, no error-recovery strategy choice.
+    async fn compact_to_fit_in_place(
+        &self,
+        session_id: &SessionId,
+        messages: &mut Vec<UnifiedMessage>,
+        system_prompt: &str,
+        budget_tool_tokens: usize,
+        use_llm_compactor: bool,
+    ) {
+        let Some(budget) = self.deps.context_budget.as_ref() else {
+            return;
+        };
+        let mut guard = budget.lock().await;
+        let session_key_str = session_id.to_key_string();
+        // Reactive fallback passes `false`: the LLM summariser was already tried
+        // on the main path (and the reactive rescue cap governs it), so re-invoking
+        // it here wastes a call and softens the cap. Proactive callers pass `true`
+        // for a full compact (LLM summary → floor).
+        let compactor = if use_llm_compactor {
+            self.deps.context_compactor.as_deref()
+        } else {
+            None
+        };
+        crate::context::compact::fit::compact_to_fit(
+            compactor,
+            &guard,
+            messages,
+            system_prompt,
+            budget_tool_tokens,
+            Some(session_key_str.as_str()),
+        )
+        .await;
+        // Refresh `last_pressure` to the fitted prompt so a later
+        // `observe_actual_usage` calibration divides the real (post-fit)
+        // prompt_tokens by the post-fit estimate — not the stale pre-fit snapshot
+        // `before_turn` took. Mirrors the `CompactAndContinue` path's
+        // `note_compaction_effect` call and the reactive path's 3a refresh;
+        // omitting it injects a spurious shrink into the tokenizer-ratio EWMA that
+        // degrades every later compaction decision this run.
+        guard.note_compaction_effect(messages.as_slice(), system_prompt, budget_tool_tokens);
     }
 
     /// Fire one tool-less LLM call so the user gets a terminal text
@@ -1958,18 +2110,8 @@ mod tests {
     }
 
     #[test]
-    fn grace_reason_budget_uses_budget_nudge() {
-        assert_eq!(GraceReason::Budget.nudge(), GRACE_NUDGE_BUDGET);
-    }
-
-    #[test]
     fn grace_reason_diminishing_uses_diminishing_nudge() {
         assert_eq!(GraceReason::Diminishing.nudge(), GRACE_NUDGE_DIMINISHING);
-    }
-
-    #[test]
-    fn grace_nudge_budget_and_diminishing_are_distinct_strings() {
-        assert_ne!(GRACE_NUDGE_BUDGET, GRACE_NUDGE_DIMINISHING);
     }
 
     #[test]

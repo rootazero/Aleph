@@ -15,6 +15,7 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex};
 
+use crate::context::budget::{ContextBudget, ContextBudgetConfig};
 use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
 use crate::error::{AlephError, Result as AlephResult};
 use crate::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback, TurnState};
@@ -272,6 +273,91 @@ impl AiProvider for StubCompactorProvider {
     }
 }
 
+/// Returns `prompt_too_long` on the first two calls, then clean text. Drives
+/// exit #4's I1 fallback: the post-compaction retry (#2) still overflows, so it
+/// is the deterministic-floor retry (#3) that recovers.
+struct OverflowTwiceThenTextProvider {
+    calls: AtomicUsize,
+    success_text: String,
+}
+
+impl OverflowTwiceThenTextProvider {
+    fn new(success_text: &str) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            success_text: success_text.to_string(),
+        })
+    }
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl AiProvider for OverflowTwiceThenTextProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        let success = self.success_text.clone();
+        Box::pin(async move {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n < 2 {
+                Err(AlephError::provider(
+                    "prompt is too long: 250000 tokens > 200000 maximum",
+                ))
+            } else {
+                Ok(ProviderResponse::text_only(success))
+            }
+        })
+    }
+    fn name(&self) -> &str {
+        "overflow_twice_then_text"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+/// Provider that always returns clean text (no overflow). The seeded history is
+/// compacted proactively *before* this call, so the call itself succeeds — the
+/// whole point of the never-break regression: a reloaded near-full session must
+/// reach a normal completion, not a hard-stop.
+struct PlainTextProvider {
+    calls: AtomicUsize,
+    text: String,
+}
+
+impl PlainTextProvider {
+    fn new(text: &str) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            text: text.to_string(),
+        })
+    }
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl AiProvider for PlainTextProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        let text = self.text.clone();
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ProviderResponse::text_only(text))
+        })
+    }
+    fn name(&self) -> &str {
+        "plain_text"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -350,6 +436,53 @@ fn stub_compactor() -> Arc<ContextCompactor> {
     ))
 }
 
+/// A permissive budget so the reactive floor actually runs, while the large
+/// window + high thresholds keep the proactive `before_turn` path at `Continue`
+/// (it must not interfere with the reactive path under test).
+fn budget_config() -> ContextBudgetConfig {
+    ContextBudgetConfig {
+        token_budget: 200_000,
+        warning_threshold: 0.70,
+        critical_threshold: 0.85,
+        token_estimate_ratio: 4.0,
+        fresh_tail_count: 2,
+        circuit_breaker_max: 10,
+        diminishing_window: 16,
+        diminishing_threshold: 1,
+        max_splits: 3,
+    }
+}
+
+/// A near-full budget: `token_budget` small and 1 char ≈ 1 token, so the seeded
+/// history is critically over budget on turn 0 — exactly what reloading a
+/// near-full conversation looks like to `before_turn`.
+fn near_full_budget_config() -> ContextBudgetConfig {
+    ContextBudgetConfig {
+        token_budget: 100,
+        warning_threshold: 0.40,
+        critical_threshold: 0.85,
+        token_estimate_ratio: 1.0,
+        fresh_tail_count: 2,
+        circuit_breaker_max: 10,
+        diminishing_window: 16,
+        diminishing_threshold: 1,
+        max_splits: 3,
+    }
+}
+
+fn assistant_message_event(text: &str) -> SessionEvent {
+    SessionEvent::AssistantMessage {
+        turn_id: uuid::Uuid::new_v4(),
+        content: MessageContent {
+            text: text.to_string(),
+            blocks: Vec::new(),
+            thinking: None,
+            thinking_signature: None,
+        },
+        at: now_ms(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -389,13 +522,12 @@ async fn rescue_succeeds_when_compactor_wired_and_retry_returns_clean() {
     assert_eq!(harness.terminate_reason(), TerminateReason::Completed);
 }
 
-/// Cap path: provider always returns `prompt_too_long`. The first rescue
-/// succeeds in mutating messages but the retry still overflows, so the
-/// helper surfaces `HarnessError::Llm` and stamps the
-/// `ReactiveCompactExhausted` terminate reason. Subsequent provider
-/// retries (e.g. inside the empty-response loop) are NOT issued because
-/// the LLM error propagates immediately. The compactor cap guarantees
-/// the helper cannot loop forever.
+/// Exhaustion path: provider ALWAYS returns `prompt_too_long`. Flow: primary
+/// call (#1) → LLM compact → retry (#2, still overflow error) → exit #4's I1
+/// fallback floors deterministically and retries once more (#3, still overflow)
+/// → surfaces `HarnessError::Llm` + `ReactiveCompactExhausted`. Bounded: floor +
+/// a single extra retry, then honest surface — the helper cannot loop forever
+/// even when nothing can shrink the prompt enough.
 #[tokio::test]
 async fn rescue_exhausts_when_retry_still_overflows() {
     let session = MockSession::new(vec![
@@ -414,9 +546,10 @@ async fn rescue_exhausts_when_retry_still_overflows() {
         result.is_err(),
         "persistent overflow should surface as error"
     );
-    // Initial call + one retry after compaction — the cap allows exactly
-    // one rescue attempt.
-    assert_eq!(llm.call_count(), 2);
+    // #1 primary + #2 post-compact retry + #3 post-floor retry (I1) = 3 calls,
+    // then honest surface. The rescue slot is still reserved exactly once (the
+    // deterministic floor fallback consumes no additional LLM-compaction slot).
+    assert_eq!(llm.call_count(), 3);
     assert_eq!(harness.reactive_compact_attempts_for_tests(), 1);
     assert_eq!(
         harness.terminate_reason(),
@@ -424,11 +557,50 @@ async fn rescue_exhausts_when_retry_still_overflows() {
     );
 }
 
-/// No compactor wired: a `prompt_too_long` error must surface immediately
-/// as `HarnessError::Llm` with the `ReactiveCompactExhausted` terminate
-/// reason. No spurious retry calls.
+/// I1 recovery: the post-compaction retry ALSO overflows (error-style, as
+/// OpenAI-compatible proxies report it), so exit #4 no longer hard-stops — it
+/// floors deterministically and retries once more, which recovers. Calls: #1
+/// primary + #2 post-compact retry (overflow) + #3 post-floor retry (clean).
 #[tokio::test]
-async fn rescue_skipped_when_compactor_not_wired() {
+async fn exit4_still_overflow_error_floors_and_recovers() {
+    let session = MockSession::new(vec![
+        turn_started_event(),
+        user_message_event("oversized input that still overflows after the summary"),
+    ]);
+    let llm = OverflowTwiceThenTextProvider::new("recovered after the floor");
+    let deps = build_deps(session.clone(), llm.clone(), Some(stub_compactor()));
+    let harness = AgentHarness::new(deps);
+
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("exit #4 must floor + retry, not hard-stop, when the retry still overflows");
+
+    assert_eq!(state, TurnState::Done);
+    assert_eq!(
+        llm.call_count(),
+        3,
+        "primary + post-compact retry (overflow) + post-floor retry (I1) = 3 calls",
+    );
+    assert_ne!(
+        harness.terminate_reason(),
+        TerminateReason::ReactiveCompactExhausted,
+        "a recovered exit-#4 overflow must NOT hard-stop",
+    );
+    assert_eq!(
+        harness.reactive_compact_attempts_for_tests(),
+        1,
+        "the deterministic-floor fallback consumes no additional rescue slot",
+    );
+}
+
+/// No LLM compactor wired: a `prompt_too_long` error no longer hard-stops
+/// immediately. The reactive fallback floors to fit (a no-op here — no budget
+/// wired) and retries the provider ONCE; the retry still overflows, so the
+/// helper surfaces `HarnessError::Llm` with `ReactiveCompactExhausted`. The
+/// never-break contract: always attempt recovery before giving up.
+#[tokio::test]
+async fn overflow_floor_retries_then_propagates_when_no_compactor() {
     let session = MockSession::new(vec![turn_started_event(), user_message_event("oversized")]);
     let llm = PersistentOverflowProvider::new();
     let deps = build_deps(session.clone(), llm.clone(), None);
@@ -441,17 +613,57 @@ async fn rescue_skipped_when_compactor_not_wired() {
     assert!(result.is_err());
     assert_eq!(
         llm.call_count(),
-        1,
-        "no compactor → no retry, just propagate the original error",
+        2,
+        "no compactor → floor (no-op) + exactly one retry before propagating",
     );
     assert_eq!(
         harness.reactive_compact_attempts_for_tests(),
         0,
-        "rescue counter must NOT advance when compactor is None",
+        "the no-compactor exit does not consume an LLM-compaction rescue slot",
     );
     assert_eq!(
         harness.terminate_reason(),
         TerminateReason::ReactiveCompactExhausted,
+    );
+}
+
+/// Never-break recovery: an overflow with no compactor wired but a budget
+/// present floors the prompt to fit and retries ONCE; the retry succeeds, so the
+/// run completes cleanly and does NOT stamp `ReactiveCompactExhausted`. This is
+/// the core Task-5 behaviour: a full context window recovers instead of ending
+/// the run.
+#[tokio::test]
+async fn overflow_floor_retry_recovers_to_clean_completion() {
+    let session = MockSession::new(vec![
+        turn_started_event(),
+        user_message_event("oversized input"),
+    ]);
+    let llm = RecoverableOverflowProvider::new("recovered after floor");
+    let mut deps = build_deps(session.clone(), llm.clone(), None);
+    // Wire a budget so the deterministic floor in `compact_to_fit` actually runs.
+    deps.context_budget = Some(Arc::new(Mutex::new(ContextBudget::new(&budget_config()))));
+    let harness = AgentHarness::new(deps);
+
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("floor + retry must turn the overflow into a clean turn");
+
+    assert_eq!(state, TurnState::Done);
+    assert_eq!(
+        llm.call_count(),
+        2,
+        "provider called twice: initial overflow + post-floor retry",
+    );
+    assert_ne!(
+        harness.terminate_reason(),
+        TerminateReason::ReactiveCompactExhausted,
+        "a recovered overflow must NOT hard-stop as ReactiveCompactExhausted",
+    );
+    assert_eq!(
+        harness.reactive_compact_attempts_for_tests(),
+        0,
+        "the no-compactor floor path does not consume an LLM-compaction rescue slot",
     );
 }
 
@@ -481,4 +693,79 @@ async fn non_overflow_errors_bypass_rescue() {
     // Terminate reason stays at default `Completed` — the rescue helper
     // doesn't touch it on the pass-through path.
     assert_eq!(harness.terminate_reason(), TerminateReason::Completed);
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end never-break regression (the user's original bug). Distinct from
+// the reactive rescue tests above: this exercises the PROACTIVE path — a
+// reloaded near-full session that is critical on turn 0 must compact-to-fit and
+// continue, never hard-stopping on ContextBudgetExhausted / ReactiveCompactExhausted.
+// ---------------------------------------------------------------------------
+
+/// Reloading a near-full conversation and typing one more message must CONTINUE
+/// to a normal answer, not brick the session. A large seeded history + a small
+/// budget makes turn 0 critically over budget → `before_turn` returns
+/// `CompactToFit` → the harness floors to fit and falls through to the LLM,
+/// which answers cleanly. Neither the proactive (`ContextBudgetExhausted`) nor
+/// the reactive (`ReactiveCompactExhausted`) hard-stop may fire.
+#[tokio::test]
+async fn reloaded_near_full_session_continues_not_bricked() {
+    // Seed a realistic near-full history: alternating user/assistant turns whose
+    // combined length (~850 chars ≈ 850 tokens at ratio 1.0) dwarfs the 100-token
+    // budget, so turn 0 is critical.
+    let mut events = vec![turn_started_event()];
+    for i in 0..6 {
+        events.push(user_message_event(&format!(
+            "earlier user turn {i}: a chunk of prior conversation text padding the window"
+        )));
+        events.push(assistant_message_event(&format!(
+            "earlier assistant turn {i}: a chunk of prior reply text padding the window"
+        )));
+    }
+    // The freshly-typed message on the reloaded session.
+    events.push(user_message_event("open the html"));
+    let session = MockSession::new(events);
+
+    let llm = PlainTextProvider::new("here is the opened html");
+    let mut deps = build_deps(session.clone(), llm.clone(), None);
+    // Budget wired so turn 0 is critical and the proactive floor runs.
+    deps.context_budget =
+        Some(Arc::new(Mutex::new(ContextBudget::new(&near_full_budget_config()))));
+    let harness = AgentHarness::new(deps);
+
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("a reloaded near-full session must continue, not error out");
+
+    assert_eq!(state, TurnState::Done);
+    // Never-break: neither hard-stop reason may be stamped.
+    let reason = harness.terminate_reason();
+    assert_ne!(
+        reason,
+        TerminateReason::ContextBudgetExhausted,
+        "a full context window must not hard-stop the run (proactive P1)",
+    );
+    assert_ne!(
+        reason,
+        TerminateReason::ReactiveCompactExhausted,
+        "a full context window must not hard-stop the run (reactive P2)",
+    );
+    assert!(
+        llm.call_count() >= 1,
+        "the harness must compact and still issue the LLM request",
+    );
+    // The user gets a real, non-empty answer.
+    let recorded = session
+        .get_events(&sample_session_id(), None, None)
+        .await
+        .expect("get_events");
+    let answered = recorded.iter().any(|r| {
+        matches!(&r.event,
+            SessionEvent::AssistantMessage { content, .. } if content.text == "here is the opened html")
+    });
+    assert!(
+        answered,
+        "the run must persist the model's non-empty final text; got: {recorded:#?}",
+    );
 }

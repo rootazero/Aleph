@@ -36,8 +36,9 @@ const OVERHEAD_WARNING_RATIO: f64 = 0.30;
 const OVERHEAD_CRITICAL_RATIO: f64 = 0.50;
 /// Minimum pressure drop (fraction of budget) for a compaction to count as
 /// "effective" and re-arm the circuit breaker. Below this the breaker keeps
-/// its count, so a run of ineffective compactions still escalates to
-/// `FinalReply` — the anti-thrash safety stop borrowed from hermes.
+/// its count, so a run of ineffective compactions still escalates to a session
+/// split (and, once splits are exhausted, `CompactToFit`) — the anti-thrash
+/// safety path borrowed from hermes, but never a hard stop.
 const COMPACTION_EFFECTIVE_DROP: f64 = 0.05;
 /// EWMA weight on the newest observation when smoothing the calibration factor.
 /// Low enough to ride through transient noise (cache swings, recovery resends),
@@ -149,8 +150,12 @@ pub enum LoopDirective {
     Continue,
     /// Context exceeds warning threshold — compact tool results before the next LLM call.
     CompactAndContinue,
-    /// Context is critically full — force compaction, inject a system notice, skip tools.
-    FinalReply,
+    /// Context is critically full — compact aggressively until it fits
+    /// (LLM summary → deterministic truncation floor) and CONTINUE. Replaces
+    /// the old `FinalReply` hard-stop on the pressure path so a run can never
+    /// terminate merely because the context filled up. See
+    /// `context::compact::fit::compact_to_fit`.
+    CompactToFit,
     /// Diminishing returns detected — inject a notice and stop tool execution.
     StopDiminishing,
     /// In-place compaction is not keeping pressure down — split the session:
@@ -367,6 +372,12 @@ impl ContextBudget {
         self.warning_threshold
     }
 
+    /// Fraction of budget at which context is considered critically full.
+    #[must_use]
+    pub const fn critical_threshold(&self) -> f64 {
+        self.critical_threshold
+    }
+
     /// Fresh tail count for compaction.
     #[must_use]
     pub const fn fresh_tail_count(&self) -> usize {
@@ -450,15 +461,16 @@ impl ContextBudget {
         }
 
         if pressure.ratio >= self.critical_threshold {
-            // Critical — force final reply regardless of circuit breaker
+            // Critical — compact aggressively until it fits, then continue.
+            // Never a hard stop: a run cannot end just because context filled.
             tracing::warn!(
                 target: "context_budget",
                 used = pressure.used_tokens,
                 budget = pressure.budget_tokens,
                 ratio = pressure.ratio,
-                "Critical context pressure — forcing final reply"
+                "Critical context pressure — compacting to fit"
             );
-            return LoopDirective::FinalReply;
+            return LoopDirective::CompactToFit;
         }
 
         if pressure.ratio >= self.warning_threshold {
@@ -475,9 +487,9 @@ impl ContextBudget {
                 tracing::warn!(
                     target: "context_budget",
                     split_count = self.split_count,
-                    "Compaction circuit breaker tripped and split cap reached — escalating to FinalReply"
+                    "Compaction circuit breaker tripped and split cap reached — compacting to fit"
                 );
-                return LoopDirective::FinalReply;
+                return LoopDirective::CompactToFit;
             }
             tracing::info!(
                 target: "context_budget",
@@ -847,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    fn test_before_turn_critical_returns_final_reply() {
+    fn test_before_turn_critical_returns_compact_to_fit() {
         let config = ContextBudgetConfig {
             token_budget: 1000,
             warning_threshold: 0.70,
@@ -859,7 +871,7 @@ mod tests {
         // 900 chars = 90% usage → Critical zone
         let msgs = vec![UnifiedMessage::user("x".repeat(900))];
         let directive = budget.before_turn(&msgs, "", 0);
-        assert_eq!(directive, LoopDirective::FinalReply);
+        assert_eq!(directive, LoopDirective::CompactToFit);
     }
 
     #[test]
@@ -935,7 +947,7 @@ mod tests {
     }
 
     #[test]
-    fn test_before_turn_zero_budget_is_critical() {
+    fn test_before_turn_zero_budget_is_critical_returns_compact_to_fit() {
         let config = ContextBudgetConfig {
             token_budget: 0,
             ..default_config()
@@ -943,7 +955,7 @@ mod tests {
         let mut budget = ContextBudget::new(&config);
         let msgs = vec![UnifiedMessage::user("hello")];
         let directive = budget.before_turn(&msgs, "", 0);
-        assert_eq!(directive, LoopDirective::FinalReply);
+        assert_eq!(directive, LoopDirective::CompactToFit);
     }
 
     #[test]
@@ -970,7 +982,7 @@ mod tests {
     }
 
     #[test]
-    fn split_session_falls_back_to_final_reply_at_cap() {
+    fn split_session_falls_back_to_compact_to_fit_at_cap() {
         let mut cfg = default_config();
         cfg.token_budget = 1000;
         cfg.warning_threshold = 0.70;
@@ -990,12 +1002,31 @@ mod tests {
                                // (pressure is still in warning band; breaker consecutive_count is >= max after the trip)
                                // We need circuit_breaker_max more warning-band calls to trip again.
         budget.before_turn(&msgs, "", 0); // consecutive_count = 1 (CompactAndContinue)
-                                          // Trip the breaker again: split_count=1 == max_splits=1 → FinalReply
+                                          // Trip the breaker again: split_count=1 == max_splits=1 → CompactToFit
         let second = budget.before_turn(&msgs, "", 0);
         assert_eq!(
             second,
-            LoopDirective::FinalReply,
-            "once max_splits is reached, the breaker trip falls back to FinalReply",
+            LoopDirective::CompactToFit,
+            "once max_splits is reached, the breaker trip falls back to CompactToFit",
+        );
+    }
+
+    #[test]
+    fn critical_pressure_requests_compact_to_fit_not_final_reply() {
+        let config = ContextBudgetConfig {
+            token_budget: 1000,
+            warning_threshold: 0.70,
+            critical_threshold: 0.85,
+            ..default_config()
+        };
+        let mut budget = ContextBudget::new(&config);
+        // Build a message list whose estimated tokens blow past 0.85 * 1000.
+        let big = vec![UnifiedMessage::user("x".repeat(8000))]; // ~2285 tokens @3.5 → ratio > 2.0
+        let directive = budget.before_turn(&big, "", 0);
+        assert_eq!(
+            directive,
+            LoopDirective::CompactToFit,
+            "critical pressure must compact-to-fit, never hard-stop with FinalReply"
         );
     }
 
