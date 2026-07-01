@@ -408,7 +408,14 @@ fn build_stability_triple(
     (
         triple.stall_config,
         triple.consecutive_failure_cap,
-        triple.turn_timeout,
+        // Default per-turn wall-clock cap: prevents a hung or throttled LLM
+        // call from making the harness appear to "spin" endlessly when the
+        // operator has not configured an explicit `[stability] turn_timeout_secs`.
+        // 120s is long enough for a heavy reasoning/generation turn; override
+        // via config if a deployment needs more.
+        triple
+            .turn_timeout
+            .or_else(|| Some(std::time::Duration::from_secs(120))),
     )
 }
 
@@ -492,12 +499,14 @@ mod tests {
     }
 
     #[test]
-    fn stability_missing_section_all_none() {
+    fn stability_missing_section_uses_defaults() {
         let cfg = Config::default();
         let (sc, cap, tt) = build_stability_triple(&cfg);
         assert!(sc.is_none());
         assert!(cap.is_none());
-        assert!(tt.is_none());
+        // The production harness now defaults to a 120s per-turn cap so a
+        // hung/throttled LLM call cannot make the UI appear to spin forever.
+        assert_eq!(tt, Some(Duration::from_secs(120)));
     }
 
     #[test]
@@ -527,7 +536,8 @@ mod tests {
             alephcore::harness::StallConfig::default().check_interval
         );
         assert!(cap.is_none());
-        assert!(tt.is_none());
+        // turn_timeout defaults to the production cap when not configured.
+        assert_eq!(tt, Some(Duration::from_secs(120)));
     }
 
     #[test]

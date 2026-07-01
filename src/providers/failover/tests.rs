@@ -290,6 +290,35 @@ async fn live_derivation_falls_back_to_static_when_handle_has_no_registry() {
     assert_eq!(resp.text_content(), "static-fb");
 }
 
+#[tokio::test]
+async fn explicit_chain_skips_providers_removed_from_live_registry() {
+    // An explicit operator `[fallback_provider].chain` can outlive a provider
+    // that is deleted at runtime. The chain must be filtered against the live
+    // registry so the deleted entry is not attempted, otherwise the request
+    // wastes retries on a dead provider before reaching a healthy sibling.
+    let primary = ScriptProvider::err("primary", "HTTP 429 too many requests");
+    let deleted_fb = ScriptProvider::ok("deleted-fb");
+    let live_fb = ScriptProvider::ok("live-fb");
+    let pool = LivePool::new(
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![("live-fb", live_fb.clone() as Arc<dyn AiProvider>)],
+    );
+    let fp = FailoverProvider::new(
+        pool,
+        vec![
+            node("deleted-fb", deleted_fb),
+            node("live-fb", live_fb),
+        ],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "live-fb");
+}
+
 // --- decide() unit tests ----------------------------------------------
 
 #[test]
@@ -377,29 +406,23 @@ fn decide_transient_retries_then_advances() {
 }
 
 #[test]
-fn decide_transient_overload_429_gets_deep_retry_budget() {
+fn decide_transient_overload_429_gets_limited_retry_budget() {
     // The generic Anthropic server-throttle 429 ("please wait a moment")
-    // must be retried in place well past the shallow `max_retries=2` so a
-    // single-provider setup rides out the spike instead of hard-failing the
-    // flow (the 08:00 scheduled-job 429 crash). Once OVERLOAD_RETRY_BUDGET is
-    // exhausted it escalates to the per-model cooldown path (RateLimited),
-    // which process() turns into a sibling-model migration and, only if the
-    // provider's models are exhausted, a provider advance.
+    // gets one brief in-place retry so a transient spike has a chance to
+    // clear, but we no longer ride it out for tens of seconds: a provider
+    // that is consistently overloaded should fail fast in interactive chat.
+    // Once retries are exhausted it escalates to the per-model cooldown path
+    // (RateLimited), which process() turns into a sibling-model migration and,
+    // only if the provider's models are exhausted, a provider advance.
     let e = AlephError::RateLimitError {
         message: "Anthropic API rate limited (429): We're receiving too many \
                   requests at the moment. Please wait a moment and try again."
             .into(),
         suggestion: None,
     };
-    assert!(matches!(decide(&e, 2, 2), Decision::RetrySame(_)));
-    assert!(matches!(
-        decide(&e, OVERLOAD_RETRY_BUDGET - 1, 2),
-        Decision::RetrySame(_)
-    ));
-    assert_eq!(
-        decide(&e, OVERLOAD_RETRY_BUDGET, 2),
-        Decision::RateLimited(None)
-    );
+    assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
+    assert!(matches!(decide(&e, 1, 2), Decision::RetrySame(_)));
+    assert_eq!(decide(&e, 2, 2), Decision::RateLimited(None));
 }
 
 #[test]
