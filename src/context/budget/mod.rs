@@ -373,6 +373,12 @@ impl ContextBudget {
         self.warning_threshold
     }
 
+    /// Fraction of budget at which context is considered critically full.
+    #[must_use]
+    pub const fn critical_threshold(&self) -> f64 {
+        self.critical_threshold
+    }
+
     /// Fresh tail count for compaction.
     #[must_use]
     pub const fn fresh_tail_count(&self) -> usize {
