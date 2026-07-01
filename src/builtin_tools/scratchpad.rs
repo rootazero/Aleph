@@ -388,7 +388,13 @@ impl AlephTool for ScratchpadTool {
 fn derive_default_project_id(session_key: &str) -> String {
     let slug: String = session_key
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     // collapse runs of '-' and trim edges for a clean slug
     let mut collapsed = String::with_capacity(slug.len());
@@ -422,9 +428,18 @@ mod tests {
         let snap = ScratchpadSnapshot {
             objective: Some("Ship auth".into()),
             items: vec![
-                PlanItem { text: "Design".into(), status: PlanItemStatus::Done },
-                PlanItem { text: "Build".into(), status: PlanItemStatus::InProgress },
-                PlanItem { text: "Test".into(), status: PlanItemStatus::Pending },
+                PlanItem {
+                    text: "Design".into(),
+                    status: PlanItemStatus::Done,
+                },
+                PlanItem {
+                    text: "Build".into(),
+                    status: PlanItemStatus::InProgress,
+                },
+                PlanItem {
+                    text: "Test".into(),
+                    status: PlanItemStatus::Pending,
+                },
             ],
         };
         let dto = PlanSnapshotDto::from(&snap);
@@ -442,7 +457,10 @@ mod tests {
         use crate::memory::scratchpad::{PlanItem, PlanItemStatus, ScratchpadSnapshot};
         let snap = ScratchpadSnapshot {
             objective: Some("X".into()),
-            items: vec![PlanItem { text: "a".into(), status: PlanItemStatus::Done }],
+            items: vec![PlanItem {
+                text: "a".into(),
+                status: PlanItemStatus::Done,
+            }],
         };
         assert!(PlanSnapshotDto::from(&snap).complete);
     }
@@ -542,11 +560,16 @@ mod tests {
 
     #[test]
     fn derive_default_project_id_sanitizes_and_prefixes() {
-        assert_eq!(derive_default_project_id("agent:abc/def 1"), "chat-agent-abc-def-1");
+        assert_eq!(
+            derive_default_project_id("agent:abc/def 1"),
+            "chat-agent-abc-def-1"
+        );
         assert_eq!(derive_default_project_id(""), "chat-default");
         assert_eq!(derive_default_project_id("///"), "chat-default");
         // result must pass the same path-safety rules call() enforces
         let id = derive_default_project_id("..\\evil");
-        assert!(!id.contains("..") && !id.contains('/') && !id.contains('\\') && !id.starts_with('.'));
+        assert!(
+            !id.contains("..") && !id.contains('/') && !id.contains('\\') && !id.starts_with('.')
+        );
     }
 }

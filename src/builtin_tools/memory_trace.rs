@@ -86,11 +86,7 @@ impl MemoryTraceTool {
     /// `note_memory_dir` is the base notes directory (the parent of per-agent
     /// subdirectories), matching the path injected into `ProfileSynthesizer` and
     /// the note-wiki tooling.
-    pub fn new(
-        db: MemoryBackend,
-        agent_id: impl Into<String>,
-        note_memory_dir: PathBuf,
-    ) -> Self {
+    pub fn new(db: MemoryBackend, agent_id: impl Into<String>, note_memory_dir: PathBuf) -> Self {
         Self {
             db,
             agent_id: agent_id.into(),
@@ -114,8 +110,7 @@ impl MemoryTraceTool {
                 // section heading → session ids (from USER.md Sources map)
                 // → raw memory rows → citing notes
                 let agent_dir = self.note_memory_dir.join(agent.as_str());
-                let store =
-                    crate::memory::notes::profile::ProfileStore::new(agent_dir);
+                let store = crate::memory::notes::profile::ProfileStore::new(agent_dir);
                 let profile = store.read().await.ok().flatten();
                 let mut notes = Vec::new();
                 if let Some(p) = profile {
@@ -231,8 +226,10 @@ mod tests {
             .unwrap();
 
         // Insert only the "present" raw.
-        let mut r =
-            RawMemory::new("user: I prefer TypeScript".into(), RawMemorySource::Transcript);
+        let mut r = RawMemory::new(
+            "user: I prefer TypeScript".into(),
+            RawMemorySource::Transcript,
+        );
         r.id = "raw-present".into();
         r.agent_id = "default".into();
         backend.insert_raw_memory(&r).await.unwrap();
@@ -295,7 +292,10 @@ mod tests {
             source_notes: vec!["raw-ts".into()],
             ..Default::default()
         };
-        backend.index_note(&note, agent, "preference").await.unwrap();
+        backend
+            .index_note(&note, agent, "preference")
+            .await
+            .unwrap();
 
         // L3: USER.md whose `## Sources` maps the "Identity" section to ses_x.
         let mut sources: BTreeMap<String, Vec<String>> = BTreeMap::new();

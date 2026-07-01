@@ -242,7 +242,9 @@ impl InitializationCoordinator {
                 InitPhase::Runtimes => self.rollback_runtimes(pre_existing, &mut errors).await,
                 InitPhase::Database => self.rollback_database(pre_existing, &mut errors).await,
                 InitPhase::Config => self.rollback_config(),
-                InitPhase::Directories => self.rollback_directories(pre_existing, &mut errors).await,
+                InitPhase::Directories => {
+                    self.rollback_directories(pre_existing, &mut errors).await
+                }
             }
         }
 
@@ -313,7 +315,11 @@ impl InitializationCoordinator {
         warn!("Skipping config rollback to avoid deleting pre-existing user configuration");
     }
 
-    async fn rollback_directories(&self, pre_existing: &PreExistingState, errors: &mut Vec<String>) {
+    async fn rollback_directories(
+        &self,
+        pre_existing: &PreExistingState,
+        errors: &mut Vec<String>,
+    ) {
         for subdir in CONFIG_SUBDIRS {
             let path = self.config_dir.join(subdir);
             if pre_existing.subdirs.contains(*subdir) {
@@ -439,7 +445,9 @@ impl InitializationCoordinator {
         // Database creation performs synchronous file I/O and schema init;
         // run it on the blocking thread pool.
         tokio::task::spawn_blocking(move || {
-            SqliteMemoryBackend::new(&db_path).map(|_| ()).map_err(|e| format!("{e}"))
+            SqliteMemoryBackend::new(&db_path)
+                .map(|_| ())
+                .map_err(|e| format!("{e}"))
         })
         .await
         .map_err(|e| {

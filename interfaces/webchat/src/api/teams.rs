@@ -422,10 +422,7 @@ impl TeamsApi {
     /// to "user" on the server, so the panel sends only the task id.
     pub async fn task_approve(state: &DashboardState, task_id: &str) -> Result<(), String> {
         state
-            .rpc_call(
-                "teams.workflow.approve_step",
-                json!({ "task_id": task_id }),
-            )
+            .rpc_call("teams.workflow.approve_step", json!({ "task_id": task_id }))
             .await
             .map(|_| ())
     }

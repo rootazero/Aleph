@@ -152,7 +152,10 @@ pub fn arrange(forest: Vec<TreeNode>, sort: SortMode, filter: FilterMode) -> Vec
         kept
     };
     roots.sort_by(|a, b| match sort {
-        SortMode::Depth => b.rollup.max_depth_from_here.cmp(&a.rollup.max_depth_from_here),
+        SortMode::Depth => b
+            .rollup
+            .max_depth_from_here
+            .cmp(&a.rollup.max_depth_from_here),
         SortMode::Tools => b.rollup.total_tools.cmp(&a.rollup.total_tools),
         SortMode::Duration => b.rollup.total_duration_ms.cmp(&a.rollup.total_duration_ms),
         SortMode::Status => status_rank(a).cmp(&status_rank(b)),
@@ -208,7 +211,12 @@ mod tests {
     #[test]
     fn apply_spawned_then_progress_then_settled() {
         let mut nodes = Vec::new();
-        apply_event(&mut nodes, SubagentTreeEvent::Spawned { node: node("a", NodeLifecycle::Running) });
+        apply_event(
+            &mut nodes,
+            SubagentTreeEvent::Spawned {
+                node: node("a", NodeLifecycle::Running),
+            },
+        );
         assert_eq!(nodes.len(), 1);
         apply_event(
             &mut nodes,
@@ -258,7 +266,10 @@ mod tests {
 
     #[test]
     fn summary_counts_active_and_depth() {
-        let flat = vec![node("a", NodeLifecycle::Running), node("b", NodeLifecycle::Completed)];
+        let flat = vec![
+            node("a", NodeLifecycle::Running),
+            node("b", NodeLifecycle::Completed),
+        ];
         let s = summarize(&flat);
         assert_eq!(s.agents, 2);
         assert_eq!(s.active, 1);

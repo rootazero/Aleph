@@ -241,4 +241,3 @@ mod tests {
         assert_eq!(resolve_targets(&args), vec!["uv"]);
     }
 }
-

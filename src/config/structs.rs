@@ -4,14 +4,15 @@
 
 use crate::config::types::{
     AcpConfig, AgentsConfig, BehaviorConfig, ContextBudgetToml, CoworkConfigToml,
-    DispatcherConfigToml, EvolutionConfig, ExecutionConfig, FallbackProviderToml, FetchConfigInternal,
-    GeneralConfig, GenerationConfig, GroupChatConfig, GuardrailsToml, McpConfig, MediaConfig,
-    MemoryConfig, OrchestratorConfig, PersonaConfig, PoliciesConfig, PrivacyConfig, ProfileConfig,
-    PromptSectionConfig, ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, SearchConfig,
-    SearchConfigInternal, SecretMapping, SecretProviderConfig, SecretsConfig, ShellSecurityConfig,
-    SkillsConfig, SmartFlowConfig, SmartMatchingConfig, StabilityToml, StopHookConfig,
-    SubAgentConfig, TeamBroadcastConfigToml, TeamDispatcherConfigToml, ToolServiceConfig,
-    ToolsConfig, UnifiedToolsConfig, VoiceLocalConfig, VoiceSection,
+    DispatcherConfigToml, EvolutionConfig, ExecutionConfig, FallbackProviderToml,
+    FetchConfigInternal, GeneralConfig, GenerationConfig, GroupChatConfig, GuardrailsToml,
+    McpConfig, MediaConfig, MemoryConfig, OrchestratorConfig, PersonaConfig, PoliciesConfig,
+    PrivacyConfig, ProfileConfig, PromptSectionConfig, ProviderConfig, ProviderConfigEntry,
+    RoutingRuleConfig, SearchConfig, SearchConfigInternal, SecretMapping, SecretProviderConfig,
+    SecretsConfig, ShellSecurityConfig, SkillsConfig, SmartFlowConfig, SmartMatchingConfig,
+    StabilityToml, StopHookConfig, SubAgentConfig, TeamBroadcastConfigToml,
+    TeamDispatcherConfigToml, ToolServiceConfig, ToolsConfig, UnifiedToolsConfig, VoiceLocalConfig,
+    VoiceSection,
 };
 use crate::tasks::cron::CronConfig;
 use crate::tasks::heartbeat::config::HeartbeatConfig;
@@ -593,6 +594,9 @@ mod tests {
         cfg.fetch = Some(crate::config::types::FetchConfigInternal::default());
         cfg.policies.web_fetch.crawl4ai.enabled = true;
         cfg.migrate_fetch();
-        assert!(cfg.fetch.as_ref().unwrap().backends.is_empty(), "existing [fetch] wins");
+        assert!(
+            cfg.fetch.as_ref().unwrap().backends.is_empty(),
+            "existing [fetch] wins"
+        );
     }
 }

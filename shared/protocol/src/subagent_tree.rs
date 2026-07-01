@@ -207,7 +207,9 @@ fn compute_rollup(node: &SubagentNode, children: &[TreeNode]) -> Rollup {
         r.active_count += child.rollup.active_count;
         r.total_tools += child.rollup.total_tools;
         r.total_duration_ms += child.rollup.total_duration_ms;
-        r.max_depth_from_here = r.max_depth_from_here.max(child.rollup.max_depth_from_here + 1);
+        r.max_depth_from_here = r
+            .max_depth_from_here
+            .max(child.rollup.max_depth_from_here + 1);
     }
     // tools per second; guard the zero-duration window (no divide-by-zero).
     r.hotness = if r.total_duration_ms == 0 {

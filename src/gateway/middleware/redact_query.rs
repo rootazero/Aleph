@@ -85,11 +85,10 @@ mod tests {
 
     #[tokio::test]
     async fn strips_bootstrap_ticket_from_query() {
-        let mut svc = RedactQueryLayer::new().layer(tower::service_fn(
-            |req: Request<Body>| async move {
+        let mut svc =
+            RedactQueryLayer::new().layer(tower::service_fn(|req: Request<Body>| async move {
                 Ok::<_, Infallible>(req.uri().clone())
-            },
-        ));
+            }));
 
         let req = Request::builder()
             .uri("/?bt=super-secret-ticket")
@@ -102,11 +101,10 @@ mod tests {
 
     #[tokio::test]
     async fn strips_legacy_token_and_device_token() {
-        let mut svc = RedactQueryLayer::new().layer(tower::service_fn(
-            |req: Request<Body>| async move {
+        let mut svc =
+            RedactQueryLayer::new().layer(tower::service_fn(|req: Request<Body>| async move {
                 Ok::<_, Infallible>(req.uri().clone())
-            },
-        ));
+            }));
 
         let req = Request::builder()
             .uri("/panel?token=legacy&device_token=per-device")
@@ -119,11 +117,10 @@ mod tests {
 
     #[tokio::test]
     async fn leaves_queryless_uri_unchanged() {
-        let mut svc = RedactQueryLayer::new().layer(tower::service_fn(
-            |req: Request<Body>| async move {
+        let mut svc =
+            RedactQueryLayer::new().layer(tower::service_fn(|req: Request<Body>| async move {
                 Ok::<_, Infallible>(req.uri().clone())
-            },
-        ));
+            }));
 
         let req = Request::builder()
             .uri("/assets/main.js")

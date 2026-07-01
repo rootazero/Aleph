@@ -242,7 +242,11 @@ pub fn TaskDetailDrawer(
         busy.set(true);
         error.set(None);
         spawn_local(async move {
-            let reason_opt = if reason.is_empty() { None } else { Some(reason.as_str()) };
+            let reason_opt = if reason.is_empty() {
+                None
+            } else {
+                Some(reason.as_str())
+            };
             match TeamsApi::task_reject(&dash, &id, reason_opt).await {
                 Ok(()) => {
                     busy.set(false);
@@ -586,17 +590,32 @@ mod tests {
     #[test]
     fn gating_matches_lifecycle_rules() {
         use TaskAction::*;
-        assert_eq!(actions_for_status("pending"), vec![Start, Pause, Skip, Cancel]);
+        assert_eq!(
+            actions_for_status("pending"),
+            vec![Start, Pause, Skip, Cancel]
+        );
         assert_eq!(actions_for_status("blocked"), vec![Pause, Skip, Cancel]);
         // "unsatisfiable" (derived blocked) mirrors blocked exactly.
-        assert_eq!(actions_for_status("unsatisfiable"), actions_for_status("blocked"));
-        assert_eq!(actions_for_status("in_progress"), vec![Complete, Fail, Pause, Cancel]);
-        assert_eq!(actions_for_status("waiting_review"), vec![Approve, Reject, Skip, Cancel]);
+        assert_eq!(
+            actions_for_status("unsatisfiable"),
+            actions_for_status("blocked")
+        );
+        assert_eq!(
+            actions_for_status("in_progress"),
+            vec![Complete, Fail, Pause, Cancel]
+        );
+        assert_eq!(
+            actions_for_status("waiting_review"),
+            vec![Approve, Reject, Skip, Cancel]
+        );
         assert_eq!(actions_for_status("paused"), vec![Resume, Cancel]);
         assert_eq!(actions_for_status("failed"), vec![Retry]);
         // Terminal + unknown statuses expose no actions.
         for s in ["completed", "skipped", "cancelled", "garbage"] {
-            assert!(actions_for_status(s).is_empty(), "{s} must be terminal/inert");
+            assert!(
+                actions_for_status(s).is_empty(),
+                "{s} must be terminal/inert"
+            );
         }
     }
 }

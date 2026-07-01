@@ -199,7 +199,11 @@ pub fn fact_provenance_for(fact: &str) -> super::types::FactProvenance {
             _ => ProvenanceOrigin::Legacy,
         };
         let inferred = caps.get(3).map(|m| m.as_str() == "true").unwrap_or(false);
-        FactProvenance { origin, source_id, inferred }
+        FactProvenance {
+            origin,
+            source_id,
+            inferred,
+        }
     } else {
         FactProvenance::default()
     }

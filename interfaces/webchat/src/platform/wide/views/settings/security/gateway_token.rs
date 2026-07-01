@@ -124,9 +124,7 @@ pub fn GatewayTokenSection() -> impl IntoView {
                         .and_then(|t| t.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let expires_at = v
-                        .get("expires_at")
-                        .and_then(|t| t.as_i64());
+                    let expires_at = v.get("expires_at").and_then(|t| t.as_i64());
                     pairing_ticket.set(ticket);
                     pairing_expires_at.set(expires_at);
                     pairing_error.set(None);

@@ -1321,14 +1321,10 @@ impl ToolRegistry for BuiltinToolRegistry {
                 let agent_id = self.caller_agent_id("default");
                 Box::pin(async move {
                     let db = self.memory_trace_db.as_ref().ok_or_else(|| {
-                        AlephError::tool(
-                            "memory_trace not available: no memory backend configured",
-                        )
+                        AlephError::tool("memory_trace not available: no memory backend configured")
                     })?;
                     let note_memory_dir = crate::utils::paths::get_note_memory_dir()
-                        .map_err(|e| {
-                            AlephError::tool(format!("memory_trace: note dir: {e}"))
-                        })?;
+                        .map_err(|e| AlephError::tool(format!("memory_trace: note dir: {e}")))?;
                     let args: crate::builtin_tools::memory_trace::MemoryTraceArgs =
                         serde_json::from_value(arguments).map_err(|e| {
                             AlephError::tool(format!("memory_trace: bad args: {e}"))

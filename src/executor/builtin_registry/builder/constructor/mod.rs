@@ -68,8 +68,7 @@ impl BuiltinToolRegistry {
                             search: cfg_guard.search.as_ref(),
                             resolve_secret: &resolve,
                         };
-                        let registry =
-                            crate::fetch::FetchRegistry::from_config(fetch_cfg, &ctx);
+                        let registry = crate::fetch::FetchRegistry::from_config(fetch_cfg, &ctx);
                         tool = tool.with_fetch_providers(registry.select());
                     }
                 }

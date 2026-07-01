@@ -193,8 +193,13 @@ fn store_issued_device_token(msg: &Value) {
     if id != Some(1) {
         return;
     }
-    let Some(result) = msg.get("result") else { return };
-    let authorized = result.get("authorized").and_then(Value::as_bool).unwrap_or(false);
+    let Some(result) = msg.get("result") else {
+        return;
+    };
+    let authorized = result
+        .get("authorized")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if !authorized {
         return;
     }

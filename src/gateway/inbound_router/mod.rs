@@ -1233,7 +1233,9 @@ mod tests {
     /// interpreted exactly like a typed number.
     #[tokio::test]
     async fn clarify_button_callback_resolves_pending_clarification() {
-        use crate::clarification::{ClarificationManager, ClarificationOption, ClarificationRequest};
+        use crate::clarification::{
+            ClarificationManager, ClarificationOption, ClarificationRequest,
+        };
         use crate::exec::manager::ExecApprovalManager;
         use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
         use crate::routing::session_key::SessionKey;
@@ -1274,8 +1276,7 @@ mod tests {
             raw: None,
             metadata: vec![],
         };
-        let reply_route =
-            ReplyRoute::new(ChannelId::new("telegram"), ConversationId::new("u1"));
+        let reply_route = ReplyRoute::new(ChannelId::new("telegram"), ConversationId::new("u1"));
         let ctx = InboundContext::new(msg, reply_route, session_key);
 
         assert!(
@@ -1321,10 +1322,12 @@ mod tests {
             raw: None,
             metadata: vec![],
         };
-        let reply_route =
-            ReplyRoute::new(ChannelId::new("telegram"), ConversationId::new("u9"));
-        let ctx =
-            InboundContext::new(msg, reply_route, SessionKey::ephemeral("stale-clarify-test"));
+        let reply_route = ReplyRoute::new(ChannelId::new("telegram"), ConversationId::new("u9"));
+        let ctx = InboundContext::new(
+            msg,
+            reply_route,
+            SessionKey::ephemeral("stale-clarify-test"),
+        );
 
         assert!(
             router.try_intercept_hitl(&ctx).await,
@@ -1513,9 +1516,18 @@ mod tests {
         .with_route_bindings(vec![binding], SessionConfig::default(), "main")
         .with_workspace_manager(env_store_with_binding(&[("telegram", "trader")]));
 
-        let (agent, route) = router.resolve_agent_id_async(&dm_on("telegram")).await.unwrap();
-        assert_eq!(agent, "trader", "explicit switch must beat the default route");
-        assert!(route.is_none(), "override must rebuild the session key (route=None)");
+        let (agent, route) = router
+            .resolve_agent_id_async(&dm_on("telegram"))
+            .await
+            .unwrap();
+        assert_eq!(
+            agent, "trader",
+            "explicit switch must beat the default route"
+        );
+        assert!(
+            route.is_none(),
+            "override must rebuild the session key (route=None)"
+        );
     }
 
     /// Inverse guard: a *specific* matching route binding is NOT overridden by a
@@ -1538,8 +1550,14 @@ mod tests {
         .with_route_bindings(vec![binding], SessionConfig::default(), "main")
         .with_workspace_manager(env_store_with_binding(&[("discord", "trader")]));
 
-        let (agent, _route) = router.resolve_agent_id_async(&dm_on("discord")).await.unwrap();
-        assert_eq!(agent, "work", "specific channel route binding must win over workspace override");
+        let (agent, _route) = router
+            .resolve_agent_id_async(&dm_on("discord"))
+            .await
+            .unwrap();
+        assert_eq!(
+            agent, "work",
+            "specific channel route binding must win over workspace override"
+        );
     }
 
     fn bot_authored_msg(id: &str) -> InboundMessage {

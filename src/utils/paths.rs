@@ -575,7 +575,9 @@ mod tests {
 
         let dirs = get_all_skills_dirs(Some(&project)).unwrap();
         assert!(
-            !dirs.iter().any(|d| d.to_string_lossy().contains("/agents/")),
+            !dirs
+                .iter()
+                .any(|d| d.to_string_lossy().contains("/agents/")),
             "no agent dir without an active agent scope, got {dirs:?}"
         );
     }

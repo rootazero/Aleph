@@ -288,7 +288,8 @@ impl SkillManageTool {
         full: &str,
         id: &SkillId,
     ) -> Result<()> {
-        tokio::fs::write(path, full).await
+        tokio::fs::write(path, full)
+            .await
             .map_err(|e| AlephError::tool(format!("Failed to write SKILL.md: {e}")))?;
         self.system
             .reload_file(path)
@@ -401,9 +402,11 @@ impl SkillManageTool {
                 path.display()
             )));
         }
-        tokio::fs::create_dir_all(&skill_dir).await
+        tokio::fs::create_dir_all(&skill_dir)
+            .await
             .map_err(|e| AlephError::tool(format!("Failed to create skill directory: {e}")))?;
-        tokio::fs::write(&path, &full).await
+        tokio::fs::write(&path, &full)
+            .await
             .map_err(|e| AlephError::tool(format!("Failed to write SKILL.md: {e}")))?;
 
         // Make sure the authoring root participates in future rescans, then
@@ -459,7 +462,8 @@ impl SkillManageTool {
         let replace = args.replace.as_deref().unwrap_or_default();
 
         let path = self.mutable_skill_file(&skill_id, "patch").await?;
-        let current = tokio::fs::read_to_string(&path).await
+        let current = tokio::fs::read_to_string(&path)
+            .await
             .map_err(|e| AlephError::tool(format!("Failed to read SKILL.md: {e}")))?;
 
         let occurrences = current.matches(find).count();
@@ -517,7 +521,8 @@ impl SkillManageTool {
             .ok_or_else(|| AlephError::tool("Skill directory could not be resolved"))?;
         let target = skill_dir.join(file_name);
         if let Some(parent) = target.parent() {
-            tokio::fs::create_dir_all(parent).await
+            tokio::fs::create_dir_all(parent)
+                .await
                 .map_err(|e| AlephError::tool(format!("Failed to create directory: {e}")))?;
             // Defense in depth: a symlinked subdirectory inside the skill
             // could redirect the write outside the skills tree. Compare the
@@ -545,7 +550,8 @@ impl SkillManageTool {
                 "'{file_name}' is a symlink; refusing to write through it."
             )));
         }
-        tokio::fs::write(&target, file_content).await
+        tokio::fs::write(&target, file_content)
+            .await
             .map_err(|e| AlephError::tool(format!("Failed to write file: {e}")))?;
         self.system.record_patch(&skill_id).await;
 
@@ -903,4 +909,3 @@ mod tests {
         assert!(snap.prompt_xml.contains("seasonal"));
     }
 }
-

@@ -49,8 +49,7 @@ pub enum Extractor {
 // invariant rather than panicking in library code.
 
 static RE_COMMENTS: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?s)<!--.*?-->")
-        .unwrap_or_else(|e| unreachable!("invalid regex RE_COMMENTS: {e}"))
+    Regex::new(r"(?s)<!--.*?-->").unwrap_or_else(|e| unreachable!("invalid regex RE_COMMENTS: {e}"))
 });
 static RE_SCRIPT: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?si)<script(\s[^>]*)?>.*?</script\s*>")
@@ -85,8 +84,7 @@ static RE_SR_CLASSES: Lazy<Regex> = Lazy::new(|| {
     .unwrap_or_else(|e| unreachable!("invalid regex RE_SR_CLASSES: {e}"))
 });
 static RE_STRIP_TAGS: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"<[^>]+>")
-        .unwrap_or_else(|e| unreachable!("invalid regex RE_STRIP_TAGS: {e}"))
+    Regex::new(r"<[^>]+>").unwrap_or_else(|e| unreachable!("invalid regex RE_STRIP_TAGS: {e}"))
 });
 
 // Surface `<time datetime="…">` machine timestamps into the element's own
@@ -434,17 +432,22 @@ impl WebFetchTool {
         // use a provider to reach internal hosts. On any provider failure, fall
         // through to the next provider, then the built-in fetch below.
         if !self.fetch_providers.is_empty() {
-            validate_url_async(&args.url, &self.ssrf_policy).await.map_err(|e| {
-                let msg = format!("Fetch blocked or failed: {e}");
-                notify_tool_result(Self::NAME, &msg, false);
-                ToolError::Network(msg)
-            })?;
+            validate_url_async(&args.url, &self.ssrf_policy)
+                .await
+                .map_err(|e| {
+                    let msg = format!("Fetch blocked or failed: {e}");
+                    notify_tool_result(Self::NAME, &msg, false);
+                    ToolError::Network(msg)
+                })?;
             for provider in &self.fetch_providers {
                 match provider.fetch(&args.url).await {
                     Ok(markdown) => {
                         let content = self.truncate_content(markdown);
-                        let summary =
-                            format!("已获取网页内容 ({} 字符, {})", content.len(), provider.name());
+                        let summary = format!(
+                            "已获取网页内容 ({} 字符, {})",
+                            content.len(),
+                            provider.name()
+                        );
                         notify_tool_result(Self::NAME, &summary, true);
                         let wrapped = wrap_external_content(
                             &content,
@@ -462,7 +465,10 @@ impl WebFetchTool {
                         return Ok(apply_focus_prompt(bare, args.prompt.as_deref()));
                     }
                     Err(e) => {
-                        warn!("fetch provider '{}' failed, trying next: {e}", provider.name());
+                        warn!(
+                            "fetch provider '{}' failed, trying next: {e}",
+                            provider.name()
+                        );
                     }
                 }
             }

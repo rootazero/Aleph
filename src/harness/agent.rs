@@ -303,7 +303,10 @@ impl AgentHarness {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
-            .map_or(0, crate::providers::adapter::TokenUsage::context_occupancy_tokens);
+            .map_or(
+                0,
+                crate::providers::adapter::TokenUsage::context_occupancy_tokens,
+            );
         u32::try_from(occupancy).unwrap_or(u32::MAX)
     }
 

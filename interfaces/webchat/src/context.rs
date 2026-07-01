@@ -82,23 +82,19 @@ fn read_connect_credentials() -> ConnectCredentials {
     let bootstrap_ticket = parse_query_param(&search, "bt=");
     let url_legacy_token = parse_query_param(&search, "token=");
 
-    let storage = win
-        .local_storage()
-        .ok()
-        .flatten();
+    let storage = win.local_storage().ok().flatten();
 
     let device_token = storage
         .as_ref()
         .and_then(|s| s.get_item(GATEWAY_DEVICE_TOKEN_KEY).ok().flatten())
         .filter(|v| !v.is_empty());
 
-    let legacy_token = url_legacy_token
-        .or_else(|| {
-            storage
-                .as_ref()
-                .and_then(|s| s.get_item(GATEWAY_LEGACY_TOKEN_KEY).ok().flatten())
-                .filter(|v| !v.is_empty())
-        });
+    let legacy_token = url_legacy_token.or_else(|| {
+        storage
+            .as_ref()
+            .and_then(|s| s.get_item(GATEWAY_LEGACY_TOKEN_KEY).ok().flatten())
+            .filter(|v| !v.is_empty())
+    });
 
     ConnectCredentials {
         bootstrap_ticket,
@@ -125,10 +121,7 @@ fn parse_query_param(search: &str, prefix: &str) -> Option<String> {
 pub(crate) fn strip_params(search: &str, prefixes: &[&str]) -> String {
     let q = search.strip_prefix('?').unwrap_or(search);
     q.split('&')
-        .filter(|pair| {
-            !pair.is_empty()
-                && !prefixes.iter().any(|prefix| pair.starts_with(prefix))
-        })
+        .filter(|pair| !pair.is_empty() && !prefixes.iter().any(|prefix| pair.starts_with(prefix)))
         .collect::<Vec<_>>()
         .join("&")
 }
@@ -222,7 +215,10 @@ fn scrub_credentials_from_url() {}
 #[cfg(target_arch = "wasm32")]
 fn read_gateway_token() -> Option<String> {
     let creds = read_connect_credentials();
-    creds.bootstrap_ticket.or(creds.device_token).or(creds.legacy_token)
+    creds
+        .bootstrap_ticket
+        .or(creds.device_token)
+        .or(creds.legacy_token)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -679,10 +675,7 @@ impl DashboardState {
         if resp.get("authorized").and_then(serde_json::Value::as_bool) == Some(true) {
             // A bootstrap exchange returns a fresh device token; store it for
             // subsequent reconnects and clear any legacy token.
-            if let Some(dt) = resp
-                .get("device_token")
-                .and_then(serde_json::Value::as_str)
-            {
+            if let Some(dt) = resp.get("device_token").and_then(serde_json::Value::as_str) {
                 persist_device_token(dt);
                 clear_legacy_token();
             } else if credential_kind == "legacy" {

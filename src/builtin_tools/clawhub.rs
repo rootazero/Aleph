@@ -693,4 +693,3 @@ mod tests {
         assert!(!is_path_within(&base, &target));
     }
 }
-

@@ -514,8 +514,7 @@ impl DeliveryStore {
                 "SELECT channel_id, COUNT(*) AS n FROM outbound_deliveries
                  GROUP BY channel_id ORDER BY n DESC, channel_id ASC",
             )?;
-            let rows =
-                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
         let dead_lettered: i64 =
@@ -609,7 +608,8 @@ async fn drain_once(registry: &ChannelRegistry, store: &DeliveryStore) {
                     // push leaves a forensic trail (R5 correctness). Fall back to
                     // a plain drop if the move itself fails so the record can
                     // never wedge the queue.
-                    if let Err(dl_err) = store.record_dead_letter(rec.id, attempts, &format!("{e:?}"))
+                    if let Err(dl_err) =
+                        store.record_dead_letter(rec.id, attempts, &format!("{e:?}"))
                     {
                         warn!(id = rec.id, error = %dl_err, "delivery queue: dead-letter failed; dropping");
                         let _ = store.drop_record(rec.id, "dead-letter failed");
@@ -860,7 +860,8 @@ mod tests {
         let s = store();
         let now = now_secs();
         // Two telegram (one due, one future), one signal (due). Oldest is 100s old.
-        s.enqueue("telegram", &msg("a"), "NotConnected", now).unwrap();
+        s.enqueue("telegram", &msg("a"), "NotConnected", now)
+            .unwrap();
         s.enqueue("telegram", &msg("b"), "NotConnected", now + 3600)
             .unwrap();
         s.enqueue("signal", &msg("c"), "NotConnected", now).unwrap();
@@ -870,7 +871,9 @@ mod tests {
         assert_eq!(stats.due_now, 2, "two records are already due");
         // created_at was stamped at enqueue (~now); age measured at now+100.
         assert!(
-            stats.oldest_age_secs.is_some_and(|a| (95..=105).contains(&a)),
+            stats
+                .oldest_age_secs
+                .is_some_and(|a| (95..=105).contains(&a)),
             "oldest age ~100s, got {:?}",
             stats.oldest_age_secs
         );
@@ -905,7 +908,8 @@ mod tests {
             )
             .unwrap();
 
-        s.record_dead_letter(id, 10, "NotConnected(\"down\")").unwrap();
+        s.record_dead_letter(id, 10, "NotConnected(\"down\")")
+            .unwrap();
 
         // Gone from the live queue, present in the dead-letter table.
         assert!(s.is_empty(), "exhausted record left the live queue");
@@ -917,7 +921,11 @@ mod tests {
         assert_eq!(dl[0].channel_id, "telegram");
         assert_eq!(dl[0].message.text, "lost");
         assert_eq!(dl[0].attempts, 10);
-        assert_eq!(dl[0].created_at, now - 500, "original enqueue time preserved");
+        assert_eq!(
+            dl[0].created_at,
+            now - 500,
+            "original enqueue time preserved"
+        );
         assert!(dl[0].last_error.contains("NotConnected"));
     }
 
@@ -943,7 +951,10 @@ mod tests {
             s.record_dead_letter(id, 10, "exhausted").unwrap();
         }
         let stats = s.stats(now).unwrap();
-        assert_eq!(stats.dead_lettered, 2, "dead-letter table capped at max_queue_len");
+        assert_eq!(
+            stats.dead_lettered, 2,
+            "dead-letter table capped at max_queue_len"
+        );
         // The two newest survive; the first dead-lettered ("1") is evicted.
         let texts: Vec<String> = s
             .recent_dead_letters(10)
@@ -951,6 +962,9 @@ mod tests {
             .into_iter()
             .map(|d| d.message.text)
             .collect();
-        assert!(!texts.contains(&"1".to_string()), "oldest dead letter evicted");
+        assert!(
+            !texts.contains(&"1".to_string()),
+            "oldest dead letter evicted"
+        );
     }
 }

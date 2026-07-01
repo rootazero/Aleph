@@ -151,8 +151,9 @@ impl HarnessRunner for AgentHarnessRunner {
 
         // Per-run routing handle: co-locates recall backfill (writer) with the
         // completion observer (reader). §6/§7. Lives outside the harness (R10).
-        let routing_attribution =
-            std::sync::Arc::new(crate::routing::RoutingAttribution::new(session_id.to_key_string()));
+        let routing_attribution = std::sync::Arc::new(crate::routing::RoutingAttribution::new(
+            session_id.to_key_string(),
+        ));
 
         // Frozen attribution: the EXACT (provider, model) this run resolved.
         // model_directive already folds the select_model session pick and the agent
@@ -175,7 +176,12 @@ impl HarnessRunner for AgentHarnessRunner {
         // also backfills routing_attribution.task_emb for the observer (symmetry).
         let routing_text: Option<String> = if let Some(recall) = self.routing_recall.as_ref() {
             recall
-                .build_routing_experience_message(&user_query, &spec.agent, None, &routing_attribution)
+                .build_routing_experience_message(
+                    &user_query,
+                    &spec.agent,
+                    None,
+                    &routing_attribution,
+                )
                 .await
                 .ok()
                 .flatten()
@@ -298,16 +304,17 @@ impl HarnessRunner for AgentHarnessRunner {
         // at the spawn seam (subagent_spawner::spawn) — each run records under
         // its own agent_id; no cross-agent leakage.
         let trace_sink = match (trace_sink, self.routing_store.as_ref()) {
-            (Some(parent), Some(store)) => Some(std::sync::Arc::new(
-                crate::routing::OutcomeObserver::new(
+            (Some(parent), Some(store)) => {
+                Some(std::sync::Arc::new(crate::routing::OutcomeObserver::new(
                     parent,
                     store.clone(),
                     routing_attribution.clone(),
                     routing_model_id,
                     routing_provider_id.unwrap_or_default(),
                     spec.agent.clone(),
-                ),
-            ) as std::sync::Arc<dyn crate::harness::TraceSink>),
+                ))
+                    as std::sync::Arc<dyn crate::harness::TraceSink>)
+            }
             (other, _) => other,
         };
         let deps = HarnessDeps {

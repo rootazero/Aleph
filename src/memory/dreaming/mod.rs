@@ -1196,8 +1196,7 @@ async fn compute_raw_metrics(
             Ok(hits) => {
                 let recalled_total = hits.len() as u32;
                 let never = total_notes.saturating_sub(recalled_total);
-                let skill_total =
-                    notes.iter().filter(|n| n.category == "skill").count() as u32;
+                let skill_total = notes.iter().filter(|n| n.category == "skill").count() as u32;
                 let skill_recalled = notes
                     .iter()
                     .filter(|n| n.category == "skill" && hits.contains_key(&n.path))

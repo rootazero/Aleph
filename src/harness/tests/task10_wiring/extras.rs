@@ -856,7 +856,10 @@ async fn compact_to_fit_turn_keeps_token_breakdown_in_lockstep() {
         .expect("run_turn should succeed");
     let total = harness.total_tokens();
     let breakdown = harness.token_breakdown();
-    assert!(total > 0, "the compact-to-fit turn must record provider usage");
+    assert!(
+        total > 0,
+        "the compact-to-fit turn must record provider usage"
+    );
     assert_eq!(
         breakdown.total(),
         total,

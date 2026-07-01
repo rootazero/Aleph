@@ -71,8 +71,15 @@ impl PlanView {
     /// when complete, else `("◗", "未完成 · d/t")`.
     #[must_use]
     pub fn archive_summary(&self) -> (&'static str, String) {
-        let (glyph, word) = if self.complete { ("✓", "任务完成") } else { ("◗", "未完成") };
-        (glyph, format!("{word} · {}/{}", self.done_count(), self.total()))
+        let (glyph, word) = if self.complete {
+            ("✓", "任务完成")
+        } else {
+            ("◗", "未完成")
+        };
+        (
+            glyph,
+            format!("{word} · {}/{}", self.done_count(), self.total()),
+        )
     }
 }
 
@@ -103,13 +110,20 @@ fn parse_plan_view(snapshot: &Value) -> Option<PlanView> {
         .get("objective")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let complete = obj.get("complete").and_then(|v| v.as_bool()).unwrap_or(false);
+    let complete = obj
+        .get("complete")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let items = obj
         .get("items")
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(parse_item).collect())
         .unwrap_or_default();
-    Some(PlanView { objective, items, complete })
+    Some(PlanView {
+        objective,
+        items,
+        complete,
+    })
 }
 
 fn parse_item(v: &Value) -> Option<PlanItemView> {
@@ -170,7 +184,10 @@ mod tests {
             objective: Some("Ship".into()),
             items: items
                 .iter()
-                .map(|(t, s)| PlanItemView { text: (*t).into(), status: s.clone() })
+                .map(|(t, s)| PlanItemView {
+                    text: (*t).into(),
+                    status: s.clone(),
+                })
                 .collect(),
             complete,
         }

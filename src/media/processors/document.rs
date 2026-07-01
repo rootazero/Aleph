@@ -158,9 +158,7 @@ mod tests {
     async fn read_text_file() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
-        tokio::fs::write(&file_path, "Hello, world!")
-            .await
-            .unwrap();
+        tokio::fs::write(&file_path, "Hello, world!").await.unwrap();
 
         let p = TextDocumentProvider;
         let input = MediaInput::FilePath { path: file_path };

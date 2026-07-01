@@ -488,7 +488,10 @@ mod tests {
             .map(|i| AskUserChoice::Simple(format!("opt{i}")))
             .collect();
         let kb = AskUserTool::build_choice_keyboard(&many);
-        assert!(kb.is_none(), "oversized choice lists must not render buttons");
+        assert!(
+            kb.is_none(),
+            "oversized choice lists must not render buttons"
+        );
 
         // At the cap boundary the keyboard is still rendered.
         let twelve: Vec<AskUserChoice> = (0..12)

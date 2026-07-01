@@ -95,8 +95,9 @@ impl DeviceTokenManager {
         let device_name = device_name.unwrap_or_else(|| "Remote Panel".to_string());
 
         // Atomically consume the ticket before issuing the device token.
-        let _consumed: ConsumedBootstrapTicket =
-            self.store.consume_bootstrap_ticket(ticket, Some(&device_id))?;
+        let _consumed: ConsumedBootstrapTicket = self
+            .store
+            .consume_bootstrap_ticket(ticket, Some(&device_id))?;
 
         // Create or update the device record. For the MVP every paired remote
         // device gets the operator role and wildcard scope.
@@ -230,6 +231,9 @@ mod tests {
             .unwrap();
 
         mgr.revoke_device("dev-x").unwrap();
-        assert!(mgr.validate_device_token(&result.device_token).unwrap().is_none());
+        assert!(mgr
+            .validate_device_token(&result.device_token)
+            .unwrap()
+            .is_none());
     }
 }

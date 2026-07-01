@@ -729,8 +729,9 @@ async fn reloaded_near_full_session_continues_not_bricked() {
     let llm = PlainTextProvider::new("here is the opened html");
     let mut deps = build_deps(session.clone(), llm.clone(), None);
     // Budget wired so turn 0 is critical and the proactive floor runs.
-    deps.context_budget =
-        Some(Arc::new(Mutex::new(ContextBudget::new(&near_full_budget_config()))));
+    deps.context_budget = Some(Arc::new(Mutex::new(ContextBudget::new(
+        &near_full_budget_config(),
+    ))));
     let harness = AgentHarness::new(deps);
 
     let state = harness

@@ -406,4 +406,3 @@ fn test_args_schema_includes_render_engine() {
         "Schema should include native option"
     );
 }
-

@@ -248,7 +248,8 @@ impl AcpAdapterManager {
         let mut configs = self.configs.write().await;
 
         // Helper: remove all sessions for this harness_id (across all cwds)
-        let remove_sessions = |sessions: &mut HashMap<SessionKey, SessionEntry>, harness_id: &str| {
+        let remove_sessions = |sessions: &mut HashMap<SessionKey, SessionEntry>,
+                               harness_id: &str| {
             let keys_to_remove: Vec<SessionKey> = sessions
                 .keys()
                 .filter(|k| k.harness_id == harness_id)

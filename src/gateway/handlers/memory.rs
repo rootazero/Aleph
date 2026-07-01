@@ -537,15 +537,10 @@ pub async fn handle_trace(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         })
         .await
     {
-        Ok(res) => JsonRpcResponse::success(
-            request.id,
-            serde_json::to_value(res).unwrap_or_default(),
-        ),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("memory.trace: {e}"),
-        ),
+        Ok(res) => {
+            JsonRpcResponse::success(request.id, serde_json::to_value(res).unwrap_or_default())
+        }
+        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("memory.trace: {e}")),
     }
 }
 
@@ -902,8 +897,14 @@ mod trace_tests {
         let resp = handle_trace(req, db).await;
         assert!(resp.is_success(), "{:?}", resp.error);
         let result = resp.result.unwrap();
-        assert!(result["notes"].as_array().is_some(), "response has notes array");
-        assert!(result["evidence"].as_array().is_some(), "response has evidence array");
+        assert!(
+            result["notes"].as_array().is_some(),
+            "response has notes array"
+        );
+        assert!(
+            result["evidence"].as_array().is_some(),
+            "response has evidence array"
+        );
         let evidence = result["evidence"].as_array().unwrap();
         assert!(
             evidence.iter().any(|e| e["raw_id"] == "raw-ev1"),

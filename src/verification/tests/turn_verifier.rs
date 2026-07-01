@@ -159,7 +159,9 @@ async fn concurrent_verify_vs_disable_all_is_consistent() {
     for r in readers {
         r.await.unwrap_or_else(|e| panic!("reader task: {e}"));
     }
-    toggler.await.unwrap_or_else(|e| panic!("toggler task: {e}"));
+    toggler
+        .await
+        .unwrap_or_else(|e| panic!("toggler task: {e}"));
 
     let total = blocks.load(Ordering::Relaxed) + allows.load(Ordering::Relaxed);
     assert_eq!(total, READERS * ITERS);

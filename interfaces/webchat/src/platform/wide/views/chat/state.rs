@@ -1,9 +1,9 @@
 //! Chat reactive state — signals for chat messages, streaming, and UI mode.
 
+use super::plan::{PlanUpdate, PlanView};
 use crate::api::teams::CoordTaskDto;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
-use super::plan::{PlanUpdate, PlanView};
 
 /// File staged for upload as part of the next outbound message.
 ///
@@ -486,7 +486,9 @@ impl ChatState {
 
     /// Which sink trigger is calling — decides the archive gate.
     pub fn archive_active_plan(&self, gate: ArchiveGate) {
-        let Some(p) = self.plan.get_untracked() else { return };
+        let Some(p) = self.plan.get_untracked() else {
+            return;
+        };
         let should = match gate {
             ArchiveGate::Activity => p.has_activity(),
             ArchiveGate::Completed => p.complete,
@@ -1285,14 +1287,18 @@ mod step_tests {
             objective: Some("Obj".into()),
             items: items
                 .iter()
-                .map(|(t, s)| PlanItemView { text: (*t).into(), status: s.clone() })
+                .map(|(t, s)| PlanItemView {
+                    text: (*t).into(),
+                    status: s.clone(),
+                })
                 .collect(),
             complete,
         }
     }
 
     fn archive_count(chat: &ChatState) -> usize {
-        chat.messages.with(|m| m.iter().filter(|x| x.plan_archive.is_some()).count())
+        chat.messages
+            .with(|m| m.iter().filter(|x| x.plan_archive.is_some()).count())
     }
 
     #[test]
@@ -1300,10 +1306,14 @@ mod step_tests {
         let owner = Owner::new();
         owner.set();
         let chat = ChatState::new();
-        chat.plan.set(Some(plan(&[("a", PlanItemStatusView::Completed)], false)));
+        chat.plan
+            .set(Some(plan(&[("a", PlanItemStatusView::Completed)], false)));
         chat.archive_active_plan(ArchiveGate::Activity);
         assert_eq!(archive_count(&chat), 1, "worked plan sinks one capsule");
-        assert!(chat.plan.get_untracked().is_none(), "slot cleared after archive");
+        assert!(
+            chat.plan.get_untracked().is_none(),
+            "slot cleared after archive"
+        );
     }
 
     #[test]
@@ -1311,10 +1321,14 @@ mod step_tests {
         let owner = Owner::new();
         owner.set();
         let chat = ChatState::new();
-        chat.plan.set(Some(plan(&[("a", PlanItemStatusView::Pending)], false)));
+        chat.plan
+            .set(Some(plan(&[("a", PlanItemStatusView::Pending)], false)));
         chat.archive_active_plan(ArchiveGate::Activity);
         assert_eq!(archive_count(&chat), 0, "pristine plan is not archived");
-        assert!(chat.plan.get_untracked().is_some(), "slot left for overwrite");
+        assert!(
+            chat.plan.get_untracked().is_some(),
+            "slot left for overwrite"
+        );
     }
 
     #[test]
@@ -1322,9 +1336,14 @@ mod step_tests {
         let owner = Owner::new();
         owner.set();
         let chat = ChatState::new();
-        chat.plan.set(Some(plan(&[("a", PlanItemStatusView::InProgress)], false)));
+        chat.plan
+            .set(Some(plan(&[("a", PlanItemStatusView::InProgress)], false)));
         chat.archive_active_plan(ArchiveGate::Completed);
-        assert_eq!(archive_count(&chat), 0, "in-progress plan not sunk on Completed gate");
+        assert_eq!(
+            archive_count(&chat),
+            0,
+            "in-progress plan not sunk on Completed gate"
+        );
         assert!(chat.plan.get_untracked().is_some());
     }
 
@@ -1333,9 +1352,14 @@ mod step_tests {
         let owner = Owner::new();
         owner.set();
         let chat = ChatState::new();
-        chat.plan.set(Some(plan(&[("a", PlanItemStatusView::Completed)], true)));
+        chat.plan
+            .set(Some(plan(&[("a", PlanItemStatusView::Completed)], true)));
         chat.start_assistant_message("r2");
-        assert_eq!(archive_count(&chat), 1, "completed plan sinks at next run start");
+        assert_eq!(
+            archive_count(&chat),
+            1,
+            "completed plan sinks at next run start"
+        );
         assert!(chat.plan.get_untracked().is_none());
     }
 
@@ -1344,9 +1368,14 @@ mod step_tests {
         let owner = Owner::new();
         owner.set();
         let chat = ChatState::new();
-        chat.plan.set(Some(plan(&[("a", PlanItemStatusView::InProgress)], false)));
+        chat.plan
+            .set(Some(plan(&[("a", PlanItemStatusView::InProgress)], false)));
         chat.start_assistant_message("r2");
-        assert_eq!(archive_count(&chat), 0, "in-progress plan stays in the sticky slot");
+        assert_eq!(
+            archive_count(&chat),
+            0,
+            "in-progress plan stays in the sticky slot"
+        );
         assert!(chat.plan.get_untracked().is_some());
     }
 

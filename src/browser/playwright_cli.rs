@@ -90,9 +90,12 @@ impl PlaywrightCliDriver {
         let runtimes_dir = crate::runtimes::get_runtimes_dir()
             .map_err(|e| BrowserError::PlaywrightCliError(format!("runtimes dir: {e}")))?;
         let ledger_path = runtimes_dir.join("ledger.json");
-        let ledger = tokio::task::spawn_blocking(move || CapabilityLedger::load_or_create(ledger_path))
-            .await
-            .map_err(|e| BrowserError::PlaywrightCliError(format!("load capability ledger: {e}")))?;
+        let ledger =
+            tokio::task::spawn_blocking(move || CapabilityLedger::load_or_create(ledger_path))
+                .await
+                .map_err(|e| {
+                    BrowserError::PlaywrightCliError(format!("load capability ledger: {e}"))
+                })?;
         let ledger = Arc::new(tokio::sync::RwLock::new(ledger));
 
         let resolved = ensure_capability("playwright-cli", &ledger)

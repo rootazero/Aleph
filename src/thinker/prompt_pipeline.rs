@@ -10,11 +10,11 @@ use super::layers::{
     HydratedToolsLayer, IdentityFilesLayer, InboundContextLayer, LanguageLayer,
     McpInstructionsLayer, MemoryAugmentationLayer, MemoryProtocolLayer, MultiStepConductLayer,
     OperationalGuidelinesLayer, ProfileLayer, ProtocolTokensLayer, ProviderGuidanceLayer,
-    RoleLayer, RuntimeCapabilitiesLayer,
-    RuntimeContextLayer, SecurityLayer, SessionBudgetLayer, SessionContextGuideLayer,
-    SessionResumeLayer, SkillInstructionsLayer, SkillModeLayer, SoulLayer, SpecialActionsLayer,
-    StandingGoalLayer, StrategyLayer, StrategyPointerLayer, ThinkingGuidanceLayer,
-    ToolRuntimeStateLayer, ToolUsageGrammarLayer, ToolsLayer, VoiceModeLayer,
+    RoleLayer, RuntimeCapabilitiesLayer, RuntimeContextLayer, SecurityLayer, SessionBudgetLayer,
+    SessionContextGuideLayer, SessionResumeLayer, SkillInstructionsLayer, SkillModeLayer,
+    SoulLayer, SpecialActionsLayer, StandingGoalLayer, StrategyLayer, StrategyPointerLayer,
+    ThinkingGuidanceLayer, ToolRuntimeStateLayer, ToolUsageGrammarLayer, ToolsLayer,
+    VoiceModeLayer,
 };
 use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};

@@ -465,17 +465,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // remote Panel can exchange for a per-device token. Authorized-only.
     {
         let mgr = device_token_mgr.clone();
-        server.handlers_mut().register("gateway.ticket.create", move |req| {
-            let mgr = mgr.clone();
-            async move {
-                let ctx = Arc::new(
-                    alephcore::gateway::handlers::gateway_ticket::TicketHandlerContext {
-                        device_token_mgr: mgr,
-                    },
-                );
-                alephcore::gateway::handlers::gateway_ticket::handle_ticket_create(req, ctx).await
-            }
-        });
+        server
+            .handlers_mut()
+            .register("gateway.ticket.create", move |req| {
+                let mgr = mgr.clone();
+                async move {
+                    let ctx = Arc::new(
+                        alephcore::gateway::handlers::gateway_ticket::TicketHandlerContext {
+                            device_token_mgr: mgr,
+                        },
+                    );
+                    alephcore::gateway::handlers::gateway_ticket::handle_ticket_create(req, ctx)
+                        .await
+                }
+            });
     }
     // Wire the security store so the WS node connect/disconnect paths can
     // stamp enrolled-node last_seen_at (offline fleet view honesty).
@@ -1125,9 +1128,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Register the subagent tree relay — live spawn/progress/settle events are
     // republished to panels under `run.subagent_tree` for the background
     // sub-agent tree view (pure observability; no parent turn driven).
-    alephcore::gateway::subagent_tree_relay::spawn_subagent_tree_relay(
-        server.event_bus().clone(),
-    );
+    alephcore::gateway::subagent_tree_relay::spawn_subagent_tree_relay(server.event_bus().clone());
 
     // Wire OpenAI-compatible API dependencies into GatewayServer
     server.execution_adapter = agent_result.execution_adapter.clone();
@@ -1231,12 +1232,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // register_common_handlers) because that seam has no orchestrator handle.
                 {
                     let harness = orch.harness.clone();
-                    server.handlers_mut().register("chat.context_estimate", move |req| {
-                        let harness = harness.clone();
-                        async move {
-                            alephcore::gateway::handlers::chat::handle_context_estimate(req, harness).await
-                        }
-                    });
+                    server
+                        .handlers_mut()
+                        .register("chat.context_estimate", move |req| {
+                            let harness = harness.clone();
+                            async move {
+                                alephcore::gateway::handlers::chat::handle_context_estimate(
+                                    req, harness,
+                                )
+                                .await
+                            }
+                        });
                 }
                 server.orchestrator = Some(orch);
                 if !args.daemon {
@@ -2065,9 +2071,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // Gateway event bus. No-op when the platform has no SystemCapability
         // (headless CI, etc.).
         if desktop_cfg.presence.enabled {
-            let platform = platform.clone().unwrap_or_else(|| {
-                panic!("platform must be built when presence is enabled")
-            });
+            let platform = platform
+                .clone()
+                .unwrap_or_else(|| panic!("platform must be built when presence is enabled"));
             if platform.system().is_some() {
                 let reporter = alephcore::tasks::presence::PresenceReporter::new(
                     platform,
@@ -2093,9 +2099,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // `MediaCapability::mic_level()` and publishes a categorical
         // (Active/Quiet/Unavailable) snapshot on the Gateway event bus.
         if desktop_cfg.mic_level.enabled {
-            let platform = platform.clone().unwrap_or_else(|| {
-                panic!("platform must be built when mic_level is enabled")
-            });
+            let platform = platform
+                .clone()
+                .unwrap_or_else(|| panic!("platform must be built when mic_level is enabled"));
             if platform.media().is_some() {
                 let reporter = alephcore::tasks::mic_level::MicLevelReporter::new(
                     platform,
@@ -2589,4 +2595,3 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     Ok(())
 }
-

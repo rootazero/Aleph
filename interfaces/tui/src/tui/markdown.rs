@@ -156,9 +156,7 @@ fn parse_inline(text: &str, base_style: Style) -> Vec<Span<'static>> {
         match ch {
             '*' => {
                 // Check for bold (**) or italic (*)
-                let is_bold = chars
-                    .get(i + 1)
-                    .map_or(false, |&(_, c)| c == '*');
+                let is_bold = chars.get(i + 1).map_or(false, |&(_, c)| c == '*');
                 if is_bold {
                     // Bold: **text**
                     if let Some(end) = find_double_marker(&chars, i + 2, '*') {

@@ -284,7 +284,9 @@ pub(crate) fn scrub_special_tokens(text: &str) -> (String, usize) {
             }
         }
         if !matched {
-            let Some(ch) = text[i..].chars().next() else { break; };
+            let Some(ch) = text[i..].chars().next() else {
+                break;
+            };
             out.push(ch);
             i += ch.len_utf8();
         }

@@ -275,4 +275,3 @@ mod tests {
         assert!(!is_protected(&catalog, "my-custom-trader"));
     }
 }
-

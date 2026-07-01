@@ -28,8 +28,8 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-pub use types::*;
 pub use bootstrap_tickets::{BootstrapTicketError, ConsumedBootstrapTicket};
+pub use types::*;
 
 /// Schema version for migrations
 const SCHEMA_VERSION: i32 = 11;

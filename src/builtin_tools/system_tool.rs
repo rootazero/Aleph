@@ -293,9 +293,7 @@ Examples:
                     Ok(()) => Ok(SystemOutput {
                         success: true,
                         data: None,
-                        message: Some(format!(
-                            "Opened {target} with the default application."
-                        )),
+                        message: Some(format!("Opened {target} with the default application.")),
                     }),
                     Err(e) => Ok(SystemOutput {
                         success: false,
@@ -439,8 +437,8 @@ mod tests {
     use super::*;
     use aleph_desktop::system_types::{AppInfo, ClipboardContent, SystemInfo};
     use aleph_desktop::traits::SystemCapability;
-    use aleph_desktop::{DesktopError, DesktopPlatform};
     use aleph_desktop::Result as DesktopResult;
+    use aleph_desktop::{DesktopError, DesktopPlatform};
     use async_trait::async_trait;
     use std::sync::Mutex;
 

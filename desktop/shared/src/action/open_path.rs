@@ -38,7 +38,9 @@ pub fn open(target: &str) -> Result<()> {
         let status = std::process::Command::new("/usr/bin/open")
             .arg(target)
             .status()
-            .map_err(|e| DesktopError::InputFailed(format!("open: failed to run /usr/bin/open: {e}")))?;
+            .map_err(|e| {
+                DesktopError::InputFailed(format!("open: failed to run /usr/bin/open: {e}"))
+            })?;
         if !status.success() {
             return Err(DesktopError::InputFailed(format!(
                 "open: '/usr/bin/open {target}' exited with {status}"

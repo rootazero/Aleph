@@ -53,11 +53,7 @@ pub async fn handle_search(request: JsonRpcRequest) -> JsonRpcResponse {
         Ok(t) => t,
         Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
     };
-    match tool
-        .client()
-        .search(&params.query, params.limit)
-        .await
-    {
+    match tool.client().search(&params.query, params.limit).await {
         Ok(skills) => JsonRpcResponse::success(request.id, json!({ "skills": skills })),
         Err(e) => JsonRpcResponse::error(
             request.id,

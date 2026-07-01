@@ -250,19 +250,34 @@ impl BackgroundAgentTracker {
         };
         // Carry over every tree field from the running entry so a completed
         // node still rebuilds into the tree with its parent/depth/tools intact.
-        let (duration_secs, task_description, meta, started_at_ms, tool_count, last_tool, last_activity) =
-            match prior {
-                Some(agent) => (
-                    now.duration_since(agent.started_at).as_secs(),
-                    agent.task_description,
-                    agent.meta,
-                    agent.started_at_ms,
-                    agent.tool_count,
-                    agent.last_tool,
-                    agent.last_activity,
-                ),
-                None => (0, String::new(), SpawnMeta::default(), now_unix_ms(), 0, None, None),
-            };
+        let (
+            duration_secs,
+            task_description,
+            meta,
+            started_at_ms,
+            tool_count,
+            last_tool,
+            last_activity,
+        ) = match prior {
+            Some(agent) => (
+                now.duration_since(agent.started_at).as_secs(),
+                agent.task_description,
+                agent.meta,
+                agent.started_at_ms,
+                agent.tool_count,
+                agent.last_tool,
+                agent.last_activity,
+            ),
+            None => (
+                0,
+                String::new(),
+                SpawnMeta::default(),
+                now_unix_ms(),
+                0,
+                None,
+                None,
+            ),
+        };
         let lifecycle = lifecycle_from_outcome(&outcome);
         let mut completed = self.completed.write().unwrap_or_else(|e| {
             warn!("BackgroundAgentTracker lock poisoned, recovering");

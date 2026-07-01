@@ -4,8 +4,8 @@
 
 use crate::api::{BehaviorConfig, BehaviorConfigApi};
 use crate::context::DashboardState;
-use crate::state::typewriter::TypewriterClock;
 use crate::i18n::{t, t_string, use_i18n};
+use crate::state::typewriter::TypewriterClock;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 

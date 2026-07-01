@@ -431,18 +431,46 @@ impl ProviderRegistry for MultiProviderRegistry {
         // FailoverProvider::candidates() already filters the explicit fallback
         // chain against the live registry, so we will never select a provider
         // that has been removed at runtime.
-        for (i, (provider_name, candidate_model)) in candidates.into_iter().enumerate() {
-            let health = state.health.get(&provider_name).cloned().unwrap_or_default();
+        for (i, (provider_name, candidate_model)) in candidates.iter().enumerate() {
+            let health = state.health.get(provider_name).cloned().unwrap_or_default();
             if !health.is_usable() {
                 continue;
             }
-            if state.providers.contains_key(&provider_name) {
+            if state.providers.contains_key(provider_name) {
                 return Ok(ResolvedModel {
-                    provider_name,
-                    model: candidate_model,
+                    provider_name: provider_name.clone(),
+                    model: candidate_model.clone(),
                     is_fallback: i > 0,
                     original_model: model.to_string(),
                 });
+            }
+        }
+
+        // Last-resort fallback: if every usable provider is depleted and only
+        // one provider is registered, allow a degraded provider (cooldown still
+        // active) so a single-provider setup can retry within the same run
+        // instead of failing immediately with "no healthy provider". When there
+        // are multiple providers we keep the circuit breaker closed so a user
+        // with alternatives does not hammer a degraded one. Permanent
+        // `Unavailable` providers are always skipped — they require user
+        // intervention.
+        if state.providers.len() == 1 {
+            for (i, (provider_name, candidate_model)) in candidates.iter().enumerate() {
+                let health = state.health.get(provider_name).cloned().unwrap_or_default();
+                if matches!(health, ProviderHealth::Degraded { .. })
+                    && state.providers.contains_key(provider_name)
+                {
+                    tracing::warn!(
+                        provider = %provider_name,
+                        "No healthy provider; retrying degraded provider as last resort"
+                    );
+                    return Ok(ResolvedModel {
+                        provider_name: provider_name.clone(),
+                        model: candidate_model.clone(),
+                        is_fallback: i > 0,
+                        original_model: model.to_string(),
+                    });
+                }
             }
         }
 
@@ -784,6 +812,24 @@ mod multi_registry_tests {
         assert_eq!(resolved.provider_name, "openai");
         assert_eq!(resolved.model, "totally-unknown-model");
         assert!(!resolved.is_fallback);
+    }
+
+    #[test]
+    fn resolve_retries_degraded_provider_when_its_the_only_one() {
+        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
+
+        // A transient failure puts the only provider into cooldown.
+        r.report_outcome(
+            "openai",
+            Err(ProviderError::Transient(
+                crate::providers::health::TransientError::Timeout,
+            )),
+        );
+
+        // Without a last-resort degraded fallback, this would error out.
+        let resolved = r.resolve_with_fallback("gpt-4o", &[]).unwrap();
+        assert_eq!(resolved.provider_name, "openai");
+        assert_eq!(resolved.model, "gpt-4o");
     }
 
     #[test]

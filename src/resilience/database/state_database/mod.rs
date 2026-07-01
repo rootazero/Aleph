@@ -185,8 +185,9 @@ impl StateDatabase {
 
         Self::create_schema(&conn, DEFAULT_EMBEDDING_DIM)?;
 
-        Self::drop_obsolete_state_facts_tables(&conn)
-            .map_err(|e| AlephError::config(format!("Failed to drop obsolete facts tables: {e}")))?;
+        Self::drop_obsolete_state_facts_tables(&conn).map_err(|e| {
+            AlephError::config(format!("Failed to drop obsolete facts tables: {e}"))
+        })?;
 
         Self::run_optional_migrations(&conn)?;
         Self::migrate_to_vec0(&conn)?;
@@ -236,8 +237,9 @@ impl StateDatabase {
 
         Self::create_schema(&conn, embedding_dim)?;
 
-        Self::drop_obsolete_state_facts_tables(&conn)
-            .map_err(|e| AlephError::config(format!("Failed to drop obsolete facts tables: {e}")))?;
+        Self::drop_obsolete_state_facts_tables(&conn).map_err(|e| {
+            AlephError::config(format!("Failed to drop obsolete facts tables: {e}"))
+        })?;
 
         Self::run_optional_migrations(&conn)?;
 

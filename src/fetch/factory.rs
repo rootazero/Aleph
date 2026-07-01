@@ -14,18 +14,28 @@ pub struct FetchBuildCtx<'a> {
 
 pub trait FetchProviderFactory: Send + Sync {
     fn provider_type(&self) -> &'static str;
-    fn build(&self, backend: &FetchBackendConfig, ctx: &FetchBuildCtx)
-        -> Result<Option<Arc<dyn FetchProvider>>>;
+    fn build(
+        &self,
+        backend: &FetchBackendConfig,
+        ctx: &FetchBuildCtx,
+    ) -> Result<Option<Arc<dyn FetchProvider>>>;
 }
 
 pub struct Crawl4aiFetchFactory;
 impl FetchProviderFactory for Crawl4aiFetchFactory {
-    fn provider_type(&self) -> &'static str { "crawl4ai" }
-    fn build(&self, backend: &FetchBackendConfig, ctx: &FetchBuildCtx)
-        -> Result<Option<Arc<dyn FetchProvider>>> {
+    fn provider_type(&self) -> &'static str {
+        "crawl4ai"
+    }
+    fn build(
+        &self,
+        backend: &FetchBackendConfig,
+        ctx: &FetchBuildCtx,
+    ) -> Result<Option<Arc<dyn FetchProvider>>> {
         // token: backend.api_key (inline) else vault `fetch:crawl4ai`
         // (back-compat `web_fetch:crawl4ai`).
-        let token = backend.api_key.clone()
+        let token = backend
+            .api_key
+            .clone()
             .or_else(|| (ctx.resolve_secret)("fetch:crawl4ai"))
             .or_else(|| (ctx.resolve_secret)("web_fetch:crawl4ai"));
         let mut b = backend.clone();
@@ -36,15 +46,30 @@ impl FetchProviderFactory for Crawl4aiFetchFactory {
 
 pub struct FirecrawlFetchFactory;
 impl FetchProviderFactory for FirecrawlFetchFactory {
-    fn provider_type(&self) -> &'static str { "firecrawl" }
-    fn build(&self, _backend: &FetchBackendConfig, ctx: &FetchBuildCtx)
-        -> Result<Option<Arc<dyn FetchProvider>>> {
+    fn provider_type(&self) -> &'static str {
+        "firecrawl"
+    }
+    fn build(
+        &self,
+        _backend: &FetchBackendConfig,
+        ctx: &FetchBuildCtx,
+    ) -> Result<Option<Arc<dyn FetchProvider>>> {
         // Decision A: reuse the [search] firecrawl backend + vault `search:firecrawl`.
-        let Some(search) = ctx.search else { return Ok(None) };
-        let Some(fc) = search.backends.get("firecrawl") else { return Ok(None) };
-        let Some(base_url) = fc.base_url.clone().filter(|s| !s.is_empty()) else { return Ok(None) };
-        let Some(token) = (ctx.resolve_secret)("search:firecrawl") else { return Ok(None) };
-        Ok(Some(Arc::new(FirecrawlFetchProvider::new(base_url, token)?)))
+        let Some(search) = ctx.search else {
+            return Ok(None);
+        };
+        let Some(fc) = search.backends.get("firecrawl") else {
+            return Ok(None);
+        };
+        let Some(base_url) = fc.base_url.clone().filter(|s| !s.is_empty()) else {
+            return Ok(None);
+        };
+        let Some(token) = (ctx.resolve_secret)("search:firecrawl") else {
+            return Ok(None);
+        };
+        Ok(Some(Arc::new(FirecrawlFetchProvider::new(
+            base_url, token,
+        )?)))
     }
 }
 
@@ -67,5 +92,7 @@ impl FetchProviderFactoryRegistry {
     }
 }
 impl Default for FetchProviderFactoryRegistry {
-    fn default() -> Self { Self::with_defaults() }
+    fn default() -> Self {
+        Self::with_defaults()
+    }
 }

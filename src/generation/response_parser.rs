@@ -145,9 +145,13 @@ mod tests {
 
     #[test]
     fn test_has_generation_requests() {
-        assert!(has_generation_requests("[GENERATE:image:dalle:model:prompt]")
-            .expect("static regex should be valid"));
-        assert!(!has_generation_requests("no generation here").expect("static regex should be valid"));
+        assert!(
+            has_generation_requests("[GENERATE:image:dalle:model:prompt]")
+                .expect("static regex should be valid")
+        );
+        assert!(
+            !has_generation_requests("no generation here").expect("static regex should be valid")
+        );
     }
 
     #[test]

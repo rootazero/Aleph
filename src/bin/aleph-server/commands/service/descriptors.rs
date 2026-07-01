@@ -118,7 +118,10 @@ mod tests {
 
     #[test]
     fn launchd_plist_runs_start_at_load_and_keepalive() {
-        let p = launchd_plist(Path::new("/Users/x/.local/bin/aleph-server"), Path::new("/Users/x"));
+        let p = launchd_plist(
+            Path::new("/Users/x/.local/bin/aleph-server"),
+            Path::new("/Users/x"),
+        );
         assert!(p.contains("<string>ai.aleph.server</string>"));
         assert!(p.contains("<string>/Users/x/.local/bin/aleph-server</string>"));
         assert!(p.contains("<string>start</string>"));
@@ -141,7 +144,9 @@ mod tests {
 
     #[test]
     fn scheduled_task_xml_has_logon_trigger_and_launcher() {
-        let x = scheduled_task_xml(&PathBuf::from(r"C:\Users\x\AppData\Local\Aleph\aleph-server-hidden.vbs"));
+        let x = scheduled_task_xml(&PathBuf::from(
+            r"C:\Users\x\AppData\Local\Aleph\aleph-server-hidden.vbs",
+        ));
         assert!(x.contains("<LogonTrigger>"));
         assert!(x.contains("aleph-server-hidden.vbs"));
         assert!(x.contains("wscript.exe"));
@@ -150,7 +155,9 @@ mod tests {
 
     #[test]
     fn vbs_shim_launches_start_hidden() {
-        let v = vbs_shim(Path::new(r"C:\Users\x\AppData\Local\Aleph\aleph-server.exe"));
+        let v = vbs_shim(Path::new(
+            r"C:\Users\x\AppData\Local\Aleph\aleph-server.exe",
+        ));
         // VBScript doubles the literal quotes around the exe path, so the .vbs source
         // reads:  s.Run """<exe>"" start", 0, False  — assert the escaped form.
         assert!(v.contains(r#"aleph-server.exe"" start"#));

@@ -286,8 +286,9 @@ impl ClawHubClient {
         let mut downloaded = 0usize;
         let result: std::result::Result<(), AlephError> = async move {
             while let Some(chunk) = stream.next().await {
-                let chunk = chunk
-                    .map_err(|e| AlephError::network(format!("ClawHub download read error: {e}")))?;
+                let chunk = chunk.map_err(|e| {
+                    AlephError::network(format!("ClawHub download read error: {e}"))
+                })?;
                 if downloaded + chunk.len() > MAX_DOWNLOAD_BYTES {
                     return Err(AlephError::network(format!(
                         "ClawHub download exceeds maximum size (> {MAX_DOWNLOAD_BYTES} bytes)"

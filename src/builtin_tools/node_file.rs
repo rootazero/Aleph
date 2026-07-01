@@ -193,7 +193,8 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                     ));
                 }
                 if let Some(parent) = local.parent() {
-                    tokio::fs::create_dir_all(parent).await
+                    tokio::fs::create_dir_all(parent)
+                        .await
                         .map_err(|e| AlephError::tool(format!("create local dir: {e}")))?;
                 }
                 tokio::fs::write(&local, &bytes).await.map_err(|e| {
@@ -330,7 +331,9 @@ mod tests {
     async fn push_rejects_oversize_local() {
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join("big.bin");
-        tokio::fs::write(&local, vec![0u8; super::MAX_FILE_BYTES + 1]).await.unwrap();
+        tokio::fs::write(&local, vec![0u8; super::MAX_FILE_BYTES + 1])
+            .await
+            .unwrap();
         let (reg, _rx, _ch) = registry_with_node(vec!["file.write"]);
         let tool = NodeFileTool::new(reg);
         let err = tool
@@ -440,4 +443,3 @@ mod tests {
         assert!(err.to_string().contains("not declared"), "{err}");
     }
 }
-

@@ -176,9 +176,10 @@ pub async fn handle_get(
     // Surface firecrawl availability from the shared [search] config so the Panel
     // can offer it as a default (Strategy V: no [fetch] backend entry is created).
     if !dto.backends.iter().any(|b| b.name == "firecrawl") {
-        if let Some(fc) =
-            synth_firecrawl_dto(cfg.search.as_ref(), resolve_firecrawl_api_key(&vault).is_some())
-        {
+        if let Some(fc) = synth_firecrawl_dto(
+            cfg.search.as_ref(),
+            resolve_firecrawl_api_key(&vault).is_some(),
+        ) {
             dto.backends.push(fc);
         }
     }
@@ -207,11 +208,7 @@ pub async fn handle_update(
     let params = match request.params {
         Some(p) => p,
         None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            )
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params".to_string())
         }
     };
 
@@ -255,11 +252,8 @@ pub async fn handle_update(
                 }
 
                 // Store API key in vault if provided
-                if let Some(ref api_key) =
-                    normalize_optional_string(backend_dto.api_key.clone())
-                {
-                    if let Err(e) = vault.store_secret(&vault_key(&backend_dto.name), api_key)
-                    {
+                if let Some(ref api_key) = normalize_optional_string(backend_dto.api_key.clone()) {
+                    if let Err(e) = vault.store_secret(&vault_key(&backend_dto.name), api_key) {
                         error!(error = %e, "Failed to store fetch API key in vault");
                         return JsonRpcResponse::error(
                             request.id,
@@ -526,7 +520,10 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "backends": {} })).unwrap();
         assert!(synth_firecrawl_dto(Some(&empty), true).is_none());
         let blank = search_with_firecrawl("");
-        assert!(synth_firecrawl_dto(Some(&blank), true).is_none(), "empty base_url → unavailable");
+        assert!(
+            synth_firecrawl_dto(Some(&blank), true).is_none(),
+            "empty base_url → unavailable"
+        );
     }
 
     #[test]
@@ -592,7 +589,10 @@ mod tests {
                 fetch.default_provider, "firecrawl",
                 "default_provider round-trips even without a firecrawl backend entry"
             );
-            assert!(fetch.backends.contains_key("crawl4ai"), "crawl4ai persisted");
+            assert!(
+                fetch.backends.contains_key("crawl4ai"),
+                "crawl4ai persisted"
+            );
             assert!(
                 !fetch.backends.contains_key("firecrawl"),
                 "Strategy V: firecrawl must never be persisted as a [fetch] backend"

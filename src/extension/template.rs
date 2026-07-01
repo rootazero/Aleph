@@ -204,7 +204,9 @@ mod tests {
     async fn test_file_reference_relative() {
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join("config.json");
-        tokio::fs::write(&config_path, r#"{"key": "value"}"#).await.unwrap();
+        tokio::fs::write(&config_path, r#"{"key": "value"}"#)
+            .await
+            .unwrap();
 
         let template =
             SkillTemplate::with_base_dir("Config: @./config.json", temp.path().to_path_buf());
@@ -269,7 +271,9 @@ mod tests {
     async fn test_combined_template() {
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join("settings.json");
-        tokio::fs::write(&config_path, r#"{"name": "test"}"#).await.unwrap();
+        tokio::fs::write(&config_path, r#"{"name": "test"}"#)
+            .await
+            .unwrap();
 
         let template = SkillTemplate::with_base_dir(
             "User: $ARGUMENTS\nSettings: @./settings.json",

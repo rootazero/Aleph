@@ -72,7 +72,10 @@ impl EscapeAbort for WindowsEscapeListener {
             use windows::Win32::System::LibraryLoader::GetModuleHandleW;
             use windows::Win32::UI::WindowsAndMessaging::{SetWindowsHookExW, WH_KEYBOARD_LL};
 
-            let mut state_guard = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state_guard = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if state_guard.is_some() {
                 return Ok(());
             }
@@ -101,13 +104,20 @@ impl EscapeAbort for WindowsEscapeListener {
             }
             .map_err(|e| {
                 LISTENER_PTR.store(0, Ordering::SeqCst);
-                let _ = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+                let _ = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
                 aleph_desktop::DesktopError::PlatformError(format!(
                     "failed to install keyboard hook: {e}"
                 ))
             })?;
 
-            *self.hook.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook.0 as isize);
+            *self
+                .hook
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook.0 as isize);
             Ok(())
         }
         #[cfg(not(windows))]
@@ -123,25 +133,40 @@ impl EscapeAbort for WindowsEscapeListener {
         {
             use windows::Win32::UI::WindowsAndMessaging::{UnhookWindowsHookEx, HHOOK};
 
-            if let Some(addr) = self.hook.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+            if let Some(addr) = self
+                .hook
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
                 // SAFETY: `addr` is an `HHOOK` previously returned by
                 // `SetWindowsHookExW` and not yet unhooked.
                 let _ = unsafe { UnhookWindowsHookEx(HHOOK(addr as *mut core::ffi::c_void)) };
             }
             LISTENER_PTR.store(0, Ordering::SeqCst);
-            let _ = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+            let _ = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
         }
     }
 
     fn is_aborted(&self) -> bool {
-        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state
             .as_ref()
             .is_some_and(|s| s.aborted.load(Ordering::SeqCst))
     }
 
     fn reset(&self) {
-        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(s) = state.as_ref() {
             s.aborted.store(false, Ordering::SeqCst);
         }

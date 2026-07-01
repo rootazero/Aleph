@@ -1614,8 +1614,14 @@ impl AgentHarness {
         // before we got here, so re-running it would waste a call and soften the
         // reactive rescue cap; the floor alone guarantees fit.
         let system_prompt = self.deps.system_prompt.as_deref().unwrap_or("");
-        self.compact_to_fit_in_place(session_id, messages, system_prompt, budget_tool_tokens, false)
-            .await;
+        self.compact_to_fit_in_place(
+            session_id,
+            messages,
+            system_prompt,
+            budget_tool_tokens,
+            false,
+        )
+        .await;
 
         // 2. Retry the provider once with the fitted prompt.
         let payload = build_request_payload(

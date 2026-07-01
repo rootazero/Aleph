@@ -315,7 +315,8 @@ impl AlephTool for FileReadTool {
         // read of this exact window. If the file is byte-for-byte unchanged,
         // skip re-rendering the (potentially large) numbered content and return
         // a compact stub instead. A failed stat fails open to a full read.
-        let fingerprint = tokio::fs::metadata(&canonical).await
+        let fingerprint = tokio::fs::metadata(&canonical)
+            .await
             .ok()
             .and_then(|m| m.modified().ok())
             .map(|mtime| (mtime, size));
@@ -590,4 +591,3 @@ mod tests {
         assert_eq!(again.returned_lines, 3);
     }
 }
-

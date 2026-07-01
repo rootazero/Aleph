@@ -4,7 +4,10 @@
 //! - Left panel: Preset search provider grid + global search settings
 //! - Right panel: Detail panel for selected provider
 
-use crate::api::{FetchBackendEntry, FetchConfig, FetchConfigApi, SearchBackendEntry, SearchConfig, SearchConfigApi};
+use crate::api::{
+    FetchBackendEntry, FetchConfig, FetchConfigApi, SearchBackendEntry, SearchConfig,
+    SearchConfigApi,
+};
 use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_key_field::ProviderKeyField;
 use crate::components::ui::ConfirmButton;
@@ -1392,7 +1395,11 @@ fn FetchProvidersSection() -> impl IntoView {
                     shares_search: b.shares_search,
                 })
                 .collect();
-            let new_cfg = FetchConfig { enabled, default_provider, backends };
+            let new_cfg = FetchConfig {
+                enabled,
+                default_provider,
+                backends,
+            };
             if FetchConfigApi::update(&state, new_cfg).await.is_ok() {
                 if let Ok(refreshed) = FetchConfigApi::get(&state).await {
                     fetch_config.set(refreshed);
@@ -1437,9 +1444,17 @@ fn FetchProvidersSection() -> impl IntoView {
             backends.push(FetchBackendEntry {
                 name: "crawl4ai".to_string(),
                 provider_type: "crawl4ai".to_string(),
-                base_url: if base_url.is_empty() { None } else { Some(base_url) },
+                base_url: if base_url.is_empty() {
+                    None
+                } else {
+                    Some(base_url)
+                },
                 timeout_seconds: Some(timeout),
-                api_key: if api_key.is_empty() { None } else { Some(api_key) },
+                api_key: if api_key.is_empty() {
+                    None
+                } else {
+                    Some(api_key)
+                },
                 has_api_key: false,
                 verified: false,
                 shares_search: false,
@@ -1485,9 +1500,17 @@ fn FetchProvidersSection() -> impl IntoView {
         let entry = FetchBackendEntry {
             name: "crawl4ai".to_string(),
             provider_type: "crawl4ai".to_string(),
-            base_url: if base_url.is_empty() { None } else { Some(base_url) },
+            base_url: if base_url.is_empty() {
+                None
+            } else {
+                Some(base_url)
+            },
             timeout_seconds: Some(timeout),
-            api_key: if api_key.is_empty() { None } else { Some(api_key) },
+            api_key: if api_key.is_empty() {
+                None
+            } else {
+                Some(api_key)
+            },
             has_api_key: false,
             verified: false,
             shares_search: false,

@@ -137,8 +137,9 @@ pub fn parse_disclosure_result(
 ) -> Result<(DisclosurePayload, Vec<InjectionFinding>, Option<String>), String> {
     let disclosure = serde_json::from_value(v.get("disclosure").cloned().unwrap_or(Value::Null))
         .map_err(|e| format!("parse disclosure: {e}"))?;
-    let findings = serde_json::from_value(v.get("injection_findings").cloned().unwrap_or(json!([])))
-        .unwrap_or_default();
+    let findings =
+        serde_json::from_value(v.get("injection_findings").cloned().unwrap_or(json!([])))
+            .unwrap_or_default();
     let post_install = v
         .get("post_install")
         .and_then(Value::as_str)

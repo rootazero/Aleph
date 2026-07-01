@@ -314,7 +314,9 @@ fn persist_credential_from_url(url: &Url) {
     match credential_from_url(url) {
         Some(t) => {
             if let Err(e) = store_gateway_token(&t) {
-                tracing::warn!("could not persist Gateway credential for the notification bridge: {e}");
+                tracing::warn!(
+                    "could not persist Gateway credential for the notification bridge: {e}"
+                );
             }
         }
         None => remove_gateway_token(),
@@ -412,11 +414,12 @@ mod tests {
 
     #[test]
     fn credential_from_url_reads_bootstrap_ticket_first() {
-        let url = Url::parse(
-            "https://gw.example.com:8443/?bt=aleph-bt-abc123&token=aleph-legacy",
-        )
-        .unwrap();
-        assert_eq!(credential_from_url(&url).as_deref(), Some("aleph-bt-abc123"));
+        let url = Url::parse("https://gw.example.com:8443/?bt=aleph-bt-abc123&token=aleph-legacy")
+            .unwrap();
+        assert_eq!(
+            credential_from_url(&url).as_deref(),
+            Some("aleph-bt-abc123")
+        );
     }
 
     #[test]
@@ -443,7 +446,11 @@ mod tests {
         // No query, an empty credential, and an unrelated param all yield None.
         assert!(credential_from_url(&Url::parse("https://gw.example.com/").unwrap()).is_none());
         assert!(credential_from_url(&Url::parse("https://gw.example.com/?bt=").unwrap()).is_none());
-        assert!(credential_from_url(&Url::parse("https://gw.example.com/?token=").unwrap()).is_none());
-        assert!(credential_from_url(&Url::parse("https://gw.example.com/?foo=bar").unwrap()).is_none());
+        assert!(
+            credential_from_url(&Url::parse("https://gw.example.com/?token=").unwrap()).is_none()
+        );
+        assert!(
+            credential_from_url(&Url::parse("https://gw.example.com/?foo=bar").unwrap()).is_none()
+        );
     }
 }

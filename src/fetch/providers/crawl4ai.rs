@@ -1,5 +1,5 @@
-use crate::config::Crawl4aiConfig;
 use crate::config::types::FetchBackendConfig;
+use crate::config::Crawl4aiConfig;
 use crate::error::{AlephError, Result};
 use crate::fetch::FetchProvider;
 use async_trait::async_trait;
@@ -34,8 +34,12 @@ impl FetchProvider for Crawl4aiFetchProvider {
             .await
             .map_err(|e| AlephError::provider(format!("crawl4ai: {e}")))
     }
-    fn name(&self) -> &str { NAME }
-    fn is_available(&self) -> bool { true }
+    fn name(&self) -> &str {
+        NAME
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -60,7 +64,10 @@ mod tests {
     fn factory_returns_none_without_base_url() {
         let backend = crate::config::types::FetchBackendConfig {
             provider_type: "crawl4ai".into(),
-            api_key: None, base_url: None, timeout_seconds: None, verified: false,
+            api_key: None,
+            base_url: None,
+            timeout_seconds: None,
+            verified: false,
         };
         assert!(Crawl4aiFetchProvider::from_backend(&backend).is_none());
     }

@@ -505,10 +505,16 @@ mod tests {
         // default_open=false, 未 toggle → 当前折叠 → reveal 应翻开（toggle_event 置位）
         assert!(!ws.is_event_toggled("t1"));
         ws.reveal_tool("r1", 2, "t1", false);
-        assert!(ws.is_event_toggled("t1"), "collapsed-by-default tool should be toggled open");
+        assert!(
+            ws.is_event_toggled("t1"),
+            "collapsed-by-default tool should be toggled open"
+        );
         // 再次 reveal 幂等：已展开不再翻转（仍为 toggled）
         ws.reveal_tool("r1", 2, "t1", false);
-        assert!(ws.is_event_toggled("t1"), "second reveal must not collapse an open tool");
+        assert!(
+            ws.is_event_toggled("t1"),
+            "second reveal must not collapse an open tool"
+        );
     }
 
     #[test]
@@ -516,7 +522,10 @@ mod tests {
         let ws = test_ws(LayoutMode::Split);
         // default_open=true, 未 toggle → 当前已展开 → reveal 不应 toggle（保持未翻转）
         ws.reveal_tool("r1", 1, "t2", true);
-        assert!(!ws.is_event_toggled("t2"), "default-open tool must stay open without toggling");
+        assert!(
+            !ws.is_event_toggled("t2"),
+            "default-open tool must stay open without toggling"
+        );
     }
 
     #[test]

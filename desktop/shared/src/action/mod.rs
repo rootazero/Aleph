@@ -19,11 +19,11 @@ pub mod wayland_input;
 pub mod window;
 
 pub use app_launch::{launch_app, quit_app};
-pub use open_path::open;
 pub use input::{
     click, clipboard_read, clipboard_write, cursor_position, double_click, drag, hover, key_button,
     key_combo, mouse_button, scroll, type_text,
 };
+pub use open_path::open;
 pub use window::{focus_window, move_window, resize_window, window_list};
 
 use enigo::{Button, Enigo, Settings};

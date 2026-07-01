@@ -45,7 +45,11 @@ impl FirecrawlFetchProvider {
                 "Firecrawl base URL must use http:// or https:// scheme",
             ));
         }
-        Ok(Self { base_url, api_key: api_key.into(), client: build_client()? })
+        Ok(Self {
+            base_url,
+            api_key: api_key.into(),
+            client: build_client()?,
+        })
     }
 }
 
@@ -56,7 +60,10 @@ impl FetchProvider for FirecrawlFetchProvider {
             .client
             .post(format!("{}/v2/scrape", self.base_url))
             .bearer_auth(&self.api_key)
-            .json(&ScrapeRequest { url, formats: ["markdown"] })
+            .json(&ScrapeRequest {
+                url,
+                formats: ["markdown"],
+            })
             .send()
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
@@ -66,8 +73,12 @@ impl FetchProvider for FirecrawlFetchProvider {
         map_scrape(parsed)
             .ok_or_else(|| AlephError::provider("firecrawl scrape returned no markdown"))
     }
-    fn name(&self) -> &str { NAME }
-    fn is_available(&self) -> bool { !self.base_url.is_empty() && !self.api_key.is_empty() }
+    fn name(&self) -> &str {
+        NAME
+    }
+    fn is_available(&self) -> bool {
+        !self.base_url.is_empty() && !self.api_key.is_empty()
+    }
 }
 
 #[cfg(test)]

@@ -107,9 +107,13 @@ impl NodeCommand for FileWriteCommand {
             return Err("file.write: target exists (set overwrite)".to_string());
         }
         if let Some(parent) = dest.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| format!("file.write: {e}"))?;
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| format!("file.write: {e}"))?;
         }
-        tokio::fs::write(&dest, &bytes).await.map_err(|e| format!("file.write: {e}"))?;
+        tokio::fs::write(&dest, &bytes)
+            .await
+            .map_err(|e| format!("file.write: {e}"))?;
         Ok(json!({ "written": bytes.len() }))
     }
 
@@ -141,13 +145,17 @@ impl NodeCommand for FileReadCommand {
             .and_then(|v| v.as_str())
             .ok_or("file.read: missing string field `path`")?;
         let src = resolve_in_jail(path, &self.workspace_dir).await?;
-        if !tokio::fs::try_exists(&src).await.map_err(|e| format!("file.read: {e}"))? {
+        if !tokio::fs::try_exists(&src)
+            .await
+            .map_err(|e| format!("file.read: {e}"))?
+        {
             return Err("file.read: not found".to_string());
         }
         // Compare the raw u64 before any cast: `len() as usize` truncates on a
         // 32-bit node, letting a huge file whose size mod 2^32 is under the cap
         // pass the check and then OOM in tokio::fs::read below.
-        let size = tokio::fs::metadata(&src).await
+        let size = tokio::fs::metadata(&src)
+            .await
             .map_err(|e| format!("file.read: {e}"))?
             .len();
         if size > MAX_FILE_BYTES as u64 {
@@ -155,7 +163,9 @@ impl NodeCommand for FileReadCommand {
                 "file.read: {size} bytes exceeds {MAX_FILE_BYTES} cap"
             ));
         }
-        let bytes = tokio::fs::read(&src).await.map_err(|e| format!("file.read: {e}"))?;
+        let bytes = tokio::fs::read(&src)
+            .await
+            .map_err(|e| format!("file.read: {e}"))?;
         if bytes.len() > MAX_FILE_BYTES {
             return Err(format!(
                 "file.read: {} bytes exceeds {MAX_FILE_BYTES} cap",
@@ -300,4 +310,3 @@ mod tests {
         assert!(err.contains("exceeds"), "{err}");
     }
 }
-

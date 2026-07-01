@@ -14,7 +14,6 @@ use crate::views::home::Home;
 use crate::views::logs::Logs;
 use crate::views::memory_hub::MemoryHub;
 use crate::views::runtimes::RuntimesView;
-use crate::views::subagent_tree::SubagentTree;
 use crate::views::settings::{
     AcpHarnessesView, AppearanceView, BehaviorView, BrowserView, ChannelPlatformPage,
     ChannelsOverview, EmbeddingProvidersView, ExecutionView, GeneralView, GenerationProvidersView,
@@ -22,10 +21,12 @@ use crate::views::settings::{
     RerankingProvidersView, RouteView, RoutingRulesView, SearchView, SecurityView, Settings,
     SkillsView,
 };
+use crate::views::subagent_tree::SubagentTree;
 use crate::views::tasks::TasksView;
 use crate::views::teams::TeamsView;
 use crate::views::usage::UsageView;
 // Layout components
+use crate::api::BehaviorConfigApi;
 use crate::components::boot_check_gate::BootCheckGate;
 use crate::components::command_palette::CommandPalette;
 use crate::components::mode_sidebar::{ModeSidebar, PanelMode};
@@ -52,7 +53,6 @@ use crate::state::notifications::NotificationsState;
 use crate::state::sessions::SessionMap;
 use crate::state::typewriter::TypewriterClock;
 use crate::state::viewport::{FormFactor, FormFactorState};
-use crate::api::BehaviorConfigApi;
 use crate::views::chat::ChatState;
 use crate::views::voice::{ImmersiveVoiceView, VoiceMode};
 

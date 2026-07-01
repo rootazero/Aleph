@@ -153,7 +153,10 @@ pub fn parse_user_md(raw: &str) -> Result<UserProfile, AlephError> {
                     }
                 }
             } else if let Some(ref h) = current_heading {
-                sections.entry(h.clone()).or_default().push(bullet.to_string());
+                sections
+                    .entry(h.clone())
+                    .or_default()
+                    .push(bullet.to_string());
             }
         }
     }
@@ -371,8 +374,14 @@ confidence: "medium"
         let md = render_user_md(2, "ses_c", "high", &sections, &sources);
         assert!(md.contains("## Sources"));
         let parsed = parse_user_md(&md).unwrap();
-        assert_eq!(parsed.sources.get("Identity"), Some(&vec!["ses_a".to_string(), "ses_b".to_string()]));
-        assert_eq!(parsed.sources.get("Current Focus"), Some(&vec!["ses_c".to_string()]));
+        assert_eq!(
+            parsed.sources.get("Identity"),
+            Some(&vec!["ses_a".to_string(), "ses_b".to_string()])
+        );
+        assert_eq!(
+            parsed.sources.get("Current Focus"),
+            Some(&vec!["ses_c".to_string()])
+        );
         // The Sources heading must NOT pollute the 6 content sections.
         assert!(!parsed.sections.contains_key("Sources"));
     }

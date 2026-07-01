@@ -61,7 +61,14 @@ impl OutcomeObserver {
         provider_id: String,
         agent_id: String,
     ) -> Self {
-        Self { inner, store, attribution, model_id, provider_id, agent_id }
+        Self {
+            inner,
+            store,
+            attribution,
+            model_id,
+            provider_id,
+            agent_id,
+        }
     }
 
     /// Fire-and-forget body, a free async fn so `on_trace` can `tokio::spawn`
@@ -86,17 +93,32 @@ impl OutcomeObserver {
 impl TraceSink for OutcomeObserver {
     fn on_trace(&self, event: &LoopTraceEvent) {
         if let LoopTraceEvent::SessionCompleted {
-            iterations, tool_calls_made, terminate_reason, token_breakdown, duration_ms, tool_timeline, ..
+            iterations,
+            tool_calls_made,
+            terminate_reason,
+            token_breakdown,
+            duration_ms,
+            tool_timeline,
+            ..
         } = event
         {
             let mut outcome = outcome_from_session_completed(
-                *iterations, *tool_calls_made, terminate_reason, token_breakdown, duration_ms, tool_timeline,
+                *iterations,
+                *tool_calls_made,
+                terminate_reason,
+                token_breakdown,
+                duration_ms,
+                tool_timeline,
             );
             // v1.1 (c): enrich with USD from the static price table, keyed on the
             // REAL injected provider+model (never the FailoverProvider wrapper
             // name). Best-effort — unknown provider/model degrades to None, never
             // errors. Same enrichment for top-level and subagent observers.
-            let est = crate::pricing::estimate(&self.provider_id, &self.model_id, &outcome.token_breakdown);
+            let est = crate::pricing::estimate(
+                &self.provider_id,
+                &self.model_id,
+                &outcome.token_breakdown,
+            );
             outcome.estimated_cost = match est.status {
                 crate::pricing::CostStatus::Complete
                 | crate::pricing::CostStatus::PartialMissingPrice => Some(est.usd),
@@ -136,7 +158,11 @@ mod tests {
     use crate::error::AlephError;
     use crate::routing::RoutingExperienceStore;
 
-    fn emb(seed: f32) -> Vec<f32> { let mut v = vec![0.0f32; 768]; v[0] = seed; v }
+    fn emb(seed: f32) -> Vec<f32> {
+        let mut v = vec![0.0f32; 768];
+        v[0] = seed;
+        v
+    }
     fn temp_backend() -> crate::memory::store::sqlite::SqliteMemoryBackend {
         let dir = std::env::temp_dir().join(format!("aleph-routing-obs-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -145,22 +171,56 @@ mod tests {
     struct StubEmbedder;
     #[async_trait::async_trait]
     impl crate::memory::EmbeddingProvider for StubEmbedder {
-        async fn embed(&self, _t: &str) -> Result<Vec<f32>, AlephError> { Ok(emb(1.0)) }
-        async fn embed_batch(&self, t: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> { Ok(t.iter().map(|_| emb(1.0)).collect()) }
-        fn dimensions(&self) -> usize { 768 }
-        fn model_name(&self) -> &str { "stub" }
-        fn provider_id(&self) -> &str { "stub" }
+        async fn embed(&self, _t: &str) -> Result<Vec<f32>, AlephError> {
+            Ok(emb(1.0))
+        }
+        async fn embed_batch(&self, t: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+            Ok(t.iter().map(|_| emb(1.0)).collect())
+        }
+        fn dimensions(&self) -> usize {
+            768
+        }
+        fn model_name(&self) -> &str {
+            "stub"
+        }
+        fn provider_id(&self) -> &str {
+            "stub"
+        }
     }
 
     #[test]
     fn outcome_maps_raw_without_verdict() {
         let timeline = vec![
-            ToolInvocation { id: "1".into(), name: "bash".into(), duration_ms: 5, success: true, error: None },
-            ToolInvocation { id: "2".into(), name: "web".into(), duration_ms: 5, success: false, error: Some("boom".into()) },
-            ToolInvocation { id: "3".into(), name: "web".into(), duration_ms: 5, success: false, error: Some("boom".into()) },
+            ToolInvocation {
+                id: "1".into(),
+                name: "bash".into(),
+                duration_ms: 5,
+                success: true,
+                error: None,
+            },
+            ToolInvocation {
+                id: "2".into(),
+                name: "web".into(),
+                duration_ms: 5,
+                success: false,
+                error: Some("boom".into()),
+            },
+            ToolInvocation {
+                id: "3".into(),
+                name: "web".into(),
+                duration_ms: 5,
+                success: false,
+                error: Some("boom".into()),
+            },
         ];
         let tr = Some(TerminateReason::VerifierVeto { vetos: 3 });
-        let tb = Some(TokenBreakdown { input: 10, output: 20, cache_read: 0, cache_creation: 0, reasoning: 5 });
+        let tb = Some(TokenBreakdown {
+            input: 10,
+            output: 20,
+            cache_read: 0,
+            cache_creation: 0,
+            reasoning: 5,
+        });
         let dur = Some(1234u64);
         let outcome = outcome_from_session_completed(7, 3, &tr, &tb, &dur, &timeline);
         assert_eq!(outcome.iterations, 7);
@@ -168,7 +228,10 @@ mod tests {
         assert_eq!(outcome.tool_error_count, 2);
         assert_eq!(outcome.tool_call_total, 3);
         assert_eq!(outcome.duration_ms, 1234);
-        assert_eq!(outcome.terminate_reason, "{\"kind\":\"verifier_veto\",\"vetos\":3}");
+        assert_eq!(
+            outcome.terminate_reason,
+            "{\"kind\":\"verifier_veto\",\"vetos\":3}"
+        );
         assert_eq!(outcome.token_breakdown.reasoning, 5);
     }
 
@@ -179,8 +242,14 @@ mod tests {
         // (include_str! embeds the full file including these test lines).
         let re_steer = ["user_re", "_steer"].concat();
         let consec_err = ["consecutive", "_errors"].concat();
-        assert!(!src.contains(&re_steer), "must not reference user-re-steer signal (U2)");
-        assert!(!src.contains(&consec_err), "must not reference consecutive-errors signal (U2)");
+        assert!(
+            !src.contains(&re_steer),
+            "must not reference user-re-steer signal (U2)"
+        );
+        assert!(
+            !src.contains(&consec_err),
+            "must not reference consecutive-errors signal (U2)"
+        );
     }
 
     #[tokio::test]
@@ -189,13 +258,26 @@ mod tests {
         let embedder: Arc<dyn crate::memory::EmbeddingProvider> = Arc::new(StubEmbedder);
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
         let outcome = RoutingOutcome {
-            iterations: 0, tool_calls_made: 0, terminate_reason: "{\"kind\":\"completed\"}".into(),
-            token_breakdown: TokenBreakdown::default(), estimated_cost: None, duration_ms: 0,
-            context_tokens: 0, context_window: 0, tool_error_count: 0, tool_call_total: 0,
+            iterations: 0,
+            tool_calls_made: 0,
+            terminate_reason: "{\"kind\":\"completed\"}".into(),
+            token_breakdown: TokenBreakdown::default(),
+            estimated_cost: None,
+            duration_ms: 0,
+            context_tokens: 0,
+            context_window: 0,
+            tool_error_count: 0,
+            tool_call_total: 0,
         };
         OutcomeObserver::record_to_store(
-            store.clone(), "a".into(), "MODEL_X".into(), "PROV_Y".into(), emb(1.0), outcome,
-        ).await;
+            store.clone(),
+            "a".into(),
+            "MODEL_X".into(),
+            "PROV_Y".into(),
+            emb(1.0),
+            outcome,
+        )
+        .await;
         let got = store.recall("a", &emb(0.0), 5).await.unwrap();
         assert_eq!(got[0].model_id, "MODEL_X"); // injected at construction, not from ProviderUsage
         assert_eq!(got[0].provider_id, "PROV_Y");

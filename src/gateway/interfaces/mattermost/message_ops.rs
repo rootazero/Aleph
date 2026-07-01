@@ -475,7 +475,9 @@ impl MattermostMessageOps {
             };
 
             if let Err(e) = ws_tx
-                .send(tokio_tungstenite::tungstenite::Message::Text(auth_text.into()))
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    auth_text.into(),
+                ))
                 .await
             {
                 tracing::warn!("Mattermost WebSocket auth send failed: {e}");

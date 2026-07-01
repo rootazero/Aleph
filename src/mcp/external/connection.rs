@@ -545,8 +545,8 @@ impl McpServerConnection {
         })?;
 
         // Parse tool call result
-        let call_result: mcp_types::ToolCallResult = serde_json::from_value(result)
-            .map_err(|e| {
+        let call_result: mcp_types::ToolCallResult =
+            serde_json::from_value(result).map_err(|e| {
                 AlephError::IoError(format!(
                     "Tool '{}' returned malformed result from '{}': {}",
                     tool_name, self.name, e

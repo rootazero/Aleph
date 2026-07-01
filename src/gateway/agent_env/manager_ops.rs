@@ -358,7 +358,9 @@ impl AgentEnvStore {
     ) -> Result<std::collections::HashMap<String, Vec<String>>, AgentEnvError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
-            .prepare("SELECT agent_id, channel FROM channel_active_agent ORDER BY agent_id, channel")
+            .prepare(
+                "SELECT agent_id, channel FROM channel_active_agent ORDER BY agent_id, channel",
+            )
             .map_err(|e| AgentEnvError::Database(e.to_string()))?;
         let rows = stmt
             .query_map([], |row| {

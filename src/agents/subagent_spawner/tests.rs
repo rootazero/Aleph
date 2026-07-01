@@ -942,36 +942,61 @@ mod tests {
     #[async_trait::async_trait]
     impl crate::memory::EmbeddingProvider for SpawnStubEmbedder {
         async fn embed(&self, _t: &str) -> AlephResult<Vec<f32>> {
-            Ok({ let mut v = vec![0.0f32; 768]; v[0] = 1.0; v })
+            Ok({
+                let mut v = vec![0.0f32; 768];
+                v[0] = 1.0;
+                v
+            })
         }
         async fn embed_batch(&self, t: &[&str]) -> AlephResult<Vec<Vec<f32>>> {
-            Ok(t.iter().map(|_| { let mut v = vec![0.0f32; 768]; v[0] = 1.0; v }).collect())
+            Ok(t.iter()
+                .map(|_| {
+                    let mut v = vec![0.0f32; 768];
+                    v[0] = 1.0;
+                    v
+                })
+                .collect())
         }
-        fn dimensions(&self) -> usize { 768 }
-        fn model_name(&self) -> &str { "stub" }
-        fn provider_id(&self) -> &str { "stub" }
+        fn dimensions(&self) -> usize {
+            768
+        }
+        fn model_name(&self) -> &str {
+            "stub"
+        }
+        fn provider_id(&self) -> &str {
+            "stub"
+        }
     }
 
     fn routing_store_for_test() -> Arc<crate::routing::RoutingExperienceStore> {
-        let dir = std::env::temp_dir().join(format!("aleph-spawn-routing-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("aleph-spawn-routing-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let backend = Arc::new(
             crate::memory::store::sqlite::SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap(),
         );
         let embedder: Arc<dyn crate::memory::EmbeddingProvider> = Arc::new(SpawnStubEmbedder);
-        Arc::new(crate::routing::RoutingExperienceStore::new(backend, embedder))
+        Arc::new(crate::routing::RoutingExperienceStore::new(
+            backend, embedder,
+        ))
     }
 
     async fn drain_routing_row(
         store: &crate::routing::RoutingExperienceStore,
         agent: &str,
     ) -> Vec<crate::memory::store::sqlite::routing_experience::RoutingNeighbor> {
-        let q = { let mut v = vec![0.0f32; 768]; v[0] = 0.0; v };
+        let q = {
+            let mut v = vec![0.0f32; 768];
+            v[0] = 0.0;
+            v
+        };
         let mut got = Vec::new();
         for _ in 0..200 {
             tokio::task::yield_now().await;
             got = store.recall(agent, &q, 5).await.unwrap();
-            if !got.is_empty() { break; }
+            if !got.is_empty() {
+                break;
+            }
         }
         got
     }
@@ -1004,7 +1029,7 @@ mod tests {
         let got = drain_routing_row(&store, "reviewer").await;
         assert_eq!(got.len(), 1, "subagent run recorded under child agent_id");
         assert_eq!(got[0].model_id, "claude-sonnet-4-6"); // from model_hint
-        assert_eq!(got[0].provider_id, "anthropic");       // from provider_hint
+        assert_eq!(got[0].provider_id, "anthropic"); // from provider_hint
     }
 
     // -- VESR v1.1 (b): production threading test ----------------------------
@@ -1019,7 +1044,8 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         migrate_add_session_events(&conn).unwrap();
         let event_store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
-        let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(event_store));
+        let session: Arc<dyn SessionService> =
+            Arc::new(InProcessActorSessionService::new(event_store));
 
         // child_chain must be descended (depth > 0) — execute_via_harness debug_asserts it.
         let chain = ChainContext::new().child().expect("descended chain");
@@ -1049,7 +1075,11 @@ mod tests {
         runtime.run(config).await.expect("spawn ok");
 
         let got = drain_routing_row(&store, "planner").await;
-        assert_eq!(got.len(), 1, "production threading reaches the spawn-seam observer");
+        assert_eq!(
+            got.len(),
+            1,
+            "production threading reaches the spawn-seam observer"
+        );
         assert_eq!(got[0].model_id, "claude-opus-4-8");
         assert_eq!(got[0].provider_id, "anthropic");
     }

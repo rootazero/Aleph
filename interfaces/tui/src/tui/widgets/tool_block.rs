@@ -39,7 +39,10 @@ pub fn render_tool_block(
         ToolStatus::Running => {
             let frame = spinner_frame % SPINNER_FRAMES.len();
             (
-                format!("\u{27f3} {}", SPINNER_FRAMES.get(frame).copied().unwrap_or("")), // ⟳ + spinner
+                format!(
+                    "\u{27f3} {}",
+                    SPINNER_FRAMES.get(frame).copied().unwrap_or("")
+                ), // ⟳ + spinner
                 DEFAULT_THEME.tool_running,
             )
         }

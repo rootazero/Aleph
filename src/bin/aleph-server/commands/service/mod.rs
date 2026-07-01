@@ -38,7 +38,12 @@ fn home() -> Result<PathBuf, Box<dyn Error>> {
 /// codes treated as success besides 0 (e.g. schtasks "not found" on uninstall).
 fn run(cmd: &mut Command, ok_codes: &[i32]) -> Res {
     let status = cmd.status()?;
-    if status.success() || status.code().map(|c| ok_codes.contains(&c)).unwrap_or(false) {
+    if status.success()
+        || status
+            .code()
+            .map(|c| ok_codes.contains(&c))
+            .unwrap_or(false)
+    {
         Ok(())
     } else {
         Err(format!("`{cmd:?}` failed: {status}").into())
@@ -71,31 +76,53 @@ mod platform {
         std::fs::create_dir_all(home()?.join(".aleph/logs"))?;
         std::fs::write(&plist, descriptors::launchd_plist(&exe_path()?, &home()?))?;
         // `load -w` arms RunAtLoad and starts it now.
-        run(Command::new("launchctl").arg("load").arg("-w").arg(&plist), &[])?;
+        run(
+            Command::new("launchctl").arg("load").arg("-w").arg(&plist),
+            &[],
+        )?;
         println!("Installed launchd agent ai.aleph.server (starts at login).");
         Ok(())
     }
 
     pub fn uninstall() -> Res {
         let plist = plist_path()?;
-        let _ = run(Command::new("launchctl").arg("unload").arg("-w").arg(&plist), &[]);
+        let _ = run(
+            Command::new("launchctl")
+                .arg("unload")
+                .arg("-w")
+                .arg(&plist),
+            &[],
+        );
         let _ = std::fs::remove_file(&plist);
         println!("Removed launchd agent ai.aleph.server.");
         Ok(())
     }
 
     pub fn enable() -> Res {
-        run(Command::new("launchctl").arg("enable").arg(service_target()?), &[])
+        run(
+            Command::new("launchctl")
+                .arg("enable")
+                .arg(service_target()?),
+            &[],
+        )
     }
 
     pub fn disable() -> Res {
-        run(Command::new("launchctl").arg("disable").arg(service_target()?), &[])
+        run(
+            Command::new("launchctl")
+                .arg("disable")
+                .arg(service_target()?),
+            &[],
+        )
     }
 
     pub fn status() -> Res {
         let installed = plist_path()?.exists();
         println!("descriptor installed: {installed}");
-        let _ = Command::new("launchctl").arg("list").arg("ai.aleph.server").status();
+        let _ = Command::new("launchctl")
+            .arg("list")
+            .arg("ai.aleph.server")
+            .status();
         Ok(())
     }
 }
@@ -125,7 +152,12 @@ mod platform {
         // login session (what a home server wants). May require polkit/root on
         // some distros — warn but don't fail the install.
         if let Ok(user) = std::env::var("USER") {
-            if run(Command::new("loginctl").arg("enable-linger").arg(&user), &[]).is_err() {
+            if run(
+                Command::new("loginctl").arg("enable-linger").arg(&user),
+                &[],
+            )
+            .is_err()
+            {
                 eprintln!(
                     "note: could not enable linger; the server starts at login, not boot. \
                      Run `sudo loginctl enable-linger {user}` for boot autostart."
@@ -197,28 +229,42 @@ mod platform {
         )?;
         let _ = std::fs::remove_file(&xml_path);
         // Start now (next logon would otherwise be the first run).
-        let _ = run(Command::new("schtasks").args(["/Run", "/TN", TASK_NAME]), &[]);
+        let _ = run(
+            Command::new("schtasks").args(["/Run", "/TN", TASK_NAME]),
+            &[],
+        );
         println!("Installed scheduled task {TASK_NAME} (starts at logon).");
         Ok(())
     }
 
     pub fn uninstall() -> Res {
-        let _ = run(Command::new("schtasks").args(["/Delete", "/TN", TASK_NAME, "/F"]), &[1]);
+        let _ = run(
+            Command::new("schtasks").args(["/Delete", "/TN", TASK_NAME, "/F"]),
+            &[1],
+        );
         let _ = std::fs::remove_file(launcher_path()?);
         println!("Removed scheduled task {TASK_NAME}.");
         Ok(())
     }
 
     pub fn enable() -> Res {
-        run(Command::new("schtasks").args(["/Change", "/TN", TASK_NAME, "/ENABLE"]), &[])
+        run(
+            Command::new("schtasks").args(["/Change", "/TN", TASK_NAME, "/ENABLE"]),
+            &[],
+        )
     }
 
     pub fn disable() -> Res {
-        run(Command::new("schtasks").args(["/Change", "/TN", TASK_NAME, "/DISABLE"]), &[])
+        run(
+            Command::new("schtasks").args(["/Change", "/TN", TASK_NAME, "/DISABLE"]),
+            &[],
+        )
     }
 
     pub fn status() -> Res {
-        let _ = Command::new("schtasks").args(["/Query", "/TN", TASK_NAME]).status();
+        let _ = Command::new("schtasks")
+            .args(["/Query", "/TN", TASK_NAME])
+            .status();
         Ok(())
     }
 }

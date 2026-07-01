@@ -493,7 +493,12 @@ mod tests {
         // always-admit-first rule) and the rest degrade to compact (name +
         // version, description elided) — none are omitted.
         let skills: Vec<SkillManifest> = (0..4)
-            .map(|i| make_skill(&format!("Skill{i}"), "a description long enough to exceed the cap"))
+            .map(|i| {
+                make_skill(
+                    &format!("Skill{i}"),
+                    "a description long enough to exceed the cap",
+                )
+            })
             .collect();
         let refs: Vec<&SkillManifest> = skills.iter().collect();
         let budget = SkillPromptBudget {
@@ -504,7 +509,10 @@ mod tests {
         let xml = build_skills_prompt_xml_with_budget(&refs, &budget);
         // All four stay in the index; nothing omitted by the char budget alone.
         assert_eq!(xml.matches("<skill>").count(), 4);
-        assert!(!xml.contains("<note>"), "char budget must not omit, only compact");
+        assert!(
+            !xml.contains("<note>"),
+            "char budget must not omit, only compact"
+        );
         // Exactly one full <description> (the always-admitted first); the rest
         // are compact (description elided).
         assert_eq!(xml.matches("<description>").count(), 1);
@@ -538,7 +546,10 @@ mod tests {
             150,
             "every skill in a large library must stay in the index"
         );
-        assert!(!xml.contains("<note>"), "no skill should be omitted under default budget");
+        assert!(
+            !xml.contains("<note>"),
+            "no skill should be omitted under default budget"
+        );
         // The char budget still rations descriptions: the head renders full,
         // the tail compact — so not all 150 carry an inline <description>.
         let full = xml.matches("<description>").count();

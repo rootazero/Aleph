@@ -122,7 +122,10 @@ impl SystemCapability for WindowsSystem {
                 // SAFETY: `enum_proc` matches `WNDENUMPROC`; `state` outlives the
                 // synchronous enumeration.
                 unsafe {
-                    let _ = EnumWindows(Some(enum_proc), LPARAM(std::ptr::addr_of_mut!(state) as isize));
+                    let _ = EnumWindows(
+                        Some(enum_proc),
+                        LPARAM(std::ptr::addr_of_mut!(state) as isize),
+                    );
                 }
 
                 Ok(state.apps)

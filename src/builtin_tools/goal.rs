@@ -198,7 +198,10 @@ impl GoalTool {
         }
         if let Some(d) = goal.deadline_ms {
             if now_ms != 0 && d > now_ms {
-                s.push_str(&format!(" | deadline in ~{}m", (d - now_ms).div_ceil(60_000)));
+                s.push_str(&format!(
+                    " | deadline in ~{}m",
+                    (d - now_ms).div_ceil(60_000)
+                ));
             } else {
                 s.push_str(" | deadline set");
             }
@@ -1301,7 +1304,11 @@ mod tests {
             .unwrap();
 
         let out = tool_a.call(args(GoalAction::List)).await.unwrap();
-        assert!(out.message.contains("Standing goals (2)"), "got: {}", out.message);
+        assert!(
+            out.message.contains("Standing goals (2)"),
+            "got: {}",
+            out.message
+        );
         assert!(out.message.contains("Goal in A"));
         assert!(
             out.message.contains("Goal in B"),
@@ -1319,6 +1326,9 @@ mod tests {
             .lines()
             .find(|l| l.contains("Goal in B"))
             .unwrap();
-        assert!(!b_line.contains("(this session)"), "B not flagged: {b_line}");
+        assert!(
+            !b_line.contains("(this session)"),
+            "B not flagged: {b_line}"
+        );
     }
 }

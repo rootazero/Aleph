@@ -148,7 +148,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("image.png");
         // Create a minimal PNG (magic bytes)
-        tokio::fs::write(&path, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).await.unwrap();
+        tokio::fs::write(&path, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+            .await
+            .unwrap();
 
         let args = AudioTranscribeArgs {
             file_path: path.to_string_lossy().to_string(),
@@ -166,4 +168,3 @@ mod tests {
         assert_eq!(def.name, "audio_transcribe");
     }
 }
-

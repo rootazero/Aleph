@@ -280,7 +280,9 @@ impl ArenaManifest {
         }
 
         let strategy = match strategy_str {
-            "peer" => CoordinationStrategy::Peer { coordinator: coord.clone() },
+            "peer" => CoordinationStrategy::Peer {
+                coordinator: coord.clone(),
+            },
             "pipeline" => {
                 let stages = stages.unwrap_or_else(|| {
                     agent_ids
@@ -298,8 +300,7 @@ impl ArenaManifest {
                         .collect()
                 });
 
-                let participant_ids: HashSet<&str> =
-                    agent_ids.iter().map(String::as_str).collect();
+                let participant_ids: HashSet<&str> = agent_ids.iter().map(String::as_str).collect();
                 for stage in &stages {
                     if !participant_ids.contains(stage.agent_id.as_str()) {
                         return Err(format!(

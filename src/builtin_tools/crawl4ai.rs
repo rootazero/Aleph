@@ -261,7 +261,7 @@ mod tests {
         let cfg = Crawl4aiConfig {
             enabled: true,
             base_url: "http://10.10.10.3:11235/".into(),
-            timeout_seconds: 0, // 0 → falls back to default 60
+            timeout_seconds: 0,         // 0 → falls back to default 60
             token: Some(String::new()), // empty token → filtered to None
         };
         let backend = Crawl4aiBackend::from_config(&cfg).expect("should build");

@@ -316,7 +316,10 @@ mod tests {
                 saw_clean_message = true;
             }
         }
-        assert!(saw_clean_message, "a message frame should have been published");
+        assert!(
+            saw_clean_message,
+            "a message frame should have been published"
+        );
     }
 
     #[tokio::test]

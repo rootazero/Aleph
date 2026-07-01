@@ -43,14 +43,14 @@ pub fn provider_availability_from_config(
     token_manager: Option<Arc<SharedTokenManager>>,
 ) -> ProviderAvailability {
     Arc::new(move |provider: &str| {
-        let available = providers.get(provider).and_then(|c| c.api_key.as_ref()).is_some()
+        let available = providers
+            .get(provider)
+            .and_then(|c| c.api_key.as_ref())
+            .is_some()
             || match &token_manager {
                 Some(tm) => {
-                    crate::gateway::handlers::resolve_vault_secret(
-                        &format!("ai:{provider}"),
-                        tm,
-                    )
-                    .is_some()
+                    crate::gateway::handlers::resolve_vault_secret(&format!("ai:{provider}"), tm)
+                        .is_some()
                 }
                 None => false,
             };
@@ -74,7 +74,11 @@ pub struct RoutingRecall {
 impl RoutingRecall {
     #[must_use]
     pub fn new(store: Arc<RoutingExperienceStore>, availability: ProviderAvailability) -> Self {
-        Self { store, availability, k: 5 }
+        Self {
+            store,
+            availability,
+            k: 5,
+        }
     }
 
     pub async fn build_routing_experience_message(
@@ -205,8 +209,7 @@ mod tests {
         v
     }
     fn temp_backend() -> SqliteMemoryBackend {
-        let dir = std::env::temp_dir()
-            .join(format!("aleph-routing-rec-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("aleph-routing-rec-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap()
     }
@@ -281,7 +284,11 @@ mod tests {
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
         let avail: ProviderAvailability = Arc::new(|p: &str| {
-            if p == "deadprov" { ProviderStatus::Deconfigured } else { ProviderStatus::Available }
+            if p == "deadprov" {
+                ProviderStatus::Deconfigured
+            } else {
+                ProviderStatus::Available
+            }
         });
         let recall = RoutingRecall::new(store, avail);
         let attribution = RoutingAttribution::new("s".into());
@@ -317,13 +324,21 @@ mod tests {
         // they must never appear as [UNAVAILABLE] in the recall block.
         let backend = Arc::new(temp_backend());
         backend
-            .record_routing_experience(&row("1", "a", "claude-3-5-sonnet", "failover"), &emb(1.0), 768)
+            .record_routing_experience(
+                &row("1", "a", "claude-3-5-sonnet", "failover"),
+                &emb(1.0),
+                768,
+            )
             .unwrap();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
         // Gate returns Unknown for "failover" (not a recognized config provider).
         let avail: ProviderAvailability = Arc::new(|p: &str| {
-            if p == "failover" { ProviderStatus::Unknown } else { ProviderStatus::Available }
+            if p == "failover" {
+                ProviderStatus::Unknown
+            } else {
+                ProviderStatus::Available
+            }
         });
         let recall = RoutingRecall::new(store, avail);
         let attribution = RoutingAttribution::new("s".into());
@@ -333,7 +348,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(msg.contains("claude-3-5-sonnet"), "model must be visible");
-        assert!(!msg.contains("UNAVAILABLE"), "unknown provider must not be tagged UNAVAILABLE");
+        assert!(
+            !msg.contains("UNAVAILABLE"),
+            "unknown provider must not be tagged UNAVAILABLE"
+        );
     }
 
     #[tokio::test]

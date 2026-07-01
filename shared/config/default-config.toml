@@ -13,6 +13,11 @@ default_hotkey = "Grave"
 # Must match one of the provider names defined below
 default_provider = "openai"
 
+# Global fallback provider chain. When the default provider fails with a
+# transient error (rate limit, timeout, connection failure), these providers
+# are tried in order. Names must match keys in [providers].
+fallback_providers = ["claude", "deepseek"]
+
 # Log retention in days (1-30, default: 7)
 # Automatically deletes logs older than this many days
 log_retention_days = 7
@@ -116,12 +121,16 @@ pii_scrubbing_enabled = false
 # - Names containing "gemini" or "google" → gemini provider
 # - Names containing "ollama" → ollama provider
 # - Everything else → openai provider (including custom APIs)
+#
+# IMPORTANT: Providers default to `enabled = false`. You must set
+# `enabled = true` on every provider you want to use.
 
 # ----------------------------------------------------------------------------
 # OpenAI Official
 # ----------------------------------------------------------------------------
 [providers.openai]
 provider_type = "openai"  # Optional, inferred from name
+enabled = true            # Providers are disabled by default; must explicitly enable
 api_key = "sk-..."        # Get from https://platform.openai.com
 models = ["gpt-4o"]       # First model is default. Options: gpt-4o, gpt-4o-mini, gpt-3.5-turbo
 color = "#10a37f"         # Brand color for UI
@@ -141,6 +150,7 @@ presence_penalty = 0.0    # Encourage new topics (-2.0 to 2.0)
 # ----------------------------------------------------------------------------
 [providers.claude]
 provider_type = "claude"  # Optional, inferred from name
+enabled = true
 api_key = "sk-ant-..."    # Get from https://console.anthropic.com
 models = ["claude-3-5-sonnet-20241022"]  # First model is default
 color = "#d97757"
@@ -160,6 +170,7 @@ stop_sequences = "END,STOP"  # Comma-separated stop sequences
 # ----------------------------------------------------------------------------
 [providers.gemini]
 provider_type = "gemini"  # Optional, inferred from name
+enabled = true
 api_key = "..."           # Get from https://makersuite.google.com/app/apikey
 models = ["gemini-3-flash"]  # First model is default
 base_url = "https://generativelanguage.googleapis.com/v1beta"
@@ -182,6 +193,7 @@ stop_sequences = "END"    # Comma-separated stop sequences
 # ----------------------------------------------------------------------------
 [providers.ollama]
 provider_type = "ollama"  # Optional, inferred from name
+enabled = true
 # No API key needed for local Ollama
 models = ["llama3.2"]     # First model is default
 color = "#0000ff"
@@ -206,6 +218,7 @@ stop_sequences = "END"    # Comma-separated stop sequences
 # ----------------------------------------------------------------------------
 [providers.deepseek]
 provider_type = "openai"           # Use OpenAI-compatible interface
+enabled = true
 api_key = "sk-..."                 # Get from https://platform.deepseek.com
 models = ["deepseek-chat"]
 base_url = "https://api.deepseek.com"  # Custom API endpoint
@@ -219,6 +232,7 @@ temperature = 0.7
 # ----------------------------------------------------------------------------
 [providers.moonshot]
 provider_type = "openai"           # Use OpenAI-compatible interface
+enabled = true
 api_key = "sk-..."                 # Get from https://platform.moonshot.cn
 models = ["moonshot-v1-8k"]       # First model is default
 base_url = "https://api.moonshot.cn/v1"
@@ -232,6 +246,7 @@ temperature = 0.7
 # ----------------------------------------------------------------------------
 [providers.azure]
 provider_type = "openai"
+enabled = true
 api_key = "your-azure-key"
 models = ["gpt-4o"]                # Your deployment name
 base_url = "https://your-resource.openai.azure.com"

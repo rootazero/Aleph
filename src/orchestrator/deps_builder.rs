@@ -1667,7 +1667,10 @@ mod tests {
         );
         let built = built_map(&["fb", "aux"]);
         let (nodes, auto_derived) = assemble_fallbacks(&cfg, "primary", &built, &HashMap::new());
-        assert!(!auto_derived, "explicit chain → honored static, not auto-derived");
+        assert!(
+            !auto_derived,
+            "explicit chain → honored static, not auto-derived"
+        );
         assert_eq!(fallback_names(&nodes), vec!["fb"]);
     }
 

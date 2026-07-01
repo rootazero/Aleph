@@ -12,20 +12,20 @@ mod palette;
 mod voice;
 
 use super::mention_palette::{update_mention_palette, MentionPaletteView};
-use attachments::{read_file_list_into, AttachmentPreviewBar};
-use palette::{
-    build_palette_entries, doctor_command_info, expand_doctor_command, parse_command_info,
-    CommandInfo, PaletteEntry, PaletteLabels, SlashPaletteView,
-};
 use super::project_menu::ProjectMenu;
-use super::TodoPanel;
 use super::state::{ChatSendError, ChatSendErrorCode, ChatState, QueuedPrompt, TeamMemberView};
+use super::TodoPanel;
 use crate::api::chat::{ChatApi, ChatAttachment};
 use crate::components::team_task_strip::TeamTaskStrip;
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};
+use attachments::{read_file_list_into, AttachmentPreviewBar};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use palette::{
+    build_palette_entries, doctor_command_info, expand_doctor_command, parse_command_info,
+    CommandInfo, PaletteEntry, PaletteLabels, SlashPaletteView,
+};
 use shared_ui_logic::safety::{
     check_prompt_injection, prompt_guard_message, PromptInjectionVerdict,
 };
