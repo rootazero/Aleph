@@ -94,6 +94,7 @@ async fn session(
                              present a valid Gateway token to enable desktop notifications"
                         ));
                     }
+                    store_issued_device_token(&value);
                     handle_message(app, &value);
                 }
                 Err(e) => {
@@ -152,11 +153,11 @@ fn ws_url(target: &crate::connection::ConnectionTarget) -> String {
 /// A Local (loopback) Gateway is operator under LAN-trust — the bridge connects
 /// bare. A Remote Gateway runs the single-tier Gateway-token model: a remote
 /// `connect` without a valid token is walled (`guest`, no scopes), so the bridge
-/// presents the shared token the Panel deposited after the user authorized
-/// (`connection::load_gateway_token`). Either way it declares its surface
-/// identity so the gateway routes `surface.notify` (audience `["desktop"]`) and
-/// `surface.approval` to this desktop surface — needed even for a remote, whose
-/// non-loopback client_ip would otherwise be labelled Unknown and receive nothing.
+/// presents the credential the Panel URL carried (`connection::load_gateway_token`).
+/// Either way it declares its surface identity so the gateway routes
+/// `surface.notify` (audience `["desktop"]`) and `surface.approval` to this
+/// desktop surface — needed even for a remote, whose non-loopback client_ip
+/// would otherwise be labelled Unknown and receive nothing.
 fn connect_request(target: &crate::connection::ConnectionTarget) -> String {
     let mut params = json!({
         "device_name": "Aleph Desktop",
@@ -165,8 +166,14 @@ fn connect_request(target: &crate::connection::ConnectionTarget) -> String {
         "channel_kind": "desktop",
     });
     if matches!(target, crate::connection::ConnectionTarget::Remote(_)) {
-        if let Some(token) = crate::connection::load_gateway_token() {
-            params["token"] = json!(token);
+        if let Some(credential) = crate::connection::load_gateway_token() {
+            if credential.starts_with("aleph-bt-") {
+                params["bootstrap_ticket"] = json!(credential);
+            } else if credential.starts_with("aleph-dt-") {
+                params["device_token"] = json!(credential);
+            } else {
+                params["token"] = json!(credential);
+            }
         }
     }
     json!({
@@ -176,6 +183,26 @@ fn connect_request(target: &crate::connection::ConnectionTarget) -> String {
         "params": params,
     })
     .to_string()
+}
+
+/// If `msg` is the successful JSON-RPC response to the bridge's own `connect`
+/// (id 1) and it carries a newly-issued `device_token`, persist it so future
+/// reconnects use the long-lived token instead of a one-off bootstrap ticket.
+fn store_issued_device_token(msg: &Value) {
+    let id = msg.get("id").and_then(Value::as_i64);
+    if id != Some(1) {
+        return;
+    }
+    let Some(result) = msg.get("result") else { return };
+    let authorized = result.get("authorized").and_then(Value::as_bool).unwrap_or(false);
+    if !authorized {
+        return;
+    }
+    if let Some(dt) = result.get("device_token").and_then(Value::as_str) {
+        if let Err(e) = crate::connection::store_gateway_token(dt) {
+            tracing::warn!("notification bridge: failed to persist issued device token: {e}");
+        }
+    }
 }
 
 /// Build the `events.subscribe` request for the notification topics.

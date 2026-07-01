@@ -411,6 +411,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // vault consumers outside the request path).
     server.set_shared_token_manager(auth_bundle.auth_ctx.shared_token_mgr.clone());
 
+    // Device-token manager for bootstrap-ticket / per-device-token auth.
+    // Wired early so the `connect` handshake and `gateway.ticket.create` can
+    // use it as soon as handlers are installed.
+    let device_token_mgr = Arc::new(alephcore::gateway::security::DeviceTokenManager::new(
+        auth_bundle.security_store.clone(),
+    ));
+    server.set_device_token_manager(device_token_mgr.clone());
+
     // Now spawn the deferred MCP manager, injecting a vault-backed secret
     // resolver so `{{secret:NAME}}` env references resolve per-server into the
     // child process only (never the daemon's own env).
@@ -451,6 +459,23 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     resp
                 }
             });
+    }
+
+    // Bootstrap ticket RPC: generate a short-lived, single-use ticket that a
+    // remote Panel can exchange for a per-device token. Authorized-only.
+    {
+        let mgr = device_token_mgr.clone();
+        server.handlers_mut().register("gateway.ticket.create", move |req| {
+            let mgr = mgr.clone();
+            async move {
+                let ctx = Arc::new(
+                    alephcore::gateway::handlers::gateway_ticket::TicketHandlerContext {
+                        device_token_mgr: mgr,
+                    },
+                );
+                alephcore::gateway::handlers::gateway_ticket::handle_ticket_create(req, ctx).await
+            }
+        });
     }
     // Wire the security store so the WS node connect/disconnect paths can
     // stamp enrolled-node last_seen_at (offline fleet view honesty).

@@ -45,3 +45,38 @@ impl DeviceRow {
         })
     }
 }
+
+/// Device authentication token row from database.
+#[derive(Debug, Clone)]
+pub struct DeviceTokenRow {
+    pub token_id: String,
+    pub device_id: String,
+    pub token_hash: String,
+    pub role: String,
+    pub scopes: Vec<String>,
+    pub issued_at: i64,
+    pub expires_at: i64,
+    pub last_used_at: Option<i64>,
+    pub rotated_at: Option<i64>,
+    pub revoked_at: Option<i64>,
+}
+
+impl DeviceTokenRow {
+    pub fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        let scopes_json: String = row.get(4)?;
+        let scopes = serde_json::from_str(&scopes_json).unwrap_or_default();
+
+        Ok(Self {
+            token_id: row.get(0)?,
+            device_id: row.get(1)?,
+            token_hash: row.get(2)?,
+            role: row.get(3)?,
+            scopes,
+            issued_at: row.get(5)?,
+            expires_at: row.get(6)?,
+            last_used_at: row.get(7)?,
+            rotated_at: row.get(8)?,
+            revoked_at: row.get(9)?,
+        })
+    }
+}

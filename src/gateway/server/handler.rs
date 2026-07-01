@@ -78,6 +78,8 @@ struct ConnectionContext {
     /// view in `environments.list` stays honest. `None` in probe/legacy
     /// wiring — stamping is then skipped.
     security_store: Option<Arc<SecurityStore>>,
+    /// Device-token manager for bootstrap-ticket / per-device-token auth.
+    device_token_mgr: Option<Arc<crate::gateway::security::DeviceTokenManager>>,
     /// Socket peer IP. Used for the per-IP connection cap and rate-limit
     /// identity.
     client_ip: IpAddr,
@@ -191,6 +193,7 @@ pub(super) async fn ws_upgrade_handler(
             idle_timeout_secs: state.idle_timeout_secs,
             require_idempotency_key: state.require_idempotency_key,
             security_store: state.security_store.clone(),
+            device_token_mgr: state.device_token_mgr.clone(),
             client_ip,
             reverse_rpc: state.reverse_rpc.clone(),
             node_registry: state.node_registry.clone(),
@@ -719,19 +722,46 @@ async fn handle_connection(
                                                 if resp.is_success() {
                                                     // Gateway-token authorization. Loopback ⇒
                                                     // operator (zero-config, no token). Remote ⇒
-                                                    // validate the shared Gateway token presented in
-                                                    // `connect` params: valid ⇒ operator (same
-                                                    // authority as local, single tier), missing /
-                                                    // invalid ⇒ unauthorized (login wall; the Panel
-                                                    // renders a token box). The decision lives in the
-                                                    // tested pure `connect::connect_authorized`.
-                                                    let presented_token = req
-                                                        .params
-                                                        .as_ref()
+                                                    // validate device token, bootstrap ticket, or the
+                                                    // legacy shared Gateway token presented in
+                                                    // `connect` params. The decision lives in
+                                                    // `connect::resolve_connect_auth`.
+                                                    let params = req.params.as_ref();
+                                                    let presented_token = params
                                                         .and_then(|p| p.get("token"))
                                                         .and_then(|v| v.as_str());
-                                                    let authorized =
-                                                        crate::gateway::handlers::connect::connect_authorized(
+                                                    let device_token = params
+                                                        .and_then(|p| p.get("device_token"))
+                                                        .and_then(|v| v.as_str());
+                                                    let bootstrap_ticket = params
+                                                        .and_then(|p| p.get("bootstrap_ticket"))
+                                                        .and_then(|v| v.as_str());
+                                                    let device_id = params
+                                                        .and_then(|p| p.get("device_id"))
+                                                        .and_then(|v| v.as_str());
+                                                    let device_name = params
+                                                        .and_then(|p| p.get("device_name"))
+                                                        .and_then(|v| v.as_str());
+
+                                                    let auth_outcome = if let Some(mgr) = ctx.device_token_mgr.as_ref() {
+                                                        crate::gateway::handlers::connect::resolve_connect_auth(
+                                                            ctx.client_ip.is_loopback(),
+                                                            presented_token,
+                                                            device_token,
+                                                            bootstrap_ticket,
+                                                            device_id,
+                                                            device_name,
+                                                            |t| {
+                                                                crate::gateway::security::SharedTokenManager::global()
+                                                                    .map(|m| m.validate(t).unwrap_or(false))
+                                                                    .unwrap_or(false)
+                                                            },
+                                                            mgr,
+                                                        )
+                                                    } else {
+                                                        // Device-token manager not wired: fall back to
+                                                        // the legacy shared-token-only behavior.
+                                                        let authorized = crate::gateway::handlers::connect::connect_authorized(
                                                             ctx.client_ip.is_loopback(),
                                                             presented_token,
                                                             |t| {
@@ -740,8 +770,18 @@ async fn handle_connection(
                                                                     .unwrap_or(false)
                                                             },
                                                         );
-                                                    let panel_role =
-                                                        if authorized { "operator" } else { "guest" };
+                                                        if authorized {
+                                                            crate::gateway::handlers::connect::ConnectAuthOutcome::Authorized
+                                                        } else {
+                                                            crate::gateway::handlers::connect::ConnectAuthOutcome::Unauthorized
+                                                        }
+                                                    };
+
+                                                    let (authorized, panel_role, issued_device_token) = match &auth_outcome {
+                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::Authorized => (true, "operator", None),
+                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::BootstrapExchanged { device_token, .. } => (true, "operator", Some(device_token.clone())),
+                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::Unauthorized => (false, "guest", None),
+                                                    };
                                                     {
                                                         let mut conns = ctx.connections.write().await;
                                                         if let Some(state) = conns.get_mut(&conn_id) {
@@ -797,6 +837,12 @@ async fn handle_connection(
                                                             "needs_token".to_string(),
                                                             serde_json::Value::Bool(!authorized),
                                                         );
+                                                        if let Some(dt) = issued_device_token {
+                                                            obj.insert(
+                                                                "device_token".to_string(),
+                                                                serde_json::Value::String(dt),
+                                                            );
+                                                        }
                                                     }
                                                     response =
                                                         serde_json::to_string(&resp).unwrap_or(response);

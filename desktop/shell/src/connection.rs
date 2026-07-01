@@ -63,7 +63,7 @@ pub fn load_gateway_token() -> Option<String> {
 
 /// Persist a Gateway token (already trimmed non-empty by the caller). Written
 /// with the same `.aleph` directory bootstrap as the target.
-fn store_gateway_token(token: &str) -> Result<(), String> {
+pub(crate) fn store_gateway_token(token: &str) -> Result<(), String> {
     let marker = gateway_token_marker().ok_or("home directory not found")?;
     if let Some(parent) = marker.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create .aleph dir: {e}"))?;
@@ -269,15 +269,15 @@ pub fn get_connection_target() -> String {
 pub fn set_connection_target(app: tauri::AppHandle, raw: String) -> Result<(), String> {
     let target = ConnectionTarget::parse(&raw)?;
     save_target(&target)?;
-    // Capture (or clear) the shared Gateway token from the target so the native
+    // Capture (or clear) the Gateway credential from the target so the native
     // notification bridge can authorize against a remote token-protected
     // Gateway too (R5 — desktop banners on remote). A QR / shared-link onboarding
-    // URL carries the token in its `?token=` query (the same query the remote
-    // Panel reads); a manual address or Local has none. Switching always
-    // re-derives it, so one remote's token is never presented to another or to
-    // the local daemon.
+    // URL may carry either `?bt=` (bootstrap ticket, preferred) or `?token=`
+    // (legacy shared token); a manual address or Local has none. Switching always
+    // re-derives it, so one remote's credential is never presented to another or
+    // to the local daemon.
     match &target {
-        ConnectionTarget::Remote(url) => persist_token_from_url(url),
+        ConnectionTarget::Remote(url) => persist_credential_from_url(url),
         ConnectionTarget::Local => remove_gateway_token(),
     }
     match &target {
@@ -288,24 +288,33 @@ pub fn set_connection_target(app: tauri::AppHandle, raw: String) -> Result<(), S
     Ok(())
 }
 
-/// Extract a non-empty `token` from a URL's query, if present. Pure (no I/O) so
-/// the extraction is unit-testable without touching the filesystem.
-fn token_from_url(url: &Url) -> Option<String> {
-    url.query_pairs()
-        .find(|(k, _)| k.as_ref() == "token")
+/// Extract a non-empty credential from a URL's query, if present.
+///
+/// Priority: `?bt=` (bootstrap ticket) > `?token=` (legacy shared token).
+/// Pure (no I/O) so the extraction is unit-testable without touching the filesystem.
+fn credential_from_url(url: &Url) -> Option<String> {
+    let mut pairs = url.query_pairs().peekable();
+    pairs
+        .find(|(k, _)| k.as_ref() == "bt")
         .map(|(_, v)| v.into_owned())
         .filter(|t| !t.is_empty())
+        .or_else(|| {
+            url.query_pairs()
+                .find(|(k, _)| k.as_ref() == "token")
+                .map(|(_, v)| v.into_owned())
+                .filter(|t| !t.is_empty())
+        })
 }
 
-/// Persist the `?token=` from a remote Gateway URL for the notification bridge,
-/// or clear the store when the URL carries none. The token only ever appears in
-/// the QR / shared-link onboarding URL (`aleph-<uuid>`, no URL-special chars);
-/// a manually typed address has no query and so clears any stale token.
-fn persist_token_from_url(url: &Url) {
-    match token_from_url(url) {
+/// Persist the credential (`?bt=` or `?token=`) from a remote Gateway URL for
+/// the notification bridge, or clear the store when the URL carries none.
+/// Bootstrap tickets are short-lived, but the bridge needs to present the same
+/// value the remote Panel URL carried until it is exchanged for a device token.
+fn persist_credential_from_url(url: &Url) {
+    match credential_from_url(url) {
         Some(t) => {
             if let Err(e) = store_gateway_token(&t) {
-                tracing::warn!("could not persist Gateway token for the notification bridge: {e}");
+                tracing::warn!("could not persist Gateway credential for the notification bridge: {e}");
             }
         }
         None => remove_gateway_token(),
@@ -402,9 +411,18 @@ mod tests {
     }
 
     #[test]
-    fn token_from_url_reads_the_query_token() {
+    fn credential_from_url_reads_bootstrap_ticket_first() {
+        let url = Url::parse(
+            "https://gw.example.com:8443/?bt=aleph-bt-abc123&token=aleph-legacy",
+        )
+        .unwrap();
+        assert_eq!(credential_from_url(&url).as_deref(), Some("aleph-bt-abc123"));
+    }
+
+    #[test]
+    fn credential_from_url_falls_back_to_legacy_token() {
         let url = Url::parse("https://gw.example.com:8443/?token=aleph-abc123").unwrap();
-        assert_eq!(token_from_url(&url).as_deref(), Some("aleph-abc123"));
+        assert_eq!(credential_from_url(&url).as_deref(), Some("aleph-abc123"));
     }
 
     #[test]
@@ -421,10 +439,11 @@ mod tests {
     }
 
     #[test]
-    fn token_from_url_none_without_token() {
-        // No query, an empty token, and an unrelated param all yield None.
-        assert!(token_from_url(&Url::parse("https://gw.example.com/").unwrap()).is_none());
-        assert!(token_from_url(&Url::parse("https://gw.example.com/?token=").unwrap()).is_none());
-        assert!(token_from_url(&Url::parse("https://gw.example.com/?foo=bar").unwrap()).is_none());
+    fn credential_from_url_none_without_credential() {
+        // No query, an empty credential, and an unrelated param all yield None.
+        assert!(credential_from_url(&Url::parse("https://gw.example.com/").unwrap()).is_none());
+        assert!(credential_from_url(&Url::parse("https://gw.example.com/?bt=").unwrap()).is_none());
+        assert!(credential_from_url(&Url::parse("https://gw.example.com/?token=").unwrap()).is_none());
+        assert!(credential_from_url(&Url::parse("https://gw.example.com/?foo=bar").unwrap()).is_none());
     }
 }

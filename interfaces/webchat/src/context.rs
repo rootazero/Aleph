@@ -42,78 +42,128 @@ pub(crate) fn role_is_operator(role: Option<&str>) -> bool {
     role == Some("operator")
 }
 
-/// localStorage key holding the shared Gateway token a remote Panel presents
-/// at the `connect` handshake.
+/// localStorage key holding the legacy shared Gateway token. Kept for backward
+/// compatibility with old `?token=` links and manually-entered tokens.
 #[cfg(target_arch = "wasm32")]
-const GATEWAY_TOKEN_KEY: &str = "aleph_gateway_token";
+const GATEWAY_LEGACY_TOKEN_KEY: &str = "aleph_gateway_token";
 
-/// Read the Gateway token to present at handshake. A `?token=` URL query
-/// (QR / shared link) wins over a previously persisted localStorage token.
+/// localStorage key holding the long-lived device token issued after a
+/// bootstrap ticket is exchanged.
 #[cfg(target_arch = "wasm32")]
-fn read_gateway_token() -> Option<String> {
-    let win = web_sys::window()?;
-    if let Ok(search) = win.location().search() {
-        if let Some(tok) = parse_query_token(&search) {
-            return Some(tok);
-        }
-    }
-    win.local_storage()
-        .ok()
-        .flatten()
-        .and_then(|s| s.get_item(GATEWAY_TOKEN_KEY).ok().flatten())
-        .filter(|v| !v.is_empty())
+const GATEWAY_DEVICE_TOKEN_KEY: &str = "aleph_device_token";
+
+/// Credentials to present during the `connect` handshake.
+/// Priority: bootstrap ticket (one-time) > device token > legacy shared token.
+#[derive(Debug, Default, Clone)]
+struct ConnectCredentials {
+    bootstrap_ticket: Option<String>,
+    device_token: Option<String>,
+    legacy_token: Option<String>,
 }
 
-/// Extract `token` from a `?token=…&…` query string. The token is an
-/// `aleph-<uuid>` (no URL-special characters), so no percent-decoding is
-/// needed. Machine-format parsing, not natural language — regex-free by P8.
+impl ConnectCredentials {
+    fn is_empty(&self) -> bool {
+        self.bootstrap_ticket.is_none()
+            && self.device_token.is_none()
+            && self.legacy_token.is_none()
+    }
+}
+
+/// Read credentials to present at the `connect` handshake.
+/// `?bt=` and `?token=` URL queries win over persisted localStorage values.
 #[cfg(target_arch = "wasm32")]
-fn parse_query_token(search: &str) -> Option<String> {
+fn read_connect_credentials() -> ConnectCredentials {
+    let win = match web_sys::window() {
+        Some(w) => w,
+        None => return ConnectCredentials::default(),
+    };
+
+    let search = win.location().search().unwrap_or_default();
+    let bootstrap_ticket = parse_query_param(&search, "bt=");
+    let url_legacy_token = parse_query_param(&search, "token=");
+
+    let storage = win
+        .local_storage()
+        .ok()
+        .flatten();
+
+    let device_token = storage
+        .as_ref()
+        .and_then(|s| s.get_item(GATEWAY_DEVICE_TOKEN_KEY).ok().flatten())
+        .filter(|v| !v.is_empty());
+
+    let legacy_token = url_legacy_token
+        .or_else(|| {
+            storage
+                .as_ref()
+                .and_then(|s| s.get_item(GATEWAY_LEGACY_TOKEN_KEY).ok().flatten())
+                .filter(|v| !v.is_empty())
+        });
+
+    ConnectCredentials {
+        bootstrap_ticket,
+        device_token,
+        legacy_token,
+    }
+}
+
+/// Extract a query parameter value from a `?a=1&b=2…` query string.
+/// The values we care about (`aleph-…` tokens) contain no URL-special
+/// characters, so no percent-decoding is needed. Machine-format, regex-free.
+#[cfg(target_arch = "wasm32")]
+fn parse_query_param(search: &str, prefix: &str) -> Option<String> {
     let q = search.strip_prefix('?').unwrap_or(search);
     q.split('&')
-        .find_map(|pair| pair.strip_prefix("token="))
+        .find_map(|pair| pair.strip_prefix(prefix))
         .filter(|v| !v.is_empty())
         .map(std::string::ToString::to_string)
 }
 
-/// Persist a validated Gateway token so refreshes / reconnects stay authorized.
-#[cfg(target_arch = "wasm32")]
-fn persist_gateway_token(token: &str) {
-    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = s.set_item(GATEWAY_TOKEN_KEY, token);
-    }
-}
-
-/// Drop the `token=` pair from a `?…` query string, returning the remaining
-/// query (no leading `?`); empty when `token` was the only param. Inverse of
-/// `parse_query_token` — machine-format, regex-free (P8). Host-testable.
-///
-/// Only consumed by the wasm-only `scrub_token_from_url` and the host test
-/// suite, so gate it to those targets to avoid a dead-code warning on host
-/// non-test builds.
+/// Drop listed query params from a `?…` string, returning the remaining query
+/// (no leading `?`). Empty when all params were stripped.
 #[cfg(any(target_arch = "wasm32", test))]
-pub(crate) fn strip_token_param(search: &str) -> String {
+pub(crate) fn strip_params(search: &str, prefixes: &[&str]) -> String {
     let q = search.strip_prefix('?').unwrap_or(search);
     q.split('&')
-        .filter(|pair| !pair.is_empty() && !pair.starts_with("token="))
+        .filter(|pair| {
+            !pair.is_empty()
+                && !prefixes.iter().any(|prefix| pair.starts_with(prefix))
+        })
         .collect::<Vec<_>>()
         .join("&")
 }
 
-/// Scrub a `?token=…` from the address bar (no reload) once the token is safely
-/// in localStorage. Two reasons: (1) keep the shared Gateway token out of the
-/// address bar, browser history, and accidental bookmarks; (2) stop a *stale*
-/// link's `?token=` from shadowing localStorage on the next load —
-/// `read_gateway_token` gives the URL query precedence, so without this scrub a
-/// rotated/expired QR link would re-trip the login wall forever (the freshly
-/// entered token can never win). No-op when the query carries no token.
+/// Legacy helper kept for existing host tests.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn strip_token_param(search: &str) -> String {
+    strip_params(search, &["token="])
+}
+
+/// Persist a validated device token so refreshes / reconnects stay authorized.
 #[cfg(target_arch = "wasm32")]
-fn scrub_token_from_url() {
+fn persist_device_token(token: &str) {
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = s.set_item(GATEWAY_DEVICE_TOKEN_KEY, token);
+    }
+}
+
+/// Persist a validated legacy shared token for backward compatibility.
+#[cfg(target_arch = "wasm32")]
+fn persist_legacy_token(token: &str) {
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = s.set_item(GATEWAY_LEGACY_TOKEN_KEY, token);
+    }
+}
+
+/// Scrub `?token=` and `?bt=` from the address bar (no reload) once the
+/// credential is safely in localStorage. No-op when the query carries neither.
+#[cfg(target_arch = "wasm32")]
+fn scrub_credentials_from_url() {
     let Some(win) = web_sys::window() else { return };
     let Ok(search) = win.location().search() else {
         return;
     };
-    if !search.contains("token=") {
+    if !search.contains("token=") && !search.contains("bt=") {
         return;
     }
     let Ok(history) = win.history() else { return };
@@ -121,7 +171,7 @@ fn scrub_token_from_url() {
         .location()
         .pathname()
         .unwrap_or_else(|_| "/".to_string());
-    let remaining = strip_token_param(&search);
+    let remaining = strip_params(&search, &["token=", "bt="]);
     let new_url = if remaining.is_empty() {
         pathname
     } else {
@@ -130,28 +180,86 @@ fn scrub_token_from_url() {
     let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&new_url));
 }
 
+/// Drop all persisted credentials. Called when authentication is rejected so
+/// the login box starts empty on the next load.
+#[cfg(target_arch = "wasm32")]
+fn clear_credentials() {
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = s.remove_item(GATEWAY_DEVICE_TOKEN_KEY);
+        let _ = s.remove_item(GATEWAY_LEGACY_TOKEN_KEY);
+    }
+}
+
+/// Drop only the legacy shared token.
+#[cfg(target_arch = "wasm32")]
+fn clear_legacy_token() {
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = s.remove_item(GATEWAY_LEGACY_TOKEN_KEY);
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
+fn clear_legacy_token() {}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_connect_credentials() -> ConnectCredentials {
+    ConnectCredentials::default()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn persist_device_token(_token: &str) {}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn persist_legacy_token(_token: &str) {}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clear_credentials() {}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn scrub_credentials_from_url() {}
+
+/// Legacy helpers kept for old call sites during the transition.
+#[cfg(target_arch = "wasm32")]
+fn read_gateway_token() -> Option<String> {
+    let creds = read_connect_credentials();
+    creds.bootstrap_ticket.or(creds.device_token).or(creds.legacy_token)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn persist_gateway_token(token: &str) {
+    if token.starts_with("aleph-dt-") {
+        persist_device_token(token);
+    } else {
+        persist_legacy_token(token);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn clear_gateway_token() {
+    clear_credentials();
+}
+
+#[cfg(target_arch = "wasm32")]
+fn scrub_token_from_url() {
+    scrub_credentials_from_url();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
 fn read_gateway_token() -> Option<String> {
     None
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
 fn persist_gateway_token(_token: &str) {}
 
-/// Drop the persisted Gateway token. Called when a previously-stored token is
-/// rejected (rotation / mismatch) so it can't silently re-fail on the next
-/// load and the login box starts empty.
-#[cfg(target_arch = "wasm32")]
-fn clear_gateway_token() {
-    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = s.remove_item(GATEWAY_TOKEN_KEY);
-    }
-}
-
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
 fn clear_gateway_token() {}
 
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
 fn scrub_token_from_url() {}
 
 enum Handshake {
@@ -384,19 +492,26 @@ impl DashboardState {
     /// Submit a Gateway token from the login wall: persist it, then reload the
     /// page so the fresh `connect` handshake presents it. Reload (vs. in-place
     /// reconnect) keeps the boot/subscription wiring on its single happy path.
+    ///
+    /// Accepts either a long-lived device token (`aleph-dt-…`) or the legacy
+    /// shared token (`aleph-…`).
     pub fn submit_token(&self, token: String) {
         let token = token.trim().to_string();
         if token.is_empty() {
             return;
         }
-        persist_gateway_token(&token);
+        if token.starts_with("aleph-dt-") {
+            persist_device_token(&token);
+        } else {
+            persist_legacy_token(&token);
+        }
         #[cfg(target_arch = "wasm32")]
         {
-            // Drop any stale `?token=` from the URL *before* reloading:
-            // `read_gateway_token` prefers the URL query over localStorage, so
-            // an expired link token would otherwise shadow the one just entered
-            // and re-trip the login wall on every reload.
-            scrub_token_from_url();
+            // Drop any stale `?token=` / `?bt=` from the URL *before* reloading:
+            // `read_connect_credentials` prefers the URL query over localStorage,
+            // so an expired link would otherwise shadow the one just entered and
+            // re-trip the login wall on every reload.
+            scrub_credentials_from_url();
             if let Some(w) = web_sys::window() {
                 let _ = w.location().reload();
             }
@@ -536,32 +651,56 @@ impl DashboardState {
     /// (login wall, NOT a transport failure), and a transport-level failure.
     async fn handshake(&self) -> Handshake {
         let (device_id, device_name) = panel_device_identity();
-        let token = read_gateway_token();
+        let creds = read_connect_credentials();
         let mut params = serde_json::json!({
             "device_id": device_id,
             "device_name": device_name,
         });
-        if let Some(t) = token.as_ref() {
+
+        // Priority: one-time bootstrap ticket > long-lived device token > legacy shared token.
+        let credential_kind = if let Some(t) = creds.bootstrap_ticket.as_ref() {
+            params["bootstrap_ticket"] = serde_json::json!(t);
+            "bootstrap"
+        } else if let Some(t) = creds.device_token.as_ref() {
+            params["device_token"] = serde_json::json!(t);
+            "device"
+        } else if let Some(t) = creds.legacy_token.as_ref() {
             params["token"] = serde_json::json!(t);
-        }
+            "legacy"
+        } else {
+            "none"
+        };
+
         let resp = match self.rpc_call("connect", params).await {
             Ok(r) => r,
             Err(e) => return Handshake::Failed(classify(FailureStage::Handshake, Some(&e), false)),
         };
         self.capture_role(&resp);
         if resp.get("authorized").and_then(serde_json::Value::as_bool) == Some(true) {
-            if let Some(t) = token {
-                persist_gateway_token(&t);
+            // A bootstrap exchange returns a fresh device token; store it for
+            // subsequent reconnects and clear any legacy token.
+            if let Some(dt) = resp
+                .get("device_token")
+                .and_then(serde_json::Value::as_str)
+            {
+                persist_device_token(dt);
+                clear_legacy_token();
+            } else if credential_kind == "legacy" {
+                if let Some(t) = creds.legacy_token {
+                    persist_legacy_token(&t);
+                }
+            } else if credential_kind == "device" {
+                // Device token still valid; keep it.
             }
-            scrub_token_from_url();
+            scrub_credentials_from_url();
             Handshake::Authorized
         } else {
-            // Reachable but unauthorized: a stale/rotated/mismatched token (if
+            // Reachable but unauthorized: a stale/rotated/mismatched credential (if
             // any) must not silently re-fail next load. Login wall takes over.
-            // Capture whether a token was present *before* clearing it so
+            // Capture whether a credential was present *before* clearing it so
             // TokenWall can distinguish first-time vs rejected-token copy.
-            let was_rejected = read_gateway_token().is_some();
-            clear_gateway_token();
+            let was_rejected = !read_connect_credentials().is_empty();
+            clear_credentials();
             Handshake::NeedsToken { was_rejected }
         }
     }

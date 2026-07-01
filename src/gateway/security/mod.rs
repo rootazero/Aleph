@@ -24,6 +24,7 @@
 //! including the legacy tables kept only for migration compatibility.
 
 pub mod crypto;
+pub mod device_token_manager;
 pub mod shared_token;
 pub mod store;
 pub mod token_readonly;
@@ -33,6 +34,7 @@ pub use crypto::{
     generate_keypair, generate_pairing_code, generate_secret, hmac_sign, hmac_verify, sign_message,
     verify_signature, CryptoError, DeviceFingerprint, PAIRING_CODE_CHARSET, PAIRING_CODE_LENGTH,
 };
+pub use device_token_manager::{DeviceTokenError, DeviceTokenManager};
 pub use shared_token::{SharedTokenError, SharedTokenManager};
 pub use store::{DeviceUpsertData, SecurityStore};
 pub use token_readonly::read_current_token_readonly;

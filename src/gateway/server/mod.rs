@@ -129,6 +129,9 @@ pub struct GatewaySharedState {
     /// [`GatewayServer::set_shared_token_manager`] — the vault is live
     /// infrastructure (provider keys, channel secrets, admin IPC bearer).
     pub shared_token_mgr: Option<Arc<SharedTokenManager>>,
+    /// Device-token manager for bootstrap-ticket / per-device-token auth.
+    /// Populated at boot by [`GatewayServer::set_device_token_manager`].
+    pub device_token_mgr: Option<Arc<crate::gateway::security::DeviceTokenManager>>,
     /// Security store handle. The cluster node connect/disconnect paths use
     /// it to stamp the enrolled device's `last_seen_at` for the offline
     /// `environments.list` view. `None` in probe/legacy wiring.
@@ -296,6 +299,9 @@ pub struct GatewayServer {
     /// which also publishes the process-global used by vault consumers
     /// (e.g. the WhatsApp vault store's crypto lookup).
     shared_token_mgr: Option<Arc<SharedTokenManager>>,
+    /// Device-token manager for bootstrap-ticket / per-device-token auth.
+    /// Populated at boot by [`GatewayServer::set_device_token_manager`].
+    device_token_mgr: Option<Arc<crate::gateway::security::DeviceTokenManager>>,
     /// Security store handle for the node `last_seen_at` stamping in the
     /// WS connect/disconnect paths. See `GatewaySharedState::security_store`.
     security_store: Option<Arc<crate::gateway::security::SecurityStore>>,
@@ -354,6 +360,7 @@ impl GatewayServer {
             openai_api_token: None,
             admin_router: None,
             shared_token_mgr: None,
+            device_token_mgr: None,
             security_store: None,
             reverse_rpc: Arc::new(RwLock::new(HashMap::new())),
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
@@ -404,6 +411,7 @@ impl GatewayServer {
             openai_api_token: None,
             admin_router: None,
             shared_token_mgr: None,
+            device_token_mgr: None,
             security_store: None,
             reverse_rpc: Arc::new(RwLock::new(HashMap::new())),
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
@@ -457,6 +465,15 @@ impl GatewayServer {
         self.shared_token_mgr = Some(manager);
     }
 
+    /// Install the `DeviceTokenManager` for bootstrap-ticket / per-device-token
+    /// authentication in the WebSocket `connect` handshake.
+    pub fn set_device_token_manager(
+        &mut self,
+        manager: Arc<crate::gateway::security::DeviceTokenManager>,
+    ) {
+        self.device_token_mgr = Some(manager);
+    }
+
     /// Install the `SecurityStore` so the WS node connect/disconnect paths
     /// can stamp enrolled-node `last_seen_at` (offline fleet view honesty).
     pub fn set_security_store(&mut self, store: Arc<crate::gateway::security::SecurityStore>) {
@@ -505,6 +522,7 @@ impl GatewayServer {
             idle_timeout_secs: self.config.idle_timeout_secs,
             require_idempotency_key: self.config.require_idempotency_key,
             shared_token_mgr: self.shared_token_mgr.clone(),
+            device_token_mgr: self.device_token_mgr.clone(),
             security_store: self.security_store.clone(),
             middleware_chain,
             origin_policy: Arc::new(if self.config.allow_any_origin {
@@ -519,7 +537,11 @@ impl GatewayServer {
             exec_approval_manager: self.exec_approval_manager.clone(),
         });
 
-        let control_plane = create_control_plane_router();
+        // Strip query strings from the Panel/control-plane fallback before any
+        // static-file or SPA handler sees the request. This prevents bootstrap
+        // tickets, legacy tokens, or device tokens from appearing in server logs
+        // or error traces even if a future tracing layer is enabled.
+        let control_plane = create_control_plane_router().layer(super::middleware::RedactQueryLayer::new());
 
         // OpenAI-compatible API routes (/v1/models, /v1/health, /v1/chat/completions)
         let openai_state = Arc::new(OpenAiApiState {

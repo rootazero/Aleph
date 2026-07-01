@@ -19,6 +19,7 @@ use rusqlite::{Connection, Result as SqliteResult};
 use std::path::Path;
 use tracing::{debug, info};
 
+mod bootstrap_tickets;
 mod devices;
 mod senders;
 mod tokens;
@@ -28,9 +29,10 @@ mod types;
 mod tests;
 
 pub use types::*;
+pub use bootstrap_tickets::{BootstrapTicketError, ConsumedBootstrapTicket};
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 10;
+const SCHEMA_VERSION: i32 = 11;
 
 /// Unified security storage backed by `SQLite`
 pub struct SecurityStore {
@@ -198,6 +200,19 @@ impl SecurityStore {
             conn.execute_batch(SCHEMA_V10)?;
             drop(conn);
             self.set_schema_version(10)?;
+        }
+
+        if version < 11 {
+            info!(
+                from = version,
+                to = 11,
+                "Migrating security schema to v11 (bootstrap tickets for panel pairing)"
+            );
+
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute_batch(SCHEMA_V11)?;
+            drop(conn);
+            self.set_schema_version(11)?;
         }
 
         // Final safety: ensure version is at latest
@@ -418,4 +433,20 @@ CREATE TABLE pairing_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_pairing_code ON pairing_requests(code);
 CREATE INDEX IF NOT EXISTS idx_pairing_expires ON pairing_requests(expires_at);
+"#;
+
+/// Schema v11 SQL — bootstrap tickets for remote Panel pairing.
+///
+/// One-time, short-lived codes exchanged for a per-device token during the
+/// WebSocket `connect` handshake. Keeps long-lived shared tokens out of URLs.
+const SCHEMA_V11: &str = r#"
+CREATE TABLE IF NOT EXISTS bootstrap_tickets (
+    code                    TEXT PRIMARY KEY,
+    created_at              INTEGER NOT NULL,
+    expires_at              INTEGER NOT NULL,
+    consumed_at             INTEGER,
+    consumed_by_device_id   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_bootstrap_expires ON bootstrap_tickets(expires_at);
+CREATE INDEX IF NOT EXISTS idx_bootstrap_consumed ON bootstrap_tickets(consumed_at);
 "#;

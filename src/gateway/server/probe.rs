@@ -93,6 +93,7 @@ mod tests {
             idle_timeout_secs: 90,
             require_idempotency_key: false,
             shared_token_mgr: None,
+            device_token_mgr: None,
             security_store: None,
             middleware_chain: MiddlewareChain::new(handlers, rate_limiter),
             origin_policy: Arc::new(crate::gateway::origin_policy::OriginPolicy::loopback_only()),
