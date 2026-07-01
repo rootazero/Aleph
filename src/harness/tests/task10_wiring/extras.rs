@@ -279,6 +279,74 @@ impl AiProvider for CapGraceProvider {
     }
 }
 
+/// Which way the boundary grace call misbehaves — used to exercise
+/// `fire_grace_turn`'s shared `race_llm_call` robustness from the surviving
+/// `max_iterations` trigger (the budget trigger that used to reach it was removed).
+#[derive(Clone, Copy)]
+enum GraceCallOutcome {
+    /// Return a provider error on the grace call (LLM-error fail-soft path).
+    Fail,
+    /// Hang forever on the grace call (turn-timeout abort path).
+    Hang,
+}
+
+/// Emits `tool_call_turns` tool-call turns (no text) to exhaust the
+/// `max_iterations` cap, then fails or hangs on the boundary grace call.
+struct CapGraceRobustnessProvider {
+    calls: AtomicUsize,
+    tool_call_turns: usize,
+    grace_outcome: GraceCallOutcome,
+}
+
+impl CapGraceRobustnessProvider {
+    fn new(tool_call_turns: usize, grace_outcome: GraceCallOutcome) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            tool_call_turns,
+            grace_outcome,
+        })
+    }
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl AiProvider for CapGraceRobustnessProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n < self.tool_call_turns {
+                return Ok(ProviderResponse {
+                    tool_calls: vec![NativeToolCall {
+                        thought_signature: None,
+                        id: format!("call-{n}"),
+                        name: "noop_tool".to_string(),
+                        arguments: serde_json::json!({}),
+                    }],
+                    stop_reason: StopReason::ToolUse,
+                    ..Default::default()
+                });
+            }
+            match self.grace_outcome {
+                GraceCallOutcome::Fail => Err(crate::error::AlephError::provider("grace fail")),
+                GraceCallOutcome::Hang => {
+                    std::future::pending::<()>().await;
+                    unreachable!("pending future never resolves")
+                }
+            }
+        })
+    }
+    fn name(&self) -> &str {
+        "cap-grace-robustness"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
 /// Returns an all-empty response (no text, no tool_calls, no thinking) for
 /// the first `empty_calls` calls, then text-only "recovered". Drives the
 /// empty-response retry guard (H3).
@@ -424,6 +492,73 @@ async fn max_iterations_cap_fires_grace_turn_for_terminal_text() {
     assert!(
         grace_text_present,
         "grace turn text must be persisted; got: {events:#?}",
+    );
+}
+
+// =============================================================================
+// Re-homed from the removed budget→FinalReply trigger: a boundary grace call
+// whose LLM errors must fail-soft — the harness still completes cleanly with
+// hit_limit set and leaves no partial assistant event. Exercises the same
+// `fire_grace_turn` → `race_llm_call` error path that budget pressure used to reach.
+// =============================================================================
+#[tokio::test]
+async fn boundary_grace_turn_failsoft_on_llm_error() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do work")]);
+    // 1 tool-call turn exhausts the cap → the grace turn is provider call #2, which fails.
+    let provider = CapGraceRobustnessProvider::new(1, GraceCallOutcome::Fail);
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider.clone(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: Some(1),
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let cancel = CancellationToken::new();
+    harness
+        .run(&sample_session_id(), &mut NoopHarnessCallback, &cancel)
+        .await
+        .expect("grace turn LLM failure must NOT bubble out of run");
+
+    assert!(harness.hit_limit(), "max_iterations cap must set hit_limit");
+    assert_eq!(
+        harness.terminate_reason(),
+        crate::orchestrator::dispatch::TerminateReason::HitMaxIterations { used: 1 },
+    );
+    assert_eq!(
+        provider.call_count(),
+        2,
+        "1 capped tool-call turn + 1 (failing) grace turn = 2 provider calls",
+    );
+    // The failing grace call must not leave a partial assistant event on the log.
+    let events = session.snapshot().await;
+    let assistant_count = events
+        .iter()
+        .filter(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
+        .count();
+    assert_eq!(
+        assistant_count, 0,
+        "a grace-call LLM error must not persist a partial assistant event",
     );
 }
 
@@ -586,22 +721,23 @@ async fn tool_memo_does_not_span_turns() {
 }
 
 // =============================================================================
-// M9 — the grace turn races cancel + turn-timeout; a hung provider on the
-// grace call must not hang the harness.
+// Re-homed from the removed budget→FinalReply trigger: a boundary grace call
+// that hangs must abort on the turn-timeout, not hang the harness. Exercises the
+// same `fire_grace_turn` → `race_llm_call` timeout path budget pressure used to reach.
 // =============================================================================
 #[tokio::test]
-async fn grace_turn_times_out_instead_of_hanging() {
-    let user_text = "x".repeat(100);
-    let session = MockSession::new(vec![turn_started_event(), user_message_event(&user_text)]);
-    let budget = ContextBudget::new(&tiny_budget_config(10, 0.40, 0.50));
+async fn boundary_grace_turn_times_out_instead_of_hanging() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do work")]);
+    // 1 tool-call turn exhausts the cap → the grace turn is provider call #2, which hangs.
+    let provider = CapGraceRobustnessProvider::new(1, GraceCallOutcome::Hang);
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
         sandbox: MockSandbox::new(noop_sandbox_output()),
-        llm: Arc::new(super::super::stability::HangingProvider) as Arc<dyn AiProvider>,
+        llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
-        context_budget: Some(Arc::new(AsyncMutex::new(budget))),
+        context_budget: None,
         context_compactor: None,
         preflight_pipeline: None,
         trace_sink: None,
@@ -609,7 +745,7 @@ async fn grace_turn_times_out_instead_of_hanging() {
         system_prompt_parts: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
-        max_iterations: None,
+        max_iterations: Some(1),
         power: None,
         stall_config: None,
         consecutive_failure_cap: None,
@@ -622,17 +758,27 @@ async fn grace_turn_times_out_instead_of_hanging() {
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
+    let cancel = CancellationToken::new();
     let started = std::time::Instant::now();
-    let state = harness
-        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+    harness
+        .run(&sample_session_id(), &mut NoopHarnessCallback, &cancel)
         .await
-        .expect("grace turn timeout must not bubble out of run_turn");
+        .expect("a hung grace turn must not bubble out of run");
     let elapsed = started.elapsed();
-    assert_eq!(state, TurnState::Done);
-    assert!(harness.hit_limit());
+
+    assert!(harness.hit_limit(), "max_iterations cap must set hit_limit");
+    assert_eq!(
+        harness.terminate_reason(),
+        crate::orchestrator::dispatch::TerminateReason::HitMaxIterations { used: 1 },
+    );
+    assert_eq!(
+        provider.call_count(),
+        2,
+        "1 capped tool-call turn + 1 (hanging) grace turn = 2 provider calls",
+    );
     assert!(
         elapsed < std::time::Duration::from_secs(2),
-        "grace turn must abort on the 20ms turn-timeout, not hang; took {elapsed:?}",
+        "the hung grace call must abort on the 20ms turn-timeout, not hang; took {elapsed:?}",
     );
 }
 
