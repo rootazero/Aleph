@@ -140,7 +140,20 @@ pub fn apply_staged_update(app: &AppHandle) {
                 return;
             }
         };
-        match update.download_and_install(|_, _| {}, || {}).await {
+        // Download first while the daemon is still running; the installer will
+        // try to overwrite aleph-server.exe, which Windows locks while it is
+        // executing. We stop the daemon only once the package is local so the
+        // service interruption is as short as possible.
+        let bytes = match update.download(|_, _| {}, || {}).await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!("update download failed: {e}");
+                notify(&app, "Update failed", "Could not download the update.");
+                return;
+            }
+        };
+        stop_daemon_for_update().await;
+        match update.install(&bytes) {
             Ok(()) => {
                 tracing::info!("update installed — restarting");
                 app.restart();
@@ -152,6 +165,17 @@ pub fn apply_staged_update(app: &AppHandle) {
         }
     });
 }
+
+/// Stop the bundled `aleph-server` so the installer can replace its binary.
+#[cfg(feature = "embedded-core")]
+async fn stop_daemon_for_update() {
+    crate::daemon::stop_daemon();
+    crate::daemon::wait_until_port_closed().await;
+}
+
+/// Panel-only shells have no bundled daemon to stop.
+#[cfg(not(feature = "embedded-core"))]
+async fn stop_daemon_for_update() {}
 
 /// Whether a check announces a no-update / failure outcome to the user.
 #[derive(Clone, Copy)]
