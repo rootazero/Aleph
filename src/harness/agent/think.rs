@@ -569,6 +569,22 @@ impl AgentHarness {
             }
         }
 
+        // 2c-fit. `CompactToFit` directive — critical pressure (or a split cap
+        // reached). Compact aggressively down to the model's window, then FALL
+        // THROUGH to the normal LLM call. A run must never end just because
+        // context filled (never-break guarantee). R10-safe: mechanical dispatch
+        // to the external fit helper; no policy, no completion judgement.
+        if matches!(budget_directive, Some(LoopDirective::CompactToFit)) {
+            self.compact_to_fit_in_place(
+                session_id,
+                &mut messages,
+                system_prompt,
+                budget_tool_tokens,
+            )
+            .await;
+            // no early return — control falls through to the LLM call below.
+        }
+
         // 2c-split. `SplitSession` directive — attempt compaction-driven session
         // split. On success, return `TurnState::Continue` with the child session
         // id so `run()` can rebind `current_session`. On failure or when the
@@ -624,24 +640,25 @@ impl AgentHarness {
                     split_child: Some(child),
                 });
             }
-            // Fail-soft: behave like the FinalReply branch.
-            self.hit_limit.store(true, Ordering::Relaxed);
-            self.set_terminate_reason(
-                crate::orchestrator::dispatch::TerminateReason::ContextBudgetExhausted,
-            );
-            self.fire_grace_turn(
+            // Fail-soft: registrar/compactor unavailable or the split failed.
+            // Rather than hard-stop (the old ContextBudgetExhausted + grace),
+            // compact to fit and FALL THROUGH to the normal LLM call — the
+            // never-break guarantee. R10-safe: same mechanical fit helper as the
+            // `CompactToFit` arm; no policy, no error-recovery strategy choice.
+            self.compact_to_fit_in_place(
                 session_id,
-                &events,
-                &messages,
-                callback,
-                iterations,
-                GraceReason::Budget,
-                parent_cancel,
+                &mut messages,
+                system_prompt,
+                budget_tool_tokens,
             )
             .await;
-            return Ok(TurnStep::done());
+            // no early return — control falls through to the LLM call below.
         }
 
+        // NOTE (never-break, 2026-07): `before_turn` no longer returns `FinalReply`
+        // (critical pressure now returns `CompactToFit`). This arm is retained as a
+        // defensive no-op for any future directive producer and is flagged for the
+        // final whole-branch review as a zero-producer removal candidate.
         // 2d. `FinalReply` directive — record hit_limit and short-circuit to
         // Done. Hermes-inspired grace turn: if the most recent assistant
         // turn ended without text (unresolved tool_use, or no assistant
@@ -1640,6 +1657,35 @@ impl AgentHarness {
             started,
         )
         .await
+    }
+
+    /// Compact the in-flight prompt down to fit the model's context window, then
+    /// return so the caller can fall through to the normal LLM call. Shared by the
+    /// `CompactToFit` directive and the `SplitSession` fail-soft path — both must
+    /// reduce pressure and continue, never hard-stop (the never-break guarantee).
+    /// R10-safe: mechanical delegation to `context::compact::fit::compact_to_fit`
+    /// (lives outside the harness); no policy, no error-recovery strategy choice.
+    async fn compact_to_fit_in_place(
+        &self,
+        session_id: &SessionId,
+        messages: &mut Vec<UnifiedMessage>,
+        system_prompt: &str,
+        budget_tool_tokens: usize,
+    ) {
+        let Some(budget) = self.deps.context_budget.as_ref() else {
+            return;
+        };
+        let guard = budget.lock().await;
+        let session_key_str = session_id.to_key_string();
+        crate::context::compact::fit::compact_to_fit(
+            self.deps.context_compactor.as_deref(),
+            &guard,
+            messages,
+            system_prompt,
+            budget_tool_tokens,
+            Some(session_key_str.as_str()),
+        )
+        .await;
     }
 
     /// Fire one tool-less LLM call so the user gets a terminal text
