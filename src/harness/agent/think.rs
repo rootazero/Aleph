@@ -1774,7 +1774,7 @@ impl AgentHarness {
         let Some(budget) = self.deps.context_budget.as_ref() else {
             return;
         };
-        let guard = budget.lock().await;
+        let mut guard = budget.lock().await;
         let session_key_str = session_id.to_key_string();
         crate::context::compact::fit::compact_to_fit(
             self.deps.context_compactor.as_deref(),
@@ -1785,6 +1785,14 @@ impl AgentHarness {
             Some(session_key_str.as_str()),
         )
         .await;
+        // Refresh `last_pressure` to the fitted prompt so a later
+        // `observe_actual_usage` calibration divides the real (post-fit)
+        // prompt_tokens by the post-fit estimate — not the stale pre-fit snapshot
+        // `before_turn` took. Mirrors the `CompactAndContinue` path's
+        // `note_compaction_effect` call and the reactive path's 3a refresh;
+        // omitting it injects a spurious shrink into the tokenizer-ratio EWMA that
+        // degrades every later compaction decision this run.
+        guard.note_compaction_effect(messages.as_slice(), system_prompt, budget_tool_tokens);
     }
 
     /// Fire one tool-less LLM call so the user gets a terminal text
