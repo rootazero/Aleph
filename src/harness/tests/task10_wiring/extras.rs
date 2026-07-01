@@ -153,10 +153,13 @@ async fn split_session_directive_continues_run_in_child_session() {
 }
 
 // =============================================================================
-// Test — SplitSession fail-soft: registrar error → fall back to FinalReply.
+// Test — SplitSession fail-soft: registrar error → compact to fit and CONTINUE
+// (never-break). The old hard-stop (hit_limit + ContextBudgetExhausted + grace)
+// was removed; the fail-soft path now compacts in place and falls through to the
+// normal LLM call, so the run finishes with a real answer, not a hard stop.
 // =============================================================================
 #[tokio::test]
-async fn split_session_failsoft_falls_back_to_final_reply() {
+async fn split_session_failsoft_compacts_and_continues() {
     // Same budget config as above — trips SplitSession on first warning turn.
     let user_text = "y".repeat(80);
     let session = MockSession::new(vec![turn_started_event(), user_message_event(&user_text)]);
@@ -213,11 +216,23 @@ async fn split_session_failsoft_falls_back_to_final_reply() {
         .await
         .expect("run must complete Ok even when split fails");
 
+    // Never-break: a failed split must NOT hard-stop. The fail-soft path compacts
+    // to fit and falls through to the normal LLM call, which produces the answer.
     assert!(
-        harness.hit_limit(),
-        "FinalReply fallback path must set hit_limit",
+        !harness.hit_limit(),
+        "split fail-soft must compact and continue, never set hit_limit",
     );
-    // No split → final session is same as parent (epoch unchanged).
+    assert_ne!(
+        harness.terminate_reason(),
+        crate::orchestrator::dispatch::TerminateReason::ContextBudgetExhausted,
+        "a failed split must never terminate the run on context budget",
+    );
+    assert_eq!(
+        provider.call_count(),
+        1,
+        "the run must continue into exactly one normal LLM call after the failed split",
+    );
+    // No split happened → final session is same as parent (epoch unchanged).
     let final_id = harness.final_session_id();
     let parent = sample_session_id();
     assert!(
@@ -550,15 +565,17 @@ async fn boundary_grace_turn_failsoft_on_llm_error() {
         2,
         "1 capped tool-call turn + 1 (failing) grace turn = 2 provider calls",
     );
-    // The failing grace call must not leave a partial assistant event on the log.
+    // The failing grace call must not persist any terminal text — the user gets
+    // no salvaged answer. (The capped tool-call turn legitimately emits one
+    // text-less AssistantMessage carrying its tool_use; the grace failure adds none.)
     let events = session.snapshot().await;
-    let assistant_count = events
-        .iter()
-        .filter(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
-        .count();
-    assert_eq!(
-        assistant_count, 0,
-        "a grace-call LLM error must not persist a partial assistant event",
+    let terminal_text_present = events.iter().any(|r| {
+        matches!(&r.event,
+            SessionEvent::AssistantMessage { content, .. } if !content.text.trim().is_empty())
+    });
+    assert!(
+        !terminal_text_present,
+        "a grace-call LLM error must not persist terminal text; got: {events:#?}",
     );
 }
 
