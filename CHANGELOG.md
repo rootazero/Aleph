@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [26.7.1]
+
+A harness-reliability and polish release. The headline is a **context
+"never-break" guarantee** — the agent loop now always compacts and continues
+instead of ever cutting a turn short — alongside a **real, reload-proof
+context-usage gauge**, **launch-at-login landing on all three product forms**,
+and a flattened, collapsible redesign of tool calls in the chat stream.
+
+### Added
+
+- **Context "never-break" guarantee** — pressure situations that previously
+  could end a turn early via `FinalReply` (critical/strict budget breaches,
+  exhausted reactive-compaction retries, split-session fail-soft) now always
+  route through `compact_to_fit` and continue instead. Adds a deterministic
+  `truncate_to_fit` floor as a last resort — hardened against orphaned
+  `tool_result` messages — so a turn can never silently stop mid-session.
+- **Real per-model context-usage gauge that survives reloads** — the chat
+  context-usage percentage is computed core-side (honoring any
+  `context_window` config override) and persisted on the assistant message
+  itself, so it survives tab switches and history reloads instead of
+  resetting. Brand-new sessions show an `≈N%` estimate from a local budget
+  dry-run (zero LLM calls) that self-corrects to the real figure after the
+  first turn.
+- **Launch-at-login lands on all three product forms** — the full desktop App
+  and the lite Panel shell both get a working "Launch at Login" toggle
+  (Settings → General / tray menu), and the standalone `aleph-server` gets a
+  new `service` subcommand plus an installer default so it starts as a system
+  service (launchd / systemd-user / Task Scheduler) out of the box.
+- **Flattened, collapsible chat tool-call display** — tool calls and results
+  in the chat stream now render as a compact, single-changing-line step strip
+  while running (`✓N steps` once done), with a full-detail side panel for
+  anything that overflows instead of nested `<details>`/JSON-tree widgets.
+- **`system.open_path` desktop capability** — a new cross-platform primitive
+  to open a file or URL with the OS's default handler (`open` / `xdg-open` /
+  `start`), so the agent can hand the user a document it just wrote instead of
+  failing to find a way to open it.
+- **Broader runtime-detection coverage** — install-dir probing now also
+  checks Homebrew's `rustup` keg, MacPorts, asdf shims, and Nix profile paths
+  (macOS/Linux), plus extended Windows search paths for `node` /
+  `playwright-cli`; the agent is now told not to re-verify paths the probe
+  already confirmed.
+
 ### Fixed
 
 - **Standalone server self-update on Linux** — the installer now downloads the
@@ -16,6 +58,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Linux — which is exactly what `aleph-server update` does when it re-runs the
   installer to replace itself — so in-place updates of a running server now
   succeed. (Also back-ported to the `install.sh` asset on the v26.6.29 release.)
+- **Launch-at-login toggle never appeared in the full desktop App** — the
+  panel was calling app-level Tauri commands that can't be authorized from a
+  detached/remote origin; switched to the `tauri-plugin-autostart` plugin
+  commands (with the matching capability grant), which work from any origin.
+- **Updater signing key rotated** — the previous Tauri update-signing keypair
+  was unusable, breaking in-app auto-updates on both product forms; a new
+  keypair is now wired through CI and both product forms.
+- Cross-platform session-directory naming is healed on read in the file
+  backend, and chat-sidebar async reads now guard against a disposed signal,
+  fixing intermittent panics/no-ops when switching sessions quickly.
 
 ## [26.6.29]
 
