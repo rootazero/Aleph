@@ -46,18 +46,10 @@ impl crate::providers::DeltaSink for CallbackSink<'_> {
     }
 }
 
-/// Ephemeral nudge appended on the grace turn when the budget hits
-/// critical — the single tool-less LLM call given when
-/// `LoopDirective::FinalReply` fires and the prior assistant turn ended
-/// on an unresolved `tool_use`. Tools are also stripped at the request
-/// layer (no `.with_tools(...)`), so the model cannot loop further.
-const GRACE_NUDGE_BUDGET: &str = "You are out of context budget and cannot call any more tools. \
-     Respond now with a final summary for the user based on what you have so far.";
-
 /// Ephemeral nudge for the grace turn fired by
-/// `LoopDirective::StopDiminishing` — same shape as
-/// `GRACE_NUDGE_BUDGET` but framed around lack of measurable progress
-/// rather than budget exhaustion.
+/// `LoopDirective::StopDiminishing` — a single tool-less LLM call framed
+/// around lack of measurable progress. Tools are also stripped at the
+/// request layer (no `.with_tools(...)`), so the model cannot loop further.
 const GRACE_NUDGE_DIMINISHING: &str = "You have not been making measurable progress on this task. \
      Stop calling tools and summarize what you have found so far for the user.";
 
@@ -167,8 +159,6 @@ const MAX_OUTPUT_TOKENS_RESUME_NUDGE: &str =
 /// the call path is identical.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GraceReason {
-    /// `LoopDirective::FinalReply` — context-budget critical.
-    Budget,
     /// `LoopDirective::StopDiminishing` — diminishing-returns detector trip.
     Diminishing,
     /// `max_iterations` cap reached in the outer loop.
@@ -188,7 +178,6 @@ pub(crate) enum GraceReason {
 impl GraceReason {
     const fn nudge(self) -> &'static str {
         match self {
-            Self::Budget => GRACE_NUDGE_BUDGET,
             Self::Diminishing => GRACE_NUDGE_DIMINISHING,
             Self::MaxIterations => GRACE_NUDGE_MAX_ITERATIONS,
             Self::VerifierVeto => GRACE_NUDGE_VERIFIER_VETO,
@@ -580,6 +569,7 @@ impl AgentHarness {
                 &mut messages,
                 system_prompt,
                 budget_tool_tokens,
+                true,
             )
             .await;
             // no early return — control falls through to the LLM call below.
@@ -650,41 +640,10 @@ impl AgentHarness {
                 &mut messages,
                 system_prompt,
                 budget_tool_tokens,
+                true,
             )
             .await;
             // no early return — control falls through to the LLM call below.
-        }
-
-        // NOTE (never-break, 2026-07): `before_turn` no longer returns `FinalReply`
-        // (critical pressure now returns `CompactToFit`). This arm is retained as a
-        // defensive no-op for any future directive producer and is flagged for the
-        // final whole-branch review as a zero-producer removal candidate.
-        // 2d. `FinalReply` directive — record hit_limit and short-circuit to
-        // Done. Hermes-inspired grace turn: if the most recent assistant
-        // turn ended without text (unresolved tool_use, or no assistant
-        // turn yet), issue exactly one tool-less LLM call so the user
-        // gets a terminal text response instead of a mid-thought hang.
-        // Tools are stripped both via `.with_tools(None)` (implicit by
-        // omitting the call) and via the grace nudge message, so the LLM
-        // cannot recurse. Fail-soft: any error falls through silently.
-        // R10-safe: one extra LLM call gated by an existing directive,
-        // no new policy, no state machine.
-        if matches!(budget_directive, Some(LoopDirective::FinalReply)) {
-            self.hit_limit.store(true, Ordering::Relaxed);
-            self.set_terminate_reason(
-                crate::orchestrator::dispatch::TerminateReason::ContextBudgetExhausted,
-            );
-            self.fire_grace_turn(
-                session_id,
-                &events,
-                &messages,
-                callback,
-                iterations,
-                GraceReason::Budget,
-                parent_cancel,
-            )
-            .await;
-            return Ok(TurnStep::done());
         }
 
         // 2d-G1. Last-step soft hint (opencode parity). When the iteration
@@ -1582,10 +1541,35 @@ impl AgentHarness {
                 Ok(resp)
             }
             Err(retry_err) => {
+                // I1: if the retry ALSO failed with a context-overflow error (the
+                // OpenAI-compatible-proxy shape that surfaces overflow as an `Err`
+                // rather than a `ContextWindowExceeded` stop_reason), the LLM
+                // summary alone wasn't enough — fall back to the deterministic
+                // floor + one more retry before giving up (never-break). Only a
+                // genuine non-context error surfaces immediately. Loop-safe:
+                // `reactive_fit_and_retry` floors once and retries once, never
+                // returning `Ok(overflow)`, so the caller's drain loop terminates.
+                if matches!(
+                    classify(&retry_err.to_string()),
+                    RetryVerdict::CompactAndRetry { .. }
+                ) {
+                    return self
+                        .reactive_fit_and_retry(
+                            retry_err,
+                            session_id,
+                            messages,
+                            tools_ref,
+                            budget_tool_tokens,
+                            parent_cancel,
+                            started,
+                            token_gap,
+                        )
+                        .await;
+                }
                 tracing::warn!(
                     ?session_id,
                     error = %retry_err,
-                    "reactive-compaction retry still failed; surfacing retry error",
+                    "reactive-compaction retry failed with a non-context error; surfacing",
                 );
                 self.emit(
                     || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
@@ -1601,11 +1585,12 @@ impl AgentHarness {
         }
     }
 
-    /// Reactive-overflow fallback: compact the in-flight prompt to fit the model
-    /// window (`compact_to_fit_in_place`: LLM compact if wired + deterministic
-    /// floor), then retry the provider ONCE. Replaces the old
-    /// `ReactiveCompactExhausted` hard-stops at the no-compactor / cap-exhausted /
-    /// compact-failed exits — a full context window must not end the run. Only a
+    /// Reactive-overflow fallback: floor the in-flight prompt to fit the model
+    /// window DETERMINISTICALLY (`compact_to_fit_in_place` with
+    /// `use_llm_compactor: false` — the LLM summariser was already tried on the
+    /// main path), then retry the provider ONCE. Backs the no-compactor /
+    /// cap-exhausted / compact-failed exits AND the still-overflow retry error
+    /// (I1) — a full context window must not end the run. Only a
     /// non-overflow response is success; a still-overflowing OR erroring retry
     /// surfaces honestly (the truncated prompt didn't fit ⇒ pathological config,
     /// not "context full", which the floor already resolved). Loop-safe: never
@@ -1623,9 +1608,12 @@ impl AgentHarness {
         started: std::time::Instant,
         token_gap: Option<usize>,
     ) -> Result<ProviderResponse, HarnessError> {
-        // 1. Compact to fit (LLM compact if wired + deterministic floor).
+        // 1. Compact to fit — DETERMINISTIC floor only (`use_llm_compactor: false`).
+        // The LLM summariser was already attempted on the main reactive path
+        // before we got here, so re-running it would waste a call and soften the
+        // reactive rescue cap; the floor alone guarantees fit.
         let system_prompt = self.deps.system_prompt.as_deref().unwrap_or("");
-        self.compact_to_fit_in_place(session_id, messages, system_prompt, budget_tool_tokens)
+        self.compact_to_fit_in_place(session_id, messages, system_prompt, budget_tool_tokens, false)
             .await;
 
         // 2. Retry the provider once with the fitted prompt.
@@ -1770,14 +1758,24 @@ impl AgentHarness {
         messages: &mut Vec<UnifiedMessage>,
         system_prompt: &str,
         budget_tool_tokens: usize,
+        use_llm_compactor: bool,
     ) {
         let Some(budget) = self.deps.context_budget.as_ref() else {
             return;
         };
         let mut guard = budget.lock().await;
         let session_key_str = session_id.to_key_string();
+        // Reactive fallback passes `false`: the LLM summariser was already tried
+        // on the main path (and the reactive rescue cap governs it), so re-invoking
+        // it here wastes a call and softens the cap. Proactive callers pass `true`
+        // for a full compact (LLM summary → floor).
+        let compactor = if use_llm_compactor {
+            self.deps.context_compactor.as_deref()
+        } else {
+            None
+        };
         crate::context::compact::fit::compact_to_fit(
-            self.deps.context_compactor.as_deref(),
+            compactor,
             &guard,
             messages,
             system_prompt,
@@ -2111,18 +2109,8 @@ mod tests {
     }
 
     #[test]
-    fn grace_reason_budget_uses_budget_nudge() {
-        assert_eq!(GraceReason::Budget.nudge(), GRACE_NUDGE_BUDGET);
-    }
-
-    #[test]
     fn grace_reason_diminishing_uses_diminishing_nudge() {
         assert_eq!(GraceReason::Diminishing.nudge(), GRACE_NUDGE_DIMINISHING);
-    }
-
-    #[test]
-    fn grace_nudge_budget_and_diminishing_are_distinct_strings() {
-        assert_ne!(GRACE_NUDGE_BUDGET, GRACE_NUDGE_DIMINISHING);
     }
 
     #[test]

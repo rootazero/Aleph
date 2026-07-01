@@ -36,8 +36,9 @@ const OVERHEAD_WARNING_RATIO: f64 = 0.30;
 const OVERHEAD_CRITICAL_RATIO: f64 = 0.50;
 /// Minimum pressure drop (fraction of budget) for a compaction to count as
 /// "effective" and re-arm the circuit breaker. Below this the breaker keeps
-/// its count, so a run of ineffective compactions still escalates to
-/// `FinalReply` — the anti-thrash safety stop borrowed from hermes.
+/// its count, so a run of ineffective compactions still escalates to a session
+/// split (and, once splits are exhausted, `CompactToFit`) — the anti-thrash
+/// safety path borrowed from hermes, but never a hard stop.
 const COMPACTION_EFFECTIVE_DROP: f64 = 0.05;
 /// EWMA weight on the newest observation when smoothing the calibration factor.
 /// Low enough to ride through transient noise (cache swings, recovery resends),
@@ -149,8 +150,6 @@ pub enum LoopDirective {
     Continue,
     /// Context exceeds warning threshold — compact tool results before the next LLM call.
     CompactAndContinue,
-    /// Context is critically full — force compaction, inject a system notice, skip tools.
-    FinalReply,
     /// Context is critically full — compact aggressively until it fits
     /// (LLM summary → deterministic truncation floor) and CONTINUE. Replaces
     /// the old `FinalReply` hard-stop on the pressure path so a run can never

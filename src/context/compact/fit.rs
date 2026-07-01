@@ -47,12 +47,14 @@ pub fn truncate_to_fit(
     before.saturating_sub(estimate_total(messages, prose_ratio))
 }
 
-/// Guarantee the working message list fits under the budget's critical line,
-/// compacting as gently as possible: (1) try the LLM compactor if wired,
+/// Shrink the working message list toward fitting under the budget's critical
+/// line, compacting as gently as possible: (1) try the LLM compactor if wired,
 /// (2) re-measure, (3) if still critical, apply the deterministic
-/// `truncate_to_fit` floor. Post-condition: the returned message list's
-/// pressure ratio is below `critical_threshold`. Never returns an error and
-/// never hard-stops — this IS the never-break guarantee's mechanism.
+/// `truncate_to_fit` floor. Post-condition: the returned list's pressure ratio
+/// is below `critical_threshold` UNLESS the protected fresh tail plus the fixed
+/// overhead (system prompt + tool schemas) alone already meet/exceed the budget
+/// — the Plan-1b pathological case, where the caller continues anyway. Never
+/// returns an error and never hard-stops — this IS the never-break mechanism.
 pub async fn compact_to_fit(
     compactor: Option<&ContextCompactor>,
     budget: &ContextBudget,

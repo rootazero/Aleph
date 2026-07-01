@@ -273,6 +273,51 @@ impl AiProvider for StubCompactorProvider {
     }
 }
 
+/// Returns `prompt_too_long` on the first two calls, then clean text. Drives
+/// exit #4's I1 fallback: the post-compaction retry (#2) still overflows, so it
+/// is the deterministic-floor retry (#3) that recovers.
+struct OverflowTwiceThenTextProvider {
+    calls: AtomicUsize,
+    success_text: String,
+}
+
+impl OverflowTwiceThenTextProvider {
+    fn new(success_text: &str) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            success_text: success_text.to_string(),
+        })
+    }
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl AiProvider for OverflowTwiceThenTextProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        let success = self.success_text.clone();
+        Box::pin(async move {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n < 2 {
+                Err(AlephError::provider(
+                    "prompt is too long: 250000 tokens > 200000 maximum",
+                ))
+            } else {
+                Ok(ProviderResponse::text_only(success))
+            }
+        })
+    }
+    fn name(&self) -> &str {
+        "overflow_twice_then_text"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
 /// Provider that always returns clean text (no overflow). The seeded history is
 /// compacted proactively *before* this call, so the call itself succeeds — the
 /// whole point of the never-break regression: a reloaded near-full session must
@@ -477,13 +522,12 @@ async fn rescue_succeeds_when_compactor_wired_and_retry_returns_clean() {
     assert_eq!(harness.terminate_reason(), TerminateReason::Completed);
 }
 
-/// Cap path: provider always returns `prompt_too_long`. The first rescue
-/// succeeds in mutating messages but the retry still overflows, so the
-/// helper surfaces `HarnessError::Llm` and stamps the
-/// `ReactiveCompactExhausted` terminate reason. Subsequent provider
-/// retries (e.g. inside the empty-response loop) are NOT issued because
-/// the LLM error propagates immediately. The compactor cap guarantees
-/// the helper cannot loop forever.
+/// Exhaustion path: provider ALWAYS returns `prompt_too_long`. Flow: primary
+/// call (#1) → LLM compact → retry (#2, still overflow error) → exit #4's I1
+/// fallback floors deterministically and retries once more (#3, still overflow)
+/// → surfaces `HarnessError::Llm` + `ReactiveCompactExhausted`. Bounded: floor +
+/// a single extra retry, then honest surface — the helper cannot loop forever
+/// even when nothing can shrink the prompt enough.
 #[tokio::test]
 async fn rescue_exhausts_when_retry_still_overflows() {
     let session = MockSession::new(vec![
@@ -502,13 +546,51 @@ async fn rescue_exhausts_when_retry_still_overflows() {
         result.is_err(),
         "persistent overflow should surface as error"
     );
-    // Initial call + one retry after compaction — the cap allows exactly
-    // one rescue attempt.
-    assert_eq!(llm.call_count(), 2);
+    // #1 primary + #2 post-compact retry + #3 post-floor retry (I1) = 3 calls,
+    // then honest surface. The rescue slot is still reserved exactly once (the
+    // deterministic floor fallback consumes no additional LLM-compaction slot).
+    assert_eq!(llm.call_count(), 3);
     assert_eq!(harness.reactive_compact_attempts_for_tests(), 1);
     assert_eq!(
         harness.terminate_reason(),
         TerminateReason::ReactiveCompactExhausted,
+    );
+}
+
+/// I1 recovery: the post-compaction retry ALSO overflows (error-style, as
+/// OpenAI-compatible proxies report it), so exit #4 no longer hard-stops — it
+/// floors deterministically and retries once more, which recovers. Calls: #1
+/// primary + #2 post-compact retry (overflow) + #3 post-floor retry (clean).
+#[tokio::test]
+async fn exit4_still_overflow_error_floors_and_recovers() {
+    let session = MockSession::new(vec![
+        turn_started_event(),
+        user_message_event("oversized input that still overflows after the summary"),
+    ]);
+    let llm = OverflowTwiceThenTextProvider::new("recovered after the floor");
+    let deps = build_deps(session.clone(), llm.clone(), Some(stub_compactor()));
+    let harness = AgentHarness::new(deps);
+
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("exit #4 must floor + retry, not hard-stop, when the retry still overflows");
+
+    assert_eq!(state, TurnState::Done);
+    assert_eq!(
+        llm.call_count(),
+        3,
+        "primary + post-compact retry (overflow) + post-floor retry (I1) = 3 calls",
+    );
+    assert_ne!(
+        harness.terminate_reason(),
+        TerminateReason::ReactiveCompactExhausted,
+        "a recovered exit-#4 overflow must NOT hard-stop",
+    );
+    assert_eq!(
+        harness.reactive_compact_attempts_for_tests(),
+        1,
+        "the deterministic-floor fallback consumes no additional rescue slot",
     );
 }
 

@@ -800,11 +800,13 @@ async fn boundary_grace_turn_times_out_instead_of_hanging() {
 }
 
 // =============================================================================
-// M10 — a grace turn folds its provider usage into BOTH total_tokens and the
-// per-component breakdown, keeping the documented invariant.
+// M10 — a compact-to-fit turn (critical pressure → CompactToFit → normal LLM
+// call) folds its provider usage into BOTH total_tokens and the per-component
+// breakdown, keeping the documented invariant. (Before the never-break change
+// this exercised the budget grace turn; that path no longer fires on pressure.)
 // =============================================================================
 #[tokio::test]
-async fn grace_turn_keeps_token_breakdown_in_lockstep() {
+async fn compact_to_fit_turn_keeps_token_breakdown_in_lockstep() {
     let user_text = "x".repeat(100);
     let session = MockSession::new(vec![turn_started_event(), user_message_event(&user_text)]);
     let provider = Arc::new(super::super::stability::UsageTextProvider {
@@ -847,18 +849,18 @@ async fn grace_turn_keeps_token_breakdown_in_lockstep() {
     };
     let harness = AgentHarness::new(deps);
     // TurnState is must_use; this test inspects accumulated token usage
-    // after the grace turn fires, not the returned loop-control signal.
+    // after the compact-to-fit turn's LLM call, not the loop-control signal.
     let _ = harness
         .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
         .expect("run_turn should succeed");
     let total = harness.total_tokens();
     let breakdown = harness.token_breakdown();
-    assert!(total > 0, "the grace turn must record provider usage");
+    assert!(total > 0, "the compact-to-fit turn must record provider usage");
     assert_eq!(
         breakdown.total(),
         total,
-        "grace turn breakdown.total() must stay in lockstep with total_tokens()",
+        "breakdown.total() must stay in lockstep with total_tokens()",
     );
 }
 
