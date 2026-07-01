@@ -221,7 +221,14 @@ mod tests {
         let store = store();
         seed_device(&store, "dev-1");
         store
-            .issue_device_token("dt-1", "dev-1", "hash-1", "operator", &["*".to_string()], i64::MAX)
+            .issue_device_token(
+                "dt-1",
+                "dev-1",
+                "hash-1",
+                "operator",
+                &["*".to_string()],
+                i64::MAX,
+            )
             .unwrap();
 
         let row = store.validate_device_token_hash("hash-1").unwrap();
@@ -240,7 +247,10 @@ mod tests {
             .issue_device_token("dt-exp", "dev-1", "hash-exp", "operator", &[], -1)
             .unwrap();
 
-        assert!(store.validate_device_token_hash("hash-exp").unwrap().is_none());
+        assert!(store
+            .validate_device_token_hash("hash-exp")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -251,7 +261,10 @@ mod tests {
             .issue_device_token("dt-rev", "dev-1", "hash-rev", "operator", &[], i64::MAX)
             .unwrap();
         assert!(store.revoke_device_token("dt-rev").unwrap());
-        assert!(store.validate_device_token_hash("hash-rev").unwrap().is_none());
+        assert!(store
+            .validate_device_token_hash("hash-rev")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -266,7 +279,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(store.revoke_device_tokens("dev-1").unwrap(), 2);
-        assert!(store.validate_device_token_hash("hash-a").unwrap().is_none());
-        assert!(store.validate_device_token_hash("hash-b").unwrap().is_none());
+        assert!(store
+            .validate_device_token_hash("hash-a")
+            .unwrap()
+            .is_none());
+        assert!(store
+            .validate_device_token_hash("hash-b")
+            .unwrap()
+            .is_none());
     }
 }

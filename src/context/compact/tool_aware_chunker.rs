@@ -424,8 +424,7 @@ mod tests {
         // ToolRound must be in the same chunk.
         for chunk in &chunks {
             for unit in &chunk.units {
-                if let SemanticUnit::ToolRound(round) = unit
-                {
+                if let SemanticUnit::ToolRound(round) = unit {
                     let chunk_indices = chunk.message_indices();
                     assert!(
                         chunk_indices.contains(&round.tool_use_index),

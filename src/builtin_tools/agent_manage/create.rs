@@ -294,18 +294,22 @@ impl AlephTool for AgentCreateTool {
         // initialize_agent_identity's write_if_missing keeps it.
         let display_name = args.name.as_deref().unwrap_or(&args.id);
         let soul_content = resolve_soul_content(&args, display_name);
-        tokio::fs::create_dir_all(&agent_state_dir).await.map_err(|e| {
-            crate::error::AlephError::other(format!(
-                "Failed to create agent state dir for '{}': {}",
-                args.id, e
-            ))
-        })?;
-        tokio::fs::write(agent_state_dir.join("SOUL.md"), &soul_content).await.map_err(|e| {
-            crate::error::AlephError::other(format!(
-                "Failed to write SOUL.md for '{}': {}",
-                args.id, e
-            ))
-        })?;
+        tokio::fs::create_dir_all(&agent_state_dir)
+            .await
+            .map_err(|e| {
+                crate::error::AlephError::other(format!(
+                    "Failed to create agent state dir for '{}': {}",
+                    args.id, e
+                ))
+            })?;
+        tokio::fs::write(agent_state_dir.join("SOUL.md"), &soul_content)
+            .await
+            .map_err(|e| {
+                crate::error::AlephError::other(format!(
+                    "Failed to write SOUL.md for '{}': {}",
+                    args.id, e
+                ))
+            })?;
 
         // Initialize the rest of the identity directory (AGENTS.md, MEMORY.md, …).
         // SOUL.md was already written above, so the archetype here only matters
@@ -331,12 +335,14 @@ impl AlephTool for AgentCreateTool {
         })?;
 
         // Create workspace directory for tool output
-        tokio::fs::create_dir_all(&workspace_path).await.map_err(|e| {
-            crate::error::AlephError::other(format!(
-                "Failed to create workspace for '{}': {}",
-                args.id, e
-            ))
-        })?;
+        tokio::fs::create_dir_all(&workspace_path)
+            .await
+            .map_err(|e| {
+                crate::error::AlephError::other(format!(
+                    "Failed to create workspace for '{}': {}",
+                    args.id, e
+                ))
+            })?;
 
         // 5. Write custom system_prompt to AGENTS.md if provided
         if let Some(ref prompt) = args.system_prompt {
@@ -578,4 +584,3 @@ mod tests {
         assert!(def.llm_context.is_some());
     }
 }
-

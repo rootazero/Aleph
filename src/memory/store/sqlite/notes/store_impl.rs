@@ -1568,16 +1568,10 @@ impl NoteStore for SqliteMemoryBackend {
         self.record_signals(query, channel, &recall_hits, None, namespace)
     }
 
-    async fn sources_of(
-        &self,
-        agent_id: &str,
-        note_path: &str,
-    ) -> Result<Vec<String>, AlephError> {
+    async fn sources_of(&self, agent_id: &str, note_path: &str) -> Result<Vec<String>, AlephError> {
         let conn = lock_conn!(self)?;
         let mut stmt = conn
-            .prepare(
-                "SELECT source_ref FROM notes_sources WHERE agent_id = ?1 AND note_path = ?2",
-            )
+            .prepare("SELECT source_ref FROM notes_sources WHERE agent_id = ?1 AND note_path = ?2")
             .map_err(|e| AlephError::config(format!("sources_of prepare: {e}")))?;
         let rows = stmt
             .query_map(params![agent_id, note_path], |r| r.get::<_, String>(0))
@@ -1596,9 +1590,7 @@ impl NoteStore for SqliteMemoryBackend {
     ) -> Result<Vec<String>, AlephError> {
         let conn = lock_conn!(self)?;
         let mut stmt = conn
-            .prepare(
-                "SELECT note_path FROM notes_sources WHERE agent_id = ?1 AND source_ref = ?2",
-            )
+            .prepare("SELECT note_path FROM notes_sources WHERE agent_id = ?1 AND source_ref = ?2")
             .map_err(|e| AlephError::config(format!("notes_citing prepare: {e}")))?;
         let rows = stmt
             .query_map(params![agent_id, source_ref], |r| r.get::<_, String>(0))

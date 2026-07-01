@@ -272,8 +272,7 @@ fn add_column_if_missing(
         .any(|name| name == column);
     if !exists {
         let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {type_decl}");
-        conn.execute(&sql, [])
-            .map_err(db_err)?;
+        conn.execute(&sql, []).map_err(db_err)?;
     }
     Ok(())
 }

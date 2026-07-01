@@ -49,7 +49,10 @@ impl BbDedup {
         if self.seen.len() >= self.cap {
             self.seen.pop_front();
         }
-        self.seen.push_back(Entry { id: id.to_string(), at: Instant::now() });
+        self.seen.push_back(Entry {
+            id: id.to_string(),
+            at: Instant::now(),
+        });
         false
     }
 }

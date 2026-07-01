@@ -1030,8 +1030,7 @@ where
                                 let bumped =
                                     state.clone().spent_iteration().with_next_wake_ms(None);
                                 let delay = crate::looping::pursuit::tick_delay_ms(&state, now_ms);
-                                let prompt =
-                                    crate::looping::pursuit::tick_prompt(&state, now_ms);
+                                let prompt = crate::looping::pursuit::tick_prompt(&state, now_ms);
                                 loop_reg.put(bumped);
                                 spawn_continuation_run(
                                     cont_deps.registry.clone(),

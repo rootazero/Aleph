@@ -4,11 +4,11 @@
 //! `SqliteMemoryBackend`, backed by the `routing_experiences` relational table and
 //! the `routing_exp_vec_{768,1024,1536}` sqlite-vec virtual tables.
 
+use super::vec;
+use super::SqliteMemoryBackend;
+use crate::error::AlephError;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use crate::error::AlephError;
-use super::SqliteMemoryBackend;
-use super::vec;
 
 #[derive(Debug, Clone)]
 pub struct RoutingExperienceRow {
@@ -108,11 +108,25 @@ impl SqliteMemoryBackend {
               context_window, created_at) \
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
             params![
-                row.id, row.agent_id, row.model_id, row.provider_id, row.terminate_reason,
-                row.iterations, row.tool_calls, row.tool_error_count, row.tool_call_total,
-                row.tok_input, row.tok_output, row.tok_cache_read, row.tok_cache_creation,
-                row.tok_reasoning, row.estimated_cost, row.duration_ms, row.context_tokens,
-                row.context_window, row.created_at,
+                row.id,
+                row.agent_id,
+                row.model_id,
+                row.provider_id,
+                row.terminate_reason,
+                row.iterations,
+                row.tool_calls,
+                row.tool_error_count,
+                row.tool_call_total,
+                row.tok_input,
+                row.tok_output,
+                row.tok_cache_read,
+                row.tok_cache_creation,
+                row.tok_reasoning,
+                row.estimated_cost,
+                row.duration_ms,
+                row.context_tokens,
+                row.context_window,
+                row.created_at,
             ],
         )
         .map_err(|e| AlephError::config(format!("record_routing_experience insert: {e}")))?;
@@ -160,18 +174,26 @@ impl SqliteMemoryBackend {
                 .query_map(params![blob, k_over], |row| {
                     Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
                 })
-                .map_err(|e| AlephError::config(format!("recall_routing_experience knn query: {e}")))?;
+                .map_err(|e| {
+                    AlephError::config(format!("recall_routing_experience knn query: {e}"))
+                })?;
             let mut out = Vec::new();
             for r in rows {
-                out.push(r.map_err(|e| AlephError::config(format!("recall_routing_experience knn row: {e}")))?);
+                out.push(r.map_err(|e| {
+                    AlephError::config(format!("recall_routing_experience knn row: {e}"))
+                })?);
             }
             out
         };
 
         // Step 2: rowid -> routing_exp_id filtered by agent (post-hoc isolation), then load the row.
         let mut map_stmt = conn
-            .prepare("SELECT routing_exp_id FROM routing_exp_vec_map WHERE rowid = ?1 AND agent_id = ?2")
-            .map_err(|e| AlephError::config(format!("recall_routing_experience map prepare: {e}")))?;
+            .prepare(
+                "SELECT routing_exp_id FROM routing_exp_vec_map WHERE rowid = ?1 AND agent_id = ?2",
+            )
+            .map_err(|e| {
+                AlephError::config(format!("recall_routing_experience map prepare: {e}"))
+            })?;
         let mut row_stmt = conn
             .prepare(
                 "SELECT id, agent_id, model_id, provider_id, terminate_reason, iterations, tool_calls, \
@@ -186,7 +208,9 @@ impl SqliteMemoryBackend {
             let exp_id: Option<String> = map_stmt
                 .query_row(params![rowid, agent_id], |r| r.get(0))
                 .optional()
-                .map_err(|e| AlephError::config(format!("recall_routing_experience map row: {e}")))?;
+                .map_err(|e| {
+                    AlephError::config(format!("recall_routing_experience map row: {e}"))
+                })?;
             let Some(exp_id) = exp_id else { continue };
             let neighbor = row_stmt
                 .query_row(params![exp_id], |row| {
@@ -220,7 +244,11 @@ impl SqliteMemoryBackend {
             }
         }
 
-        neighbors.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal));
+        neighbors.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         neighbors.truncate(k);
         Ok(neighbors)
     }
@@ -243,13 +271,17 @@ impl SqliteMemoryBackend {
                     "SELECT id FROM routing_experiences WHERE agent_id = ?1 \
                      ORDER BY created_at DESC LIMIT -1 OFFSET ?2",
                 )
-                .map_err(|e| AlephError::config(format!("prune_routing_experiences select: {e}")))?;
+                .map_err(|e| {
+                    AlephError::config(format!("prune_routing_experiences select: {e}"))
+                })?;
             let rows = stmt
                 .query_map(params![agent_id, cap as i64], |r| r.get::<_, String>(0))
                 .map_err(|e| AlephError::config(format!("prune_routing_experiences query: {e}")))?;
             let mut out = Vec::new();
             for r in rows {
-                out.push(r.map_err(|e| AlephError::config(format!("prune_routing_experiences row: {e}")))?);
+                out.push(r.map_err(|e| {
+                    AlephError::config(format!("prune_routing_experiences row: {e}"))
+                })?);
             }
             out
         };
@@ -264,13 +296,25 @@ impl SqliteMemoryBackend {
                 .optional()
                 .map_err(|e| AlephError::config(format!("prune_routing_experiences map: {e}")))?;
             if let Some(rowid) = rowid {
-                conn.execute(&format!("DELETE FROM {table} WHERE rowid = ?1"), params![rowid])
-                    .map_err(|e| AlephError::config(format!("prune_routing_experiences vec del: {e}")))?;
-                conn.execute("DELETE FROM routing_exp_vec_map WHERE rowid = ?1", params![rowid])
-                    .map_err(|e| AlephError::config(format!("prune_routing_experiences map del: {e}")))?;
+                conn.execute(
+                    &format!("DELETE FROM {table} WHERE rowid = ?1"),
+                    params![rowid],
+                )
+                .map_err(|e| {
+                    AlephError::config(format!("prune_routing_experiences vec del: {e}"))
+                })?;
+                conn.execute(
+                    "DELETE FROM routing_exp_vec_map WHERE rowid = ?1",
+                    params![rowid],
+                )
+                .map_err(|e| {
+                    AlephError::config(format!("prune_routing_experiences map del: {e}"))
+                })?;
             }
             conn.execute("DELETE FROM routing_experiences WHERE id = ?1", params![id])
-                .map_err(|e| AlephError::config(format!("prune_routing_experiences exp del: {e}")))?;
+                .map_err(|e| {
+                    AlephError::config(format!("prune_routing_experiences exp del: {e}"))
+                })?;
         }
         Ok(())
     }
@@ -405,23 +449,47 @@ mod tests {
     }
     fn row(id: &str, agent: &str, model: &str, created_at: i64) -> RoutingExperienceRow {
         RoutingExperienceRow {
-            id: id.into(), agent_id: agent.into(), model_id: model.into(), provider_id: "p".into(),
+            id: id.into(),
+            agent_id: agent.into(),
+            model_id: model.into(),
+            provider_id: "p".into(),
             terminate_reason: "{\"kind\":\"completed\"}".into(),
-            iterations: 0, tool_calls: 0, tool_error_count: 0, tool_call_total: 0,
-            tok_input: 0, tok_output: 0, tok_cache_read: 0, tok_cache_creation: 0, tok_reasoning: 0,
-            estimated_cost: None, duration_ms: 0, context_tokens: 0, context_window: 0, created_at,
+            iterations: 0,
+            tool_calls: 0,
+            tool_error_count: 0,
+            tool_call_total: 0,
+            tok_input: 0,
+            tok_output: 0,
+            tok_cache_read: 0,
+            tok_cache_creation: 0,
+            tok_reasoning: 0,
+            estimated_cost: None,
+            duration_ms: 0,
+            context_tokens: 0,
+            context_window: 0,
+            created_at,
         }
     }
 
     #[test]
     fn recall_orders_by_distance_and_isolates_agents() {
         let backend = temp_backend();
-        backend.record_routing_experience(&row("1", "a", "m1", 1), &emb(1.0), 768).unwrap();
-        backend.record_routing_experience(&row("2", "a", "m2", 2), &emb(2.0), 768).unwrap();
-        backend.record_routing_experience(&row("3", "a", "m3", 3), &emb(3.0), 768).unwrap();
-        backend.record_routing_experience(&row("b1", "b", "mb", 4), &emb(1.0), 768).unwrap();
+        backend
+            .record_routing_experience(&row("1", "a", "m1", 1), &emb(1.0), 768)
+            .unwrap();
+        backend
+            .record_routing_experience(&row("2", "a", "m2", 2), &emb(2.0), 768)
+            .unwrap();
+        backend
+            .record_routing_experience(&row("3", "a", "m3", 3), &emb(3.0), 768)
+            .unwrap();
+        backend
+            .record_routing_experience(&row("b1", "b", "mb", 4), &emb(1.0), 768)
+            .unwrap();
 
-        let got = backend.recall_routing_experience(&emb(0.0), 768, "a", 3).unwrap();
+        let got = backend
+            .recall_routing_experience(&emb(0.0), 768, "a", 3)
+            .unwrap();
         let models: Vec<String> = got.iter().map(|n| n.model_id.clone()).collect();
         assert_eq!(models, vec!["m1", "m2", "m3"]);
         assert!(got.iter().all(|n| n.agent_id == "a"));
@@ -431,11 +499,19 @@ mod tests {
     #[test]
     fn prune_keeps_newest_by_recency_not_distance() {
         let backend = temp_backend();
-        backend.record_routing_experience(&row("1", "a", "m1", 1), &emb(1.0), 768).unwrap(); // nearest, oldest
-        backend.record_routing_experience(&row("2", "a", "m2", 2), &emb(2.0), 768).unwrap();
-        backend.record_routing_experience(&row("3", "a", "m3", 3), &emb(3.0), 768).unwrap();
+        backend
+            .record_routing_experience(&row("1", "a", "m1", 1), &emb(1.0), 768)
+            .unwrap(); // nearest, oldest
+        backend
+            .record_routing_experience(&row("2", "a", "m2", 2), &emb(2.0), 768)
+            .unwrap();
+        backend
+            .record_routing_experience(&row("3", "a", "m3", 3), &emb(3.0), 768)
+            .unwrap();
         backend.prune_routing_experiences("a", 768, 2).unwrap();
-        let got = backend.recall_routing_experience(&emb(0.0), 768, "a", 5).unwrap();
+        let got = backend
+            .recall_routing_experience(&emb(0.0), 768, "a", 5)
+            .unwrap();
         let models: Vec<String> = got.iter().map(|n| n.model_id.clone()).collect();
         assert!(!models.contains(&"m1".to_string())); // oldest pruned despite being nearest
         assert!(models.contains(&"m2".to_string()));
@@ -445,13 +521,18 @@ mod tests {
     #[test]
     fn record_targets_routing_dim_table_and_not_notes() {
         let backend = temp_backend();
-        backend.record_routing_experience(&row("1", "a", "m1", 1), &emb(1.0), 768).unwrap();
+        backend
+            .record_routing_experience(&row("1", "a", "m1", 1), &emb(1.0), 768)
+            .unwrap();
         // `conn` is private to the sqlite module but reachable from this child module.
         let conn = backend.conn.lock().unwrap();
         let routing_count: i64 = conn
             .query_row("SELECT count(*) FROM routing_exp_vec_768", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(routing_count, 1, "embedding must land in routing_exp_vec_768");
+        assert_eq!(
+            routing_count, 1,
+            "embedding must land in routing_exp_vec_768"
+        );
         let notes_count: i64 = conn
             .query_row("SELECT count(*) FROM notes_vec_768", [], |r| r.get(0))
             .unwrap();
@@ -481,9 +562,15 @@ mod tests {
         let mut r3 = row("3", "a", "m2", 30);
         r3.terminate_reason = "{\"kind\":\"max_iterations\"}".into();
         r3.tool_error_count = 2;
-        backend.record_routing_experience(&r1, &emb(1.0), 768).unwrap();
-        backend.record_routing_experience(&r2, &emb(2.0), 768).unwrap();
-        backend.record_routing_experience(&r3, &emb(3.0), 768).unwrap();
+        backend
+            .record_routing_experience(&r1, &emb(1.0), 768)
+            .unwrap();
+        backend
+            .record_routing_experience(&r2, &emb(2.0), 768)
+            .unwrap();
+        backend
+            .record_routing_experience(&r3, &emb(3.0), 768)
+            .unwrap();
 
         let aggs = backend.aggregate_routing_experiences_by_model("a").unwrap();
         assert_eq!(aggs.len(), 2);
@@ -496,12 +583,18 @@ mod tests {
         assert_eq!(m1.avg_iterations, 3.0); // (2+4)/2
         assert_eq!(m1.avg_total_tokens, 75.0); // (100 + 50)/2
         assert_eq!(m1.avg_cost, Some(0.02)); // (0.01 + 0.03)/2
-        assert_eq!(m1.terminate_reason_counts, vec![("completed".to_string(), 2)]);
+        assert_eq!(
+            m1.terminate_reason_counts,
+            vec![("completed".to_string(), 2)]
+        );
 
         let m2 = &aggs[0];
         assert_eq!(m2.n_runs, 1);
         assert_eq!(m2.avg_tool_errors, 2.0);
-        assert_eq!(m2.terminate_reason_counts, vec![("max_iterations".to_string(), 1)]);
+        assert_eq!(
+            m2.terminate_reason_counts,
+            vec![("max_iterations".to_string(), 1)]
+        );
     }
 
     #[test]
@@ -510,8 +603,12 @@ mod tests {
         let mut ra = row("1", "a", "m1", 1);
         ra.estimated_cost = None;
         let rb = row("2", "b", "mb", 2);
-        backend.record_routing_experience(&ra, &emb(1.0), 768).unwrap();
-        backend.record_routing_experience(&rb, &emb(2.0), 768).unwrap();
+        backend
+            .record_routing_experience(&ra, &emb(1.0), 768)
+            .unwrap();
+        backend
+            .record_routing_experience(&rb, &emb(2.0), 768)
+            .unwrap();
 
         let aggs = backend.aggregate_routing_experiences_by_model("a").unwrap();
         assert_eq!(aggs.len(), 1); // agent "b" excluded

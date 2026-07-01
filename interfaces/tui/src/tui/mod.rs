@@ -730,12 +730,13 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
             let Some(dialog) = &state.dialog else {
                 return Action::None;
             };
-            dialog.options.get(dialog.selected).map_or(Action::None, |choice| {
-                Action::RespondToDialog {
+            dialog
+                .options
+                .get(dialog.selected)
+                .map_or(Action::None, |choice| Action::RespondToDialog {
                     run_id: dialog.run_id.clone(),
                     choice: choice.clone(),
-                }
-            })
+                })
         }
         _ => Action::None,
     }

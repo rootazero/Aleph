@@ -262,6 +262,9 @@ mod tests {
             token: Some("secret".into()),
         };
         let json = serde_json::to_value(&cfg).unwrap();
-        assert!(json.get("token").is_none(), "token must be skip_serializing");
+        assert!(
+            json.get("token").is_none(),
+            "token must be skip_serializing"
+        );
     }
 }

@@ -188,6 +188,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     use alephcore::gateway::handlers::config::{handle_get_full_config, handle_patch_config};
     use alephcore::gateway::handlers::embedding_providers;
     use alephcore::gateway::handlers::execution_config;
+    use alephcore::gateway::handlers::fetch_config;
     use alephcore::gateway::handlers::general_config;
     use alephcore::gateway::handlers::generation_config;
     use alephcore::gateway::handlers::generation_providers;
@@ -196,7 +197,6 @@ pub(in crate::commands::start) fn register_config_handlers(
     use alephcore::gateway::handlers::rerank_config;
     use alephcore::gateway::handlers::route_config;
     use alephcore::gateway::handlers::routing_rules;
-    use alephcore::gateway::handlers::fetch_config;
     use alephcore::gateway::handlers::search_config;
     use alephcore::gateway::handlers::security_config;
     use alephcore::gateway::handlers::voice;

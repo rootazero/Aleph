@@ -88,4 +88,3 @@ mod warmup_tests {
             serde_json::from_str(&content).expect("ledger must be valid JSON");
     }
 }
-

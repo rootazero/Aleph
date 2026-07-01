@@ -36,7 +36,9 @@ pub async fn handle_tree(request: JsonRpcRequest) -> JsonRpcResponse {
     let count = flat.len();
 
     match serde_json::to_value(&flat) {
-        Ok(nodes) => JsonRpcResponse::success(request.id, json!({ "nodes": nodes, "count": count })),
+        Ok(nodes) => {
+            JsonRpcResponse::success(request.id, json!({ "nodes": nodes, "count": count }))
+        }
         Err(err) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,

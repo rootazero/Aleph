@@ -383,9 +383,7 @@ impl RawMemoryStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("get_raws_by_ids query: {e}")))?;
         let mut results = Vec::new();
         for row in rows {
-            results.push(
-                row.map_err(|e| AlephError::config(format!("get_raws_by_ids row: {e}")))?,
-            );
+            results.push(row.map_err(|e| AlephError::config(format!("get_raws_by_ids row: {e}")))?);
         }
         Ok(results)
     }
@@ -799,9 +797,15 @@ mod tests {
         r.session_id = Some("ses_x".into());
         backend.insert_raw_memory(&r).await.unwrap();
 
-        let by_id = backend.get_raws_by_ids("default", &[r.id.clone()]).await.unwrap();
+        let by_id = backend
+            .get_raws_by_ids("default", &[r.id.clone()])
+            .await
+            .unwrap();
         assert_eq!(by_id.len(), 1);
-        let by_ses = backend.get_raws_by_session("default", "ses_x").await.unwrap();
+        let by_ses = backend
+            .get_raws_by_session("default", "ses_x")
+            .await
+            .unwrap();
         assert_eq!(by_ses.len(), 1);
     }
 }

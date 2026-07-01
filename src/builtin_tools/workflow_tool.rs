@@ -2032,7 +2032,10 @@ mod tests {
         // trims and treats empty as "no override").
         let mut m = WorkflowManifest::from_def(&linear_def());
         m.steps[0].model = Some("   ".into());
-        assert!(manifest_step_models(&m).is_none(), "blank model is no model");
+        assert!(
+            manifest_step_models(&m).is_none(),
+            "blank model is no model"
+        );
     }
 
     #[tokio::test]

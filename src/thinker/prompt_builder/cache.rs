@@ -217,13 +217,20 @@ mod tests {
             .with_memory_user_message("MEM_BODY".to_string())
             .with_routing_experience_message(marker.to_string());
         let parts = builder.build_system_prompt_cached_with_mode(&[], PromptMode::Full);
-        let full: String = parts.iter().map(|p| p.content.clone()).collect::<Vec<_>>().join("");
+        let full: String = parts
+            .iter()
+            .map(|p| p.content.clone())
+            .collect::<Vec<_>>()
+            .join("");
         assert_eq!(
             full.matches(marker).count(),
             1,
             "routing text must be emitted exactly once"
         );
-        assert!(full.contains("MEM_BODY"), "memory still emitted alongside routing");
+        assert!(
+            full.contains("MEM_BODY"),
+            "memory still emitted alongside routing"
+        );
     }
 
     #[test]

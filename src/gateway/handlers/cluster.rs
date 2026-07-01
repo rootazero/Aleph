@@ -535,7 +535,11 @@ mod tests {
             ctx,
         )
         .await;
-        assert!(resp.is_success(), "normalized offline deregister: {:?}", resp.error);
+        assert!(
+            resp.is_success(),
+            "normalized offline deregister: {:?}",
+            resp.error
+        );
         let r = resp.result.unwrap();
         assert_eq!(r["node_id"], node_id);
         assert_eq!(r["evicted"], false);

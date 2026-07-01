@@ -195,7 +195,9 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             return match action {
                 PluginsAction::List => commands::handle_plugins_list().await,
                 PluginsAction::Install { url } => commands::handle_plugins_install(&url).await,
-                PluginsAction::Uninstall { name } => commands::handle_plugins_uninstall(&name).await,
+                PluginsAction::Uninstall { name } => {
+                    commands::handle_plugins_uninstall(&name).await
+                }
                 PluginsAction::Enable { name } => commands::handle_plugins_enable(&name).await,
                 PluginsAction::Disable { name } => commands::handle_plugins_disable(&name).await,
             };

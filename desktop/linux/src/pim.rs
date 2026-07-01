@@ -47,7 +47,10 @@ impl LinuxPim {
             } else {
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 let name_lower = name.to_ascii_lowercase();
-                if name_lower.starts_with('.') || name_lower.ends_with(".msf") || name_lower.ends_with(".dat") {
+                if name_lower.starts_with('.')
+                    || name_lower.ends_with(".msf")
+                    || name_lower.ends_with(".dat")
+                {
                     continue;
                 }
                 let relative = path.strip_prefix(root).unwrap_or(&path);
@@ -168,9 +171,9 @@ impl LinuxPim {
     }
 
     async fn read_mbox_file(path: &Path) -> Result<String> {
-        tokio::fs::read_to_string(path)
-            .await
-            .map_err(|e| DesktopError::PlatformError(format!("Failed to read mbox {}: {e}", path.display())))
+        tokio::fs::read_to_string(path).await.map_err(|e| {
+            DesktopError::PlatformError(format!("Failed to read mbox {}: {e}", path.display()))
+        })
     }
 }
 

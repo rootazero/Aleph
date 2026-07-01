@@ -15,7 +15,10 @@ pub fn TodoPanel() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let expanded = RwSignal::new(false);
 
-    let visible = move || chat.plan.with(|p| p.as_ref().is_some_and(PlanView::has_content));
+    let visible = move || {
+        chat.plan
+            .with(|p| p.as_ref().is_some_and(PlanView::has_content))
+    };
 
     view! {
         <style>{TODO_PANEL_CSS}</style>

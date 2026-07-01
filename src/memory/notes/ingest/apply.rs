@@ -152,8 +152,10 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 };
                 let summary_trimmed: String = summary.chars().take(120).collect();
                 if !summary_trimmed.is_empty() {
-                    note.facts
-                        .insert(0, format!("[summary] {summary_trimmed} {SYSTEM_FACT_MARKER}"));
+                    note.facts.insert(
+                        0,
+                        format!("[summary] {summary_trimmed} {SYSTEM_FACT_MARKER}"),
+                    );
                 }
                 if !title.is_empty() && title != &safe {
                     note.facts
@@ -864,18 +866,23 @@ mod tests {
         .unwrap();
         tx.commit().await.unwrap();
 
-        let body = tokio::fs::read_to_string(dir.path().join("note/default/preference/typescript.md"))
-            .await
-            .unwrap();
-        assert!(body.contains("source_notes:"), "frontmatter must carry source_notes");
+        let body =
+            tokio::fs::read_to_string(dir.path().join("note/default/preference/typescript.md"))
+                .await
+                .unwrap();
+        assert!(
+            body.contains("source_notes:"),
+            "frontmatter must carry source_notes"
+        );
         assert!(body.contains("raw-A") && body.contains("raw-B"));
 
         // Order-independent assertion (no Task 6 dependency):
-        let n = crate::memory::notes::note::KnowledgeNote::from_markdown(
-            "typescript",
-            &body,
-        ).unwrap();
-        assert_eq!(n.source_notes, vec!["raw-A".to_string(), "raw-B".to_string()]);
+        let n =
+            crate::memory::notes::note::KnowledgeNote::from_markdown("typescript", &body).unwrap();
+        assert_eq!(
+            n.source_notes,
+            vec!["raw-A".to_string(), "raw-B".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -913,8 +920,7 @@ mod tests {
     async fn create_stamps_system_provenance_on_title_and_summary() {
         use crate::memory::notes::note::ProvenanceOrigin;
         let (dir, backend, indexer) = fresh().await;
-        let mut tx =
-            CompoundApplyTx::new(&indexer, &backend, dir.path().join("note"), "default");
+        let mut tx = CompoundApplyTx::new(&indexer, &backend, dir.path().join("note"), "default");
         tx.stage(&PageOp::Create {
             note_path: "learning/tokio".into(),
             title: "Tokio".into(),
@@ -929,12 +935,10 @@ mod tests {
         .unwrap();
         tx.commit().await.unwrap();
 
-        let body =
-            tokio::fs::read_to_string(dir.path().join("note/default/learning/tokio.md"))
-                .await
-                .unwrap();
-        let n =
-            crate::memory::notes::note::KnowledgeNote::from_markdown("tokio", &body).unwrap();
+        let body = tokio::fs::read_to_string(dir.path().join("note/default/learning/tokio.md"))
+            .await
+            .unwrap();
+        let n = crate::memory::notes::note::KnowledgeNote::from_markdown("tokio", &body).unwrap();
 
         // The synthetic [title]/[summary] lines must be System origin, never Legacy.
         let system = n

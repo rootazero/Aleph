@@ -52,12 +52,7 @@ impl ArenaManager {
 
         let mut handles = HashMap::new();
         for (agent_id, role, permissions) in participants {
-            let handle = ArenaHandle::new(
-                Arc::clone(&shared),
-                agent_id.clone(),
-                role,
-                permissions,
-            );
+            let handle = ArenaHandle::new(Arc::clone(&shared), agent_id.clone(), role, permissions);
             handles.insert(agent_id, handle);
         }
 

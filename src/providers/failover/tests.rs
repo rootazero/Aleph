@@ -305,10 +305,7 @@ async fn explicit_chain_skips_providers_removed_from_live_registry() {
     );
     let fp = FailoverProvider::new(
         pool,
-        vec![
-            node("deleted-fb", deleted_fb),
-            node("live-fb", live_fb),
-        ],
+        vec![node("deleted-fb", deleted_fb), node("live-fb", live_fb)],
         HashMap::new(),
         FailoverHealth::default(),
         FailoverConfig::default(),

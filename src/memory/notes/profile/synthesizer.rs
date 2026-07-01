@@ -259,7 +259,13 @@ impl ProfileSynthesizer for FsProfileSynthesizer {
             .unwrap_or("low")
             .to_string();
 
-        let md = render_user_md(1, "bootstrap", &confidence, &sections, &std::collections::BTreeMap::new());
+        let md = render_user_md(
+            1,
+            "bootstrap",
+            &confidence,
+            &sections,
+            &std::collections::BTreeMap::new(),
+        );
         store.write(&md, None).await?;
 
         self.log_orientation(agent_id, LogAction::Bootstrap, "bootstrapped USER.md")
@@ -356,7 +362,13 @@ impl ProfileSynthesizer for FsProfileSynthesizer {
                 entry.push(signal.session_id.clone());
             }
         }
-        let md = render_user_md(new_revision, &signal.session_id, &confidence, &sections, &sources);
+        let md = render_user_md(
+            new_revision,
+            &signal.session_id,
+            &confidence,
+            &sections,
+            &sources,
+        );
 
         // Hash-guarded write with one retry on conflict
         match store.write(&md, Some(&h0)).await {

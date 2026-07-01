@@ -33,7 +33,11 @@ pub struct RoutingExperienceStore {
 impl RoutingExperienceStore {
     #[must_use]
     pub fn new(backend: Arc<SqliteMemoryBackend>, embedder: Arc<dyn EmbeddingProvider>) -> Self {
-        Self { backend, embedder, retention_cap: 5000 }
+        Self {
+            backend,
+            embedder,
+            retention_cap: 5000,
+        }
     }
 
     pub async fn embed_task(&self, text: &str) -> Result<Vec<f32>, AlephError> {
@@ -74,8 +78,10 @@ impl RoutingExperienceStore {
             context_window: outcome.context_window as i64,
             created_at,
         };
-        self.backend.record_routing_experience(&row, task_emb, dim)?;
-        self.backend.prune_routing_experiences(agent_id, dim, self.retention_cap)?;
+        self.backend
+            .record_routing_experience(&row, task_emb, dim)?;
+        self.backend
+            .prune_routing_experiences(agent_id, dim, self.retention_cap)?;
         Ok(())
     }
 
@@ -86,7 +92,8 @@ impl RoutingExperienceStore {
         k: usize,
     ) -> Result<Vec<RoutingNeighbor>, AlephError> {
         let dim = self.embedder.dimensions() as u32;
-        self.backend.recall_routing_experience(task_emb, dim, agent_id, k)
+        self.backend
+            .recall_routing_experience(task_emb, dim, agent_id, k)
     }
 
     /// Per-(model, provider) lifetime aggregate for one agent (VESR v1.1 a).
@@ -95,7 +102,8 @@ impl RoutingExperienceStore {
         &self,
         agent_id: &str,
     ) -> Result<Vec<ModelAggregate>, AlephError> {
-        self.backend.aggregate_routing_experiences_by_model(agent_id)
+        self.backend
+            .aggregate_routing_experiences_by_model(agent_id)
     }
 }
 
@@ -113,29 +121,53 @@ mod tests {
         v[0] = seed;
         v
     }
-    struct StubEmbedder { dim: usize, vec: Vec<f32> }
+    struct StubEmbedder {
+        dim: usize,
+        vec: Vec<f32>,
+    }
     #[async_trait::async_trait]
     impl EmbeddingProvider for StubEmbedder {
-        async fn embed(&self, _t: &str) -> Result<Vec<f32>, AlephError> { Ok(self.vec.clone()) }
+        async fn embed(&self, _t: &str) -> Result<Vec<f32>, AlephError> {
+            Ok(self.vec.clone())
+        }
         async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
             Ok(texts.iter().map(|_| self.vec.clone()).collect())
         }
-        fn dimensions(&self) -> usize { self.dim }
-        fn model_name(&self) -> &str { "stub" }
-        fn provider_id(&self) -> &str { "stub" }
+        fn dimensions(&self) -> usize {
+            self.dim
+        }
+        fn model_name(&self) -> &str {
+            "stub"
+        }
+        fn provider_id(&self) -> &str {
+            "stub"
+        }
     }
 
     #[tokio::test]
     async fn facade_record_then_recall_roundtrip() {
         let backend = Arc::new(temp_backend());
-        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { dim: 768, vec: emb(1.0) });
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder {
+            dim: 768,
+            vec: emb(1.0),
+        });
         let store = RoutingExperienceStore::new(backend, embedder);
         let outcome = RoutingOutcome {
-            iterations: 2, tool_calls_made: 1, terminate_reason: "{\"kind\":\"completed\"}".into(),
-            token_breakdown: TokenBreakdown::default(), estimated_cost: None, duration_ms: 10,
-            context_tokens: 0, context_window: 0, tool_error_count: 0, tool_call_total: 1,
+            iterations: 2,
+            tool_calls_made: 1,
+            terminate_reason: "{\"kind\":\"completed\"}".into(),
+            token_breakdown: TokenBreakdown::default(),
+            estimated_cost: None,
+            duration_ms: 10,
+            context_tokens: 0,
+            context_window: 0,
+            tool_error_count: 0,
+            tool_call_total: 1,
         };
-        store.record("a", "MODEL_X", "PROV_Y", &emb(1.0), &outcome).await.unwrap();
+        store
+            .record("a", "MODEL_X", "PROV_Y", &emb(1.0), &outcome)
+            .await
+            .unwrap();
         let got = store.recall("a", &emb(0.0), 5).await.unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].model_id, "MODEL_X");

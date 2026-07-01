@@ -101,7 +101,10 @@ mod tests {
         let toml = toml::to_string(&cfg).unwrap();
         let back: FetchConfigInternal = toml::from_str(&toml).unwrap();
         assert_eq!(back.default_provider, "crawl4ai");
-        assert_eq!(back.backends["crawl4ai"].base_url.as_deref(), Some("http://x:11235"));
+        assert_eq!(
+            back.backends["crawl4ai"].base_url.as_deref(),
+            Some("http://x:11235")
+        );
         assert!(back.backends["crawl4ai"].verified);
     }
 }

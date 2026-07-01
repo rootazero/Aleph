@@ -1,7 +1,9 @@
 //! Map a BlueBubbles webhook/message JSON object to a transport-neutral struct.
 
 const MESSAGE_EVENTS: &[&str] = &["new-message", "message", "updated-message"];
-const TAPBACK_TYPES: &[i64] = &[2000, 2001, 2002, 2003, 2004, 2005, 3000, 3001, 3002, 3003, 3004, 3005];
+const TAPBACK_TYPES: &[i64] = &[
+    2000, 2001, 2002, 2003, 2004, 2005, 3000, 3001, 3002, 3003, 3004, 3005,
+];
 
 /// A BlueBubbles message reduced to the fields Aleph needs.
 #[derive(Debug, Clone)]
@@ -19,7 +21,8 @@ pub struct MappedMessage {
 }
 
 fn first_str<'a>(v: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
-    keys.iter().find_map(|k| v.get(*k).and_then(|x| x.as_str()).filter(|s| !s.is_empty()))
+    keys.iter()
+        .find_map(|k| v.get(*k).and_then(|x| x.as_str()).filter(|s| !s.is_empty()))
 }
 
 /// Returns `None` for non-message events or unparseable payloads.
@@ -28,14 +31,26 @@ pub fn map_webhook_record(payload: &serde_json::Value) -> Option<MappedMessage> 
     if !event.is_empty() && !MESSAGE_EVENTS.contains(&event) {
         return None;
     }
-    let data = payload.get("data").and_then(|d| {
-        if d.is_object() { Some(d.clone()) }
-        else { d.as_array().and_then(|a| a.iter().find(|x| x.is_object()).cloned()) }
-    }).unwrap_or_else(|| payload.clone());
+    let data = payload
+        .get("data")
+        .and_then(|d| {
+            if d.is_object() {
+                Some(d.clone())
+            } else {
+                d.as_array()
+                    .and_then(|a| a.iter().find(|x| x.is_object()).cloned())
+            }
+        })
+        .unwrap_or_else(|| payload.clone());
 
     let guid = first_str(&data, &["guid", "messageGuid", "id"])?.to_string();
-    let text = first_str(&data, &["text", "message", "body"]).unwrap_or("").to_string();
-    let is_from_me = data.get("isFromMe").and_then(|v| v.as_bool()).unwrap_or(false);
+    let text = first_str(&data, &["text", "message", "body"])
+        .unwrap_or("")
+        .to_string();
+    let is_from_me = data
+        .get("isFromMe")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let assoc = data.get("associatedMessageType").and_then(|v| v.as_i64());
     let is_tapback = assoc.is_some_and(|t| TAPBACK_TYPES.contains(&t));
 
@@ -50,34 +65,52 @@ pub fn map_webhook_record(payload: &serde_json::Value) -> Option<MappedMessage> 
         })
         .unwrap_or_default();
 
-    let sender = data.get("handle")
+    let sender = data
+        .get("handle")
         .and_then(|h| h.get("address"))
         .and_then(|a| a.as_str())
         .or_else(|| first_str(&data, &["sender", "from", "address"]))
         .unwrap_or(&chat_guid)
         .to_string();
 
-    let is_group = data.get("isGroup").and_then(|v| v.as_bool()).unwrap_or(false)
+    let is_group = data
+        .get("isGroup")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
         || chat_guid.contains(";+;");
 
-    let reply_to = first_str(&data, &["threadOriginatorGuid", "associatedMessageGuid"])
-        .map(str::to_string);
+    let reply_to =
+        first_str(&data, &["threadOriginatorGuid", "associatedMessageGuid"]).map(str::to_string);
 
-    let attachment_guids = data.get("attachments")
+    let attachment_guids = data
+        .get("attachments")
         .and_then(|a| a.as_array())
         .map(|arr| {
-            arr.iter().filter_map(|att| {
-                let g = att.get("guid").and_then(|g| g.as_str())?.to_string();
-                let mime = att.get("mimeType")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("application/octet-stream")
-                    .to_string();
-                Some((g, mime))
-            }).collect()
+            arr.iter()
+                .filter_map(|att| {
+                    let g = att.get("guid").and_then(|g| g.as_str())?.to_string();
+                    let mime = att
+                        .get("mimeType")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("application/octet-stream")
+                        .to_string();
+                    Some((g, mime))
+                })
+                .collect()
         })
         .unwrap_or_default();
 
-    Some(MappedMessage { guid, chat_guid, sender, text, is_group, is_from_me, is_tapback, reply_to, attachment_guids })
+    Some(MappedMessage {
+        guid,
+        chat_guid,
+        sender,
+        text,
+        is_group,
+        is_from_me,
+        is_tapback,
+        reply_to,
+        attachment_guids,
+    })
 }
 
 /// Build an `InboundMessage` from a mapped record (attachments already downloaded).
@@ -117,9 +150,10 @@ mod tests {
                 "handle": { "address": "+15551234567" }
             }
         });
-        base["data"].as_object_mut().unwrap().extend(
-            extra.as_object().unwrap().clone()
-        );
+        base["data"]
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
         base
     }
 
@@ -143,7 +177,10 @@ mod tests {
 
     #[test]
     fn flags_tapback() {
-        let m = map_webhook_record(&record(serde_json::json!({ "associatedMessageType": 2000 }))).unwrap();
+        let m = map_webhook_record(&record(
+            serde_json::json!({ "associatedMessageType": 2000 }),
+        ))
+        .unwrap();
         assert!(m.is_tapback);
     }
 
@@ -151,7 +188,8 @@ mod tests {
     fn detects_group_by_guid() {
         let m = map_webhook_record(&record(serde_json::json!({
             "chatGuid": "iMessage;+;chat123", "isGroup": true
-        }))).unwrap();
+        })))
+        .unwrap();
         assert!(m.is_group);
     }
 

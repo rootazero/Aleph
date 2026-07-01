@@ -639,9 +639,15 @@ mod tests {
             source_notes: vec!["raw-1".into(), "raw-2".into()],
             ..Default::default()
         };
-        backend.index_note(&note, "default", "preference").await.unwrap();
+        backend
+            .index_note(&note, "default", "preference")
+            .await
+            .unwrap();
 
-        let mut srcs = backend.sources_of("default", "preference/typescript").await.unwrap();
+        let mut srcs = backend
+            .sources_of("default", "preference/typescript")
+            .await
+            .unwrap();
         srcs.sort();
         assert_eq!(srcs, vec!["raw-1".to_string(), "raw-2".to_string()]);
 

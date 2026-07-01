@@ -400,9 +400,7 @@ impl SessionManager {
         ];
 
         fn is_safe_identifier(s: &str) -> bool {
-            !s.is_empty()
-                && s.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
         }
 
         fn is_safe_column_def(s: &str) -> bool {
@@ -419,9 +417,7 @@ impl SessionManager {
         }
 
         for (table, column, def) in migrations {
-            if !is_safe_identifier(table)
-                || !is_safe_identifier(column)
-                || !is_safe_column_def(def)
+            if !is_safe_identifier(table) || !is_safe_identifier(column) || !is_safe_column_def(def)
             {
                 return Err(SessionManagerError::DatabaseError(format!(
                     "Refusing unsafe migration identifier: {table}.{column} {def}"

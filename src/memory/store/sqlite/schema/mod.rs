@@ -130,7 +130,9 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     migrations::drop_obsolete_facts_tables(conn)?;
 
     conn.execute_batch(ddl::ROUTING_EXPERIENCE_DDL)
-        .map_err(|e| AlephError::config(format!("Failed to create routing_experiences table: {e}")))?;
+        .map_err(|e| {
+            AlephError::config(format!("Failed to create routing_experiences table: {e}"))
+        })?;
 
     Ok(())
 }

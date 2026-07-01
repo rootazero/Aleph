@@ -326,10 +326,7 @@ Examples:
                 {
                     return Ok(out);
                 }
-                let log_path = args
-                    .log
-                    .clone()
-                    .unwrap_or_else(default_background_log_path);
+                let log_path = args.log.clone().unwrap_or_else(default_background_log_path);
                 match auto.run_background(language, script, &log_path).await {
                     Ok(pid) => Ok(AutomationOutput {
                         success: true,

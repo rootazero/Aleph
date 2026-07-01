@@ -271,7 +271,9 @@ mod tests {
         let j = serde_json::to_string(&op).unwrap();
         let back: PageOp = serde_json::from_str(&j).unwrap();
         match back {
-            PageOp::Create { source_ids, .. } => assert_eq!(source_ids, vec!["raw-uuid-1", "raw-uuid-2"]),
+            PageOp::Create { source_ids, .. } => {
+                assert_eq!(source_ids, vec!["raw-uuid-1", "raw-uuid-2"])
+            }
             _ => panic!("expected create"),
         }
 
@@ -283,7 +285,8 @@ mod tests {
             _ => panic!("expected create"),
         }
 
-        let legacy_append = r#"{"kind":"append","note_path":"a/b","new_facts":["x"],"new_links":[]}"#;
+        let legacy_append =
+            r#"{"kind":"append","note_path":"a/b","new_facts":["x"],"new_links":[]}"#;
         let op3: PageOp = serde_json::from_str(legacy_append).unwrap();
         match op3 {
             PageOp::Append { source_ids, .. } => assert!(source_ids.is_empty()),

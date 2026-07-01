@@ -541,7 +541,8 @@ impl GatewayServer {
         // static-file or SPA handler sees the request. This prevents bootstrap
         // tickets, legacy tokens, or device tokens from appearing in server logs
         // or error traces even if a future tracing layer is enabled.
-        let control_plane = create_control_plane_router().layer(super::middleware::RedactQueryLayer::new());
+        let control_plane =
+            create_control_plane_router().layer(super::middleware::RedactQueryLayer::new());
 
         // OpenAI-compatible API routes (/v1/models, /v1/health, /v1/chat/completions)
         let openai_state = Arc::new(OpenAiApiState {

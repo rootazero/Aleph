@@ -80,7 +80,7 @@ impl IMessageChannel {
                 images: true,
                 audio: true,
                 video: true,
-                reactions: false,            // AppleScript cannot send tapbacks
+                reactions: false, // AppleScript cannot send tapbacks
                 replies: false,
                 editing: false,
                 deletion: false,
@@ -397,12 +397,18 @@ mod tests {
     fn group_chat_target_routes_to_chat_send() {
         // chat_id: prefix and chat_guid: must parse to chat targets, which the
         // send path must route via send_to_chat (not participant send_text).
-        assert!(matches!(parse_target("chat_id:42").unwrap(), IMessageTarget::ChatId { .. }));
+        assert!(matches!(
+            parse_target("chat_id:42").unwrap(),
+            IMessageTarget::ChatId { .. }
+        ));
         assert!(matches!(
             parse_target("chat_guid:iMessage;+;chat123").unwrap(),
             IMessageTarget::ChatGuid { .. }
         ));
         // a plain phone stays a Phone target (participant send_text)
-        assert!(matches!(parse_target("+15551234567").unwrap(), IMessageTarget::Phone { .. }));
+        assert!(matches!(
+            parse_target("+15551234567").unwrap(),
+            IMessageTarget::Phone { .. }
+        ));
     }
 }

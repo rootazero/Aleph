@@ -66,7 +66,12 @@ fn probe_system_path(spec: &RuntimeSpec) -> Option<ProbeResult> {
     let bin_name = spec.binaries.iter().next()?;
     let search_path = enriched_search_path();
     let bin_path = find_on_path(bin_name, &search_path)?;
-    let version = get_version(&bin_path, spec.version_flag, spec.version_regex, &search_path);
+    let version = get_version(
+        &bin_path,
+        spec.version_flag,
+        spec.version_regex,
+        &search_path,
+    );
     let version_warning = check_version_warning(spec, version.as_deref());
     Some(ProbeResult {
         found: true,
@@ -685,7 +690,10 @@ mod tests {
         );
 
         // Enriched PATH includes the interpreter dir → version captured (the fix).
-        let enriched = extend_path(&minimal, std::slice::from_ref(&interp_dir.path().to_path_buf()));
+        let enriched = extend_path(
+            &minimal,
+            std::slice::from_ref(&interp_dir.path().to_path_buf()),
+        );
         assert_eq!(
             get_version(&tool, "--version", re, &enriched).as_deref(),
             Some("9.8.7"),

@@ -48,8 +48,14 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
     ])
     .split(inner);
 
-    let question_area = chunks.get(1).copied().expect("dialog layout has question area");
-    let options_area = chunks.get(3).copied().expect("dialog layout has options area");
+    let question_area = chunks
+        .get(1)
+        .copied()
+        .expect("dialog layout has question area");
+    let options_area = chunks
+        .get(3)
+        .copied()
+        .expect("dialog layout has options area");
     let hint_area = chunks.get(4).copied().expect("dialog layout has hint area");
 
     // Render question

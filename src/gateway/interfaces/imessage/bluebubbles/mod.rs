@@ -48,9 +48,7 @@ pub struct BlueBubblesChannel {
     info: ChannelInfo,
     config: BlueBubblesConfig,
     channel_state: ChannelState,
-    offset_tracker: Option<
-        Arc<crate::gateway::interfaces::telegram::offset::OffsetTracker>,
-    >,
+    offset_tracker: Option<Arc<crate::gateway::interfaces::telegram::offset::OffsetTracker>>,
     api: BlueBubblesApi,
     guid_cache: Arc<tokio::sync::Mutex<LruGuidCache>>,
     server_caps: Arc<tokio::sync::RwLock<ServerCaps>>,
@@ -118,7 +116,9 @@ impl Channel for BlueBubblesChannel {
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
-        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connecting)
+            .await;
 
         if self.api.ping().await.is_err() {
             self.channel_state.set_status(ChannelStatus::Error).await;
@@ -144,8 +144,9 @@ impl Channel for BlueBubblesChannel {
             self.config.webhook_port,
             self.config.webhook_path.clone(),
         );
-        self.webhook_handle =
-            Some(tokio::spawn(inbound::webhook_server::run_webhook_server(state, host, port, path)));
+        self.webhook_handle = Some(tokio::spawn(inbound::webhook_server::run_webhook_server(
+            state, host, port, path,
+        )));
 
         let cb = api::webhook_callback_url(
             &self.config.webhook_host,
@@ -170,7 +171,9 @@ impl Channel for BlueBubblesChannel {
             )));
         }
 
-        self.channel_state.set_status(ChannelStatus::Connected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connected)
+            .await;
         Ok(())
     }
 
@@ -189,7 +192,9 @@ impl Channel for BlueBubblesChannel {
             h.abort();
         }
         self.running.store(false, Ordering::SeqCst);
-        self.channel_state.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Disconnected)
+            .await;
         Ok(())
     }
 
@@ -222,7 +227,10 @@ impl Channel for BlueBubblesChannel {
                     .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
             }
         }
-        Ok(SendResult { message_id: MessageId::new(last), timestamp: chrono::Utc::now() })
+        Ok(SendResult {
+            message_id: MessageId::new(last),
+            timestamp: chrono::Utc::now(),
+        })
     }
 
     async fn react(

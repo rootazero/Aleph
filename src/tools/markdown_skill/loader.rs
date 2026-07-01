@@ -221,7 +221,9 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let skill_path = temp_dir.path().join("test-skill/SKILL.md");
 
-        fs::create_dir_all(skill_path.parent().unwrap()).await.unwrap();
+        fs::create_dir_all(skill_path.parent().unwrap())
+            .await
+            .unwrap();
         fs::write(
             &skill_path,
             "---\n\

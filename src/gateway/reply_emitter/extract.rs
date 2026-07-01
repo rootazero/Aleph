@@ -153,7 +153,10 @@ mod tests {
     fn atom_returns_none_for_pure_reasoning_or_empty() {
         // A turn that sanitizes to nothing visible yields None (no surface
         // delivery): a pure-reasoning block collapses, as does empty input.
-        assert_eq!(sanitize_final_response("<think>only thinking</think>"), None);
+        assert_eq!(
+            sanitize_final_response("<think>only thinking</think>"),
+            None
+        );
         assert_eq!(sanitize_final_response(""), None);
     }
 

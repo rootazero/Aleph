@@ -6,8 +6,8 @@
 
 use super::reasoning::ReasoningPanel;
 use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState, QueuedPrompt};
-use super::PlanArchiveCell;
 use super::timeline::{self, TimelineRow};
+use super::PlanArchiveCell;
 use crate::components::markdown::{MarkdownRenderer, TypewriterRenderer};
 use crate::components::tool_card::{tool_headline, tool_icon, ToolCard, ToolKind};
 use crate::i18n::{t, t_string, use_i18n};
@@ -976,12 +976,15 @@ mod step_action_tests {
             id: id.to_string(),
             role: "assistant".into(),
             content: content.to_string(),
-            tool_calls: tools.into_iter().map(|(tid, tn)| ToolCallEntry {
-                tool_id: tid.to_string(),
-                tool_name: tn.to_string(),
-                status: "completed".into(),
-                duration_ms: None,
-            }).collect(),
+            tool_calls: tools
+                .into_iter()
+                .map(|(tid, tn)| ToolCallEntry {
+                    tool_id: tid.to_string(),
+                    tool_name: tn.to_string(),
+                    status: "completed".into(),
+                    duration_ms: None,
+                })
+                .collect(),
             is_streaming: false,
             is_intermediate: true,
             error: None,
@@ -999,7 +1002,11 @@ mod step_action_tests {
     fn latest_step_tool_picks_last_tool_of_last_step_with_tools() {
         let steps = vec![
             msg("intermediate-r1-1", "searching", vec![("t1", "search")]),
-            msg("intermediate-r1-2", "editing", vec![("t2", "file_edit"), ("t3", "bash")]),
+            msg(
+                "intermediate-r1-2",
+                "editing",
+                vec![("t2", "file_edit"), ("t3", "bash")],
+            ),
         ];
         assert_eq!(
             latest_step_tool(&steps),
@@ -1036,10 +1043,7 @@ mod step_action_tests {
             Some("second step")
         );
         // 截断（UTF-8 安全）
-        assert_eq!(
-            step_narration_head(&steps, 6).as_deref(),
-            Some("second")
-        );
+        assert_eq!(step_narration_head(&steps, 6).as_deref(), Some("second"));
     }
 
     #[test]

@@ -13,9 +13,7 @@ use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::{GatewayConfig as FullGatewayConfig, SessionManager};
 
 /// Validate that the bind address is available, or return an error if not.
-pub(super) async fn validate_bind_address(
-    args: &Args,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub(super) async fn validate_bind_address(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let addr = resolve_socket_addr(args)?;
     if !args.force {
         if let Err(e) = tokio::net::TcpListener::bind(addr).await {

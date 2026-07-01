@@ -68,7 +68,10 @@ pub async fn compact_to_fit(
 
     // 1. LLM compaction (aggressive: minimal fresh tail). Fail-soft.
     if let Some(c) = compactor {
-        if let Err(e) = c.compact(messages, budget.fresh_tail_count(), session_id).await {
+        if let Err(e) = c
+            .compact(messages, budget.fresh_tail_count(), session_id)
+            .await
+        {
             tracing::warn!(error = %e, "compact_to_fit: LLM compaction failed; falling back to floor");
         }
     }
@@ -100,7 +103,9 @@ mod tests {
     }
 
     fn total(msgs: &[UnifiedMessage], ratio: f64) -> usize {
-        msgs.iter().map(|m| estimate_message_tokens_aware(m, ratio)).sum()
+        msgs.iter()
+            .map(|m| estimate_message_tokens_aware(m, ratio))
+            .sum()
     }
 
     #[test]
@@ -117,7 +122,10 @@ mod tests {
         // fresh tail (last message) preserved
         assert_eq!(
             msgs.last().map(|m| estimate_message_tokens_aware(m, 3.5)),
-            Some(estimate_message_tokens_aware(&text_user(&"c".repeat(400)), 3.5))
+            Some(estimate_message_tokens_aware(
+                &text_user(&"c".repeat(400)),
+                3.5
+            ))
         );
     }
 

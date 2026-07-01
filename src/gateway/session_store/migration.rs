@@ -52,11 +52,7 @@ pub async fn normalize_session_dir_names(base_dir: &Path) -> usize {
 
     let mut renamed = 0usize;
     while let Ok(Some(entry)) = entries.next_entry().await {
-        let is_dir = entry
-            .file_type()
-            .await
-            .map(|t| t.is_dir())
-            .unwrap_or(false);
+        let is_dir = entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
         if !is_dir {
             continue;
         }
@@ -99,7 +95,10 @@ pub async fn normalize_session_dir_names(base_dir: &Path) -> usize {
     }
 
     if renamed > 0 {
-        info!(renamed, "Normalized {renamed} migrated session directory name(s)");
+        info!(
+            renamed,
+            "Normalized {renamed} migrated session directory name(s)"
+        );
     }
     renamed
 }
@@ -485,7 +484,9 @@ mod normalize_tests {
         let canonical = sanitize_key_for_dir("agent:x:main");
         seed_dir(base, &canonical, "agent:x:main").await;
         // No metadata.json ⇒ must be skipped (e.g. `.archive`, channel scratch).
-        tokio::fs::create_dir_all(base.join(".archive")).await.unwrap();
+        tokio::fs::create_dir_all(base.join(".archive"))
+            .await
+            .unwrap();
 
         let renamed = normalize_session_dir_names(base).await;
         assert_eq!(renamed, 0);

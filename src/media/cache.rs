@@ -509,7 +509,9 @@ mod tests {
         let dir = session_dir("test-media-item-local");
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let local_file = dir.join("test.png");
-        tokio::fs::write(&local_file, b"fake png data").await.unwrap();
+        tokio::fs::write(&local_file, b"fake png data")
+            .await
+            .unwrap();
 
         let item = MediaItem {
             url: local_file.to_string_lossy().to_string(),

@@ -816,9 +816,7 @@ impl JwtAssertionGenerator {
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_err(|e| {
-                MsTeamsAuthError::TokenExchangeError(format!("system clock error: {e}"))
-            })?
+            .map_err(|e| MsTeamsAuthError::TokenExchangeError(format!("system clock error: {e}")))?
             .as_secs() as i64;
 
         #[derive(serde::Serialize)]

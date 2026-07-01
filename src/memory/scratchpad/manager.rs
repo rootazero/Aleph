@@ -700,8 +700,15 @@ mod tests {
             .filter(|(_, it)| it.is_in_progress())
             .map(|(i, _)| i)
             .collect();
-        assert_eq!(in_prog, vec![1], "only the newest started item stays in progress");
-        assert!(!snap.items[0].is_in_progress(), "previous in-progress demoted to pending");
+        assert_eq!(
+            in_prog,
+            vec![1],
+            "only the newest started item stays in progress"
+        );
+        assert!(
+            !snap.items[0].is_in_progress(),
+            "previous in-progress demoted to pending"
+        );
     }
 
     #[tokio::test]

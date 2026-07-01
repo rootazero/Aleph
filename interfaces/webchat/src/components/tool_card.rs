@@ -378,7 +378,12 @@ pub fn ToolCard(
     let detail_label = t_string!(i18n, tool_card.to_detail).to_string();
     let on_overflow = move || {
         if let (Some(ws), Some(it)) = (workspace, iteration) {
-            ws.reveal_tool(run_for_overflow.clone(), it, &tid_for_overflow, default_open);
+            ws.reveal_tool(
+                run_for_overflow.clone(),
+                it,
+                &tid_for_overflow,
+                default_open,
+            );
         }
     };
 
@@ -539,7 +544,10 @@ fn patch_body(
                 Some('-') => '-',
                 _ => ' ',
             };
-            DiffLine { sign, text: raw.to_string() }
+            DiffLine {
+                sign,
+                text: raw.to_string(),
+            }
         })
         .collect();
     capped_diff(lines, surface, detail_label, on_overflow)
@@ -635,14 +643,36 @@ fn shell_body(
 ) -> AnyView {
     let cmd = {
         let v = arg_str(p, "cmd");
-        if v.is_empty() { arg_str(p, "code") } else { v }
-    }.to_string();
+        if v.is_empty() {
+            arg_str(p, "code")
+        } else {
+            v
+        }
+    }
+    .to_string();
     let out = p.result.as_ref().and_then(success_output).cloned();
-    let stdout = out.as_ref().and_then(|o| o.get("stdout")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let stderr = out.as_ref().and_then(|o| o.get("stderr")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let exit = out.as_ref().and_then(|o| o.get("exit_code")).and_then(serde_json::Value::as_i64);
+    let stdout = out
+        .as_ref()
+        .and_then(|o| o.get("stdout"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let stderr = out
+        .as_ref()
+        .and_then(|o| o.get("stderr"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let exit = out
+        .as_ref()
+        .and_then(|o| o.get("exit_code"))
+        .and_then(serde_json::Value::as_i64);
     let exit_badge = exit.map(|c| {
-        let cls = if c == 0 { "text-success" } else { "text-danger" };
+        let cls = if c == 0 {
+            "text-success"
+        } else {
+            "text-danger"
+        };
         view! { <span class=format!("text-[10px] font-mono {cls}")>{format!("exit {c}")}</span> }
     });
     view! {
@@ -683,7 +713,13 @@ fn read_body(
     if text.is_empty() {
         return default_body(p, surface, detail_label, on_overflow);
     }
-    capped_block(&text, "text-text-secondary", surface, detail_label, on_overflow)
+    capped_block(
+        &text,
+        "text-text-secondary",
+        surface,
+        detail_label,
+        on_overflow,
+    )
 }
 
 fn search_body(
@@ -737,7 +773,13 @@ fn default_body(
     if kv.is_empty() {
         // 非对象（数组/标量）→ 紧凑 pretty JSON，按 surface 封顶。
         let compact = serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string());
-        return capped_block(&compact, "text-text-secondary", surface, detail_label, on_overflow);
+        return capped_block(
+            &compact,
+            "text-text-secondary",
+            surface,
+            detail_label,
+            on_overflow,
+        );
     }
     let cap = surface.cap();
     let total = kv.len();
@@ -943,8 +985,14 @@ mod tests {
         });
         let hits = search_hits(&result);
         assert_eq!(hits.len(), 3);
-        assert_eq!(hits[0], ("美股暴跌".to_string(), Some("https://a.com".to_string())));
-        assert_eq!(hits[1], ("关税新闻".to_string(), Some("https://b.com".to_string())));
+        assert_eq!(
+            hits[0],
+            ("美股暴跌".to_string(), Some("https://a.com".to_string()))
+        );
+        assert_eq!(
+            hits[1],
+            ("关税新闻".to_string(), Some("https://b.com".to_string()))
+        );
         assert_eq!(hits[2], ("无链接条目".to_string(), None));
     }
 
@@ -966,7 +1014,10 @@ mod tests {
         let map: std::collections::HashMap<_, _> = kv.into_iter().collect();
         assert_eq!(map.get("name").map(String::as_str), Some("alpha"));
         assert_eq!(map.get("count").map(String::as_str), Some("3"));
-        assert_eq!(map.get("nested").map(String::as_str), Some("{\"a\":1,\"b\":[2,3]}"));
+        assert_eq!(
+            map.get("nested").map(String::as_str),
+            Some("{\"a\":1,\"b\":[2,3]}")
+        );
     }
 
     #[test]

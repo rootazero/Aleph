@@ -66,10 +66,15 @@ impl FetchRegistry {
 
     /// Providers to try, in order. Empty when nothing is configured/available.
     pub fn select(&self) -> Vec<Arc<dyn FetchProvider>> {
-        self.order.iter().filter_map(|n| self.providers.get(n).cloned()).collect()
+        self.order
+            .iter()
+            .filter_map(|n| self.providers.get(n).cloned())
+            .collect()
     }
 
-    pub fn is_empty(&self) -> bool { self.order.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -79,19 +84,30 @@ mod tests {
     use std::collections::HashMap;
 
     fn ctx_no_search() -> FetchBuildCtx<'static> {
-        FetchBuildCtx { search: None, resolve_secret: &|_| None }
+        FetchBuildCtx {
+            search: None,
+            resolve_secret: &|_| None,
+        }
     }
 
     #[test]
     fn builds_crawl4ai_and_orders_default_first() {
         let mut backends = HashMap::new();
-        backends.insert("crawl4ai".into(), FetchBackendConfig {
-            provider_type: "crawl4ai".into(), api_key: None,
-            base_url: Some("http://x:11235".into()), timeout_seconds: Some(60), verified: false,
-        });
+        backends.insert(
+            "crawl4ai".into(),
+            FetchBackendConfig {
+                provider_type: "crawl4ai".into(),
+                api_key: None,
+                base_url: Some("http://x:11235".into()),
+                timeout_seconds: Some(60),
+                verified: false,
+            },
+        );
         let cfg = FetchConfigInternal {
-            enabled: true, default_provider: "crawl4ai".into(),
-            fallback_providers: None, backends,
+            enabled: true,
+            default_provider: "crawl4ai".into(),
+            fallback_providers: None,
+            backends,
         };
         let reg = FetchRegistry::from_config(&cfg, &ctx_no_search());
         let sel = reg.select();
@@ -102,16 +118,27 @@ mod tests {
     #[test]
     fn firecrawl_unavailable_without_search_config() {
         let mut backends = HashMap::new();
-        backends.insert("firecrawl".into(), FetchBackendConfig {
-            provider_type: "firecrawl".into(), api_key: None,
-            base_url: None, timeout_seconds: None, verified: false,
-        });
+        backends.insert(
+            "firecrawl".into(),
+            FetchBackendConfig {
+                provider_type: "firecrawl".into(),
+                api_key: None,
+                base_url: None,
+                timeout_seconds: None,
+                verified: false,
+            },
+        );
         let cfg = FetchConfigInternal {
-            enabled: true, default_provider: "firecrawl".into(),
-            fallback_providers: None, backends,
+            enabled: true,
+            default_provider: "firecrawl".into(),
+            fallback_providers: None,
+            backends,
         };
         let reg = FetchRegistry::from_config(&cfg, &ctx_no_search());
-        assert!(reg.select().is_empty(), "no search firecrawl config → no provider");
+        assert!(
+            reg.select().is_empty(),
+            "no search firecrawl config → no provider"
+        );
     }
 
     fn search_with_firecrawl() -> SearchConfigInternal {
@@ -131,7 +158,10 @@ mod tests {
         let resolve = |k: &str| -> Option<String> {
             (k == "search:firecrawl").then(|| "fc-token".to_string())
         };
-        let ctx = FetchBuildCtx { search: Some(&search), resolve_secret: &resolve };
+        let ctx = FetchBuildCtx {
+            search: Some(&search),
+            resolve_secret: &resolve,
+        };
         let cfg = FetchConfigInternal {
             enabled: true,
             default_provider: "firecrawl".into(),
@@ -150,15 +180,26 @@ mod tests {
         let resolve = |k: &str| -> Option<String> {
             (k == "search:firecrawl").then(|| "fc-token".to_string())
         };
-        let ctx = FetchBuildCtx { search: Some(&search), resolve_secret: &resolve };
+        let ctx = FetchBuildCtx {
+            search: Some(&search),
+            resolve_secret: &resolve,
+        };
         let mut backends = HashMap::new();
-        backends.insert("crawl4ai".into(), FetchBackendConfig {
-            provider_type: "crawl4ai".into(), api_key: None,
-            base_url: Some("http://x:11235".into()), timeout_seconds: Some(60), verified: false,
-        });
+        backends.insert(
+            "crawl4ai".into(),
+            FetchBackendConfig {
+                provider_type: "crawl4ai".into(),
+                api_key: None,
+                base_url: Some("http://x:11235".into()),
+                timeout_seconds: Some(60),
+                verified: false,
+            },
+        );
         let cfg = FetchConfigInternal {
-            enabled: true, default_provider: "firecrawl".into(),
-            fallback_providers: None, backends,
+            enabled: true,
+            default_provider: "firecrawl".into(),
+            fallback_providers: None,
+            backends,
         };
         let sel = FetchRegistry::from_config(&cfg, &ctx).select();
         let names: Vec<&str> = sel.iter().map(|p| p.name()).collect();
@@ -171,15 +212,26 @@ mod tests {
         let resolve = |k: &str| -> Option<String> {
             (k == "search:firecrawl").then(|| "fc-token".to_string())
         };
-        let ctx = FetchBuildCtx { search: Some(&search), resolve_secret: &resolve };
+        let ctx = FetchBuildCtx {
+            search: Some(&search),
+            resolve_secret: &resolve,
+        };
         let mut backends = HashMap::new();
-        backends.insert("crawl4ai".into(), FetchBackendConfig {
-            provider_type: "crawl4ai".into(), api_key: None,
-            base_url: Some("http://x:11235".into()), timeout_seconds: Some(60), verified: false,
-        });
+        backends.insert(
+            "crawl4ai".into(),
+            FetchBackendConfig {
+                provider_type: "crawl4ai".into(),
+                api_key: None,
+                base_url: Some("http://x:11235".into()),
+                timeout_seconds: Some(60),
+                verified: false,
+            },
+        );
         let cfg = FetchConfigInternal {
-            enabled: true, default_provider: "crawl4ai".into(),
-            fallback_providers: None, backends,
+            enabled: true,
+            default_provider: "crawl4ai".into(),
+            fallback_providers: None,
+            backends,
         };
         let sel = FetchRegistry::from_config(&cfg, &ctx).select();
         let names: Vec<&str> = sel.iter().map(|p| p.name()).collect();

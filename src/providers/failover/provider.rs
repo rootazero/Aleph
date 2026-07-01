@@ -416,12 +416,14 @@ impl FailoverProvider {
                 .into_iter()
                 .filter(|name| name != &primary_name) // dedup: primary slot covers it
                 .filter_map(|name| {
-                    self.primary.provider_by_name(&name).map(|provider| FailoverNode {
-                        name,
-                        models: Vec::new(),
-                        provider,
-                        tier: EndpointTier::Unknown,
-                    })
+                    self.primary
+                        .provider_by_name(&name)
+                        .map(|provider| FailoverNode {
+                            name,
+                            models: Vec::new(),
+                            provider,
+                            tier: EndpointTier::Unknown,
+                        })
                 })
                 .collect()
         } else {
@@ -463,10 +465,8 @@ impl FailoverProvider {
                 // tier to rank an *unpriced* model (free local vs unknown-cost
                 // cloud — see `unpriced_cost`); the metric closure only receives
                 // the provider name, so the tier rides in via this map.
-                let tier_by_name: HashMap<String, EndpointTier> = fallbacks
-                    .iter()
-                    .map(|n| (n.name.clone(), n.tier))
-                    .collect();
+                let tier_by_name: HashMap<String, EndpointTier> =
+                    fallbacks.iter().map(|n| (n.name.clone(), n.tier)).collect();
                 order_candidates_balanced(
                     fallbacks,
                     mode,

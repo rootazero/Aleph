@@ -15,7 +15,9 @@ pub mod session_key;
 
 pub use experience_store::{RoutingExperienceStore, RoutingOutcome};
 pub use observer::{outcome_from_session_completed, OutcomeObserver};
-pub use recall::{provider_availability_from_config, ProviderAvailability, ProviderStatus, RoutingRecall};
+pub use recall::{
+    provider_availability_from_config, ProviderAvailability, ProviderStatus, RoutingRecall,
+};
 
 pub use config::{MatchRule, PeerMatchConfig, RouteBinding, SessionConfig};
 pub use resolve::{resolve_route, MatchedBy, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind};
@@ -37,10 +39,12 @@ pub struct RoutingAttribution {
 impl RoutingAttribution {
     #[must_use]
     pub fn new(session_id: String) -> Self {
-        Self { session_id, task_emb: std::sync::OnceLock::new() }
+        Self {
+            session_id,
+            task_emb: std::sync::OnceLock::new(),
+        }
     }
 }
-
 
 #[cfg(test)]
 mod integration_tests {
@@ -56,23 +60,41 @@ mod integration_tests {
 
     use super::{OutcomeObserver, RoutingAttribution, RoutingExperienceStore};
 
-    fn emb(seed: f32) -> Vec<f32> { let mut v = vec![0.0f32; 768]; v[0] = seed; v }
+    fn emb(seed: f32) -> Vec<f32> {
+        let mut v = vec![0.0f32; 768];
+        v[0] = seed;
+        v
+    }
     fn temp_backend() -> SqliteMemoryBackend {
         let dir = std::env::temp_dir().join(format!("aleph-routing-int-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap()
     }
-    struct StubEmbedder { vec: Vec<f32> }
+    struct StubEmbedder {
+        vec: Vec<f32>,
+    }
     #[async_trait::async_trait]
     impl EmbeddingProvider for StubEmbedder {
-        async fn embed(&self, _t: &str) -> Result<Vec<f32>, AlephError> { Ok(self.vec.clone()) }
-        async fn embed_batch(&self, t: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> { Ok(t.iter().map(|_| self.vec.clone()).collect()) }
-        fn dimensions(&self) -> usize { 768 }
-        fn model_name(&self) -> &str { "stub" }
-        fn provider_id(&self) -> &str { "stub" }
+        async fn embed(&self, _t: &str) -> Result<Vec<f32>, AlephError> {
+            Ok(self.vec.clone())
+        }
+        async fn embed_batch(&self, t: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+            Ok(t.iter().map(|_| self.vec.clone()).collect())
+        }
+        fn dimensions(&self) -> usize {
+            768
+        }
+        fn model_name(&self) -> &str {
+            "stub"
+        }
+        fn provider_id(&self) -> &str {
+            "stub"
+        }
     }
     #[derive(Default)]
-    struct SpySink { session_completed: AtomicUsize }
+    struct SpySink {
+        session_completed: AtomicUsize,
+    }
     impl TraceSink for SpySink {
         fn on_trace(&self, event: &LoopTraceEvent) {
             if matches!(event, LoopTraceEvent::SessionCompleted { .. }) {
@@ -91,18 +113,35 @@ mod integration_tests {
             final_text: Some("done".into()),
             terminate_reason: Some(TerminateReason::Completed),
             duration_ms: Some(123),
-            token_breakdown: Some(TokenBreakdown { input: 10, output: 20, cache_read: 0, cache_creation: 0, reasoning: 0 }),
-            tool_timeline: vec![ToolInvocation { id: "1".into(), name: "bash".into(), duration_ms: 5, success: true, error: None }],
+            token_breakdown: Some(TokenBreakdown {
+                input: 10,
+                output: 20,
+                cache_read: 0,
+                cache_creation: 0,
+                reasoning: 0,
+            }),
+            tool_timeline: vec![ToolInvocation {
+                id: "1".into(),
+                name: "bash".into(),
+                duration_ms: 5,
+                success: true,
+                error: None,
+            }],
         }
     }
-    async fn drain_until_row(store: &RoutingExperienceStore, agent: &str) -> Vec<crate::memory::store::sqlite::routing_experience::RoutingNeighbor> {
+    async fn drain_until_row(
+        store: &RoutingExperienceStore,
+        agent: &str,
+    ) -> Vec<crate::memory::store::sqlite::routing_experience::RoutingNeighbor> {
         // `#[tokio::test]` is current-thread: yielding lets the spawned
         // fire-and-forget record task run. Bounded poll → deterministic.
         let mut got = Vec::new();
         for _ in 0..200 {
             tokio::task::yield_now().await;
             got = store.recall(agent, &emb(0.0), 5).await.unwrap();
-            if !got.is_empty() { break; }
+            if !got.is_empty() {
+                break;
+            }
         }
         got
     }
@@ -119,11 +158,17 @@ mod integration_tests {
             spy.clone() as Arc<dyn TraceSink>,
             store.clone(),
             attribution,
-            "MODEL_X".into(), "PROV_Y".into(), "agentA".into(),
+            "MODEL_X".into(),
+            "PROV_Y".into(),
+            "agentA".into(),
         );
         observer.on_trace(&session_completed());
         let got = drain_until_row(&store, "agentA").await;
-        assert_eq!(spy.session_completed.load(Ordering::SeqCst), 1, "forwarded unchanged");
+        assert_eq!(
+            spy.session_completed.load(Ordering::SeqCst),
+            1,
+            "forwarded unchanged"
+        );
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].model_id, "MODEL_X");
         assert_eq!(got[0].provider_id, "PROV_Y");
@@ -173,7 +218,10 @@ mod integration_tests {
         observer.on_trace(&session_completed());
         let got = drain_until_row(&store, "agentDyn").await;
         assert_eq!(got.len(), 1);
-        assert!(got[0].estimated_cost.is_none(), "unknown provider -> no estimate");
+        assert!(
+            got[0].estimated_cost.is_none(),
+            "unknown provider -> no estimate"
+        );
     }
 
     #[tokio::test]
@@ -188,13 +236,21 @@ mod integration_tests {
         attr_p.task_emb.set(emb(1.0)).unwrap();
         let obs_p = OutcomeObserver::new(
             Arc::new(SpySink::default()) as Arc<dyn TraceSink>,
-            store.clone(), attr_p, "M".into(), "P".into(), "parent".into(),
+            store.clone(),
+            attr_p,
+            "M".into(),
+            "P".into(),
+            "parent".into(),
         );
         let attr_c = Arc::new(RoutingAttribution::new("c".into()));
         attr_c.task_emb.set(emb(2.0)).unwrap();
         let obs_c = OutcomeObserver::new(
             Arc::new(SpySink::default()) as Arc<dyn TraceSink>,
-            store.clone(), attr_c, "N".into(), "P".into(), "child".into(),
+            store.clone(),
+            attr_c,
+            "N".into(),
+            "P".into(),
+            "child".into(),
         );
 
         obs_p.on_trace(&session_completed());
@@ -212,9 +268,19 @@ mod integration_tests {
         // touch routing recall (R10 — loop stays dumb).
         let prompt_src = include_str!("../harness/agent/prompt.rs");
         let think_src = include_str!("../harness/agent/think.rs");
-        for needle in ["RoutingRecall", "build_routing_experience_message", "routing_recall"] {
-            assert!(!prompt_src.contains(needle), "prompt.rs must not reference {needle}");
-            assert!(!think_src.contains(needle), "think.rs must not reference {needle}");
+        for needle in [
+            "RoutingRecall",
+            "build_routing_experience_message",
+            "routing_recall",
+        ] {
+            assert!(
+                !prompt_src.contains(needle),
+                "prompt.rs must not reference {needle}"
+            );
+            assert!(
+                !think_src.contains(needle),
+                "think.rs must not reference {needle}"
+            );
         }
     }
 }

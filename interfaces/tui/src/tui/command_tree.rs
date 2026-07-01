@@ -118,10 +118,10 @@ impl CommandEntry {
             .children
             .iter()
             .map(|child| {
-                let label = child.param_hint.as_ref().map_or_else(
-                    || child.name.clone(),
-                    |ph| format!("{} {}", child.name, ph),
-                );
+                let label = child
+                    .param_hint
+                    .as_ref()
+                    .map_or_else(|| child.name.clone(), |ph| format!("{} {}", child.name, ph));
                 DisplayEntry {
                     label,
                     hint: child.hint.clone(),

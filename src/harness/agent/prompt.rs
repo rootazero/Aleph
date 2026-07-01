@@ -62,8 +62,7 @@ pub(crate) fn build_prompt(
     // once they have all landed, keeping the pairing intact. Mechanical /
     // positional (R10-safe): the prompt is rebuilt fresh each turn and never
     // persisted, so this reorders only what the model sees, never the log.
-    let mut expected_results: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut expected_results: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut deferred_user_msgs: Vec<UnifiedMessage> = Vec::new();
 
     // Walk the FULL conversation in order, emitting one message per event.

@@ -35,7 +35,9 @@ pub trait SystemCapability: Send + Sync {
         let target = target.to_string();
         tokio::task::spawn_blocking(move || crate::action::open(&target))
             .await
-            .map_err(|e| crate::DesktopError::InputFailed(format!("open_path task join error: {e}")))?
+            .map_err(|e| {
+                crate::DesktopError::InputFailed(format!("open_path task join error: {e}"))
+            })?
     }
 
     /// List currently running applications.

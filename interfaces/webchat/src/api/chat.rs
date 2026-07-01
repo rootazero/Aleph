@@ -141,7 +141,9 @@ impl ChatApi {
         if result.is_null() {
             return Ok(None);
         }
-        serde_json::from_value(result).map(Some).map_err(|e| e.to_string())
+        serde_json::from_value(result)
+            .map(Some)
+            .map_err(|e| e.to_string())
     }
 
     /// Create a new session by closing the current one and incrementing the epoch.

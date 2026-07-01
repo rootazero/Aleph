@@ -14,7 +14,13 @@ fn build_script_cmd(language: ScriptLanguage, source: &str) -> Result<Command> {
     let cmd = match language {
         ScriptLanguage::PowerShell => {
             let mut c = Command::new("powershell.exe");
-            c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", source]);
+            c.args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                source,
+            ]);
             c
         }
         ScriptLanguage::Shell => {

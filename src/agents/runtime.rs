@@ -555,7 +555,10 @@ pub fn persist_transcript(transcript: &SubagentTranscript, session_id: &str) {
     // Sanitize path components so a user/project-controlled agent id or
     // session id cannot traverse out of the transcript directory.
     let safe_session = session_id.replace(['/', '\\'], "_").replace("..", "_");
-    let safe_agent_id = transcript.agent_id.replace(['/', '\\'], "_").replace("..", "_");
+    let safe_agent_id = transcript
+        .agent_id
+        .replace(['/', '\\'], "_")
+        .replace("..", "_");
     let base = match dirs::home_dir() {
         Some(h) => h.join(".aleph/data/transcripts").join(safe_session),
         None => {

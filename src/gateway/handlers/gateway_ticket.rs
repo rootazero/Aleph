@@ -53,15 +53,21 @@ pub async fn handle_ticket_create(
                 }),
             )
         }
-        Err(DeviceTokenError::Storage(e)) => {
-            JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("ticket creation failed: {e}"))
-        }
-        Err(DeviceTokenError::InvalidBootstrapTicket) => {
-            JsonRpcResponse::error(request.id, INTERNAL_ERROR, "invalid bootstrap ticket configuration".to_string())
-        }
-        Err(DeviceTokenError::InvalidDeviceToken) => {
-            JsonRpcResponse::error(request.id, INTERNAL_ERROR, "invalid device token configuration".to_string())
-        }
+        Err(DeviceTokenError::Storage(e)) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("ticket creation failed: {e}"),
+        ),
+        Err(DeviceTokenError::InvalidBootstrapTicket) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            "invalid bootstrap ticket configuration".to_string(),
+        ),
+        Err(DeviceTokenError::InvalidDeviceToken) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            "invalid device token configuration".to_string(),
+        ),
     }
 }
 

@@ -87,8 +87,7 @@ fn ensure_column(
         return Ok(());
     }
     let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {sql_type}");
-    conn
-        .execute(&sql, [])
+    conn.execute(&sql, [])
         .map_err(|e| format!("failed to ALTER TABLE {table} ADD {column}: {e}"))?;
     Ok(())
 }

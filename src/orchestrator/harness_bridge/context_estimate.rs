@@ -103,7 +103,10 @@ mod tests {
     fn compose_adds_history_message_tokens() {
         let history = vec![UnifiedMessage::user("hello there, this is a user turn")];
         let est = compose_estimate(10_000, &history, 200_000, ESTIMATE_RATIO);
-        assert!(est.used_tokens > 10_000, "history tokens must add on top of overhead");
+        assert!(
+            est.used_tokens > 10_000,
+            "history tokens must add on top of overhead"
+        );
     }
 
     #[test]

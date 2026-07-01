@@ -54,7 +54,8 @@ pub fn sparkline(counts: &[u32]) -> String {
             if c == 0 {
                 ' '
             } else {
-                let idx = ((f64::from(c) / f64::from(max)) * (BARS.len() - 1) as f64).round() as usize;
+                let idx =
+                    ((f64::from(c) / f64::from(max)) * (BARS.len() - 1) as f64).round() as usize;
                 BARS[idx.min(BARS.len() - 1)]
             }
         })

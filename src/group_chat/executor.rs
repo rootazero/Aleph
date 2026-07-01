@@ -108,9 +108,7 @@ impl GroupChatExecutor {
             let (speaker_type, speaker_id, speaker_name) = match &speaker {
                 Speaker::Coordinator => ("coordinator", None, "Coordinator"),
                 Speaker::System => ("system", None, "System"),
-                Speaker::Persona { id, name } => {
-                    ("persona", Some(id.as_str()), name.as_str())
-                }
+                Speaker::Persona { id, name } => ("persona", Some(id.as_str()), name.as_str()),
             };
             db.insert_group_chat_turn(
                 &session_id,

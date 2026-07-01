@@ -31,7 +31,9 @@ pub struct WebhookState {
 
 pub async fn run_webhook_server(state: WebhookState, host: String, port: u16, path: String) {
     let addr = format!("{host}:{port}");
-    let app = Router::new().route(&path, post(handle_webhook)).with_state(state);
+    let app = Router::new()
+        .route(&path, post(handle_webhook))
+        .with_state(state);
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,
         Err(e) => {
@@ -74,8 +76,7 @@ pub async fn handle_webhook(
                     .is_duplicate(&m.guid)
             };
             if !dup {
-                let atts =
-                    super::download_attachments(&state.api, &m.attachment_guids).await;
+                let atts = super::download_attachments(&state.api, &m.attachment_guids).await;
                 let inbound = to_inbound(&m, atts);
                 let _ = state.sender.send(inbound);
                 if state.send_read_receipts {
@@ -119,8 +120,9 @@ mod tests {
     #[tokio::test]
     async fn rejects_bad_password() {
         let st = crate::gateway::channel::ChannelState::new(10);
-        let app =
-            Router::new().route("/wh", post(handle_webhook)).with_state(state(st.sender()));
+        let app = Router::new()
+            .route("/wh", post(handle_webhook))
+            .with_state(state(st.sender()));
         let resp = app
             .oneshot(
                 Request::builder()
@@ -139,8 +141,9 @@ mod tests {
     async fn accepts_and_emits_inbound() {
         let st = crate::gateway::channel::ChannelState::new(10);
         let mut rx = st.inbound_subscribe();
-        let app =
-            Router::new().route("/wh", post(handle_webhook)).with_state(state(st.sender()));
+        let app = Router::new()
+            .route("/wh", post(handle_webhook))
+            .with_state(state(st.sender()));
         let body = r#"{"type":"new-message","data":{"guid":"g1","text":"hi","isFromMe":false,"chatGuid":"iMessage;-;+1","handle":{"address":"+1"}}}"#;
         let resp = app
             .oneshot(

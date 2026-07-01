@@ -28,9 +28,18 @@ pub fn render(frame: &mut Frame, state: &AppState, textarea: &TextArea) {
     ])
     .split(frame.area());
 
-    let chat_area = chunks.get(0).copied().expect("vertical layout must produce three areas");
-    let input_area = chunks.get(1).copied().expect("vertical layout must produce three areas");
-    let status_area = chunks.get(2).copied().expect("vertical layout must produce three areas");
+    let chat_area = chunks
+        .get(0)
+        .copied()
+        .expect("vertical layout must produce three areas");
+    let input_area = chunks
+        .get(1)
+        .copied()
+        .expect("vertical layout must produce three areas");
+    let status_area = chunks
+        .get(2)
+        .copied()
+        .expect("vertical layout must produce three areas");
 
     // Chat area
     render_chat_area(frame, state, chat_area);

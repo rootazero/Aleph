@@ -112,10 +112,9 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
     println!("Cloning repository...");
     let url = url.to_string();
     let dest_path_clone = dest_path.clone();
-    let clone_result = tokio::task::spawn_blocking(move || {
-        git2::Repository::clone(&url, &dest_path_clone)
-    })
-    .await?;
+    let clone_result =
+        tokio::task::spawn_blocking(move || git2::Repository::clone(&url, &dest_path_clone))
+            .await?;
     match clone_result {
         Ok(_) => {
             println!("Repository cloned successfully.");
@@ -200,7 +199,10 @@ pub async fn handle_plugins_enable(name: &str) -> Result<(), Box<dyn std::error:
 
     // Check for disabled marker file
     let disabled_marker = plugin_path.join(".disabled");
-    if tokio::fs::try_exists(&disabled_marker).await.unwrap_or(false) {
+    if tokio::fs::try_exists(&disabled_marker)
+        .await
+        .unwrap_or(false)
+    {
         tokio::fs::remove_file(&disabled_marker).await?;
         println!("Plugin enabled: {name}");
     } else {
@@ -224,7 +226,10 @@ pub async fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error
 
     // Create disabled marker file
     let disabled_marker = plugin_path.join(".disabled");
-    if tokio::fs::try_exists(&disabled_marker).await.unwrap_or(false) {
+    if tokio::fs::try_exists(&disabled_marker)
+        .await
+        .unwrap_or(false)
+    {
         println!("Plugin is already disabled: {name}");
     } else {
         tokio::fs::write(&disabled_marker, "").await?;
@@ -478,4 +483,3 @@ pub async fn handle_marketplace_command(
     }
     Ok(())
 }
-

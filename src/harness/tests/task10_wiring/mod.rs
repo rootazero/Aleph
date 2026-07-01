@@ -313,7 +313,11 @@ async fn budget_critical_compacts_and_continues_with_prior_text() {
     // Never-break: critical context pressure compacts in place, then the normal
     // LLM call fires. The run must NOT hard-stop (no hit_limit, no
     // ContextBudgetExhausted) even though a prior assistant text exists on the log.
-    assert_eq!(state, TurnState::Done, "compact-then-continue ends the turn via a normal LLM completion");
+    assert_eq!(
+        state,
+        TurnState::Done,
+        "compact-then-continue ends the turn via a normal LLM completion"
+    );
     assert!(
         !harness.hit_limit(),
         "critical pressure must compact and continue, never set hit_limit",
@@ -390,7 +394,9 @@ async fn budget_critical_compacts_and_continues_no_prior_text() {
     // gets a real answer, not a hard-stop).
     let events = session.snapshot().await;
     let text_present = events.iter().any(|r| match &r.event {
-        SessionEvent::AssistantMessage { content, .. } => content.text == "continued after compaction",
+        SessionEvent::AssistantMessage { content, .. } => {
+            content.text == "continued after compaction"
+        }
         _ => false,
     });
     assert!(

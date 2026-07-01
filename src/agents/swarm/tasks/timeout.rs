@@ -118,7 +118,10 @@ mod tests {
     #[test]
     fn zero_is_not_an_override() {
         // A zero-second timeout would abort instantly — treat as "no override".
-        assert_eq!(read_task_timeout(&json!({ TASK_TIMEOUT_METADATA_KEY: 0 })), None);
+        assert_eq!(
+            read_task_timeout(&json!({ TASK_TIMEOUT_METADATA_KEY: 0 })),
+            None
+        );
     }
 
     #[test]

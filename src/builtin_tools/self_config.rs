@@ -820,7 +820,9 @@ mod tests {
     async fn test_list_files() {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path();
-        tokio::fs::write(dir.join("SOUL.md"), "soul content").await.unwrap();
+        tokio::fs::write(dir.join("SOUL.md"), "soul content")
+            .await
+            .unwrap();
 
         let tool = tool_with_dir(dir);
         let result = AlephTool::call(&tool, SelfConfigArgs::ListFiles)
@@ -916,7 +918,9 @@ mod tests {
         let saved = tokio::fs::read_to_string(backups[0].path()).await.unwrap();
         assert_eq!(saved, "version one", "backup must hold the OLD content");
         // The live file holds the new content.
-        let live = tokio::fs::read_to_string(tmp.path().join("SOUL.md")).await.unwrap();
+        let live = tokio::fs::read_to_string(tmp.path().join("SOUL.md"))
+            .await
+            .unwrap();
         assert_eq!(live, "version two");
     }
 
@@ -1109,4 +1113,3 @@ mod tests {
         assert!(result.message.contains("always_local"));
     }
 }
-

@@ -92,7 +92,9 @@ fn team_history_item_to_message(index: usize, item: TeamMessageItem) -> ChatMess
 /// real LLM call ran). `None` when no turn carries one, which correctly leaves
 /// the gauge hidden. Pure + sync so it is unit-testable without a Leptos owner.
 #[must_use]
-pub(crate) fn occupancy_from_history(history: &[crate::api::chat::ChatMessage]) -> Option<ContextUsage> {
+pub(crate) fn occupancy_from_history(
+    history: &[crate::api::chat::ChatMessage],
+) -> Option<ContextUsage> {
     history.iter().rev().find_map(|m| {
         let used = m.context_tokens?;
         let window = m.context_window?;
@@ -576,10 +578,8 @@ pub fn ChatSidebar() -> impl IntoView {
             let Some(agent_list) = agents.try_get_untracked() else {
                 return;
             };
-            let agent_map: std::collections::HashMap<String, AgentEntry> = agent_list
-                .into_iter()
-                .map(|a| (a.id.clone(), a))
-                .collect();
+            let agent_map: std::collections::HashMap<String, AgentEntry> =
+                agent_list.into_iter().map(|a| (a.id.clone(), a)).collect();
             let roster: Vec<TeamMemberView> = detail
                 .members
                 .iter()
@@ -1651,7 +1651,10 @@ mod gauge_tests {
     fn real_occupancy_is_not_marked_estimate() {
         let h = vec![assistant(Some(10_000), Some(200_000), Some(12_000))];
         let u = occupancy_from_history(&h).expect("real occupancy present");
-        assert!(!u.is_estimate, "history-persisted occupancy is real, not an estimate");
+        assert!(
+            !u.is_estimate,
+            "history-persisted occupancy is real, not an estimate"
+        );
     }
 
     #[test]

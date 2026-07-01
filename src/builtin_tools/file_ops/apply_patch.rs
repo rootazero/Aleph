@@ -666,7 +666,9 @@ fn parse_patch(input: &str) -> std::result::Result<Vec<PatchOp>, String> {
                     Some(_) => {
                         let raw = match lines.next() {
                             Some(v) => v,
-                            None => return Err("Update File `{path}`: missing hunk line".to_string()),
+                            None => {
+                                return Err("Update File `{path}`: missing hunk line".to_string())
+                            }
                         };
                         let raw = raw.trim_end_matches('\r');
                         if let Some(rest) = raw.strip_prefix("@@") {
@@ -750,7 +752,8 @@ fn current_mut(slot: &mut Option<Hunk>) -> &mut Hunk {
             eof_anchor: false,
         });
     }
-    slot.as_mut().unwrap_or_else(|| unreachable!("just initialised"))
+    slot.as_mut()
+        .unwrap_or_else(|| unreachable!("just initialised"))
 }
 
 // =============================================================================
@@ -865,7 +868,9 @@ mod tests {
     async fn end_to_end_add_and_update_in_tempdir() {
         let dir = tempfile::tempdir().expect("tempdir");
         let app_py = dir.path().join("app.py");
-        tokio::fs::write(&app_py, "x = 1\ny = 2\nz = 3\n").await.unwrap();
+        tokio::fs::write(&app_py, "x = 1\ny = 2\nz = 3\n")
+            .await
+            .unwrap();
 
         // Run the add+update in the temp directory using absolute prefix in
         // the resolved paths. We bypass the tool's path-resolution layer
@@ -939,7 +944,9 @@ mod tests {
         // fallback recovers the location and the edit lands.
         let dir = tempfile::tempdir().expect("tempdir");
         let app_py = dir.path().join("app.py");
-        tokio::fs::write(&app_py, "x = 1   \ny = 2\nz = 3  \n").await.unwrap();
+        tokio::fs::write(&app_py, "x = 1   \ny = 2\nz = 3  \n")
+            .await
+            .unwrap();
 
         let tool = ApplyPatchTool::new();
         let outcome = tool
@@ -991,4 +998,3 @@ mod tests {
         assert_eq!(updated, "end \nmiddle\nFIN\n");
     }
 }
-

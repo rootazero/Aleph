@@ -221,7 +221,9 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             let repo_for_blocking = repo.clone();
             let (wt, repo) = tokio::task::spawn_blocking(move || {
                 let wt = wt_for_blocking.canonicalize().unwrap_or(wt_for_blocking);
-                let repo = repo_for_blocking.canonicalize().unwrap_or(repo_for_blocking);
+                let repo = repo_for_blocking
+                    .canonicalize()
+                    .unwrap_or(repo_for_blocking);
                 (wt, repo)
             })
             .await
@@ -266,46 +268,49 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         // here at the spawn seam. Borrows `effective_task` before it moves into
         // the UserMessage below. `None` store / `None` sink → child keeps the
         // raw sink (today's behavior, no capture).
-        let child_trace_sink: Option<Arc<dyn crate::harness::TraceSink>> =
-            match (base.trace_sink.as_ref(), base.routing_store.as_ref()) {
-                (Some(sink), Some(store)) => {
-                    // Attribute from spawn-seam directives only (the parent's
-                    // resolved model/provider are not reachable here). Explicit
-                    // model choice = the high-value routing case; full
-                    // inheritance → "(dynamic)".
-                    let child_model = req
-                        .model
-                        .map(str::to_string)
-                        .or_else(|| req.agent_def.model_hint.clone())
-                        .unwrap_or_else(|| "(dynamic)".to_string());
-                    let child_provider = req
-                        .agent_def
-                        .provider_hint
-                        .clone()
-                        .unwrap_or_else(|| "(dynamic)".to_string());
-                    match store.embed_task(&effective_task).await {
-                        Ok(task_emb) => {
-                            let attribution = Arc::new(
-                                crate::routing::RoutingAttribution::new(child_id.to_key_string()),
-                            );
-                            let _ = attribution.task_emb.set(task_emb);
-                            Some(Arc::new(crate::routing::OutcomeObserver::new(
-                                sink.clone(),
-                                store.clone(),
-                                attribution,
-                                child_model,
-                                child_provider,
-                                req.agent_def.id.clone(),
-                            )) as Arc<dyn crate::harness::TraceSink>)
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "subagent routing embed failed; capture skipped");
-                            base.trace_sink.clone()
-                        }
+        let child_trace_sink: Option<Arc<dyn crate::harness::TraceSink>> = match (
+            base.trace_sink.as_ref(),
+            base.routing_store.as_ref(),
+        ) {
+            (Some(sink), Some(store)) => {
+                // Attribute from spawn-seam directives only (the parent's
+                // resolved model/provider are not reachable here). Explicit
+                // model choice = the high-value routing case; full
+                // inheritance → "(dynamic)".
+                let child_model = req
+                    .model
+                    .map(str::to_string)
+                    .or_else(|| req.agent_def.model_hint.clone())
+                    .unwrap_or_else(|| "(dynamic)".to_string());
+                let child_provider = req
+                    .agent_def
+                    .provider_hint
+                    .clone()
+                    .unwrap_or_else(|| "(dynamic)".to_string());
+                match store.embed_task(&effective_task).await {
+                    Ok(task_emb) => {
+                        let attribution = Arc::new(crate::routing::RoutingAttribution::new(
+                            child_id.to_key_string(),
+                        ));
+                        let _ = attribution.task_emb.set(task_emb);
+                        Some(Arc::new(crate::routing::OutcomeObserver::new(
+                            sink.clone(),
+                            store.clone(),
+                            attribution,
+                            child_model,
+                            child_provider,
+                            req.agent_def.id.clone(),
+                        ))
+                            as Arc<dyn crate::harness::TraceSink>)
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "subagent routing embed failed; capture skipped");
+                        base.trace_sink.clone()
                     }
                 }
-                _ => base.trace_sink.clone(),
-            };
+            }
+            _ => base.trace_sink.clone(),
+        };
         base.session
             .emit_event(
                 &child_id,

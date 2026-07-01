@@ -194,7 +194,6 @@ impl MessageSender {
         execute_applescript(script).await?;
         Ok(())
     }
-
 }
 
 /// Execute an `AppleScript` and return the output

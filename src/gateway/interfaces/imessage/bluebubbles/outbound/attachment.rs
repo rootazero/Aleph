@@ -16,7 +16,10 @@ mod tests {
 
     #[test]
     fn form_name_is_basename() {
-        assert_eq!(attachment_form_name(Path::new("/tmp/a/photo.png")), "photo.png");
+        assert_eq!(
+            attachment_form_name(Path::new("/tmp/a/photo.png")),
+            "photo.png"
+        );
         assert_eq!(attachment_form_name(Path::new("noext")), "noext");
     }
 }

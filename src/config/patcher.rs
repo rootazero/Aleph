@@ -1117,7 +1117,10 @@ mod tests {
             .await
             .unwrap();
         assert!(result.success, "a no-op patch still reports success");
-        assert!(result.diff.is_empty(), "no-op patch must report an empty diff");
+        assert!(
+            result.diff.is_empty(),
+            "no-op patch must report an empty diff"
+        );
 
         // No second snapshot was taken; the backup ring is untouched.
         let backups_after_noop = {

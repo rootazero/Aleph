@@ -22,8 +22,10 @@ pub(crate) fn sanitize_llm_output(text: &str) -> Cow<'_, str> {
         Regex::new(r"<(?:think|thinking|thought|antthinking|completion-check|task-complete)[\s/>]")
             .unwrap_or_else(|_| unreachable!("quick probe regex is statically valid"))
     });
-    static BLANK_LINES_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\n{3,}").unwrap_or_else(|_| unreachable!("blank-lines regex is statically valid")));
+    static BLANK_LINES_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\n{3,}")
+            .unwrap_or_else(|_| unreachable!("blank-lines regex is statically valid"))
+    });
 
     let has_tags = QUICK_PROBE.is_match(text);
     let has_trailing = text.ends_with("[[") || text.ends_with('[');

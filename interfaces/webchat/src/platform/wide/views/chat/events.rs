@@ -97,10 +97,7 @@ pub(crate) fn apply_trace_event(
                 let decoded = output
                     .and_then(serde_json::Value::as_str)
                     .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
-                let snapshot = decoded
-                    .as_ref()
-                    .or(output)
-                    .and_then(|o| o.get("snapshot"));
+                let snapshot = decoded.as_ref().or(output).and_then(|o| o.get("snapshot"));
                 // Sink the prior plan before the new snapshot overwrites it.
                 // Only a fresh decomposition (`set_plan`) or explicit teardown
                 // (`clear`) supersedes — `start_item`/`complete_item`/
@@ -564,8 +561,7 @@ mod projection_tests {
             .iter()
             .map(|(status, text)| json!({ "status": status, "text": text }))
             .collect();
-        let complete = !items.is_empty()
-            && items.iter().all(|(s, _)| *s == "completed");
+        let complete = !items.is_empty() && items.iter().all(|(s, _)| *s == "completed");
         let snapshot = json!({ "complete": complete, "objective": "Obj", "items": items_json });
         let output = serde_json::to_string(&json!({
             "success": true, "message": "ok", "snapshot": snapshot
@@ -580,7 +576,8 @@ mod projection_tests {
     }
 
     fn archive_count(chat: &ChatState) -> usize {
-        chat.messages.with(|m| m.iter().filter(|x| x.plan_archive.is_some()).count())
+        chat.messages
+            .with(|m| m.iter().filter(|x| x.plan_archive.is_some()).count())
     }
 
     #[test]
@@ -591,8 +588,18 @@ mod projection_tests {
         let ws = WorkspaceState::new();
         chat.start_assistant_message("r1");
         // plan A, then start an item (activity), then a fresh set_plan B
-        apply_trace_event(chat, ws, "r1", &scratchpad_event("set_plan", &[("in_progress", "a")]));
-        apply_trace_event(chat, ws, "r1", &scratchpad_event("set_plan", &[("pending", "b")]));
+        apply_trace_event(
+            chat,
+            ws,
+            "r1",
+            &scratchpad_event("set_plan", &[("in_progress", "a")]),
+        );
+        apply_trace_event(
+            chat,
+            ws,
+            "r1",
+            &scratchpad_event("set_plan", &[("pending", "b")]),
+        );
         assert_eq!(archive_count(&chat), 1, "worked prior plan A sinks");
         let plan = chat.plan.get_untracked().expect("new plan B shown");
         assert_eq!(plan.items[0].text, "b");
@@ -606,9 +613,23 @@ mod projection_tests {
         let ws = WorkspaceState::new();
         chat.start_assistant_message("r1");
         // plan A pristine (all pending), immediately replaced → silent
-        apply_trace_event(chat, ws, "r1", &scratchpad_event("set_plan", &[("pending", "a")]));
-        apply_trace_event(chat, ws, "r1", &scratchpad_event("set_plan", &[("pending", "b")]));
-        assert_eq!(archive_count(&chat), 0, "pristine prior A is silently replaced");
+        apply_trace_event(
+            chat,
+            ws,
+            "r1",
+            &scratchpad_event("set_plan", &[("pending", "a")]),
+        );
+        apply_trace_event(
+            chat,
+            ws,
+            "r1",
+            &scratchpad_event("set_plan", &[("pending", "b")]),
+        );
+        assert_eq!(
+            archive_count(&chat),
+            0,
+            "pristine prior A is silently replaced"
+        );
         assert_eq!(chat.plan.get_untracked().unwrap().items[0].text, "b");
     }
 
@@ -619,10 +640,18 @@ mod projection_tests {
         let chat = ChatState::new();
         let ws = WorkspaceState::new();
         chat.start_assistant_message("r1");
-        apply_trace_event(chat, ws, "r1", &scratchpad_event("set_plan", &[("completed", "a")]));
+        apply_trace_event(
+            chat,
+            ws,
+            "r1",
+            &scratchpad_event("set_plan", &[("completed", "a")]),
+        );
         apply_trace_event(chat, ws, "r1", &scratchpad_event("clear", &[]));
         assert_eq!(archive_count(&chat), 1, "completed plan sinks on clear");
-        assert!(chat.plan.get_untracked().is_none(), "panel hidden after clear");
+        assert!(
+            chat.plan.get_untracked().is_none(),
+            "panel hidden after clear"
+        );
     }
 
     #[test]
@@ -632,10 +661,24 @@ mod projection_tests {
         let chat = ChatState::new();
         let ws = WorkspaceState::new();
         chat.start_assistant_message("r1");
-        apply_trace_event(chat, ws, "r1", &scratchpad_event("set_plan", &[("pending", "a"), ("pending", "b")]));
+        apply_trace_event(
+            chat,
+            ws,
+            "r1",
+            &scratchpad_event("set_plan", &[("pending", "a"), ("pending", "b")]),
+        );
         // a same-plan update (start_item) must NOT sink a capsule
-        apply_trace_event(chat, ws, "r1", &scratchpad_event("start_item", &[("in_progress", "a"), ("pending", "b")]));
-        assert_eq!(archive_count(&chat), 0, "in-place update is not a supersede");
+        apply_trace_event(
+            chat,
+            ws,
+            "r1",
+            &scratchpad_event("start_item", &[("in_progress", "a"), ("pending", "b")]),
+        );
+        assert_eq!(
+            archive_count(&chat),
+            0,
+            "in-place update is not a supersede"
+        );
     }
 
     #[test]
@@ -646,24 +689,42 @@ mod projection_tests {
         let live = ChatState::new();
         let ws1 = WorkspaceState::new();
         live.start_assistant_message("r1");
-        apply_trace_event(live, ws1, "r1", &scratchpad_event("set_plan", &[("completed", "a")]));
+        apply_trace_event(
+            live,
+            ws1,
+            "r1",
+            &scratchpad_event("set_plan", &[("completed", "a")]),
+        );
         live.start_assistant_message("r2"); // next-turn sink of completed A
         let live_caps = live.messages.with(|m| {
-            m.iter().filter_map(|x| x.plan_archive.clone()).collect::<Vec<_>>()
+            m.iter()
+                .filter_map(|x| x.plan_archive.clone())
+                .collect::<Vec<_>>()
         });
 
         // Replay path: same two runs reconstructed via replay_run
         let rep = ChatState::new();
         let ws2 = WorkspaceState::new();
-        replay_run(rep, ws2, "r1", &[scratchpad_event("set_plan", &[("completed", "a")])], "done");
+        replay_run(
+            rep,
+            ws2,
+            "r1",
+            &[scratchpad_event("set_plan", &[("completed", "a")])],
+            "done",
+        );
         replay_run(rep, ws2, "r2", &[], "next");
         let rep_caps = rep.messages.with(|m| {
-            m.iter().filter_map(|x| x.plan_archive.clone()).collect::<Vec<_>>()
+            m.iter()
+                .filter_map(|x| x.plan_archive.clone())
+                .collect::<Vec<_>>()
         });
 
         assert_eq!(live_caps.len(), 1, "live sinks one capsule");
         assert_eq!(rep_caps.len(), 1, "replay reconstructs the same one");
-        assert_eq!(live_caps, rep_caps, "live and replay capsules are identical");
+        assert_eq!(
+            live_caps, rep_caps,
+            "live and replay capsules are identical"
+        );
     }
 
     #[test]
@@ -681,10 +742,7 @@ mod projection_tests {
         });
         super::apply_context_gauge(chat, &summary);
 
-        let usage = chat
-            .context_usage
-            .get_untracked()
-            .expect("gauge published");
+        let usage = chat.context_usage.get_untracked().expect("gauge published");
         assert_eq!(usage.used_tokens, 42_000);
         assert_eq!(usage.window_tokens, 200_000);
         assert_eq!(usage.total_tokens, 55_000);

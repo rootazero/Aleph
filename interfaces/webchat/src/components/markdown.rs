@@ -257,7 +257,12 @@ pub fn TypewriterRenderer(content: String, message_id: String) -> impl IntoView 
 
     let html = move || {
         clock.tick.track(); // re-render on each ~30fps animation tick
-        let revealed = revealed_len(total, now_ms() - start, clock.cps.get(), clock.instant.get());
+        let revealed = revealed_len(
+            total,
+            now_ms() - start,
+            clock.cps.get(),
+            clock.instant.get(),
+        );
         content.with_value(|c| {
             if revealed >= total {
                 render_streaming(c)

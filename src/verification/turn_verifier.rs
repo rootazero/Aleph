@@ -214,8 +214,7 @@ pub fn hash_tool_args(args: &serde_json::Value) -> u64 {
     use std::hash::{Hash, Hasher};
     // serde_json::Value 的序列化理论不可能失败；万一失败，退而使用其 Display
     // 表示的字节，避免返回空 vec 导致两个不同参数被误判为相同。
-    let bytes = serde_json::to_vec(args)
-        .unwrap_or_else(|_| args.to_string().into_bytes());
+    let bytes = serde_json::to_vec(args).unwrap_or_else(|_| args.to_string().into_bytes());
     let mut h = DefaultHasher::new();
     bytes.hash(&mut h);
     h.finish()
