@@ -7,6 +7,7 @@
 
 pub(crate) mod audio;
 pub(crate) mod caption_state;
+pub(crate) mod level;
 pub(crate) mod machine;
 pub(crate) mod orb;
 pub(crate) mod sentence;
@@ -24,6 +25,7 @@ use crate::context::{DashboardState, GatewayEvent};
 use crate::views::chat::ChatState;
 use audio::{MicError, MicSession, TtsPlayer};
 use caption_state::{apply_delta, apply_formatted, lock, CaptionState, Delta};
+use level::LevelSmoother;
 use machine::{on_event, Action, VoiceEvent, VoicePhase};
 use orb::VoiceOrb;
 use sentence::SentenceSplitter;
@@ -158,7 +160,14 @@ fn VoiceSession() -> impl IntoView {
                 });
             }
             Action::ShowError => {
-                caption.set(Caption::Error("没听清，再说一次？".into()));
+                // "没听清" is honest for a transcription miss but a lie for a
+                // failed agent run — tell the user which side actually broke.
+                let msg = if ev == VoiceEvent::RunFailed {
+                    "回复出错了，稍等再说一次？"
+                } else {
+                    "没听清，再说一次？"
+                };
+                caption.set(Caption::Error(msg.into()));
                 error_flash.set(true);
                 set_timeout(
                     move || error_flash.set(false),
@@ -235,6 +244,9 @@ fn VoiceSession() -> impl IntoView {
         let splitter = Rc::clone(&splitter);
         let speak_gen = Rc::clone(&speak_gen);
         let consecutive_errors = Rc::clone(&consecutive_errors);
+        // dB-domain fast-attack/slow-decay smoothing for the orb (FluidVoice's
+        // level pipeline). Visual only — the VAD below stays on raw RMS.
+        let orb_level = Rc::new(RefCell::new(LevelSmoother::default()));
         spawn_local(async move {
             let session = match MicSession::open().await {
                 Ok(s) => s,
@@ -266,13 +278,14 @@ fn VoiceSession() -> impl IntoView {
                 move || {
                     let rms = session.rms();
                     let speaking = phase.get_untracked() == VoicePhase::Speaking;
-                    // Orb level: amplified so ordinary speech (RMS ~0.06-0.2)
-                    // produces a visible pulse, not an imperceptible ~3% nudge.
+                    // Orb level: perceptual dB mapping + fast-attack/slow-decay
+                    // smoothing (level.rs) so ordinary speech (RMS ~0.06-0.2)
+                    // fills the orb's range instead of an imperceptible nudge.
                     // While the reply is speaking the mic mostly hears the AI's own
                     // playback echo, so drive the orb from the playback analyser.
                     let out_level = if speaking { player.output_level() } else { 0.0 };
                     let raw = if speaking { out_level } else { rms };
-                    level.set(f64::from((raw * 3.5).min(1.0)));
+                    level.set(f64::from(orb_level.borrow_mut().step(raw)));
 
                     if speaking {
                         // The AI's TTS plays through a separate AudioContext outside
@@ -784,7 +797,9 @@ async fn send_utterance(
     *splitter.borrow_mut() = SentenceSplitter::default();
     chat.push_user_message(&text);
     let sk = chat.session_key.get_untracked();
-    match ChatApi::send(&dash, &text, sk.as_deref(), vec![], None, None, None).await {
+    // voice_input=true: core arms VoiceModeLayer (spoken-reply prompt style)
+    // and the `[voice]` low-TTFT model pin for this session turn.
+    match ChatApi::send(&dash, &text, sk.as_deref(), vec![], None, None, None, true).await {
         Ok(resp) => {
             // Only arm the pipeline if no newer utterance / barge-in superseded
             // us while send was in flight.

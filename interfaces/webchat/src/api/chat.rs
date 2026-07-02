@@ -62,6 +62,10 @@ impl ChatApi {
     /// the user has entered project mode via "进入项目工作". Forwarded as
     /// `RunRequest.workspace_override` so the agent's tool calls run
     /// inside that folder instead of `~/.aleph/workspaces/{agent_id}`.
+    ///
+    /// `voice_input` — true when `message` is an ASR-transcribed spoken
+    /// utterance (voice loop / dictation). Core then arms the session's
+    /// voice-mode prompt layer and the `[voice]` low-TTFT model pin.
     #[allow(clippy::too_many_arguments)]
     pub async fn send(
         state: &DashboardState,
@@ -71,6 +75,7 @@ impl ChatApi {
         agent_id: Option<&str>,
         project_root: Option<&str>,
         model_override: Option<&crate::api::providers::ModelOverride>,
+        voice_input: bool,
     ) -> Result<ChatSendResponse, String> {
         let attachments_json: Vec<Value> = attachments
             .iter()
@@ -92,6 +97,7 @@ impl ChatApi {
             "agent_id": agent_id,
             "project_root": project_root,
             "model_override": model_override,
+            "voice_input": voice_input,
         });
         let result = state.rpc_call("chat.send", params).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())

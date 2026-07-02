@@ -209,7 +209,7 @@ pub(super) fn InputArea() -> impl IntoView {
             let aid = agent_id.as_deref();
             let pr = project_root.as_deref();
             let mo = model_override.as_ref();
-            match ChatApi::send(&dash, &text, sk, api_attachments, aid, pr, mo).await {
+            match ChatApi::send(&dash, &text, sk, api_attachments, aid, pr, mo, false).await {
                 Ok(resp) => {
                     chat.session_key.set(Some(resp.session_key));
                 }
@@ -295,6 +295,7 @@ pub(super) fn InputArea() -> impl IntoView {
                     agent_id.as_deref(),
                     project_root.as_deref(),
                     model_override.as_ref(),
+                    false,
                 )
                 .await
                 {

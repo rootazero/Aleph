@@ -31,6 +31,10 @@ pub enum RateLimitScope {
     RpcWrite,
     /// Resource-intensive RPC calls (agent.run, chat.send, ...).
     RpcHeavy,
+    /// High-frequency realtime data frames (voice.stream.audio). Streaming STT
+    /// pushes one ~200 ms PCM frame per RPC — a steady 5 req/s per active mic —
+    /// which would exhaust `RpcDefault` in seconds and kill live transcription.
+    RpcRealtime,
     /// Webhook authentication attempts.
     WebhookAuth,
 }
@@ -42,6 +46,7 @@ impl fmt::Display for RateLimitScope {
             Self::RpcDefault => write!(f, "rpc_default"),
             Self::RpcWrite => write!(f, "rpc_write"),
             Self::RpcHeavy => write!(f, "rpc_heavy"),
+            Self::RpcRealtime => write!(f, "rpc_realtime"),
             Self::WebhookAuth => write!(f, "webhook_auth"),
         }
     }
@@ -93,6 +98,7 @@ pub struct RateLimitConfig {
     pub rpc_default: WindowConfig,
     pub rpc_write: WindowConfig,
     pub rpc_heavy: WindowConfig,
+    pub rpc_realtime: WindowConfig,
     /// If `true`, requests from loopback addresses bypass all limits.
     pub exempt_loopback: bool,
     /// Hard cap on the number of distinct `(identity, scope)` entries held in
@@ -129,7 +135,18 @@ impl Default for RateLimitConfig {
                 lockout_secs: None,
             },
             rpc_heavy: WindowConfig {
-                max_requests: 5,
+                // A live voice conversation issues one chat.send per spoken
+                // utterance — easily 10-20/min in quick exchanges. 5/min made
+                // remote (LAN Panel) voice mode collapse after five turns; 30
+                // still caps a runaway loop while leaving conversation room.
+                max_requests: 30,
+                window_secs: 60,
+                lockout_secs: None,
+            },
+            rpc_realtime: WindowConfig {
+                // Streaming STT frames: 5/s per mic (200 ms cadence) = 300/min;
+                // 1500 leaves headroom for several concurrent voice sessions.
+                max_requests: 1500,
                 window_secs: 60,
                 lockout_secs: None,
             },
@@ -147,6 +164,7 @@ impl RateLimitConfig {
             RateLimitScope::RpcDefault => &self.rpc_default,
             RateLimitScope::RpcWrite => &self.rpc_write,
             RateLimitScope::RpcHeavy => &self.rpc_heavy,
+            RateLimitScope::RpcRealtime => &self.rpc_realtime,
         }
     }
 }
@@ -416,6 +434,10 @@ pub fn scope_for_method(method: &str) -> RateLimitScope {
         // Resource-intensive operations
         "agent.run" | "chat.send" => RateLimitScope::RpcHeavy,
 
+        // Realtime audio frames (one ~200 ms PCM chunk per call while a
+        // streaming-STT mic is live)
+        "voice.stream.audio" => RateLimitScope::RpcRealtime,
+
         // Everything else
         _ => RateLimitScope::RpcDefault,
     }
@@ -465,6 +487,11 @@ mod tests {
             },
             rpc_heavy: WindowConfig {
                 max_requests: 2,
+                window_secs: 1,
+                lockout_secs: None,
+            },
+            rpc_realtime: WindowConfig {
+                max_requests: 20,
                 window_secs: 1,
                 lockout_secs: None,
             },
@@ -605,6 +632,13 @@ mod tests {
             );
         }
 
+        // Realtime audio frames get their own high-rate bucket — RpcDefault
+        // would starve a live mic (5 frames/s) within seconds.
+        assert_eq!(
+            scope_for_method("voice.stream.audio"),
+            RateLimitScope::RpcRealtime
+        );
+
         // Default
         assert_eq!(scope_for_method("session.list"), RateLimitScope::RpcDefault);
         assert_eq!(scope_for_method("config.get"), RateLimitScope::RpcDefault);
@@ -612,6 +646,35 @@ mod tests {
             scope_for_method("unknown.method"),
             RateLimitScope::RpcDefault
         );
+        // Other voice methods stay in the default bucket (they are per-turn,
+        // not per-frame).
+        assert_eq!(
+            scope_for_method("voice.transcribe"),
+            RateLimitScope::RpcDefault
+        );
+    }
+
+    #[test]
+    fn default_limits_leave_room_for_a_voice_conversation() {
+        // A remote (LAN) voice session: ~15 utterances/min = 15 chat.send,
+        // plus a continuous 5 frames/s streaming mic = 300 voice.stream.audio.
+        // Both must clear the production defaults — 5/min rpc_heavy was the
+        // "voice chat dies after five turns" bug.
+        let limiter = RateLimiter::new(RateLimitConfig::default());
+        let heavy = RateLimitKey::new("192.168.1.20", RateLimitScope::RpcHeavy);
+        for i in 0..15 {
+            assert!(
+                limiter.check_and_record(&heavy).is_ok(),
+                "chat.send {i} within a minute must pass"
+            );
+        }
+        let frames = RateLimitKey::new("192.168.1.20", RateLimitScope::RpcRealtime);
+        for i in 0..300 {
+            assert!(
+                limiter.check_and_record(&frames).is_ok(),
+                "streaming frame {i} within a minute must pass"
+            );
+        }
     }
 
     #[test]

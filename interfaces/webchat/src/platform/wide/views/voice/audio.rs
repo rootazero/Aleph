@@ -1,14 +1,25 @@
 //! Wasm audio glue for the immersive voice mode. No business logic here —
 //! VAD/splitting/phase decisions live in the pure modules.
 //!
-//! Capture is a *continuous* PCM tap (Web Audio `ScriptProcessorNode`), not a
-//! per-utterance `MediaRecorder`. A `MediaRecorder` can only start capturing at
-//! the moment VAD declares speech — by then the first syllable is already gone
-//! (RMS must cross the threshold first, then the recorder spins up), which is
-//! exactly the "你好 → 好" leading-clip bug. With a continuous tap we keep a
-//! rolling pre-roll ring and seed each segment with it, so the onset is always
-//! present. Raw PCM is sliceable (webm chunks are not), so the pre-roll is
-//! free; the segment is WAV-encoded for the STT round-trip.
+//! Capture is a *continuous* PCM tap, not a per-utterance `MediaRecorder`. A
+//! `MediaRecorder` can only start capturing at the moment VAD declares speech —
+//! by then the first syllable is already gone (RMS must cross the threshold
+//! first, then the recorder spins up), which is exactly the "你好 → 好"
+//! leading-clip bug. With a continuous tap we keep a rolling pre-roll ring and
+//! seed each segment with it, so the onset is always present. Raw PCM is
+//! sliceable (webm chunks are not), so the pre-roll is free; the segment is
+//! WAV-encoded for the STT round-trip.
+//!
+//! The tap has two implementations behind one ingest path ([`ingest_pcm`]):
+//!
+//! 1. **`AudioWorklet` (primary)** — sample copying runs on the audio render
+//!    thread; ~4096-sample batches arrive on the main thread as transferable
+//!    `Float32Array` messages (zero-copy hand-off, ~12 msgs/s at 48 kHz).
+//!    Mirrors FluidVoice's 4096-frame `AVAudioEngine` tap.
+//! 2. **`ScriptProcessorNode` (fallback)** — the deprecated main-thread tap,
+//!    kept for webviews whose `AudioContext` lacks `audioWorklet`. Same buffer
+//!    size, same ingest, strictly worse scheduling (main-thread jank can drop
+//!    audio callbacks).
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -61,16 +72,28 @@ pub(crate) fn f32_to_s16le(pcm: &[f32]) -> Vec<u8> {
     out
 }
 
+/// The live PCM tap — worklet (audio-thread) or script-processor (fallback).
+/// Both feed [`ingest_pcm`]; only wiring and teardown differ.
+enum CaptureTap {
+    Worklet {
+        node: web_sys::AudioWorkletNode,
+        _on_message: Closure<dyn FnMut(web_sys::MessageEvent)>,
+    },
+    Script {
+        node: web_sys::ScriptProcessorNode,
+        _on_audio: Closure<dyn FnMut(web_sys::AudioProcessingEvent)>,
+    },
+}
+
 /// Microphone session: one getUserMedia stream feeding two taps — an
-/// `AnalyserNode` (RMS level, polled on an interval) and a `ScriptProcessorNode`
-/// (continuous PCM into the pre-roll ring + the active segment).
+/// `AnalyserNode` (RMS level, polled on an interval) and a continuous PCM
+/// [`CaptureTap`] (pre-roll ring + the active segment + streaming frames).
 pub(crate) struct MicSession {
     stream: web_sys::MediaStream,
     ctx: web_sys::AudioContext,
     analyser: web_sys::AnalyserNode,
-    processor: web_sys::ScriptProcessorNode,
+    tap: CaptureTap,
     _source: web_sys::MediaStreamAudioSourceNode,
-    _on_audio: Closure<dyn FnMut(web_sys::AudioProcessingEvent)>,
     rms_buf: RefCell<Vec<u8>>,
     sample_rate: u32,
     cap: Rc<RefCell<Capture>>,
@@ -224,91 +247,30 @@ impl MicSession {
             on_frame: None,
         }));
 
-        let processor = ctx
-            .create_script_processor_with_buffer_size_and_number_of_input_channels_and_number_of_output_channels(
-                SCRIPT_BUF, 1, 1,
-            )
-            .map_err(|_| MicError::AudioContext)?;
-        let cap_w = Rc::clone(&cap);
         // Flush a streaming frame once the accumulator holds ~200 ms of
         // device-rate audio. Kept ≥ 1 so a degenerate rate can't divide to 0.
         let frame_chunk = (sample_rate / 5).max(1) as usize;
-        let on_audio = Closure::<dyn FnMut(_)>::new(move |ev: web_sys::AudioProcessingEvent| {
-            let Ok(input) = ev.input_buffer() else { return };
-            let Ok(data) = input.get_channel_data(0) else {
-                return;
-            };
-            let mut c = cap_w.borrow_mut();
-            let pc = c.preroll_cap;
-            for &s in &data {
-                if c.preroll.len() >= pc {
-                    c.preroll.pop_front();
-                }
-                c.preroll.push_back(s);
+
+        // Primary: AudioWorklet tap (audio-thread copy, batched hand-off).
+        // Any failure — no audioWorklet on the context (older WKWebView),
+        // module rejection, node construction — falls back to the deprecated
+        // ScriptProcessorNode path, which still works everywhere.
+        let tap = match open_worklet_tap(&ctx, &source, &cap, sample_rate, frame_chunk).await {
+            Ok(tap) => tap,
+            Err(e) => {
+                web_sys::console::debug_1(
+                    &format!("voice capture: AudioWorklet unavailable ({e:?}), using ScriptProcessor fallback").into(),
+                );
+                open_script_tap(&ctx, &source, &cap, sample_rate, frame_chunk)?
             }
-            let mc = c.max_segment;
-            if let Some(seg) = c.segment.as_mut() {
-                if seg.len() < mc {
-                    seg.extend_from_slice(&data);
-                }
-            }
-            // Streaming tap: accumulate device-rate samples, then emit fixed
-            // ~200 ms frames resampled to 16 kHz s16le. Independent of the batch
-            // WAV segment above (which is the fallback path).
-            if !c.streaming {
-                return;
-            }
-            c.frame_accum.extend_from_slice(&data);
-            // Drain whole chunks; a single callback (≈85 ms) won't fill a 200 ms
-            // chunk, but draining in a loop is robust to larger buffers/rates.
-            let mut frames: Vec<String> = Vec::new();
-            while c.frame_accum.len() >= frame_chunk {
-                let chunk: Vec<f32> = c.frame_accum.drain(..frame_chunk).collect();
-                // Resample device rate → 16 kHz (nearest-neighbor decimation;
-                // STT is robust to this). Handles non-integer ratios (44100→16000).
-                let out_len = chunk.len() * 16_000 / sample_rate as usize;
-                let mut resampled = Vec::with_capacity(out_len);
-                for i in 0..out_len {
-                    let src = i * sample_rate as usize / 16_000;
-                    resampled.push(chunk[src.min(chunk.len() - 1)]);
-                }
-                let bytes = f32_to_s16le(&resampled);
-                frames.push(wav::base64_encode(&bytes));
-            }
-            // Snapshot the sink and DROP the borrow before invoking it: the
-            // callback spawns an RPC upward and must not re-enter `Capture`
-            // while it is mutably borrowed (BorrowMutError guard).
-            if frames.is_empty() {
-                return;
-            }
-            let sink = c.on_frame.clone();
-            drop(c);
-            if let Some(sink) = sink {
-                for b64 in frames {
-                    sink(b64);
-                }
-            }
-        });
-        processor.set_onaudioprocess(Some(on_audio.as_ref().unchecked_ref()));
-        // Tap the source into the processor and pin the processor to the
-        // destination so its `onaudioprocess` fires (WebKit/Chrome require a
-        // live downstream). The output buffer is left untouched (silent), so
-        // routing through the destination causes no mic feedback.
-        source
-            .connect_with_audio_node(&processor)
-            .map_err(|_| MicError::AudioContext)?;
-        let dest = ctx.destination();
-        processor
-            .connect_with_audio_node(&dest)
-            .map_err(|_| MicError::AudioContext)?;
+        };
 
         Ok(Rc::new(Self {
             stream,
             ctx,
             analyser,
-            processor,
+            tap,
             _source: source,
-            _on_audio: on_audio,
             rms_buf: RefCell::new(vec![0u8; 1024]),
             sample_rate,
             cap,
@@ -375,8 +337,18 @@ impl MicSession {
     }
 
     pub(crate) fn close(&self) {
-        self.processor.set_onaudioprocess(None);
-        let _ = self.processor.disconnect();
+        match &self.tap {
+            CaptureTap::Worklet { node, .. } => {
+                if let Ok(port) = node.port() {
+                    port.set_onmessage(None);
+                }
+                let _ = node.disconnect();
+            }
+            CaptureTap::Script { node, .. } => {
+                node.set_onaudioprocess(None);
+                let _ = node.disconnect();
+            }
+        }
         let _ = self._source.disconnect();
         for track in self.stream.get_tracks().iter() {
             if let Ok(track) = track.dyn_into::<web_sys::MediaStreamTrack>() {
@@ -385,6 +357,184 @@ impl MicSession {
         }
         let _ = self.ctx.close();
     }
+}
+
+// ---------------------------------------------------------------------------
+// Capture taps — shared ingest + the two wiring paths
+// ---------------------------------------------------------------------------
+
+/// Feed one batch of device-rate mono samples into the capture state:
+/// pre-roll ring, active segment, and (when streaming) fixed ~200 ms frames
+/// resampled to 16 kHz s16le for the backend ASR stream. Single ingest shared
+/// by both taps so their behavior cannot drift.
+fn ingest_pcm(cap: &Rc<RefCell<Capture>>, data: &[f32], sample_rate: u32, frame_chunk: usize) {
+    let mut c = cap.borrow_mut();
+    let pc = c.preroll_cap;
+    for &s in data {
+        if c.preroll.len() >= pc {
+            c.preroll.pop_front();
+        }
+        c.preroll.push_back(s);
+    }
+    let mc = c.max_segment;
+    if let Some(seg) = c.segment.as_mut() {
+        if seg.len() < mc {
+            seg.extend_from_slice(data);
+        }
+    }
+    // Streaming tap: accumulate device-rate samples, then emit fixed ~200 ms
+    // frames resampled to 16 kHz s16le. Independent of the batch WAV segment
+    // above (which is the fallback path).
+    if !c.streaming {
+        return;
+    }
+    c.frame_accum.extend_from_slice(data);
+    // Drain whole chunks; draining in a loop is robust to batch sizes larger
+    // than one chunk (the worklet delivers ~85 ms batches, but a stalled main
+    // thread can queue several).
+    let mut frames: Vec<String> = Vec::new();
+    while c.frame_accum.len() >= frame_chunk {
+        let chunk: Vec<f32> = c.frame_accum.drain(..frame_chunk).collect();
+        // Resample device rate → 16 kHz (nearest-neighbor decimation;
+        // STT is robust to this). Handles non-integer ratios (44100→16000).
+        let out_len = chunk.len() * 16_000 / sample_rate as usize;
+        let mut resampled = Vec::with_capacity(out_len);
+        for i in 0..out_len {
+            let src = i * sample_rate as usize / 16_000;
+            resampled.push(chunk[src.min(chunk.len() - 1)]);
+        }
+        let bytes = f32_to_s16le(&resampled);
+        frames.push(wav::base64_encode(&bytes));
+    }
+    // Snapshot the sink and DROP the borrow before invoking it: the callback
+    // spawns an RPC upward and must not re-enter `Capture` while it is
+    // mutably borrowed (BorrowMutError guard).
+    if frames.is_empty() {
+        return;
+    }
+    let sink = c.on_frame.clone();
+    drop(c);
+    if let Some(sink) = sink {
+        for b64 in frames {
+            sink(b64);
+        }
+    }
+}
+
+/// The AudioWorklet processor, registered from a blob URL. Copies input
+/// samples on the render thread into ~[`SCRIPT_BUF`]-sample batches and posts
+/// each batch to the main thread as a *transferred* `Float32Array` buffer
+/// (zero-copy hand-off). Outputs stay zeroed — the node is pinned to the
+/// destination only so the graph pulls it; it contributes silence.
+const CAPTURE_WORKLET_JS: &str = r"
+class AlephCapture extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Float32Array(4096); this.n = 0; }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (ch) {
+      let i = 0;
+      while (i < ch.length) {
+        const take = Math.min(ch.length - i, 4096 - this.n);
+        this.buf.set(ch.subarray(i, i + take), this.n);
+        this.n += take; i += take;
+        if (this.n === 4096) {
+          const out = this.buf;
+          this.port.postMessage(out, [out.buffer]);
+          this.buf = new Float32Array(4096); this.n = 0;
+        }
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('aleph-capture', AlephCapture);
+";
+
+/// Wire the primary AudioWorklet tap: register the processor module from a
+/// blob URL, build the node, pump its port messages into [`ingest_pcm`].
+async fn open_worklet_tap(
+    ctx: &web_sys::AudioContext,
+    source: &web_sys::MediaStreamAudioSourceNode,
+    cap: &Rc<RefCell<Capture>>,
+    sample_rate: u32,
+    frame_chunk: usize,
+) -> Result<CaptureTap, JsValue> {
+    // audioWorklet is undefined on some older webviews → Err → fallback.
+    let worklet = ctx.audio_worklet()?;
+
+    // Processor module via blob URL (no separate asset to serve; works under
+    // the panel's `script-src 'self'` CSP because worklet modules are fetched
+    // as same-origin blobs... revoked immediately after registration).
+    let parts = js_sys::Array::new();
+    parts.push(&JsValue::from_str(CAPTURE_WORKLET_JS));
+    let bag = web_sys::BlobPropertyBag::new();
+    bag.set_type("application/javascript");
+    let blob = web_sys::Blob::new_with_str_sequence_and_options(parts.as_ref(), &bag)?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob)?;
+    let loaded = JsFuture::from(worklet.add_module(&url)?).await;
+    let _ = web_sys::Url::revoke_object_url(&url);
+    loaded?;
+
+    let node = web_sys::AudioWorkletNode::new(ctx, "aleph-capture")?;
+    let cap_w = Rc::clone(cap);
+    let on_message = Closure::<dyn FnMut(_)>::new(move |ev: web_sys::MessageEvent| {
+        let data = ev.data();
+        let Ok(arr) = data.dyn_into::<js_sys::Float32Array>() else {
+            return;
+        };
+        ingest_pcm(&cap_w, &arr.to_vec(), sample_rate, frame_chunk);
+    });
+    node.port()?
+        .set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+
+    // Pin into the graph: source → worklet → destination. The destination hop
+    // is what makes the graph pull the worklet (same requirement as the old
+    // ScriptProcessor); its zeroed output contributes silence.
+    source.connect_with_audio_node(&node)?;
+    node.connect_with_audio_node(&ctx.destination())?;
+
+    Ok(CaptureTap::Worklet {
+        node,
+        _on_message: on_message,
+    })
+}
+
+/// Wire the legacy ScriptProcessorNode tap (deprecated API, main-thread
+/// callbacks). Only used when [`open_worklet_tap`] fails.
+fn open_script_tap(
+    ctx: &web_sys::AudioContext,
+    source: &web_sys::MediaStreamAudioSourceNode,
+    cap: &Rc<RefCell<Capture>>,
+    sample_rate: u32,
+    frame_chunk: usize,
+) -> Result<CaptureTap, MicError> {
+    let node = ctx
+        .create_script_processor_with_buffer_size_and_number_of_input_channels_and_number_of_output_channels(
+            SCRIPT_BUF, 1, 1,
+        )
+        .map_err(|_| MicError::AudioContext)?;
+    let cap_w = Rc::clone(cap);
+    let on_audio = Closure::<dyn FnMut(_)>::new(move |ev: web_sys::AudioProcessingEvent| {
+        let Ok(input) = ev.input_buffer() else { return };
+        let Ok(data) = input.get_channel_data(0) else {
+            return;
+        };
+        ingest_pcm(&cap_w, &data, sample_rate, frame_chunk);
+    });
+    node.set_onaudioprocess(Some(on_audio.as_ref().unchecked_ref()));
+    // Tap the source into the processor and pin the processor to the
+    // destination so its `onaudioprocess` fires (WebKit/Chrome require a
+    // live downstream). The output buffer is left untouched (silent), so
+    // routing through the destination causes no mic feedback.
+    source
+        .connect_with_audio_node(&node)
+        .map_err(|_| MicError::AudioContext)?;
+    node.connect_with_audio_node(&ctx.destination())
+        .map_err(|_| MicError::AudioContext)?;
+    Ok(CaptureTap::Script {
+        node,
+        _on_audio: on_audio,
+    })
 }
 
 /// Decode a base64 payload (atob) into bytes. `atob` yields a Latin-1 string

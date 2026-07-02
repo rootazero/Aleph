@@ -115,6 +115,8 @@ fn transcribe_and_send(
                     aid.as_deref(),
                     pr.as_deref(),
                     mo.as_ref(),
+                    // Dictated speech: arm the voice-mode prompt layer + model pin.
+                    true,
                 )
                 .await
                 {

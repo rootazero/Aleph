@@ -70,6 +70,7 @@ pub fn PhoneComposer() -> impl IntoView {
                 agent_id.as_deref(),
                 project_root.as_deref(),
                 None,
+                false,
             )
             .await;
             match res {
@@ -120,6 +121,7 @@ pub fn PhoneComposer() -> impl IntoView {
                     agent_id.as_deref(),
                     project_root.as_deref(),
                     None,
+                    false,
                 )
                 .await
                 {
