@@ -54,6 +54,15 @@ pub enum FlowStreamEvent {
         result: Option<serde_json::Value>,
         error: Option<String>,
     },
+    /// Live context-window occupancy after one LLM call. Emitted once per
+    /// call (`HarnessCallback::on_context_usage`) so the panel gauge tracks a
+    /// long run in real time — including the drop right after a mid-run
+    /// compaction. `context_window` is the run's pre-resolved denominator.
+    ContextGauge {
+        context_tokens: u32,
+        context_window: u32,
+        total_tokens: u64,
+    },
     /// Safety gate blocked the turn. `reason` is for i18n formatting.
     SafetyBlock { reason: String },
     /// Terminal event — carries the complete `FlowOutcome`. Always last.

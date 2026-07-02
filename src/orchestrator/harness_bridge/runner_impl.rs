@@ -172,6 +172,29 @@ impl HarnessRunner for AgentHarnessRunner {
                 },
             };
 
+        // Model id that keys per-model lookups (context-gauge window + cost
+        // estimate). `routing_model_id` already folds the session
+        // `select_model` pick, the agent's `model_hint`, and the brain's
+        // strict pin; the genuinely dynamic path asks the live provider chain
+        // which model it would serve (`serving_model_hint`, delegated through
+        // Metering → Failover → primary), falling back to the provider name
+        // only when even that is unknown. Resolved ONCE here — pre-loop — so
+        // the same window rides on both per-turn gauge events and the final
+        // `FlowOutcome`.
+        let gauge_model: String = if routing_model_id == "(dynamic)" {
+            llm.serving_model_hint()
+                .map_or_else(|| provider_name.clone(), std::borrow::Cow::into_owned)
+        } else {
+            routing_model_id.clone()
+        };
+        // Gauge denominator: authoritative per-model context window (R7 — the
+        // lookup is core's, not the panel's), honoring the configured
+        // per-provider override first.
+        let context_window = crate::providers::model_catalog::resolve_context_window_with_override(
+            self.primary_context_window,
+            &gauge_model,
+        );
+
         // Run-start recall (ONCE, pre-loop) → fenced String for the builder;
         // also backfills routing_attribution.task_emb for the observer (symmetry).
         let routing_text: Option<String> = if let Some(recall) = self.routing_recall.as_ref() {
@@ -412,7 +435,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // Fans HarnessCallback events onto the FlowStreamEvent broadcast
         // channel so downstream Gateway sinks see delta / tool_call cadence
         // equivalent to the retiring AgentLoop StreamingSink.
-        let mut cb = callback::BroadcastCallback::new(events.clone());
+        let mut cb = callback::BroadcastCallback::new(events.clone(), context_window);
         // Resume run markers. `run_id` is a locally-minted UUID — the marker
         // pair only needs to correlate within one session log, so the
         // gateway scheduler's run id is not required here. A crash between
@@ -594,36 +617,22 @@ impl HarnessRunner for AgentHarnessRunner {
         // `None` when the run produced no tokens (no LLM call observed) —
         // the renderer treats `None` and `Unknown` differently (None ==
         // "did not attempt"; Unknown == "attempted, no rate").
-        // Resolve the model id once — both the cost estimate and the context
-        // gauge denominator key off it. `routing_model_id` already folds the
-        // session `select_model` pick, the agent's `model_hint`, and the brain's
-        // strict pin (see Step 3 above); only the genuinely dynamic brain path
-        // falls back to the provider name, matching the previous fallback but
-        // avoiding the bug where a non-strict brain with an agent hint was
-        // looked up by provider name and hit the conservative 128k window.
-        let model: &str = if routing_model_id == "(dynamic)" {
-            provider_name.as_str()
-        } else {
-            routing_model_id.as_str()
-        };
+        // Cost + gauge both key off `gauge_model` / `context_window`, resolved
+        // once pre-loop (see the Step 3 block above) so per-turn gauge events
+        // and this terminal outcome carry the same denominator.
         let estimated_cost =
             if token_breakdown == crate::orchestrator::dispatch::TokenBreakdown::default() {
                 None
             } else {
                 Some(crate::pricing::estimate(
                     &provider_name,
-                    model,
+                    &gauge_model,
                     &token_breakdown,
                 ))
             };
-        // Gauge: authoritative per-model context window (R7 — the lookup is
-        // core's, not the panel's) plus the current occupancy snapshot from the
-        // harness's last LLM call. `context_tokens` is 0 when no call ran, so the
-        // panel self-hides the gauge.
-        let context_window = crate::providers::model_catalog::resolve_context_window_with_override(
-            self.primary_context_window,
-            model,
-        );
+        // Gauge numerator: the current occupancy snapshot from the harness's
+        // last LLM call. `context_tokens` is 0 when no call ran, so the panel
+        // self-hides the gauge.
         let context_tokens = harness.last_turn_context_tokens();
         let outcome = FlowOutcome {
             final_text,
@@ -667,9 +676,14 @@ impl HarnessRunner for AgentHarnessRunner {
         let agent_id = session_id.agent_id().to_string();
 
         // 2. Resolve the model the next turn would use: session pin → agent
-        //    hint → none. Same precedence as `run` (Step 3); empty string falls
-        //    back through `resolve_context_window_with_override` to the configured
-        //    override or the conservative default.
+        //    hint → the default provider chain's serving-model hint. The last
+        //    step mirrors `run`'s dynamic-brain fallback (`gauge_model`), so
+        //    the estimate's denominator matches the one a real turn will
+        //    report instead of dropping to the conservative 128k window.
+        //    (Known gap, accepted: a `BrainRef::Strict` pin on a non-default
+        //    flow is invisible here — the estimate has no `FlowSpec`. All
+        //    chat presets use `brain = default`, and the `≈` label plus the
+        //    first real turn self-correct the narrow mismatch.)
         let model: String =
             crate::providers::session_model_handle::get_session_model(&session_id.to_key_string())
                 .map(|p| p.model)
@@ -678,7 +692,13 @@ impl HarnessRunner for AgentHarnessRunner {
                         .get(&agent_id)
                         .and_then(|d| d.model_hint)
                 })
-                .unwrap_or_default();
+                .unwrap_or_else(|| {
+                    self.default_provider
+                        .current()
+                        .serving_model_hint()
+                        .map(std::borrow::Cow::into_owned)
+                        .unwrap_or_default()
+                });
 
         // 3. Window = exactly what `run` resolves (runner_impl.rs:611): the
         //    configured per-provider override first, else the model catalog.
@@ -732,6 +752,14 @@ impl HarnessRunner for AgentHarnessRunner {
         let history = crate::harness::agent::prompt::build_prompt(&events, 0);
 
         // 6. used = overhead + history tokens; against the resolved window.
-        Some(est::compose_estimate(overhead, &history, window, ratio))
+        //    When mid-run compaction is enabled, cap at the warning band it
+        //    enforces — the raw sum walks the uncompacted event log, so a
+        //    previously-compacted long session would otherwise show ≈100%
+        //    while its next real turn compacts back under the threshold.
+        let raw = est::compose_estimate(overhead, &history, window, ratio);
+        Some(match &self.context_budget_config {
+            Some(cfg) => est::cap_by_compaction(raw, cfg.warning_threshold),
+            None => raw,
+        })
     }
 }

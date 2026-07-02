@@ -43,6 +43,15 @@ pub trait HarnessCallback: Send {
     ) {
     }
 
+    /// Invoked once per LLM call, right after the provider-billed token usage
+    /// is folded into the run totals. `context_tokens` is the call's
+    /// context-window occupancy (prompt + generated; see
+    /// `TokenUsage::context_occupancy_tokens`), `total_tokens` the run's
+    /// cumulative billed total so far. Lets consumers stream a live
+    /// occupancy gauge — the value drops on the call right after a mid-run
+    /// compaction. Default no-op.
+    fn on_context_usage(&mut self, _context_tokens: u32, _total_tokens: u64) {}
+
     /// Invoked when a safety gate blocks the current turn.
     fn on_safety_block(&mut self, _reason: &str) {}
 

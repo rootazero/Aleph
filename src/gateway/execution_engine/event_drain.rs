@@ -161,6 +161,23 @@ pub(crate) async fn emit_flow_event(
                 .await?;
         }
 
+        FlowStreamEvent::ContextGauge {
+            context_tokens,
+            context_window,
+            total_tokens,
+        } => {
+            let seq = emitter.next_seq();
+            emitter
+                .emit(StreamEvent::ContextGauge {
+                    run_id: run_id.to_string(),
+                    seq,
+                    context_tokens,
+                    context_window,
+                    total_tokens,
+                })
+                .await?;
+        }
+
         FlowStreamEvent::SafetyBlock { reason } => {
             // Map safety blocks to a run error with a recognisable error code.
             let seq = emitter.next_seq();

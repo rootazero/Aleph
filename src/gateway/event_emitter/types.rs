@@ -119,6 +119,20 @@ pub enum StreamEvent {
         is_intermediate: bool,
     },
 
+    /// Live context-window occupancy after one LLM call (mid-run). The panel
+    /// gauge tracks these between `run_complete` summaries so a long agentic
+    /// run — and the occupancy drop right after a mid-run compaction — is
+    /// visible in real time. Same field semantics as the `RunSummary` gauge
+    /// fields: `context_tokens` = current occupancy, `context_window` =
+    /// authoritative per-model denominator, `total_tokens` = run cumulative.
+    ContextGauge {
+        run_id: String,
+        seq: u64,
+        context_tokens: u32,
+        context_window: u32,
+        total_tokens: u64,
+    },
+
     /// Agent run completed successfully
     RunComplete {
         run_id: String,
