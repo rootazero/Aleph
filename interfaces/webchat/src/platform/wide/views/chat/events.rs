@@ -222,11 +222,13 @@ fn append_reasoning(chat: ChatState, summary: &str) {
     });
 }
 
-/// Project the run summary's core-authoritative context occupancy onto the
-/// composer gauge. Pure rendering (R4): core computes `context_tokens` (current
-/// window occupancy) and `context_window` (the model's authoritative window);
-/// the panel only displays them. `total_tokens` (run cumulative) rides along for
-/// the tooltip. No-op unless both occupancy and window are present, so legacy
+/// Project core-authoritative context occupancy onto the composer gauge.
+/// Reads `context_tokens` / `context_window` / `total_tokens` — the same field
+/// names on both feeds: the terminal `run_complete` summary and the mid-run
+/// `context_gauge` events emitted once per LLM call (so the gauge tracks a
+/// long run live, including the drop right after a mid-run compaction).
+/// Pure rendering (R4): core computes both sides; the panel only displays
+/// them. No-op unless both occupancy and window are present, so legacy
 /// payloads and runs with no LLM call leave the gauge hidden.
 fn apply_context_gauge(chat: ChatState, summary: &serde_json::Value) {
     let used = summary
@@ -391,6 +393,13 @@ pub fn subscribe_run_events(
                     attempt,
                     max_attempts,
                 });
+            }
+            "context_gauge" => {
+                // Mid-run occupancy update, once per LLM call. Field names
+                // match the run_complete summary, so the same projector
+                // applies; the terminal summary still lands last and stays
+                // authoritative.
+                apply_context_gauge(chat, data);
             }
             "run_complete" => {
                 chat.complete_run(run_id);
