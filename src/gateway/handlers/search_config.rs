@@ -192,6 +192,56 @@ pub async fn handle_update(
     {
         let mut cfg = config.write().await;
 
+        // Structural prerequisites, checked BEFORE any mutation. These mirror
+        // config::validate — the loader hard-fails on a searxng backend
+        // without base_url (or google without engine_id), so persisting such
+        // an entry would brick every subsequent config load ("brick-on-save",
+        // 2026-07-02 incident). Effective provider_type follows the upsert
+        // semantics below: an existing entry keeps its type, a new entry
+        // derives it from the DTO name.
+        {
+            let empty = std::collections::HashMap::new();
+            let existing = cfg
+                .search
+                .as_ref()
+                .map(|s| &s.backends)
+                .unwrap_or(&empty);
+            for backend_dto in &dto.backends {
+                let provider_type = existing
+                    .get(&backend_dto.name)
+                    .map(|e| e.provider_type.as_str())
+                    .unwrap_or(backend_dto.name.as_str());
+                match provider_type {
+                    "searxng"
+                        if normalize_optional_string(backend_dto.base_url.clone()).is_none() =>
+                    {
+                        return JsonRpcResponse::error(
+                            request.id,
+                            INVALID_PARAMS,
+                            format!(
+                                "Search backend '{}' (SearXNG) requires a base_url — to remove \
+                                 the provider, delete it instead of saving it with an empty URL",
+                                backend_dto.name
+                            ),
+                        );
+                    }
+                    "google"
+                        if normalize_optional_string(backend_dto.engine_id.clone()).is_none() =>
+                    {
+                        return JsonRpcResponse::error(
+                            request.id,
+                            INVALID_PARAMS,
+                            format!(
+                                "Search backend '{}' (Google) requires an engine_id",
+                                backend_dto.name
+                            ),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         // Create search config if it doesn't exist
         if cfg.search.is_none() {
             cfg.search = Some(crate::config::types::SearchConfigInternal {
@@ -814,5 +864,159 @@ mod tests {
         assert_eq!(json["engines"], "bing");
         let back: SearchBackendDto = serde_json::from_value(json).unwrap();
         assert_eq!(back.engines.as_deref(), Some("bing"));
+    }
+
+    fn update_dto_params(backends: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "enabled": true,
+            "default_provider": "tavily",
+            "max_results": 5,
+            "timeout_seconds": 10,
+            "pii_enabled": false,
+            "pii_scrub_email": false,
+            "pii_scrub_phone": false,
+            "pii_scrub_ssn": false,
+            "pii_scrub_credit_card": false,
+            "backends": backends,
+        })
+    }
+
+    // Regression (2026-07-02 incident): saving a searxng backend with the
+    // base_url cleared must be rejected, not persisted. The config loader
+    // hard-fails on a searxng backend without base_url (validate.rs), so
+    // accepting the write bricks every subsequent config load.
+    #[tokio::test]
+    #[serial_test::serial(aleph_home_env)]
+    async fn handle_update_rejects_searxng_without_base_url_and_preserves_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ALEPH_HOME").ok();
+        // SAFETY: single-threaded test mutates a process env var so any config
+        // save lands in the tempdir, not the real ~/.aleph. Restored below.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", dir.path());
+        }
+
+        let base = Config {
+            search: Some(crate::config::types::SearchConfigInternal {
+                enabled: true,
+                default_provider: "tavily".to_string(),
+                fallback_providers: None,
+                max_results: 5,
+                timeout_seconds: 10,
+                backends: std::collections::HashMap::from([
+                    (
+                        "searxng".to_string(),
+                        crate::config::types::SearchBackendConfig {
+                            provider_type: "searxng".to_string(),
+                            api_key: None,
+                            base_url: Some("http://10.0.0.1:8008".to_string()),
+                            engine_id: None,
+                            engines: Some("bing".to_string()),
+                            min_request_interval_ms: Some(2000),
+                            verified: true,
+                        },
+                    ),
+                    (
+                        "tavily".to_string(),
+                        crate::config::types::SearchBackendConfig {
+                            provider_type: "tavily".to_string(),
+                            api_key: None,
+                            base_url: Some("https://api.tavily.com".to_string()),
+                            engine_id: None,
+                            engines: None,
+                            min_request_interval_ms: None,
+                            verified: true,
+                        },
+                    ),
+                ]),
+                pii: Some(crate::config::types::PIIConfig::default()),
+                web_fetch_fallback: crate::config::types::search::default_web_fetch_fallback(),
+            }),
+            ..Default::default()
+        };
+        let config = Arc::new(RwLock::new(base));
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
+        let vault = Arc::new(SharedTokenManager::new(
+            store,
+            dir.path().join("test.vault").to_string_lossy().to_string(),
+        ));
+        let _ = vault.generate_token();
+
+        // The incident payload: the Panel echoes searxng with its fields
+        // cleared (user emptied the form, or a stale card upserts blindly).
+        let params = update_dto_params(serde_json::json!([
+            { "name": "tavily", "base_url": "https://api.tavily.com" },
+            { "name": "searxng" }
+        ]));
+        let request =
+            JsonRpcRequest::with_id("search_config.update", Some(params), serde_json::json!(1));
+        let response = handle_update(request, config.clone(), event_bus, vault).await;
+        assert!(
+            !response.is_success(),
+            "clearing searxng base_url must be rejected: {response:?}"
+        );
+        let msg = &response.error.as_ref().unwrap().message;
+        assert!(msg.contains("base_url"), "error names the missing field: {msg}");
+
+        // The in-memory entry is untouched — nothing was clobbered before the
+        // rejection, so a follow-up get still shows the working config.
+        {
+            let cfg = config.read().await;
+            let search = cfg.search.as_ref().unwrap();
+            let sx = &search.backends["searxng"];
+            assert_eq!(sx.base_url.as_deref(), Some("http://10.0.0.1:8008"));
+            assert_eq!(sx.engines.as_deref(), Some("bing"));
+            assert!(sx.verified);
+        }
+
+        match prev {
+            Some(v) => unsafe { std::env::set_var("ALEPH_HOME", v) },
+            None => unsafe { std::env::remove_var("ALEPH_HOME") },
+        }
+    }
+
+    // Sibling structural prerequisite: a google backend without engine_id is
+    // equally unloadable — reject its creation instead of persisting it.
+    #[tokio::test]
+    #[serial_test::serial(aleph_home_env)]
+    async fn handle_update_rejects_google_without_engine_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ALEPH_HOME").ok();
+        // SAFETY: see above — scoped ALEPH_HOME override, restored below.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", dir.path());
+        }
+
+        let config = Arc::new(RwLock::new(Config::default()));
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
+        let vault = Arc::new(SharedTokenManager::new(
+            store,
+            dir.path().join("test.vault").to_string_lossy().to_string(),
+        ));
+        let _ = vault.generate_token();
+
+        let params = update_dto_params(serde_json::json!([
+            { "name": "google", "base_url": "https://www.googleapis.com/customsearch/v1" }
+        ]));
+        let request =
+            JsonRpcRequest::with_id("search_config.update", Some(params), serde_json::json!(1));
+        let response = handle_update(request, config.clone(), event_bus, vault).await;
+        assert!(
+            !response.is_success(),
+            "google without engine_id must be rejected: {response:?}"
+        );
+        let msg = &response.error.as_ref().unwrap().message;
+        assert!(msg.contains("engine_id"), "error names the missing field: {msg}");
+
+        // Rejection happened before any mutation — no search section was
+        // created as a side effect.
+        assert!(config.read().await.search.is_none());
+
+        match prev {
+            Some(v) => unsafe { std::env::set_var("ALEPH_HOME", v) },
+            None => unsafe { std::env::remove_var("ALEPH_HOME") },
+        }
     }
 }

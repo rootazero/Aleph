@@ -623,6 +623,7 @@ mod tests {
     // backend nor write a fetch:firecrawl vault key (firecrawl shares [search]).
     // Other backends (crawl4ai) and default_provider still round-trip.
     #[tokio::test]
+    #[serial_test::serial(aleph_home_env)]
     async fn handle_update_never_persists_firecrawl_backend() {
         let dir = tempfile::tempdir().unwrap();
         let prev = std::env::var("ALEPH_HOME").ok();
