@@ -30,6 +30,10 @@ pub fn register_sqlite_vec() {
     }
 }
 
+/// All notes vec0 tables, one per supported embedding dimension. Used by
+/// delete paths that must clear an embedding without knowing its dimension.
+pub const ALL_NOTES_VEC_TABLES: &[&str] = &["notes_vec_768", "notes_vec_1024", "notes_vec_1536"];
+
 /// Map an embedding dimension to the corresponding notes vec0 table name.
 ///
 /// Returns an error if `dim` is not one of 768, 1024, or 1536.

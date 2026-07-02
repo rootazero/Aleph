@@ -267,6 +267,19 @@ impl<S: NoteStore> NoteIndexer<S> {
             }
         }
 
+        // Sweep embedding rows orphaned by historical deletes (delete paths
+        // now clear vectors, but pre-existing ghosts kept occupying KNN
+        // slots). Best-effort: a sweep failure must not fail the rebuild.
+        match self.store.prune_orphan_vectors(agent_id).await {
+            Ok(n) if n > 0 => {
+                tracing::info!(pruned = n, "full_rebuild: removed orphan note vectors");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "full_rebuild: orphan-vector sweep failed");
+            }
+        }
+
         // Re-resolve cross-note wikilinks. The category scan above runs each
         // category in its own task, so a note can be indexed before the note it
         // links to exists in `notes_index` — `resolve_target` then falls back to
@@ -481,15 +494,10 @@ impl<S: NoteStore> NoteIndexer<S> {
             }
         };
 
-        // Append facts
-        note.facts.extend(new_facts.iter().cloned());
-
-        // Append links (dedup)
-        for link in new_links {
-            if !note.links.contains(link) {
-                note.links.push(link.clone());
-            }
-        }
+        // Append facts + links through the body-sync helpers so the verbatim
+        // body (prose notes) is extended rather than silently dropped.
+        note.append_facts(new_facts);
+        note.add_links(new_links);
 
         // Bump updated_at
         note.updated_at = chrono::Utc::now().timestamp();
@@ -507,6 +515,42 @@ impl<S: NoteStore> NoteIndexer<S> {
         self.store.index_note(&note, agent_id, &safe_cat).await?;
 
         self.notify_orientation(agent_id, &safe_cat, filename);
+        Ok(())
+    }
+
+    /// Delete a note: remove its index rows (including any embedding) and the
+    /// markdown file, then notify orientation. Sanitizes both path segments.
+    ///
+    /// Index removal runs first — if it fails the file stays put and the two
+    /// remain consistent; if the file delete fails afterwards, `full_rebuild`
+    /// re-indexes the surviving file (self-healing in the safe direction).
+    /// A file already missing on disk is not an error (idempotent delete).
+    pub async fn delete_note(
+        &self,
+        agent_id: &str,
+        category: &str,
+        filename: &str,
+    ) -> Result<(), AlephError> {
+        let safe_cat = sanitize_title(category).unwrap_or_else(|_| "other".to_string());
+        let safe_title = sanitize_title(filename)?;
+        let note_path = format!("{safe_cat}/{safe_title}");
+        let file_path = self
+            .memory_dir
+            .join(agent_id)
+            .join(&safe_cat)
+            .join(format!("{safe_title}.md"));
+
+        self.store.remove_note_index(&note_path, agent_id).await?;
+        match fs::remove_file(&file_path).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(AlephError::config(format!(
+                    "delete_note: failed to remove {file_path:?}: {e}"
+                )))
+            }
+        }
+        self.notify_orientation(agent_id, &safe_cat, &safe_title);
         Ok(())
     }
 

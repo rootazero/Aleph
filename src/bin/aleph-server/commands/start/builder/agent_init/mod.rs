@@ -166,6 +166,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut default_prov: Option<Arc<dyn alephcore::providers::AiProvider>> = None;
     let tool_catalog_out: Option<Arc<alephcore::tool_metadata::ToolCatalog>>;
     let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
+    // Long-lived embedding manager (B5.2): hoisted so the compound ingestor's
+    // embedding queue has a real producer/consumer instead of the manager
+    // being constructed locally and dropped.
+    let mut embedding_manager_out: Option<std::sync::Arc<alephcore::memory::EmbeddingManager>> =
+        None;
     let mut compression_out: Option<
         std::sync::Arc<alephcore::memory::compression::CompressionService>,
     > = None;
@@ -304,6 +309,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     let provider = manager.get_active_provider().await;
                     if provider.is_some() && !daemon {
                         println!("  Embedding provider initialized for memory tools");
+                    }
+                    // Keep the manager alive: its pending queue feeds the
+                    // compound ingestor's write-tail embedding flush.
+                    if provider.is_some() {
+                        embedding_manager_out = Some(std::sync::Arc::new(manager));
                     }
                     provider
                 }
@@ -813,13 +823,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             orientation: orientation.clone(),
                             memory_dir: note_dir.clone(),
                             budget,
-                            // B5.2: ingest-tail flush wiring deferred to a
-                            // follow-up (the manager is constructed locally
-                            // here and dropped; passing an Arc requires
-                            // hoisting it to a long-lived AppContext field).
-                            // For now the legacy reembed_all path handles
-                            // vector freshness for the production server.
-                            embedding_manager: None,
+                            // B5.2 closed: the manager is hoisted above and
+                            // lives as long as the ingestor, so the ingest
+                            // tail pushes each touched note into the pending
+                            // queue and flushes — fresh notes are visible to
+                            // vector search without a manual reembed.
+                            embedding_manager: embedding_manager_out.clone(),
                             // TODO(C2): construct DefaultNoteWriteGate from
                             // config when governance is enabled. C2.3.2 ships
                             // the mount point; activation is a follow-up.

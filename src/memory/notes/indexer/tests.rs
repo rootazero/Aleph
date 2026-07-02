@@ -779,3 +779,79 @@ mod reference_hook_tests {
         assert!((after - 0.7).abs() < 1e-5, "got {after}");
     }
 }
+
+#[tokio::test]
+async fn append_to_note_preserves_raw_prose_body() {
+    // Regression (RF-01): appending to a raw-written prose note used to
+    // round-trip through the lossy facts view and wipe the prose.
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+    let indexer = NoteIndexer::new(memory_dir.clone(), db);
+
+    let raw = "---\ncategory: reference\ntags: []\n---\n\n# Design\n\nProse the panel editor wrote.\n\n- seed fact\n";
+    indexer
+        .write_note_raw(AGENT, "reference", "design-doc", raw)
+        .await
+        .unwrap();
+
+    indexer
+        .append_to_note(
+            AGENT,
+            "reference/design-doc",
+            &["appended fact".to_string()],
+            &["Peer Note".to_string()],
+        )
+        .await
+        .unwrap();
+
+    let on_disk = fs::read_to_string(
+        memory_dir
+            .join(AGENT)
+            .join("reference")
+            .join("design-doc.md"),
+    )
+    .await
+    .unwrap();
+    assert!(on_disk.contains("# Design"), "heading lost: {on_disk}");
+    assert!(
+        on_disk.contains("Prose the panel editor wrote."),
+        "prose lost: {on_disk}"
+    );
+    assert!(on_disk.contains("- seed fact"));
+    assert!(on_disk.contains("- appended fact"));
+    assert!(on_disk.contains("[[Peer Note]]"));
+}
+
+#[tokio::test]
+async fn delete_note_removes_file_index_and_is_idempotent() {
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+    let indexer = NoteIndexer::new(memory_dir.clone(), db);
+
+    let cat_dir = setup_category_dir(&memory_dir, AGENT, "plan").await;
+    let file = cat_dir.join("old-plan.md");
+    fs::write(&file, sample_md("plan", &["obsolete"], &[]))
+        .await
+        .unwrap();
+    indexer.index_file(AGENT, "plan", &file).await.unwrap();
+    assert!(indexer
+        .store()
+        .get_note_index("plan/old-plan", AGENT)
+        .await
+        .unwrap()
+        .is_some());
+
+    indexer.delete_note(AGENT, "plan", "old-plan").await.unwrap();
+    assert!(!file.exists());
+    assert!(indexer
+        .store()
+        .get_note_index("plan/old-plan", AGENT)
+        .await
+        .unwrap()
+        .is_none());
+
+    // Second delete of the same note is a no-op, not an error.
+    indexer.delete_note(AGENT, "plan", "old-plan").await.unwrap();
+}

@@ -37,14 +37,18 @@ All note categories are enumerated by `CATEGORY_DIRS` in `src/memory/notes/index
     ├── personal/*.md
     ├── tool/*.md
     ├── lesson/*.md
+    ├── goal-lessons/*.md          # per-goal lessons appended by GoalLessonsPromoteStage
     ├── skill/*.md
     ├── reference/*.md
+    ├── feedback/*.md              # user-taught corrections distilled by FeedbackDistill
     ├── transcript/*.md
     ├── subagent-run/*.md
     ├── subagent-session/*.md
     ├── subagent-checkpoint/*.md
     ├── subagent-transcript/*.md
-    └── other/*.md
+    ├── contradiction/*.md         # Phase C2.6: note_drift conflict pages
+    ├── other/*.md
+    └── query/*.md                 # Spec 8: filed-back query answers
 ```
 
 `NoteIndexer::ensure_dirs` creates every one of these directories lazily on first use. Filenames are sanitized by `sanitize_title` (see §4) to strip path separators and filesystem-unsafe characters, so a malicious note title like `../../etc/passwd` becomes the literal `etcpasswd` before ever touching disk.
@@ -59,8 +63,8 @@ Notes are read and written by `KnowledgeNote::from_markdown` / `KnowledgeNote::t
 pub(super) struct Frontmatter {
     pub(super) category: String,            // #[serde(default)]
     pub(super) tags: Vec<String>,           // #[serde(default)]
-    pub(super) created: Option<String>,     // YYYY-MM-DD; #[serde(default)]
-    pub(super) updated: Option<String>,     // YYYY-MM-DD; #[serde(default)]
+    pub(super) created: Option<String>,     // RFC3339 or legacy YYYY-MM-DD; #[serde(default)]
+    pub(super) updated: Option<String>,     // RFC3339 or legacy YYYY-MM-DD; #[serde(default)]
     pub(super) confidence: f32,             // default 1.0
     pub(super) severity: Severity,          // #[serde(default)]
     pub(super) source_notes: Vec<String>,   // alias "source_facts"; #[serde(default)]
@@ -69,33 +73,45 @@ pub(super) struct Frontmatter {
     pub(super) superseded_by: Vec<String>,  // #[serde(default)]
     pub(super) permanent: bool,             // true → exempt from decay; #[serde(default)]
     pub(super) relations: Vec<Relation>,    // typed relation edges; #[serde(default)]
+    pub(super) note_type: Option<String>,   // #[serde(rename = "type")]; Obsidian/llm_wiki page-type
+    pub(super) title: Option<String>,       // round-trip only — filename stays SSOT
+    pub(super) aliases: Vec<String>,        // Obsidian aliases; #[serde(default)]
 }
 ```
 
-Every field is `#[serde(default)]`, so missing values fall through to sane defaults rather than erroring. Dates are parsed as `YYYY-MM-DD` (UTC midnight) by `parse_date_to_unix`; empty / missing dates yield `0`. `to_markdown` serializes all non-default fields back to YAML frontmatter.
+Every field is `#[serde(default)]`, so missing values fall through to sane defaults rather than erroring. Dates are serialized by `to_markdown` as RFC3339 at second precision (e.g. `"2026-07-02T09:30:00Z"`) — day-granular dates collapsed `updated_at` to midnight on every reparse, breaking recency ordering after a rebuild. `parse_date_to_unix` accepts both RFC3339 and the legacy `YYYY-MM-DD` (midnight UTC); empty / missing dates yield `0`. The `type` / `title` / `aliases` trio exists for Obsidian / llm_wiki vault byte-compatibility: `note_type` mirrors the category, `title` is parsed but never mapped into `KnowledgeNote.title` (the filename remains the single source of truth), and `aliases` feeds wikilink alias resolution.
 
-The minimum on-disk shape for a note created via `NoteManageTool` is:
+The on-disk shape for a note created via `NoteManageTool` is:
 
 ```yaml
 ---
+type: {category}
+title: {title}
+aliases: []
 category: {category}
 tags: {tags_json}
-created: "{YYYY-MM-DD}"
-updated: "{YYYY-MM-DD}"
+created: "{RFC3339}"
+updated: "{RFC3339}"
+confidence: 1.0000
+severity: low
+source_notes: []
+status: active
+supersedes: []
+superseded_by: []
 ---
 ```
 
-Additional fields (`confidence`, `severity`, `status`, `supersedes`, `superseded_by`, `permanent`, `relations`, `source_notes`) are emitted when non-default. Forward-compatible: unknown fields are ignored by the parser.
+`relations` and `permanent` are emitted only when non-default, so legacy notes without them serialize byte-for-byte as before those fields existed. The `title` / `type` / `category` scalars are single-quoted when needed (`yaml_scalar` in `note/helpers.rs`) — an unquoted `title: [wip] plans` would make the whole note permanently unparseable. Forward-compatible: unknown fields are ignored by the parser.
 
 ## 4. `KnowledgeNote` Data Model
 
-Verbatim from `src/memory/notes/note.rs`:
+Abridged from `src/memory/notes/note/mod.rs` (the struct grew into a module directory: `mod.rs` + `helpers.rs` + `parsing.rs` + `relation.rs` + `types.rs`):
 
 ```rust
 /// A knowledge note — the primary memory unit.
 ///
 /// Parsed from (and serializable back to) a markdown file with YAML frontmatter.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeNote {
     /// Filename without `.md` extension
     pub title: String,
@@ -103,28 +119,53 @@ pub struct KnowledgeNote {
     pub category: String,
     /// From frontmatter `tags` field
     pub tags: Vec<String>,
-    /// Bullet points from the body (lines starting with `- `)
+    /// Bullet points from the body — derived index view when `body` is Some
     pub facts: Vec<String>,
-    /// Extracted `[[wikilinks]]` from the body
+    /// Extracted `[[wikilinks]]` from the body — same derived-view rule
     pub links: Vec<String>,
+    /// Verbatim markdown body (everything after the closing `---` fence)
+    pub body: Option<String>,
+    /// Typed relation edges from frontmatter `relations:`
+    pub relations: Vec<Relation>,
     /// Unix timestamp (seconds) — from frontmatter `created` date
     pub created_at: i64,
     /// Unix timestamp (seconds) — from frontmatter `updated` date
     pub updated_at: i64,
     /// SHA-256 hex digest of the full file content
     pub content_hash: String,
+    /// LLM-assigned distillation confidence; 1.0 for legacy notes
+    pub confidence: f32,
+    /// LLM-judged importance; Severity::Low for legacy notes
+    pub severity: types::Severity,
+    /// Source synthesis-note paths or raw-memory IDs that produced this note
+    pub source_notes: Vec<String>,
+    /// Governance status: Active | Deprecated | Contradicted
+    pub status: types::NoteStatus,
+    /// Note paths this note supersedes / that supersede this note
+    pub supersedes: Vec<String>,
+    pub superseded_by: Vec<String>,
+    /// Per-fact provenance from inline `<!-- src: ..., origin: ... -->` markers
+    pub fact_provenance: Vec<FactProvenance>,
+    /// Permanent core-knowledge marker — exempt from decay and archival
+    pub permanent: bool,
+    /// Obsidian / llm_wiki page-type (mirrors category); None for legacy notes
+    pub note_type: Option<String>,
+    /// Obsidian aliases from frontmatter `aliases:`
+    pub aliases: Vec<String>,
 }
 ```
 
-Parsing splits frontmatter and body at the first pair of `---` fences; the body contributes `facts` (every line after a trimmed `- ` prefix) and `links` (via `extract_wikilinks`; see §5). `content_hash` is computed over the entire file content and is how the indexer decides whether a re-scanned file needs to be re-indexed.
+**Body fidelity.** `body` is the verbatim markdown body. `from_markdown` populates it with the raw text after the closing frontmatter fence; `to_markdown` re-emits it byte-for-byte under regenerated frontmatter, so prose, headings, and code blocks survive every round-trip. `body: None` (programmatically constructed notes) falls back to the legacy rendering: facts as `- ` bullets plus a trailing `Related: [[...]]` line — byte-identical to the pre-body-field output. When `body` is `Some`, `facts` and `links` are *derived index views*: a direct `facts.push` would be silently dropped by `to_markdown` (the body wins). Mutations must go through the sync helpers — `set_body` (replaces the body and re-derives facts/links/provenance), `append_facts` (extends both the body and the facts view), `add_links` (dedupes and appends a `Related:` line for targets the body doesn't already reference).
+
+Parsing splits frontmatter and body at the `---` fences; the closing fence match is **line-anchored** (a whole line equal to `---`), so a `---` embedded inside a value like `title: phase---2` no longer truncates the YAML mid-line. The body contributes `facts` (top-level `- ` bullets, with indented continuation lines attached) and `links` (via `extract_wikilinks`; see §5). `content_hash` is computed over the entire file content and is how the indexer decides whether a re-scanned file needs to be re-indexed.
 
 `sanitize_title` guards every filename before it reaches the filesystem:
 
 ```rust
-pub fn sanitize_title(title: &str) -> String
+pub fn sanitize_title(title: &str) -> Result<String, AlephError>
 ```
 
-It strips `/ \ \0 : * ? " < > |`, removes every occurrence of `..`, and trims surrounding whitespace. This is applied in `NoteIndexer::write_note`, `append_to_note`, `rename_note`, and every action handler in `NoteManageTool` — LLM-generated titles cannot escape the agent's category directory.
+It strips `/ \ \0 : * ? " < > |`, removes every occurrence of `..`, trims surrounding whitespace, and strips a trailing `.md` (preventing doubled `*.md.md` files). It returns `Err(AlephError::Validation)` when the result is empty / all-dots / all-whitespace, so callers reject the operation instead of writing a note with an unstable filename. This is applied in `NoteIndexer::write_note`, `write_note_raw`, `append_to_note`, `delete_note`, `rename_note`, and every action handler in `NoteManageTool` — LLM-generated titles cannot escape the agent's category directory.
 
 ## 5. Wikilinks
 
@@ -186,8 +227,10 @@ Resolved links (really: the raw target strings extracted at index time) are pers
 
 Write entry points on `NoteIndexer`:
 
-- `write_note(agent_id, category, &note)` — serializes `KnowledgeNote::to_markdown` and writes `{category}/{title}.md`. Used by `CompressionService` for fresh notes.
-- `append_to_note(agent_id, "category/filename", &facts, &links)` — reads the existing file (or synthesizes an empty `KnowledgeNote`), extends `facts`, deduplicates `links`, bumps `updated_at`, writes, and re-indexes.
+- `write_note(agent_id, category, &note)` — serializes `KnowledgeNote::to_markdown` (plus the supersession section via `ensure_supersession_section`), writes `{category}/{title}.md` atomically, reparses the written file, indexes it, and notifies orientation. Used by `CompressionService` for fresh notes and by `NoteManageTool` create/update.
+- `write_note_raw(agent_id, category, title, content)` — writes caller-supplied full markdown **byte-for-byte** (no `KnowledgeNote` reconstruction), then reparses and indexes. Backs the panel node editor's `graph.update_note` RPC, so hand-edited content survives untouched.
+- `append_to_note(agent_id, "category/filename", &facts, &links)` — reads the existing file (or synthesizes an empty `KnowledgeNote`), then extends it through the body-preserving helpers `append_facts` / `add_links` (§4) so a verbatim prose body is extended rather than silently dropped; bumps `updated_at`, writes atomically, and re-indexes.
+- `delete_note(agent_id, category, filename)` — removes the index rows (including any embedding) first, then the markdown file, then notifies orientation. Idempotent: a file already missing on disk is not an error; if the file delete fails after index removal, `full_rebuild` re-indexes the surviving file (self-healing in the safe direction).
 - `rename_note(agent_id, old_title, new_title)` — renames the file, scans every category dir for `[[old_title]]` references, calls `rewrite_wikilinks` on each match, and re-indexes every changed file.
 
 #### Write-time semantic dedup (mem0-style) / 写入期语义去重
@@ -219,7 +262,7 @@ degrade gracefully to the legacy create-everything behaviour (P7).
 
 ### 6.3 Cold-Start `full_rebuild()`
 
-`full_rebuild(agent_id) -> IndexStats` scans `memory_dir/{agent_id}/{category}/*.md` for every category in `CATEGORY_DIRS`, parses each file through `KnowledgeNote::from_markdown`, and calls `NoteStore::index_note`. Files whose SHA-256 matches the existing `notes_index.content_hash` are skipped, yielding a cheap no-op on warm databases. The returned `IndexStats { indexed, skipped, errors }` makes the operation observable; parse failures are logged and counted rather than aborting the whole rebuild. This is the repair path if the SQLite index is deleted or goes out of sync with the markdown files.
+`full_rebuild(agent_id) -> IndexStats` scans `memory_dir/{agent_id}/{category}/*.md` for every category in `CATEGORY_DIRS`, parses each file through `KnowledgeNote::from_markdown`, and calls `NoteStore::index_note`. Files whose SHA-256 matches the existing `notes_index.content_hash` are skipped, yielding a cheap no-op on warm databases. After the scan, a **reconcile pass** drops any index row for the agent whose backing `.md` file no longer exists on disk (orphans from a rename / deletion / agent-id relocation), then `prune_orphan_vectors` sweeps embedding rows whose path has no `notes_index` row (best-effort — a sweep failure never fails the rebuild), and `relink_unresolved` retries raw wikilink edges now that every note is indexed. The returned `IndexStats { indexed, skipped, errors, pruned }` makes the operation observable; parse failures are logged and counted rather than aborting the whole rebuild. This is the repair path if the SQLite index is deleted or goes out of sync with the markdown files.
 
 ## 7. `NoteStore` Trait
 
@@ -228,7 +271,7 @@ degrade gracefully to the legacy create-everything behaviour (P7).
 | Method | Purpose |
 |---|---|
 | `index_note(&self, note: &KnowledgeNote, agent_id: &str, category: &str) -> Result<()>` | Upsert `notes_index` row, replace `notes_links` rows, and rebuild `notes_fts` content. |
-| `remove_note_index(&self, path: &str, agent_id: &str) -> Result<()>` | Remove index / links / FTS entries by `category/filename` path. |
+| `remove_note_index(&self, path: &str, agent_id: &str) -> Result<()>` | Remove index / links / FTS entries by `category/filename` path — and the note's embedding rows (`notes_vec_map` + `notes_vec_{dim}`) in the same transaction, so a deleted note's orphan vector stops occupying KNN slots. |
 | `get_note_index(&self, path: &str, agent_id: &str) -> Result<Option<NoteIndexEntry>>` | Single-row lookup by path. |
 | `list_notes(&self, agent_id: &str) -> Result<Vec<NoteIndexEntry>>` | All notes for an agent, most-recently-updated first. |
 | `get_outgoing_links(&self, path: &str, agent_id: &str) -> Result<Vec<String>>` | Raw wikilink targets emitted by this note. |
@@ -244,6 +287,7 @@ degrade gracefully to the legacy create-everything behaviour (P7).
 | `vector_search_notes_with_content(&self, embedding, agent_id, dim_hint, limit) -> Result<Vec<NoteSearchResult>>` | Vector-only search returning full content. |
 | `get_notes_by_category(&self, agent_id, category, limit) -> Result<Vec<NoteIndexEntry>>` | Paginated category listing. |
 | `get_embedding(&self, path, agent_id, dim_hint) -> Result<Option<Vec<f32>>>` | Read back a stored embedding. |
+| `prune_orphan_vectors(&self, agent_id) -> Result<usize>` | Sweep embedding rows whose path has no `notes_index` row (historical deletes); returns the count removed. Called by `full_rebuild` (§6.3). |
 
 `NoteIndexEntry` is the lightweight row returned everywhere index metadata is enough:
 
@@ -314,6 +358,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
     tokenize='unicode61'
 );
 ```
+
+`content` is the note's full frontmatter-stripped body when the note has one (`KnowledgeNote::body_text_for_fts`, provenance markers stripped) — bullet-facts-only indexing made all prose in raw-written notes (panel edits, hand edits) invisible to the FTS leg of search. `search_notes_fts` splits a multi-word query into an OR of quoted FTS5 phrases (one per whitespace-separated term, embedded quotes doubled) and orders by `rank` (bm25) — binding the whole query as one exact phrase required the exact token sequence, so multi-word natural-language queries matched nothing.
 
 `notes_vec_map`:
 
@@ -391,12 +437,14 @@ A distinct subsystem lives in `src/skill/` — `SkillSystem`, `SkillId`, `Prompt
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum NoteManageAction {
-    Create,   // fails if filename already exists
-    Update,   // replace body of existing note
-    Append,   // extend facts + links on existing or new note
-    Query,    // FTS5 search across indexed notes
-    List,     // list notes, optionally filtered by category
-    Delete,   // remove file + index entry
+    Create,    // fails if filename already exists
+    Update,    // replace body of existing note (markdown preserved verbatim)
+    Append,    // extend facts + links on existing or new note
+    Query,     // hybrid (vector + FTS) search across indexed notes
+    List,      // list notes, optionally filtered by category
+    Delete,    // remove file + index entry
+    Insights,  // read materialized graph-health insights (read-only, §14)
+    Evolution, // read the memory-evolution gate state from recent dream cycles (read-only)
 }
 ```
 
@@ -413,11 +461,16 @@ pub struct NoteManageArgs {
     pub links: Option<Vec<String>>, // wikilink targets
     pub tags: Option<Vec<String>>,
     pub query: Option<String>,      // required for query
-    pub limit: Option<usize>,       // default: 20 (query), 100 (list)
+    pub limit: Option<usize>,       // max results for query/list (default: 20)
+    pub agent_id: Option<String>,   // per-agent vault scoping (default: "default")
 }
 ```
 
-Every action runs `validate_category(category)` against the tool's own copy of the category list (which matches `CATEGORY_DIRS` plus the four `subagent-*` categories, see lines 22–38 of `note_manage.rs`). Unknown categories are rejected with a listing of valid values. Create and update both run input through `sanitize_title` before the filename is ever joined into a path.
+Mutating actions run `validate_category(category)` directly against `CATEGORY_DIRS` imported from the indexer — single-sourced, so the tool can never drift from the directories the indexer creates (a hand-copied list here once drifted from `CATEGORY_DIRS`, locking the LLM out of `feedback` / `goal-lessons` / `query` notes; a regression test now pins the alignment). Unknown categories are rejected with a listing of valid values. Create and update both run input through `sanitize_title` before the filename is ever joined into a path.
+
+`query` is hybrid search: when an embedder is injected (`with_embedder`, wired from the registry's `config.embedder`), the query text is embedded and `hybrid_search_notes` fuses vector + FTS results via RRF — which also gives CJK queries semantic recall that the unicode61 FTS tokenizer cannot. A missing embedder or a failed embed degrades to the FTS path rather than failing (P7). Every query records `recall_signals` on the dedicated channel `"note_manage"` (independent per-day dedup from the auto-recall channel). Output is budgeted: 4,000 chars per note, 24,000 chars total, with honest `…(+N chars truncated)` markers rather than silent cuts.
+
+`create` and `update` store `content` verbatim as the note's `body` (via `set_body`, §4) and route through `NoteIndexer::write_note` — atomic write, orientation notification, supersession section. Both, plus `append`, refresh the note's embedding immediately after a successful write (embed-on-write, best-effort — never fails the write), so the note is discoverable by vector search without waiting for a manual `memory.reembed`. `create` additionally surfaces `related_notes` — semantic neighbors via the embedder's vector search, falling back to per-keyword FTS when no embedder is wired — so the model can weave the new note into the wiki via `links` instead of leaving an orphan island. `delete` routes through `NoteIndexer::delete_note` (§6.1): index rows including embedding, file, and orientation in one owned path.
 
 Frontmatter is produced by `KnowledgeNote::to_markdown` (the single real write path). The YAML fields written are those described in §3.
 
@@ -471,7 +524,7 @@ Commands in `src/memory/events/commands.rs`:
 
 1. Append the `MemoryEventEnvelope` to the SQLite event log (`append_memory_event`).
 2. Fold all events for the affected note path into a projected note via `EventProjector::fold_events_to_note`.
-3. On a present projection, write a `KnowledgeNote` via `NoteIndexer::write_note`, then `index_note`.
+3. On a present projection, write a `KnowledgeNote` via `NoteIndexer::write_note`. `write_note` already reparses the written file and indexes it with the correct `content_hash` — the redundant second `index_note` call was removed, because indexing the empty-hash struct overwrote the row and defeated the hash-skip on every subsequent rebuild. The projected note preserves the event-log `created_at` (resetting it to projection time lost the original creation date on every fold).
 4. On a `None` projection (note deleted), scan `CATEGORY_DIRS` for the file and remove both file and index entry.
 
 This is the "notes dual-write": the event log remains the audit-and-explain source of truth while markdown files are the primary read surface. See `RETRIEVAL.md` §12 for how the event log powers `explain_fact` and time-travel queries.
@@ -492,9 +545,18 @@ pub enum NamespaceScope {
 
 Note scoping itself is orthogonal: notes are keyed by `agent_id` in the filesystem path and the `notes_index` primary key. `agent_id` and `namespace` are independent axes — the former partitions the markdown filesystem, the latter partitions rows visible to a given authenticated caller.
 
-## 14. Graph Subsystem (upcoming)
+## 14. Graph Subsystem
 
-`src/memory/notes/graph/` is the planned home for the note protocol-graph subsystem — a typed, queryable knowledge graph built on top of the existing `notes_links` table (§8). The subsystem will provide structured graph traversal (BFS/DFS), relation-typed edge queries, and graph-aware retrieval to complement the existing FTS and vector search paths. Design documentation lives in `docs/reference/memory/notes-graph-spec.md` and `notes-graph-plan.md` (Phase 0–3 implementation roadmap).
+`src/memory/notes/graph/` is the note knowledge-graph intelligence layer — pure functions over an immutable `GraphSnapshot`, zero storage coupling (P4), no external graph crate (R3), concurrency via std threads:
+
+| File | Contents |
+|---|---|
+| `mod.rs` | `GraphSnapshot` / `GraphNode` / `GraphEdge` / `GraphIndex` (shared adjacency), community detection entry |
+| `relevance.rs` | Four-signal relatedness scoring: direct-link ×3 (edge-confidence-weighted), source-overlap ×4 (IDF-damped), Adamic-Adar ×1.5, type-affinity ×1 |
+| `insights.rs` | Graph-health insights: isolated nodes (degree ≤ 1), sparse communities, bridge notes, surprising cross-community connections |
+| `minhash.rs` | MinHash + LSH content-similarity edges over note bodies (word-level 3-shingles, K=64, zero embeddings, zero new deps) |
+
+The graph is **materialized offline** by `GraphRecomputeStage` (`src/memory/dreaming/stages/graph_recompute.rs`) each dream cycle: it loads the snapshot, runs the four-signal / Louvain / insights algorithms inside `spawn_blocking` plus a MinHash similarity pass, and upserts `notes_graph_cache` + `notes_graph_related` + `notes_graph_insights` — pure deterministic aggregation, zero LLM calls (R7/R10-safe). Consumers: the `note_manage` **Insights** action (§11) reads the materialized insights, and the `note_weave` dream stage uses the `isolated` insight plus `related_peers` four-signal scores for orphan-note backfill. See [FEATURE_LOCATOR.md](../FEATURE_LOCATOR.md) §2.5① for the full anchor map and the NoteWeave three-signal orphan-rescue design.
 
 ## See Also
 

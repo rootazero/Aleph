@@ -482,29 +482,21 @@ async fn execute_merge(
             if absorbed_note.created_at < keeper_note.created_at && absorbed_note.created_at > 0 {
                 keeper_note.created_at = absorbed_note.created_at;
             }
-            // Merge unique facts
-            for fact in &absorbed_note.facts {
-                if !keeper_note.facts.contains(fact) {
-                    keeper_note.facts.push(fact.clone());
-                }
-            }
         }
-        MergeMode::AbsorbIntoA => {
-            // Append unique facts from absorbed into keeper
-            for fact in &absorbed_note.facts {
-                if !keeper_note.facts.contains(fact) {
-                    keeper_note.facts.push(fact.clone());
-                }
-            }
-        }
+        MergeMode::AbsorbIntoA => {}
     }
 
-    // Merge unique links
-    for link in &absorbed_note.links {
-        if !keeper_note.links.contains(link) {
-            keeper_note.links.push(link.clone());
-        }
-    }
+    // Merge unique facts + links through the body-sync helpers so a keeper
+    // with a verbatim prose body gains the absorbed bullets instead of
+    // silently dropping them (both merge modes append unique facts).
+    let fresh_facts: Vec<String> = absorbed_note
+        .facts
+        .iter()
+        .filter(|f| !keeper_note.facts.contains(f))
+        .cloned()
+        .collect();
+    keeper_note.append_facts(&fresh_facts);
+    keeper_note.add_links(&absorbed_note.links);
 
     // Merge unique tags
     for tag in &absorbed_note.tags {

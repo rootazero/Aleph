@@ -182,17 +182,15 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 let safe = sanitize_title(&filename)?;
                 let existing = self.load_existing_or_default(&category, &safe).await?;
                 let mut merged = existing;
-                for raw in new_facts {
-                    let f = ensure_origin_marker(raw);
-                    if !merged.facts.contains(&f) {
-                        merged.facts.push(f.clone());
-                    }
-                }
-                for l in new_links {
-                    if !merged.links.contains(l) {
-                        merged.links.push(l.clone());
-                    }
-                }
+                // Route through the body-sync helpers so a prose-bearing note
+                // gains the new bullets instead of losing its body on rewrite.
+                let fresh_facts: Vec<String> = new_facts
+                    .iter()
+                    .map(|raw| ensure_origin_marker(raw))
+                    .filter(|f| !merged.facts.contains(f))
+                    .collect();
+                merged.append_facts(&fresh_facts);
+                merged.add_links(new_links);
                 // Upsert typed relation edges by target: re-stated relation replaces
                 // the existing one with the same `to`; new target is appended.
                 for r in new_relations {
@@ -237,7 +235,11 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                     });
                 }
                 let mut existing = self.load_existing_or_default(&category, &safe).await?;
+                // Full facts replacement: the planner rewrote the bullet set,
+                // so the note reverts to facts-form (legacy parity — a stale
+                // verbatim body would otherwise win over the new facts).
                 existing.facts = new_facts.clone();
+                existing.body = None;
                 existing.updated_at = chrono::Utc::now().timestamp();
                 self.push_staged(&category, &safe, existing, "update")
                     .await?;
@@ -256,9 +258,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 } else {
                     format!(" (sources: {})", evidence_source_ids.join(", "))
                 };
-                existing
-                    .facts
-                    .push(format!("[contradict {ts}] {new_claim}{ev}"));
+                existing.append_facts(&[format!("[contradict {ts}] {new_claim}{ev}")]);
                 existing.updated_at = chrono::Utc::now().timestamp();
                 self.push_staged(&category, &safe, existing, "contradict")
                     .await?;

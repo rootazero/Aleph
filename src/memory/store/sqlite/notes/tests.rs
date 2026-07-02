@@ -129,6 +129,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remove_note_index_clears_embedding() {
+        // Regression: deleted notes used to leave orphan vectors behind that
+        // kept occupying KNN slots forever (no delete path cleared
+        // notes_vec_map / notes_vec_{dim}).
+        let backend = make_backend();
+        let note = make_note("vectored", "reference");
+        backend
+            .index_note(&note, "agent1", "reference")
+            .await
+            .unwrap();
+        let path = "reference/vectored";
+        let embedding = vec![0.5_f32; 768];
+        backend
+            .upsert_embedding(path, "agent1", &embedding, 768)
+            .await
+            .unwrap();
+        assert!(backend
+            .get_embedding(path, "agent1", 768)
+            .await
+            .unwrap()
+            .is_some());
+
+        backend.remove_note_index(path, "agent1").await.unwrap();
+
+        assert!(
+            backend
+                .get_embedding(path, "agent1", 768)
+                .await
+                .unwrap()
+                .is_none(),
+            "embedding must be cleared with the index entry"
+        );
+        let hits = backend
+            .vector_search(&embedding, 768, "agent1", 5)
+            .await
+            .unwrap();
+        assert!(
+            hits.iter().all(|(p, _)| p != path),
+            "deleted note must not surface in KNN: {hits:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn list_notes_by_category_filters_correctly() {
         let backend = make_backend();
         backend

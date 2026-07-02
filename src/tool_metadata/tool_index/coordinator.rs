@@ -340,6 +340,9 @@ impl ToolIndexCoordinator {
                                 KnowledgeNote::from_markdown(&tool_name, &existing_md)
                             {
                                 existing_note.facts = vec![l2_result.description.clone()];
+                                // Full facts replacement — drop any verbatim
+                                // body so the new description wins on write.
+                                existing_note.body = None;
                                 existing_note.updated_at = std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .unwrap_or_default()

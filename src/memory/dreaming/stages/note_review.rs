@@ -101,6 +101,9 @@ impl DreamStage for NoteReviewStage {
                 ReviewVerdict::Rewrite(new_facts) => {
                     let mut admitted = candidate.clone();
                     admitted.note.facts = new_facts;
+                    // Full facts replacement — a stale verbatim body would
+                    // otherwise win over the rewrite on serialization.
+                    admitted.note.body = None;
                     admitted.bypass_review = true;
                     let _ = ctx
                         .indexer

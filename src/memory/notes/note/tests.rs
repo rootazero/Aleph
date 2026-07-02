@@ -506,18 +506,15 @@ Related: [[Rust Learning]] [[Dev Environment]]
         };
         let md = n.to_markdown();
         assert!(
-            md.contains("created: \"2024-04-29\""),
-            "expected quoted date, got:\n{md}"
+            md.contains("created: \"2024-04-29T08:00:00Z\""),
+            "expected quoted RFC3339 date, got:\n{md}"
         );
-        // Writer formats only the date (`%Y-%m-%d`), not the time, so the
-        // round-trip truncates to start-of-day UTC: the input
-        // 1714377600 (2024-04-29 08:00:00 UTC) becomes 1714348800
-        // (2024-04-29 00:00:00 UTC). Pin the observed value to catch future
-        // regressions; if the truncation is ever fixed this assertion must
-        // be updated.
+        // Writer emits second-precision RFC3339, so the round-trip preserves
+        // the exact timestamp (day-granular writers used to truncate to
+        // start-of-day UTC and break intra-day recency ordering).
         let parsed = KnowledgeNote::from_markdown("t", &md).expect("round-trip parse");
-        assert_eq!(parsed.created_at, 1714348800);
-        assert_eq!(parsed.updated_at, 1714348800);
+        assert_eq!(parsed.created_at, 1714377600);
+        assert_eq!(parsed.updated_at, 1714377600);
     }
 
     #[test]
@@ -709,6 +706,151 @@ tags: []
         assert!(md.contains("permanent: true"));
         let reparsed = KnowledgeNote::from_markdown(&note.title, &md).unwrap();
         assert!(reparsed.permanent);
+    }
+
+    // ─── body-fidelity round-trip (RF-01) ───────────────────────────────
+
+    #[test]
+    fn body_round_trip_preserves_prose() {
+        // Prose, headings, and fenced code must survive parse → serialize.
+        let md = "---\ncategory: reference\ntags: []\n---\n\n# Heading\n\nA paragraph of prose.\n\n```rust\nfn main() {}\n```\n\n- one bullet fact\n";
+        let n = KnowledgeNote::from_markdown("prose-note", md).unwrap();
+        assert_eq!(n.facts, vec!["one bullet fact".to_string()]);
+        let out = n.to_markdown();
+        assert!(out.contains("# Heading"), "heading lost: {out}");
+        assert!(out.contains("A paragraph of prose."), "prose lost: {out}");
+        assert!(out.contains("fn main() {}"), "code lost: {out}");
+        assert!(out.contains("- one bullet fact"));
+        // And the re-parse of the re-serialization is stable.
+        let n2 = KnowledgeNote::from_markdown("prose-note", &out).unwrap();
+        assert_eq!(n2.facts, n.facts);
+        assert!(n2.body.as_deref().unwrap().contains("# Heading"));
+    }
+
+    #[test]
+    fn append_facts_keeps_prose_and_adds_bullets() {
+        let md = "---\ncategory: reference\ntags: []\n---\n\nSome prose to keep.\n\n- old fact\n";
+        let mut n = KnowledgeNote::from_markdown("t", md).unwrap();
+        n.append_facts(&["new fact".to_string()]);
+        let out = n.to_markdown();
+        assert!(out.contains("Some prose to keep."));
+        assert!(out.contains("- old fact"));
+        assert!(out.contains("- new fact"));
+        let reparsed = KnowledgeNote::from_markdown("t", &out).unwrap();
+        assert_eq!(
+            reparsed.facts,
+            vec!["old fact".to_string(), "new fact".to_string()]
+        );
+    }
+
+    #[test]
+    fn add_links_appends_related_line_once() {
+        let md = "---\ncategory: reference\ntags: []\n---\n\nProse body. See [[Existing]].\n";
+        let mut n = KnowledgeNote::from_markdown("t", md).unwrap();
+        n.add_links(&["Existing".to_string(), "Fresh".to_string()]);
+        let out = n.to_markdown();
+        // Existing link not duplicated; fresh one lands on a Related line.
+        assert_eq!(out.matches("[[Existing]]").count(), 1, "{out}");
+        assert!(out.contains("Related: [[Fresh]]"), "{out}");
+        let reparsed = KnowledgeNote::from_markdown("t", &out).unwrap();
+        assert!(reparsed.links.contains(&"Fresh".to_string()));
+    }
+
+    #[test]
+    fn legacy_construction_emits_facts_format() {
+        // Programmatic notes (body: None) keep the legacy rendering.
+        let n = KnowledgeNote {
+            title: "legacy".into(),
+            category: "skill".into(),
+            facts: vec!["a rule".into()],
+            links: vec!["Peer".into()],
+            ..Default::default()
+        };
+        let out = n.to_markdown();
+        assert!(out.contains("- a rule\n"));
+        assert!(out.contains("Related: [[Peer]]"));
+    }
+
+    #[test]
+    fn multiline_fact_round_trips_via_indent() {
+        // Continuation lines used to serialize unindented and get dropped by
+        // extract_facts on the next parse.
+        let n = KnowledgeNote {
+            title: "ml".into(),
+            category: "lesson".into(),
+            facts: vec!["step 1\nstep 2".into()],
+            ..Default::default()
+        };
+        let out = n.to_markdown();
+        let reparsed = KnowledgeNote::from_markdown("ml", &out).unwrap();
+        assert_eq!(reparsed.facts.len(), 1, "tail dropped: {out}");
+        assert!(reparsed.facts[0].contains("step 1"));
+        assert!(reparsed.facts[0].contains("step 2"));
+    }
+
+    #[test]
+    fn yaml_reserved_title_round_trips() {
+        // Unquoted `title: [wip] plans` used to make the note unparseable.
+        let n = KnowledgeNote {
+            title: "[wip] plans".into(),
+            category: "plan".into(),
+            facts: vec!["x".into()],
+            ..Default::default()
+        };
+        let out = n.to_markdown();
+        let reparsed = KnowledgeNote::from_markdown("[wip] plans", &out).unwrap();
+        assert_eq!(reparsed.category, "plan");
+    }
+
+    #[test]
+    fn triple_dash_in_title_does_not_break_fence_split() {
+        // split_frontmatter used to cut at the FIRST `---` substring, so a
+        // title containing `---` truncated the YAML mid-line.
+        let n = KnowledgeNote {
+            title: "phase---2".into(),
+            category: "plan".into(),
+            facts: vec!["x".into()],
+            ..Default::default()
+        };
+        let out = n.to_markdown();
+        let reparsed = KnowledgeNote::from_markdown("phase---2", &out).unwrap();
+        assert_eq!(reparsed.facts, vec!["x".to_string()]);
+    }
+
+    #[test]
+    fn rfc3339_dates_round_trip_with_second_precision() {
+        let n = KnowledgeNote {
+            title: "dated".into(),
+            category: "other".into(),
+            facts: vec!["x".into()],
+            created_at: 1_750_000_000,
+            updated_at: 1_750_003_661,
+            ..Default::default()
+        };
+        let out = n.to_markdown();
+        let reparsed = KnowledgeNote::from_markdown("dated", &out).unwrap();
+        assert_eq!(reparsed.created_at, 1_750_000_000);
+        assert_eq!(reparsed.updated_at, 1_750_003_661);
+    }
+
+    #[test]
+    fn legacy_day_granular_dates_still_parse() {
+        let md = "---\ncategory: skill\ncreated: \"2026-04-29\"\nupdated: \"2026-04-29\"\n---\n\n- f\n";
+        let n = KnowledgeNote::from_markdown("legacy-dates", md).unwrap();
+        assert!(n.created_at > 0);
+        assert_eq!(n.created_at, n.updated_at);
+    }
+
+    #[test]
+    fn fts_body_includes_prose_for_raw_notes() {
+        let md = "---\ncategory: reference\ntags: []\n---\n\nImportant prose about sqlite-vec internals.\n\n- bullet\n";
+        let n = KnowledgeNote::from_markdown("t", md).unwrap();
+        let fts = n.body_text_for_fts();
+        assert!(
+            fts.contains("Important prose about sqlite-vec internals."),
+            "prose invisible to FTS: {fts}"
+        );
+        assert!(fts.contains("bullet"));
     }
 
     #[test]

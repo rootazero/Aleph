@@ -476,6 +476,17 @@ pub trait NoteStore: Send + Sync {
         let _ = (query, channel, hits, namespace);
         Ok(0)
     }
+
+    /// Remove embedding rows whose note no longer exists in `notes_index`.
+    /// Historical deletes did not clear `notes_vec_map` / `notes_vec_{dim}`,
+    /// so ghost vectors kept occupying KNN slots forever. Called from
+    /// `full_rebuild`'s reconcile pass. Returns the number of pruned mappings.
+    /// Default impl is a no-op so non-SQLite stores and mocks compile
+    /// unchanged.
+    async fn prune_orphan_vectors(&self, agent_id: &str) -> Result<usize, AlephError> {
+        let _ = agent_id;
+        Ok(0)
+    }
 }
 
 #[cfg(test)]

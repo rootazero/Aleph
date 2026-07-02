@@ -10,7 +10,6 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
 
 use crate::error::{AlephError, Result};
@@ -20,27 +19,26 @@ use crate::memory::events::EventActor;
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::{sanitize_title, KnowledgeNote, NoteIndexer};
 use crate::memory::store::SqliteMemoryBackend;
+use crate::memory::EmbeddingProvider;
 use crate::tools::AlephTool;
 
-/// Valid note categories (mirrors `CATEGORY_DIRS` in indexer.rs).
-const VALID_CATEGORIES: &[&str] = &[
-    "preference",
-    "plan",
-    "learning",
-    "project",
-    "personal",
-    "tool",
-    "lesson",
-    "skill",
-    "reference",
-    "transcript",
-    "other",
-    "subagent-run",
-    "subagent-session",
-    "subagent-checkpoint",
-    "subagent-transcript",
-    "contradiction",
-];
+/// Per-note content cap in `query` results. A single sprawling note must not
+/// crowd out the other hits (or the context window).
+const PER_NOTE_MAX_CHARS: usize = 4_000;
+
+/// Total content budget for one `query` response, in chars. Mirrors the
+/// output-bounding discipline used by the browser tools' `bound_content`.
+const TOTAL_CONTENT_MAX_CHARS: usize = 24_000;
+
+/// recall_signals channel for explicit `note_manage(query)` look-ups. Distinct
+/// from the auto-recall channel so the per-day dedup of the two paths is
+/// independent (mirrors `note_retrieval::AUTO_RECALL_CHANNEL`).
+const NOTE_MANAGE_RECALL_CHANNEL: &str = "note_manage";
+
+/// `(path, category, filename, tags, content, score)` rows from `search_notes`.
+type SearchRows = Vec<(String, String, String, Vec<String>, String, f32)>;
+
+use crate::memory::notes::CATEGORY_DIRS;
 
 // =============================================================================
 // Args / Output types
@@ -52,11 +50,12 @@ const VALID_CATEGORIES: &[&str] = &[
 pub enum NoteManageAction {
     /// Create a new note (fails if filename already exists).
     Create,
-    /// Replace the body content of an existing note.
+    /// Replace the body content of an existing note (markdown preserved verbatim).
     Update,
     /// Append bullet-point facts (and optional links) to an existing or new note.
     Append,
-    /// Full-text search across all indexed notes.
+    /// Hybrid (semantic + full-text) search across all indexed notes; falls
+    /// back to full-text only when no embedder is configured.
     Query,
     /// List all notes, optionally filtered by category.
     List,
@@ -79,8 +78,8 @@ pub struct NoteManageArgs {
     pub action: NoteManageAction,
 
     /// Note category: preference, plan, learning, project, personal, tool,
-    /// lesson, skill, reference, transcript, other, subagent-run, subagent-session,
-    /// subagent-checkpoint, subagent-transcript.
+    /// lesson, goal-lessons, skill, reference, feedback, transcript, query,
+    /// contradiction, other, or the subagent-* family.
     /// Required for create/update/append/delete; optional filter for list.
     #[serde(default)]
     pub category: Option<String>,
@@ -175,6 +174,11 @@ pub struct NoteManageTool {
     /// [`crate::memory::project_scope`]. Mirrors `MemoryConfig.project_scoped`;
     /// `false` (the default) is byte-for-byte the single-namespace behaviour.
     project_scoped: bool,
+    /// Optional embedding provider. When present, `query` upgrades from
+    /// FTS-only to vector+FTS hybrid search (RRF fusion) — which also gives
+    /// CJK queries semantic recall that the unicode61 FTS tokenizer cannot.
+    /// `None` (or a failed embed) falls back to the FTS path.
+    embedder: Option<Arc<dyn EmbeddingProvider>>,
 }
 
 impl NoteManageTool {
@@ -183,7 +187,16 @@ impl NoteManageTool {
             indexer: Arc::new(NoteIndexer::new(memory_dir, store)),
             command_handler: None,
             project_scoped: false,
+            embedder: None,
         }
+    }
+
+    /// Attach an embedding provider so `query` runs hybrid (vector + FTS)
+    /// search instead of FTS-only. Wired from the registry's `config.embedder`.
+    #[must_use]
+    pub fn with_embedder(mut self, embedder: Arc<dyn EmbeddingProvider>) -> Self {
+        self.embedder = Some(embedder);
+        self
     }
 
     /// Enable per-project memory namespacing for this tool. Wired from
@@ -191,6 +204,21 @@ impl NoteManageTool {
     #[must_use]
     pub const fn with_project_scoping(mut self, enabled: bool) -> Self {
         self.project_scoped = enabled;
+        self
+    }
+
+    /// Attach the note-orientation hook so LLM-driven note writes invalidate
+    /// the generated `index.md` / `log.md` like every other write path. The
+    /// inner indexer is rebuilt because `NoteIndexer::with_orientation`
+    /// consumes `self` and this tool wraps it in an `Arc`.
+    #[must_use]
+    pub fn with_orientation(
+        mut self,
+        orientation: Arc<dyn crate::memory::notes::orientation::NoteOrientation>,
+    ) -> Self {
+        let memory_dir = self.indexer.memory_dir().to_path_buf();
+        let store = Arc::clone(self.indexer.store());
+        self.indexer = Arc::new(NoteIndexer::new(memory_dir, store).with_orientation(orientation));
         self
     }
 
@@ -341,14 +369,13 @@ impl NoteManageTool {
             scan_note_for_threats(content)?;
         }
 
-        // Ensure directory exists
         let safe_filename = sanitize_title(filename)?;
-        let note_dir = self.indexer.memory_dir().join(agent_id).join(category);
-        tokio::fs::create_dir_all(&note_dir)
-            .await
-            .map_err(|e| AlephError::tool(format!("Failed to create category dir: {e}")))?;
-
-        let file_path = note_dir.join(format!("{safe_filename}.md"));
+        let file_path = self
+            .indexer
+            .memory_dir()
+            .join(agent_id)
+            .join(category)
+            .join(format!("{safe_filename}.md"));
         if file_path.exists() {
             return Err(AlephError::tool(format!(
                 "Note '{filename}' in '{category}' already exists. Use 'update' action instead."
@@ -362,101 +389,105 @@ impl NoteManageTool {
             category: category.to_string(),
             tags: tags.clone(),
             facts: vec![],
-            links: args.links.clone().unwrap_or_default(),
+            links: vec![],
             created_at: now,
             updated_at: now,
             content_hash: String::new(),
             ..Default::default()
         };
 
-        // If content is provided, treat each line starting with "- " as a fact,
-        // and the rest as additional markdown body appended below facts.
-        // For simplicity, store content as the facts list parsed from the body.
+        // Store the caller's markdown verbatim as the body (headings, code
+        // blocks, and paragraphs survive) — facts/links become derived index
+        // views. Explicit `links` args are merged via the body-sync helper.
         if let Some(content) = &args.content {
-            note.facts = content
-                .lines()
-                .filter_map(|l| {
-                    let t = l.trim();
-                    if let Some(rest) = t.strip_prefix("- ") {
-                        Some(rest.to_string())
-                    } else if !t.is_empty() {
-                        // Non-bullet lines stored verbatim as facts
-                        Some(t.to_string())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            note.set_body(content.clone());
+        }
+        if let Some(links) = &args.links {
+            note.add_links(links);
         }
 
-        // Atomic write — open with create_new to avoid TOCTOU race
-        let md = note.to_markdown();
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&file_path)
-            .await
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::AlreadyExists {
-                    AlephError::tool(format!(
-                        "Note '{filename}' already exists. Use 'update' action instead."
-                    ))
-                } else {
-                    AlephError::tool(format!("Failed to write note: {e}"))
-                }
-            })?;
-        file.write_all(md.as_bytes())
+        // Single write chokepoint: atomic write + reparse-index + orientation.
+        // (The pre-write existence check above leaves a narrow check-to-write
+        // window; note writes are single-process, so this is acceptable.)
+        self.indexer
+            .write_note(agent_id, category, &note)
             .await
             .map_err(|e| AlephError::tool(format!("Failed to write note: {e}")))?;
-
-        // Index the new file
-        self.indexer
-            .index_file(agent_id, category, &file_path)
-            .await
-            .map_err(|e| AlephError::tool(format!("Failed to index note: {e}")))?;
 
         let note_path = format!("{category}/{safe_filename}");
         info!(path = %note_path, "Note created");
 
-        // Surface related existing notes (best-effort, FTS-only — this tool
-        // has no embedder) so the model can weave the new note into the wiki
-        // instead of leaving an orphan island. `search_notes_fts` treats its
-        // whole query as ONE FTS5 phrase, so a multi-word title+content blob
-        // would require an exact phrase hit and never match — search per
-        // significant keyword instead and merge by path. Search failure must
-        // never fail the create.
+        // Make the new note immediately visible to vector retrieval.
+        self.refresh_embedding(agent_id, category, &safe_filename)
+            .await;
+
+        // Surface related existing notes (best-effort) so the model can weave
+        // the new note into the wiki instead of leaving an orphan island.
+        // Preferred: semantic neighbors via the embedder — this also works for
+        // CJK content, which the unicode61 FTS tokenizer cannot match
+        // per-word. Fallback: per-keyword FTS. Search failure must never fail
+        // the create.
         let query_text = format!(
             "{} {}",
             args.title.as_deref().unwrap_or(&safe_filename),
             args.content.as_deref().unwrap_or("")
         );
         let mut rel: Vec<NoteListEntry> = Vec::new();
-        for kw in related_keywords(&query_text) {
-            match self
-                .indexer
-                .store()
-                .search_notes_fts(&kw, agent_id, 3)
-                .await
-            {
-                Ok(hits) => {
-                    for e in hits {
-                        if e.path == note_path || rel.iter().any(|r| r.path == e.path) {
+        if let Some(embedder) = &self.embedder {
+            if let Ok(embedding) = embedder.embed(&query_text).await {
+                let dim = embedding.len() as u32;
+                if let Ok(hits) = self
+                    .indexer
+                    .store()
+                    .vector_search(&embedding, dim, agent_id, 6)
+                    .await
+                {
+                    for (path, _score) in hits {
+                        if path == note_path || rel.iter().any(|r| r.path == path) {
                             continue;
                         }
-                        rel.push(NoteListEntry {
-                            path: e.path,
-                            category: e.category,
-                            filename: e.filename,
-                            tags: e.tags,
-                        });
+                        if let Ok(Some(e)) =
+                            self.indexer.store().get_note_index(&path, agent_id).await
+                        {
+                            rel.push(NoteListEntry {
+                                path: e.path,
+                                category: e.category,
+                                filename: e.filename,
+                                tags: e.tags,
+                            });
+                        }
                     }
                 }
-                Err(e) => {
-                    warn!(error = %e, keyword = %kw, "note_manage create: related-note search failed");
-                }
             }
-            if rel.len() >= 5 {
-                break;
+        }
+        if rel.is_empty() {
+            for kw in related_keywords(&query_text) {
+                match self
+                    .indexer
+                    .store()
+                    .search_notes_fts(&kw, agent_id, 3)
+                    .await
+                {
+                    Ok(hits) => {
+                        for e in hits {
+                            if e.path == note_path || rel.iter().any(|r| r.path == e.path) {
+                                continue;
+                            }
+                            rel.push(NoteListEntry {
+                                path: e.path,
+                                category: e.category,
+                                filename: e.filename,
+                                tags: e.tags,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, keyword = %kw, "note_manage create: related-note search failed");
+                    }
+                }
+                if rel.len() >= 5 {
+                    break;
+                }
             }
         }
         rel.truncate(5);
@@ -519,7 +550,8 @@ impl NoteManageTool {
             )));
         }
 
-        // Read existing note, preserve metadata, replace facts/body
+        // Read existing note, preserve frontmatter metadata, replace the body
+        // verbatim (facts/links re-derived by set_body).
         let existing = tokio::fs::read_to_string(&file_path)
             .await
             .map_err(|e| AlephError::tool(format!("Failed to read note: {e}")))?;
@@ -527,44 +559,31 @@ impl NoteManageTool {
         let mut note = KnowledgeNote::from_markdown(&safe_filename, &existing)
             .map_err(|e| AlephError::tool(format!("Failed to parse existing note: {e}")))?;
 
-        // Replace facts from new content
-        note.facts = content
-            .lines()
-            .filter_map(|l| {
-                let t = l.trim();
-                if let Some(rest) = t.strip_prefix("- ") {
-                    Some(rest.to_string())
-                } else if !t.is_empty() {
-                    Some(t.to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        note.set_body(content.to_string());
 
         // Apply optional field updates
         if let Some(tags) = &args.tags {
             note.tags = tags.clone();
         }
         if let Some(links) = &args.links {
-            note.links = links.clone();
+            note.add_links(links);
         }
         note.updated_at = chrono::Utc::now().timestamp();
 
-        // Write updated file
-        let md = note.to_markdown();
-        tokio::fs::write(&file_path, &md)
+        // Single write chokepoint: atomic write + reparse-index + orientation
+        // (the previous plain fs::write could leave a truncated source-of-truth
+        // file on a crash).
+        self.indexer
+            .write_note(agent_id, category, &note)
             .await
             .map_err(|e| AlephError::tool(format!("Failed to write note: {e}")))?;
 
-        // Re-index
-        self.indexer
-            .index_file(agent_id, category, &file_path)
-            .await
-            .map_err(|e| AlephError::tool(format!("Failed to re-index note: {e}")))?;
-
         let note_path = format!("{category}/{safe_filename}");
         info!(path = %note_path, "Note updated");
+
+        // Keep the vector index in step with the rewritten content.
+        self.refresh_embedding(agent_id, category, &safe_filename)
+            .await;
 
         Ok(NoteManageResult {
             related_notes: None,
@@ -617,6 +636,10 @@ impl NoteManageTool {
 
         info!(path = %note_path, facts = new_facts.len(), "Note appended");
 
+        // Keep the vector index in step with the extended content.
+        self.refresh_embedding(agent_id, category, &safe_filename)
+            .await;
+
         Ok(NoteManageResult {
             related_notes: None,
             success: true,
@@ -630,6 +653,106 @@ impl NoteManageTool {
         })
     }
 
+    /// Hybrid (vector + FTS) search when an embedder is wired; a failed embed
+    /// degrades to FTS rather than failing the query (P7). Returns
+    /// `(path, category, filename, tags, content, score)` tuples plus the
+    /// mode label used in the result message.
+    async fn search_notes(
+        &self,
+        query: &str,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<(SearchRows, &'static str)> {
+        if let Some(embedder) = &self.embedder {
+            match embedder.embed(query).await {
+                Ok(embedding) => {
+                    let dim = embedding.len() as u32;
+                    let hits = self
+                        .indexer
+                        .store()
+                        .hybrid_search_notes(&embedding, query, agent_id, dim, limit)
+                        .await
+                        .map_err(|e| AlephError::tool(format!("Note search failed: {e}")))?;
+                    let rows = hits
+                        .into_iter()
+                        .map(|h| (h.path, h.category, h.filename, h.tags, h.content, h.score))
+                        .collect();
+                    return Ok((rows, "hybrid"));
+                }
+                Err(e) => {
+                    warn!(error = %e, "note_manage query: embed failed — falling back to FTS");
+                }
+            }
+        }
+
+        let entries = self
+            .indexer
+            .store()
+            .search_notes_fts(query, agent_id, limit)
+            .await
+            .map_err(|e| AlephError::tool(format!("Note search failed: {e}")))?;
+        let mut rows: SearchRows = Vec::with_capacity(entries.len());
+        for (rank, entry) in entries.into_iter().enumerate() {
+            let file_path = self
+                .indexer
+                .memory_dir()
+                .join(agent_id)
+                .join(&entry.category)
+                .join(format!("{}.md", entry.filename));
+            let content = tokio::fs::read_to_string(&file_path)
+                .await
+                .unwrap_or_default();
+            // Rank-derived pseudo score — FTS entries carry no fused score.
+            let score = 1.0 / (1.0 + rank as f32);
+            rows.push((
+                entry.path,
+                entry.category,
+                entry.filename,
+                entry.tags,
+                content,
+                score,
+            ));
+        }
+        Ok((rows, "full-text"))
+    }
+
+    /// Best-effort embedding refresh after a successful write, so the note is
+    /// immediately visible to the vector leg of retrieval instead of waiting
+    /// for a manual `memory.reembed`. Embeds the full on-disk file content
+    /// (same text basis as `reembed_all`). Never fails the write.
+    async fn refresh_embedding(&self, agent_id: &str, category: &str, filename: &str) {
+        let Some(embedder) = &self.embedder else {
+            return;
+        };
+        let file_path = self
+            .indexer
+            .memory_dir()
+            .join(agent_id)
+            .join(category)
+            .join(format!("{filename}.md"));
+        let content = match tokio::fs::read_to_string(&file_path).await {
+            Ok(c) if !c.trim().is_empty() => c,
+            _ => return,
+        };
+        match embedder.embed(&content).await {
+            Ok(embedding) => {
+                let dim = embedding.len() as u32;
+                let note_path = format!("{category}/{filename}");
+                if let Err(e) = self
+                    .indexer
+                    .store()
+                    .upsert_embedding(&note_path, agent_id, &embedding, dim)
+                    .await
+                {
+                    warn!(path = %note_path, error = %e, "note_manage: embedding upsert failed");
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "note_manage: embed-on-write failed (vector index stays stale)");
+            }
+        }
+    }
+
     async fn handle_query(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
         let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
@@ -641,12 +764,7 @@ impl NoteManageTool {
 
         let limit = args.limit.unwrap_or(20);
 
-        let results = self
-            .indexer
-            .store()
-            .search_notes_fts(query, agent_id, limit)
-            .await
-            .map_err(|e| AlephError::tool(format!("Note search failed: {e}")))?;
+        let (results, mode) = self.search_notes(query, agent_id, limit).await?;
 
         if results.is_empty() {
             return Ok(NoteManageResult {
@@ -659,38 +777,58 @@ impl NoteManageTool {
             });
         }
 
+        // Recall bookkeeping: notes the LLM explicitly looks up must accrue
+        // recall signals, or the decay stage ages them as never-used.
+        // Best-effort — a signal write failure never breaks the query.
+        let hits: Vec<(String, f32)> = results
+            .iter()
+            .map(|(path, .., score)| (path.clone(), *score))
+            .collect();
+        if let Err(e) = self
+            .indexer
+            .store()
+            .record_recall_hits(query, NOTE_MANAGE_RECALL_CHANNEL, &hits, "owner")
+            .await
+        {
+            tracing::debug!(error = %e, "note_manage query: recall signal write failed");
+        }
+
         let mut notes = Vec::new();
         let mut combined_content = String::new();
+        let mut bodies_omitted = 0usize;
 
-        for entry in &results {
-            let file_path = self
-                .indexer
-                .memory_dir()
-                .join(agent_id)
-                .join(&entry.category)
-                .join(format!("{}.md", entry.filename));
-
-            let file_content = tokio::fs::read_to_string(&file_path)
-                .await
-                .unwrap_or_default();
-
-            combined_content.push_str(&format!(
-                "## {} ({})\n\n{}\n\n---\n\n",
-                entry.filename, entry.path, file_content
-            ));
+        for (path, category, filename, tags, file_content, _score) in &results {
+            // Budget the response: full metadata for every hit, but bodies stop
+            // once the total content budget is spent — an unbounded query over
+            // 20 full notes can flood the context window.
+            if combined_content.len() < TOTAL_CONTENT_MAX_CHARS {
+                let body = bound_chars(file_content, PER_NOTE_MAX_CHARS);
+                combined_content.push_str(&format!("## {filename} ({path})\n\n{body}\n\n---\n\n"));
+            } else {
+                bodies_omitted += 1;
+            }
 
             notes.push(NoteListEntry {
-                path: entry.path.clone(),
-                category: entry.category.clone(),
-                filename: entry.filename.clone(),
-                tags: entry.tags.clone(),
+                path: path.clone(),
+                category: category.clone(),
+                filename: filename.clone(),
+                tags: tags.clone(),
             });
+        }
+        if bodies_omitted > 0 {
+            combined_content.push_str(&format!(
+                "[{bodies_omitted} more matching note(s) listed above without bodies — \
+                 query with a smaller limit or read them individually]\n"
+            ));
         }
 
         Ok(NoteManageResult {
             related_notes: None,
             success: true,
-            message: format!("Found {} note(s) matching '{query}'", notes.len()),
+            message: format!(
+                "Found {} note(s) matching '{query}' ({mode} search)",
+                notes.len()
+            ),
             note_path: None,
             content: Some(combined_content),
             notes: Some(notes),
@@ -702,23 +840,25 @@ impl NoteManageTool {
         let agent_id = agent_id_owned.as_str();
         let limit = args.limit.unwrap_or(100);
 
-        let all_entries = self
-            .indexer
-            .store()
-            .list_notes(agent_id)
-            .await
-            .map_err(|e| AlephError::tool(format!("Failed to list notes: {e}")))?;
+        // Category filter dispatches to the paginated store query instead of
+        // scanning every note for the agent and filtering in memory.
+        let all_entries = match args.category.as_deref() {
+            Some(cat) => self
+                .indexer
+                .store()
+                .get_notes_by_category(agent_id, cat, limit)
+                .await
+                .map_err(|e| AlephError::tool(format!("Failed to list notes: {e}")))?,
+            None => self
+                .indexer
+                .store()
+                .list_notes(agent_id)
+                .await
+                .map_err(|e| AlephError::tool(format!("Failed to list notes: {e}")))?,
+        };
 
         let entries: Vec<NoteListEntry> = all_entries
             .into_iter()
-            .filter(|e| {
-                // Optional category filter
-                if let Some(cat) = args.category.as_deref() {
-                    e.category == cat
-                } else {
-                    true
-                }
-            })
             .take(limit)
             .map(|e| NoteListEntry {
                 path: e.path.clone(),
@@ -775,19 +915,12 @@ impl NoteManageTool {
 
         let note_path = format!("{category}/{safe_filename}");
 
-        // Remove from index first (recoverable), then delete file
-        if let Err(e) = self
-            .indexer
-            .store()
-            .remove_note_index(&note_path, agent_id)
+        // Unified delete path: index rows (incl. embedding) + file +
+        // orientation notification, all owned by the indexer.
+        self.indexer
+            .delete_note(agent_id, category, filename)
             .await
-        {
-            warn!(path = %note_path, error = %e, "Failed to remove note from index");
-        }
-
-        tokio::fs::remove_file(&file_path)
-            .await
-            .map_err(|e| AlephError::tool(format!("Failed to delete note file: {e}")))?;
+            .map_err(|e| AlephError::tool(format!("Failed to delete note: {e}")))?;
 
         info!(path = %note_path, "Note deleted");
 
@@ -932,9 +1065,14 @@ impl NoteManageTool {
 impl AlephTool for NoteManageTool {
     const NAME: &'static str = "note_manage";
     const DESCRIPTION: &'static str =
-        "Create, update, append, query, list, or delete personal knowledge notes. \
+        "Create, update, append, query, list, or delete personal knowledge notes; \
+         `insights` reads knowledge-graph health (gaps, bridges, communities) and \
+         `evolution` explains why memory changed (or didn't) in recent dream cycles. \
          Notes are markdown files organized by category (preference, plan, learning, \
-         project, personal, tool, lesson, skill, reference, transcript, other). \
+         project, personal, tool, lesson, goal-lessons, skill, reference, feedback, \
+         transcript, query, contradiction, other, subagent-*). Markdown structure \
+         (headings, paragraphs, code blocks) is preserved verbatim in create/update. \
+         `query` is hybrid semantic + full-text search. \
          Use this tool to store and retrieve long-term knowledge and preferences. \
          This is the DURABLE tier — searchable and recalled on relevance, not always \
          in-prompt. If a fact is identity-level and worth re-reading EVERY session \
@@ -956,6 +1094,8 @@ impl AlephTool for NoteManageTool {
             "note_manage(action='query', query='vim editor preferences', limit=5)".to_string(),
             "note_manage(action='list', category='reference')".to_string(),
             "note_manage(action='delete', category='plan', filename='old-plan')".to_string(),
+            "note_manage(action='insights')".to_string(),
+            "note_manage(action='evolution')".to_string(),
         ])
     }
 
@@ -980,6 +1120,18 @@ impl AlephTool for NoteManageTool {
 // Helpers
 // =============================================================================
 
+/// Truncate to at most `max` characters on a char boundary (P7 UTF-8 safety),
+/// with an honest marker carrying the omitted-char count.
+fn bound_chars(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((byte_idx, _)) => {
+            let omitted = s.chars().count() - max;
+            format!("{}…(+{omitted} chars truncated)", &s[..byte_idx])
+        }
+        None => s.to_string(),
+    }
+}
+
 /// Extract up to 4 significant keywords (length >= 4, lowercased, deduped,
 /// input order preserved) from a note's title+content for the per-keyword
 /// related-note FTS search after `create`.
@@ -1001,13 +1153,18 @@ fn related_keywords(text: &str) -> Vec<String> {
 }
 
 /// Validate that the category is one of the known valid values.
+///
+/// Single source of truth: `CATEGORY_DIRS` (indexer.rs) — the exact set of
+/// directories the indexer scans. A previous hand-copied list here drifted
+/// (missing `feedback` / `goal-lessons` / `query`), locking the LLM out of
+/// managing notes in those categories.
 fn validate_category(category: &str) -> Result<()> {
-    if VALID_CATEGORIES.contains(&category) {
+    if CATEGORY_DIRS.contains(&category) {
         Ok(())
     } else {
         Err(AlephError::tool(format!(
             "Unknown category '{category}'. Valid categories: {}",
-            VALID_CATEGORIES.join(", ")
+            CATEGORY_DIRS.join(", ")
         )))
     }
 }
@@ -1048,6 +1205,15 @@ mod tests {
     #[test]
     fn validate_category_accepts_contradiction() {
         assert!(validate_category("contradiction").is_ok());
+    }
+
+    #[test]
+    fn validate_category_matches_indexer_dirs() {
+        // Regression: a hand-copied list here once drifted from CATEGORY_DIRS,
+        // locking the LLM out of feedback / goal-lessons / query notes.
+        assert!(validate_category("feedback").is_ok());
+        assert!(validate_category("goal-lessons").is_ok());
+        assert!(validate_category("query").is_ok());
     }
 
     #[test]
@@ -1170,6 +1336,48 @@ mod tests {
         assert!(related.iter().all(|n| n.path != "learning/tokio-advanced"));
         // The message carries the linking nudge.
         assert!(r2.message.contains("consider linking"));
+    }
+
+    #[test]
+    fn bound_chars_utf8_safe_and_honest() {
+        // Short input passes through untouched.
+        assert_eq!(bound_chars("短文本", 10), "短文本");
+        // Multi-byte truncation lands on a char boundary and reports omission.
+        let long: String = "记".repeat(20);
+        let bounded = bound_chars(&long, 5);
+        assert!(bounded.starts_with("记记记记记"));
+        assert!(bounded.contains("+15 chars truncated"), "got: {bounded}");
+    }
+
+    #[tokio::test]
+    async fn query_without_embedder_falls_back_to_fts() {
+        let (_d, tool) = mk_tool();
+        tool.call(create_args("fts-target", "- tokioruntime scheduling deep dive"))
+            .await
+            .unwrap();
+        let r = tool
+            .call(NoteManageArgs {
+                action: NoteManageAction::Query,
+                category: None,
+                filename: None,
+                title: None,
+                content: None,
+                facts: None,
+                links: None,
+                tags: None,
+                query: Some("tokioruntime".into()),
+                limit: None,
+                agent_id: None,
+            })
+            .await
+            .unwrap();
+        assert!(r.success);
+        assert!(
+            r.message.contains("full-text search"),
+            "expected FTS mode label, got: {}",
+            r.message
+        );
+        assert!(r.content.unwrap().contains("fts-target"));
     }
 
     #[tokio::test]

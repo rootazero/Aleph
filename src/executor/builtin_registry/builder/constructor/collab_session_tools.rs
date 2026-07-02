@@ -423,6 +423,19 @@ impl BuiltinToolRegistry {
             let mut tool =
                 crate::builtin_tools::note_manage::NoteManageTool::new(memory_dir, db.clone())
                     .with_project_scoping(config.memory_project_scoped);
+            // Wire the orientation hook so LLM note writes refresh index.md /
+            // log.md like the compression / dream write paths do. Without
+            // this, notes created via note_manage never invalidate the
+            // orientation snapshot the prompt layer reads.
+            if let Some(ref wiki) = config.orientation {
+                tool = tool.with_orientation(Arc::clone(wiki));
+            }
+            // Wire the embedder so `query` runs hybrid (vector + FTS) search;
+            // without it the action silently degrades to FTS-only, which the
+            // unicode61 tokenizer makes near-useless for CJK queries.
+            if let Some(ref embedder) = config.embedder {
+                tool = tool.with_embedder(Arc::clone(embedder));
+            }
             // Wire the event-sourcing handler so note create/update/delete
             // actions feed the per-note event log that the memory_timeline
             // tool reads. Event-log only (no note_indexer) — note_manage owns

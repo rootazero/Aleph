@@ -143,17 +143,26 @@ pub fn split_frontmatter(content: &str) -> Result<(Frontmatter, String), AlephEr
         });
     }
 
-    // Find the closing `---`
+    // Find the closing fence: a whole line equal to `---`. A plain substring
+    // find would cut the YAML mid-line for values containing `---` (e.g.
+    // `title: phase---2`), producing a permanently unparseable note.
     let after_open = &trimmed[3..];
-    let close_pos = after_open
-        .find("---")
-        .ok_or_else(|| AlephError::ConfigError {
-            message: "Note missing closing --- for YAML frontmatter".to_string(),
-            suggestion: None,
-        })?;
+    let mut fence: Option<(usize, usize)> = None; // (yaml_end, body_start)
+    let mut pos = 0usize;
+    for line in after_open.split_inclusive('\n') {
+        if pos > 0 && line.trim_end() == "---" {
+            fence = Some((pos, pos + line.len()));
+            break;
+        }
+        pos += line.len();
+    }
+    let (yaml_end, body_start) = fence.ok_or_else(|| AlephError::ConfigError {
+        message: "Note missing closing --- for YAML frontmatter".to_string(),
+        suggestion: None,
+    })?;
 
-    let yaml_str = &after_open[..close_pos];
-    let body = after_open[close_pos + 3..].trim().to_string();
+    let yaml_str = &after_open[..yaml_end];
+    let body = after_open[body_start..].trim().to_string();
 
     let fm: Frontmatter = serde_yaml::from_str(yaml_str).map_err(|e| AlephError::ConfigError {
         message: format!("Failed to parse YAML frontmatter: {e}"),
@@ -163,8 +172,13 @@ pub fn split_frontmatter(content: &str) -> Result<(Frontmatter, String), AlephEr
     Ok((fm, body))
 }
 
-/// Parse an optional date string (YYYY-MM-DD) to a unix timestamp (midnight UTC).
-/// Returns 0 if the date is `None` or empty.
+/// Parse an optional date string to a unix timestamp. Accepts RFC3339
+/// (`2026-07-02T09:30:00Z`, second precision — what `to_markdown` now emits)
+/// and the legacy `YYYY-MM-DD` (midnight UTC). Returns 0 if `None` or empty.
+///
+/// Day-granular dates made `updated_at` collapse to midnight on every reparse
+/// from disk, so `list_notes`' `ORDER BY updated_at DESC` gave arbitrary
+/// intra-day ordering after a rebuild — hence the second-precision format.
 pub fn parse_date_to_unix(date: &Option<String>) -> Result<i64, AlephError> {
     let Some(s) = date.as_deref() else {
         return Ok(0);
@@ -174,9 +188,13 @@ pub fn parse_date_to_unix(date: &Option<String>) -> Result<i64, AlephError> {
         return Ok(0);
     }
 
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.timestamp());
+    }
+
     let nd = NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| AlephError::ConfigError {
         message: format!("Invalid date '{s}': {e}"),
-        suggestion: Some("Use YYYY-MM-DD format".to_string()),
+        suggestion: Some("Use RFC3339 or YYYY-MM-DD format".to_string()),
     })?;
 
     let dt = nd.and_hms_opt(0, 0, 0).expect("midnight is always valid");

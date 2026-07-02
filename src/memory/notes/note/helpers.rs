@@ -56,47 +56,53 @@ fn is_yaml_implicit_scalar(s: &str) -> bool {
         || s.starts_with("+0o")
 }
 
+/// Whether a string needs quoting to survive a YAML round-trip unchanged.
+fn needs_yaml_quote(s: &str) -> bool {
+    s.chars().any(|c| {
+        matches!(
+            c,
+            '\'' | '"'
+                | ','
+                | ':'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '#'
+                | '&'
+                | '*'
+                | '!'
+                | '|'
+                | '>'
+                | '%'
+                | '@'
+                | '`'
+        )
+    }) || s.starts_with(' ')
+        || s.ends_with(' ')
+        || s.is_empty()
+        || is_yaml_implicit_scalar(s)
+}
+
+/// Emit a YAML scalar value, single-quoting when the raw form would not
+/// round-trip (reserved chars, implicit scalars, edge whitespace). Used for
+/// frontmatter `title:` / `type:` / `category:` — an unquoted `title: [wip] x`
+/// makes the whole note permanently unparseable.
+pub(crate) fn yaml_scalar(s: &str) -> String {
+    if needs_yaml_quote(s) {
+        format!("'{}'", s.replace('\'', "''"))
+    } else {
+        s.to_string()
+    }
+}
+
 /// Emit a YAML flow-style array, quoting any element that contains a YAML
 /// reserved character so the round-trip survives `serde_yaml::from_str`.
 pub(crate) fn yaml_inline_array(items: &[String]) -> String {
     if items.is_empty() {
         return "[]".to_string();
     }
-    let parts: Vec<String> = items
-        .iter()
-        .map(|s| {
-            let needs_quote = s.chars().any(|c| {
-                matches!(
-                    c,
-                    '\'' | '"'
-                        | ','
-                        | ':'
-                        | '['
-                        | ']'
-                        | '{'
-                        | '}'
-                        | '#'
-                        | '&'
-                        | '*'
-                        | '!'
-                        | '|'
-                        | '>'
-                        | '%'
-                        | '@'
-                        | '`'
-                )
-            }) || s.starts_with(' ')
-                || s.ends_with(' ')
-                || s.is_empty()
-                || is_yaml_implicit_scalar(s);
-            if needs_quote {
-                let escaped = s.replace('\'', "''");
-                format!("'{escaped}'")
-            } else {
-                s.clone()
-            }
-        })
-        .collect();
+    let parts: Vec<String> = items.iter().map(|s| yaml_scalar(s)).collect();
     format!("[{}]", parts.join(", "))
 }
 

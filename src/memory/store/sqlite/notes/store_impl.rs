@@ -328,6 +328,33 @@ impl NoteStore for SqliteMemoryBackend {
         )
         .map_err(|e| AlephError::config(format!("remove_note_index sources: {e}")))?;
 
+        // Clear the embedding too: an orphan vector for a deleted note keeps
+        // occupying KNN slots forever (retrieval skips it on the missing file,
+        // but it still displaces real notes from the top-K). The vec0 virtual
+        // tables are per-dimension; the map row tells us the shared rowid.
+        let vec_rowid: Option<i64> = tx
+            .query_row(
+                "SELECT rowid FROM notes_vec_map WHERE path = ?1 AND agent_id = ?2",
+                params![path, agent_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| AlephError::config(format!("remove_note_index vec map lookup: {e}")))?;
+        if let Some(rowid) = vec_rowid {
+            for table in vec::ALL_NOTES_VEC_TABLES {
+                tx.execute(
+                    &format!("DELETE FROM {table} WHERE rowid = ?1"),
+                    params![rowid],
+                )
+                .map_err(|e| AlephError::config(format!("remove_note_index {table}: {e}")))?;
+            }
+            tx.execute(
+                "DELETE FROM notes_vec_map WHERE rowid = ?1",
+                params![rowid],
+            )
+            .map_err(|e| AlephError::config(format!("remove_note_index vec map: {e}")))?;
+        }
+
         tx.commit()
             .map_err(|e| AlephError::config(format!("remove_note_index tx commit: {e}")))?;
         Ok(())
@@ -517,9 +544,18 @@ impl NoteStore for SqliteMemoryBackend {
         // keywords (`AND`, `OR`, `NOT`, `NEAR`). Raw user/transcript queries
         // routinely contain brackets (`[user]`, code snippets, JSON), which
         // makes the unquoted MATCH binding raise `fts5: syntax error near "["`.
-        // Wrapping the whole query as a single FTS5 phrase keeps it literal —
-        // we double-up any embedded quotes per FTS5 phrase escaping rules.
-        let phrase = format!("\"{}\"", query.replace('"', "\"\""));
+        // Each whitespace-separated term becomes its own FTS5 phrase (embedded
+        // quotes doubled per FTS5 escaping) joined with OR — binding the WHOLE
+        // query as one phrase required the exact token sequence, so multi-word
+        // natural-language queries matched nothing. `ORDER BY rank` (bm25)
+        // then puts notes matching more/rarer terms first.
+        let phrase = |t: &str| format!("\"{}\"", t.replace('"', "\"\""));
+        let terms: Vec<String> = query.split_whitespace().map(phrase).collect();
+        let match_expr = if terms.len() <= 1 {
+            phrase(query.trim())
+        } else {
+            terms.join(" OR ")
+        };
 
         let mut stmt = conn
             .prepare(
@@ -528,12 +564,13 @@ impl NoteStore for SqliteMemoryBackend {
                  FROM notes_fts f \
                  JOIN notes_index n ON n.path = f.path AND n.agent_id = f.agent_id \
                  WHERE notes_fts MATCH ?1 AND f.agent_id = ?2 \
+                 ORDER BY rank \
                  LIMIT ?3",
             )
             .map_err(|e| AlephError::config(format!("search_notes_fts prepare: {e}")))?;
 
         let rows = stmt
-            .query_map(params![phrase, agent_id, limit as i64], row_to_entry)
+            .query_map(params![match_expr, agent_id, limit as i64], row_to_entry)
             .map_err(|e| AlephError::config(format!("search_notes_fts query: {e}")))?;
 
         let mut entries = Vec::new();
@@ -687,6 +724,49 @@ impl NoteStore for SqliteMemoryBackend {
             paths.push(row.map_err(|e| AlephError::config(format!("find_by_filename row: {e}")))?);
         }
         Ok(paths)
+    }
+
+    async fn prune_orphan_vectors(&self, agent_id: &str) -> Result<usize, AlephError> {
+        let conn = lock_conn!(self)?;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AlephError::config(format!("prune_orphan_vectors tx begin: {e}")))?;
+
+        // Collect map rowids whose path has no notes_index row.
+        let orphan_rowids: Vec<i64> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT m.rowid FROM notes_vec_map m \
+                     WHERE m.agent_id = ?1 \
+                       AND NOT EXISTS (SELECT 1 FROM notes_index n \
+                                       WHERE n.path = m.path AND n.agent_id = m.agent_id)",
+                )
+                .map_err(|e| AlephError::config(format!("prune_orphan_vectors prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![agent_id], |row| row.get::<_, i64>(0))
+                .map_err(|e| AlephError::config(format!("prune_orphan_vectors query: {e}")))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|e| AlephError::config(format!("prune_orphan_vectors rows: {e}")))?
+        };
+
+        for rowid in &orphan_rowids {
+            for table in vec::ALL_NOTES_VEC_TABLES {
+                tx.execute(
+                    &format!("DELETE FROM {table} WHERE rowid = ?1"),
+                    params![rowid],
+                )
+                .map_err(|e| AlephError::config(format!("prune_orphan_vectors {table}: {e}")))?;
+            }
+            tx.execute(
+                "DELETE FROM notes_vec_map WHERE rowid = ?1",
+                params![rowid],
+            )
+            .map_err(|e| AlephError::config(format!("prune_orphan_vectors map: {e}")))?;
+        }
+
+        tx.commit()
+            .map_err(|e| AlephError::config(format!("prune_orphan_vectors commit: {e}")))?;
+        Ok(orphan_rowids.len())
     }
 
     async fn upsert_embedding(

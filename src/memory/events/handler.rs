@@ -72,32 +72,26 @@ impl MemoryCommandHandler {
                         return Ok(());
                     }
                 };
-                let now = chrono::Utc::now().timestamp();
                 let note = KnowledgeNote {
                     title: title.clone(),
                     category: category.to_string(),
                     tags: vec![],
                     facts: vec![fact.content.clone()],
                     links: vec![],
-                    created_at: now,
-                    updated_at: now,
+                    // Preserve the event-log creation time — resetting it to
+                    // projection time lost the original creation date on
+                    // every fold.
+                    created_at: fact.created_at,
+                    updated_at: chrono::Utc::now().timestamp(),
                     content_hash: String::new(),
                     ..Default::default()
                 };
-                let path = indexer.write_note(&fact.agent, category, &note).await;
-                match path {
-                    Ok(_) => {
-                        if let Err(e) = indexer
-                            .store()
-                            .index_note(&note, &fact.agent, category)
-                            .await
-                        {
-                            tracing::error!(fact_id, error = %e, "Notes dual-write: failed to index note");
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(fact_id, error = %e, "Notes dual-write: failed to write note file");
-                    }
+                // write_note already reparses the written file and indexes it
+                // with the correct content_hash; a second index_note with this
+                // empty-hash struct overwrote the row and defeated the
+                // hash-skip on every subsequent rebuild.
+                if let Err(e) = indexer.write_note(&fact.agent, category, &note).await {
+                    tracing::error!(fact_id, error = %e, "Notes dual-write: failed to write note file");
                 }
             }
             None => {

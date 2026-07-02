@@ -811,7 +811,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "note_manage",
-        description: "Create, update, append, query, list, or delete personal knowledge notes across all categories",
+        description: "Manage personal knowledge notes across all categories: create, update, append, query (hybrid semantic + full-text search), list, delete, plus read-only insights (knowledge-graph health) and evolution (why memory changed overnight)",
         requires_config: true,
     },
     // ACP delegate tool — unified delegation to any external CLI agent.
