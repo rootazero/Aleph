@@ -54,7 +54,7 @@ pub(super) fn ReasoningPanel() -> impl IntoView {
 
     view! {
         <Show when=has_reasoning>
-            <div class="max-w-3xl mx-auto w-full">
+            <div class="max-w-5xl mx-auto w-full">
                 <div class="rounded-xl glass-inset overflow-hidden">
                     // Header — clickable toggle. Pulse dot animates while active.
                     <button

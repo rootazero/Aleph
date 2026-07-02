@@ -51,7 +51,7 @@ pub fn PlanArchiveCell(plan: PlanView) -> impl IntoView {
 }
 
 const ARCHIVE_CELL_CSS: &str = r#"
-.aleph-plan-cap{max-width:760px;margin:2px auto;border:1px solid var(--color-border);
+.aleph-plan-cap{max-width:1016px;margin:2px auto;border:1px solid var(--color-border);
   border-radius:12px;background:color-mix(in oklch,var(--color-surface-overlay) 88%,transparent);
   overflow:hidden;font-size:12.5px}
 .aleph-plan-cap-head{display:flex;align-items:center;gap:8px;width:100%;padding:5px 12px;
