@@ -72,7 +72,9 @@ impl Markdown {
             Self::Object {
                 fit_markdown,
                 raw_markdown,
-            } => fit_markdown.or(raw_markdown),
+            } => fit_markdown
+                .filter(|s| !s.trim().is_empty())
+                .or(raw_markdown),
         }
     }
 }
@@ -192,6 +194,17 @@ mod tests {
             {"raw_markdown": "RAW", "fit_markdown": "FIT"}}]}"#,
         );
         assert_eq!(Crawl4aiBackend::extract_markdown(r).unwrap(), "FIT");
+    }
+
+    #[test]
+    fn extract_markdown_object_empty_fit_falls_back_to_raw() {
+        // crawl4ai 0.9.0 returns fit_markdown: "" when no content filter is
+        // configured; the empty string must not shadow raw_markdown.
+        let r = parse(
+            r#"{"success": true, "results": [{"markdown":
+            {"raw_markdown": "RAW", "fit_markdown": ""}}]}"#,
+        );
+        assert_eq!(Crawl4aiBackend::extract_markdown(r).unwrap(), "RAW");
     }
 
     #[test]
