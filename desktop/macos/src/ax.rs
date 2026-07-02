@@ -12,8 +12,9 @@ use tracing::debug;
 use aleph_desktop::traits::AccessibilityCapability;
 use aleph_desktop::{DesktopError, Result, SwiftBridge};
 use aleph_protocol::desktop_bridge::methods::ax::{
-    AxElement, QueryByRoleParams, QueryFocusedParams, QueryListResult, QueryResult,
-    QueryTreeParams, METHOD_QUERY_BY_ROLE, METHOD_QUERY_FOCUSED, METHOD_QUERY_TREE,
+    AxActionResult, AxElement, PerformActionParams, QueryByRoleParams, QueryFocusedParams,
+    QueryListResult, QueryResult, QueryTreeParams, SetValueParams, METHOD_PERFORM_ACTION,
+    METHOD_QUERY_BY_ROLE, METHOD_QUERY_FOCUSED, METHOD_QUERY_TREE, METHOD_SET_VALUE,
 };
 
 /// `AccessibilityCapability` implementation backed by the Swift helper.
@@ -70,5 +71,21 @@ impl AccessibilityCapability for BridgeAccessibility {
             .await
             .map_err(|e| bridge_err(METHOD_QUERY_BY_ROLE, e))?;
         Ok(r.elements)
+    }
+
+    async fn set_value(&self, params: SetValueParams) -> Result<AxActionResult> {
+        debug!("Proxying ax.set_value to Swift helper");
+        self.bridge
+            .call(METHOD_SET_VALUE, params)
+            .await
+            .map_err(|e| bridge_err(METHOD_SET_VALUE, e))
+    }
+
+    async fn perform_action(&self, params: PerformActionParams) -> Result<AxActionResult> {
+        debug!("Proxying ax.perform_action to Swift helper");
+        self.bridge
+            .call(METHOD_PERFORM_ACTION, params)
+            .await
+            .map_err(|e| bridge_err(METHOD_PERFORM_ACTION, e))
     }
 }

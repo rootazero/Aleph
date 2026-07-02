@@ -6,7 +6,10 @@
 
 use async_trait::async_trait;
 
-use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryByRoleParams, QueryTreeParams};
+use aleph_protocol::desktop_bridge::methods::ax::{
+    AxActionResult, AxElement, PerformActionParams, QueryByRoleParams, QueryTreeParams,
+    SetValueParams,
+};
 
 use crate::error::Result;
 
@@ -32,4 +35,20 @@ pub trait AccessibilityCapability: Send + Sync {
     ///
     /// `params.pid` selects the process; `None` means "frontmost app".
     async fn query_by_role(&self, params: QueryByRoleParams) -> Result<Vec<AxElement>>;
+
+    /// Write `params.value` into the located element's `AXValue` attribute
+    /// and read it back for verification. Platforms without a semantic
+    /// accessibility write path inherit this `NotImplemented` default.
+    async fn set_value(&self, params: SetValueParams) -> Result<AxActionResult> {
+        let _ = params;
+        Err(crate::DesktopError::NotImplemented("ax.set_value".into()))
+    }
+
+    /// Perform a native AX action (e.g. `AXPress`) on the located element.
+    async fn perform_action(&self, params: PerformActionParams) -> Result<AxActionResult> {
+        let _ = params;
+        Err(crate::DesktopError::NotImplemented(
+            "ax.perform_action".into(),
+        ))
+    }
 }
