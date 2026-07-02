@@ -199,6 +199,14 @@ pub struct DesktopArgs {
     /// Target process ID for `set_value` / `ax_action`. Omit for the frontmost app.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
+
+    /// Post-action observation for mutating actions: "state" appends a
+    /// lightweight `post_state` (frontmost app, focused element) to the
+    /// result after a short settle delay; "screenshot" additionally captures
+    /// a budget-bounded screenshot. Omit for the historical fire-and-forget
+    /// behavior.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observe: Option<String>,
 }
 
 /// A single sub-action inside a `batch` operation.
@@ -363,6 +371,58 @@ pub struct DesktopBatchAction {
     /// Target process ID for `set_value` / `ax_action`. Omit for the frontmost app.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
+
+    /// Post-action observation for this sub-action. Falls back to the
+    /// enclosing batch's `observe` when omitted (set by the dispatcher
+    /// before invocation, mirroring `coord_space`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observe: Option<String>,
+}
+
+impl DesktopBatchAction {
+    /// An action with every optional field unset — the one obvious way to
+    /// build a sub-action programmatically.
+    pub(super) fn empty(action: &str) -> Self {
+        Self {
+            action: action.to_string(),
+            region: None,
+            image_base64: None,
+            x: None,
+            y: None,
+            button: None,
+            text: None,
+            keys: None,
+            bundle_id: None,
+            window_id: None,
+            start_x: None,
+            start_y: None,
+            end_x: None,
+            end_y: None,
+            delta_x: None,
+            delta_y: None,
+            width: None,
+            height: None,
+            duration_ms: None,
+            press_action: None,
+            duration: None,
+            fps: None,
+            with_audio: None,
+            display_id: None,
+            format: None,
+            quality: None,
+            max_width: None,
+            max_height: None,
+            timeout_ms: None,
+            coord_space: None,
+            coord_factors: None,
+            describe: None,
+            role: None,
+            element_title: None,
+            ax_action_name: None,
+            pid: None,
+            observe: None,
+        }
+    }
 }
 
 impl From<&DesktopBatchAction> for DesktopArgs {
@@ -406,6 +466,7 @@ impl From<&DesktopBatchAction> for DesktopArgs {
             element_title: b.element_title.clone(),
             ax_action_name: b.ax_action_name.clone(),
             pid: b.pid,
+            observe: b.observe.clone(),
         }
     }
 }

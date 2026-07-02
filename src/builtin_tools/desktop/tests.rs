@@ -46,6 +46,7 @@ fn make_args(action: &str) -> DesktopArgs {
         element_title: None,
         ax_action_name: None,
         pid: None,
+        observe: None,
     }
 }
 
@@ -493,6 +494,32 @@ async fn approval_request_carries_agent_id_from_turn_context() {
     );
 }
 
+// ── act→observe fusion ────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_observe_ignored_without_platform() {
+    // No platform: action fails with no-capability; observe must not panic
+    // or alter the error shape.
+    let tool = DesktopTool::new();
+    let mut args = make_args("click");
+    args.x = Some(1.0);
+    args.y = Some(1.0);
+    args.observe = Some("state".into());
+    let out = AlephTool::call(&tool, args).await.unwrap();
+    assert!(!out.success);
+    assert!(out.data.is_none());
+}
+
+#[test]
+fn test_batch_inherits_observe() {
+    // Pure plumbing check via the From impl: a sub-action with no `observe`
+    // of its own converts to a `DesktopArgs` with `observe: None` (the
+    // inherit assignment happens in `execute_batch`, not in `From`).
+    let b = types::DesktopBatchAction::empty("click");
+    let args: DesktopArgs = (&b).into();
+    assert!(args.observe.is_none());
+}
+
 // ── End-to-end normalized-coord pipeline tests ──────────────────────
 //
 // These prove the UI-TARS coordinate contract is honoured all the way from
@@ -767,6 +794,7 @@ mod e2e_normalized {
             element_title: None,
             ax_action_name: None,
             pid: None,
+            observe: None,
         }];
 
         AlephTool::call(&tool, args).await.unwrap();

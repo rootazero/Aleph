@@ -8,6 +8,7 @@ mod coord_resolve;
 mod gui_locate;
 mod interactable;
 mod native;
+mod observe;
 mod perm;
 mod safety;
 pub mod session_lock;
@@ -182,6 +183,9 @@ impl DesktopTool {
             }
             if sub_args.coord_factors.is_none() {
                 sub_args.coord_factors = args.coord_factors;
+            }
+            if sub_args.observe.is_none() {
+                sub_args.observe = args.observe.clone();
             }
 
             // Prevent nested batch. The type system already prevents an
@@ -577,6 +581,10 @@ IMPORTANT — a full-screen `screenshot` is usually downscaled to fit the result
 {"action":"click","coord_space":"normalized","x":500,"y":500}
 {"action":"batch","coord_space":"normalized","actions":[{"action":"click","x":300,"y":400},{"action":"type_text","text":"hi"}]}
 
+Act→observe in one call — mutating actions accept `observe:"state"` (result gains `post_state`: frontmost app + focused element after a 300ms settle) or `observe:"screenshot"` (additionally a fresh bounded screenshot as `post_screenshot`). Use it on the last action of a step instead of a separate screenshot round-trip. In a batch, sub-actions inherit the batch-level `observe`.
+
+{"action":"click","x":500,"y":300,"observe":"state"}
+
 Pythonic action script — UI-TARS-finetuned models can emit `script` containing one or more `Action: ...` lines instead of JSON. Supported verbs: click, left_double, right_single, middle_click, drag, hover, type, hotkey, press, release, scroll, wait, finished, call_user. A trailing `\n` in `type(content='…\n')` types the text then presses Enter (submit). `press(key='ctrl')` / `release(key='ctrl')` hold a key (or chord like `ctrl shift`) down and release it later — distinct from `hotkey`, which presses and releases atomically. Box formats `(x,y)`, `[x1,y1,x2,y2]`, `<point>x y</point>`, `<bbox>x1 y1 x2 y2</bbox>` all parse. Inherits `coord_space` / `coord_factors` from the same call.
 
 {"action":"script","coord_space":"normalized","script":"Thought: open menu\nAction: click(start_box='(500,30)')"}
@@ -684,7 +692,35 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
 
         // 7. Execute via platform
         if let Some(ref platform) = self.platform {
-            if let Some(output) = self.call_via_platform(platform, &args).await? {
+            if let Some(mut output) = self.call_via_platform(platform, &args).await? {
+                // 7.5 act→observe fusion: on success, a mutating leaf action may
+                //     carry its own post-state so the model saves a round-trip.
+                //     Never turns a succeeded action into a failure —
+                //     observation is strictly additive to `data`.
+                let wants_observe = matches!(args.observe.as_deref(), Some("state" | "screenshot"));
+                if wants_observe && output.success && classify_approval(&args).is_some() {
+                    let post = observe::gather_post_state(platform).await;
+                    let mut data = output.data.take().unwrap_or_else(|| serde_json::json!({}));
+                    if let Some(obj) = data.as_object_mut() {
+                        obj.insert("post_state".into(), post);
+                    }
+                    output.data = Some(data);
+
+                    if args.observe.as_deref() == Some("screenshot") {
+                        let mut shot_args =
+                            DesktopArgs::from(&types::DesktopBatchAction::empty("screenshot"));
+                        shot_args.max_width = Some(1568);
+                        if let Ok(Some(shot)) = self.call_via_platform(platform, &shot_args).await
+                        {
+                            if let (Some(obj), Some(shot_data)) = (
+                                output.data.as_mut().and_then(|d| d.as_object_mut()),
+                                shot.data,
+                            ) {
+                                obj.insert("post_screenshot".into(), shot_data);
+                            }
+                        }
+                    }
+                }
                 return Ok(output);
             }
         }

@@ -389,6 +389,7 @@ const fn blank_batch_action() -> DesktopBatchAction {
         element_title: None,
         ax_action_name: None,
         pid: None,
+        observe: None,
     }
 }
 
