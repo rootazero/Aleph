@@ -161,6 +161,8 @@ defined in `shared/protocol/src/desktop_bridge/methods/`.
 | `ax.query_focused` | Accessibility (TCC) | Element currently holding keyboard focus + its ancestors |
 | `ax.query_tree` | Accessibility (TCC) | Full subtree rooted at a given PID (defaults to frontmost app) |
 | `ax.query_by_role` | Accessibility (TCC) | Collect all elements matching an AX role string |
+| `ax.set_value` | Accessibility (TCC) | Locate an element by stateless locator (role/title/center scoring) and write its `AXValue`, reading it back for verification |
+| `ax.perform_action` | Accessibility (TCC) | Locate an element the same way and perform a native AX action (`AXPress`, `AXShowMenu`, …) |
 
 ### perm.* — Permission introspection
 
