@@ -280,6 +280,41 @@ impl DesktopTool {
         }
     }
 
+    /// Hard-refuse mutating actions while a credential vault is frontmost, and
+    /// refuse launching/quitting/focusing one. Fail-open: if the frontmost app
+    /// cannot be determined, proceed — this guard is defense-in-depth on top
+    /// of approval + content hard-blocks, not the only line.
+    async fn check_blocked_app(&self, args: &DesktopArgs) -> Option<DesktopOutput> {
+        let platform = self.platform.as_ref()?;
+
+        // Target guard: launching / quitting / restarting a blocked app.
+        if matches!(
+            args.action.as_str(),
+            "launch_app" | "quit_app" | "restart_app"
+        ) {
+            if let Some(bid) = args.bundle_id.as_deref() {
+                if let Some(reason) = safety::blocked_app_reason(bid, bid) {
+                    return Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(reason),
+                    });
+                }
+            }
+            return None; // launch of a non-blocked app needs no frontmost check
+        }
+
+        // Frontmost guard for every other mutating action.
+        let system = platform.system()?;
+        let apps = system.list_running_apps().await.ok()?;
+        let front = apps.iter().find(|a| a.is_active)?;
+        safety::blocked_app_reason(&front.name, &front.bundle_id).map(|reason| DesktopOutput {
+            success: false,
+            data: None,
+            message: Some(reason),
+        })
+    }
+
     fn no_capability_output(&self) -> DesktopOutput {
         DesktopOutput {
             success: false,
@@ -575,6 +610,15 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
         // 1. Unconditional safety hard-block (sits below the approval policy).
         if let Some(out) = check_hard_block(&args) {
             return Ok(out);
+        }
+
+        // 1.6 Blocked-app guard: never drive a credential vault. Leaf mutating
+        //     actions only — batch sub-actions re-enter call() and get checked
+        //     individually against the then-current frontmost app.
+        if args.action != "batch" && classify_approval(&args).is_some() {
+            if let Some(out) = self.check_blocked_app(&args).await {
+                return Ok(out);
+            }
         }
 
         // 1.5 Loop-control verbs (UI-TARS `finished` / `call_user`). The model
