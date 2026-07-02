@@ -136,6 +136,7 @@ impl Config {
 
         crate::config::types::voice_local::normalize_voice_local(&mut config);
         config.migrate_fetch();
+        crate::config::validate::normalize_default_provider(&mut config);
 
         config.validate()?;
 

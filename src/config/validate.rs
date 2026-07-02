@@ -7,6 +7,39 @@ use crate::error::{AlephError, Result};
 use chrono::NaiveTime;
 use tracing::{debug, error, info, warn};
 
+/// Load-time normalization: when `general.default_provider` names a provider
+/// that does not exist in `providers`, fall back to a deterministically-chosen
+/// available provider rather than failing validation. This keeps the daemon
+/// bootable when a provider section is removed but its default reference is
+/// forgotten — a common config drift that otherwise leaves the desktop shell
+/// stuck on the splash screen while the daemon exits on every launch.
+///
+/// If no providers are configured at all, the fallback is not applied; the
+/// existing validation error is preserved so the operator is told to add one.
+pub fn normalize_default_provider(cfg: &mut Config) {
+    let Some(ref current) = cfg.general.default_provider else {
+        return;
+    };
+    if cfg.providers.contains_key(current) {
+        return;
+    }
+    if cfg.providers.is_empty() {
+        return;
+    }
+    let fallback = cfg
+        .providers
+        .keys()
+        .min()
+        .expect("providers is non-empty")
+        .clone();
+    warn!(
+        default_provider = %current,
+        fallback_provider = %fallback,
+        "Default provider not found; falling back to available provider"
+    );
+    cfg.general.default_provider = Some(fallback);
+}
+
 impl Config {
     /// Validate configuration
     ///
@@ -572,5 +605,110 @@ impl Config {
                  default for LLM-sovereign routing"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::types::provider::ProviderConfig;
+    use crate::config::Config;
+
+    use super::normalize_default_provider;
+
+    fn test_provider() -> ProviderConfig {
+        ProviderConfig {
+            protocol: None,
+            api_key: None,
+            models: vec![],
+            base_url: None,
+            color: "#000000".to_string(),
+            timeout_seconds: 60,
+            stream_idle_timeout_secs: None,
+            cache_retention: None,
+            enabled: true,
+            max_tokens: None,
+            context_window: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop_sequences: None,
+            thinking_level: None,
+            media_resolution: None,
+            repeat_penalty: None,
+            system_prompt_mode: None,
+            model_behavior: None,
+            verified: false,
+            service_tier: None,
+            response_format: None,
+            parallel_tool_calls: None,
+            seed: None,
+            logprobs: None,
+            top_logprobs: None,
+            metadata_user_id: None,
+            effort: None,
+        }
+    }
+
+    #[test]
+    fn normalize_falls_back_to_available_provider() {
+        let mut cfg = Config::default();
+        cfg.providers.insert("custom".to_string(), test_provider());
+        cfg.general.default_provider = Some("missing".to_string());
+
+        normalize_default_provider(&mut cfg);
+
+        assert_eq!(cfg.general.default_provider.as_deref(), Some("custom"));
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn normalize_keeps_valid_default_unchanged() {
+        let mut cfg = Config::default();
+        cfg.providers.insert("custom".to_string(), test_provider());
+        cfg.general.default_provider = Some("custom".to_string());
+
+        normalize_default_provider(&mut cfg);
+
+        assert_eq!(cfg.general.default_provider.as_deref(), Some("custom"));
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn normalize_no_op_when_no_providers_configured() {
+        let mut cfg = Config::default();
+        cfg.general.default_provider = Some("missing".to_string());
+
+        normalize_default_provider(&mut cfg);
+
+        assert_eq!(cfg.general.default_provider.as_deref(), Some("missing"));
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn normalize_no_op_when_default_unset() {
+        let mut cfg = Config::default();
+        cfg.providers.insert("custom".to_string(), test_provider());
+        cfg.general.default_provider = None;
+
+        normalize_default_provider(&mut cfg);
+
+        assert_eq!(cfg.general.default_provider, None);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn normalize_chooses_fallback_deterministically() {
+        let mut cfg = Config::default();
+        cfg.providers.insert("beta".to_string(), test_provider());
+        cfg.providers.insert("alpha".to_string(), test_provider());
+        cfg.providers.insert("gamma".to_string(), test_provider());
+        cfg.general.default_provider = Some("missing".to_string());
+
+        normalize_default_provider(&mut cfg);
+
+        // Alphabetical minimum is chosen for deterministic behavior.
+        assert_eq!(cfg.general.default_provider.as_deref(), Some("alpha"));
     }
 }

@@ -237,6 +237,7 @@ impl ConfigPatcher {
         // 6b. Normalize before validation (mirrors Config::load ordering) so
         // validation sees the same config a fresh boot would produce.
         crate::config::types::voice_local::normalize_voice_local(&mut new_config);
+        crate::config::validate::normalize_default_provider(&mut new_config);
 
         // 7. Run Config::validate()
         new_config.validate()?;
@@ -336,6 +337,7 @@ impl ConfigPatcher {
             // Normalize before validation (mirrors Config::load ordering) so
             // the config installed live + persisted is the normalized one.
             crate::config::types::voice_local::normalize_voice_local(&mut final_config);
+            crate::config::validate::normalize_default_provider(&mut final_config);
             final_config.validate()?;
             // Commit to disk first; only swap in-memory on success. If the
             // save fails, restore the previous live config so the in-memory

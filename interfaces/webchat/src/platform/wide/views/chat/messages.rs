@@ -575,14 +575,6 @@ fn MessageBubble(
     let error = message.error.clone();
     let model_info = message.model_info.clone();
 
-    let streaming_cursor = if is_streaming {
-        Some(view! {
-            <span class="inline-block w-[3px] h-4 rounded-full bg-gradient-to-b from-primary to-primary/40 animate-pulse ml-0.5 align-text-bottom"></span>
-        })
-    } else {
-        None
-    };
-
     let error_view = error.map(|err| {
         view! {
             <div class="mt-2 text-xs text-danger/80">{err}</div>
@@ -749,7 +741,6 @@ fn MessageBubble(
                                 } else {
                                     view! { <MarkdownRenderer content=content /> }.into_any()
                                 }}
-                                {streaming_cursor}
                                 {error_view}
                                 {model_view}
                             </div>
@@ -772,7 +763,6 @@ fn MessageBubble(
                         } else {
                             view! { <MarkdownRenderer content=content /> }.into_any()
                         }}
-                        {streaming_cursor}
                         {error_view}
                         {model_view}
                     </div>
@@ -865,9 +855,11 @@ fn MessageBubble(
 
 /// 一个 run 的中间步骤容器，三态：
 /// - 运行中（`!completed`）：默认收起成「一条会变的状态行」（图标 + 最新动作 +
-///   spinner，副行 `└ N 步 · 叙述`）；点击展开成扁平步骤流。
-/// - 完成（`completed`）：收起成 `✓ N 步 · 末步摘要`；点击展开。
+///   spinner）；点击展开成扁平步骤流。
+/// - 完成（`completed`）：收起成 `✓ 末步摘要`；点击展开。
 /// - 展开（任一态）：扁平步骤流，每步一行（无内层滚动条、无嵌套）。
+///
+/// 收起态固定为单行，避免思考过程中高度跳动。
 ///
 /// 展开/收起按 `run_id` 存于 `ChatState`（`strip_open`），承受 keyed `<For>`
 /// 的每 token 重挂载（见 `ChatState::strip_open` 注释）。
@@ -884,12 +876,6 @@ fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
     let open = {
         let run = run_id.clone();
         Memo::new(move |_| chat.strip_is_open(&run, false))
-    };
-    let count = steps.len();
-    let word = if count == 1 {
-        t_string!(i18n, chat.step).to_string()
-    } else {
-        t_string!(i18n, chat.steps).to_string()
     };
 
     // 收起态摘要文案：运行中 = 最新动作 headline；完成 = 末步摘要。
@@ -920,23 +906,18 @@ fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
             <div class="w-full rounded-lg glass-inset">
                 <button
                     type="button"
-                    class="w-full flex flex-col gap-0.5 px-3 py-1.5 text-left
+                    class="w-full flex items-center gap-2 px-3 py-1.5 text-left
                            text-text-tertiary hover:text-text-secondary"
                     on:click=move |_| chat.toggle_strip(&run_for_toggle, false)
                 >
-                    <span class="flex items-center gap-2 text-sm">
-                        {move || if completed {
-                            view! { <span class="text-success shrink-0">"\u{2713}"</span> }.into_any()
-                        } else {
-                            view! { <span class="shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span> }.into_any()
-                        }}
-                        <span class="flex-1 min-w-0 truncate">{summary_main}</span>
-                        <span class="shrink-0 text-[10px]">
-                            {move || if open.get() { "\u{25BE}" } else { "\u{25B8}" }}
-                        </span>
-                    </span>
-                    <span class="text-[10px] uppercase tracking-wider text-text-tertiary/80 pl-3.5">
-                        {format!("{count} {word}")}
+                    {move || if completed {
+                        view! { <span class="text-success shrink-0">"\u{2713}"</span> }.into_any()
+                    } else {
+                        view! { <span class="shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span> }.into_any()
+                    }}
+                    <span class="flex-1 min-w-0 truncate text-sm">{summary_main}</span>
+                    <span class="shrink-0 text-[10px]">
+                        {move || if open.get() { "\u{25BE}" } else { "\u{25B8}" }}
                     </span>
                 </button>
                 <Show when=move || open.get()>

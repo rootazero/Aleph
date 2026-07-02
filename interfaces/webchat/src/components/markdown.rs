@@ -79,6 +79,21 @@ fn render_markdown(content: &str) -> String {
     html_output
 }
 
+/// Streaming cursor markup — kept inline after streamed text so it never
+/// creates a second line when the bubble is empty.
+const STREAMING_CURSOR_HTML: &str = r#"<span class="inline-block w-[3px] h-4 rounded-full bg-gradient-to-b from-primary to-primary/40 animate-pulse ml-0.5 align-text-bottom"></span>"#;
+
+/// Render streaming content plus an inline cursor. When content is empty,
+/// emit a non-breaking space so the bubble keeps a single text line of
+/// height instead of collapsing or showing a cursor on its own line.
+fn render_streaming_with_cursor(content: &str) -> String {
+    if content.is_empty() {
+        "&nbsp;".to_string()
+    } else {
+        format!("{}{}", render_streaming(content), STREAMING_CURSOR_HTML)
+    }
+}
+
 /// Highlight code using syntect. Falls back to HTML-escaped plain text on failure.
 fn highlight_code(code: &str, lang: &str) -> String {
     if lang.is_empty() {
@@ -217,7 +232,7 @@ fn render_streaming(content: &str) -> String {
 #[component]
 #[must_use]
 pub fn StreamingRenderer(content: String) -> impl IntoView {
-    let html = render_streaming(&content);
+    let html = render_streaming_with_cursor(&content);
 
     view! {
         <div class="markdown-body text-sm leading-relaxed streaming-content" inner_html=html />
@@ -265,10 +280,10 @@ pub fn TypewriterRenderer(content: String, message_id: String) -> impl IntoView 
         );
         content.with_value(|c| {
             if revealed >= total {
-                render_streaming(c)
+                render_streaming_with_cursor(c)
             } else {
                 let shown: String = c.chars().take(revealed).collect();
-                render_streaming(&shown)
+                render_streaming_with_cursor(&shown)
             }
         })
     };

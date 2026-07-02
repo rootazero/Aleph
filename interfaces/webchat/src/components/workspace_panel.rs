@@ -192,8 +192,8 @@ fn ActivityTimeline() -> impl IntoView {
     }
 }
 
-/// One agent step: iteration header + narration + its tool rows. Clicking the
-/// header focuses the step (cross-highlight with the chat bubble).
+/// One agent step: narration + its tool rows. The card highlights when focused
+/// from the chat side; the active turn is marked by a pulse dot.
 #[component]
 fn StepCard(group: StepGroup) -> impl IntoView {
     let workspace = expect_context::<WorkspaceState>();
@@ -201,7 +201,6 @@ fn StepCard(group: StepGroup) -> impl IntoView {
 
     let run_id = group.run_id.clone();
     let iteration = group.iteration;
-    let run_for_focus = run_id.clone();
     let run_for_highlight = run_id.clone();
     let run_for_active = run_id.clone();
 
@@ -243,18 +242,9 @@ fn StepCard(group: StepGroup) -> impl IntoView {
                 }
             }
         >
-            <button
-                type="button"
-                class="flex items-center gap-2 text-left"
-                on:click=move |_| workspace.focus_step(run_for_focus.clone(), iteration)
-            >
-                <span class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary">
-                    {format!("#{iteration}")}
-                </span>
-                <Show when=move || active.get()>
-                    <span class="inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
-                </Show>
-            </button>
+            <Show when=move || active.get()>
+                <span class="inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+            </Show>
             {if !narration.is_empty() {
                 view! {
                     <div class="text-sm text-text-primary leading-relaxed aleph-step-narration">
