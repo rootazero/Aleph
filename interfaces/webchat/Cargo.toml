@@ -50,6 +50,9 @@ web-sys = { version = "0.3", features = [
     "AudioContext", "AnalyserNode", "MediaStreamAudioSourceNode",
     # immersive capture — continuous PCM tap (pre-roll buffer, kills leading-syllable clip)
     "ScriptProcessorNode", "AudioProcessingEvent", "AudioBuffer", "AudioDestinationNode",
+    # immersive capture v2 — AudioWorklet path (audio-thread processing; the
+    # deprecated ScriptProcessorNode above stays as the runtime fallback)
+    "AudioWorklet", "AudioWorkletNode", "MessagePort", "MessageEvent", "BaseAudioContext",
     # immersive playback — decode TTS bytes to a buffer source on the output
     # context. WKWebView-safe: bypasses BOTH the <audio> autoplay gate and the
     # createMediaElementSource silent-bridge bug. Blob URL kept only for the

@@ -13,13 +13,23 @@ use tower::{Layer, Service};
 
 // --- Header values ---------------------------------------------------------
 
-const CSP_VALUE: &str = "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'";
+// `blob:` in script-src: the Panel's voice capture registers its AudioWorklet
+// processor module from a same-origin-created blob URL (worklet module loads
+// are governed by script-src). Only scripts already running on the page can
+// mint blob URLs, and script-src already carries 'unsafe-inline', so this
+// grants no capability an injected script wouldn't have.
+const CSP_VALUE: &str = "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'";
 const HSTS_VALUE: &str = "max-age=31536000; includeSubDomains";
 const X_CONTENT_TYPE_OPTIONS_VALUE: &str = "nosniff";
 const X_FRAME_OPTIONS_VALUE: &str = "DENY";
 const X_XSS_PROTECTION_VALUE: &str = "0";
 const REFERRER_POLICY_VALUE: &str = "strict-origin-when-cross-origin";
-const PERMISSIONS_POLICY_VALUE: &str = "camera=(), microphone=(), geolocation=()";
+// `microphone=(self)`: the Panel's immersive voice mode runs getUserMedia on
+// this same origin — an empty allowlist would block it and dead-end voice chat.
+// Camera/geolocation stay fully denied; cross-origin embedding is already
+// impossible (frame-ancestors 'none' + X-Frame-Options DENY), so `self` here
+// grants nothing to third parties.
+const PERMISSIONS_POLICY_VALUE: &str = "camera=(), microphone=(self), geolocation=()";
 const CACHE_CONTROL_NO_STORE_VALUE: &str = "no-store";
 
 // --- Static asset detection ------------------------------------------------
@@ -171,6 +181,18 @@ mod tests {
         assert!(
             headers.contains_key("strict-transport-security"),
             "HSTS header should be present"
+        );
+        // The Panel's immersive voice mode captures the mic via getUserMedia on
+        // the same origin the server serves it from. `microphone=()` (empty
+        // allowlist) blocks even same-origin capture and kills voice chat
+        // entirely; the policy must allow self while still denying third-party
+        // frames (which are already impossible under frame-ancestors 'none').
+        assert_eq!(
+            headers
+                .get("permissions-policy")
+                .and_then(|v: &HeaderValue| v.to_str().ok()),
+            Some("camera=(), microphone=(self), geolocation=()"),
+            "Permissions-Policy must allow same-origin microphone for voice mode"
         );
         assert_eq!(
             headers

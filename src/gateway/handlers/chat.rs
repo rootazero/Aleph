@@ -60,6 +60,11 @@ pub struct SendParams {
     /// [`crate::gateway::model_override::ModelOverride`].
     #[serde(default)]
     pub model_override: Option<crate::gateway::model_override::ModelOverride>,
+    /// True when this message is an ASR-transcribed spoken utterance (the
+    /// Panel voice loop). Forwarded to [`AgentRunParams::voice_input`] so the
+    /// session gets the voice-mode prompt layer and the `[voice]` model pin.
+    #[serde(default)]
+    pub voice_input: bool,
 }
 
 const fn default_stream() -> bool {
@@ -197,6 +202,7 @@ pub async fn handle_send(
         agent_id: params.agent_id,
         project_root: params.project_root,
         model_override: params.model_override,
+        voice_input: params.voice_input,
     };
 
     // Start the run

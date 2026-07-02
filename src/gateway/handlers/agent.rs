@@ -71,6 +71,14 @@ pub struct AgentRunParams {
     /// [`crate::gateway::model_override::ModelOverride`].
     #[serde(default)]
     pub model_override: Option<crate::gateway::model_override::ModelOverride>,
+    /// Marks this run's user input as ASR-transcribed speech (the Panel voice
+    /// loop). Wires the session voice-mode registry so `VoiceModeLayer`
+    /// injects spoken-reply guidance into this turn's prompt, and applies the
+    /// `[voice]` low-TTFT model pin when no explicit override is set —
+    /// mirroring the channel voice path. Recomputed every turn: a typed turn
+    /// (default `false`) clears the flag.
+    #[serde(default)]
+    pub voice_input: bool,
 }
 
 const fn default_stream() -> bool {
@@ -181,6 +189,17 @@ impl AgentRunManager {
 
         let session_key_str = session_key.to_key_string();
         let accepted_at = chrono::Utc::now().to_rfc3339();
+
+        // Record voice mode for this session BEFORE the run spawns, so prompt
+        // assembly (`VoiceModeLayer` via the harness bridge) sees it on THIS
+        // turn. Same registry the channel inbound path writes
+        // (`inbound_router::executor`); channel sessions use distinct keys, so
+        // the unconditional per-turn recompute here cannot clobber them.
+        crate::gateway::voice::session_mode::set(
+            &session_key_str,
+            params.voice_input,
+            params.voice_input,
+        );
 
         // Create run state
         let run_state = RunState {
@@ -331,6 +350,22 @@ impl AgentRunManager {
             })
             .collect();
 
+        // Voice turns may pin a low-TTFT model (config `[voice]
+        // llm_provider/llm_model`) so the spoken reply starts faster — the
+        // same pin the channel voice path applies. An explicit per-turn
+        // override from the model picker always wins.
+        let model_override = match (params.model_override, params.voice_input, &self.app_config) {
+            (Some(o), _, _) => Some(o),
+            (None, true, Some(cfg)) => {
+                let cfg = cfg.read().await;
+                crate::gateway::model_override::ModelOverride::from_voice(
+                    &cfg.voice_local.llm_provider,
+                    &cfg.voice_local.llm_model,
+                )
+            }
+            (None, _, _) => None,
+        };
+
         let request = RunRequest {
             run_id: run_id.clone(),
             input: params.input.clone(),
@@ -342,7 +377,7 @@ impl AgentRunManager {
             sandbox_override: None,
             workspace_override,
             max_iterations_override: None,
-            model_override: params.model_override,
+            model_override,
         };
 
         // Primary emitter: streams to the Panel via the gateway event bus.
@@ -755,11 +790,68 @@ mod tests {
             agent_id: None,
             project_root: None,
             model_override: None,
+            voice_input: false,
         };
 
         let result = manager.start_run(params).await.unwrap();
         assert!(!result.run_id.is_empty());
         assert!(result.session_key.starts_with("agent:main:"));
+    }
+
+    // The Panel voice loop sends chat.send { voice_input: true }. start_run
+    // must record that in the session voice-mode registry BEFORE the run
+    // spawns (VoiceModeLayer reads it at prompt assembly), and a following
+    // typed turn must clear it — otherwise the spoken-reply style leaks into
+    // text chat.
+    #[tokio::test]
+    async fn voice_input_round_trips_through_session_mode_registry() {
+        let router = Arc::new(AgentRouter::new());
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let (agent_registry, _tmp) = registry_with_main_agent().await;
+        let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
+        let manager = AgentRunManager::new(router, event_bus, agent_registry, execution_adapter);
+
+        let voice_params = AgentRunParams {
+            input: "把窗帘拉上".to_string(),
+            session_key: None,
+            channel: None,
+            peer_id: None,
+            stream: false,
+            thinking: None,
+            attachments: vec![],
+            agent_id: None,
+            project_root: None,
+            model_override: None,
+            voice_input: true,
+        };
+        let result = manager.start_run(voice_params).await.unwrap();
+        assert_eq!(
+            crate::gateway::voice::session_mode::get(&result.session_key),
+            Some(true),
+            "a voice turn must mark the session voice-active with transcribed input"
+        );
+
+        // Same session, typed turn → the flag clears.
+        let typed_params = AgentRunParams {
+            input: "thanks".to_string(),
+            session_key: Some(result.session_key.clone()),
+            channel: None,
+            peer_id: None,
+            stream: false,
+            thinking: None,
+            attachments: vec![],
+            agent_id: None,
+            project_root: None,
+            model_override: None,
+            voice_input: false,
+        };
+        let result2 = manager.start_run(typed_params).await.unwrap();
+        assert_eq!(result2.session_key, result.session_key);
+        assert_eq!(
+            crate::gateway::voice::session_mode::get(&result.session_key),
+            None,
+            "a typed turn must clear the voice-mode flag"
+        );
     }
 
     // Regression: a Panel run must stamp `metadata["platform"]="webchat"` so the
@@ -820,6 +912,7 @@ mod tests {
             agent_id: None,
             project_root: None,
             model_override: None,
+            voice_input: false,
         };
         manager.start_run(params).await.expect("start_run");
 
@@ -903,6 +996,7 @@ mod tests {
             agent_id: None,
             project_root: None,
             model_override: None,
+            voice_input: false,
         };
 
         let result = manager.start_run(params).await.unwrap();
@@ -933,6 +1027,7 @@ mod tests {
             agent_id: None,
             project_root: Some(std::env::temp_dir().display().to_string()),
             model_override: None,
+            voice_input: false,
         };
 
         let result = crate::gateway::caller_identity::CALLER_ROLE
@@ -963,6 +1058,7 @@ mod tests {
             agent_id: None,
             project_root: Some(std::env::temp_dir().display().to_string()),
             model_override: None,
+            voice_input: false,
         };
 
         let result = crate::gateway::caller_identity::CALLER_ROLE
@@ -996,6 +1092,7 @@ mod tests {
             agent_id: None,
             project_root: Some(std::env::temp_dir().display().to_string()),
             model_override: None,
+            voice_input: false,
         };
 
         // chat-tier role but loopback connection → allowed.
