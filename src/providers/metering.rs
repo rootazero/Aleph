@@ -107,6 +107,10 @@ impl AiProvider for MeteringProvider {
         self.inner.behavior_hint()
     }
 
+    fn serving_model_hint(&self) -> Option<Cow<'_, str>> {
+        self.inner.serving_model_hint()
+    }
+
     fn as_http_provider(&self) -> Option<&crate::providers::http_provider::HttpProvider> {
         self.inner.as_http_provider()
     }

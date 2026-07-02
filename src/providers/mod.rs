@@ -274,6 +274,17 @@ pub trait AiProvider: Send + Sync {
         None
     }
 
+    /// Best-effort id of the model this provider would serve next. Used to key
+    /// per-model lookups (context-window resolution for the occupancy gauge,
+    /// pricing) when no explicit model directive (session pick / agent hint /
+    /// strict brain pin) exists. Wrappers delegate to their live primary, like
+    /// [`AiProvider::behavior_hint`]; `HttpProvider` reports its configured
+    /// default model. Default `None` = "unknown", callers fall back to the
+    /// provider name.
+    fn serving_model_hint(&self) -> Option<Cow<'_, str>> {
+        None
+    }
+
     /// Downcast to `HttpProvider` for streaming access.
     ///
     /// Returns Some(&HttpProvider) only for `HttpProvider` instances.

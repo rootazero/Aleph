@@ -640,6 +640,15 @@ impl AiProvider for HttpProvider {
         .map(Cow::Borrowed)
     }
 
+    fn serving_model_hint(&self) -> Option<Cow<'_, str>> {
+        let model = self.config.default_model();
+        if model.is_empty() {
+            None
+        } else {
+            Some(Cow::Borrowed(model))
+        }
+    }
+
     fn as_http_provider(&self) -> Option<&HttpProvider> {
         Some(self)
     }
