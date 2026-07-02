@@ -566,6 +566,19 @@ fn ProviderDetailPanel(
             .filter(|b| b.name != provider_name)
             .cloned()
             .collect();
+        // A provider that was never configured and whose form is entirely
+        // empty has nothing to save — pushing it anyway would create a
+        // phantom backend entry as a side effect of merely selecting the
+        // provider card (removal is the delete button's job, not save's).
+        let has_existing = existing.iter().any(|b| b.name == provider_name);
+        if !has_existing
+            && api_key.is_empty()
+            && base_url.is_empty()
+            && engine_id.is_empty()
+            && engines.is_empty()
+        {
+            return backends;
+        }
         backends.push(SearchBackendEntry {
             name: provider_name.to_string(),
             api_key: if api_key.is_empty() {
