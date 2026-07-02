@@ -667,7 +667,11 @@ impl ChatState {
                 is_final: false,
                 text_finalized: false,
                 timestamp: Some(super::timeline::now_millis()),
-                iteration: None,
+                // Stamp the placeholder as step 1 immediately so the timeline
+                // folds it into the step strip from the first frame, instead of
+                // briefly rendering it as a bare reply bubble before the first
+                // `turn_started` arrives.
+                iteration: Some(1),
                 agent_id: None,
                 plan_archive: None,
             });
@@ -680,11 +684,16 @@ impl ChatState {
     /// Begin a new agent step (Think→Act iteration) for `run_id`.
     ///
     /// Driven by `agent_trace.turn_started`. If the current
-    /// `assistant-{run_id}` bubble already carries text or tool calls, it is
-    /// finalized as a standalone intermediate step and a fresh streaming
-    /// bubble tagged with `iteration` is started. An empty placeholder (the
-    /// one created on `run_accepted` before the first turn) is reused — just
-    /// stamped with the iteration — to avoid an empty step bubble.
+    /// `assistant-{run_id}` bubble already carries text or tool calls and
+    /// belongs to a different iteration, it is finalized as a standalone
+    /// intermediate step and a fresh streaming bubble tagged with `iteration`
+    /// is started. Otherwise the trailing placeholder is reused — its iteration
+    /// is simply updated to the incoming one. This covers the first turn (the
+    /// placeholder is pre-stamped as step 1 in `start_assistant_message`) and
+    /// the race where `response_chunk` preview text lands before `turn_started`
+    /// (the two travel independent async pipelines — AgentTraceEmitSink spawns
+    /// a drain task), so the preview belongs to THIS step and must not be
+    /// orphaned into a duplicate intermediate bubble.
     pub fn begin_step(&self, run_id: &str, iteration: usize) {
         let target_id = format!("assistant-{run_id}");
         self.messages.update(|msgs| {
@@ -693,13 +702,8 @@ impl ChatState {
                 let has_payload = !msgs[idx].content.is_empty() || !msgs[idx].tool_calls.is_empty();
                 // Only finalize the bubble as a completed intermediate step when
                 // it already belongs to a *different, already-stamped* iteration.
-                // A bubble still tagged `iteration == None` is the un-stamped
-                // placeholder for the step we're just now starting: streamed
-                // `response_chunk` preview text may have raced ahead of this
-                // `turn_started` (the two travel independent async pipelines —
-                // AgentTraceEmitSink spawns a drain task), so its content belongs
-                // to THIS step. Reuse it instead of orphaning the preview into a
-                // duplicate intermediate bubble that `set_step_text` then mirrors.
+                // When the iteration matches (first turn or a raced preview), the
+                // placeholder is reused so the content stays in the step strip.
                 let prior_step = msgs[idx].iteration.is_some_and(|prev| prev != iteration);
                 if has_payload && prior_step {
                     msgs[idx].is_streaming = false;
@@ -1053,6 +1057,24 @@ mod step_tests {
     }
 
     #[test]
+    fn assistant_placeholder_is_pre_stamped_as_step_one() {
+        // The placeholder must fold into the step strip from the first frame,
+        // so the UI never renders a bare reply bubble before the first turn
+        // starts.
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+
+        let rows = assistant_ids(&chat);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "assistant-r1");
+        assert_eq!(rows[0].1, Some(1), "placeholder pre-stamped as step 1");
+        assert!(rows[0].2, "placeholder streaming");
+        assert!(!rows[0].3, "placeholder not intermediate");
+    }
+
+    #[test]
     fn begin_step_finalizes_nonempty_and_opens_new() {
         let owner = Owner::new();
         owner.set();
@@ -1073,14 +1095,14 @@ mod step_tests {
     }
 
     #[test]
-    fn begin_step_reuses_unstamped_placeholder_with_raced_preview() {
+    fn begin_step_reuses_placeholder_with_raced_preview() {
         // Regression (double-render): `response_chunk` deltas and
         // `agent_trace.turn_started` travel independent async pipelines
         // (AgentTraceEmitSink spawns a drain task), so streamed preview text can
         // land in the placeholder bubble BEFORE the first `turn_started`. The
-        // late `begin_step` must REUSE that un-stamped (iteration == None)
-        // placeholder — its content is THIS step's preview — not orphan it into
-        // a duplicate `intermediate-` bubble that `set_step_text` then mirrors.
+        // late `begin_step` must REUSE the pre-stamped placeholder — its
+        // content is THIS step's preview — not orphan it into a duplicate
+        // `intermediate-` bubble that `set_step_text` then mirrors.
         let owner = Owner::new();
         owner.set();
         let chat = ChatState::new();

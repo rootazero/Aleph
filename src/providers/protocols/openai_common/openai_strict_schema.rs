@@ -1003,7 +1003,10 @@ mod tests {
             }
         });
         deref_json_schema(&mut schema);
-        assert_eq!(schema["properties"]["outer"]["properties"]["value"]["type"], "integer");
+        assert_eq!(
+            schema["properties"]["outer"]["properties"]["value"]["type"],
+            "integer"
+        );
     }
 
     #[test]

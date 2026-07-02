@@ -833,7 +833,8 @@ mod tests {
 
     #[test]
     fn kimi_policy_derefs_refs_and_fills_types() {
-        let policy = build_payload_policy(Some("https://api.kimi.com/coding/v1"), "openai-chat", None);
+        let policy =
+            build_payload_policy(Some("https://api.kimi.com/coding/v1"), "openai-chat", None);
         assert_eq!(policy.endpoint_class, EndpointClass::MoonshotNative);
 
         let mut schema = serde_json::json!({

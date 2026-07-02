@@ -221,11 +221,7 @@ impl ExtensionWatcher {
                             .iter()
                             .flat_map(|e| e.paths.iter().cloned())
                             .filter(|p| Self::should_watch_file(p))
-                            .filter(|p| {
-                                !runtime_data_dirs
-                                    .iter()
-                                    .any(|d| p.starts_with(d))
-                            })
+                            .filter(|p| !runtime_data_dirs.iter().any(|d| p.starts_with(d)))
                             .collect();
 
                         if changed_paths.is_empty() {

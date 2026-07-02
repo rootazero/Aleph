@@ -424,7 +424,10 @@ fn test_build_request_derefs_refs_for_moonshot() {
     let body_bytes = built.body().unwrap().as_bytes().unwrap();
     let body: serde_json::Value = serde_json::from_slice(body_bytes).unwrap();
     let params = &body["tools"][0]["function"]["parameters"];
-    assert!(params.get("$defs").is_none(), "$defs should be removed for Moonshot");
+    assert!(
+        params.get("$defs").is_none(),
+        "$defs should be removed for Moonshot"
+    );
     assert!(
         params["properties"]["action"].get("$ref").is_none(),
         "action $ref should be inlined"

@@ -62,9 +62,9 @@ pub fn build_rows(
         // Fold every Think→Act *step* bubble of one run into a single StepStrip
         // so a long run doesn't stretch the column. A step is any iteration-
         // tagged assistant bubble that is NOT the run's final answer — this
-        // includes the still-streaming current turn (which `begin_step` leaves
-        // as the non-intermediate `assistant-{run}` placeholder), so it folds
-        // into the strip instead of dangling below it as a bare bubble.
+        // includes the still-streaming current turn (`assistant-{run}` is
+        // stamped as step 1 in `start_assistant_message`), so it folds into the
+        // strip from the first frame instead of dangling below it as a bare bubble.
         if is_step(m) {
             if pending
                 .first()
@@ -531,6 +531,30 @@ mod tests {
             Some(false),
             "streaming placeholder keeps strip open"
         );
+    }
+
+    #[test]
+    fn pre_stamped_placeholder_folds_into_strip_from_first_frame() {
+        // `start_assistant_message` now stamps the placeholder as step 1, so the
+        // very first frame of a run must show the collapsible step strip instead
+        // of a dangling reply bubble.
+        let msgs = vec![msg_user("u1", "hi"), msg_empty_step("run-x", 1)];
+        let rows = derive_timeline(&msgs, "Today", "Yesterday");
+        assert!(
+            !rows.iter().any(
+                |r| matches!(r, TimelineRow::Message { message, .. } if message.role == "assistant")
+            ),
+            "pre-stamped placeholder must fold into strip, not render as a bubble"
+        );
+        let strip = rows
+            .iter()
+            .find_map(|r| match r {
+                TimelineRow::StepStrip { steps, completed, .. } => Some((steps.len(), *completed)),
+                _ => None,
+            })
+            .expect("a strip");
+        assert_eq!(strip.0, 1, "placeholder is the single step in the strip");
+        assert!(!strip.1, "streaming placeholder keeps strip open");
     }
 
     #[test]

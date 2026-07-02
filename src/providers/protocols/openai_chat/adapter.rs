@@ -540,8 +540,7 @@ mod build_request_tests {
         });
         let tool = ToolDefinition::new("loop", "loop tool", schema, ToolCategory::Builtin);
         let messages = [UnifiedMessage::user("hi")];
-        let payload = RequestPayload::new(&messages)
-            .with_tools(Some(std::slice::from_ref(&tool)));
+        let payload = RequestPayload::new(&messages).with_tools(Some(std::slice::from_ref(&tool)));
         let req = protocol
             .build_request(&payload, &kimi_config())
             .unwrap()
