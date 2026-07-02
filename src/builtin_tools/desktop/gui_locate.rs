@@ -165,7 +165,9 @@ impl AlephTool for DesktopGuiLocate {
                 return Ok(DesktopOutput {
                     success: false,
                     data: None,
-                    message: Some(format!("desktop_gui_locate: OCR failed: {e}")),
+                    message: Some(super::recovery::with_hint(format!(
+                        "desktop_gui_locate: OCR failed: {e}"
+                    ))),
                 });
             }
         };

@@ -72,7 +72,7 @@ fn bridge_err_output(err: impl std::fmt::Display) -> DesktopOutput {
     DesktopOutput {
         success: false,
         data: None,
-        message: Some(format!("AX query failed: {err}")),
+        message: Some(super::recovery::with_hint(format!("AX query failed: {err}"))),
     }
 }
 

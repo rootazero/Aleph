@@ -10,6 +10,7 @@ mod interactable;
 mod native;
 mod observe;
 mod perm;
+mod recovery;
 mod safety;
 pub mod session_lock;
 mod set_of_marks;

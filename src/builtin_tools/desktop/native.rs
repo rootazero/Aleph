@@ -339,7 +339,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -380,7 +380,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -399,7 +399,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -418,7 +418,7 @@ impl super::DesktopTool {
                                 return Ok(Some(DesktopOutput {
                                     success: false,
                                     data: None,
-                                    message: Some(format!("Screen capability error: {e}")),
+                                    message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                                 }));
                             }
                         }
@@ -435,7 +435,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -460,7 +460,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -496,7 +496,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -547,7 +547,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -573,7 +573,7 @@ impl super::DesktopTool {
                 Err(e) => Ok(Some(DesktopOutput {
                     success: false,
                     data: None,
-                    message: Some(format!("Screen capability error: {e}")),
+                    message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                 })),
             },
             "focus_window" => {
@@ -599,7 +599,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -627,7 +627,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -660,7 +660,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -684,7 +684,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -713,7 +713,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen recording error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen recording error: {e}"))),
                     })),
                 }
             }
@@ -732,7 +732,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -754,7 +754,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -772,7 +772,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -785,7 +785,7 @@ impl super::DesktopTool {
                 Err(e) => Ok(Some(DesktopOutput {
                     success: false,
                     data: None,
-                    message: Some(format!("Screen capability error: {e}")),
+                    message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                 })),
             },
             "mouse_button" => {
@@ -817,7 +817,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -841,7 +841,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -874,7 +874,7 @@ impl super::DesktopTool {
                         Err(e) => DesktopOutput {
                             success: false,
                             data: None,
-                            message: Some(format!("System capability error: {e}")),
+                            message: Some(super::recovery::with_hint(format!("System capability error: {e}"))),
                         },
                     }));
                 }
@@ -892,14 +892,14 @@ impl super::DesktopTool {
                             Err(e) => Ok(Some(DesktopOutput {
                                 success: false,
                                 data: None,
-                                message: Some(format!("Launch failed after quit: {e}")),
+                                message: Some(super::recovery::with_hint(format!("Launch failed after quit: {e}"))),
                             })),
                         }
                     }
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Quit failed: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Quit failed: {e}"))),
                     })),
                 }
             }
@@ -928,7 +928,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("System capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("System capability error: {e}"))),
                     })),
                 },
                 // No system capability wired: fall back to the text-only screen
@@ -942,7 +942,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 },
             },
@@ -957,7 +957,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Screen capability error: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                     })),
                 }
             }
@@ -987,7 +987,7 @@ impl super::DesktopTool {
                 Err(e) => Ok(Some(DesktopOutput {
                     success: false,
                     data: None,
-                    message: Some(format!("Screen capability error: {e}")),
+                    message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
                 })),
             },
             "paste" => {
@@ -1001,7 +1001,7 @@ impl super::DesktopTool {
                     return Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Failed to write to clipboard: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Failed to write to clipboard: {e}"))),
                     }));
                 }
 
@@ -1023,7 +1023,7 @@ impl super::DesktopTool {
                     return Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("Failed to paste: {e}")),
+                        message: Some(super::recovery::with_hint(format!("Failed to paste: {e}"))),
                     }));
                 }
 
@@ -1059,11 +1059,11 @@ impl super::DesktopTool {
                         return Ok(Some(DesktopOutput {
                             success: false,
                             data: None,
-                            message: Some(
+                            message: Some(super::recovery::with_hint(
                                 "AX capability not available on this platform — \
                                  fall back to click + type_text."
                                     .into(),
-                            ),
+                            )),
                         }))
                     }
                 };
@@ -1086,7 +1086,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("set_value failed: {e}")),
+                        message: Some(super::recovery::with_hint(format!(
+                            "set_value failed: {e}"
+                        ))),
                     })),
                 }
             }
@@ -1097,11 +1099,11 @@ impl super::DesktopTool {
                         return Ok(Some(DesktopOutput {
                             success: false,
                             data: None,
-                            message: Some(
+                            message: Some(super::recovery::with_hint(
                                 "AX capability not available on this platform — \
                                  fall back to click."
                                     .into(),
-                            ),
+                            )),
                         }))
                     }
                 };
@@ -1124,7 +1126,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!("ax_action failed: {e}")),
+                        message: Some(super::recovery::with_hint(format!(
+                            "ax_action failed: {e}"
+                        ))),
                     })),
                 }
             }
