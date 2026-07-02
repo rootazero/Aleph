@@ -8,7 +8,7 @@ use crate::sync_primitives::{AtomicU32, AtomicU64};
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{mpsc, RwLock};
 use tracing::{info, warn};
 
 use super::{ActiveRun, ExecutionEngineConfig, ExecutionError, RunRequest, RunState, RunStatus};

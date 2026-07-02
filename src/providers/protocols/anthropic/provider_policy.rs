@@ -721,7 +721,7 @@ mod tests {
     #[test]
     fn beta_headers_omits_fine_grained_when_capability_off() {
         use crate::providers::protocols::anthropic::provider_policy::{
-            AnthropicEndpointClass, resolve_anthropic_capabilities,
+            resolve_anthropic_capabilities, AnthropicEndpointClass,
         };
         let caps = resolve_anthropic_capabilities(
             AnthropicEndpointClass::Custom,
@@ -743,7 +743,7 @@ mod tests {
     #[test]
     fn beta_headers_includes_context_1m_on_azure_for_claude_4() {
         use crate::providers::protocols::anthropic::provider_policy::{
-            AnthropicEndpointClass, resolve_anthropic_capabilities,
+            resolve_anthropic_capabilities, AnthropicEndpointClass,
         };
         let caps = resolve_anthropic_capabilities(
             AnthropicEndpointClass::Custom,
@@ -761,7 +761,7 @@ mod tests {
     #[test]
     fn beta_headers_omits_context_1m_on_pre_claude_4_models_even_if_capability_on() {
         use crate::providers::protocols::anthropic::provider_policy::{
-            AnthropicEndpointClass, resolve_anthropic_capabilities,
+            resolve_anthropic_capabilities, AnthropicEndpointClass,
         };
         let caps = resolve_anthropic_capabilities(
             AnthropicEndpointClass::Custom,

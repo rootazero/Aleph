@@ -191,6 +191,23 @@ impl ExtensionWatcher {
 
         let callback = Arc::clone(&self.callback);
 
+        // Runtime data directories are written constantly during normal chat
+        // turns (sessions, memory notes, runtime ledger, logs). They are not
+        // extension sources, so watching them triggers expensive full reloads
+        // that contend with the hot path. Exclude them from the debounced event
+        // set.
+        let runtime_data_dirs: Vec<PathBuf> = [
+            crate::utils::paths::get_data_dir().ok(),
+            crate::utils::paths::get_runtimes_dir().ok(),
+            crate::utils::paths::get_note_memory_dir()
+                .ok()
+                .and_then(|p| p.parent().map(PathBuf::from)),
+            crate::logging::file_appender::get_log_directory().ok(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
         // Create debounced watcher
         let mut debouncer = new_debouncer(
             Duration::from_millis(DEBOUNCE_DELAY_MS),
@@ -198,11 +215,17 @@ impl ExtensionWatcher {
             move |result: DebounceEventResult| {
                 match result {
                     Ok(events) => {
-                        // Collect all changed paths
+                        // Collect all changed paths, skipping runtime data
+                        // directories that are not extension sources.
                         let changed_paths: HashSet<PathBuf> = events
                             .iter()
                             .flat_map(|e| e.paths.iter().cloned())
                             .filter(|p| Self::should_watch_file(p))
+                            .filter(|p| {
+                                !runtime_data_dirs
+                                    .iter()
+                                    .any(|d| p.starts_with(d))
+                            })
                             .collect();
 
                         if changed_paths.is_empty() {

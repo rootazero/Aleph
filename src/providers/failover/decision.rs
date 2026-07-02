@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::error::{AlephError, ErrorClass};
 use crate::providers::llm_retry::{
-    RetryVerdict, classify, classify_exhausted, extract_retry_after_str, is_transient_overload,
+    classify, classify_exhausted, extract_retry_after_str, is_transient_overload, RetryVerdict,
 };
 
 use super::{DEFAULT_TRANSIENT_DELAY, OVERLOAD_RETRY_BUDGET};

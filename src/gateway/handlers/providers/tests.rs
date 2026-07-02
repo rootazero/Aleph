@@ -410,3 +410,62 @@ async fn catalog_unknown_view_treats_as_all() {
     // Unknown view → fall through to "all", returning every preset.
     assert!(items.len() >= 20);
 }
+
+// Regression: providers.update must hot-reload the runtime provider instance
+// so protocol/base_url/model changes take effect without a daemon restart.
+#[tokio::test]
+async fn test_handle_update_hot_reloads_runtime_provider_protocol() {
+    use crate::providers::create_provider;
+    use crate::thinker::{MultiProviderRegistry, ProviderRegistry};
+
+    let mut config = Config::default();
+    let initial_cfg = ProviderConfig::test_config("gpt-4o");
+    config
+        .providers
+        .insert("custom".to_string(), initial_cfg.clone());
+    let config = Arc::new(RwLock::new(config));
+
+    let vault = test_vault();
+    vault
+        .store_secret("ai:custom", "test-key")
+        .expect("store provider key");
+
+    // Seed the live registry with an openai-protocol instance.
+    let registry = {
+        let mut cfg_with_key = initial_cfg.clone();
+        cfg_with_key.api_key = Some("test-key".to_string());
+        cfg_with_key.protocol = Some("openai".to_string());
+        let provider = create_provider("custom", cfg_with_key).expect("create initial provider");
+        Arc::new(MultiProviderRegistry::new("custom".to_string(), provider))
+    };
+
+    assert_eq!(
+        registry.default_provider().protocol().as_ref(),
+        "openai",
+        "initial runtime protocol should be openai"
+    );
+
+    let request = JsonRpcRequest::with_id(
+        "providers.update",
+        Some(json!({
+            "name": "custom",
+            "config": {
+                "protocol": "anthropic",
+                "enabled": true,
+                "model": "claude-sonnet-4-6",
+                "api_key": "test-key"
+            }
+        })),
+        json!(1),
+    );
+
+    let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+    let response = handle_update_hot(request, config, event_bus, vault, registry.clone()).await;
+    assert!(response.is_success(), "update failed: {:?}", response.error);
+
+    assert_eq!(
+        registry.default_provider().protocol().as_ref(),
+        "anthropic",
+        "providers.update must hot-reload the runtime provider with the new protocol"
+    );
+}

@@ -20,6 +20,7 @@ pub use handlers::{
     handle_catalog, handle_create, handle_create_hot, handle_delete, handle_delete_hot, handle_get,
     handle_healthcheck, handle_list, handle_needs_setup, handle_set_default,
     handle_set_default_config_only, handle_test, handle_test_no_registry, handle_update,
+    handle_update_hot,
 };
 
 // Re-export parse_params from parent for use by handlers submodule

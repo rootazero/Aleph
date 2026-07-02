@@ -214,6 +214,10 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
         primary_context_window: None,
         routing_store: None,
         routing_recall: None,
+        estimate_overhead_cache: std::sync::Arc::new(
+            alephcore::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
+        ),
+        stable_prompt_cache: alephcore::orchestrator::harness_bridge::default_stable_prompt_cache(),
     };
 
     Arc::new(Orchestrator::new(

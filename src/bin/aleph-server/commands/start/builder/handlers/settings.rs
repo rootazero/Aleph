@@ -271,14 +271,28 @@ pub(in crate::commands::start) fn register_config_handlers(
             shared_token_mgr
         );
     }
-    register_handler!(
-        server,
-        "providers.update",
-        providers::handle_update,
-        config,
-        event_bus,
-        shared_token_mgr
-    );
+    // update also hot-reloads the runtime provider instance when a registry is
+    // available, so Panel edits to protocol/base_url/model take effect immediately.
+    if let Some(ref registry) = multi_registry {
+        register_handler!(
+            server,
+            "providers.update",
+            providers::handle_update_hot,
+            config,
+            event_bus,
+            shared_token_mgr,
+            registry
+        );
+    } else {
+        register_handler!(
+            server,
+            "providers.update",
+            providers::handle_update,
+            config,
+            event_bus,
+            shared_token_mgr
+        );
+    }
     if let Some(ref registry) = multi_registry {
         register_handler!(
             server,

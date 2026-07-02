@@ -19,13 +19,13 @@
 //! concurrent first-callers cannot both spawn a helper.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 
 use aleph_protocol::desktop_bridge::envelope::{Message, Request, RpcError};
 use aleph_protocol::desktop_bridge::errors::ERR_PERMISSION_DENIED;

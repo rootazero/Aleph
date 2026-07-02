@@ -34,8 +34,8 @@
 
 use std::time::Duration;
 
-use crate::providers::AiProvider;
 use crate::providers::route_policy::EndpointTier;
+use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 
 mod decision;

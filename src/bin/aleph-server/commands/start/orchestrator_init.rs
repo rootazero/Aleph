@@ -300,6 +300,11 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         estimate_overhead_cache: std::sync::Arc::new(
             alephcore::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
         ),
+        // Cache the stable system-prompt prefix per session so repeated turns
+        // in the same chat do not re-assemble the heavy persona/tools/skills
+        // block every time. Capacity is per-runner; a small LRU is enough for
+        // the typical handful of active sessions.
+        stable_prompt_cache: alephcore::orchestrator::harness_bridge::default_stable_prompt_cache(),
     });
 
     // PHASE-6: thread routing overrides from `aleph.toml [flow_routing]`.

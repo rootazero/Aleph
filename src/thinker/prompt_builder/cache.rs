@@ -44,42 +44,7 @@ impl PromptBuilder {
         tools: &[ToolInfo],
         mode: PromptMode,
     ) -> Vec<SystemPromptPart> {
-        // Thread every builder field into the layer input — the same set
-        // `build_system_prompt` wires. This method is the harness bridge's
-        // production entry point: before this threading, the bridge's
-        // `with_identity_files` / `with_curated_envelope` /
-        // `with_memory_user_message` / `with_agent` / `with_resolved_context`
-        // / `with_chain_context` / `with_behavior_name` /
-        // `with_iteration_cap` / `with_extra_files` calls were silently
-        // dropped here (the input was built bare), so the corresponding
-        // layers rendered nothing on the production cached path.
-        let input = LayerInput::basic(&self.config, tools)
-            .with_mode(mode)
-            .with_identity_files_opt(self.identity_files.as_ref())
-            .with_extra_files_opt(self.extra_files.as_deref());
-        let input = match &self.agent_def {
-            Some(agent) => input.with_agent_def(agent),
-            None => input,
-        };
-        let input = match &self.config.mcp_instructions {
-            Some(instructions) => input.with_mcp_instructions(instructions),
-            None => input,
-        };
-        let input = match &self.memory_user_message {
-            Some(text) => input.with_memory_user_message(text.clone()),
-            None => input,
-        };
-        let input = match &self.routing_experience_user_message {
-            Some(text) => input.with_routing_experience_message(text.clone()),
-            None => input,
-        };
-        let input = input
-            .with_curated_envelope(self.curated_memory_envelope.clone())
-            .with_chain_context_opt(self.chain_context.as_ref())
-            .with_resolved_context_opt(self.resolved_context.as_ref())
-            .with_behavior_name_opt(self.behavior_name.as_deref())
-            .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref())
-            .with_iteration_cap_opt(self.iteration_cap);
+        let input = self.build_cached_input(tools, mode);
         let stable = self
             .pipeline
             .execute_stable_with_mode(AssemblyPath::Cached, &input, mode);
@@ -109,6 +74,80 @@ impl PromptBuilder {
                 cache: false,
             },
         ]
+    }
+
+    /// Build only the dynamic suffix of the cached system prompt.
+    ///
+    /// Used by the harness bridge when a session-scoped cache already holds
+    /// the stable prefix from a previous turn, so only the per-request tail
+    /// (memory, runtime context, execution plan, etc.) needs to be rendered.
+    /// `stable_chars` is the length of the cached stable prefix so the total
+    /// prompt budget is enforced correctly.
+    pub fn build_dynamic_only_with_mode(
+        &self,
+        tools: &[ToolInfo],
+        mode: PromptMode,
+        stable_chars: usize,
+    ) -> SystemPromptPart {
+        let input = self.build_cached_input(tools, mode);
+        let dynamic = self
+            .pipeline
+            .execute_dynamic_with_mode(AssemblyPath::Cached, &input, mode);
+
+        // The stable prefix is supplied by the caller's cache. Pass its known
+        // length so the dynamic suffix is trimmed to keep the combined prompt
+        // under the total budget.
+        let dynamic = crate::thinker::prompt_budget::fit_dynamic_suffix(
+            stable_chars,
+            dynamic,
+            &self.config.token_budget,
+        );
+
+        SystemPromptPart {
+            content: dynamic,
+            cache: false,
+        }
+    }
+
+    /// Construct the [`LayerInput`] shared by the cached stable/dynamic builds.
+    ///
+    /// Threads every builder field into the layer input — the same set
+    /// `build_system_prompt` wires. This method is the harness bridge's
+    /// production entry point: before this threading, the bridge's
+    /// `with_identity_files` / `with_curated_envelope` /
+    /// `with_memory_user_message` / `with_agent` / `with_resolved_context`
+    /// / `with_chain_context` / `with_behavior_name` /
+    /// `with_iteration_cap` / `with_extra_files` calls were silently
+    /// dropped here (the input was built bare), so the corresponding
+    /// layers rendered nothing on the production cached path.
+    fn build_cached_input<'a>(&'a self, tools: &'a [ToolInfo], mode: PromptMode) -> LayerInput<'a> {
+        let input = LayerInput::basic(&self.config, tools)
+            .with_mode(mode)
+            .with_identity_files_opt(self.identity_files.as_ref())
+            .with_extra_files_opt(self.extra_files.as_deref());
+        let input = match &self.agent_def {
+            Some(agent) => input.with_agent_def(agent),
+            None => input,
+        };
+        let input = match &self.config.mcp_instructions {
+            Some(instructions) => input.with_mcp_instructions(instructions),
+            None => input,
+        };
+        let input = match &self.memory_user_message {
+            Some(text) => input.with_memory_user_message(text.clone()),
+            None => input,
+        };
+        let input = match &self.routing_experience_user_message {
+            Some(text) => input.with_routing_experience_message(text.clone()),
+            None => input,
+        };
+        input
+            .with_curated_envelope(self.curated_memory_envelope.clone())
+            .with_chain_context_opt(self.chain_context.as_ref())
+            .with_resolved_context_opt(self.resolved_context.as_ref())
+            .with_behavior_name_opt(self.behavior_name.as_deref())
+            .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref())
+            .with_iteration_cap_opt(self.iteration_cap)
     }
 }
 

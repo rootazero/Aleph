@@ -4,11 +4,11 @@ use std::collections::VecDeque;
 
 use super::sse::parse_anthropic_sse_event;
 use super::{
-    ANTHROPIC_VERSION, AnthropicProtocol, CLAUDE_CODE_USER_AGENT, ToolNameMap,
-    sanitize_anthropic_tool_name,
+    sanitize_anthropic_tool_name, AnthropicProtocol, ToolNameMap, ANTHROPIC_VERSION,
+    CLAUDE_CODE_USER_AGENT,
 };
-use crate::config::ProviderConfig;
 use crate::config::types::provider::CacheRetention;
+use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::anthropic::types::{Metadata, OutputConfig};
@@ -16,8 +16,8 @@ use crate::providers::anthropic::{AnthropicTool, MessagesRequest, SystemBlock, T
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::{CacheControl, EphemeralTtl};
 use crate::providers::protocols::anthropic::provider_policy::{
-    KIMI_CODING_USER_AGENT, is_kimi_anthropic_base_url, normalize_kimi_coding_model_id,
-    strip_cache_control,
+    is_kimi_anthropic_base_url, normalize_kimi_coding_model_id, strip_cache_control,
+    KIMI_CODING_USER_AGENT,
 };
 use crate::thinker::prompt_builder::SystemPromptPart;
 use crate::tool_metadata::DEFAULT_MAX_TOKENS;
@@ -28,8 +28,8 @@ use tracing::{debug, warn};
 
 mod cache;
 use cache::{
-    MAX_CACHE_BREAKPOINTS, effective_cache_retention, inject_cache_control_into_recent_messages,
-    inject_cache_control_into_system_array, promote_system_marker_ttl,
+    effective_cache_retention, inject_cache_control_into_recent_messages,
+    inject_cache_control_into_system_array, promote_system_marker_ttl, MAX_CACHE_BREAKPOINTS,
 };
 
 /// Collapse a `SystemPromptPart` slice into Anthropic `SystemBlock`s,
@@ -936,8 +936,8 @@ mod normalize_model_id_tests {
 /// stream cut before its terminal `message_delta` is flagged for retry.
 #[cfg(test)]
 mod truncation_guard_tests {
-    use super::super::ToolNameMap;
     use super::super::sse::parse_anthropic_sse_event;
+    use super::super::ToolNameMap;
     use super::{queue_has_terminal, stream_was_truncated};
     use crate::error::Result;
     use crate::providers::delta::{IndexIdTracker, ProviderDelta};

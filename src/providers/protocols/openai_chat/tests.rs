@@ -385,6 +385,54 @@ fn test_build_request_includes_tools() {
 }
 
 #[test]
+fn test_build_request_derefs_refs_for_moonshot() {
+    use crate::tool_metadata::ToolDefinition;
+    use crate::ToolCategory;
+
+    let protocol = OpenAiProtocol::new(Client::new());
+    // Schema mirrors what schemars emits for an internally-tagged enum arg
+    // (e.g. `LoopArgs.action: LoopAction`). Moonshot rejects the bare `$ref`.
+    let tools = vec![ToolDefinition::new(
+        "loop",
+        "Loop tool",
+        serde_json::json!({
+            "$defs": {
+                "LoopAction": {
+                    "oneOf": [
+                        {"type": "string", "const": "start"},
+                        {"type": "string", "const": "stop"}
+                    ]
+                }
+            },
+            "type": "object",
+            "properties": {
+                "action": {"$ref": "#/$defs/LoopAction"}
+            },
+            "required": ["action"]
+        }),
+        ToolCategory::Builtin,
+    )];
+    let msgs = [UnifiedMessage::user("Hello")];
+    let payload = RequestPayload::new(&msgs).with_tools(Some(&tools));
+    let mut config = ProviderConfig::test_config("kimi-k2-turbo-preview");
+    config.api_key = Some("test-key".to_string());
+    config.base_url = Some("https://api.moonshot.ai/v1".to_string());
+
+    let request = protocol.build_request(&payload, &config).unwrap();
+    let built = request.build().unwrap();
+
+    let body_bytes = built.body().unwrap().as_bytes().unwrap();
+    let body: serde_json::Value = serde_json::from_slice(body_bytes).unwrap();
+    let params = &body["tools"][0]["function"]["parameters"];
+    assert!(params.get("$defs").is_none(), "$defs should be removed for Moonshot");
+    assert!(
+        params["properties"]["action"].get("$ref").is_none(),
+        "action $ref should be inlined"
+    );
+    assert!(params["properties"]["action"]["oneOf"].is_array());
+}
+
+#[test]
 fn test_build_request_no_tools_when_none() {
     let protocol = OpenAiProtocol::new(Client::new());
     let msgs = [UnifiedMessage::user("Hello")];

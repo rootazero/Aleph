@@ -111,17 +111,42 @@ pub async fn handle_get(
 // Update
 // ============================================================================
 
-/// Update a provider
+/// Update a provider (config-only, no runtime swap)
 pub async fn handle_update(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
     vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
+    update_provider_inner(request, config, event_bus, vault, None).await
+}
+
+/// Update a provider and hot-reload the live registry instance.
+pub async fn handle_update_hot(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
+    multi_registry: Arc<crate::thinker::MultiProviderRegistry>,
+) -> JsonRpcResponse {
+    update_provider_inner(request, config, event_bus, vault, Some(multi_registry)).await
+}
+
+async fn update_provider_inner(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
+    multi_registry: Option<Arc<crate::thinker::MultiProviderRegistry>>,
+) -> JsonRpcResponse {
     let params: UpdateParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    // Snapshot (name + config WITH api_key) for live reload, captured before
+    // the key is stripped for persistence. None when no registry.
+    let mut registration: Option<(String, ProviderConfig)> = None;
 
     // Update config
     {
@@ -154,6 +179,12 @@ pub async fn handle_update(
                 );
             }
         }
+
+        // Capture the registration snapshot (with the key) before clearing it,
+        // so the live registry can build a working provider instance.
+        if multi_registry.is_some() {
+            registration = Some((params.name.clone(), provider_config.clone()));
+        }
         provider_config.api_key = None;
 
         // Update provider — config change resets verified status
@@ -168,6 +199,21 @@ pub async fn handle_update(
                 INTERNAL_ERROR,
                 format!("Failed to save config: {e}"),
             );
+        }
+    }
+
+    // Hot-reload into the live registry so protocol/base_url/model changes take
+    // effect on the very next prompt, matching create/delete/setDefault behavior.
+    if let (Some(registry), Some((name, pc))) = (&multi_registry, registration) {
+        match crate::providers::create_provider(&name, pc) {
+            Ok(provider) => {
+                registry.register(name.clone(), provider);
+                info!(name = %name, "Provider hot-reloaded in live registry");
+            }
+            Err(e) => error!(
+                name = %name, error = %e,
+                "Failed to build provider for hot reload (config saved)"
+            ),
         }
     }
 

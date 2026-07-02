@@ -328,6 +328,252 @@ fn normalize_node(
     StrictResult::Ok
 }
 
+// =============================================================================
+// Moonshot (Kimi) compatibility helpers
+// =============================================================================
+
+/// Recursively inline local `$ref` entries in a JSON Schema.
+///
+/// Moonshot's tool-schema validator rejects (or misinterprets) `$ref` nodes,
+/// reporting errors such as
+/// `"At path 'properties.action': detected infinite recursion without termination condition"`.
+/// This function resolves every local `#/$defs/<Name>` / `#/definitions/<Name>`
+/// reference and merges the referenced payload in-place. Definition buckets are
+/// removed afterwards so the emitted schema contains no `$ref`s.
+///
+/// Remote references (e.g. `http://...`) are left untouched.
+///
+/// # Panics
+///
+/// Panics if a `$ref` points to a non-existent definition. Such schemas are
+/// already malformed; failing fast is preferable to sending them to the provider.
+pub fn deref_json_schema(schema: &mut Value) {
+    // Collect definitions first so we can resolve them while mutating the tree.
+    let defs = collect_defs(schema);
+    // Recursion uses a visited set to guard against true cycles. In practice
+    // Aleph tool schemas are acyclic; this guard exists for defensiveness.
+    let mut visiting = std::collections::HashSet::new();
+    deref_node(schema, &defs, &mut visiting);
+    // Remove the now-unneeded definition buckets.
+    if let Some(obj) = schema.as_object_mut() {
+        obj.remove("$defs");
+        obj.remove("definitions");
+    }
+}
+
+fn collect_defs(schema: &Value) -> std::collections::HashMap<String, Value> {
+    let mut out = std::collections::HashMap::new();
+    for key in ["$defs", "definitions"] {
+        if let Some(Value::Object(map)) = schema.get(key) {
+            for (k, v) in map {
+                out.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    out
+}
+
+fn deref_node(
+    node: &mut Value,
+    defs: &std::collections::HashMap<String, Value>,
+    visiting: &mut std::collections::HashSet<String>,
+) {
+    if let Some(obj) = node.as_object_mut() {
+        if let Some(Value::String(ref_path)) = obj.get("$ref") {
+            if let Some(name) = ref_path
+                .strip_prefix("#/$defs/")
+                .or_else(|| ref_path.strip_prefix("#/definitions/"))
+            {
+                if visiting.insert(name.to_string()) {
+                    let mut target = defs
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| panic!("unresolved $ref: {ref_path}"));
+                    deref_node(&mut target, defs, visiting);
+                    visiting.remove(name);
+                    // Replace the $ref object with the dereferenced target.
+                    *node = target;
+                }
+                // If the ref is already being visited we have a real cycle.
+                // Leave the $ref in place; higher-level tooling should reject
+                // truly recursive tool schemas rather than silently inlining
+                // forever. In practice Aleph tool schemas are acyclic.
+            }
+        }
+    }
+
+    // Recurse into the (possibly replaced) node.
+    match node {
+        Value::Object(obj) => {
+            for v in obj.values_mut() {
+                deref_node(v, defs, visiting);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                deref_node(v, defs, visiting);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Ensure every property schema carries an explicit `type` keyword.
+///
+/// Moonshot rejects tool parameter schemas where a nested property omits
+/// `type` (e.g. `{"enum": ["a", "b"]}` without `"type": "string"`),
+/// returning HTTP 400 with `"At path 'properties.X': type is not defined"`.
+/// This function walks property-schema positions and fills in a `type` when
+/// one is missing:
+///
+/// - `enum` / `const` present → infer from the values.
+/// - structural keywords (`properties`, `items`, `minLength`, …) → infer object/
+///   array/string/number.
+/// - otherwise default to `"string"`.
+///
+/// Nodes that legitimately declare shape via combinators (`anyOf`/`oneOf`/
+/// `allOf`/`$ref`/`not`/`if`/`then`/`else`) are left alone.
+pub fn ensure_property_types(schema: &mut Value) {
+    ensure_property_types_node(schema);
+}
+
+/// JSON Schema keywords that describe a property's shape without a `type`.
+/// When any of these are present we skip the type-filling step.
+const COMBINATOR_KEYS: &[&str] = &[
+    "anyOf", "oneOf", "allOf", "not", "if", "then", "else", "$ref",
+];
+
+/// Structural keywords that imply a specific JSON Schema type.
+const OBJECT_KEYWORDS: &[&str] = &[
+    "properties",
+    "additionalProperties",
+    "patternProperties",
+    "propertyNames",
+    "required",
+    "minProperties",
+    "maxProperties",
+];
+const ARRAY_KEYWORDS: &[&str] = &[
+    "items",
+    "prefixItems",
+    "minItems",
+    "maxItems",
+    "uniqueItems",
+    "contains",
+];
+const STRING_KEYWORDS: &[&str] = &["minLength", "maxLength", "pattern", "format"];
+const NUMERIC_KEYWORDS: &[&str] = &[
+    "minimum",
+    "maximum",
+    "multipleOf",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+];
+
+fn ensure_property_types_node(node: &mut Value) {
+    if let Some(obj) = node.as_object_mut() {
+        if let Some(Value::Object(props)) = obj.get_mut("properties") {
+            for prop in props.values_mut() {
+                normalize_property_type(prop);
+            }
+        }
+
+        if let Some(items) = obj.get_mut("items") {
+            if items.is_array() {
+                for item in items.as_array_mut().unwrap() {
+                    normalize_property_type(item);
+                }
+            } else {
+                normalize_property_type(items);
+            }
+        }
+
+        if let Some(additional) = obj.get_mut("additionalProperties") {
+            if additional.is_object() {
+                normalize_property_type(additional);
+            }
+        }
+
+        for key in ["anyOf", "oneOf", "allOf"] {
+            if let Some(Value::Array(branches)) = obj.get_mut(key) {
+                for branch in branches.iter_mut() {
+                    normalize_property_type(branch);
+                }
+            }
+        }
+    }
+}
+
+fn normalize_property_type(node: &mut Value) {
+    if let Some(obj) = node.as_object_mut() {
+        if !obj.contains_key("type") && !COMBINATOR_KEYS.iter().any(|k| obj.contains_key(*k)) {
+            let inferred = if let Some(Value::Array(values)) = obj.get("enum") {
+                if !values.is_empty() {
+                    infer_type_from_values(values)
+                } else {
+                    infer_type_from_structure(obj)
+                }
+            } else if let Some(v) = obj.get("const") {
+                infer_type_from_value(v)
+            } else {
+                infer_type_from_structure(obj)
+            };
+            obj.insert("type".to_string(), Value::String(inferred));
+        }
+    }
+    ensure_property_types_node(node);
+}
+
+fn infer_type_from_structure(obj: &serde_json::Map<String, Value>) -> String {
+    if OBJECT_KEYWORDS.iter().any(|k| obj.contains_key(*k)) {
+        return "object".to_string();
+    }
+    if ARRAY_KEYWORDS.iter().any(|k| obj.contains_key(*k)) {
+        return "array".to_string();
+    }
+    if STRING_KEYWORDS.iter().any(|k| obj.contains_key(*k)) {
+        return "string".to_string();
+    }
+    if NUMERIC_KEYWORDS.iter().any(|k| obj.contains_key(*k)) {
+        return "number".to_string();
+    }
+    "string".to_string()
+}
+
+fn infer_type_from_value(value: &Value) -> String {
+    match value {
+        Value::Bool(_) => "boolean".to_string(),
+        Value::Number(n) => {
+            if n.is_i64() || n.is_u64() {
+                "integer".to_string()
+            } else {
+                "number".to_string()
+            }
+        }
+        Value::String(_) => "string".to_string(),
+        Value::Null => "null".to_string(),
+        Value::Object(_) => "object".to_string(),
+        Value::Array(_) => "array".to_string(),
+    }
+}
+
+fn infer_type_from_values(values: &[Value]) -> String {
+    let mut inferred = std::collections::HashSet::new();
+    for v in values {
+        inferred.insert(infer_type_from_value(v));
+    }
+
+    if inferred.len() == 1 {
+        return inferred.into_iter().next().unwrap();
+    }
+    if inferred == std::collections::HashSet::from(["integer".to_string(), "number".to_string()]) {
+        return "number".to_string();
+    }
+    // Mixed values: default to string. Moonshot tolerates enum values that do
+    // not exactly match the declared type, so "string" is the safe fallback.
+    "string".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -698,5 +944,151 @@ mod tests {
             }
             other => panic!("expected Incompatible, got {other:?}"),
         }
+    }
+
+    // =====================================================================
+    // Moonshot (Kimi) compatibility tests
+    // =====================================================================
+
+    #[test]
+    fn deref_inlines_local_refs_and_removes_defs() {
+        let mut schema = serde_json::json!({
+            "$defs": {
+                "Color": {
+                    "type": "string",
+                    "enum": ["red", "green", "blue"]
+                }
+            },
+            "type": "object",
+            "properties": {
+                "favorite": { "$ref": "#/$defs/Color" }
+            }
+        });
+        deref_json_schema(&mut schema);
+        assert!(schema.get("$defs").is_none());
+        assert!(schema["properties"]["favorite"].get("$ref").is_none());
+        assert_eq!(schema["properties"]["favorite"]["type"], "string");
+    }
+
+    #[test]
+    fn deref_preserves_remote_refs() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "remote": { "$ref": "https://example.com/schema" }
+            }
+        });
+        deref_json_schema(&mut schema);
+        assert_eq!(
+            schema["properties"]["remote"]["$ref"],
+            "https://example.com/schema"
+        );
+    }
+
+    #[test]
+    fn deref_handles_nested_refs() {
+        let mut schema = serde_json::json!({
+            "$defs": {
+                "Inner": { "type": "integer" },
+                "Outer": {
+                    "type": "object",
+                    "properties": {
+                        "value": { "$ref": "#/$defs/Inner" }
+                    }
+                }
+            },
+            "type": "object",
+            "properties": {
+                "outer": { "$ref": "#/$defs/Outer" }
+            }
+        });
+        deref_json_schema(&mut schema);
+        assert_eq!(schema["properties"]["outer"]["properties"]["value"]["type"], "integer");
+    }
+
+    #[test]
+    fn ensure_property_types_adds_type_to_enum_property() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "size": { "enum": ["small", "medium", "large"] }
+            }
+        });
+        ensure_property_types(&mut schema);
+        assert_eq!(schema["properties"]["size"]["type"], "string");
+    }
+
+    #[test]
+    fn ensure_property_types_adds_type_from_const() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "kind": { "const": "widget" }
+            }
+        });
+        ensure_property_types(&mut schema);
+        assert_eq!(schema["properties"]["kind"]["type"], "string");
+    }
+
+    #[test]
+    fn ensure_property_types_infers_object_from_properties() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "nested": {
+                    "properties": { "a": { "type": "string" } },
+                    "required": ["a"]
+                }
+            }
+        });
+        ensure_property_types(&mut schema);
+        assert_eq!(schema["properties"]["nested"]["type"], "object");
+    }
+
+    #[test]
+    fn ensure_property_types_skips_combinator_nodes() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "choice": {
+                    "anyOf": [
+                        { "type": "string" },
+                        { "type": "integer" }
+                    ]
+                }
+            }
+        });
+        ensure_property_types(&mut schema);
+        assert!(schema["properties"]["choice"].get("type").is_none());
+    }
+
+    #[test]
+    fn moonshot_normalization_of_action_ref() {
+        // Mimics the `loop` tool schema: an `action` property that schemars
+        // emits as a `$ref` to a `$defs` enum. Moonshot rejects this unless
+        // we inline the reference and ensure explicit types.
+        let mut schema = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {
+                "LoopAction": {
+                    "oneOf": [
+                        { "type": "string", "const": "start" },
+                        { "type": "string", "const": "stop" }
+                    ]
+                }
+            },
+            "type": "object",
+            "properties": {
+                "action": { "$ref": "#/$defs/LoopAction" }
+            },
+            "required": ["action"]
+        });
+        deref_json_schema(&mut schema);
+        ensure_property_types(&mut schema);
+        assert!(schema.get("$defs").is_none());
+        assert!(schema["properties"]["action"].get("$ref").is_none());
+        // The inlined `oneOf` branches already have explicit types; the outer
+        // `action` schema itself does not need a type because it uses `oneOf`.
+        assert!(schema["properties"]["action"]["oneOf"].is_array());
     }
 }

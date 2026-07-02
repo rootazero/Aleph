@@ -39,6 +39,18 @@ mod runner_impl;
 
 pub mod context_estimate;
 
+pub(crate) use prompt_build::{StablePromptCacheEntry, StablePromptKey};
+
+/// Default per-session stable-prompt cache used at `AgentHarnessRunner`
+/// construction time. Exported so the `aleph-server` binary crate can
+/// initialize the field without exposing the cache types in the public API.
+pub fn default_stable_prompt_cache(
+) -> std::sync::Arc<tokio::sync::Mutex<lru::LruCache<StablePromptKey, StablePromptCacheEntry>>> {
+    std::sync::Arc::new(tokio::sync::Mutex::new(lru::LruCache::new(
+        std::num::NonZeroUsize::new(64).expect("64 > 0"),
+    )))
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -235,6 +247,13 @@ pub struct AgentHarnessRunner {
     /// history switches.
     pub estimate_overhead_cache:
         std::sync::Arc<crate::orchestrator::harness_bridge::context_estimate::OverheadCache>,
+
+    /// Per-session cache for the stable system-prompt prefix. The stable part
+    /// (persona, tools, security, skills, identity, etc.) is expensive to
+    /// assemble and changes rarely within a session. Caching it avoids
+    /// rebuilding it on every turn; only the dynamic tail is recomputed.
+    pub stable_prompt_cache:
+        std::sync::Arc<tokio::sync::Mutex<lru::LruCache<StablePromptKey, StablePromptCacheEntry>>>,
 }
 
 /// Hard fallback iteration cap — used only when both the per-flow override

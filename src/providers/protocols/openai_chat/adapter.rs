@@ -18,7 +18,7 @@ use super::{sanitize_tool_name, OpenAiProtocol};
 
 use crate::providers::protocols::openai_common::max_tokens::uses_max_completion_tokens;
 use crate::providers::protocols::openai_common::openai_strict_schema::{
-    lenient_multi_type_rewrite, normalize_strict_schema, StrictResult,
+    ensure_openai_tool_envelope, lenient_multi_type_rewrite, normalize_strict_schema, StrictResult,
 };
 use crate::providers::protocols::openai_common::provider_policy::build_payload_policy;
 use crate::providers::protocols::openai_common::response_format::to_chat_response_format;
@@ -185,6 +185,17 @@ impl ProtocolAdapter for OpenAiProtocol {
                     } else {
                         None
                     };
+                    // Ensure the tool envelope is always valid: OpenAI's parser
+                    // requires top-level `type: "object"` and rejects `oneOf`/
+                    // `anyOf` at the root. Do this before provider-specific fixes
+                    // so Moonshot/DeepSeek/etc. see a well-formed object schema.
+                    ensure_openai_tool_envelope(&mut params);
+
+                    // Provider-specific schema fixes (e.g. Moonshot cannot handle
+                    // local `$ref` nodes and requires explicit `type` on every
+                    // property). Applied after strict/lenient normalization so the
+                    // schema is already in its final shape.
+                    policy.apply_to_schema(&mut params);
                     OpenAiTool {
                         tool_type: "function".into(),
                         function: OpenAiFunction {
@@ -491,6 +502,61 @@ impl ProtocolAdapter for OpenAiProtocol {
         crate::providers::protocols::openai_common::model_id::normalize_openai_model_id(
             model_id, None,
         )
+    }
+}
+
+#[cfg(test)]
+mod build_request_tests {
+    use super::super::OpenAiProtocol;
+    use crate::config::ProviderConfig;
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+    use crate::providers::message::UnifiedMessage;
+    use crate::tool_metadata::{ToolCategory, ToolDefinition};
+
+    fn kimi_config() -> ProviderConfig {
+        let mut c = ProviderConfig::test_config("Kimi-K2.7");
+        c.base_url = Some("https://api.kimi.com/coding/v1".into());
+        c.protocol = Some("openai".into());
+        c.api_key = Some("test-key".into());
+        c
+    }
+
+    #[test]
+    fn kimi_tool_schema_derefs_refs_and_has_object_type() {
+        let protocol = OpenAiProtocol::new(reqwest::Client::new());
+        let schema = serde_json::json!({
+            "$defs": {
+                "Action": {
+                    "oneOf": [
+                        { "type": "string", "const": "start" },
+                        { "type": "string", "const": "stop" }
+                    ]
+                }
+            },
+            "type": "object",
+            "properties": {
+                "action": { "$ref": "#/$defs/Action" }
+            }
+        });
+        let tool = ToolDefinition::new("loop", "loop tool", schema, ToolCategory::Builtin);
+        let messages = [UnifiedMessage::user("hi")];
+        let payload = RequestPayload::new(&messages)
+            .with_tools(Some(std::slice::from_ref(&tool)));
+        let req = protocol
+            .build_request(&payload, &kimi_config())
+            .unwrap()
+            .build()
+            .unwrap();
+        let body_bytes = req.body().unwrap().as_bytes().unwrap();
+        let body: serde_json::Value = serde_json::from_slice(body_bytes).unwrap();
+
+        let params = &body["tools"][0]["function"]["parameters"];
+        assert_eq!(params["type"], "object", "top-level type must be object");
+        assert!(params.get("$defs").is_none(), "$defs should be inlined");
+        assert!(
+            params["properties"]["action"].get("$ref").is_none(),
+            "$ref should be dereferenced"
+        );
     }
 }
 

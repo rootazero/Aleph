@@ -4,7 +4,7 @@ use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
 use crate::resilience::TaskStatus;
 use crate::sync_primitives::Arc;
-use crate::verification::stop_hooks::{StopHookContext, execute_stop_hooks_arc};
+use crate::verification::stop_hooks::{execute_stop_hooks_arc, StopHookContext};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};

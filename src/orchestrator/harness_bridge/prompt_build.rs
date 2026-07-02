@@ -7,6 +7,60 @@ use crate::sandbox::Sandbox;
 use crate::session::service::SessionId;
 
 use super::*;
+use std::time::Instant;
+
+/// Cached stable system-prompt prefix for a session.
+///
+/// The stable part (persona, tools, security, skills, identity, etc.) is
+/// expensive to assemble and changes rarely within a session. Caching it
+/// avoids rebuilding it on every turn; only the dynamic tail (memory,
+/// runtime context, execution plan, etc.) is recomputed.
+#[derive(Clone)]
+pub struct StablePromptCacheEntry {
+    pub stable_part: crate::thinker::prompt_builder::SystemPromptPart,
+}
+
+/// Key for the stable-prompt cache.
+///
+/// The stable system prompt is keyed by `(session, provider, provider_protocol,
+/// agent, mode)`. Stable inputs (identity files, skills, tools, behavior
+/// coaching) change rarely within a session, so this simple key captures almost
+/// all cache hits while avoiding expensive content hashing on the hot path.
+/// The provider protocol is part of the key because protocol adapters shape the
+/// tool schemas and system-prompt formatting consumed by the model; a hot
+/// protocol/base_url swap (e.g. kimi → anthropic) must not reuse a stale prefix.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct StablePromptKey {
+    session_key: String,
+    agent_id: String,
+    provider_name: String,
+    provider_protocol: String,
+    prompt_mode: String,
+}
+
+impl StablePromptKey {
+    pub(crate) fn new(
+        session_key: &str,
+        agent_id: &str,
+        provider_name: &str,
+        provider_protocol: &str,
+        prompt_mode: crate::thinker::prompt_mode::PromptMode,
+    ) -> Self {
+        use crate::thinker::prompt_mode::PromptMode;
+        let prompt_mode = match prompt_mode {
+            PromptMode::Full => "full",
+            PromptMode::Compact => "compact",
+            PromptMode::Minimal => "minimal",
+        };
+        Self {
+            session_key: session_key.to_string(),
+            agent_id: agent_id.to_string(),
+            provider_name: provider_name.to_string(),
+            provider_protocol: provider_protocol.to_string(),
+            prompt_mode: prompt_mode.to_string(),
+        }
+    }
+}
 
 impl AgentHarnessRunner {
     /// Compute how many tokens the context window can spare for memory
@@ -155,6 +209,8 @@ impl AgentHarnessRunner {
         use crate::providers::message::UnifiedMessage;
         use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 
+        let prompt_build_start = Instant::now();
+
         // Phase 1 — fetch the eligible-skill snapshot once; reused below.
         let skill_snapshot = match self.skill_system.as_ref() {
             Some(sys) => Some(sys.current_snapshot().await),
@@ -163,6 +219,7 @@ impl AgentHarnessRunner {
 
         let session_key_str = session_id.to_key_string();
 
+        let memory_phase_start = Instant::now();
         let (curated_text, memory_text) = if let Some(mcp) = self.memory_context_provider.as_ref() {
             let curated_text: Option<String> =
                 match mcp.build_curated_message(agent_id, &session_key_str).await {
@@ -206,7 +263,9 @@ impl AgentHarnessRunner {
         } else {
             (None, None)
         };
+        let memory_phase_ms = memory_phase_start.elapsed().as_millis() as u64;
 
+        let identity_phase_start = Instant::now();
         let agent_def = self.agent_registry.get(agent_id);
 
         // Load user-editable identity files from `~/.aleph/agents/{agent_id}/`
@@ -240,7 +299,9 @@ impl AgentHarnessRunner {
         let has_skills = skill_snapshot
             .as_ref()
             .is_some_and(|s| !s.eligible_manifests.is_empty());
+        let identity_phase_ms = identity_phase_start.elapsed().as_millis() as u64;
 
+        let extra_files_phase_start = Instant::now();
         // Load `[prompt.extra_files]` content (size-capped). `None` when the
         // section is absent / disabled / yields no readable content, so the
         // default config keeps the assembled prompt byte-identical.
@@ -258,7 +319,9 @@ impl AgentHarnessRunner {
             }
             (!files.is_empty()).then_some(files)
         };
+        let extra_files_phase_ms = extra_files_phase_start.elapsed().as_millis() as u64;
 
+        let mcp_phase_start = Instant::now();
         // Aggregate connected MCP servers' advertised `instructions`. One actor
         // round-trip per prompt build (negligible next to the file/skill IO
         // above) keeps the data always-fresh without a shared mutable snapshot.
@@ -271,7 +334,9 @@ impl AgentHarnessRunner {
             }
             None => None,
         };
+        let mcp_phase_ms = mcp_phase_start.elapsed().as_millis() as u64;
 
+        let runtime_caps_phase_start = Instant::now();
         // Surface the persisted runtime capability ledger so
         // `RuntimeCapabilitiesLayer` (priority 400) can tell the model which
         // managed runtimes are installed and their absolute executable paths —
@@ -288,6 +353,7 @@ impl AgentHarnessRunner {
                 crate::runtimes::format_entries_for_prompt(&ledger.list_ready())
             })
             .filter(|s| !s.is_empty());
+        let runtime_caps_phase_ms = runtime_caps_phase_start.elapsed().as_millis() as u64;
 
         // Skip prompt assembly entirely when there is nothing to inject:
         // no memory, no AgentDef, no eligible skills, no identity files, no
@@ -385,6 +451,7 @@ impl AgentHarnessRunner {
         // Tools list is empty because the harness wires actual tool
         // schemas via native tool_use rather than the prompt;
         // `disabled_tools` therefore stays empty too.
+        let context_phase_start = Instant::now();
         let default_manifest;
         let manifest_ref = match channel_manifest {
             Some(m) => m,
@@ -473,6 +540,9 @@ impl AgentHarnessRunner {
             Some(true) => crate::thinker::context::VoiceContext::SpokenTranscribed,
         };
         builder = builder.with_resolved_context(resolved_context);
+        let context_phase_ms = context_phase_start.elapsed().as_millis() as u64;
+
+        let prompt_build_phase_start = Instant::now();
         // Resolve the governance behavior name once (same source of truth as
         // the robustness profile) and pre-load its overridable coaching delta.
         let behavior_name = crate::orchestrator::harness_bridge::resolve_behavior(provider);
@@ -495,7 +565,38 @@ impl AgentHarnessRunner {
         // flat string remains the source of truth for adapters that do
         // not consume `system_blocks` (everything except Anthropic today)
         // and for callsites that read `HarnessDeps::system_prompt`.
-        let parts = builder.build_system_prompt_cached_with_mode(&[], self.default_prompt_mode);
+        let stable_key = StablePromptKey::new(
+            &session_key_str,
+            agent_id,
+            provider.name(),
+            &provider.protocol(),
+            self.default_prompt_mode,
+        );
+        let cached_stable = {
+            let mut cache = self.stable_prompt_cache.lock().await;
+            cache.get(&stable_key).cloned()
+        };
+        let (parts, cache_hit) = if let Some(entry) = cached_stable {
+            let dynamic = builder.build_dynamic_only_with_mode(
+                &[],
+                self.default_prompt_mode,
+                entry.stable_part.content.len(),
+            );
+            (vec![entry.stable_part, dynamic], true)
+        } else {
+            let parts = builder.build_system_prompt_cached_with_mode(&[], self.default_prompt_mode);
+            if let Some(stable) = parts.iter().find(|p| p.cache).cloned() {
+                let mut cache = self.stable_prompt_cache.lock().await;
+                cache.put(
+                    stable_key,
+                    StablePromptCacheEntry {
+                        stable_part: stable,
+                    },
+                );
+            }
+            (parts, false)
+        };
+        let prompt_build_phase_ms = prompt_build_phase_start.elapsed().as_millis() as u64;
         let prompt: String = parts.iter().map(|p| p.content.as_str()).collect();
         // Phase 6 observability — confirm BUG-2/BUG-3 wiring at runtime.
         // Logs character counts (not contents) so prompts are observable
@@ -522,6 +623,15 @@ impl AgentHarnessRunner {
             cache_stable_chars = stable_chars,
             cache_dynamic_chars = dynamic_chars,
             prompt_mode = self.default_prompt_mode.label(),
+            memory_phase_ms,
+            identity_phase_ms,
+            extra_files_phase_ms,
+            mcp_phase_ms,
+            runtime_caps_phase_ms,
+            context_phase_ms,
+            prompt_build_phase_ms,
+            cache_hit,
+            total_ms = prompt_build_start.elapsed().as_millis() as u64,
             "system prompt assembled"
         );
         Some((prompt, parts))

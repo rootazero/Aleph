@@ -67,6 +67,9 @@ pub struct ProviderCapabilities {
     pub supports_server_compaction: bool,
     /// Known to reject object schemas without `properties`
     pub requires_object_properties: bool,
+    /// Known to mis-handle local `$ref` nodes in tool parameter schemas
+    /// (Moonshot reports "infinite recursion" or "type is not defined").
+    pub requires_derefed_refs: bool,
     /// Maximum context window (for compaction threshold calculation)
     pub context_window: Option<usize>,
 }
@@ -156,6 +159,14 @@ impl PayloadPolicy {
         if self.capabilities.requires_object_properties {
             crate::providers::protocols::openai_common::tools::ensure_properties_recursive(schema);
         }
+        if self.capabilities.requires_derefed_refs {
+            crate::providers::protocols::openai_common::openai_strict_schema::deref_json_schema(
+                schema,
+            );
+            crate::providers::protocols::openai_common::openai_strict_schema::ensure_property_types(
+                schema,
+            );
+        }
     }
 }
 
@@ -183,7 +194,7 @@ pub fn detect_endpoint_class(base_url: Option<&str>) -> EndpointClass {
         "api.deepseek.com" => EndpointClass::DeepSeekNative,
         "api.groq.com" => EndpointClass::GroqNative,
         "api.mistral.ai" => EndpointClass::MistralPublic,
-        "api.moonshot.ai" | "api.moonshot.cn" => EndpointClass::MoonshotNative,
+        "api.moonshot.ai" | "api.moonshot.cn" | "api.kimi.com" => EndpointClass::MoonshotNative,
         "api.cerebras.ai" => EndpointClass::CerebrasNative,
         "api.x.ai" | "api.grok.x.ai" => EndpointClass::XAiNative,
         _ => {
@@ -241,6 +252,7 @@ pub const fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities 
             supports_logprobs: true,
             supports_server_compaction: true,
             requires_object_properties: false,
+            requires_derefed_refs: false,
             context_window: Some(128_000),
         },
         EndpointClass::OpenAiCodex => ProviderCapabilities {
@@ -254,6 +266,7 @@ pub const fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities 
             supports_logprobs: true,
             supports_server_compaction: false,
             requires_object_properties: true,
+            requires_derefed_refs: false,
             context_window: Some(128_000),
         },
         EndpointClass::AzureOpenAi => ProviderCapabilities {
@@ -267,6 +280,7 @@ pub const fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities 
             supports_logprobs: true,
             supports_server_compaction: false,
             requires_object_properties: true,
+            requires_derefed_refs: false,
             context_window: None,
         },
         EndpointClass::AnthropicPublic => ProviderCapabilities {
@@ -280,6 +294,7 @@ pub const fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities 
             supports_logprobs: false,
             supports_server_compaction: false,
             requires_object_properties: true,
+            requires_derefed_refs: false,
             context_window: Some(200_000),
         },
         EndpointClass::DeepSeekNative => ProviderCapabilities {
@@ -293,6 +308,7 @@ pub const fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities 
             supports_logprobs: false,
             supports_server_compaction: false,
             requires_object_properties: true,
+            requires_derefed_refs: false,
             // deepseek-chat / deepseek-reasoner now map to deepseek-v4-flash
             // (non-thinking / thinking modes), whose advertised context length
             // is 1M tokens — the legacy 64K reflected the V3-era window. Source:
@@ -310,6 +326,7 @@ pub const fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities 
             supports_logprobs: true,
             supports_server_compaction: false,
             requires_object_properties: true,
+            requires_derefed_refs: false,
             context_window: Some(8_000),
         },
         EndpointClass::MistralPublic => ProviderCapabilities {
@@ -323,6 +340,7 @@ pub const fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities 
             supports_logprobs: false,
             supports_server_compaction: false,
             requires_object_properties: true,
+            requires_derefed_refs: false,
             context_window: Some(128_000),
         },
         EndpointClass::MoonshotNative => ProviderCapabilities {
@@ -336,6 +354,7 @@ pub const fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities 
             supports_logprobs: false,
             supports_server_compaction: false,
             requires_object_properties: true,
+            requires_derefed_refs: true,
             context_window: Some(128_000),
         },
         EndpointClass::CerebrasNative => ProviderCapabilities {
@@ -349,6 +368,7 @@ pub const fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities 
             supports_logprobs: true,
             supports_server_compaction: false,
             requires_object_properties: true,
+            requires_derefed_refs: false,
             context_window: Some(128_000),
         },
         EndpointClass::XAiNative => ProviderCapabilities {
@@ -362,6 +382,7 @@ pub const fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities 
             supports_logprobs: true,
             supports_server_compaction: false,
             requires_object_properties: true,
+            requires_derefed_refs: false,
             context_window: Some(128_000),
         },
         EndpointClass::OpenRouter => ProviderCapabilities {
@@ -375,6 +396,7 @@ pub const fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities 
             supports_logprobs: true,
             supports_server_compaction: false,
             requires_object_properties: true,
+            requires_derefed_refs: false,
             context_window: None,
         },
         EndpointClass::Local => ProviderCapabilities {
@@ -388,6 +410,7 @@ pub const fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities 
             supports_logprobs: false,
             supports_server_compaction: false,
             requires_object_properties: true,
+            requires_derefed_refs: false,
             context_window: None,
         },
         EndpointClass::Custom => ProviderCapabilities {
@@ -401,6 +424,7 @@ pub const fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities 
             supports_logprobs: false,
             supports_server_compaction: false,
             requires_object_properties: true,
+            requires_derefed_refs: false,
             context_window: None,
         },
     }
@@ -557,6 +581,21 @@ mod tests {
         assert_eq!(
             detect_endpoint_class(Some("https://my-resource.openai.azure.com")),
             EndpointClass::AzureOpenAi
+        );
+    }
+
+    #[test]
+    fn kimi_endpoint_requires_derefed_refs_and_object_properties() {
+        let caps = resolve_capabilities(EndpointClass::MoonshotNative);
+        assert!(caps.requires_derefed_refs);
+        assert!(caps.requires_object_properties);
+    }
+
+    #[test]
+    fn test_detect_kimi() {
+        assert_eq!(
+            detect_endpoint_class(Some("https://api.kimi.com/coding/v1")),
+            EndpointClass::MoonshotNative
         );
     }
 
@@ -790,5 +829,34 @@ mod tests {
                 class
             );
         }
+    }
+
+    #[test]
+    fn kimi_policy_derefs_refs_and_fills_types() {
+        let policy = build_payload_policy(Some("https://api.kimi.com/coding/v1"), "openai-chat", None);
+        assert_eq!(policy.endpoint_class, EndpointClass::MoonshotNative);
+
+        let mut schema = serde_json::json!({
+            "$defs": {
+                "Action": {
+                    "oneOf": [
+                        { "type": "string", "const": "start" },
+                        { "type": "string", "const": "stop" }
+                    ]
+                }
+            },
+            "type": "object",
+            "properties": {
+                "action": { "$ref": "#/$defs/Action" },
+                "count": { "enum": [1, 2, 3] }
+            }
+        });
+        policy.apply_to_schema(&mut schema);
+
+        assert!(schema.get("$defs").is_none());
+        assert!(schema["properties"]["action"].get("$ref").is_none());
+        assert!(schema["properties"]["action"]["oneOf"].is_array());
+        // Missing-type enum property gets filled in.
+        assert_eq!(schema["properties"]["count"]["type"], "integer");
     }
 }

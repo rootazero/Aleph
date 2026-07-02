@@ -237,11 +237,9 @@ fn test_build_request_beta_header_present() {
         .get("anthropic-beta")
         .and_then(|v| v.to_str().ok());
     assert!(beta_header.is_some());
-    assert!(
-        beta_header
-            .unwrap()
-            .contains("interleaved-thinking-2025-05-14")
-    );
+    assert!(beta_header
+        .unwrap()
+        .contains("interleaved-thinking-2025-05-14"));
 }
 #[test]
 fn build_request_strips_sampling_params_when_thinking_enabled() {

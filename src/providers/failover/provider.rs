@@ -9,22 +9,22 @@ use std::time::Instant;
 use crate::config::types::{LoadBalanceStrategy, RouteMode};
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
-use crate::providers::capability_gate::{RequestRequirements, retain_capable_models};
+use crate::providers::capability_gate::{retain_capable_models, RequestRequirements};
 use crate::providers::llm_retry::{backoff_delay, is_transient_overload};
 use crate::providers::load_stats::LoadStats;
 use crate::providers::route_handle::RouteHandle;
 use crate::providers::route_policy::{
-    CandidateAction, EndpointTier, RateLimits, RouteTargets, classify_candidate, order_candidates,
-    order_candidates_balanced,
+    classify_candidate, order_candidates, order_candidates_balanced, CandidateAction, EndpointTier,
+    RateLimits, RouteTargets,
 };
 use crate::providers::{AiProvider, DefaultProviderHandle};
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
 use crate::sync_primitives::Arc;
 
-use super::decision::{Decision, FailureKind, decide};
+use super::decision::{decide, Decision, FailureKind};
 use super::health::{CircuitState, FailoverHealth, ModelCooldown, ProviderCooldown};
 use super::{
-    CIRCUIT_OPEN_THRESHOLD, DEFAULT_MODEL_COOLDOWN, FailoverConfig, FailoverNode, MAX_COOLDOWN,
+    FailoverConfig, FailoverNode, CIRCUIT_OPEN_THRESHOLD, DEFAULT_MODEL_COOLDOWN, MAX_COOLDOWN,
     MAX_OVERLOAD_RETRY_DELAY, MAX_RETRY_DELAY,
 };
 
@@ -249,7 +249,11 @@ impl FailoverProvider {
                 kept.push(m.clone());
             }
         }
-        if kept.is_empty() { models } else { kept }
+        if kept.is_empty() {
+            models
+        } else {
+            kept
+        }
     }
 
     /// The load-balancing strategy to apply *now*: the live handle if attached,
@@ -899,7 +903,7 @@ impl AiProvider for FailoverProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::{EndpointTier, unpriced_cost};
+    use super::{unpriced_cost, EndpointTier};
 
     #[test]
     fn unpriced_local_is_free_and_sorts_first() {
