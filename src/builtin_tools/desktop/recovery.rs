@@ -18,7 +18,10 @@ pub(super) fn with_hint(message: String) -> String {
              a role plus element_title, or add x/y as a nearest-center hint. \
              Do not retry unchanged.",
         )
-    } else if lower.contains("window not found") || lower.contains("no window") {
+    } else if lower.contains("window not found")
+        || lower.contains("no window")
+        || lower.contains("window operation failed")
+    {
         Some(
             "Window ids go stale — re-run window_list and use a fresh id. \
              Do not retry unchanged.",
@@ -28,8 +31,11 @@ pub(super) fn with_hint(message: String) -> String {
             "A system permission is missing. Run desktop_check_permissions and \
              surface the guide steps to the user; do not retry until granted.",
         )
-    } else if lower.contains("bridgedisabled") || lower.contains("bridge backoff")
+    } else if lower.contains("bridgedisabled")
+        || lower.contains("bridge backoff")
         || lower.contains("bridgebackoff")
+        || lower.contains("bridge disabled")
+        || lower.contains("backing off")
     {
         Some(
             "The desktop helper is restarting. Wait a few seconds and retry \
@@ -77,5 +83,23 @@ mod tests {
     fn permission_denied_points_at_guide() {
         let out = with_hint("ax.query_tree RPC: permission denied: accessibility".into());
         assert!(out.contains("desktop_check_permissions"));
+    }
+
+    #[test]
+    fn value_mismatch_points_at_type_text() {
+        let out = with_hint(
+            "Value written but read-back did not match (value_mismatch). \
+             Re-observe before proceeding."
+                .into(),
+        );
+        assert!(out.contains("Hint:"));
+        assert!(out.contains("type_text"));
+    }
+
+    #[test]
+    fn window_operation_failed_points_at_stale_ids() {
+        let out = with_hint("window operation failed: window 123 not accessible".into());
+        assert!(out.contains("Hint:"));
+        assert!(out.contains("window_list"));
     }
 }

@@ -1163,10 +1163,10 @@ fn ax_action_output(r: AxActionResult) -> DesktopOutput {
         .is_some_and(|v| v.state == "verified");
     let message = r.verification.as_ref().and_then(|v| {
         (v.state == "unverified").then(|| {
-            format!(
+            super::recovery::with_hint(format!(
                 "Value written but read-back did not match ({}). Re-observe before proceeding.",
                 v.reason.as_deref().unwrap_or("unknown")
-            )
+            ))
         })
     });
     DesktopOutput {
