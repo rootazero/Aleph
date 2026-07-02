@@ -277,7 +277,7 @@ pub async fn handle_update(
                 entry.provider_type = backend_dto.provider_type.clone();
                 // api_key stays None in config — vault is the source
                 entry.api_key = None;
-                entry.base_url = backend_dto.base_url.clone();
+                entry.base_url = normalize_optional_string(backend_dto.base_url.clone());
                 entry.timeout_seconds = backend_dto.timeout_seconds;
                 entry.verified = false; // Config change resets verified
             }
@@ -378,29 +378,52 @@ pub async fn handle_test(
                 .clone()
                 .or_else(|| resolve_fetch_api_key(&params.name, &vault));
 
-            let backend_cfg = FetchBackendConfig {
-                provider_type: "crawl4ai".to_string(),
-                api_key: resolved_key,
-                base_url: params.base_url.clone(),
-                timeout_seconds: params.timeout_seconds,
-                verified: false,
-            };
-
-            match Crawl4aiFetchProvider::from_backend(&backend_cfg) {
-                Some(provider) => match provider.fetch("https://example.com").await {
-                    Ok(_) => FetchTestResult {
-                        success: true,
-                        message: "Connection successful".to_string(),
-                    },
-                    Err(e) => FetchTestResult {
-                        success: false,
-                        message: format!("Fetch failed: {e}"),
-                    },
-                },
+            // Validate base_url upfront: the provider factory collapses both
+            // "missing" and "bad scheme" into `None`, which used to surface
+            // as a misleading "No base URL configured" for scheme typos.
+            let base_url = normalize_optional_string(params.base_url.clone());
+            match &base_url {
                 None => FetchTestResult {
                     success: false,
                     message: "No base URL configured for crawl4ai".to_string(),
                 },
+                Some(url)
+                    if !url.to_lowercase().starts_with("http://")
+                        && !url.to_lowercase().starts_with("https://") =>
+                {
+                    FetchTestResult {
+                        success: false,
+                        message: format!(
+                            "Base URL must start with http:// or https:// (got \"{url}\")"
+                        ),
+                    }
+                }
+                Some(_) => {
+                    let backend_cfg = FetchBackendConfig {
+                        provider_type: "crawl4ai".to_string(),
+                        api_key: resolved_key,
+                        base_url,
+                        timeout_seconds: params.timeout_seconds,
+                        verified: false,
+                    };
+
+                    match Crawl4aiFetchProvider::from_backend(&backend_cfg) {
+                        Some(provider) => match provider.fetch("https://example.com").await {
+                            Ok(_) => FetchTestResult {
+                                success: true,
+                                message: "Connection successful".to_string(),
+                            },
+                            Err(e) => FetchTestResult {
+                                success: false,
+                                message: format!("Fetch failed: {e}"),
+                            },
+                        },
+                        None => FetchTestResult {
+                            success: false,
+                            message: "No base URL configured for crawl4ai".to_string(),
+                        },
+                    }
+                }
             }
         }
         "firecrawl" => {
@@ -534,6 +557,65 @@ mod tests {
             Some("https://api.firecrawl.dev")
         );
         assert!(firecrawl_base_url_from_search(None).is_none());
+    }
+
+    fn test_vault(dir: &tempfile::TempDir) -> Arc<SharedTokenManager> {
+        let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
+        let vault = Arc::new(SharedTokenManager::new(
+            store,
+            dir.path().join("test.vault").to_string_lossy().to_string(),
+        ));
+        let _ = vault.generate_token();
+        vault
+    }
+
+    // A base_url without an http(s) scheme must produce a scheme error, not
+    // the misleading "No base URL configured" (the provider factory collapses
+    // both cases into `None`; the handler must distinguish them upfront).
+    #[tokio::test]
+    async fn handle_test_crawl4ai_rejects_schemeless_base_url_with_clear_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(RwLock::new(Config::default()));
+        let vault = test_vault(&dir);
+
+        let params = serde_json::json!({
+            "name": "crawl4ai",
+            "provider_type": "crawl4ai",
+            "base_url": "localhost:11235"
+        });
+        let request =
+            JsonRpcRequest::with_id("fetch_config.test", Some(params), serde_json::json!(1));
+        let response = handle_test(request, config, vault).await;
+        let result: FetchTestResult =
+            serde_json::from_value(response.result.expect("result")).unwrap();
+        assert!(!result.success);
+        assert!(
+            result.message.contains("http://"),
+            "message must explain the scheme requirement, got: {}",
+            result.message
+        );
+    }
+
+    // No base_url anywhere (params or config) → the original "not configured"
+    // message. Whitespace-only input counts as missing.
+    #[tokio::test]
+    async fn handle_test_crawl4ai_reports_missing_base_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(RwLock::new(Config::default()));
+        let vault = test_vault(&dir);
+
+        let params = serde_json::json!({
+            "name": "crawl4ai",
+            "provider_type": "crawl4ai",
+            "base_url": "   "
+        });
+        let request =
+            JsonRpcRequest::with_id("fetch_config.test", Some(params), serde_json::json!(1));
+        let response = handle_test(request, config, vault).await;
+        let result: FetchTestResult =
+            serde_json::from_value(response.result.expect("result")).unwrap();
+        assert!(!result.success);
+        assert_eq!(result.message, "No base URL configured for crawl4ai");
     }
 
     // Strategy V defense-in-depth: even if a client includes a firecrawl entry
