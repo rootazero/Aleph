@@ -466,13 +466,28 @@ impl TokenUsage {
     /// Tokens occupying the model's context window as of this call: the full
     /// prompt actually sent ([`Self::prompt_tokens_total`]) plus the tokens
     /// generated on this call (which join the context for the next turn).
+    ///
+    /// Reasoning/thinking tokens are folded in without double-counting:
+    ///
+    /// * OpenAI/Anthropic report them as part of `output_tokens` already.
+    /// * Gemini reports `thoughtsTokenCount` disjoint from `candidatesTokenCount`,
+    ///   so when thinking exceeds output we add the excess on top.
+    ///
     /// Provider-aware via `prompt_tokens_total` — no cache double-count. This
     /// is the display-gauge numerator (current occupancy), distinct from the
     /// run-cumulative token counters.
     #[must_use]
     pub fn context_occupancy_tokens(&self) -> u64 {
-        self.prompt_tokens_total()
-            .saturating_add(u64::from(self.output_tokens))
+        let prompt = self.prompt_tokens_total();
+        let output = u64::from(self.output_tokens);
+        let thinking = u64::from(self.thinking_tokens.unwrap_or(0));
+        // Avoid double-counting reasoning that is already inside output.
+        let generated = if thinking > output {
+            output.saturating_add(thinking)
+        } else {
+            output
+        };
+        prompt.saturating_add(generated)
     }
 }
 
@@ -732,5 +747,48 @@ mod tests {
         };
         // prompt = 1000（cache 已在内）; + output 30 = 1030
         assert_eq!(u.context_occupancy_tokens(), 1030);
+    }
+
+    #[test]
+    fn context_occupancy_adds_disjoint_gemini_thinking() {
+        // Gemini shape: thoughtsTokenCount is disjoint from candidatesTokenCount.
+        let u = TokenUsage {
+            input_tokens: 100,
+            output_tokens: 5,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            thinking_tokens: Some(100),
+            cost: None,
+        };
+        // prompt 100 + output 5 + disjoint thinking 100 = 205
+        assert_eq!(u.context_occupancy_tokens(), 205);
+    }
+
+    #[test]
+    fn context_occupancy_avoids_double_counting_openai_reasoning() {
+        // OpenAI o-series: output_tokens already includes reasoning_tokens.
+        let u = TokenUsage {
+            input_tokens: 100,
+            output_tokens: 1000,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            thinking_tokens: Some(200),
+            cost: None,
+        };
+        // prompt 100 + output 1000 (already contains reasoning) = 1100
+        assert_eq!(u.context_occupancy_tokens(), 1100);
+    }
+
+    #[test]
+    fn context_occupancy_no_thinking_falls_back_to_output() {
+        let u = TokenUsage {
+            input_tokens: 100,
+            output_tokens: 40,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            thinking_tokens: None,
+            cost: None,
+        };
+        assert_eq!(u.context_occupancy_tokens(), 140);
     }
 }

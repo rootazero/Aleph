@@ -309,7 +309,7 @@ impl HarnessRunner for AgentHarnessRunner {
                     parent,
                     store.clone(),
                     routing_attribution.clone(),
-                    routing_model_id,
+                    routing_model_id.clone(),
                     routing_provider_id.unwrap_or_default(),
                     spec.agent.clone(),
                 ))
@@ -595,11 +595,16 @@ impl HarnessRunner for AgentHarnessRunner {
         // the renderer treats `None` and `Unknown` differently (None ==
         // "did not attempt"; Unknown == "attempted, no rate").
         // Resolve the model id once — both the cost estimate and the context
-        // gauge denominator key off it. Falls back to the provider name when
-        // the brain carries no explicit model.
-        let model: &str = match &spec.brain {
-            crate::orchestrator::flow_spec::BrainRef::Strict { model: Some(m), .. } => m.as_str(),
-            _ => provider_name.as_str(),
+        // gauge denominator key off it. `routing_model_id` already folds the
+        // session `select_model` pick, the agent's `model_hint`, and the brain's
+        // strict pin (see Step 3 above); only the genuinely dynamic brain path
+        // falls back to the provider name, matching the previous fallback but
+        // avoiding the bug where a non-strict brain with an agent hint was
+        // looked up by provider name and hit the conservative 128k window.
+        let model: &str = if routing_model_id == "(dynamic)" {
+            provider_name.as_str()
+        } else {
+            routing_model_id.as_str()
         };
         let estimated_cost =
             if token_breakdown == crate::orchestrator::dispatch::TokenBreakdown::default() {
