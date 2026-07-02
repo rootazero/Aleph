@@ -381,6 +381,15 @@ fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
             args.text.clone().unwrap_or_default(),
         )),
 
+        "set_value" => Some((
+            ActionType::DesktopType,
+            args.text.clone().unwrap_or_default(),
+        )),
+        "ax_action" => Some((
+            ActionType::DesktopClick,
+            format!("ax_action({})", args.ax_action_name.as_deref().unwrap_or("?")),
+        )),
+
         _ => Some((
             ActionType::DesktopClick,
             format!("unknown: {}", args.action),
@@ -404,7 +413,7 @@ fn check_hard_block(args: &DesktopArgs) -> Option<DesktopOutput> {
         // that would otherwise sidestep this content gate. Hold it to the same
         // bar so the staged-then-pasted path cannot smuggle a catastrophic
         // payload onto a live desktop.
-        "type_text" | "paste" | "clipboard_write" => args
+        "type_text" | "paste" | "clipboard_write" | "set_value" => args
             .text
             .as_deref()
             .and_then(|t| safety::check_typed_text(t).err()),
@@ -500,6 +509,8 @@ Actions:
 - batch: Execute multiple actions sequentially. Requires actions array.
 - paste: Paste text via clipboard (Cmd+V). Better for multiline text than type_text.
 - wait_visual: Wait until the screen settles. Polls screenshots and returns when two consecutive captures match, or after `timeout_ms` (default 5000, max 60000). Use after navigation or clicks that trigger animation. Returns `{stable: bool, polls, elapsed_ms}` — `stable=false` means timeout, not failure.
+- set_value: Set a text field's value directly via the accessibility API and VERIFY the write by reading it back — the reliable way to fill forms (multiline, non-ASCII, replacing existing content). Locate the element with role ("AXTextField") and/or element_title, optionally x/y as a nearest-center hint (honors coord_space). Requires text. Result carries verification.state = "verified" | "unverified". Prefer this over click + type_text; type_text is a blind synthetic fallback.
+- ax_action: Trigger a native accessibility action (ax_action_name, e.g. "AXPress", "AXShowMenu") on an element located the same way. More reliable than a synthetic click for buttons/menus when the app exposes AX actions. macOS only today; other platforms report the capability as unavailable.
 
 Examples:
 {"action":"click","x":500,"y":300}
@@ -521,6 +532,8 @@ Examples:
 {"action":"wait_visual","timeout_ms":8000,"region":{"x":0,"y":0,"width":1280,"height":800}}
 {"action":"screenshot","format":"jpeg","quality":0.9,"max_width":1920}
 {"action":"screenshot","describe":true}
+{"action":"set_value","role":"AXTextField","element_title":"Email","text":"a@b.c"}
+{"action":"ax_action","ax_action_name":"AXPress","element_title":"Save"}
 
 Coordinate space — by default, `x` / `y` / `start_x` / `end_x` / `region` are pixels (top-left origin). To use UI-TARS-style normalized [0, 1000] × [0, 1000] coordinates that scale to any display, set `coord_space:"normalized"` (and optionally `coord_factors:[w,h]` to override the 1000×1000 default). The runtime rescales against the primary display (or `display_id`) before dispatch.
 

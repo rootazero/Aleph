@@ -171,6 +171,10 @@ mod tests {
             coord_factors: None,
             script: None,
             describe: None,
+            role: None,
+            element_title: None,
+            ax_action_name: None,
+            pid: None,
         }
     }
 

@@ -183,6 +183,22 @@ pub struct DesktopArgs {
     /// Defaults to off, keeping the screenshot output byte-identical.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub describe: Option<bool>,
+
+    /// AX role filter for `set_value` / `ax_action`, e.g. "AXTextField".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+
+    /// Element title/label to match for `set_value` / `ax_action`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element_title: Option<String>,
+
+    /// Native AX action name for `ax_action`, e.g. "AXPress".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ax_action_name: Option<String>,
+
+    /// Target process ID for `set_value` / `ax_action`. Omit for the frontmost app.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
 }
 
 /// A single sub-action inside a `batch` operation.
@@ -331,6 +347,22 @@ pub struct DesktopBatchAction {
     /// models. See [`DesktopArgs::describe`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub describe: Option<bool>,
+
+    /// AX role filter for `set_value` / `ax_action`, e.g. "AXTextField".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+
+    /// Element title/label to match for `set_value` / `ax_action`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element_title: Option<String>,
+
+    /// Native AX action name for `ax_action`, e.g. "AXPress".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ax_action_name: Option<String>,
+
+    /// Target process ID for `set_value` / `ax_action`. Omit for the frontmost app.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
 }
 
 impl From<&DesktopBatchAction> for DesktopArgs {
@@ -370,6 +402,10 @@ impl From<&DesktopBatchAction> for DesktopArgs {
             coord_factors: b.coord_factors,
             script: None,
             describe: b.describe,
+            role: b.role.clone(),
+            element_title: b.element_title.clone(),
+            ax_action_name: b.ax_action_name.clone(),
+            pid: b.pid,
         }
     }
 }
