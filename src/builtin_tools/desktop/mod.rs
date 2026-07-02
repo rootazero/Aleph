@@ -621,15 +621,6 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
             return Ok(out);
         }
 
-        // 1.6 Blocked-app guard: never drive a credential vault. Leaf mutating
-        //     actions only — batch sub-actions re-enter call() and get checked
-        //     individually against the then-current frontmost app.
-        if args.action != "batch" && classify_approval(&args).is_some() {
-            if let Some(out) = self.check_blocked_app(&args).await {
-                return Ok(out);
-            }
-        }
-
         // 1.5 Loop-control verbs (UI-TARS `finished` / `call_user`). The model
         //     emits these to signal task completion or to hand control back to
         //     the user; they touch no desktop state. Honor them with a benign
@@ -640,6 +631,15 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
         //     host honors the signal, it does not drive a loop.
         if let Some(out) = loop_control_output(&args) {
             return Ok(out);
+        }
+
+        // 1.6 Blocked-app guard: never drive a credential vault. Leaf mutating
+        //     actions only — batch sub-actions re-enter call() and get checked
+        //     individually against the then-current frontmost app.
+        if args.action != "batch" && classify_approval(&args).is_some() {
+            if let Some(out) = self.check_blocked_app(&args).await {
+                return Ok(out);
+            }
         }
 
         // 2. Normalize coordinate space for leaf actions. Batches defer per

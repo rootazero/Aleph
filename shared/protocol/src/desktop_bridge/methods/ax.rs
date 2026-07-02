@@ -68,7 +68,11 @@ pub struct AxLocator {
     /// Title/label to match (exact beats contains, case-insensitive).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Global screen-point `[x, y]` used as a nearest-center tiebreak.
+    /// Global screen-point `[x, y]` used as a nearest-center tiebreak. The
+    /// bridge compares this against AX bounds in global screen POINTS, so a
+    /// `coord_space:"normalized"`-derived pixel center can be off by the
+    /// display scale factor on Retina displays — supply `role`/`title` as
+    /// the primary locator key; `center` only breaks ties.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub center: Option<[f64; 2]>,
 }
