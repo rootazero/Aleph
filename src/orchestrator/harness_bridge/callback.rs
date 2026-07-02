@@ -13,6 +13,9 @@ use tokio::sync::broadcast;
 /// * `on_tool_call(name)` → `FlowStreamEvent::ToolCallStart { id: "legacy", name, args: null }`
 /// * `on_tool_call_start(id, name, args)` → `FlowStreamEvent::ToolCallStart { id, name, args }`
 /// * `on_tool_call_done(id, result, error)` → `FlowStreamEvent::ToolCallDone { id, result, error }`
+/// * `on_context_usage(tokens, total)` → `FlowStreamEvent::ContextGauge
+///   { context_tokens, context_window, total_tokens }` (window pre-resolved
+///   at construction; suppressed when either side is 0)
 /// * `on_safety_block(reason)` → `FlowStreamEvent::SafetyBlock { reason }`
 /// * `on_complete()` → no-op (the terminal `Complete(outcome)` event is
 ///   emitted by [`BroadcastCallback::on_complete_with_outcome`], which fires
@@ -29,11 +32,15 @@ use tokio::sync::broadcast;
 /// as the canonical log.
 pub(super) struct BroadcastCallback {
     tx: broadcast::Sender<FlowStreamEvent>,
+    /// Pre-resolved context-window denominator for this run (0 = unknown).
+    /// Paired with each `on_context_usage` occupancy so downstream consumers
+    /// get a self-contained gauge event without re-resolving the model.
+    context_window: u32,
 }
 
 impl BroadcastCallback {
-    pub(super) const fn new(tx: broadcast::Sender<FlowStreamEvent>) -> Self {
-        Self { tx }
+    pub(super) const fn new(tx: broadcast::Sender<FlowStreamEvent>, context_window: u32) -> Self {
+        Self { tx, context_window }
     }
 }
 
@@ -75,6 +82,19 @@ impl HarnessCallback for BroadcastCallback {
             result: result.cloned(),
             error: error.map(|s| s.to_string()),
         });
+    }
+
+    fn on_context_usage(&mut self, context_tokens: u32, total_tokens: u64) {
+        // Both sides must be known for the panel to render a fraction; a
+        // zero window (unresolvable model, no override) keeps the gauge on
+        // its terminal `run_complete` cadence only.
+        if context_tokens > 0 && self.context_window > 0 {
+            let _ = self.tx.send(FlowStreamEvent::ContextGauge {
+                context_tokens,
+                context_window: self.context_window,
+                total_tokens,
+            });
+        }
     }
 
     fn on_safety_block(&mut self, reason: &str) {

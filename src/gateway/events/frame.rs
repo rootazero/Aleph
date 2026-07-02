@@ -68,6 +68,15 @@ pub enum GatewayEventFrame {
         #[serde(default)]
         is_intermediate: bool,
     },
+    /// Mid-run context-window occupancy after one LLM call (see
+    /// `StreamEvent::ContextGauge`).
+    ContextGauge {
+        run_id: String,
+        seq: u64,
+        context_tokens: u32,
+        context_window: u32,
+        total_tokens: u64,
+    },
     RunComplete {
         run_id: String,
         seq: u64,
@@ -325,6 +334,19 @@ impl From<StreamEvent> for GatewayEventFrame {
                 is_final,
                 is_intermediate,
             },
+            StreamEvent::ContextGauge {
+                run_id,
+                seq,
+                context_tokens,
+                context_window,
+                total_tokens,
+            } => Self::ContextGauge {
+                run_id,
+                seq,
+                context_tokens,
+                context_window,
+                total_tokens,
+            },
             StreamEvent::RunComplete {
                 run_id,
                 seq,
@@ -419,6 +441,7 @@ impl GatewayEventFrame {
             Self::ToolEnd { .. } => "agent.tool.end",
             Self::AgentTrace { .. } => "agent.trace",
             Self::ResponseChunk { .. } => "agent.response.chunk",
+            Self::ContextGauge { .. } => "agent.context.gauge",
             Self::RunComplete { .. } => "agent.run.complete",
             Self::RunError { .. } => "agent.run.error",
             Self::AskUser { .. } => "agent.ask.user",
@@ -467,6 +490,7 @@ impl GatewayEventFrame {
             Self::ToolEnd { .. } => Some("stream.tool_end"),
             Self::AgentTrace { .. } => Some("stream.agent_trace"),
             Self::ResponseChunk { .. } => Some("stream.response_chunk"),
+            Self::ContextGauge { .. } => Some("stream.context_gauge"),
             Self::RunComplete { .. } => Some("stream.run_complete"),
             Self::RunError { .. } => Some("stream.run_error"),
             Self::AskUser { .. } => Some("stream.ask_user"),
@@ -503,6 +527,29 @@ mod tests {
         let f = GatewayEventFrame::TokenRotated;
         let json = serde_json::to_string(&f).unwrap();
         assert_eq!(json, r#"{"type":"token_rotated"}"#);
+    }
+
+    /// Panel contract for the mid-run gauge feed: `stream.context_gauge`
+    /// method (the panel rewrites the prefix to `run.context_gauge`), tag
+    /// `"type":"context_gauge"`, and the same field names as the
+    /// `RunSummary` gauge fields so the panel projector applies unchanged.
+    #[test]
+    fn context_gauge_frame_wire_shape() {
+        let f = GatewayEventFrame::ContextGauge {
+            run_id: "r1".into(),
+            seq: 7,
+            context_tokens: 42_000,
+            context_window: 200_000,
+            total_tokens: 55_000,
+        };
+        assert_eq!(f.stream_method(), Some("stream.context_gauge"));
+        assert_eq!(f.topic_name(), "agent.context.gauge");
+        let v: serde_json::Value = serde_json::to_value(&f).unwrap();
+        assert_eq!(v["type"], "context_gauge");
+        assert_eq!(v["run_id"], "r1");
+        assert_eq!(v["context_tokens"], 42_000);
+        assert_eq!(v["context_window"], 200_000);
+        assert_eq!(v["total_tokens"], 55_000);
     }
 }
 

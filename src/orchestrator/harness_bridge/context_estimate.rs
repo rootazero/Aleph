@@ -87,6 +87,29 @@ pub fn compose_estimate(
     }
 }
 
+/// Cap a raw estimate at the occupancy the context-management system lets a
+/// real turn reach. The raw sum walks the session's *uncompacted* event log
+/// (compaction rewrites only the in-memory prompt, never the log — see
+/// `harness/agent/prompt.rs`), so a long, previously-compacted session would
+/// otherwise estimate near/above 100% while its next real turn compacts back
+/// under the warning band. `warning_threshold × window` is a deliberate upper
+/// bound of that band (the threshold is configured against the *usable*
+/// budget ≤ window), so the cap never understates the real next-turn
+/// occupancy regime. No-op when compaction is disabled (call sites pass the
+/// raw estimate through) or when the estimate is already below the cap.
+#[must_use]
+pub fn cap_by_compaction(est: ContextEstimate, warning_threshold: f64) -> ContextEstimate {
+    if !(warning_threshold > 0.0 && warning_threshold <= 1.0) {
+        return est;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let cap = (f64::from(est.window_tokens) * warning_threshold).round() as u32;
+    ContextEstimate {
+        used_tokens: est.used_tokens.min(cap),
+        window_tokens: est.window_tokens,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +135,40 @@ mod tests {
     #[test]
     fn tool_schema_tokens_empty_is_zero() {
         assert_eq!(tool_schema_tokens(&[], ESTIMATE_RATIO), 0);
+    }
+
+    #[test]
+    fn cap_by_compaction_caps_overflow_at_warning_band() {
+        // A previously-compacted long session: raw walk of the uncompacted
+        // log lands above the window, but the next real turn compacts back
+        // under the warning band — the estimate must reflect that regime.
+        let raw = ContextEstimate {
+            used_tokens: 300_000,
+            window_tokens: 200_000,
+        };
+        let capped = cap_by_compaction(raw, 0.70);
+        assert_eq!(capped.used_tokens, 140_000);
+        assert_eq!(capped.window_tokens, 200_000);
+    }
+
+    #[test]
+    fn cap_by_compaction_passes_small_estimates_through() {
+        let raw = ContextEstimate {
+            used_tokens: 50_000,
+            window_tokens: 200_000,
+        };
+        assert_eq!(cap_by_compaction(raw, 0.70), raw);
+    }
+
+    #[test]
+    fn cap_by_compaction_ignores_degenerate_thresholds() {
+        let raw = ContextEstimate {
+            used_tokens: 300_000,
+            window_tokens: 200_000,
+        };
+        // 0.0 and >1.0 are defensive no-ops, mirroring the budget config gate.
+        assert_eq!(cap_by_compaction(raw, 0.0), raw);
+        assert_eq!(cap_by_compaction(raw, 1.5), raw);
     }
 
     #[test]

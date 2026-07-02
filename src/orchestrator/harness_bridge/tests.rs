@@ -40,7 +40,7 @@ use session_seed::seed_session;
 #[test]
 fn broadcast_callback_fans_lifecycle_events() {
     let (tx, mut rx) = broadcast::channel::<FlowStreamEvent>(16);
-    let mut cb = super::callback::BroadcastCallback::new(tx);
+    let mut cb = super::callback::BroadcastCallback::new(tx, 200_000);
 
     cb.on_delta("hello ");
     cb.on_delta("world");
@@ -79,7 +79,7 @@ fn broadcast_callback_on_complete_with_outcome_emits_terminal_event() {
     use crate::orchestrator::dispatch::{FlowOutcome, TerminateReason, TokenBreakdown};
 
     let (tx, mut rx) = broadcast::channel::<FlowStreamEvent>(16);
-    let mut cb = super::callback::BroadcastCallback::new(tx);
+    let mut cb = super::callback::BroadcastCallback::new(tx, 200_000);
 
     let outcome = FlowOutcome {
         final_text: "all done".into(),
@@ -161,13 +161,51 @@ fn classify_harness_error_4500_is_not_server_transient() {
     assert!(matches!(out, FlowError::Internal(_)));
 }
 
+/// Mid-run gauge cadence: `on_context_usage` fans a self-contained
+/// `ContextGauge` event carrying the construction-time window, and stays
+/// silent when either side is 0 (unknown window / no billed tokens).
+#[test]
+fn broadcast_callback_emits_context_gauge_with_prewired_window() {
+    let (tx, mut rx) = broadcast::channel::<FlowStreamEvent>(16);
+    let mut cb = super::callback::BroadcastCallback::new(tx, 200_000);
+
+    cb.on_context_usage(0, 10); // no billed tokens → suppressed
+    cb.on_context_usage(42_000, 55_000);
+
+    let received: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert_eq!(received.len(), 1, "zero-occupancy call must be suppressed");
+    match &received[0] {
+        FlowStreamEvent::ContextGauge {
+            context_tokens,
+            context_window,
+            total_tokens,
+        } => {
+            assert_eq!(*context_tokens, 42_000);
+            assert_eq!(*context_window, 200_000);
+            assert_eq!(*total_tokens, 55_000);
+        }
+        other => panic!("expected ContextGauge, got {other:?}"),
+    }
+}
+
+#[test]
+fn broadcast_callback_suppresses_context_gauge_without_window() {
+    let (tx, mut rx) = broadcast::channel::<FlowStreamEvent>(16);
+    let mut cb = super::callback::BroadcastCallback::new(tx, 0);
+    cb.on_context_usage(42_000, 55_000);
+    assert!(
+        rx.try_recv().is_err(),
+        "unknown window (0) must not emit a gauge event"
+    );
+}
+
 #[test]
 fn broadcast_callback_is_silent_when_no_receivers() {
     // No active receiver — `send` returns Err(SendError) but
     // BroadcastCallback swallows it so the harness loop is unaffected.
     let (tx, _rx) = broadcast::channel::<FlowStreamEvent>(1);
     drop(_rx);
-    let mut cb = super::callback::BroadcastCallback::new(tx);
+    let mut cb = super::callback::BroadcastCallback::new(tx, 200_000);
     cb.on_delta("nobody is listening");
     cb.on_tool_call("read_file");
     cb.on_complete();

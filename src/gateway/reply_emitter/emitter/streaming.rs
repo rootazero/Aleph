@@ -594,6 +594,7 @@ impl EventEmitter for ReplyEmitter {
             | StreamEvent::ToolUpdate { .. }
             | StreamEvent::AgentTrace { .. }
             | StreamEvent::UncertaintySignal { .. }
+            | StreamEvent::ContextGauge { .. }
             | StreamEvent::RunRetrying { .. } => {
                 debug!("Ignoring event for channel routing: {:?}", event);
             }

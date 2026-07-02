@@ -180,6 +180,7 @@ impl EventEmitter for SseEventEmitter {
             StreamEvent::AskUser { .. } => None,
             StreamEvent::UncertaintySignal { .. } => None,
             StreamEvent::ModelResolved { .. } => None,
+            StreamEvent::ContextGauge { .. } => None,
             StreamEvent::RunRetrying { .. } => None,
         };
 

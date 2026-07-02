@@ -71,6 +71,11 @@ impl AiProvider for ModelOverrideProvider {
     fn behavior_hint(&self) -> Option<std::borrow::Cow<'_, str>> {
         self.inner.behavior_hint()
     }
+
+    /// The stamped model IS the serving model — this wrapper exists to pin it.
+    fn serving_model_hint(&self) -> Option<std::borrow::Cow<'_, str>> {
+        Some(std::borrow::Cow::Borrowed(self.model.as_str()))
+    }
 }
 
 #[cfg(test)]
@@ -183,5 +188,17 @@ mod tests {
         }
         let wrapped = ModelOverrideProvider::new(Arc::new(HintInner), "m");
         assert_eq!(wrapped.behavior_hint().as_deref(), Some("strict"));
+    }
+
+    /// The stamped model is the serving model — the wrapper reports it even
+    /// when the inner provider has no opinion (default `None`), so the
+    /// context-gauge window resolves from the actually-pinned model.
+    #[test]
+    fn serving_model_hint_reports_stamped_model() {
+        let inner = Arc::new(Recorder {
+            seen: Mutex::new(None),
+        });
+        let wrapped = ModelOverrideProvider::new(inner, "kimi-k2.7");
+        assert_eq!(wrapped.serving_model_hint().as_deref(), Some("kimi-k2.7"));
     }
 }

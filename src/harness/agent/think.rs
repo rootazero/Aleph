@@ -951,6 +951,19 @@ impl AgentHarness {
         // excludes it (Anthropic already includes it in `output`; Gemini
         // reports it separately).
         self.accumulate_token_breakdown(&response.usage);
+        // Surface this turn's context occupancy to the callback so the
+        // gateway can stream a live gauge update per LLM call — including the
+        // drop right after a mid-run compaction — instead of the panel waiting
+        // for the terminal run summary. Pure observation (R10): the harness
+        // reports what the provider billed; window resolution and rendering
+        // stay outside.
+        if let Some(usage) = response.usage.as_ref() {
+            let occupancy =
+                u32::try_from(usage.context_occupancy_tokens()).unwrap_or(u32::MAX);
+            if occupancy > 0 {
+                callback.on_context_usage(occupancy, self.total_tokens());
+            }
+        }
         // Cycle 3 — OUTPUT tokens only (not total), required by
         // DiminishingReturnsDetector's window threshold semantics.
         let output_tokens = response
