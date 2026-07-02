@@ -134,9 +134,9 @@ Bitwarden、Dashlane、LastPass、NordPass、Proton Pass × bundle-id 前缀 +
   frontmost 查询失败时**放行**（fail-open：这是纵深防御的附加层，不因
   查询抖动阻断正常操作；审批策略与内容硬阻断仍在）。
 - **目标守卫**：`launch_app`/`quit_app`/`restart_app` 的 bundle_id/名称
-  命中黑名单 → 同样拒绝（不帮模型把密码管理器带到前台）；`focus_window`
-  经 `window_list` 反查 `window_id` 的 owner 名称后同判（查不到即放行，
-  与前台守卫同一 fail-open 语义）。
+  命中黑名单 → 同样拒绝（不帮模型把密码管理器带到前台）。`focus_window`
+  不单独设卡（YAGNI）：把 vault 带到前台本身无害，任何后续变更动作都会
+  撞上前台守卫。
 - 位置：`check_hard_block` 同层（approval 之下的无条件层），但因需
   async 平台查询，作为 `call()` 中紧邻 hard_block 的独立 pre-flight。
 
