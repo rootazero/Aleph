@@ -104,6 +104,9 @@ fn GalaxyCanvasView() -> impl IntoView {
     // 3D galaxy data built from the full graph.query response via force-layout seed.
     let galaxy_data: RwSignal<Option<gl::GraphData>> = RwSignal::new(None);
 
+    // (shown_count, total) when graph.query hit the node cap; None otherwise.
+    let truncation: RwSignal<Option<(usize, usize)>> = RwSignal::new(None);
+
     // Intent channels: host → GalaxyCanvas → Scene (non-Send bridge via signals).
     // `focus_request` triggers fly_to_node; `highlight_request` triggers set_highlight.
     // `lod_request` controls edge density (0 = all edges, 1 = backbone only).
@@ -144,6 +147,7 @@ fn GalaxyCanvasView() -> impl IntoView {
                 // Clear 3D galaxy signals so the new agent's galaxy rebuilds from scratch.
                 // The galaxy-build Effect repopulates galaxy_data when it re-runs.
                 galaxy_data.set(None);
+                truncation.set(None);
                 focus_request.set(None);
                 highlight_request.set(None);
                 highlight_edges_request.set(None);
@@ -170,6 +174,12 @@ fn GalaxyCanvasView() -> impl IntoView {
             if let Some(ref r) = query_result {
                 // Build deterministic 3D galaxy seed from full-graph topology.
                 galaxy_data.set(Some(build_galaxy(r)));
+                // Surface a "showing top N of M" badge when the query truncated.
+                truncation.set(
+                    r.total
+                        .filter(|&t| t > r.nodes.len())
+                        .map(|t| (r.nodes.len(), t)),
+                );
             }
         });
     });
@@ -321,6 +331,13 @@ fn GalaxyCanvasView() -> impl IntoView {
                 hovered_node=hover_intent
                 highlight_edges_request=highlight_edges_request
             />
+            // Truncation badge: shown when graph.query returned fewer nodes than the agent has.
+            {move || truncation.get().map(|(shown, total)| view! {
+                <div class="absolute top-2 right-2 pointer-events-none text-[11px] text-white/70
+                            bg-black/40 rounded px-2 py-0.5 select-none">
+                    {format!("showing top {shown} of {total}")}
+                </div>
+            })}
             // NodeDetailPanel: overlay when a node is selected in the galaxy.
             {move || selected_node.get().map(|_| view! {
                 <div class="absolute bottom-0 right-0 w-72 max-h-[60%] overflow-y-auto

@@ -13,6 +13,13 @@ pub struct NoteNodeDto {
     #[serde(default)]
     pub tags: Vec<String>,
     pub link_count: usize,
+    /// Louvain community id (`None` on a cold graph cache). Drives community
+    /// clustering/coloring in the galaxy (consumed by Plan 3).
+    #[serde(default)]
+    pub community_id: Option<u32>,
+    /// Note last-modified epoch seconds — drives recency visual encoding.
+    #[serde(default)]
+    pub updated_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -29,6 +36,9 @@ pub struct NoteLinkDto {
 pub struct GraphQueryResponse {
     pub nodes: Vec<NoteNodeDto>,
     pub edges: Vec<NoteLinkDto>,
+    /// Total notes for the agent; `nodes` may be truncated to the query limit.
+    #[serde(default)]
+    pub total: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
