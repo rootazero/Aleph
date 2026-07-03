@@ -53,6 +53,7 @@ mod tests {
             link_count: 0,
             pos: Vec3::new(x, y, z),
             color: [1.0, 1.0, 1.0],
+            community: None,
         }
     }
 

@@ -354,6 +354,24 @@ fn GalaxyCanvasView() -> impl IntoView {
 // Private helpers shared by GalaxyCanvasView Effects
 // ---------------------------------------------------------------------------
 
+/// Minimum brightness scale for the oldest note — keeps stale nodes visible
+/// while newer ones glow brighter.
+const RECENCY_FLOOR: f32 = 0.55;
+
+/// Map a note's `updated_at` to a brightness scale in `[RECENCY_FLOOR, 1.0]`
+/// across the graph's [oldest, newest] window. `None` (or a degenerate window)
+/// → 1.0 (full brightness, no penalty).
+fn recency_scale(updated_at: Option<i64>, oldest: i64, newest: i64) -> f32 {
+    let Some(t) = updated_at else {
+        return 1.0;
+    };
+    if newest <= oldest {
+        return 1.0;
+    }
+    let f = ((t - oldest) as f32 / (newest - oldest) as f32).clamp(0.0, 1.0);
+    RECENCY_FLOOR + (1.0 - RECENCY_FLOOR) * f
+}
+
 /// Build the initial 3D galaxy GraphData from a full-graph query response.
 ///
 /// Node positions come from `ForceLayout::seed` (deterministic, hash-derived)
@@ -381,20 +399,33 @@ fn build_galaxy(resp: &GraphQueryResponse) -> gl::GraphData {
     );
 
     let ids: Vec<String> = resp.nodes.iter().map(|n| n.id.clone()).collect();
-    let layout = ForceLayout::new(ids.len(), &edges);
+    let communities: Vec<Option<u32>> = resp.nodes.iter().map(|n| n.community_id).collect();
+    let layout = ForceLayout::new(ids.len(), &edges, &communities);
     let positions = layout.seed(&ids);
+
+    // Recency window across the returned nodes (for brightness scaling).
+    let (oldest, newest) = resp
+        .nodes
+        .iter()
+        .filter_map(|n| n.updated_at)
+        .fold((i64::MAX, i64::MIN), |(lo, hi), t| (lo.min(t), hi.max(t)));
 
     let nodes: Vec<GalaxyNode> = resp
         .nodes
         .iter()
         .zip(positions)
-        .map(|(n, pos)| GalaxyNode {
-            id: n.id.clone(),
-            name: n.name.clone(),
-            category: n.category.clone(),
-            link_count: n.link_count as u32,
-            pos,
-            color: category_rgb(&n.category),
+        .map(|(n, pos)| {
+            let scale = recency_scale(n.updated_at, oldest, newest);
+            let base = category_rgb(&n.category);
+            GalaxyNode {
+                id: n.id.clone(),
+                name: n.name.clone(),
+                category: n.category.clone(),
+                link_count: n.link_count as u32,
+                pos,
+                color: [base[0] * scale, base[1] * scale, base[2] * scale],
+                community: n.community_id,
+            }
         })
         .collect();
 
@@ -492,5 +523,21 @@ mod tests {
         assert!(fold_to_lod(2) > fold_to_lod(8));
         // Out-of-range slider values clamp instead of overflowing the LOD range.
         assert_eq!(fold_to_lod(99), 0.0);
+    }
+
+    #[test]
+    fn recency_scale_maps_newest_to_full_oldest_to_floor() {
+        // None → full brightness.
+        assert_eq!(recency_scale(None, 100, 200), 1.0);
+        // Degenerate window → full (avoid div-by-zero).
+        assert_eq!(recency_scale(Some(150), 200, 200), 1.0);
+        // Newest → 1.0, oldest → floor.
+        assert!((recency_scale(Some(200), 100, 200) - 1.0).abs() < 1e-6);
+        assert!((recency_scale(Some(100), 100, 200) - RECENCY_FLOOR).abs() < 1e-6);
+        // Midpoint sits strictly between floor and 1.0.
+        let mid = recency_scale(Some(150), 100, 200);
+        assert!(mid > RECENCY_FLOOR && mid < 1.0);
+        // Out-of-range clamps to floor.
+        assert_eq!(recency_scale(Some(50), 100, 200), RECENCY_FLOOR);
     }
 }

@@ -86,7 +86,8 @@ impl Scene {
     pub fn set_graph(&mut self, data: GraphData) {
         // Build a force layout to animate-settle the incoming positions.
         let n = data.nodes.len();
-        let layout = ForceLayout::new(n, &data.edges);
+        let communities: Vec<Option<u32>> = data.nodes.iter().map(|node| node.community).collect();
+        let layout = ForceLayout::new(n, &data.edges, &communities);
         self.layout = Some(layout);
         self.settling = true;
         self.settle_steps = 0;

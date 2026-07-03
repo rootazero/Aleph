@@ -25,8 +25,11 @@ pub struct GalaxyNode {
     pub category: String,
     pub link_count: u32,
     pub pos: Vec3,
-    /// Base RGB in [0,1] (category color, pre-HDR-boost).
+    /// Base RGB in [0,1] (category color, pre-HDR-boost, recency-scaled).
     pub color: [f32; 3],
+    /// Louvain community id (`None` on a cold graph cache). Drives spatial
+    /// clustering (community centroid gravity in `ForceLayout`).
+    pub community: Option<u32>,
 }
 
 /// The whole-graph render input. `edges` index into `nodes` (resolved from ids).
@@ -68,6 +71,7 @@ mod highlight_tests {
             link_count: 0,
             pos: Vec3::zero(),
             color: [1.0, 1.0, 1.0],
+            community: None,
         }
     }
 
