@@ -2,7 +2,7 @@
 //!
 //! Uses pulldown-cmark for Markdown parsing and syntect for code block highlighting.
 
-use crate::state::typewriter::{revealed_len, TypewriterClock};
+use crate::state::typewriter::TypewriterClock;
 use leptos::prelude::*;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use std::sync::LazyLock;
@@ -239,53 +239,105 @@ pub fn StreamingRenderer(content: String) -> impl IntoView {
     }
 }
 
-/// Monotonic clock in milliseconds (page-load relative). Falls back to `0.0`
-/// when `performance` is unavailable, which `revealed_len` reads as "reveal
-/// all" once a start has been recorded (degrades to instant, never hides text).
-fn now_ms() -> f64 {
+/// Monotonic clock in milliseconds (page-load relative), or `None` when
+/// `performance` is unavailable. The renderer treats `None` as "no usable clock"
+/// and reveals all arrived text at once (degrade to instant, never hide text)
+/// rather than stalling the sweep.
+fn now_ms() -> Option<f64> {
     web_sys::window()
         .and_then(|w| w.performance())
         .map(|p| p.now())
-        .unwrap_or(0.0)
 }
 
-/// Streaming renderer that paces character reveal at `behavior.typing_speed`
-/// (chars/sec) via the shared [`TypewriterClock`].
+/// Assistant-message renderer that paces character reveal at
+/// `behavior.typing_speed` (chars/sec) via the shared [`TypewriterClock`], then
+/// switches to full Markdown once the sweep catches up.
 ///
-/// The reveal start is keyed on `message_id` in the clock, so it survives the
-/// per-token remount of a streaming bubble (the keyed `<For>` recreates the
-/// bubble on every delta) and the typewriter sweep stays continuous. When no
-/// clock is in context (e.g. storybook) it degrades to plain [`StreamingRenderer`].
+/// Unlike a stream-gated renderer, the reveal is **decoupled from
+/// `is_streaming`**: it keeps advancing after the backend finishes until it has
+/// revealed the whole final text, so a response that generates faster than `cps`
+/// still animates instead of dumping on completion. The per-message cursor lives
+/// in the clock keyed on `message_id`, so it survives the per-token remount of a
+/// streaming bubble (the keyed `<For>` recreates the bubble on every delta) and
+/// the sweep stays continuous.
+///
+/// Routing:
+/// - No cursor and not streaming → a message loaded from history (never streamed
+///   live this session): render full Markdown immediately, no tick subscription
+///   (keeps a long transcript cheap — only the one live bubble ticks at 30fps).
+/// - Reveal caught up + stream finished → prune the cursor and render full
+///   Markdown, then stop ticking (the finished bubble goes static).
+/// - Otherwise → paced streaming preview, advancing on each animation tick.
+///
+/// When no clock is in context (e.g. storybook) it degrades to a static render.
 #[component]
 #[must_use]
-pub fn TypewriterRenderer(content: String, message_id: String) -> impl IntoView {
+pub fn TypewriterRenderer(content: String, message_id: String, is_streaming: bool) -> impl IntoView {
     let Some(clock) = use_context::<TypewriterClock>() else {
-        return view! { <StreamingRenderer content=content /> }.into_any();
+        return if is_streaming {
+            view! { <StreamingRenderer content=content /> }.into_any()
+        } else {
+            view! { <MarkdownRenderer content=content /> }.into_any()
+        };
     };
 
-    // First-sight start stamp; identical on every per-token remount of this id.
-    let start = clock.start_for(&message_id, now_ms());
-    // Hold content in a StoredValue so the per-tick closure borrows it instead
-    // of cloning the (potentially large) accumulated text 30×/sec.
+    // History: a completed message with no live reveal cursor was never streamed
+    // this session — show it in full at once, with no reactive tick dependency.
+    if !is_streaming && !clock.has_reveal(&message_id) {
+        return view! { <MarkdownRenderer content=content /> }.into_any();
+    }
+
+    // Hold content/id in StoredValues so the per-tick closure borrows them
+    // instead of cloning the (potentially large) accumulated text 30×/sec.
     let content = StoredValue::new(content);
     let total = content.with_value(|c| c.chars().count());
+    let message_id = StoredValue::new(message_id);
 
     let html = move || {
-        clock.tick.track(); // re-render on each ~30fps animation tick
-        let revealed = revealed_len(
+        // No monotonic clock → cannot pace; reveal everything arrived so far.
+        let Some(now) = now_ms() else {
+            return content.with_value(|c| {
+                if is_streaming {
+                    render_streaming_with_cursor(c)
+                } else {
+                    render_markdown(c)
+                }
+            });
+        };
+        // Read pacing params untracked: the animation is driven by `tick` (which
+        // re-reads them fresh every ~33ms, so a live speed-slider change still
+        // lands within a frame), while a finished/history bubble takes no cps
+        // subscription and so never re-runs — its pruned cursor can't be
+        // resurrected into a replayed sweep.
+        let revealed = clock.advance_for(
+            &message_id.get_value(),
             total,
-            now_ms() - start,
-            clock.cps.get(),
-            clock.instant.get(),
+            now,
+            clock.cps.get_untracked(),
+            clock.instant.get_untracked(),
         );
-        content.with_value(|c| {
-            if revealed >= total {
-                render_streaming_with_cursor(c)
+        if revealed >= total {
+            if is_streaming {
+                // Caught up to the content that has arrived so far. Keep ticking
+                // (heartbeat, see `advance_reveal`) so the next delta paces
+                // smoothly; show everything available with the streaming cursor.
+                clock.tick.track();
+                content.with_value(|c| render_streaming_with_cursor(c))
             } else {
+                // Stream finished AND fully revealed → static final Markdown.
+                // Prune the cursor and read no tick, so the bubble stops
+                // re-rendering.
+                clock.finish(&message_id.get_value());
+                content.with_value(|c| render_markdown(c))
+            }
+        } else {
+            // Still sweeping — advance on each ~30fps animation tick.
+            clock.tick.track();
+            content.with_value(|c| {
                 let shown: String = c.chars().take(revealed).collect();
                 render_streaming_with_cursor(&shown)
-            }
-        })
+            })
+        }
     };
 
     view! {
