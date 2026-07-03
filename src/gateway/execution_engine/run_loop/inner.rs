@@ -597,29 +597,33 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 }
             }
 
-            // Snapshot every tool's ORIGINAL full schema before progressive
-            // disclosure collapses them, then register the on-demand loader.
-            let schema_snapshot: std::collections::HashMap<String, serde_json::Value> =
-                loop_registry_inner
-                    .tool_definitions()
-                    .into_iter()
-                    .map(|d| (d.name, d.parameters))
-                    .collect();
-            loop_registry_inner.register(Box::new(
-                crate::tools::schema_lookup::SchemaLookupTool::new(std::sync::Arc::new(
-                    schema_snapshot,
-                )),
-            ));
-            // Ensure the loader survives a non-empty allow-filter. CRITICAL:
-            // mirror the MCP-join pattern above (`if !allowed_names.is_empty()`,
-            // ~lines 583-588). An EMPTY `allowed_names` means allow-all in
-            // ScopedToolService; inserting a name into an empty set would flip it
-            // to a 1-element allowlist and hide EVERY other tool. Only widen an
-            // already-restrictive (non-empty) allow-set — when empty, get_tool_schema
-            // is already visible under allow-all.
-            if !allowed_names.is_empty() {
-                allowed_names
-                    .insert(crate::tools::schema_lookup::SchemaLookupTool::NAME.to_string());
+            // Register the on-demand schema loader ONLY when progressive
+            // disclosure is active. When disabled (core empty / ["*"]), nothing
+            // is collapsed, so get_tool_schema has nothing to serve and must NOT
+            // appear — keeping the tool surface byte-identical to pre-feature
+            // (escape hatch) and preserving prompt-cache continuity.
+            if crate::tools::scoped::ProgressiveDisclosureRewriter::is_enabled(
+                &self.config.core_tools,
+            ) {
+                // Snapshot every tool's ORIGINAL full schema before progressive
+                // disclosure collapses them, then register the on-demand loader.
+                let schema_snapshot: std::collections::HashMap<String, serde_json::Value> =
+                    loop_registry_inner
+                        .tool_definitions()
+                        .into_iter()
+                        .map(|d| (d.name, d.parameters))
+                        .collect();
+                loop_registry_inner.register(Box::new(
+                    crate::tools::schema_lookup::SchemaLookupTool::new(std::sync::Arc::new(
+                        schema_snapshot,
+                    )),
+                ));
+                // Ensure the loader survives a non-empty allow-filter (empty =
+                // allow-all; inserting into an empty set would flip it restrictive).
+                if !allowed_names.is_empty() {
+                    allowed_names
+                        .insert(crate::tools::schema_lookup::SchemaLookupTool::NAME.to_string());
+                }
             }
 
             let loop_registry = Arc::new(loop_registry_inner);

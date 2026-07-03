@@ -49,11 +49,20 @@ impl ProgressiveDisclosureRewriter {
         Self { core, truncate_desc }
     }
 
+    /// Whether progressive disclosure is active for this core set. False when
+    /// `core` is empty or contains the `"*"` wildcard (escape hatch — feature
+    /// fully off, tool surface byte-identical to pre-feature). Single source of
+    /// truth shared by `from_config` and the request-path registration gate.
+    #[must_use]
+    pub fn is_enabled(core: &[String]) -> bool {
+        !core.is_empty() && !core.iter().any(|c| c == "*")
+    }
+
     /// Build from config. Returns `None` (⇒ attach nothing ⇒ old behavior)
     /// when `core` is empty or contains the `"*"` wildcard sentinel.
     #[must_use]
     pub fn from_config(core: &[String], truncate_desc: bool) -> Option<Arc<dyn ToolDefinitionRewriter>> {
-        if core.is_empty() || core.iter().any(|c| c == "*") {
+        if !Self::is_enabled(core) {
             return None;
         }
         let set: BTreeSet<String> = core.iter().cloned().collect();
@@ -155,5 +164,13 @@ mod tests {
     fn mixed_wildcard_disables() {
         let result = ProgressiveDisclosureRewriter::from_config(&["bash".into(), "*".into()], false);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn is_enabled_matches_from_config_gate() {
+        assert!(!ProgressiveDisclosureRewriter::is_enabled(&[]));
+        assert!(!ProgressiveDisclosureRewriter::is_enabled(&["*".to_string()]));
+        assert!(!ProgressiveDisclosureRewriter::is_enabled(&["bash".to_string(), "*".to_string()]));
+        assert!(ProgressiveDisclosureRewriter::is_enabled(&["bash".to_string()]));
     }
 }
