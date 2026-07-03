@@ -15,7 +15,15 @@ pub(super) fn node_phase(id: &str) -> f32 {
     fnv1a_32(id.as_bytes()) as f32 / u32::MAX as f32
 }
 
-/// Degree floor above which a node renders a (weak) hub spike: ~95th percentile.
+/// Degree floor above which a node renders a (weak) hub spike: ~95th percentile,
+/// but never at or below the median.
+///
+/// The bare 95th percentile lights EVERY node on a uniform / low-spread graph
+/// (e.g. all notes have 2 links): there `p95 == min`, so `link_count >= p95`
+/// holds for all and every star grows a spike — defeating the "spike == rare
+/// hub" intent. Flooring the threshold just above the median suppresses spikes
+/// when no node stands out; on graphs with real spread `p95` already exceeds the
+/// median so this floor is a no-op.
 pub(super) fn hub_spike_threshold(link_counts: &[u32]) -> u32 {
     if link_counts.is_empty() {
         return 1;
@@ -23,7 +31,9 @@ pub(super) fn hub_spike_threshold(link_counts: &[u32]) -> u32 {
     let mut s: Vec<u32> = link_counts.to_vec();
     s.sort_unstable();
     let idx = ((s.len() as f32 * 0.95) as usize).min(s.len() - 1);
-    s[idx].max(1)
+    let p95 = s[idx].max(1);
+    let median = s[(s.len() - 1) / 2];
+    p95.max(median + 1)
 }
 
 /// Weak spike strength in [0, 0.3]; 0 below the hub threshold. Caps so spikes
@@ -275,5 +285,21 @@ mod tests {
     #[test]
     fn empty_counts_threshold_is_safe() {
         assert!(hub_spike_threshold(&[]) >= 1);
+    }
+
+    #[test]
+    fn uniform_degrees_suppress_all_spikes() {
+        // Every node same degree → no hub stands out → no spikes (regression:
+        // the bare 95th-percentile floor lit every node here).
+        let uniform = vec![2u32, 2, 2, 2, 2];
+        let th = hub_spike_threshold(&uniform);
+        for &c in &uniform {
+            assert_eq!(spike_strength(c, th), 0.0, "uniform graph must have no spikes");
+        }
+        // A lone dominant hub in an otherwise low-degree graph still spikes.
+        let spread = vec![1u32, 1, 1, 1, 20];
+        let th2 = hub_spike_threshold(&spread);
+        assert!(spike_strength(20, th2) > 0.0, "true hub must keep its spike");
+        assert_eq!(spike_strength(1, th2), 0.0, "low-degree node stays spikeless");
     }
 }
