@@ -33,6 +33,18 @@ impl HarnessRunner for AgentHarnessRunner {
         self.routing_store.clone()
     }
 
+    fn stall_config(&self) -> Option<crate::harness::deps::StallConfig> {
+        self.stall_config.clone()
+    }
+
+    fn consecutive_failure_cap(&self) -> Option<usize> {
+        self.consecutive_failure_cap
+    }
+
+    fn turn_timeout(&self) -> Option<std::time::Duration> {
+        self.turn_timeout
+    }
+
     async fn run(
         &self,
         session_key: String,

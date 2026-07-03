@@ -149,7 +149,10 @@ read it back in the next script, or just put everything into one cmd.
 outside the workspace are denied by the sandbox. If omitted the call lands at
 the workspace root.
 
-`timeout` defaults to 60s and is capped by the tool budget (180s ceiling).
+`timeout` defaults to 60s. Foreground calls are clamped to ~170s (just under
+the 180s tool budget) so an over-long `timeout` still returns a clean
+`exit_code = 124` with partial output instead of a hard "no result" abort —
+for longer runs use BACKGROUND MODE below.
 On timeout we kill the process, drain stdout/stderr for up to 2s, and return
 `exit_code = 124` (POSIX `timeout(1)` convention) with whatever the script
 printed before the kill preserved in `stdout` and `stderr` — so even a
@@ -284,9 +287,14 @@ impl BashExecTool {
                 // to report against; abandon quietly.
                 Err(_) => return,
             };
+            // Background escapes the 180s per-tool budget wrapper (the spawn
+            // call returned a process_id already), so it must NOT inherit the
+            // foreground timeout clamp — a backgrounded `cargo build` may
+            // legitimately run for the full 1h ceiling. `call_unclamped` runs
+            // `execute` directly, bypassing the clamp in `AlephTool::call`.
             let result = match sid {
-                Some(sid) => SESSION_ID.scope(sid, inner.call(code_exec_args)).await,
-                None => inner.call(code_exec_args).await,
+                Some(sid) => SESSION_ID.scope(sid, inner.call_unclamped(code_exec_args)).await,
+                None => inner.call_unclamped(code_exec_args).await,
             };
             let output = result
                 .unwrap_or_else(|e| error_output(format!("bash: background task error: {e}")));

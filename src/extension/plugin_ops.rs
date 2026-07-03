@@ -118,6 +118,18 @@ impl ExtensionManager {
         self.plugin_registry.read().await
     }
 
+    /// P3 Stage I — clone the shared registry handle for per-subagent MCP scope
+    /// provisioning. Unlike `get_plugin_registry` (a borrowed read guard tied to
+    /// `&self`), this hands out the `Arc<RwLock<..>>` itself so a subagent
+    /// spawner can carry it across layers and snapshot the referenced tools
+    /// under its own read guard at provision time.
+    #[must_use]
+    pub fn plugin_registry_handle(
+        &self,
+    ) -> std::sync::Arc<tokio::sync::RwLock<PluginRegistry>> {
+        self.plugin_registry.clone()
+    }
+
     /// Get mutable access to the plugin registry.
     pub async fn get_plugin_registry_mut(
         &self,

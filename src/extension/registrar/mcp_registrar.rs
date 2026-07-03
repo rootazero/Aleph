@@ -160,8 +160,12 @@ pub struct McpScope {
     pub(crate) inline_handles: Vec<InlineMcpHandle>,
     pub(crate) trace_sink: Option<Arc<dyn TraceSink>>,
     pub(crate) agent_id: String,
-    /// Read-only view of the parent global registry (for `tools()` lookups).
-    pub(crate) global: Arc<PluginRegistry>,
+    /// P3 Stage I — referenced global tools, snapshotted at provision time.
+    /// The subagent's tool surface is fixed at spawn (it must not drift
+    /// mid-run), so the referenced tools are captured under a single read guard
+    /// during `provision`; the scope holds no live-registry handle afterward
+    /// (P5 — least knowledge).
+    pub(crate) tools: Vec<crate::extension::registry::ToolRegistration>,
 }
 
 impl std::fmt::Debug for McpScope {
@@ -184,26 +188,37 @@ impl McpScope {
     /// eagerly + in parallel via `futures::future::try_join_all`.
     pub async fn provision(
         agent_def: &AgentDef,
-        global: Arc<PluginRegistry>,
+        registry: Arc<tokio::sync::RwLock<PluginRegistry>>,
         trace_sink: Option<Arc<dyn TraceSink>>,
     ) -> Result<Self, McpScopeError> {
         let mut references: HashSet<String> = HashSet::new();
         let mut inline_specs: Vec<(String, crate::agents::McpInlineConfig)> = Vec::new();
+        let mut tools: Vec<crate::extension::registry::ToolRegistration> = Vec::new();
 
-        // Phase 1: classify specs + validate collisions BEFORE spawning anything.
-        for spec in &agent_def.mcp_servers {
-            match spec {
-                McpServerSpec::Reference { name } => {
-                    if global.get_plugin(name).is_none() {
-                        return Err(McpScopeError::ReferenceNotFound(name.clone()));
+        // Phase 1: classify specs + validate collisions BEFORE spawning
+        // anything, and snapshot referenced tools — all under a single read
+        // guard so validation and the tool snapshot observe one consistent
+        // view. The guard is scoped to drop before Phase 2 so the registry lock
+        // is never held across the inline-spawn await points.
+        {
+            let reg = registry.read().await;
+            for spec in &agent_def.mcp_servers {
+                match spec {
+                    McpServerSpec::Reference { name } => {
+                        if reg.get_plugin(name).is_none() {
+                            return Err(McpScopeError::ReferenceNotFound(name.clone()));
+                        }
+                        for tool in reg.list_tools_for_plugin(name) {
+                            tools.push(tool.clone());
+                        }
+                        references.insert(name.clone());
                     }
-                    references.insert(name.clone());
-                }
-                McpServerSpec::Inline { name, config } => {
-                    if global.get_plugin(name).is_some() {
-                        return Err(McpScopeError::NameConflict(name.clone()));
+                    McpServerSpec::Inline { name, config } => {
+                        if reg.get_plugin(name).is_some() {
+                            return Err(McpScopeError::NameConflict(name.clone()));
+                        }
+                        inline_specs.push((name.clone(), config.clone()));
                     }
-                    inline_specs.push((name.clone(), config.clone()));
                 }
             }
         }
@@ -220,7 +235,7 @@ impl McpScope {
             inline_handles,
             trace_sink,
             agent_id: agent_def.id.clone(),
-            global,
+            tools,
         };
 
         if let Some(sink) = scope.trace_sink.as_ref() {
@@ -241,17 +256,11 @@ impl McpScope {
     /// Result is layered UNDER `AllowlistToolService` by the spawner.
     #[must_use]
     pub fn tools(&self) -> Vec<crate::extension::registry::ToolRegistration> {
-        let mut out = Vec::new();
-        for plugin_id in &self.references {
-            for tool in self.global.list_tools_for_plugin(plugin_id) {
-                out.push(tool.clone());
-            }
-        }
-        // NOTE: Inline-server tool surfacing requires async list_tools() +
-        // McpTool→ToolRegistration conversion. Snapshotting at provision
-        // time would be cleanest. Deferred to Stage I follow-up; Task 12
-        // I-T2 will reveal whether this matters for the integration test.
-        out
+        // Referenced global tools were snapshotted under a read guard at
+        // provision time (see the `tools` field). Inline-server tool surfacing
+        // still requires async list_tools() + McpTool→ToolRegistration
+        // conversion; deferred to a Stage I follow-up.
+        self.tools.clone()
     }
 
     /// Explicit shutdown. Marks each `InlineMcpHandle` as cleaned, then calls
@@ -497,7 +506,7 @@ mod tests {
             plugin_id: "global-mcp".into(),
         };
         registry.register_tool(tool);
-        let global = Arc::new(registry);
+        let global = Arc::new(tokio::sync::RwLock::new(registry));
 
         let agent = AgentDef::new("test", AgentMode::SubAgent).with_mcp_servers(vec![
             McpServerSpec::Reference {
@@ -520,7 +529,7 @@ mod tests {
         use crate::sync_primitives::Arc;
 
         let registry = make_registry_with_plugin("only-this");
-        let global = Arc::new(registry);
+        let global = Arc::new(tokio::sync::RwLock::new(registry));
         let agent = AgentDef::new("test", AgentMode::SubAgent).with_mcp_servers(vec![
             McpServerSpec::Reference {
                 name: "missing".into(),
@@ -539,7 +548,7 @@ mod tests {
         use crate::sync_primitives::Arc;
 
         let registry = make_registry_with_plugin("github");
-        let global = Arc::new(registry);
+        let global = Arc::new(tokio::sync::RwLock::new(registry));
 
         let agent = AgentDef::new("test", AgentMode::SubAgent).with_mcp_servers(vec![
             McpServerSpec::Inline {
@@ -571,7 +580,7 @@ mod tests {
             handler: "h".into(),
             plugin_id: "global-mcp".into(),
         });
-        let global = Arc::new(registry);
+        let global = Arc::new(tokio::sync::RwLock::new(registry));
 
         let agent = AgentDef::new("test", AgentMode::SubAgent).with_mcp_servers(vec![
             McpServerSpec::Reference {
@@ -598,7 +607,7 @@ mod tests {
         use crate::sync_primitives::Arc;
 
         let registry = PluginRegistry::new();
-        let global = Arc::new(registry);
+        let global = Arc::new(tokio::sync::RwLock::new(registry));
 
         let agent = AgentDef::new("test", AgentMode::SubAgent).with_mcp_servers(vec![
             McpServerSpec::Inline {

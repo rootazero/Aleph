@@ -45,6 +45,30 @@ use super::command_canonicalize::canonicalize_shell_cmd;
 /// 4× margin to leave room for the rest of the argv vector plus env.
 const SHELL_STDIN_PIPE_THRESHOLD: usize = 32 * 1024;
 
+/// Wall-clock ceiling (seconds) applied to a **foreground** exec so the
+/// sandbox's own timeout fires *before* the 180s per-tool budget wrapper
+/// (`tools::budget::builtin_tool_budget_ms` = 180_000 for `bash`/`code_exec`).
+///
+/// Without this clamp a foreground call with an over-long `timeout` (e.g.
+/// `bash(cmd, timeout=600)`) sets the sandbox timeout to 600s, so the outer
+/// budget wrapper trips first and aborts the whole call with a misleading
+/// "slow or unresponsive source — no result" — discarding the partial output
+/// the sandbox's exit-124 timeout path would otherwise preserve. Clamping to
+/// 170s (10s under the budget, room for the kill + 2s drain) means an
+/// over-long foreground `timeout` instead yields a clean `exit_code = 124`
+/// with partial output. Background jobs escape the budget wrapper entirely and
+/// are NOT clamped (see `BashExecTool::spawn_background` → `call_unclamped`);
+/// for anything longer than this, background mode is the right tool. Mirrors
+/// the `wait`-window clamp (`WAIT_MAX_TIMEOUT_SECS`) in `bash_exec`.
+const FOREGROUND_MAX_TIMEOUT_SECS: u64 = 170;
+
+/// Clamp a caller-supplied foreground `timeout` under the tool-budget ceiling.
+/// `None` is preserved (the sandbox applies `DEFAULT_CODE_EXEC_TIMEOUT`); a
+/// value at or below the ceiling passes through unchanged.
+fn clamp_foreground_timeout(timeout: Option<u64>) -> Option<u64> {
+    timeout.map(|t| t.min(FOREGROUND_MAX_TIMEOUT_SECS))
+}
+
 /// Supported programming languages
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -202,7 +226,9 @@ cross-call state, write it to a file under `working_dir`.
 `working_dir` (optional) is resolved inside the session workspace; paths
 outside the workspace are denied. Defaults to the workspace root.
 
-`timeout` defaults to 60s, capped by the tool budget (180s ceiling). On
+`timeout` defaults to 60s; foreground calls are clamped to ~170s (just under
+the 180s tool budget) so an over-long `timeout` returns a clean
+`exit_code = 124` with partial output, not a "no result" abort. On
 timeout the runtime is killed, stdout/stderr are drained for up to 2s,
 and we return `exit_code = 124` (POSIX `timeout(1)` convention) with the
 partial output preserved so you can see what the script accomplished.
@@ -252,6 +278,16 @@ Examples:
     pub fn with_sandbox(mut self, sandbox: Arc<dyn Sandbox>) -> Self {
         self.sandbox = Some(sandbox);
         self
+    }
+
+    /// Execute WITHOUT the foreground timeout clamp. Used only by
+    /// [`BashExecTool::spawn_background`](super::bash_exec), whose detached task
+    /// runs *outside* the 180s per-tool budget wrapper and so may legitimately
+    /// run up to the background ceiling (1h default, or an explicit `timeout`).
+    /// The clamp applied in [`AlephTool::call`] would otherwise cut every
+    /// backgrounded build/install off at 170s.
+    pub(crate) async fn call_unclamped(&self, args: CodeExecArgs) -> Result<CodeExecOutput> {
+        self.execute(args).await
     }
 
     /// Execute code and return result
@@ -665,6 +701,13 @@ impl AlephTool for CodeExecTool {
     type Output = CodeExecOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Foreground path: clamp `timeout` under the per-tool budget so an
+        // over-long value yields a clean exit-124 (with partial output) from
+        // the sandbox's own timeout, not a "no result" budget-overrun abort.
+        // The background path escapes the budget wrapper and calls
+        // `call_unclamped` directly, keeping its generous ceiling.
+        let mut args = args;
+        args.timeout = clamp_foreground_timeout(args.timeout);
         self.execute(args).await
     }
 }
@@ -1343,5 +1386,93 @@ mod tests {
         assert_eq!(out.exit_code, 134, "SIGABRT → 128 + 6");
         assert!(out.stderr.contains("thread panicked at 'boom'"));
         assert!(out.stderr.contains("SIGABRT"));
+    }
+
+    #[test]
+    fn clamp_foreground_timeout_caps_over_long_but_preserves_smaller() {
+        // None → None: the sandbox applies DEFAULT_CODE_EXEC_TIMEOUT downstream.
+        assert_eq!(clamp_foreground_timeout(None), None);
+        // At/under the ceiling passes through unchanged.
+        assert_eq!(clamp_foreground_timeout(Some(30)), Some(30));
+        assert_eq!(
+            clamp_foreground_timeout(Some(FOREGROUND_MAX_TIMEOUT_SECS)),
+            Some(FOREGROUND_MAX_TIMEOUT_SECS)
+        );
+        // Over the ceiling is clamped so the sandbox timeout fires before the
+        // 180s per-tool budget wrapper — a clean exit-124, not a hard abort.
+        assert_eq!(
+            clamp_foreground_timeout(Some(600)),
+            Some(FOREGROUND_MAX_TIMEOUT_SECS)
+        );
+    }
+
+    #[tokio::test]
+    async fn foreground_over_long_timeout_is_clamped_under_budget() {
+        // A foreground code_exec/bash call asking for 600s must hand the
+        // sandbox only ~170s so the sandbox's own timeout produces a clean
+        // exit-124 (with partial output) before the 180s budget wrapper aborts
+        // the whole call with a "no result". Contrast background, which escapes
+        // the wrapper and keeps its generous ceiling.
+        let mock = MockSandbox::new(ok_output(""));
+        let sandbox: Arc<dyn Sandbox> = mock.clone();
+        let tool = CodeExecTool::new().with_sandbox(sandbox);
+
+        SESSION_ID
+            .scope(sid(), async {
+                tool.call(CodeExecArgs {
+                    language: Language::Shell,
+                    code: "sleep 999".to_string(),
+                    working_dir: None,
+                    timeout: Some(600),
+                    allow_network: false,
+                    allow_subprocess: false,
+                    extra_writable_paths: Vec::new(),
+                    justification: None,
+                })
+                .await
+                .unwrap()
+            })
+            .await;
+
+        let calls = mock.calls.lock().await;
+        assert_eq!(
+            calls[0].timeout,
+            Some(Duration::from_secs(FOREGROUND_MAX_TIMEOUT_SECS)),
+            "foreground timeout must be clamped under the tool budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn call_unclamped_preserves_long_timeout_for_background() {
+        // The background entry point must NOT clamp — a backgrounded build may
+        // run for the full ceiling. `call_unclamped` hands the sandbox the raw
+        // 600s value.
+        let mock = MockSandbox::new(ok_output(""));
+        let sandbox: Arc<dyn Sandbox> = mock.clone();
+        let tool = CodeExecTool::new().with_sandbox(sandbox);
+
+        SESSION_ID
+            .scope(sid(), async {
+                tool.call_unclamped(CodeExecArgs {
+                    language: Language::Shell,
+                    code: "sleep 999".to_string(),
+                    working_dir: None,
+                    timeout: Some(600),
+                    allow_network: false,
+                    allow_subprocess: false,
+                    extra_writable_paths: Vec::new(),
+                    justification: None,
+                })
+                .await
+                .unwrap()
+            })
+            .await;
+
+        let calls = mock.calls.lock().await;
+        assert_eq!(
+            calls[0].timeout,
+            Some(Duration::from_secs(600)),
+            "background path must keep the caller's long timeout"
+        );
     }
 }

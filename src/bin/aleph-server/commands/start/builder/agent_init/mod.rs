@@ -111,6 +111,11 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub memory_backend: Option<alephcore::memory::store::MemoryBackend>,
     /// Arena manager for collaborative multi-agent arenas (R3).
     pub arena_manager: Option<Arc<RwLock<alephcore::arena::ArenaManager>>>,
+    /// Memory-extension registry (capture-filter + `on_delegation` hooks).
+    /// Exposed so the A2A outbound `A2ASubAgent` can route its delegation
+    /// writes through the same capture filter the engine/compactor use;
+    /// without it, A2A delegation memory bypasses the filter (direct insert).
+    pub memory_ext_registry: Arc<alephcore::memory::extensions::MemoryExtensionRegistry>,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -779,6 +784,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             engine = engine.with_workspace_manager(wm.clone());
         }
         engine = engine.with_planner_provider(naked_loop_planner_provider);
+        // Fix 4: thread the capture-filter registry so spawned subagents fire
+        // `on_delegation` memory-extension hooks on completion (and their memory
+        // writes go through the capture filter). Same registry the compactor +
+        // session_complete tool already use; unconditional so it does not depend
+        // on the compactor being configured.
+        engine = engine.with_capture_registry(memory_ext_registry.clone());
 
         // Create event-sourced memory command handler (requires state_db + memory_db)
         let command_handler: Option<
@@ -1688,5 +1699,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         memory_context_provider: mcp_for_orchestrator,
         memory_backend: Some(memory_db.clone()),
         arena_manager: Some(arena_manager),
+        memory_ext_registry: memory_ext_registry.clone(),
     })
 }

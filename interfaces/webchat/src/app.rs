@@ -53,6 +53,7 @@ use crate::state::notifications::NotificationsState;
 use crate::state::sessions::SessionMap;
 use crate::state::typewriter::TypewriterClock;
 use crate::state::viewport::{FormFactor, FormFactorState};
+use crate::views::chat::events::subscribe_run_events;
 use crate::views::chat::ChatState;
 use crate::views::voice::{ImmersiveVoiceView, VoiceMode};
 
@@ -94,7 +95,8 @@ fn AppContent() -> impl IntoView {
     // Multi-tab session registry (per-agent). Empty at boot; the chat
     // sidebar's auto-select-default-agent path is what opens the first
     // tab. Cmd+1..9 / Cmd+W hotkeys are installed lazily by SessionTabs.
-    provide_context(SessionMap::new());
+    let session_map = SessionMap::new();
+    provide_context(session_map);
 
     // Form-factor (Wide/Phone/Tablet) — read by SettingsRouter to swap the
     // wide `/settings` page for the iOS-native PhoneSettings at <640px.
@@ -104,6 +106,16 @@ fn AppContent() -> impl IntoView {
     // legacy users see zero UI change; the LayoutToggle in the composer
     // opens Split mode on demand. Persisted in localStorage.
     provide_context(WorkspaceState::new());
+
+    // Global run.* dispatcher: subscribed once here (not per-mount) so a
+    // run_id routes to the active singleton or a backgrounded live[conv]
+    // session even when its ChatView/PhoneChat isn't mounted — background
+    // sessions no longer freeze while another tab is in view.
+    {
+        let ws = expect_context::<WorkspaceState>();
+        let _root_run_sub = subscribe_run_events(&state, session_map, chat_state, ws);
+        // Root-level subscription is app-lifetime; no on_cleanup needed.
+    }
 
     // Typewriter reveal clock — paces the Panel's streamed-text reveal at the
     // configured `behavior.typing_speed` (chars/sec). Provided here so the chat

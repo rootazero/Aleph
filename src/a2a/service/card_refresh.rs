@@ -16,7 +16,6 @@ use crate::sync_primitives::Arc;
 use super::card_registry::CardRegistry;
 use crate::a2a::adapter::client::{A2AClient, A2AClientPool};
 use crate::a2a::port::{AgentHealth, AgentResolver, RegisteredAgent};
-use crate::a2a::sub_agent::A2ASubAgent;
 
 /// Fetch the real Agent Card for every registered agent and upsert it.
 ///
@@ -76,14 +75,10 @@ pub async fn refresh_all_cards(registry: &CardRegistry) -> usize {
 
 /// Spawn a background task that runs one card-refresh pass at startup.
 ///
-/// After the pass, refreshes the `A2ASubAgent` name cache so `can_handle`
-/// matches newly-discovered skill names and aliases. Non-blocking.
-pub fn spawn_card_refresh(registry: Arc<CardRegistry>, sub_agent: Arc<A2ASubAgent>) {
+/// Non-blocking — never delays startup.
+pub fn spawn_card_refresh(registry: Arc<CardRegistry>) {
     tokio::spawn(async move {
         let n = refresh_all_cards(&registry).await;
-        if n > 0 {
-            sub_agent.refresh_agent_names().await;
-        }
         tracing::info!(refreshed = n, "A2A startup card refresh complete");
     });
 }

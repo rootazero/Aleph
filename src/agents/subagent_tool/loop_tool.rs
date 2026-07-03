@@ -529,12 +529,15 @@ impl LoopTool for SubagentTool {
                         strategy: None,
                     };
 
-                    let runtime = self
-                        .build_runtime(child_chain.clone(), self.cancel_for_child_with(&cancel));
+                    let batch_cancel = self.cancel_for_child_with(&cancel);
+                    let runtime =
+                        self.build_runtime(child_chain.clone(), batch_cancel.clone());
                     handles.push(tokio::spawn(async move {
                         let outcome = AssertUnwindSafe(runtime.run(runtime_config))
                             .catch_unwind()
                             .await;
+                        // Terminate this proposal's cancel-bridge watcher.
+                        batch_cancel.cancel();
                         (idx, outcome)
                     }));
                 }
@@ -642,10 +645,12 @@ impl LoopTool for SubagentTool {
                         timeout_secs: args.timeout_secs,
                         strategy: None,
                     };
-                    let runtime = self
-                        .build_runtime(child_chain.clone(), self.cancel_for_child_with(&cancel));
+                    let agg_cancel = self.cancel_for_child_with(&cancel);
+                    let runtime = self.build_runtime(child_chain.clone(), agg_cancel.clone());
 
-                    return match runtime.run(runtime_config).await {
+                    let agg_outcome = runtime.run(runtime_config).await;
+                    agg_cancel.cancel();
+                    return match agg_outcome {
                         Ok(r) => ToolResult::Success {
                             output: json!({
                                 "status": "moa_completed",
@@ -788,9 +793,14 @@ impl LoopTool for SubagentTool {
                 strategy: None,
             };
 
-            let runtime = self.build_runtime(child_chain, self.cancel_for_child_with(&cancel));
+            let child_cancel = self.cancel_for_child_with(&cancel);
+            let runtime = self.build_runtime(child_chain, child_cancel.clone());
 
-            match runtime.run(runtime_config).await {
+            let run_outcome = runtime.run(runtime_config).await;
+            // Fire the child token so the cancel-bridge watcher exits now the
+            // run is done (no-op if it already propagated a cancel).
+            child_cancel.cancel();
+            match run_outcome {
                 Ok(result) => {
                     tracing::info!(
                         iterations = result.iterations,

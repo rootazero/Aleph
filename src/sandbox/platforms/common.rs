@@ -237,15 +237,26 @@ pub async fn run_child_with_drain(
     timeout: Duration,
     max_output_bytes: usize,
 ) -> Result<SandboxOutput, SandboxError> {
-    if let Some(data) = stdin_data {
-        if let Some(mut child_stdin) = child.stdin.take() {
+    // Always close the child's stdin so a non-interactive command that tries
+    // to READ from stdin — a git credential prompt, `sudo -S`, an `apt`
+    // confirmation, a bare `read`/`cat` — gets an immediate EOF instead of
+    // blocking on a pipe nothing will ever write to until the wall-clock
+    // timeout SIGKILLs it (turning a 1 ms command into a full-timeout stall).
+    // The drivers all spawn with `Stdio::piped()`, so absent this the parent
+    // holds the write end open for the child's whole life. When `stdin_data`
+    // is present we feed it first; the trailing drop closes the pipe either
+    // way, so the child always sees a clean EOF. (pi wires stdin from
+    // /dev/null; kimi closes it explicitly — same guarantee, one place.)
+    if let Some(mut child_stdin) = child.stdin.take() {
+        if let Some(data) = stdin_data {
             use tokio::io::AsyncWriteExt;
             child_stdin
                 .write_all(data)
                 .await
                 .map_err(|e| SandboxError::Io(format!("stdin write failed: {e}")))?;
-            // Drop closes stdin so the child sees EOF.
         }
+        // Drop closes stdin so the child sees EOF (an empty stdin when no data).
+        drop(child_stdin);
     }
 
     let stdout = child.stdout.take();
@@ -675,6 +686,34 @@ mod tests {
             .expect("natural exit");
         assert_eq!(out.exit_code, Some(0));
         assert_eq!(String::from_utf8_lossy(&out.stdout), "from-stdin\n");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_child_with_drain_closes_stdin_so_reads_get_eof() {
+        use tokio::process::Command;
+        // `cat` with no file args reads its stdin until EOF. Before the fix the
+        // child's stdin pipe stayed open (nothing ever wrote to or closed it),
+        // so this hung for the whole timeout window and came back as a
+        // `SandboxError::Timeout`. Now stdin is closed immediately when there's
+        // no `stdin_data`, so `cat` sees EOF and exits 0 in milliseconds. The
+        // generous 20s timeout is only a backstop — a regression would trip it
+        // (Err) and fail the `.expect`, never a false pass.
+        let child = Command::new("bash")
+            .arg("-c")
+            .arg("cat")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn bash");
+
+        let out = run_child_with_drain(child, None, Duration::from_secs(20), 1024)
+            .await
+            .expect("stdin-reading command must exit on EOF, not hang to timeout");
+        assert_eq!(out.exit_code, Some(0), "cat exits 0 on a clean EOF");
+        assert!(out.stdout.is_empty(), "empty stdin → no stdout");
     }
 
     #[cfg(unix)]

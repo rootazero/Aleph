@@ -443,13 +443,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         });
     {
         let rotate_bus = event_bus.clone();
+        let rotate_devices = device_token_mgr.clone();
         server
             .handlers_mut()
             .register("gateway.token.rotate", move |req| {
                 let bus = rotate_bus.clone();
+                let devices = rotate_devices.clone();
                 async move {
-                    let resp =
-                        alephcore::gateway::handlers::gateway_token::handle_token_rotate(req).await;
+                    let resp = alephcore::gateway::handlers::gateway_token::handle_token_rotate(
+                        req,
+                        Some(devices),
+                    )
+                    .await;
                     // Only broadcast when rotation succeeded — don't kick sessions on failure.
                     if resp.error.is_none() {
                         let _ = bus.publish_frame(
@@ -476,6 +481,42 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         },
                     );
                     alephcore::gateway::handlers::gateway_ticket::handle_ticket_create(req, ctx)
+                        .await
+                }
+            });
+    }
+
+    // Paired-device management RPCs: list / revoke remote Panel devices paired
+    // via the bootstrap-ticket flow. Authorized-only (login wall). Scope-guarded
+    // to `device_type = "panel"` so they never touch cluster nodes.
+    {
+        let list_mgr = device_token_mgr.clone();
+        server
+            .handlers_mut()
+            .register("gateway.devices.list", move |req| {
+                let ctx = Arc::new(
+                    alephcore::gateway::handlers::gateway_devices::DevicesHandlerContext {
+                        device_token_mgr: list_mgr.clone(),
+                    },
+                );
+                async move {
+                    alephcore::gateway::handlers::gateway_devices::handle_devices_list(req, ctx)
+                        .await
+                }
+            });
+    }
+    {
+        let revoke_mgr = device_token_mgr.clone();
+        server
+            .handlers_mut()
+            .register("gateway.devices.revoke", move |req| {
+                let ctx = Arc::new(
+                    alephcore::gateway::handlers::gateway_devices::DevicesHandlerContext {
+                        device_token_mgr: revoke_mgr.clone(),
+                    },
+                );
+                async move {
+                    alephcore::gateway::handlers::gateway_devices::handle_devices_revoke(req, ctx)
                         .await
                 }
             });
@@ -1651,9 +1692,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 let a2a_sub_agent = Arc::new(
                     A2ASubAgent::new(smart_router, client_pool.clone())
                         .with_raw_memory_writer(memory_db.clone()
-                            as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>),
+                            as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>)
+                        .with_capture_registry(agent_result.memory_ext_registry.clone()),
                 );
-                a2a_sub_agent.refresh_agent_names().await;
 
                 // 10. Publish the late-bound handle so the `a2a_delegate` and
                 // `a2a_agents` builtin tools (registered earlier in the tool
@@ -1673,10 +1714,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // 11. One-shot startup card refresh: upgrade config agents'
                 // placeholder cards to their real Agent Cards in the
                 // background. Non-blocking — never delays startup.
-                alephcore::a2a::service::spawn_card_refresh(
-                    card_registry.clone(),
-                    a2a_sub_agent.clone(),
-                );
+                alephcore::a2a::service::spawn_card_refresh(card_registry.clone());
 
                 // 12. Optional periodic agent health monitor (opt-in via
                 // `a2a.health_check_interval_secs`). Probes registered agents

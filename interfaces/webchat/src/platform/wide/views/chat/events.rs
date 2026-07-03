@@ -3,6 +3,7 @@
 use super::state::{ChatState, ContextUsage, ModelInfo, ProviderRetryNotice};
 use crate::context::{DashboardState, GatewayEvent};
 use crate::state::layout::WorkspaceState;
+use crate::state::sessions::SessionMap;
 use leptos::prelude::*;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -253,6 +254,41 @@ fn apply_context_gauge(chat: ChatState, summary: &serde_json::Value) {
     }
 }
 
+/// Resolve which conversation's `ChatState` one run event should land on, and
+/// maintain running/route bookkeeping. Returns the target `ChatState` (`None`
+/// = drop). Extracted so it's unit-testable without a Leptos event dependency.
+fn resolve_target(
+    sessions: &SessionMap,
+    singleton: ChatState,
+    event_type: &str,
+    run_id: &str,
+    session_key: Option<&str>,
+) -> Option<ChatState> {
+    let conv = match event_type {
+        // New run: the send path binds run_id → the conversation active at
+        // *send* time (authoritative when the user switches tabs before the
+        // run is accepted, I1), so prefer that route. Fall back to the active
+        // conversation only for runs with no client send (e.g. daemon-initiated).
+        "run_accepted" => sessions.route_lookup(run_id).or_else(|| sessions.active_conv()),
+        // `reasoning` without a run_id: route to the active conversation too;
+        // with a run_id it must follow that run's owning conversation like
+        // every other event, so it doesn't bleed into whichever conversation
+        // happens to be in the foreground.
+        "reasoning" if run_id.is_empty() => sessions.active_conv(),
+        _ => sessions.route_lookup(run_id),
+    }?;
+    // Only bind here when the send path hasn't already (route absent) — binding
+    // twice would double-count `running` and leave a phantom dot.
+    if event_type == "run_accepted" && sessions.route_lookup(run_id).is_none() {
+        sessions.bind_run(run_id, conv, session_key);
+    }
+    let target = sessions.chat_for(conv, singleton);
+    if matches!(event_type, "run_complete" | "run_error") {
+        sessions.settle_run(run_id);
+    }
+    target
+}
+
 /// Subscribe to `run.*` events and dispatch to `ChatState`. Tool args/results
 /// are mirrored into [`WorkspaceState::tool_payloads`] so the workspace
 /// pane can render real invocation details without an extra round-trip.
@@ -260,7 +296,8 @@ fn apply_context_gauge(chat: ChatState, summary: &serde_json::Value) {
 #[must_use]
 pub fn subscribe_run_events(
     dashboard: &DashboardState,
-    chat: ChatState,
+    sessions: SessionMap,
+    singleton: ChatState,
     workspace: WorkspaceState,
 ) -> usize {
     let trace_runs = Arc::new(Mutex::new(HashSet::<String>::new()));
@@ -292,6 +329,14 @@ pub fn subscribe_run_events(
         if run_id.is_empty() && event_type != "reasoning" {
             return;
         }
+
+        // Resolve the target conversation's ChatState (active = singleton
+        // projection / background = live[conv]).
+        let session_key = data.get("session_key").and_then(|s| s.as_str());
+        let Some(chat) = resolve_target(&sessions, singleton, event_type, run_id, session_key)
+        else {
+            return;
+        };
 
         match event_type {
             "run_accepted" => {
@@ -755,5 +800,70 @@ mod projection_tests {
         assert_eq!(usage.used_tokens, 42_000);
         assert_eq!(usage.window_tokens, 200_000);
         assert_eq!(usage.total_tokens, 55_000);
+    }
+
+    #[test]
+    fn resolve_target_routes_background_run_to_registry() {
+        let owner = Owner::new();
+        owner.set();
+        let sessions = crate::state::sessions::SessionMap::new();
+        let singleton = ChatState::new();
+        let a = sessions.open_conversation("agent-a", "A");
+        let b = sessions.open_conversation("agent-b", "B");
+
+        // A active, accept run-a; switch to B.
+        sessions.activate(singleton, a);
+        let t = resolve_target(&sessions, singleton, "run_accepted", "run-a", Some("sk-a"));
+        assert_eq!(
+            t.map(|c| c.agent_id.get_untracked()),
+            Some(singleton.agent_id.get_untracked())
+        );
+        sessions.activate(singleton, b);
+
+        // Background chunk should route to A's live state, not the singleton (B).
+        let bg = resolve_target(&sessions, singleton, "response_chunk", "run-a", None)
+            .expect("routed to background A");
+        let a_bg = sessions.chat_for(a, singleton).expect("A background");
+        // Same background A instance (Copy makes signal identity comparison
+        // awkward — compare append effects instead).
+        bg.start_assistant_message("run-a");
+        bg.append_chunk("run-a", "x");
+        assert_eq!(a_bg.assistant_text_for_run("run-a"), "x");
+        assert!(singleton.assistant_text_for_run("run-a").is_empty());
+
+        // settle clears running.
+        resolve_target(&sessions, singleton, "run_complete", "run-a", None);
+        assert!(!sessions.is_running(a));
+    }
+
+    #[test]
+    fn run_accepted_honors_send_time_binding_after_tab_switch() {
+        let owner = Owner::new();
+        owner.set();
+        let sessions = crate::state::sessions::SessionMap::new();
+        let singleton = ChatState::new();
+        let a = sessions.open_conversation("agent-a", "A");
+        let b = sessions.open_conversation("agent-b", "B");
+
+        // User sends in A (send path binds the run to A), then immediately
+        // switches to B before `run_accepted` arrives.
+        sessions.activate(singleton, a);
+        sessions.bind_run("run-a", a, Some("sk-a"));
+        sessions.activate(singleton, b);
+
+        // run_accepted must resolve to A (send-time truth), not B (foreground),
+        // and must NOT double-count A's running refcount.
+        let t = resolve_target(&sessions, singleton, "run_accepted", "run-a", Some("sk-a"))
+            .expect("resolved to A's background state");
+        let a_bg = sessions.chat_for(a, singleton).expect("A background");
+        t.start_assistant_message("run-a");
+        t.append_chunk("run-a", "hi");
+        assert_eq!(a_bg.assistant_text_for_run("run-a"), "hi");
+        assert!(singleton.assistant_text_for_run("run-a").is_empty(), "B untouched");
+
+        // A single settle clears running → no phantom dot from a double bind.
+        assert!(sessions.is_running(a));
+        resolve_target(&sessions, singleton, "run_complete", "run-a", None);
+        assert!(!sessions.is_running(a), "one settle clears it → bound exactly once");
     }
 }

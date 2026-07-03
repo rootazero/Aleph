@@ -7,11 +7,16 @@
 
 - **网络边界**：默认只绑 `127.0.0.1`；`[gateway] host = "0.0.0.0"` 显式开放整个局域网。
 - **本机 (loopback)**：免 token 自动 operator（零配置，勿回归）。
-- **远程 (LAN)**：纯 WS 直连（**非 channel 通道**），行为等同浏览器打开 core IP。须在
-  `connect` 携带共享 **Gateway token**（`aleph-<uuid>`，boot 由 `SharedTokenManager`
-  生成）；校验通过 = operator，权限与本地**完全一致**（单层，无 Chat/Config 之分）；
-  未通过 = 登录墙（WS 派发仅放行 `connect`，前端弹 token 框 / 扫 QR）。
-- **撤销**：轮换 token（`gateway.token.rotate`，旧 token 全失效）。无 per-device 会话。
+- **远程 (LAN)**：纯 WS 直连（**非 channel 通道**），行为等同浏览器打开 core IP。授权凭据
+  按优先级（`connect::resolve_connect_auth` 4 级）：① `device_token`（`aleph-dt-*` 长效绑设备）
+  ② `bootstrap_ticket`（`aleph-bt-*` 5min 一次性配对票，扫 `?bt=` QR，connect 时换取 device token）
+  ③ legacy 共享 **Gateway token**（`aleph-<uuid>`，`SharedTokenManager`）。校验通过 = operator，
+  权限与本地**完全一致**（单层）；未通过 = 登录墙（WS 派发仅放行 `connect`）。**长效凭据不进
+  URL/QR**——QR 只编码一次性配对票，修复 `?token=` 泄露向量。
+- **撤销**：① `gateway.token.rotate` = 核弹级（重生共享 token **并** `revoke_all_panel_devices`，
+  cluster 节点不受影响）。② `gateway.devices.revoke {device_id}` = 单设备（下次重连即拒）；
+  清单 `gateway.devices.list`（仅 `device_type='panel'`）。两者纯 I/O，scope 守卫不碰 cluster 节点。
+  设备令牌/配对票逻辑在 `security/device_token_manager.rs`。
 
 ## 两道护栏
 

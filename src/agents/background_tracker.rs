@@ -14,6 +14,15 @@ use tracing::warn;
 /// on each new `register()`.
 const BACKGROUND_RESULT_TTL: Duration = Duration::from_secs(3600);
 
+/// C1 follow-up — hard count cap on retained completed results. The TTL prune
+/// only fires from `register_with_meta`, so a burst of background spawns that
+/// then goes idle would otherwise keep every completed entry alive past its
+/// TTL forever (nothing re-triggers `cleanup`). `mark_completed` enforces this
+/// cap on every insert, evicting oldest-by-completion, so the map is bounded by
+/// count regardless of spawn cadence. Generous: each entry is a small struct,
+/// and a parent rarely needs to poll more than a handful of recent results.
+const MAX_COMPLETED_RESULTS: usize = 256;
+
 /// Process-global tracker. Every `ExecutionEngine` and the `subagent.tree` RPC
 /// share this one instance, so a panel sees every background sub-agent
 /// regardless of which run spawned it (the tracker was always documented as
@@ -298,6 +307,23 @@ impl BackgroundAgentTracker {
                 last_activity,
             },
         );
+        // C1 follow-up — bound the map by count. `mark_completed` is the only
+        // site that grows `completed` and it has no TTL-prune trigger of its
+        // own, so without this a long-lived process that spawns many background
+        // subagents and then idles would retain results indefinitely. Evict the
+        // oldest-by-completion entries beyond the cap while we still hold the
+        // write lock (cheap: only sorts when actually over the cap).
+        if completed.len() > MAX_COMPLETED_RESULTS {
+            let overflow = completed.len() - MAX_COMPLETED_RESULTS;
+            let mut by_age: Vec<(String, Instant)> = completed
+                .iter()
+                .map(|(id, agent)| (id.clone(), agent.completed_at))
+                .collect();
+            by_age.sort_by_key(|(_, at)| *at);
+            for (id, _) in by_age.into_iter().take(overflow) {
+                completed.remove(&id);
+            }
+        }
     }
 
     /// Cancel a running background agent. Returns `true` if the `request_id`
@@ -565,6 +591,25 @@ mod tests {
         tracker.mark_completed("old", CompletedOutcome::ok_text("old result"));
         tracker.cleanup(std::time::Duration::ZERO);
         assert!(tracker.result_snapshot("old").is_none());
+    }
+
+    #[test]
+    fn mark_completed_caps_completed_count() {
+        let tracker = BackgroundAgentTracker::new();
+        // Insert well beyond the cap; the map must stay bounded and the most
+        // recent inserts must survive (oldest-by-completion are evicted first).
+        let total = MAX_COMPLETED_RESULTS + 50;
+        for i in 0..total {
+            tracker.mark_completed(&format!("rid-{i}"), CompletedOutcome::ok_text("r"));
+        }
+        assert_eq!(
+            tracker.all_completed().len(),
+            MAX_COMPLETED_RESULTS,
+            "completed map must be bounded by MAX_COMPLETED_RESULTS"
+        );
+        // The very first inserts are the oldest → evicted; the last one stays.
+        assert!(tracker.result_snapshot("rid-0").is_none());
+        assert!(tracker.result_snapshot(&format!("rid-{}", total - 1)).is_some());
     }
 
     #[test]

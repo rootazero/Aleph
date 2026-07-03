@@ -35,10 +35,17 @@ impl SubagentTool {
     ///
     /// In production both descend from the same run cancel root, but the
     /// per-call token is more specific: the per-tool cancel RPC will only
-    /// trigger `harness`, leaving the rest of the run untouched. The watcher
-    /// task self-terminates as soon as `harness` cancels; if neither side ever
-    /// fires it stays parked on `harness.cancelled()` until the process exits,
-    /// which is acceptable for the rare-event subagent spawn path.
+    /// trigger `harness`, leaving the rest of the run untouched.
+    ///
+    /// The bridge watcher is lifetime-bounded: it exits as soon as EITHER the
+    /// `harness` token fires (propagating the cancel onto the returned token)
+    /// OR the returned token is itself cancelled — by run-level propagation
+    /// from `parent_cancel`, or by the caller firing it once the child run has
+    /// finished (every spawn site calls `.cancel()` on the returned token after
+    /// the child run completes). Without that second arm the watcher would park
+    /// on `harness.cancelled()` until process exit on the normal-completion
+    /// path, leaking one task per subagent spawn (amplified by batch / MoA
+    /// fan-out).
     pub(super) fn cancel_for_child_with(&self, harness: &CancellationToken) -> CancellationToken {
         let token = self.cancel_for_child();
         if harness.is_cancelled() {
@@ -48,8 +55,10 @@ impl SubagentTool {
         let token_clone = token.clone();
         let harness_clone = harness.clone();
         tokio::spawn(async move {
-            harness_clone.cancelled().await;
-            token_clone.cancel();
+            tokio::select! {
+                _ = harness_clone.cancelled() => token_clone.cancel(),
+                _ = token_clone.cancelled() => {}
+            }
         });
         token
     }
@@ -110,6 +119,10 @@ impl SubagentTool {
             },
         );
 
+        // Held past the `build_runtime` move so the spawned run task can fire
+        // it on completion, terminating the `cancel_for_child_with` bridge
+        // watcher (otherwise it parks until process exit).
+        let bridge_cancel = cancel_token.clone();
         let mut runtime = self.build_runtime(child_chain, cancel_token);
         if let Some(parent_sink) = self.trace_sink.clone() {
             let wrapper: std::sync::Arc<dyn crate::harness::TraceSink> = std::sync::Arc::new(
@@ -238,6 +251,10 @@ impl SubagentTool {
                 },
             );
             tracker.mark_completed(&rid, outcome);
+            // Terminate the per-call cancel bridge watcher now the child run is
+            // done (no-op if it already fired via cancel). Keeps background
+            // spawns from leaking one parked task apiece.
+            bridge_cancel.cancel();
             if let Some((session_id, result)) = announce {
                 crate::event::GlobalBus::global()
                     .broadcast(

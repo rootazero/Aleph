@@ -139,9 +139,10 @@ pub struct AgentRuntime {
     trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
     /// A2 — subagent concurrency cap, threaded into every `SpawnerBase`.
     subagent_semaphore: Option<Arc<tokio::sync::Semaphore>>,
-    /// B2 — global plugin registry, threaded into `SpawnerBase` for per-agent
-    /// MCP scope provisioning.
-    plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
+    /// B2 — shared plugin-registry handle, threaded into `SpawnerBase` for
+    /// per-agent MCP scope provisioning.
+    plugin_registry:
+        Option<Arc<tokio::sync::RwLock<crate::extension::registry::PluginRegistry>>>,
     /// Phase 3 — `provider_hint` → pinned-then-fall-through provider. An empty
     /// map (the `new()` default) means every spawn uses `provider`.
     provider_overrides: HashMap<String, Arc<dyn AiProvider>>,
@@ -215,11 +216,11 @@ impl AgentRuntime {
         self
     }
 
-    /// B2 — wire the global plugin registry for per-agent MCP scope.
+    /// B2 — wire the shared plugin-registry handle for per-agent MCP scope.
     #[must_use]
     pub fn with_plugin_registry(
         mut self,
-        registry: Arc<crate::extension::registry::PluginRegistry>,
+        registry: Arc<tokio::sync::RwLock<crate::extension::registry::PluginRegistry>>,
     ) -> Self {
         self.plugin_registry = Some(registry);
         self
