@@ -1,8 +1,10 @@
 //! `MemoryProtocolLayer` — soft guidance for the three memory tools (priority 1745)
 //!
-//! Sits between `MemoryAugmentationLayer` (1740, hybrid-retrieval injection) and
-//! `SessionContextGuideLayer` (1750, post-compaction guide). Always-on, stable
-//! text — the LLM's view of which memory tool fits which question.
+//! Sits just before `SessionContextGuideLayer` (1750, post-compaction guide).
+//! Always-on, stable text — the LLM's view of which memory tool fits which
+//! question. (Retrieved memory itself no longer rides the system prompt: it
+//! arrives as the transient trailing `<memory-context>` message, see
+//! `HarnessDeps::recall_context`.)
 //!
 //! Spec A introduced `remember` (curated MEMORY.md hot zone). Spec B introduced
 //! `session_search` (summarized session-end facts). Without explicit guidance
@@ -11,8 +13,6 @@
 //! LLM-sovereignty stance (CLAUDE.md R8).
 //!
 //! Why this is a separate layer rather than text glued onto an existing one:
-//! * `MemoryAugmentationLayer` injects retrieved content verbatim — mixing
-//!   guidance into it would couple "what we know" with "how to recall more".
 //! * `SessionContextGuideLayer` only fires after compaction. Tool guidance
 //!   must apply to the first turn too.
 
@@ -33,12 +33,11 @@ impl PromptLayer for MemoryProtocolLayer {
     fn stability(&self) -> LayerStability {
         // Convention in `prompt_pipeline.rs`: priority ≥ 1700 belongs in the
         // dynamic zone, which is enforced by `stable_layers_come_before_dynamic`.
-        // The text is identical across requests, but priority 1745 keeps the
-        // guidance visually adjacent to `MemoryAugmentationLayer` (1740) so it
-        // reads as one block — that ordering wins over the marginal cache
-        // benefit a Stable rating would give. Sibling memory/context layers
-        // (MemoryAugmentationLayer / SessionContextGuideLayer) make the same
-        // call.
+        // The text is identical across requests, so a Dynamic rating costs no
+        // provider-cache stability (byte-identical dynamic bytes never re-key
+        // the prefix); priority 1745 keeps the guidance adjacent to the other
+        // per-request memory/session context. `SessionContextGuideLayer` makes
+        // the same call.
         LayerStability::Dynamic
     }
 
@@ -62,7 +61,8 @@ impl PromptLayer for MemoryProtocolLayer {
              Three memory tools — reach for the one matching the question:\n\
              - `memory_search` — hybrid retrieval over notes/facts (cross-session). \
              Use for prior decisions, preferences, or any fact not already in the \
-             `<CuratedMemory>`/`<memory>` blocks above.\n\
+             `<CuratedMemory>` block above or the auto-recalled `<memory-context>` \
+             message in this conversation.\n\
              - `session_search` — find a past session by topic and read its summarized \
              facts (with evidence quotes). Use for \"last time\", \"that bug we fixed\", \
              or any past-conversation reference.\n\
@@ -74,7 +74,8 @@ impl PromptLayer for MemoryProtocolLayer {
              imperatives get re-read next session as standing orders and can override \
              a later request.\n\
              \n\
-             `<CuratedMemory>` and retrieved `<memory>` blocks are auto-injected — don't \
+             `<CuratedMemory>` and the retrieved `<memory-context>` message are \
+             auto-injected — don't \
              search for facts you can already read. A soft rejection from `remember` \
              (duplicate, over-budget, no-match) returns `message: \"rejected: …\"`; \
              recover by rephrasing or switching action, not by aborting the turn.\n\

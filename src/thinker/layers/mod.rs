@@ -79,7 +79,6 @@ mod extra_files;
 mod curated_memory;
 
 // --- Memory augmentation layer ---
-mod memory_augmentation;
 
 // --- Memory protocol guidance layer ---
 mod memory_protocol;
@@ -123,7 +122,6 @@ pub use extra_files::ExtraFilesLayer;
 pub use heartbeat::HeartbeatLayer;
 pub use identity_files::IdentityFilesLayer;
 pub use inbound_context::InboundContextLayer;
-pub use memory_augmentation::MemoryAugmentationLayer;
 pub use memory_protocol::MemoryProtocolLayer;
 pub use multi_step_conduct::MultiStepConductLayer;
 pub use operational_guidelines::OperationalGuidelinesLayer;

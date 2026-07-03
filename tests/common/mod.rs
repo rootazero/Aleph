@@ -202,8 +202,6 @@ impl OrchestratorFixture {
             estimate_overhead_cache: std::sync::Arc::new(
                 alephcore::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
             ),
-            stable_prompt_cache:
-                alephcore::orchestrator::harness_bridge::default_stable_prompt_cache(),
         });
 
         let orchestrator = Orchestrator::new(

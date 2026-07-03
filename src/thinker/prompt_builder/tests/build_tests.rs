@@ -1,27 +1,12 @@
 //! Tests that call build_* entry points
+//
+// (The routing-experience/memory system-prompt injection tests were removed
+// 2026-07-03: per-query recall no longer rides the system prompt — it is
+// delivered as a transient trailing user message via
+// `HarnessDeps::recall_context`.)
 
 use super::super::*;
 use crate::thinker::soul::SoulManifest;
-
-#[test]
-fn routing_experience_injected_once_on_noncached_path() {
-    // Regression: non-cached build_system_prompt must mirror the cached path
-    // and thread routing_experience_user_message into LayerInput.
-    let marker = "ROUTING_NC_MARKER_9b2e";
-    let builder = PromptBuilder::new(PromptConfig::default())
-        .with_memory_user_message("MEM_BODY_NC".to_string())
-        .with_routing_experience_message(marker.to_string());
-    let prompt = builder.build_system_prompt(&[]);
-    assert_eq!(
-        prompt.matches(marker).count(),
-        1,
-        "routing text must be emitted exactly once on non-cached path"
-    );
-    assert!(
-        prompt.contains("MEM_BODY_NC"),
-        "memory still emitted alongside routing on non-cached path"
-    );
-}
 
 // ========== Integration tests: public API via Pipeline ==========
 
@@ -225,7 +210,6 @@ fn phase4_with_runtime_context_populated_emits_runtime_environment_on_basic_path
         current_model: "test-provider".to_string(),
         hostname: "ci-runner".to_string(),
         current_time: "2026-05-20 12:00:00".to_string(),
-        current_time_ms: 1779789600000,
         timezone: "UTC".to_string(),
     });
 
@@ -394,7 +378,6 @@ fn test_build_system_prompt_with_context_includes_runtime_context() {
         current_model: "gpt-4".to_string(),
         hostname: "server-01".to_string(),
         current_time: "2026-03-30 02:30:00".to_string(),
-        current_time_ms: 1774852200000,
         timezone: "UTC".to_string(),
     });
 
@@ -460,7 +443,6 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
         current_model: "claude-opus-4-6".to_string(),
         hostname: "test-host".to_string(),
         current_time: "2026-03-30 14:30:00".to_string(),
-        current_time_ms: 1774852200000,
         timezone: "Asia/Shanghai".to_string(),
     });
 
@@ -609,7 +591,6 @@ fn test_interactive_prompt_minimal_token_overhead() {
         current_model: "gpt-4".to_string(),
         hostname: "web-server".to_string(),
         current_time: "2026-03-30 02:30:00".to_string(),
-        current_time_ms: 1774852200000,
         timezone: "UTC".to_string(),
     });
 

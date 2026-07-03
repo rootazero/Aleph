@@ -8,13 +8,12 @@ use super::layers::{
     CuratedMemoryLayer, CustomInstructionsLayer, DoctorRepairHintLayer, EnvironmentLayer,
     ExecutionPlanLayer, ExtraFilesLayer, GenerationModelsLayer, GuidelinesLayer, HeartbeatLayer,
     HydratedToolsLayer, IdentityFilesLayer, InboundContextLayer, LanguageLayer,
-    McpInstructionsLayer, MemoryAugmentationLayer, MemoryProtocolLayer, MultiStepConductLayer,
-    OperationalGuidelinesLayer, ProfileLayer, ProtocolTokensLayer, ProviderGuidanceLayer,
-    RoleLayer, RuntimeCapabilitiesLayer, RuntimeContextLayer, SecurityLayer, SessionBudgetLayer,
-    SessionContextGuideLayer, SessionResumeLayer, SkillInstructionsLayer, SkillModeLayer,
-    SoulLayer, SpecialActionsLayer, StandingGoalLayer, StrategyLayer, StrategyPointerLayer,
-    ThinkingGuidanceLayer, TimerLoopLayer, ToolRuntimeStateLayer, ToolUsageGrammarLayer,
-    ToolsLayer, VoiceModeLayer,
+    McpInstructionsLayer, MemoryProtocolLayer, MultiStepConductLayer, OperationalGuidelinesLayer,
+    ProfileLayer, ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
+    RuntimeContextLayer, SecurityLayer, SessionBudgetLayer, SessionContextGuideLayer,
+    SessionResumeLayer, SkillInstructionsLayer, SkillModeLayer, SoulLayer, SpecialActionsLayer,
+    StandingGoalLayer, StrategyLayer, StrategyPointerLayer, ThinkingGuidanceLayer, TimerLoopLayer,
+    ToolRuntimeStateLayer, ToolUsageGrammarLayer, ToolsLayer, VoiceModeLayer,
 };
 use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
@@ -320,7 +319,11 @@ impl PromptPipeline {
             Box::new(CustomInstructionsLayer),
             Box::new(IdentityFilesLayer),
             Box::new(ExtraFilesLayer),
-            Box::new(MemoryAugmentationLayer),
+            // MemoryAugmentationLayer (@1740, Dynamic) was removed 2026-07-03:
+            // per-query recall now travels as a transient trailing user
+            // message (`HarnessDeps::recall_context`) instead of the system
+            // prompt — varying bytes here re-keyed the conversation-prefix
+            // cache every run. Curated memory stays at @60 (Stable).
             Box::new(MemoryProtocolLayer),
             Box::new(SessionContextGuideLayer),
             Box::new(TimerLoopLayer),
@@ -461,9 +464,12 @@ mod tests {
         // hint, 2026-06-19). See `default_layers`.
         // → 44 (MultiStepConductLayer @805 Stable — autonomous scratchpad
         // planning + interactive progress narration, 2026-06-28).
-        // → 45 (TimerLoopLayer @1753 Dynamic — re-surfaces the session's
+        // → 43 (MemoryAugmentationLayer removed 2026-07-03 — per-query recall
+        // moved out of the system prompt into the transient trailing recall
+        // message; see `HarnessDeps::recall_context`).
+        // → 44 (TimerLoopLayer @1753 Dynamic — re-surfaces the session's
         // active watch loop per turn, 2026-07-03).
-        assert_eq!(pipeline.layer_count(), 45);
+        assert_eq!(pipeline.layer_count(), 44);
     }
 
     #[test]
@@ -780,7 +786,6 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"voice_mode"));
         assert!(dynamic_names.contains(&"runtime_context"));
         assert!(dynamic_names.contains(&"identity_files"));
-        assert!(dynamic_names.contains(&"memory_augmentation"));
         assert!(dynamic_names.contains(&"memory_protocol"));
         assert!(dynamic_names.contains(&"session_context_guide"));
         assert!(dynamic_names.contains(&"session_resume"));
@@ -803,10 +808,12 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"strategy_pointer"));
         // DoctorRepairHintLayer (@1715) is WebRich-gated per request — Dynamic.
         assert!(dynamic_names.contains(&"doctor_repair_hint"));
+        // 16 → 15: MemoryAugmentationLayer removed 2026-07-03 (recall moved
+        // to the transient trailing message, `HarnessDeps::recall_context`).
         assert_eq!(
             dynamic_names.len(),
-            16,
-            "Exactly 16 dynamic layers expected"
+            15,
+            "Exactly 15 dynamic layers expected"
         );
     }
 

@@ -47,7 +47,11 @@ struct MockSession {
 
 impl MockSession {
     fn new(initial: Vec<SessionEvent>) -> Arc<Self> {
-        let mut inner = MockSessionInner::default();
+        // Match the real store: seqs are assigned from 1 (0 = empty head).
+        let mut inner = MockSessionInner {
+            next_seq: 1,
+            ..MockSessionInner::default()
+        };
         for event in initial {
             let seq = inner.next_seq;
             inner.next_seq += 1;
@@ -76,10 +80,22 @@ impl SessionService for MockSession {
     async fn get_events(
         &self,
         _id: &SessionId,
-        _from: Option<EventSeq>,
-        _to: Option<EventSeq>,
+        from: Option<EventSeq>,
+        to: Option<EventSeq>,
     ) -> Result<Vec<SessionEventRecord>, SessionError> {
-        Ok(self.inner.lock().await.events.clone())
+        // Honor the seq range like the real store (`seq >= from && seq <= to`)
+        // so range-based production reads (watermark tails) stay testable.
+        let from = from.unwrap_or(0);
+        let to = to.unwrap_or(EventSeq::MAX);
+        Ok(self
+            .inner
+            .lock()
+            .await
+            .events
+            .iter()
+            .filter(|r| r.seq >= from && r.seq <= to)
+            .cloned()
+            .collect())
     }
     async fn emit_event(
         &self,
@@ -322,6 +338,7 @@ fn make_deps(
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
+        recall_context: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: Some(Arc::new(registry)),
         max_iterations: None,
@@ -614,6 +631,7 @@ fn make_deps_with_tools(
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
+        recall_context: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: Some(Arc::new(registry)),
         max_iterations: None,
@@ -904,6 +922,7 @@ fn make_parallel_deps(
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
+        recall_context: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: Some(Arc::new(registry)),
         max_iterations: None,

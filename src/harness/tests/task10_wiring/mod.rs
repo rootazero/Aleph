@@ -50,7 +50,11 @@ struct MockSession {
 
 impl MockSession {
     fn new(initial: Vec<SessionEvent>) -> Arc<Self> {
-        let mut inner = MockSessionInner::default();
+        // Match the real store: seqs are assigned from 1 (0 = empty head).
+        let mut inner = MockSessionInner {
+            next_seq: 1,
+            ..MockSessionInner::default()
+        };
         for event in initial {
             let seq = inner.next_seq;
             inner.next_seq += 1;
@@ -79,10 +83,22 @@ impl SessionService for MockSession {
     async fn get_events(
         &self,
         _id: &SessionId,
-        _from: Option<EventSeq>,
-        _to: Option<EventSeq>,
+        from: Option<EventSeq>,
+        to: Option<EventSeq>,
     ) -> Result<Vec<SessionEventRecord>, SessionError> {
-        Ok(self.inner.lock().await.events.clone())
+        // Honor the seq range like the real store (`seq >= from && seq <= to`)
+        // so range-based production reads (watermark tails) stay testable.
+        let from = from.unwrap_or(0);
+        let to = to.unwrap_or(EventSeq::MAX);
+        Ok(self
+            .inner
+            .lock()
+            .await
+            .events
+            .iter()
+            .filter(|r| r.seq >= from && r.seq <= to)
+            .cloned()
+            .collect())
     }
     async fn emit_event(
         &self,
@@ -289,6 +305,7 @@ async fn budget_critical_compacts_and_continues_with_prior_text() {
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
+        recall_context: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -358,6 +375,7 @@ async fn budget_critical_compacts_and_continues_no_prior_text() {
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
+        recall_context: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -445,6 +463,7 @@ async fn budget_warning_invokes_compactor_before_llm() {
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
+        recall_context: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -535,6 +554,7 @@ async fn stop_hook_veto_forces_continue_and_injects_block_reason() {
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
+        recall_context: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -609,6 +629,7 @@ async fn diminishing_returns_fires_grace_and_hits_limit() {
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
+        recall_context: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -717,6 +738,7 @@ async fn tool_loop_verifier_vetoes_repeated_tool_call_with_no_text() {
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
+        recall_context: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: Some(7),
@@ -850,6 +872,7 @@ async fn tool_loop_halt_fires_salvage_grace_turn_and_closes_orphan() {
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
+        recall_context: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         // High enough that the Tier-1 halt (at 8 identical calls) fires before
@@ -1002,6 +1025,7 @@ async fn per_tool_budget_overrun_recovers_as_tool_error_not_run_abort() {
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
+        recall_context: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -1092,6 +1116,7 @@ async fn veto_cap_follows_profile_steer_max() {
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
+        recall_context: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: Some(20),
@@ -1249,6 +1274,7 @@ async fn grace_turn_payload_has_no_orphaned_tool_calls() {
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
+        recall_context: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: Some(20),
@@ -1470,6 +1496,7 @@ async fn weak_model_fanout_then_thrash_steers_and_delivers_partial() {
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
+        recall_context: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         // High enough that the veto cap (after 2 thrash vetoes) fires first.

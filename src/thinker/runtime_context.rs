@@ -39,10 +39,10 @@ pub struct RuntimeContext {
     pub current_model: String,
     /// Machine hostname
     pub hostname: String,
-    /// Current local time as human-readable string, e.g. "2026-03-30 14:30:00"
+    /// Current local time as human-readable string, HOUR precision (e.g.
+    /// "2026-03-30 14:00") so the rendered prompt section stays byte-stable —
+    /// and provider-prompt-cacheable — across turns within the same hour.
     pub current_time: String,
-    /// Current time in milliseconds since epoch (UTC), for precise scheduling
-    pub current_time_ms: i64,
     /// Local timezone identifier, e.g. "Asia/Shanghai", "UTC+8"
     pub timezone: String,
 }
@@ -71,10 +71,18 @@ impl RuntimeContext {
             .or_else(|_| std::env::var("COMPUTERNAME"))
             .unwrap_or_else(|_| "unknown".to_string());
 
-        // Collect current local time, epoch ms, and timezone
+        // Collect current local time, epoch ms, and timezone. The prompt-facing
+        // string is HOUR precision (hermes-agent's date-only-timestamp lesson,
+        // PR #20451 there): the system prompt sits ahead of every message-level
+        // prompt-cache breakpoint, so a second-precision timestamp re-keys the
+        // whole conversation prefix on every run and zeroes the provider cache
+        // hit rate. Hour precision keeps time-of-day grounding (salutations,
+        // "is it late night" judgment) while staying byte-stable for up to an
+        // hour of turns. Precise scheduling never depended on this string —
+        // the tool registry injects fresh `__current_time_ms` into cron tool
+        // calls at execution time (`tool_registry_impl.rs`).
         let now_local = chrono::Local::now();
-        let current_time = now_local.format("%Y-%m-%d %H:%M:%S").to_string();
-        let current_time_ms = now_local.timestamp_millis();
+        let current_time = now_local.format("%Y-%m-%d %H:00").to_string();
         let timezone = {
             let offset = now_local.offset();
             // Try to get IANA timezone from TZ env var, fall back to UTC offset
@@ -101,7 +109,6 @@ impl RuntimeContext {
             current_model: current_model.to_string(),
             hostname,
             current_time,
-            current_time_ms,
             timezone,
         }
     }
@@ -138,8 +145,12 @@ impl RuntimeContext {
 
         parts.push(format!("model={}", self.current_model));
         parts.push(format!("host={}", self.hostname));
+        // Hour-precision time only — no `time_ms=`. A millisecond epoch here
+        // changed every build, and any byte change in this section invalidates
+        // the provider prompt cache for the entire conversation that follows
+        // it. Tools that need exact time get it injected per-call
+        // (`__current_time_ms`); the model needing exact time can run one.
         parts.push(format!("time={} ({})", self.current_time, self.timezone));
-        parts.push(format!("time_ms={}", self.current_time_ms));
 
         format!("## Runtime Environment\n{}", parts.join(" | "))
     }
@@ -284,8 +295,7 @@ mod tests {
             repo_root,
             current_model: "claude-opus-4-6".to_string(),
             hostname: "MacBook-Pro".to_string(),
-            current_time: "2026-03-30 14:30:00".to_string(),
-            current_time_ms: 1774852200000,
+            current_time: "2026-03-30 14:00".to_string(),
             timezone: "Asia/Shanghai".to_string(),
         }
     }
@@ -304,8 +314,11 @@ mod tests {
         assert!(section.contains("repo=/workspace"));
         assert!(section.contains("model=claude-opus-4-6"));
         assert!(section.contains("host=MacBook-Pro"));
-        assert!(section.contains("time=2026-03-30 14:30:00 (Asia/Shanghai)"));
-        assert!(section.contains("time_ms=1774852200000"));
+        assert!(section.contains("time=2026-03-30 14:00 (Asia/Shanghai)"));
+        // No sub-hour precision and no epoch ms — the section must stay
+        // byte-stable within the hour so it never re-keys the provider
+        // prompt cache for the conversation that follows it.
+        assert!(!section.contains("time_ms="));
 
         // Verify pipe-separated format on the data line
         let lines: Vec<&str> = section.lines().collect();
@@ -393,8 +406,7 @@ mod tests {
             repo_root: None,
             current_model: "gpt-4".to_string(),
             hostname: "server-01".to_string(),
-            current_time: "2026-03-30 02:30:00".to_string(),
-            current_time_ms: 1774852200000,
+            current_time: "2026-03-30 02:00".to_string(),
             timezone: "UTC".to_string(),
         };
 
@@ -412,7 +424,7 @@ mod tests {
         assert!(section.contains("model=gpt-4"));
         assert!(section.contains("host=server-01"));
         assert!(section.contains("time="));
-        assert!(section.contains("time_ms="));
+        assert!(!section.contains("time_ms="));
         assert!(
             !section.contains("git="),
             "should NOT contain git= when repo_root is None"

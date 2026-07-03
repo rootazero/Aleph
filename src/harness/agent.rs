@@ -22,7 +22,7 @@
 //!   * `guardrails.rs` — `apply_input_guardrail`, `apply_tool_call_guardrail`
 //!   * `prompt.rs` — `build_prompt` (sync per-turn message assembler)
 
-use crate::sync_primitives::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Mutex, Ordering};
+use crate::sync_primitives::{AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering};
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -158,22 +158,27 @@ pub struct AgentHarness {
     /// summarisation indicate fundamentally oversized input rather than a
     /// recoverable burst. R10-safe: pure round scheduling, no policy choice.
     pub(super) reactive_compact_attempts: AtomicU32,
-    /// Persisted event-log length captured at the start of the most recent turn
-    /// (before that turn appended anything), i.e. the index boundary the turn's
-    /// prompt was built from. The follow-up boundary check
-    /// ([`AgentHarness::has_unanswered_user_message`]) treats any non-synthetic
-    /// `UserMessage` at or beyond this watermark as input the model never saw.
+    /// Seq of the last persisted event covered by the most recent turn's
+    /// prompt (captured in `think.rs` right after `get_events`, before that
+    /// turn appended anything). `0` is the cold sentinel — the store assigns
+    /// seqs from 1, so 0 means "no prompt built yet this run" and both
+    /// consumers treat it as "nothing to compare against". The follow-up
+    /// boundary check ([`AgentHarness::has_unanswered_user_message`]) treats
+    /// any non-synthetic `UserMessage` with seq > watermark as input the model
+    /// never saw; the consecutive-failure watchdog uses the same boundary to
+    /// fetch only the just-finished turn's events instead of the full log.
     ///
     /// Why a watermark and not "user after last assistant": a steering message
-    /// injected *while the final turn's LLM call is still streaming* lands in the
-    /// log *before* the assistant message that turn commits, so the positional
-    /// "is there a user after the last assistant" test silently misses it. The
-    /// watermark is set once per turn in `think.rs` (right after `get_events`),
-    /// so on a `Done` turn it holds that turn's pre-prompt boundary — late
-    /// arrivals sit at index >= watermark regardless of the assistant's position.
-    /// Mechanical (R10-safe): one store per turn, no decision. The loop runs one
-    /// turn at a time, so `Relaxed` ordering is sufficient.
-    pub(super) last_prompt_log_len: AtomicUsize,
+    /// injected *while the final turn's LLM call is still streaming* lands in
+    /// the log *before* the assistant message that turn commits, so the
+    /// positional "is there a user after the last assistant" test silently
+    /// misses it. Late arrivals sit at seq > watermark regardless of the
+    /// assistant's position. Seq-based (not an index) so consumers can ask the
+    /// store for the tail directly (`get_events(from: watermark+1)`) rather
+    /// than re-fetching the whole log every call. Mechanical (R10-safe): one
+    /// store per turn, no decision. The loop runs one turn at a time, so
+    /// `Relaxed` ordering is sufficient.
+    pub(super) last_prompt_seq: AtomicU64,
 }
 
 impl AgentHarness {
@@ -196,7 +201,7 @@ impl AgentHarness {
             final_session_id: Mutex::new(None),
             recent_failures: Mutex::new(std::collections::HashSet::new()),
             reactive_compact_attempts: AtomicU32::new(0),
-            last_prompt_log_len: AtomicUsize::new(0),
+            last_prompt_seq: AtomicU64::new(0),
         }
     }
 
@@ -431,43 +436,41 @@ impl AgentHarness {
     /// Pi `getFollowUpMessages` parity — detect a steering message that landed
     /// during the run's *final* turn and is therefore still unanswered.
     ///
-    /// Returns `true` iff a non-synthetic [`SessionEvent::UserMessage`] appears
-    /// *after* the last [`SessionEvent::AssistantMessage`] in the session log.
-    /// That ordering is the entire signal: the model produced its final turn,
-    /// then the user spoke — so the model has not yet seen, let alone answered,
-    /// that input. The mid-loop steering path
+    /// Returns `true` iff a non-synthetic [`SessionEvent::UserMessage`] landed
+    /// *after* the last turn's prompt boundary (`last_prompt_seq`): that turn
+    /// built its prompt without the message, so the model has not yet seen,
+    /// let alone answered, that input. The mid-loop steering path
     /// ([`crate::gateway::execution_engine`]) documents exactly this race: an
     /// injection that lands during the closing LLM call would otherwise sit at
     /// the tail of the log until the user sent a *second* message. Continuing
     /// the loop here answers it in the same run.
     ///
-    /// When the newest user message *precedes* the last assistant turn, the
-    /// model already saw it and chose to stop; that decision is the model's
-    /// (R7), so we return `false` and let the loop terminate. A read error also
-    /// returns `false` — failing closed keeps a transient session-store glitch
-    /// from spinning the loop. Purely positional: no intent, completion, or
-    /// relevance judgement is made (R10-safe scaffolding).
+    /// When the newest user message *precedes* the boundary, the model already
+    /// saw it and chose to stop; that decision is the model's (R7), so we
+    /// return `false` and let the loop terminate. The cold sentinel (0 = no
+    /// prompt built yet this run) also returns `false` — before the first
+    /// prompt the leading user message is the turn being processed, not a late
+    /// arrival. A read error likewise returns `false` — failing closed keeps a
+    /// transient session-store glitch from spinning the loop. Only the tail
+    /// past the watermark is fetched (seq-ranged `get_events`), so the check
+    /// stays O(new events) per call instead of re-reading the whole log.
+    /// Purely positional: no intent, completion, or relevance judgement is
+    /// made (R10-safe scaffolding).
     async fn has_unanswered_user_message(&self, session: &SessionId) -> bool {
-        let events = match self.deps.session.get_events(session, None, None).await {
+        let watermark = self.last_prompt_seq.load(Ordering::Relaxed);
+        if watermark == 0 {
+            return false;
+        }
+        let tail = match self
+            .deps
+            .session
+            .get_events(session, Some(watermark.saturating_add(1)), None)
+            .await
+        {
             Ok(e) => e,
             Err(_) => return false,
         };
-        // A follow-up only makes sense once at least one assistant turn has run;
-        // before that the leading prompt is the turn being processed, not a late
-        // arrival. (Also guards the cold default watermark of 0.)
-        if !events
-            .iter()
-            .any(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
-        {
-            return false;
-        }
-        // Any non-synthetic UserMessage at or beyond the last turn's prompt
-        // boundary arrived after that turn read the log, so the model never saw
-        // it — even if it landed *before* the assistant message the turn went on
-        // to commit (the during-final-turn injection race). Positional and
-        // watermark-bounded; R10-safe.
-        let watermark = self.last_prompt_log_len.load(Ordering::Relaxed);
-        events.iter().skip(watermark).any(|r| {
+        tail.iter().any(|r| {
             matches!(
                 &r.event,
                 SessionEvent::UserMessage { synthetic, .. } if !*synthetic
@@ -644,10 +647,20 @@ impl Harness for AgentHarness {
                     // turn's tool errors vs successful executions over the
                     // events since the last assistant message.
                     if !vetoed {
+                        // Fetch only the just-finished turn's tail (everything
+                        // appended past its prompt boundary: the assistant
+                        // message plus tool results), not the full log — keeps
+                        // the per-turn cost proportional to the turn instead of
+                        // O(session length) every iteration.
+                        let prompt_seq = self.last_prompt_seq.load(Ordering::Relaxed);
                         let events = self
                             .deps
                             .session
-                            .get_events(&current_session, None, None)
+                            .get_events(
+                                &current_session,
+                                Some(prompt_seq.saturating_add(1)),
+                                None,
+                            )
                             .await
                             .map_err(HarnessError::Session)?;
                         let last_assistant_idx = events
@@ -783,8 +796,8 @@ impl Harness for AgentHarness {
                     // prompt (the boundary race in
                     // `gateway::execution_engine::steering`). Before handing
                     // control back, re-read the log: if a genuine user message
-                    // arrived at or beyond the final turn's prompt boundary
-                    // (`last_prompt_log_len`), the model has not seen it —
+                    // arrived past the final turn's prompt boundary
+                    // (`last_prompt_seq`), the model has not seen it —
                     // continue the loop so it is answered in this same run
                     // instead of waiting for the user to send a second message.
                     // The watermark catches messages injected *during* the final
@@ -1280,6 +1293,7 @@ mod tests {
             trace_sink: None,
             system_prompt: None,
             system_prompt_parts: None,
+            recall_context: None,
             chain_context: crate::harness::chain_context::ChainContext::default(),
             guardrails: None,
             max_iterations: None,
@@ -1344,12 +1358,14 @@ mod tests {
     }
 
     /// Set the per-turn prompt-boundary watermark the way `run_turn_internal`
-    /// would after reading a log of `len` events. Mirrors the production store so
-    /// the follow-up tests exercise the real watermark logic.
-    fn set_watermark(harness: &super::AgentHarness, len: usize) {
+    /// would after reading a log whose last event has seq `seq`. Mirrors the
+    /// production store so the follow-up tests exercise the real watermark
+    /// logic. (The real store assigns seqs from 1, so a log of N contiguous
+    /// events has last seq N.)
+    fn set_watermark(harness: &super::AgentHarness, seq: u64) {
         harness
-            .last_prompt_log_len
-            .store(len, crate::sync_primitives::Ordering::Relaxed);
+            .last_prompt_seq
+            .store(seq, crate::sync_primitives::Ordering::Relaxed);
     }
 
     /// Normal completion: the model's last act is its assistant turn, so there
@@ -1520,6 +1536,7 @@ mod tests {
             trace_sink: None,
             system_prompt: None,
             system_prompt_parts: None,
+            recall_context: None,
             chain_context: crate::harness::chain_context::ChainContext::default(),
             guardrails: None,
             max_iterations: Some(3),
@@ -1593,6 +1610,7 @@ mod tests {
             trace_sink: None,
             system_prompt: None,
             system_prompt_parts: None,
+            recall_context: None,
             chain_context: crate::harness::chain_context::ChainContext::default(),
             guardrails: None,
             max_iterations: Some(3),
@@ -1660,6 +1678,7 @@ mod tests {
             trace_sink: None,
             system_prompt: None,
             system_prompt_parts: None,
+            recall_context: None,
             chain_context: crate::harness::chain_context::ChainContext::default(),
             guardrails: None,
             max_iterations: None,

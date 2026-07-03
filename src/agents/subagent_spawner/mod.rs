@@ -420,6 +420,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             trace_sink: child_trace_sink,
             system_prompt: Some(system_prompt),
             system_prompt_parts: None,
+            recall_context: None,
             // Stage 4 (#11): stamp the descended child chain on the inner harness
             // so its `chain_context()` accessor reports the correct depth/chain_id
             // instead of falling back to a fresh root.

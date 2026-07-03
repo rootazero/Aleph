@@ -5,12 +5,12 @@
 //! ---------------
 //! [`render::render_with`] turns a [`MemoryEnvelope`](super::envelope::MemoryEnvelope)
 //! into a block of recalled notes / raw fragments / session summaries. That
-//! block is injected verbatim into the system prompt by
-//! `MemoryAugmentationLayer`. Without framing, the model cannot tell recalled
-//! memory (reference data, possibly containing past user text or external
-//! content) apart from its own core instructions and from the user's *current*
-//! request — a recalled note that reads like an instruction could be acted on
-//! as if the user had just typed it.
+//! block is delivered verbatim as the transient trailing recall message
+//! (`HarnessDeps::recall_context`). Without framing, the model cannot tell
+//! recalled memory (reference data, possibly containing past user text or
+//! external content) apart from its own core instructions and from the user's
+//! *current* request — a recalled note that reads like an instruction could be
+//! acted on as if the user had just typed it.
 //!
 //! [`wrap_memory_context`] is the hermes-parity guard: it wraps the rendered
 //! envelope in an outer `<memory-context>` fence carrying a system note that
