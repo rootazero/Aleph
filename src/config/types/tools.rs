@@ -126,10 +126,39 @@ pub struct ToolsConfig {
     /// Enable system info service
     #[serde(default = "default_true")]
     pub system_info_enabled: bool,
+
+    /// Tools kept at FULL schema in every request. Every other tool has its
+    /// `input_schema` collapsed to an open placeholder (name + description stay
+    /// visible); the model calls `get_tool_schema("<name>")` to load full
+    /// parameters on demand. `["*"]` or empty = disable collapsing (all tools
+    /// full — byte-identical to pre-feature behavior).
+    #[serde(default = "default_core_tools")]
+    pub core: Vec<String>,
+
+    /// When true, non-core tools also have their description truncated to the
+    /// first sentence (extra token savings at some discoverability cost).
+    #[serde(default)]
+    pub truncate_tool_descriptions: bool,
 }
 
 pub const fn default_shell_timeout() -> u64 {
     30
+}
+
+/// Default "kept full" tool set — daily single-chat essentials plus the
+/// on-demand schema loader. Non-core tools are schema-collapsed. See
+/// `ProgressiveDisclosureRewriter`.
+pub fn default_core_tools() -> Vec<String> {
+    [
+        "ask_user", "bash", "code_exec", "code_check",
+        "file_read", "file_write", "file_edit", "file_ops",
+        "search", "web_fetch", "memory_search", "remember",
+        "skill_read", "skill_list", "scratchpad", "note_manage",
+        "system", "get_tool_schema",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
 }
 
 impl Default for ToolsConfig {
@@ -148,6 +177,8 @@ impl Default for ToolsConfig {
             ],
             shell_timeout_seconds: default_shell_timeout(),
             system_info_enabled: true,
+            core: default_core_tools(),
+            truncate_tool_descriptions: false,
         }
     }
 }
@@ -663,4 +694,27 @@ pub struct McpServerConfig {
     /// Trigger keywords for natural language command detection
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triggers: Option<Vec<String>>,
+}
+
+#[cfg(test)]
+mod core_tools_tests {
+    use super::*;
+
+    #[test]
+    fn default_core_contains_essentials() {
+        let c = ToolsConfig::default();
+        assert!(c.core.iter().any(|t| t == "bash"));
+        assert!(c.core.iter().any(|t| t == "get_tool_schema"));
+        assert_eq!(c.core.len(), 18);
+        assert!(!c.truncate_tool_descriptions);
+    }
+
+    #[test]
+    fn core_roundtrips_and_supports_wildcard_sentinel() {
+        let toml = r#"core = ["*"]
+truncate_tool_descriptions = true"#;
+        let c: ToolsConfig = toml::from_str(toml).unwrap();
+        assert_eq!(c.core, vec!["*".to_string()]);
+        assert!(c.truncate_tool_descriptions);
+    }
 }
