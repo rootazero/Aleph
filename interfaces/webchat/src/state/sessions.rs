@@ -128,6 +128,29 @@ impl SessionMap {
         self.meta.with_untracked(|m| m.get(&conv).cloned())
     }
 
+    /// 响应式读会话标签（tab 文案）。随 backend 生成/重命名的 topic 更新而变。
+    #[must_use]
+    pub fn label(&self, conv: ConvId) -> String {
+        self.meta
+            .with(|m| m.get(&conv).map(|v| v.label.clone()).unwrap_or_default())
+    }
+
+    /// 更新会话标签（如 backend 首个回合后生成的 topic）。仅在实际变化时写，
+    /// 避免无谓的响应式刷新。
+    pub fn set_label(&self, conv: ConvId, label: impl Into<String>) {
+        let label = label.into();
+        let changed = self
+            .meta
+            .with_untracked(|m| m.get(&conv).is_some_and(|v| v.label != label));
+        if changed {
+            self.meta.update(|m| {
+                if let Some(v) = m.get_mut(&conv) {
+                    v.label = label;
+                }
+            });
+        }
+    }
+
     /// 打开或聚焦会话。切换时把出向会话数据落回其持久后台态，把入向会话的持久
     /// 后台态拉进单例（两者都是同一个持久 `ChatState`，一次创建、跨切换复用）。
     pub fn activate(&self, singleton: ChatState, conv: ConvId) {
@@ -349,6 +372,18 @@ mod tests {
 
             map.settle_run("run-2");
             assert!(!map.is_running(c), "all runs settled");
+        });
+    }
+
+    #[test]
+    fn set_label_updates_tab_label_reactively() {
+        with_owner(|| {
+            let map = SessionMap::new();
+            let c = map.open_conversation("agent-a", "新对话");
+            assert_eq!(map.label(c), "新对话");
+            // backend 生成 topic 后同步到 tab。
+            map.set_label(c, "重构 auth 模块");
+            assert_eq!(map.label(c), "重构 auth 模块");
         });
     }
 

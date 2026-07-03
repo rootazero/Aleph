@@ -380,6 +380,22 @@ pub fn ChatSidebar() -> impl IntoView {
         }
     });
 
+    // M1: keep open tab labels in sync with backend-assigned session topics.
+    // When the session list reloads (topic generated after the first exchange,
+    // or a rename via `sessions.set_topic`), mirror each session's topic onto
+    // its open tab so the strip shows the conversation subject instead of the
+    // raw session_key / "新对话". Reads only `sessions`; `conv_for_session_key`
+    // and `set_label` are untracked writes, so there is no reactive loop.
+    Effect::new(move || {
+        for s in &sessions.get() {
+            if let (Some(topic), Some(conv)) =
+                (s.topic.as_deref(), session_map.conv_for_session_key(&s.key))
+            {
+                session_map.set_label(conv, topic);
+            }
+        }
+    });
+
     // Subscribe to session_updated events so the list refreshes automatically.
     // Frames carrying an `origin_channel` mean another surface (Telegram,
     // Slack, …) touched the session: if it's the one currently open and no
@@ -476,9 +492,17 @@ pub fn ChatSidebar() -> impl IntoView {
         // Switch tabs first (snapshots outgoing, restores agent's tab),
         // then clear that tab's session so the upcoming history load
         // overwrites cleanly without leaking the previous topic.
-        let conv = session_map
-            .conv_for_session_key(&key)
-            .unwrap_or_else(|| session_map.open_conversation(&agent_id, key.clone()));
+        let conv = session_map.conv_for_session_key(&key).unwrap_or_else(|| {
+            // Open the tab labelled with the session's topic (M1), falling back
+            // to the raw key only when the backend hasn't assigned one yet.
+            let label = sessions
+                .get_untracked()
+                .iter()
+                .find(|s| s.key == key)
+                .and_then(|s| s.topic.clone())
+                .unwrap_or_else(|| key.clone());
+            session_map.open_conversation(&agent_id, label)
+        });
         session_map.activate(chat, conv);
         chat.clear_session();
         if let Some(ws) = workspace {

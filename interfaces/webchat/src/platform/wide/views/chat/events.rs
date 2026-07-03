@@ -265,8 +265,11 @@ fn resolve_target(
     session_key: Option<&str>,
 ) -> Option<ChatState> {
     let conv = match event_type {
-        // New run: route to the active conversation.
-        "run_accepted" => sessions.active_conv(),
+        // New run: the send path binds run_id → the conversation active at
+        // *send* time (authoritative when the user switches tabs before the
+        // run is accepted, I1), so prefer that route. Fall back to the active
+        // conversation only for runs with no client send (e.g. daemon-initiated).
+        "run_accepted" => sessions.route_lookup(run_id).or_else(|| sessions.active_conv()),
         // `reasoning` without a run_id: route to the active conversation too;
         // with a run_id it must follow that run's owning conversation like
         // every other event, so it doesn't bleed into whichever conversation
@@ -274,7 +277,9 @@ fn resolve_target(
         "reasoning" if run_id.is_empty() => sessions.active_conv(),
         _ => sessions.route_lookup(run_id),
     }?;
-    if event_type == "run_accepted" {
+    // Only bind here when the send path hasn't already (route absent) — binding
+    // twice would double-count `running` and leave a phantom dot.
+    if event_type == "run_accepted" && sessions.route_lookup(run_id).is_none() {
         sessions.bind_run(run_id, conv, session_key);
     }
     let target = sessions.chat_for(conv, singleton);
@@ -829,5 +834,36 @@ mod projection_tests {
         // settle clears running.
         resolve_target(&sessions, singleton, "run_complete", "run-a", None);
         assert!(!sessions.is_running(a));
+    }
+
+    #[test]
+    fn run_accepted_honors_send_time_binding_after_tab_switch() {
+        let owner = Owner::new();
+        owner.set();
+        let sessions = crate::state::sessions::SessionMap::new();
+        let singleton = ChatState::new();
+        let a = sessions.open_conversation("agent-a", "A");
+        let b = sessions.open_conversation("agent-b", "B");
+
+        // User sends in A (send path binds the run to A), then immediately
+        // switches to B before `run_accepted` arrives.
+        sessions.activate(singleton, a);
+        sessions.bind_run("run-a", a, Some("sk-a"));
+        sessions.activate(singleton, b);
+
+        // run_accepted must resolve to A (send-time truth), not B (foreground),
+        // and must NOT double-count A's running refcount.
+        let t = resolve_target(&sessions, singleton, "run_accepted", "run-a", Some("sk-a"))
+            .expect("resolved to A's background state");
+        let a_bg = sessions.chat_for(a, singleton).expect("A background");
+        t.start_assistant_message("run-a");
+        t.append_chunk("run-a", "hi");
+        assert_eq!(a_bg.assistant_text_for_run("run-a"), "hi");
+        assert!(singleton.assistant_text_for_run("run-a").is_empty(), "B untouched");
+
+        // A single settle clears running → no phantom dot from a double bind.
+        assert!(sessions.is_running(a));
+        resolve_target(&sessions, singleton, "run_complete", "run-a", None);
+        assert!(!sessions.is_running(a), "one settle clears it → bound exactly once");
     }
 }

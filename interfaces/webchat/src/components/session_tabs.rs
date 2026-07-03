@@ -56,7 +56,7 @@ fn Tab(conv: ConvId) -> impl IntoView {
 
     let is_active = move || sessions.active.with(|a| *a == Some(conv));
     let is_running = move || sessions.is_running(conv);
-    let label = move || sessions.meta(conv).map(|m| m.label).unwrap_or_default();
+    let label = move || sessions.label(conv);
 
     view! {
         <div
