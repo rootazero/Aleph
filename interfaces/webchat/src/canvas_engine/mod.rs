@@ -1,11 +1,5 @@
 pub mod adapter;
 pub mod category_color;
-pub mod cluster;
 pub mod fnv1a;
 pub mod interaction;
-pub mod json_canvas;
-pub mod layout;
 pub mod markdown_excerpt;
-pub mod prefetch;
-pub mod scatter;
-pub mod types;
