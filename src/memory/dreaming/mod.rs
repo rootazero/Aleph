@@ -915,6 +915,9 @@ impl DreamDaemon {
                 if let Some(orientation) = &self.orientation {
                     indexer = indexer.with_orientation(orientation.clone());
                 }
+                // Embed-on-write: distilled / rewritten / renamed notes get a
+                // fresh vector immediately instead of waiting for reembed_all.
+                indexer = indexer.with_embedder(embedder.clone());
                 let notes: Vec<NoteEntry> =
                     note_index.iter().map(NoteEntry::from_index_entry).collect();
                 // Scheduled cycles yield to fresh user activity; forced cycles
@@ -974,6 +977,7 @@ impl DreamDaemon {
                             if let Some(orientation) = &self.orientation {
                                 ns_indexer = ns_indexer.with_orientation(orientation.clone());
                             }
+                            ns_indexer = ns_indexer.with_embedder(embedder.clone());
                             let ns_ctx = DreamContext {
                                 notes: ns_notes,
                                 note_contents: HashMap::new(),

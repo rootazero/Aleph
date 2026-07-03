@@ -181,6 +181,13 @@
 - **状态**：✅ 已实现（2026-07-02 深度重构）。**注意**：`facts`/`links` 在 `body` 为 Some 时是**派生索引视图**——变异必须走 `set_body`/`append_facts`/`add_links`，直接 push `facts` 会被 to_markdown 静默丢弃（body 优先）。全量替换 facts 的写者（ingest `PageOp::Update`、note_review Rewrite、tool_index coordinator）显式 `body = None` 回退 facts 形态。
 - **打磨话术**：「‘笔记 prose 被打散/丢失’查 `note/mod.rs` 的 body 字段与三个同步 helpers；‘搜索搜不到’先分腿：FTS 腿看 `search_notes_fts`（rank 排序 + OR 拆词，中文整段仍是单 token——语义召回靠向量腿），向量腿看 `refresh_embedding`（note_manage 写后即时）与 ingest 尾部 `flush_pending`；‘删除后仍占 KNN’= `remove_note_index` 的 vec 清理 + `prune_orphan_vectors` 重建清扫。未连项见任务芯片：MemoryContextProvider 仍整体门控在 embedder 上（W-02）。」
 
+### 2.10 Note 写路径统一与嵌入新鲜度 (Unified Write Chokepoint & Embed Freshness)
+- **口语关键词**：写后不嵌入、dream 笔记搜不到、蒸馏笔记向量缺失、rename 后掉出向量、多 agent 召回崩溃、smart recall embed 失败、FTS 空查询报错、锁中毒 note store 瘫痪、index.md prose 摘要
+- **代码锚点**：`src/memory/notes/indexer.rs`（`finalize_write` 统一写 chokepoint = reparse→`index_note`→orientation→`refresh_embedding`，`write_note`/`write_note_raw`/`rename_note` 全收敛；`with_embedder` 可选钩子镜像 `with_orientation`）、`src/memory/dreaming/mod.rs`（`DreamContext` indexer 两处 `.with_embedder(embedder)` 注入）、`src/memory/note_retrieval/mod.rs`（`multi_agent_text_fallback`：embed 失败降级 FTS，对齐单 agent `retrieve_inner`）、`src/memory/store/sqlite/notes/store_impl.rs`（`search_notes_fts` 空查询拦截 + `lock_conn!` 锁中毒 `into_inner` 恢复 + `remove_note_index` 补清 `notes_provenance`）、`src/memory/notes/orientation/index_md.rs`（`summary_for` tier-2 frontmatter `summary:` + `split_frontmatter_raw` 行锚定）
+- **职责**：把 §2.9 里只落在 `note_manage` 工具层的"写后即嵌入"下沉为 `NoteIndexer` 自身属性——**任何**经共享写路径的写者（dream 蒸馏 New/Supersede、note_review Rewrite、面板 `graph.update_note` raw 写、rename）都在写后立即嵌入，不再等后台 `reembed_all` 才可向量检索。
+- **状态**：✅ 已实现（2026-07-03）。**注意**：note_manage 的 indexer 不带 embedder（`with_embedder` 未注入）→ `finalize_write` 的嵌入步对它是 no-op，其自身 `refresh_embedding` 不变，**无双重嵌入**；FTS-only 部署（无 embedder）字节等价。嵌入钩子只覆盖**全量写**（`write_note`/`write_note_raw`/`rename_note`），不含 `append_to_note`（link-weaving 高频，仍靠 `reembed_all` 兜底——有意的成本边界）。
+- **打磨话术**：「‘dream/蒸馏/改写/rename 的笔记搜不到向量’＝看 `indexer.rs::finalize_write` 是否嵌入、以及该 indexer 是否经 `with_embedder` 注入（dreaming 在 `mod.rs` 注入，note_manage 故意不注入用自身 refresh）；‘smart recall 一 embed 失败就全崩’＝`note_retrieval::multi_agent_text_fallback`（P7 降级）；‘FTS 空查询报语法错’＝`search_notes_fts` 顶部空查询拦截；‘一次 panic 后 note store 永久失败’＝`lock_conn!` 已 `into_inner` 恢复。要新增写路径别忘了走 `finalize_write`（否则漏 index/orientation/embed 三副作用之一）。」
+
 ---
 
 ## 3. Harness 层

@@ -566,24 +566,23 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         // No embedder configured (FTS-only deployment): degrade to per-agent
         // keyword search, mirroring the single-agent path.
         let Some(embedder) = self.embedder.as_ref() else {
-            let per_agent_limit = limit.max(10);
-            let mut all_results: Vec<ScoredFact> = Vec::new();
-            for agent_id in agent_ids {
-                all_results.extend(self.text_retrieve(query, agent_id, per_agent_limit).await?);
-            }
-            all_results.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            all_results.truncate(limit);
-            let namespace = agent_ids.first().map_or("owner", String::as_str);
-            self.record_recall(query, namespace, &all_results).await;
-            return Ok(all_results);
+            return self.multi_agent_text_fallback(query, agent_ids, limit).await;
         };
 
-        // Embed once, reuse across agents
-        let embedding = embedder.embed(query).await?;
+        // Embed once, reuse across agents. When the embedding endpoint is
+        // unreachable (network outage, provider down) the notes are still
+        // local — degrade to FTS-only rather than failing all "smart recall"
+        // (P7), mirroring the single-agent `retrieve_inner` path.
+        let embedding = match embedder.embed(query).await {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "multi-agent recall: embedding unavailable, falling back to FTS-only search"
+                );
+                return self.multi_agent_text_fallback(query, agent_ids, limit).await;
+            }
+        };
         let dim = embedding.len() as u32;
 
         let mut all_results: Vec<ScoredFact> = Vec::new();
@@ -631,6 +630,32 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         let namespace = agent_ids.first().map_or("owner", String::as_str);
         self.record_recall(query, namespace, &ranked).await;
         Ok(ranked)
+    }
+
+    /// FTS-only multi-agent recall: per-agent keyword search merged, sorted,
+    /// truncated, and recorded. Shared by the no-embedder deployment and the
+    /// embed-failure degrade path so both honor the same graceful-degradation
+    /// contract (P7) — a transient embed outage must not brick smart recall.
+    async fn multi_agent_text_fallback(
+        &self,
+        query: &str,
+        agent_ids: &[String],
+        limit: usize,
+    ) -> Result<Vec<ScoredFact>, AlephError> {
+        let per_agent_limit = limit.max(10);
+        let mut all_results: Vec<ScoredFact> = Vec::new();
+        for agent_id in agent_ids {
+            all_results.extend(self.text_retrieve(query, agent_id, per_agent_limit).await?);
+        }
+        all_results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        all_results.truncate(limit);
+        let namespace = agent_ids.first().map_or("owner", String::as_str);
+        self.record_recall(query, namespace, &all_results).await;
+        Ok(all_results)
     }
 
     /// Discover all agent IDs by listing subdirectories of the memory dir,
@@ -778,6 +803,45 @@ mod tests {
         assert!(
             !results.is_empty(),
             "FTS fallback should surface the indexed note"
+        );
+    }
+
+    #[tokio::test]
+    async fn retrieve_multi_agent_falls_back_to_fts_when_embedding_fails() {
+        // Regression (B1): with an embedder configured, a transient embed
+        // outage used to propagate through `retrieve_multi_agent` and brick
+        // ALL smart recall, while the single-agent path degraded to FTS. Both
+        // must degrade (P7).
+        use crate::memory::notes::KnowledgeNote;
+
+        let dir = tempdir().unwrap();
+        let backend: Arc<SqliteMemoryBackend> =
+            Arc::new(SqliteMemoryBackend::new(dir.path()).unwrap());
+        let note = KnowledgeNote {
+            title: "dreame brand incident".to_string(),
+            category: "general".to_string(),
+            tags: vec!["test".to_string()],
+            facts: vec!["dreame brand incident fact".to_string()],
+            created_at: 1000,
+            updated_at: 1000,
+            content_hash: "hash_dreame".to_string(),
+            ..Default::default()
+        };
+        backend
+            .index_note(&note, "default", "general")
+            .await
+            .unwrap();
+
+        let indexer = Arc::new(NoteIndexer::new(dir.path().to_path_buf(), backend.clone()));
+        let retrieval = NoteFactRetrieval::new(indexer, Arc::new(FailingEmbeddingProvider));
+
+        let results = retrieval
+            .retrieve_multi_agent("dreame", &["default".to_string()], 10)
+            .await
+            .expect("embed outage must degrade multi-agent recall to FTS, not fail it");
+        assert!(
+            !results.is_empty(),
+            "multi-agent FTS fallback should surface the indexed note"
         );
     }
 

@@ -83,6 +83,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn note_store_recovers_from_poisoned_lock() {
+        // Regression (B3): a panic while another note-store call held the
+        // connection mutex used to set the sticky poison flag, after which
+        // `lock_conn!` returned Err on every subsequent call — a permanent
+        // note-store outage. The lock is now recovered via into_inner().
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        let backend = make_backend();
+        let note = make_note("survivor", "general");
+        backend
+            .index_note(&note, "agent1", "general")
+            .await
+            .unwrap();
+
+        // Poison the connection mutex by panicking while holding the guard.
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = backend.conn().lock().unwrap();
+            panic!("intentional poison for test");
+        }));
+        assert!(
+            backend.conn().lock().is_err(),
+            "precondition: the mutex must be poisoned after the panic"
+        );
+
+        // Must still succeed despite the poisoned lock.
+        let results = backend
+            .search_notes_fts("survivor", "agent1", 10)
+            .await
+            .expect("note store must recover from a poisoned lock");
+        assert!(!results.is_empty(), "recovered call should find the note");
+    }
+
+    #[tokio::test]
+    async fn fts_search_empty_query_returns_empty_not_error() {
+        // Regression (B2): an empty / whitespace-only query built a bare
+        // `MATCH '""'`, which FTS5 can reject as a syntax error. It must
+        // degrade to "no results" instead of failing the whole query.
+        let backend = make_backend();
+        let note = make_note("anything", "general");
+        backend
+            .index_note(&note, "agent1", "general")
+            .await
+            .unwrap();
+
+        for q in ["", "   ", "\t\n"] {
+            let results = backend
+                .search_notes_fts(q, "agent1", 10)
+                .await
+                .unwrap_or_else(|e| panic!("empty query {q:?} must not error: {e}"));
+            assert!(results.is_empty(), "empty query {q:?} should yield no rows");
+        }
+    }
+
+    #[tokio::test]
     async fn index_note_creates_and_updates() {
         let backend = make_backend();
         let mut note = make_note("update test", "general");
