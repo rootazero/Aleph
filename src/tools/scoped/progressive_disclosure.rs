@@ -173,4 +173,26 @@ mod tests {
         assert!(!ProgressiveDisclosureRewriter::is_enabled(&["bash".to_string(), "*".to_string()]));
         assert!(ProgressiveDisclosureRewriter::is_enabled(&["bash".to_string()]));
     }
+
+    #[test]
+    fn collapsing_shrinks_serialized_tools_by_half() {
+        // 20 fat tools (schema-heavy) + 2 core.
+        let core: std::collections::BTreeSet<String> = ["bash".into(), "get_tool_schema".into()].into_iter().collect();
+        let rw = ProgressiveDisclosureRewriter::new(core.clone(), false);
+        let fat_schema = json!({
+            "type":"object",
+            "properties": (0..12).map(|i| (format!("field_{i}"), json!({"type":"string","description":"a reasonably long description of this parameter that costs tokens"}))).collect::<serde_json::Map<_,_>>(),
+        });
+        let mut defs: Vec<ToolDefinition> = (0..22).map(|i| ToolDefinition {
+            name: if i < 2 { ["bash","get_tool_schema"][i].to_string() } else { format!("tool_{i}") },
+            description: "does a thing".to_string(),
+            input_schema: fat_schema.clone(),
+            source: crate::tools::service::ToolSource::Builtin,
+            metadata: crate::tools::service::ToolDefinitionMetadata::default(),
+        }).collect();
+        let before = serde_json::to_string(&defs).unwrap().len();
+        for d in &mut defs { rw.rewrite(d); }
+        let after = serde_json::to_string(&defs).unwrap().len();
+        assert!(after * 2 < before, "expected >50% shrink, got {before} -> {after}");
+    }
 }
