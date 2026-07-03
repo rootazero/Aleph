@@ -102,6 +102,16 @@ fn resolve_effective_budget(
 const CROSS_BATCH_REFUSED_CAUSE: &str = "this exact call already failed earlier in the run; \
      change inputs or try a different tool";
 
+/// Synthetic `ToolError` cause persisted for a call that overran the
+/// harness-wide `turn_timeout` (a run-aborting stall, not a recoverable
+/// per-tool budget). Emitted BEFORE `StalledTurn` bubbles so the turn's
+/// `tool_use` blocks keep their result pairing: without it the prompt
+/// builder drops the whole assistant turn as orphaned on the next build,
+/// erasing exactly the context the Timeout grace turn needs to salvage.
+/// Shared by the serial and parallel dispatch paths.
+const STALLED_CALL_CAUSE: &str = "aborted: exceeded the run-level turn timeout \
+     and the run is wrapping up — no result was produced";
+
 /// Build the recoverable `ToolError` cause for a per-tool wall-clock budget
 /// overrun. Shared by the serial and parallel dispatch paths so both surface
 /// byte-identical guidance — the next Think turn reacts the same way regardless
@@ -240,8 +250,8 @@ impl AgentHarness {
                 break;
             }
             let group: Vec<NativeToolCall> = remaining.by_ref().take(end - start).collect();
-            executed_count = executed_count.saturating_add(
-                self.dispatch_group(
+            match self
+                .dispatch_group(
                     session_id,
                     turn_id,
                     group,
@@ -250,8 +260,26 @@ impl AgentHarness {
                     &budget_turn_id,
                     run_cancel,
                 )
-                .await?,
-            );
+                .await
+            {
+                Ok(n) => executed_count = executed_count.saturating_add(n),
+                Err(e) => {
+                    // A stalled group aborts the run; close out the not-yet-
+                    // started later groups so their tool_use blocks keep their
+                    // result pairing (see the serial-path stall closure).
+                    let pending_ids: Vec<String> = remaining.by_ref().map(|c| c.id).collect();
+                    if !pending_ids.is_empty() {
+                        self.close_unexecuted_tool_uses(
+                            session_id,
+                            turn_id,
+                            &pending_ids,
+                            "run stalled during an earlier tool group in this batch",
+                        )
+                        .await;
+                    }
+                    return Err(e);
+                }
+            }
         }
         Ok(executed_count)
     }
@@ -574,7 +602,36 @@ impl AgentHarness {
             };
             let inner = match exec_result {
                 Ok(r) => r,
-                Err(stalled) => return Err(stalled),
+                Err(stalled) => {
+                    // Close the tool_use↔result pairing before bubbling the
+                    // run-aborting stall. The timed-out call gets a synthetic
+                    // ToolError (its ToolStart already fired, so this also
+                    // closes the live stream's start/end symmetry); calls never
+                    // started get a bare session-log closure. Without these the
+                    // prompt builder drops the whole assistant turn as orphaned
+                    // on the next build, erasing the context the Timeout grace
+                    // turn needs to salvage a partial deliverable.
+                    let synthetic = crate::tools::service::ToolError::Execution {
+                        name: call.name.clone(),
+                        cause: STALLED_CALL_CAUSE.to_string(),
+                    };
+                    self.emit_tool_error(
+                        session_id, turn_id, &call, synthetic, started, iteration, callback,
+                    )
+                    .await;
+                    let pending_ids: Vec<String> =
+                        tool_iter.by_ref().map(|c| c.id).collect();
+                    if !pending_ids.is_empty() {
+                        self.close_unexecuted_tool_uses(
+                            session_id,
+                            turn_id,
+                            &pending_ids,
+                            "run stalled during an earlier tool call in this batch",
+                        )
+                        .await;
+                    }
+                    return Err(stalled);
+                }
             };
             match inner {
                 Ok(mut output) => {
@@ -962,9 +1019,22 @@ impl AgentHarness {
                         first_stall = Some((call.name.clone(), elapsed));
                     }
                     // Only a harness-wide `turn_timeout` overrun reaches this arm
-                    // now (per-tool budget overruns are recovered as `Ok(Err)`
-                    // above) — a genuine run-level stall, bubbled up as
-                    // `StalledTurn` below with no per-call ToolError event.
+                    // (per-tool budget overruns are recovered as `Ok(Err)` above)
+                    // — a genuine run-level stall, bubbled up as `StalledTurn`
+                    // below. Persist a synthetic ToolError first so the stalled
+                    // call's tool_use keeps its result pairing (and its live
+                    // ToolStart gets a matching ToolEnd); otherwise the prompt
+                    // builder drops the whole assistant turn as orphaned on the
+                    // next build, erasing the context the Timeout grace turn
+                    // needs to salvage a partial deliverable.
+                    let synthetic = crate::tools::service::ToolError::Execution {
+                        name: call.name.clone(),
+                        cause: STALLED_CALL_CAUSE.to_string(),
+                    };
+                    self.emit_tool_error(
+                        session_id, turn_id, call, synthetic, started, iteration, callback,
+                    )
+                    .await;
                     if let Some(ref tracker) = self.stall_tracker {
                         tracker.record_activity().await;
                     }

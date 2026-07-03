@@ -1509,6 +1509,100 @@ mod tests {
             .expect("no team store → coverage check skipped");
     }
 
+    #[tokio::test]
+    async fn run_via_call_rejected_by_preflight_creates_zero_tasks() {
+        // End-to-end ordering guarantee through call(): preflight runs BEFORE
+        // materialize, so a rejected run leaves the coord store empty instead
+        // of half-queuing a DAG the dispatcher then fails in the background.
+        let tmp = TempDir::new().unwrap();
+        let (team_store, team_id) = team_with(&["researcher"]).await; // no writer
+        let store = setup_store().await;
+        let t = tool(store, None).with_team_store(Some(team_store));
+
+        let res = {
+            let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("ALEPH_HOME");
+            // SAFETY: guarded single mutator; restored below.
+            unsafe {
+                std::env::set_var("ALEPH_HOME", tmp.path());
+            }
+            workflow::store::save(&WorkflowManifest::from_def(&linear_def())).expect("save");
+            let r = t
+                .call(WorkflowArgs::Run {
+                    name: "pipeline".into(),
+                    team_id,
+                    input: "x".into(),
+                })
+                .await;
+            // SAFETY: same guarded invariant; restore prior value.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("ALEPH_HOME", v),
+                    None => std::env::remove_var("ALEPH_HOME"),
+                }
+            }
+            r
+        };
+
+        let err = res.expect_err("uncovered agent rejects the run via call()");
+        assert!(
+            err.to_string().contains("writer"),
+            "error names the missing agent: {err}"
+        );
+        let tasks = t
+            .coord_store
+            .list_tasks(CoordTaskFilter::default())
+            .await
+            .expect("list tasks");
+        assert!(
+            tasks.is_empty(),
+            "preflight rejection must not materialise any coord_task"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_via_call_succeeds_when_team_covers_all_agents() {
+        // Companion positive path: with a team store wired and full coverage,
+        // run proceeds through preflight and materialises one task per step.
+        let tmp = TempDir::new().unwrap();
+        let (team_store, team_id) = team_with(&["researcher", "writer"]).await;
+        let store = setup_store().await;
+        let t = tool(store, None).with_team_store(Some(team_store));
+
+        let out = {
+            let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("ALEPH_HOME");
+            // SAFETY: guarded single mutator; restored below.
+            unsafe {
+                std::env::set_var("ALEPH_HOME", tmp.path());
+            }
+            workflow::store::save(&WorkflowManifest::from_def(&linear_def())).expect("save");
+            let r = t
+                .call(WorkflowArgs::Run {
+                    name: "pipeline".into(),
+                    team_id,
+                    input: "x".into(),
+                })
+                .await;
+            // SAFETY: same guarded invariant; restore prior value.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("ALEPH_HOME", v),
+                    None => std::env::remove_var("ALEPH_HOME"),
+                }
+            }
+            r
+        }
+        .expect("covered team → run succeeds");
+
+        assert_eq!(out.action, "run");
+        assert_eq!(
+            out.task_ids.as_ref().map(|v| v.len()),
+            Some(2),
+            "one task per step"
+        );
+    }
+
     // --- export / import actions ---
 
     #[test]
@@ -1963,6 +2057,85 @@ mod tests {
             described.message
         );
         assert!(missing.is_err(), "unknown proposal errors, not guessed");
+    }
+
+    #[tokio::test]
+    async fn proposals_then_accept_promotes_draft_to_active_store() {
+        // The gate transition through the tool: a drafted proposal is listed by
+        // `proposals`, promoted by `accept_proposal` (draft removed, active copy
+        // visible to list/describe), and an unknown name errors.
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let (name, listed, accepted, after, active, described, missing) = {
+            let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("ALEPH_HOME");
+            // SAFETY: guarded single mutator; restored below.
+            unsafe {
+                std::env::set_var("ALEPH_HOME", tmp.path());
+            }
+            let draft =
+                workflow::proposal::skeleton_from_chain(&["research".into(), "write".into()], 2)
+                    .expect("two-skill chain drafts a skeleton");
+            let name = draft.name.clone();
+            workflow::proposal::save_proposal(&draft).expect("persist gated draft");
+
+            let listed = t.call(WorkflowArgs::Proposals {}).await.expect("proposals");
+            let accepted = t
+                .call(WorkflowArgs::AcceptProposal { name: name.clone() })
+                .await
+                .expect("accept the gated draft");
+            let after = t
+                .call(WorkflowArgs::Proposals {})
+                .await
+                .expect("proposals after accept");
+            let active = t.call(WorkflowArgs::List {}).await.expect("list");
+            let described = t
+                .call(WorkflowArgs::Describe { name: name.clone() })
+                .await
+                .expect("describe the now-active workflow");
+            let missing = t
+                .call(WorkflowArgs::AcceptProposal {
+                    name: "metaskill-nope".into(),
+                })
+                .await;
+
+            // SAFETY: same guarded invariant; restore prior value.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("ALEPH_HOME", v),
+                    None => std::env::remove_var("ALEPH_HOME"),
+                }
+            }
+            (name, listed, accepted, after, active, described, missing)
+        };
+
+        assert_eq!(listed.action, "proposals");
+        assert!(
+            listed.names.as_ref().is_some_and(|n| n.contains(&name)),
+            "draft is listed before accept"
+        );
+        assert_eq!(accepted.action, "accept_proposal");
+        assert!(
+            accepted.message.contains(&name),
+            "accept names the promoted workflow: {}",
+            accepted.message
+        );
+        assert_eq!(
+            after.names.as_deref(),
+            Some(&[][..]),
+            "accepted draft is removed from the gated dir"
+        );
+        assert!(
+            active.names.as_ref().is_some_and(|n| n.contains(&name)),
+            "accepted workflow appears in the active store"
+        );
+        assert!(
+            described.definition.is_some(),
+            "describe resolves the promoted workflow"
+        );
+        assert!(missing.is_err(), "accepting an unknown proposal errors");
     }
 
     #[test]

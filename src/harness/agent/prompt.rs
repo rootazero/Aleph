@@ -65,6 +65,18 @@ pub(crate) fn build_prompt(
     let mut expected_results: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut deferred_user_msgs: Vec<UnifiedMessage> = Vec::new();
 
+    // Pair-integrity guard, mirror image of the orphan-tool_use drop: every
+    // `tool_result` message must reference a `tool_use` that actually made it
+    // into this rebuilt prompt, exactly once. A result whose assistant turn is
+    // missing (failed persist, split-child head) — or a duplicate result for an
+    // already-consumed id — is downgraded to plain user text below instead of
+    // being replayed as a `ToolResult`, which Anthropic-compatible backends
+    // reject with HTTP 400 (hermes orphan-result stripping parity). Ids are
+    // inserted when an assistant turn's surviving tool_use blocks are emitted
+    // and removed when their result is consumed.
+    let mut open_tool_use_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+
     // Walk the FULL conversation in order, emitting one message per event.
     //
     // History must be complete: in an autonomous tool loop (cron / subagent),
@@ -106,6 +118,7 @@ pub(crate) fn build_prompt(
                     for raw in &content.blocks {
                         if let Some(ContentBlock::ToolCall { id, .. }) = parse_tool_use_block(raw) {
                             if resolved.contains(id.as_str()) {
+                                open_tool_use_ids.insert(id.clone());
                                 expected_results.insert(id);
                             }
                         }
@@ -149,6 +162,14 @@ pub(crate) fn build_prompt(
                 call_id, output, ..
             } => {
                 let tool_name = resolve_tool_name(events, idx, call_id).unwrap_or("unknown");
+                if !open_tool_use_ids.remove(call_id) {
+                    // Orphaned (no emitted tool_use) or duplicate result —
+                    // preserve its content as plain user text (R7: the model
+                    // judges relevance) instead of an unpaired ToolResult the
+                    // provider would reject.
+                    messages.push(orphan_result_note(call_id, tool_name, &output.value));
+                    continue;
+                }
                 // Base case: the structured tool output as a JSON block. When
                 // the tool carried out-of-band images (a `desktop` screenshot,
                 // hoisted off the truncation path in `apply_layer_two`), append
@@ -180,6 +201,15 @@ pub(crate) fn build_prompt(
             }
             SessionEvent::ToolError { call_id, error, .. } => {
                 let tool_name = resolve_tool_name(events, idx, call_id).unwrap_or("unknown");
+                if !open_tool_use_ids.remove(call_id) {
+                    // Same pair-integrity downgrade as the ToolResult arm.
+                    messages.push(orphan_result_note(
+                        call_id,
+                        tool_name,
+                        &serde_json::Value::String(error.clone()),
+                    ));
+                    continue;
+                }
                 messages.push(UnifiedMessage::ToolResult {
                     tool_call_id: call_id.clone(),
                     tool_name: tool_name.to_string(),
@@ -272,6 +302,31 @@ pub(crate) fn build_prompt(
     }
 
     messages
+}
+
+/// Downgrade an orphaned / duplicate tool result to a plain user text note.
+///
+/// The content is preserved (the model judges its relevance — R7) but the
+/// message is no longer a structural `tool_result`, so a missing or already-
+/// consumed `tool_use` cannot make the provider reject the whole request.
+fn orphan_result_note(call_id: &str, tool_name: &str, payload: &serde_json::Value) -> UnifiedMessage {
+    let rendered = match payload {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    tracing::warn!(
+        call_id,
+        tool_name,
+        "downgrading orphaned/duplicate tool result to plain text \
+         (no matching tool_use in the rebuilt prompt)",
+    );
+    UnifiedMessage::user(&format!(
+        "<system-reminder>\n\
+         Orphaned result for tool call `{tool_name}` (id {call_id}) — its \
+         originating tool_use is not part of this conversation view, so the \
+         result is shown as plain text:\n{rendered}\n\
+         </system-reminder>",
+    ))
 }
 
 /// Reconstruct one persisted assistant turn into provider content blocks.
@@ -373,20 +428,46 @@ pub(crate) fn parse_tool_use_block(
     })
 }
 
-/// Find the `ToolCallRequested.name` whose `call_id` matches, searching
-/// strictly BEFORE `before_idx` (i.e. within `events[..before_idx]`).
+/// Find the tool name for `call_id`, searching strictly BEFORE `before_idx`
+/// (i.e. within `events[..before_idx]`).
+///
+/// Primary source is the `ToolCallRequested` event. Some results legitimately
+/// have none: the cooperative steer checkpoint defers not-yet-started calls
+/// with a synthetic `ToolResult` *before* their request event is ever emitted,
+/// and the stall closure does the same for a batch aborted mid-flight. For
+/// those, fall back to the assistant turn's own `tool_use` block, which
+/// carries the same id + name — providers that key the result on the function
+/// name (Gemini `functionResponse`) reject an "unknown" placeholder.
 fn resolve_tool_name<'a>(
     events: &'a [SessionEventRecord],
     before_idx: usize,
     call_id: &str,
 ) -> Option<&'a str> {
     let upper = before_idx.min(events.len());
-    events[..upper].iter().rev().find_map(|r| match &r.event {
-        SessionEvent::ToolCallRequested {
-            call_id: id, name, ..
-        } if id == call_id => Some(name.as_str()),
-        _ => None,
-    })
+    let slice = &events[..upper];
+    slice
+        .iter()
+        .rev()
+        .find_map(|r| match &r.event {
+            SessionEvent::ToolCallRequested {
+                call_id: id, name, ..
+            } if id == call_id => Some(name.as_str()),
+            _ => None,
+        })
+        .or_else(|| {
+            slice.iter().rev().find_map(|r| match &r.event {
+                SessionEvent::AssistantMessage { content, .. } => {
+                    content.blocks.iter().find_map(|b| {
+                        let obj = b.as_object()?;
+                        (obj.get("type").and_then(serde_json::Value::as_str) == Some("tool_use")
+                            && obj.get("id").and_then(serde_json::Value::as_str) == Some(call_id))
+                        .then(|| obj.get("name").and_then(serde_json::Value::as_str))
+                        .flatten()
+                    })
+                }
+                _ => None,
+            })
+        })
 }
 
 #[cfg(test)]
@@ -1018,6 +1099,127 @@ mod tests {
             !trailing_summary,
             "no summary should be appended when failures < threshold",
         );
+    }
+
+    /// A deferred/stall-closed tool result has NO `ToolCallRequested` event
+    /// (the steer checkpoint and the stall closure emit the result before the
+    /// request event ever fires). The tool name must still resolve — from the
+    /// assistant turn's own `tool_use` block — because providers that key the
+    /// result on the function name (Gemini `functionResponse`) reject an
+    /// "unknown" placeholder.
+    #[test]
+    fn deferred_result_without_requested_event_resolves_name_from_tool_use_block() {
+        let turn = uuid::Uuid::new_v4();
+        let events: Vec<SessionEventRecord> = vec![
+            mk_record(SessionEvent::UserMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: "go".into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+                synthetic: false,
+            }),
+            mk_record(SessionEvent::AssistantMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: String::new(),
+                    blocks: vec![
+                        json!({"type": "tool_use", "id": "d1", "name": "web_search", "input": {"q": "x"}}),
+                    ],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+            }),
+            // Deferred result: no ToolCallRequested for "d1" anywhere.
+            mk_record(SessionEvent::ToolResult {
+                turn_id: turn,
+                call_id: "d1".into(),
+                output: ToolOutput {
+                    value: json!({"deferred": true}),
+                    metadata: ToolOutputMetadata::default(),
+                },
+                at: now_ms(),
+            }),
+        ];
+
+        let messages = build_prompt(&events, 1);
+        let resolved_name = messages
+            .iter()
+            .find_map(|m| match m {
+                UnifiedMessage::ToolResult { tool_name, .. } => Some(tool_name.clone()),
+                _ => None,
+            })
+            .expect("tool result present");
+        assert_eq!(
+            resolved_name, "web_search",
+            "deferred result must resolve its name from the assistant tool_use block",
+        );
+    }
+
+    /// Pair-integrity guard (hermes orphan-result parity): a ToolResult whose
+    /// originating assistant tool_use never made it into the rebuilt prompt
+    /// (missing assistant turn — failed persist, split-child head) must be
+    /// downgraded to plain user text, NOT replayed as a structural ToolResult
+    /// the provider rejects with HTTP 400.
+    #[test]
+    fn orphaned_tool_result_without_assistant_is_downgraded_to_text() {
+        let turn = uuid::Uuid::new_v4();
+        let events: Vec<SessionEventRecord> = vec![
+            mk_record(SessionEvent::UserMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: "go".into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+                synthetic: false,
+            }),
+            // No AssistantMessage for this call anywhere in the log.
+            mk_record(SessionEvent::ToolCallRequested {
+                turn_id: turn,
+                call_id: "lost1".into(),
+                name: "web_fetch".into(),
+                input: json!({"url": "https://x"}),
+                at: now_ms(),
+            }),
+            mk_record(SessionEvent::ToolResult {
+                turn_id: turn,
+                call_id: "lost1".into(),
+                output: ToolOutput {
+                    value: json!("fetched body"),
+                    metadata: ToolOutputMetadata::default(),
+                },
+                at: now_ms(),
+            }),
+        ];
+
+        let messages = build_prompt(&events, 0);
+        assert!(
+            !messages
+                .iter()
+                .any(|m| matches!(m, UnifiedMessage::ToolResult { .. })),
+            "orphaned result must not be replayed as a structural ToolResult; \
+             messages={messages:#?}",
+        );
+        let note = messages
+            .iter()
+            .find_map(|m| match m {
+                UnifiedMessage::User { content } => content.iter().find_map(|b| match b {
+                    ContentBlock::Text { text, .. } if text.contains("Orphaned result") => {
+                        Some(text.clone())
+                    }
+                    _ => None,
+                }),
+                _ => None,
+            })
+            .expect("downgraded orphan note present");
+        assert!(note.contains("web_fetch") && note.contains("fetched body"));
     }
 
     /// G2: the conversation-opening user message (tail_start == 0) is the

@@ -339,12 +339,18 @@ fn promote_text_tool_calls(
         return 0;
     };
 
+    // Per-promotion nonce keeps ids unique across turns. A bare `promoted_{i}`
+    // repeats every promoting turn, and `build_prompt`'s orphan check matches
+    // results by call_id anywhere later in the log — a later turn's
+    // `promoted_0` result would mark an earlier turn's identically-named
+    // orphan as resolved, replaying an unpaired tool_use the provider rejects.
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
     let promoted: Vec<NativeToolCall> = promotion
         .calls
         .into_iter()
         .enumerate()
         .map(|(i, c)| NativeToolCall {
-            id: format!("promoted_{i}"),
+            id: format!("promoted_{i}_{nonce}"),
             name: c.name,
             arguments: c.arguments,
             thought_signature: None,
@@ -1879,10 +1885,46 @@ impl AgentHarness {
                 return;
             }
         };
+        // Account the grace call's billed tokens immediately — the early
+        // returns below (empty text, guardrail block) previously skipped the
+        // end-of-function accounting entirely, silently dropping a real billed
+        // round-trip from `total_tokens` and the per-component breakdown.
+        self.account_intermediate_tokens(&resp);
         let text = resp.text_content();
         if text.trim().is_empty() {
             return;
         }
+        // Stage 5a parity: the grace turn's text reaches the user through the
+        // same callback + session-log channel as a primary turn, so it must
+        // pass the same output guardrail. Without this the salvage path was a
+        // bypass: a deployment whose output guardrail scrubs secrets/PII could
+        // leak through the one turn that fires precisely when things are
+        // already degraded. Fail-soft on Block (grace is best-effort salvage —
+        // the run is terminating either way); Sanitize keeps the rewritten text.
+        let text = if let Some(registry) = self.deps.guardrails.as_ref() {
+            match registry.evaluate_output(&text).await {
+                crate::guardrails::GuardrailDecision::Allow => text,
+                crate::guardrails::GuardrailDecision::Warn { reason } => {
+                    tracing::warn!(?session_id, reason = %reason, "grace-turn output guardrail warned");
+                    text
+                }
+                crate::guardrails::GuardrailDecision::Sanitize(rep) => {
+                    callback.on_safety_block(&format!("output sanitized by {}", rep.source));
+                    rep.text
+                }
+                crate::guardrails::GuardrailDecision::Block { reason, .. } => {
+                    callback.on_safety_block(&reason);
+                    tracing::warn!(
+                        ?session_id,
+                        reason = %reason,
+                        "grace-turn output blocked by guardrail; skipping salvage text",
+                    );
+                    return;
+                }
+            }
+        } else {
+            text
+        };
         let turn_id = super::current_turn_id(events);
         callback.on_delta(&text);
         let grace_event = SessionEvent::AssistantMessage {
@@ -1895,11 +1937,8 @@ impl AgentHarness {
             },
             at: crate::session::events::now_ms(),
         };
-        let grace_tokens = super::turn_token_total(&resp.usage);
-        self.total_tokens.fetch_add(grace_tokens, Ordering::Relaxed);
-        // Keep the per-component breakdown in lockstep with `total_tokens`
-        // — the documented `breakdown.total() == total_tokens()` invariant.
-        self.accumulate_token_breakdown(&resp.usage);
+        // Token accounting already happened via `account_intermediate_tokens`
+        // right after the LLM call, so the early-return paths are counted too.
         if let Err(e) = self.deps.session.emit_event(session_id, grace_event).await {
             tracing::warn!(?session_id, ?e, "grace turn assistant emit failed");
         }
@@ -1957,7 +1996,7 @@ impl AgentHarness {
     /// the next prompt. Emitting a synthetic `ToolError` per call preserves the
     /// `tool_use↔result` invariant and lets the model see *why* the call did not
     /// run. Fail-soft: a failed emit logs at WARN and continues.
-    async fn close_unexecuted_tool_uses(
+    pub(super) async fn close_unexecuted_tool_uses(
         &self,
         session_id: &SessionId,
         turn_id: TurnId,
