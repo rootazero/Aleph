@@ -289,13 +289,6 @@ pub fn ChatSidebar() -> impl IntoView {
     // Client-side session filter (R4 pure I/O — no backend search).
     let search_query = RwSignal::new(String::new());
 
-    // Live-only "session is running" tracking, driven by run lifecycle
-    // events. `running` is a refcount per session_key (handles concurrent
-    // runs); `run_to_session` maps run_id → session_key because the
-    // run_complete / run_error frames carry only run_id.
-    let running = RwSignal::new(std::collections::HashMap::<String, usize>::new());
-    let run_to_session = RwSignal::new(std::collections::HashMap::<String, String>::new());
-
     // Groups (teams) the selected agent belongs to — drives the 群聊 section.
     let groups: RwSignal<Vec<TeamSummary>> = RwSignal::new(Vec::new());
     // Collapsible state for the group section (default: expanded).
@@ -329,8 +322,12 @@ pub fn ChatSidebar() -> impl IntoView {
                                     .or(list.first())
                                     .map(|a| a.id.clone());
                                 if let Some(id) = default_id {
+                                    let conv = session_map.open_conversation(
+                                        &id,
+                                        t_string!(i18n, chat.new_chat).to_string(),
+                                    );
                                     selected_agent.set(Some(id.clone()));
-                                    session_map.activate(chat, &id);
+                                    session_map.activate(chat, conv);
                                 }
                             }
                             agents.set(list);
@@ -415,7 +412,10 @@ pub fn ChatSidebar() -> impl IntoView {
         if chat.session_key.get_untracked().as_deref() != Some(sk) {
             return;
         }
-        if running.with_untracked(|m| m.contains_key(sk)) {
+        let running_now = session_map
+            .conv_for_session_key(sk)
+            .is_some_and(|c| session_map.is_running(c));
+        if running_now {
             return;
         }
         leptos::task::spawn_local(hydrate_session_history(
@@ -424,56 +424,6 @@ pub fn ChatSidebar() -> impl IntoView {
             workspace,
             sk.to_string(),
         ));
-    });
-
-    // Subscribe to run lifecycle so each session row can show a live
-    // "running" dot. Refcounted: a session is "running" while it has ≥1
-    // in-flight run. run_complete / run_error carry only run_id, so we
-    // resolve the owning session via `run_to_session`.
-    let run_subscription_id = dashboard.subscribe_events(move |event| {
-        if !event.topic.starts_with("run.") {
-            return;
-        }
-        let data = &event.data;
-        let event_type = data
-            .get("type")
-            .and_then(|t| t.as_str())
-            .or_else(|| event.topic.strip_prefix("run."))
-            .unwrap_or("");
-        let run_id = data.get("run_id").and_then(|r| r.as_str()).unwrap_or("");
-        if run_id.is_empty() {
-            return;
-        }
-        match event_type {
-            "run_accepted" => {
-                let Some(sk) = data.get("session_key").and_then(|s| s.as_str()) else {
-                    return;
-                };
-                run_to_session.update(|m| {
-                    m.insert(run_id.to_string(), sk.to_string());
-                });
-                running.update(|m| {
-                    *m.entry(sk.to_string()).or_insert(0) += 1;
-                });
-            }
-            "run_complete" | "run_error" => {
-                let sk = run_to_session.with_untracked(|m| m.get(run_id).cloned());
-                run_to_session.update(|m| {
-                    m.remove(run_id);
-                });
-                if let Some(sk) = sk {
-                    running.update(|m| {
-                        if let Some(n) = m.get_mut(&sk) {
-                            *n = n.saturating_sub(1);
-                            if *n == 0 {
-                                m.remove(&sk);
-                            }
-                        }
-                    });
-                }
-            }
-            _ => {}
-        }
     });
 
     // Ask the Gateway to push stream.session_updated events to this client.
@@ -514,7 +464,6 @@ pub fn ChatSidebar() -> impl IntoView {
     let dash_for_cleanup = dashboard;
     on_cleanup(move || {
         dash_for_cleanup.unsubscribe_events(subscription_id);
-        dash_for_cleanup.unsubscribe_events(run_subscription_id);
     });
 
     // Select a session and load its history.
@@ -527,7 +476,10 @@ pub fn ChatSidebar() -> impl IntoView {
         // Switch tabs first (snapshots outgoing, restores agent's tab),
         // then clear that tab's session so the upcoming history load
         // overwrites cleanly without leaking the previous topic.
-        session_map.activate(chat, &agent_id);
+        let conv = session_map
+            .conv_for_session_key(&key)
+            .unwrap_or_else(|| session_map.open_conversation(&agent_id, key.clone()));
+        session_map.activate(chat, conv);
         chat.clear_session();
         if let Some(ws) = workspace {
             ws.reset();
@@ -955,7 +907,11 @@ pub fn ChatSidebar() -> impl IntoView {
                                                             return;
                                                         }
                                                         selected_agent.set(Some(val.clone()));
-                                                        session_map.activate(chat, &val);
+                                                        let conv = session_map.open_conversation(
+                                                            &val,
+                                                            t_string!(i18n, chat.new_chat).to_string(),
+                                                        );
+                                                        session_map.activate(chat, conv);
                                                         if let Some(ws) = workspace {
                                                             ws.reset();
                                                         }
@@ -1330,6 +1286,12 @@ pub fn ChatSidebar() -> impl IntoView {
                                             chat.session_key.get().as_deref() == Some(&key)
                                         }
                                     };
+                                    let sk_for_dot = session.key.clone();
+                                    let is_running_row = move || {
+                                        session_map
+                                            .conv_for_session_key(&sk_for_dot)
+                                            .is_some_and(|c| session_map.is_running(c))
+                                    };
                                     let label = session
                                         .topic
                                         .clone()
@@ -1442,8 +1404,6 @@ pub fn ChatSidebar() -> impl IntoView {
                                         let key_for_edit = key.clone();
                                         let key_for_del_menu = key.clone();
                                         let label_for_edit = label.clone();
-                                        let key_for_run = key;
-                                        let is_running = move || running.with(|m| m.contains_key(&key_for_run));
                                         view! {
                                             <div class="relative group">
                                                 <button
@@ -1465,8 +1425,8 @@ pub fn ChatSidebar() -> impl IntoView {
                                                 >
                                                     <div class="flex-1 min-w-0">
                                                         <div class="flex items-center gap-1.5">
-                                                            <Show when=is_running>
-                                                                <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse flex-shrink-0" />
+                                                            <Show when=is_running_row>
+                                                                <span class="w-1.5 h-1.5 rounded-full bg-danger animate-pulse shrink-0 mr-1.5" />
                                                             </Show>
                                                             <div class="truncate font-medium text-xs">
                                                                 {label}
