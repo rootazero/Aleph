@@ -39,18 +39,6 @@ mod runner_impl;
 
 pub mod context_estimate;
 
-pub(crate) use prompt_build::{StablePromptCacheEntry, StablePromptKey};
-
-/// Default per-session stable-prompt cache used at `AgentHarnessRunner`
-/// construction time. Exported so the `aleph-server` binary crate can
-/// initialize the field without exposing the cache types in the public API.
-pub fn default_stable_prompt_cache(
-) -> std::sync::Arc<tokio::sync::Mutex<lru::LruCache<StablePromptKey, StablePromptCacheEntry>>> {
-    std::sync::Arc::new(tokio::sync::Mutex::new(lru::LruCache::new(
-        std::num::NonZeroUsize::new(64).expect("64 > 0"),
-    )))
-}
-
 #[cfg(test)]
 mod tests;
 
@@ -167,10 +155,11 @@ pub struct AgentHarnessRunner {
     /// Phase 6 follow-up — closes the BUG-2/BUG-3 gap where the gateway path
     /// was constructing `HarnessDeps { system_prompt: None }` and bypassing
     /// curated/hybrid memory entirely. When `Some`, `run()` invokes
-    /// `build_curated_message` + `build_memory_user_message` and threads the
-    /// rendered envelopes through `PromptBuilder` so the system prompt carries
-    /// per-agent curated memory plus retrieval hits. `None` preserves the old
-    /// behaviour (boot path for tests / env without a memory backend).
+    /// `build_curated_message` + `build_memory_user_message`: the curated
+    /// envelope rides the system prompt's Stable prefix via `PromptBuilder`,
+    /// while per-query retrieval hits are delivered as the transient trailing
+    /// recall message (`HarnessDeps::recall_context`). `None` preserves the
+    /// old behaviour (boot path for tests / env without a memory backend).
     pub memory_context_provider:
         Option<Arc<crate::thinker::memory_context_provider::MemoryContextProvider>>,
 
@@ -247,13 +236,6 @@ pub struct AgentHarnessRunner {
     /// history switches.
     pub estimate_overhead_cache:
         std::sync::Arc<crate::orchestrator::harness_bridge::context_estimate::OverheadCache>,
-
-    /// Per-session cache for the stable system-prompt prefix. The stable part
-    /// (persona, tools, security, skills, identity, etc.) is expensive to
-    /// assemble and changes rarely within a session. Caching it avoids
-    /// rebuilding it on every turn; only the dynamic tail is recomputed.
-    pub stable_prompt_cache:
-        std::sync::Arc<tokio::sync::Mutex<lru::LruCache<StablePromptKey, StablePromptCacheEntry>>>,
 }
 
 /// Hard fallback iteration cap — used only when both the per-flow override

@@ -9,72 +9,20 @@ use crate::session::service::SessionId;
 use super::*;
 use std::time::Instant;
 
-/// Cached stable system-prompt prefix for a session.
-///
-/// The stable part (persona, tools, security, skills, identity, etc.) is
-/// expensive to assemble and changes rarely within a session. Caching it
-/// avoids rebuilding it on every turn; only the dynamic tail (memory,
-/// runtime context, execution plan, etc.) is recomputed.
-#[derive(Clone)]
-pub struct StablePromptCacheEntry {
-    pub stable_part: crate::thinker::prompt_builder::SystemPromptPart,
-}
-
-/// Key for the stable-prompt cache.
-///
-/// The stable system prompt is keyed by `(session, provider, provider_protocol,
-/// agent, mode)`. Stable inputs (identity files, skills, tools, behavior
-/// coaching) change rarely within a session, so this simple key captures almost
-/// all cache hits while avoiding expensive content hashing on the hot path.
-/// The provider protocol is part of the key because protocol adapters shape the
-/// tool schemas and system-prompt formatting consumed by the model; a hot
-/// protocol/base_url swap (e.g. kimi → anthropic) must not reuse a stale prefix.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct StablePromptKey {
-    session_key: String,
-    agent_id: String,
-    provider_name: String,
-    provider_protocol: String,
-    prompt_mode: String,
-}
-
-impl StablePromptKey {
-    pub(crate) fn new(
-        session_key: &str,
-        agent_id: &str,
-        provider_name: &str,
-        provider_protocol: &str,
-        prompt_mode: crate::thinker::prompt_mode::PromptMode,
-    ) -> Self {
-        use crate::thinker::prompt_mode::PromptMode;
-        let prompt_mode = match prompt_mode {
-            PromptMode::Full => "full",
-            PromptMode::Compact => "compact",
-            PromptMode::Minimal => "minimal",
-        };
-        Self {
-            session_key: session_key.to_string(),
-            agent_id: agent_id.to_string(),
-            provider_name: provider_name.to_string(),
-            provider_protocol: provider_protocol.to_string(),
-            prompt_mode: prompt_mode.to_string(),
-        }
-    }
-}
-
 impl AgentHarnessRunner {
     /// Compute how many tokens the context window can spare for memory
     /// injection this turn, or `None` when no `[context_budget]` is configured
     /// (memory then uses its full configured budget — legacy behaviour).
     ///
-    /// Memory is injected once, before the Think→Act loop, into the system
-    /// prompt — which the pressure sensor counts as `overhead` and which message
-    /// compaction can NOT reclaim. So an oversized recall silently forces the
-    /// in-loop compactor to over-trim recent history to make room. We cap memory
-    /// so existing history + memory stays under the compaction *warning* line,
-    /// leaving the rest of the window for the base system prompt, tool schemas,
-    /// and the model's reply. Reuses the exact estimator the in-loop budget uses
-    /// (`estimate_message_tokens_aware`) so the two views agree.
+    /// Memory is rendered once, before the Think→Act loop, and delivered as a
+    /// transient trailing recall message that rides the compaction-protected
+    /// fresh tail. An oversized recall therefore still forces the in-loop
+    /// compactor to over-trim the rest of recent history to make room. We cap
+    /// memory so existing history + memory stays under the compaction
+    /// *warning* line, leaving the rest of the window for the base system
+    /// prompt, tool schemas, and the model's reply. Reuses the exact estimator
+    /// the in-loop budget uses (`estimate_message_tokens_aware`) so the two
+    /// views agree.
     ///
     /// No reference agent (hermes / openclaw / Pi / opensquilla) coordinates the
     /// memory and history budgets — they inject memory at a fixed size
@@ -187,10 +135,22 @@ impl AgentHarnessRunner {
     /// returned empty envelopes.
     ///
     /// Errors from individual builders are downgraded to a warn log: the
-    /// remaining sections (curated/memory/agent role) still render so a
-    /// transient memory failure never blocks a turn. This matches the
-    /// `Ok(None)` semantics already exposed by `MemoryContextProvider`'s
-    /// builders and keeps the harness path resilient.
+    /// remaining sections (curated/agent role) still render so a transient
+    /// memory failure never blocks a turn. This matches the `Ok(None)`
+    /// semantics already exposed by `MemoryContextProvider`'s builders and
+    /// keeps the harness path resilient.
+    ///
+    /// The third tuple element is the per-run recall context (hybrid memory
+    /// retrieval + routing experience). It is deliberately NOT welded into
+    /// the system prompt: recall varies with the user query, and varying
+    /// bytes in the system prompt sit ahead of every message-level
+    /// prompt-cache breakpoint — re-keying the entire conversation prefix
+    /// each run for every provider. The caller threads it into
+    /// `HarnessDeps::recall_context`, where `think` appends it as a
+    /// transient trailing user message (tail changes cost only themselves;
+    /// codex initial-context / hermes frozen-system-prompt parity). The
+    /// curated envelope stays in the Stable prefix — it is session-scoped
+    /// and rarely changes.
     pub(crate) async fn build_system_prompt(
         &self,
         agent_id: &str,
@@ -205,6 +165,7 @@ impl AgentHarnessRunner {
     ) -> Option<(
         String,
         Vec<crate::thinker::prompt_builder::SystemPromptPart>,
+        Option<String>,
     )> {
         use crate::providers::message::UnifiedMessage;
         use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
@@ -411,12 +372,27 @@ impl AgentHarnessRunner {
         let curated_chars = curated_text.as_ref().map_or(0, String::len);
         builder = builder.with_curated_envelope(curated_text);
         let memory_chars = memory_text.as_ref().map_or(0, String::len);
-        if let Some(text) = memory_text {
-            builder = builder.with_memory_user_message(text);
-        }
-        if let Some(text) = routing_text {
-            builder = builder.with_routing_experience_message(text);
-        }
+        // Per-query recall (memory + routing experience) is returned to the
+        // caller for tail-message delivery instead of being fed to the
+        // builder's `MemoryAugmentationLayer` — see the method doc. Both
+        // texts arrive already fenced (`<memory-context>` guard + "reference
+        // data, not user input" note), so plain concatenation suffices.
+        let recall_context = match (memory_text, routing_text) {
+            (None, None) => None,
+            (m, r) => {
+                let mut s = String::new();
+                if let Some(m) = m {
+                    s.push_str(&m);
+                }
+                if let Some(r) = r {
+                    if !s.is_empty() {
+                        s.push_str("\n\n");
+                    }
+                    s.push_str(&r);
+                }
+                Some(s)
+            }
+        };
         let identity_chars = identity_files.as_ref().map_or(0, |f| {
             f.files
                 .iter()
@@ -558,44 +534,26 @@ impl AgentHarnessRunner {
         // unset case silent.
         let cap_for_prompt = u32::try_from(iteration_cap).unwrap_or(u32::MAX);
         builder = builder.with_iteration_cap(cap_for_prompt);
-        // Cache-first wiring: build the stable/dynamic split AND the
-        // legacy flat string. The split lights up `RequestPayload::
-        // system_blocks` (consumed by the Anthropic adapter to place the
-        // prompt-cache breakpoint at the stable/dynamic boundary). The
-        // flat string remains the source of truth for adapters that do
-        // not consume `system_blocks` (everything except Anthropic today)
-        // and for callsites that read `HarnessDeps::system_prompt`.
-        let stable_key = StablePromptKey::new(
-            &session_key_str,
-            agent_id,
-            provider.name(),
-            &provider.protocol(),
-            self.default_prompt_mode,
-        );
-        let cached_stable = {
-            let mut cache = self.stable_prompt_cache.lock().await;
-            cache.get(&stable_key).cloned()
-        };
-        let (parts, cache_hit) = if let Some(entry) = cached_stable {
-            let dynamic = builder.build_dynamic_only_with_mode(
-                &[],
-                self.default_prompt_mode,
-                entry.stable_part.content.len(),
-            );
-            (vec![entry.stable_part, dynamic], true)
-        } else {
-            let parts = builder.build_system_prompt_cached_with_mode(&[], self.default_prompt_mode);
-            if let Some(stable) = parts.iter().find(|p| p.cache).cloned() {
-                let mut cache = self.stable_prompt_cache.lock().await;
-                cache.put(
-                    stable_key,
-                    StablePromptCacheEntry {
-                        stable_part: stable,
-                    },
-                );
-            }
-            (parts, false)
-        };
+        // Build the stable/dynamic split AND the legacy flat string. The
+        // split lights up `RequestPayload::system_blocks` (consumed by the
+        // Anthropic adapter to place the prompt-cache breakpoint at the
+        // stable/dynamic boundary). The flat string remains the source of
+        // truth for adapters that do not consume `system_blocks` (everything
+        // except Anthropic today) and for callsites that read
+        // `HarnessDeps::system_prompt`.
+        //
+        // Both parts are rendered fresh every run. A per-session LRU used to
+        // pin the stable prefix, but every stable-layer input (identity files,
+        // skills snapshot, strategy, curated memory, runtime capabilities) is
+        // already loaded fresh above — the cache only skipped the pure string
+        // render while silently serving stale content whenever a tool mutated
+        // a stable input mid-session (a strategy welded after turn 1 never
+        // reached the prompt; the token-estimate path polluted the entry with
+        // its NoopSandbox posture). Layer renders are deterministic functions
+        // of their inputs, so re-rendering stays byte-stable across runs when
+        // nothing changed — the provider-side prefix cache is unaffected — and
+        // a byte change now happens exactly when the content genuinely changed.
+        let parts = builder.build_system_prompt_cached_with_mode(&[], self.default_prompt_mode);
         let prompt_build_phase_ms = prompt_build_phase_start.elapsed().as_millis() as u64;
         let prompt: String = parts.iter().map(|p| p.content.as_str()).collect();
         // Phase 6 observability — confirm BUG-2/BUG-3 wiring at runtime.
@@ -604,12 +562,12 @@ impl AgentHarnessRunner {
         let stable_chars: usize = parts
             .iter()
             .filter(|p| p.cache)
-            .map(|p| p.content.len())
+            .map(|p| p.content.chars().count())
             .sum();
         let dynamic_chars: usize = parts
             .iter()
             .filter(|p| !p.cache)
-            .map(|p| p.content.len())
+            .map(|p| p.content.chars().count())
             .sum();
         tracing::info!(
             target: "alephcore::orchestrator::prompt",
@@ -630,11 +588,10 @@ impl AgentHarnessRunner {
             runtime_caps_phase_ms,
             context_phase_ms,
             prompt_build_phase_ms,
-            cache_hit,
             total_ms = prompt_build_start.elapsed().as_millis() as u64,
             "system prompt assembled"
         );
-        Some((prompt, parts))
+        Some((prompt, parts, recall_context))
     }
 }
 

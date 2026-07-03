@@ -71,11 +71,12 @@ impl MemoryContextProvider {
             .saturating_mul(2)
             .saturating_div(3)
             .min(u64::from(u32::MAX)) as u32;
-        // Coordinate with the per-turn context budget: memory is injected into
-        // the system prompt (counted as overhead by the pressure sensor and NOT
-        // reducible by message compaction), so an oversized injection forces the
-        // in-loop compactor to over-trim recent history. Back the budget off to
-        // the headroom the window can spare, floored so memory still lands.
+        // Coordinate with the per-turn context budget: memory is delivered as
+        // a transient trailing recall message that rides the fresh tail
+        // (compaction-protected), so an oversized injection still forces the
+        // in-loop compactor to over-trim the rest of recent history. Back the
+        // budget off to the headroom the window can spare, floored so memory
+        // still lands.
         let budget = AssemblyBudget {
             total_tokens: effective_memory_budget(target_tokens, available_tokens),
         };

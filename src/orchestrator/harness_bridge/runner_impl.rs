@@ -216,7 +216,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // prompt from per-agent curated memory + hybrid retrieval before the
         // harness loop starts. Failures are warned and degraded to `None` so
         // memory issues never block a turn.
-        let (system_prompt, system_prompt_parts) = match self
+        let (system_prompt, system_prompt_parts, recall_context) = match self
             .build_system_prompt(
                 &spec.agent,
                 &session_id,
@@ -230,8 +230,8 @@ impl HarnessRunner for AgentHarnessRunner {
             )
             .await
         {
-            Some((s, parts)) => (Some(s), Some(parts)),
-            None => (None, None),
+            Some((s, parts, recall)) => (Some(s), Some(parts), recall),
+            None => (None, None, None),
         };
 
         // Step 6: assemble HarnessDeps and run the inner Think→Act loop.
@@ -353,6 +353,7 @@ impl HarnessRunner for AgentHarnessRunner {
             trace_sink: trace_sink.clone(),
             system_prompt,
             system_prompt_parts,
+            recall_context,
             chain_context: crate::harness::chain_context::ChainContext::default(),
             guardrails: self.guardrails.clone(),
             // H1: the Think→Act loop is always capped. Per-flow override wins;
@@ -731,7 +732,7 @@ impl HarnessRunner for AgentHarnessRunner {
                     None,
                 )
                 .await
-                .map(|(s, _parts)| s)
+                .map(|(s, _parts, _recall)| s)
                 .unwrap_or_default();
             let sp_tokens =
                 crate::context::budget::pressure::estimate_tokens_aware(&system_prompt, ratio);

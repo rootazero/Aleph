@@ -1,6 +1,6 @@
 //! `SessionContextGuideLayer` — inject compressed-summary usage guide (priority 1750)
 //!
-//! Sits just after `MemoryAugmentationLayer` (1740).
+//! Sits just after `MemoryProtocolLayer` (1745).
 //! Only injects content when the conversation history contains at least one
 //! `<session_context>` block (i.e. `input.has_session_summaries` is true).
 //! For short sessions with no compaction this layer is a no-op with zero cost.
