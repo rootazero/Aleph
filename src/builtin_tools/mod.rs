@@ -41,6 +41,7 @@ pub mod clawhub;
 pub mod code_check;
 pub mod code_exec;
 pub mod command_canonicalize;
+pub mod command_ledger;
 pub mod config_audit;
 pub mod config_guide;
 pub mod crawl4ai;

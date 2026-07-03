@@ -38,6 +38,7 @@ use crate::tool_output::sanitize::sanitize_command_output;
 use crate::tools::AlephTool;
 
 use super::command_canonicalize::canonicalize_shell_cmd;
+use super::command_ledger::command_ledger;
 
 /// Threshold above which a shell script switches from `bash -c <script>`
 /// to `bash -s` reading the script from stdin. Linux's `ARG_MAX` for a
@@ -184,6 +185,12 @@ pub struct CodeExecOutput {
     /// Bytes dropped from stderr to satisfy the sandbox cap.
     #[serde(skip_serializing_if = "is_zero", default)]
     pub stderr_truncated_bytes: u64,
+    /// Advisory note attached by the tool layer, NOT produced by the command
+    /// itself — e.g. a heads-up that this exact shell command was already run
+    /// moments ago in this session (see `command_ledger`). Omitted from JSON
+    /// when absent so it only appears when there is something to say.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub advisory: Option<String>,
 }
 
 const fn is_zero(v: &u64) -> bool {
@@ -221,7 +228,9 @@ Multi-line code is first-class for all three languages. For shell, prefer
 ONE multi-line script (newlines, heredocs, pipelines, `set -e`) over many
 small calls — each call is a fresh process, so `cd`, env vars, virtualenv
 activation, and similar state do NOT persist between calls. If you need
-cross-call state, write it to a file under `working_dir`.
+cross-call state, write it to a file under `working_dir`. Re-running a shell
+command you already ran this session comes back with an `advisory` field
+flagging it — don't repeat unless you expect the output to have changed.
 
 `working_dir` (optional) is resolved inside the session workspace; paths
 outside the workspace are denied. Defaults to the workspace root.
@@ -305,6 +314,7 @@ Examples:
                     truncated: None,
                     stdout_truncated_bytes: 0,
                     stderr_truncated_bytes: 0,
+                    advisory: None,
                 });
             }
         };
@@ -326,6 +336,7 @@ Examples:
                     truncated: None,
                     stdout_truncated_bytes: 0,
                     stderr_truncated_bytes: 0,
+                    advisory: None,
                 });
             }
         };
@@ -611,6 +622,7 @@ fn sandbox_result_to_output(
                 truncated: if out.truncated { Some(true) } else { None },
                 stdout_truncated_bytes: out.stdout_truncated_bytes,
                 stderr_truncated_bytes: out.stderr_truncated_bytes,
+                advisory: None,
             }
         }
         Err(SandboxError::Timeout {
@@ -655,6 +667,7 @@ fn sandbox_result_to_output(
                 truncated: None,
                 stdout_truncated_bytes: 0,
                 stderr_truncated_bytes: 0,
+                advisory: None,
             }
         }
         Err(SandboxError::CapabilityDenied { reason }) => CodeExecOutput {
@@ -667,6 +680,7 @@ fn sandbox_result_to_output(
             truncated: None,
             stdout_truncated_bytes: 0,
             stderr_truncated_bytes: 0,
+            advisory: None,
         },
         Err(err) => CodeExecOutput {
             success: false,
@@ -678,6 +692,7 @@ fn sandbox_result_to_output(
             truncated: None,
             stdout_truncated_bytes: 0,
             stderr_truncated_bytes: 0,
+            advisory: None,
         },
     }
 }
@@ -708,8 +723,45 @@ impl AlephTool for CodeExecTool {
         // `call_unclamped` directly, keeping its generous ceiling.
         let mut args = args;
         args.timeout = clamp_foreground_timeout(args.timeout);
-        self.execute(args).await
+
+        // Advisory repeat-detection for shell commands (foreground only — the
+        // background path uses `call_unclamped`, and a deliberate long-running
+        // background job is not a wasteful re-run). Recorded BEFORE execute so
+        // the submission timestamp reflects when the model asked; it never
+        // gates execution — the command always runs regardless (R7).
+        let advisory = recent_shell_advisory(&args.language, &args.code);
+
+        let mut out = self.execute(args).await?;
+        if advisory.is_some() {
+            out.advisory = advisory;
+        }
+        Ok(out)
     }
+}
+
+/// Stable per-session key for the recent-command ledger. `None` outside a
+/// session scope (some CLI / test paths) — those simply get no advisory.
+fn session_ledger_key() -> Option<String> {
+    current_session().map(|sid| serde_json::to_string(&sid).unwrap_or_else(|_| format!("{sid:?}")))
+}
+
+/// Return a repeat advisory when this exact shell command was already run in
+/// the current session within the ledger's recency window. Shell only — other
+/// languages' re-runs usually follow an edit and are never flagged. Pure
+/// mechanical string equality on the canonicalized script (advisory only,
+/// never a gate: R7).
+fn recent_shell_advisory(language: &Language, code: &str) -> Option<String> {
+    if !matches!(language, Language::Shell) {
+        return None;
+    }
+    let key = canonicalize_shell_cmd(code).script.trim().to_string();
+    if key.is_empty() {
+        return None;
+    }
+    let session = session_ledger_key()?;
+    command_ledger()
+        .record(&session, &key)
+        .map(|advisory| advisory.message())
 }
 
 #[cfg(test)]
@@ -752,6 +804,61 @@ mod tests {
             CodeExecTool::DESCRIPTION,
             <CodeExecTool as AlephTool>::DESCRIPTION
         );
+    }
+
+    /// The repeat advisory is gated to `Language::Shell`: a re-run shell
+    /// command is flagged, but a re-run python/js command (whose repeats
+    /// usually follow an edit) never is. No sandbox needed — the advisory is
+    /// attached in `call` around `execute`, whose no-sandbox path still
+    /// returns `Ok`. Unique ephemeral session isolates the global ledger.
+    #[tokio::test]
+    async fn advisory_is_shell_only() {
+        let session = crate::routing::session_key::SessionKey::ephemeral("code-exec-advisory-gate");
+        SESSION_ID
+            .scope(session, async {
+                let tool = CodeExecTool::new();
+                let args = |language, code: &str| CodeExecArgs {
+                    language,
+                    code: code.to_string(),
+                    working_dir: None,
+                    timeout: None,
+                    allow_network: false,
+                    allow_subprocess: false,
+                    extra_writable_paths: Vec::new(),
+                    justification: None,
+                };
+                // Shell: first run clean, identical re-run flagged.
+                assert!(tool
+                    .call(args(Language::Shell, "ls -la"))
+                    .await
+                    .unwrap()
+                    .advisory
+                    .is_none());
+                assert!(
+                    tool.call(args(Language::Shell, "ls -la"))
+                        .await
+                        .unwrap()
+                        .advisory
+                        .is_some(),
+                    "identical shell re-run should be flagged"
+                );
+                // Python: never flagged, even on an identical re-run.
+                assert!(tool
+                    .call(args(Language::Python, "print(1)"))
+                    .await
+                    .unwrap()
+                    .advisory
+                    .is_none());
+                assert!(
+                    tool.call(args(Language::Python, "print(1)"))
+                        .await
+                        .unwrap()
+                        .advisory
+                        .is_none(),
+                    "python re-runs are never flagged (Shell-only gate)"
+                );
+            })
+            .await;
     }
 
     #[test]

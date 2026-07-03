@@ -145,6 +145,15 @@ variables, `set -e`, `source`, etc. do NOT carry over to the next call. If you
 need cross-call state, write the state into a file under `working_dir` and
 read it back in the next script, or just put everything into one cmd.
 
+Don't re-run a command you already ran this session unless you expect its
+output to have changed — the previous result is still above in the conversation.
+If you're polling for something to change (a build finishing, a file appearing),
+use BACKGROUND MODE's `wait`/`poll` below instead of re-issuing the same
+command; an identical re-run comes back with an `advisory` field flagging it.
+And prefer the purpose-built tools over shelling out: `file_read` to read a
+file, `file_edit` to change one, `search` to find files or text — they beat
+`cat`/`sed`/`grep`/`find` and don't spend a shell turn.
+
 `working_dir` (optional) is resolved inside the session workspace; paths
 outside the workspace are denied by the sandbox. If omitted the call lands at
 the workspace root.
@@ -445,6 +454,7 @@ fn info_output(payload: serde_json::Value) -> CodeExecOutput {
         truncated: None,
         stdout_truncated_bytes: 0,
         stderr_truncated_bytes: 0,
+        advisory: None,
     }
 }
 
@@ -460,6 +470,7 @@ fn error_output(message: impl Into<String>) -> CodeExecOutput {
         truncated: None,
         stdout_truncated_bytes: 0,
         stderr_truncated_bytes: 0,
+        advisory: None,
     }
 }
 
@@ -535,6 +546,25 @@ mod tests {
         assert!(
             d.contains("at most 8 running"),
             "should teach the per-session running cap"
+        );
+    }
+
+    /// C (description hardening): the model should learn not to waste turns
+    /// re-running identical commands, and to reach for the purpose-built tools.
+    #[test]
+    fn description_discourages_wasteful_repeats() {
+        let d = <BashExecTool as AlephTool>::DESCRIPTION;
+        assert!(
+            d.contains("advisory"),
+            "should teach the repeat-advisory field"
+        );
+        assert!(
+            d.contains("already ran"),
+            "should discourage re-running the same command"
+        );
+        assert!(
+            d.contains("file_read") && d.contains("search"),
+            "should redirect to the purpose-built read/search tools"
         );
     }
 
@@ -624,6 +654,41 @@ mod tests {
             "{}",
             out.stderr
         );
+    }
+
+    /// A (repeat advisory): a byte-identical foreground shell command run
+    /// twice in the same session is unflagged the first time and carries a
+    /// repeat `advisory` the second — and it still executes both times
+    /// (advisory only, never a gate). Unique ephemeral session keeps the
+    /// process-global ledger isolated from other tests.
+    #[tokio::test]
+    async fn repeated_foreground_command_surfaces_advisory() {
+        let session = crate::routing::session_key::SessionKey::ephemeral("bash-repeat-advisory");
+        SESSION_ID
+            .scope(session, async {
+                let tool = BashExecTool::new();
+                let mk = || BashExecArgs {
+                    cmd: "echo hi".to_string(),
+                    working_dir: None,
+                    timeout: None,
+                    allow_network: false,
+                    allow_subprocess: false,
+                    extra_writable_paths: Vec::new(),
+                    background: false,
+                    process_action: None,
+                    process_id: None,
+                    justification: None,
+                };
+                let first = tool.call(mk()).await.unwrap();
+                assert!(first.advisory.is_none(), "first run is not a repeat");
+                let second = tool.call(mk()).await.unwrap();
+                let note = second.advisory.expect("second identical run is flagged");
+                assert!(
+                    note.contains("already ran this exact command"),
+                    "advisory text: {note}"
+                );
+            })
+            .await;
     }
 
     #[tokio::test]
