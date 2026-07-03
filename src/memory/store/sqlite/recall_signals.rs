@@ -194,6 +194,58 @@ impl SqliteMemoryBackend {
         Ok(results)
     }
 
+    /// Aggregate co-recall pairs: notes retrieved together by the same query
+    /// event (same `query_hash` + `day_bucket` + `channel` — the dedup key of
+    /// one retrieval). Returns `(note_a, note_b, co_hit_count)` with
+    /// `note_a < note_b` (canonical undirected pair), strongest first, only
+    /// pairs with at least `min_co_hits` distinct co-occurrences.
+    ///
+    /// Behavioral analog of codebase-memory-mcp's `FILE_CHANGES_WITH` edge,
+    /// transposed to recall events. Pure aggregation — consumed by the
+    /// `co_recall_edges` dream stage.
+    pub fn co_recall_pairs(
+        &self,
+        min_co_hits: i64,
+        limit: usize,
+    ) -> Result<Vec<(String, String, i64)>, AlephError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT a.note_path, b.note_path, COUNT(*) AS co_hits \
+                 FROM recall_signals a \
+                 JOIN recall_signals b \
+                   ON a.query_hash = b.query_hash \
+                  AND a.day_bucket = b.day_bucket \
+                  AND a.channel    = b.channel \
+                  AND a.note_path  < b.note_path \
+                 GROUP BY a.note_path, b.note_path \
+                 HAVING COUNT(*) >= ?1 \
+                 ORDER BY co_hits DESC, a.note_path, b.note_path \
+                 LIMIT ?2",
+            )
+            .map_err(|e| AlephError::config(format!("co_recall_pairs prepare: {e}")))?;
+
+        let rows = stmt
+            .query_map(params![min_co_hits, limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| AlephError::config(format!("co_recall_pairs query: {e}")))?;
+
+        let mut pairs = Vec::new();
+        for row in rows {
+            pairs.push(row.map_err(|e| AlephError::config(format!("co_recall_pairs row: {e}")))?);
+        }
+        Ok(pairs)
+    }
+
     /// Count recall signals for a given channel.
     ///
     /// Returns the number of rows in `recall_signals` with the given channel.
@@ -376,5 +428,56 @@ mod tests {
         let store = setup();
         let agg = store.aggregate_for_facts(&[]).unwrap();
         assert!(agg.is_empty());
+    }
+
+    fn hit(path: &str) -> RecallHit {
+        RecallHit {
+            note_path: path.into(),
+            score: 0.5,
+        }
+    }
+
+    #[test]
+    fn co_recall_pairs_counts_shared_query_events() {
+        let store = setup();
+        // Two queries both surface (a, b); one also surfaces c.
+        store
+            .record_signals("q1", "web", &[hit("n/a"), hit("n/b"), hit("n/c")], None, "owner")
+            .unwrap();
+        store
+            .record_signals("q2", "web", &[hit("n/a"), hit("n/b")], None, "owner")
+            .unwrap();
+
+        let pairs = store.co_recall_pairs(2, 10).unwrap();
+        // Only (a, b) reaches 2 co-hits; (a, c) and (b, c) have 1.
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0], ("n/a".to_string(), "n/b".to_string(), 2));
+    }
+
+    #[test]
+    fn co_recall_pairs_are_canonical_and_threshold_gated() {
+        let store = setup();
+        store
+            .record_signals("q1", "web", &[hit("n/b"), hit("n/a")], None, "owner")
+            .unwrap();
+
+        // Threshold 1 surfaces the single co-occurrence, canonically ordered.
+        let pairs = store.co_recall_pairs(1, 10).unwrap();
+        assert_eq!(pairs, vec![("n/a".to_string(), "n/b".to_string(), 1)]);
+        // Threshold 2 filters it out.
+        assert!(store.co_recall_pairs(2, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn co_recall_pairs_ignore_solo_recalls_and_cross_query_hits() {
+        let store = setup();
+        // Different queries each surfacing one note — never co-recalled.
+        store
+            .record_signals("q1", "web", &[hit("n/a")], None, "owner")
+            .unwrap();
+        store
+            .record_signals("q2", "web", &[hit("n/b")], None, "owner")
+            .unwrap();
+        assert!(store.co_recall_pairs(1, 10).unwrap().is_empty());
     }
 }

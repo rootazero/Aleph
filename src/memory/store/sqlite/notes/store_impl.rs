@@ -1211,6 +1211,34 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(GraphSnapshot { nodes, edges })
     }
 
+    async fn replace_co_recall_links(
+        &self,
+        agent_id: &str,
+        rows: &[(String, String, f32)],
+    ) -> Result<(), AlephError> {
+        use crate::memory::notes::graph::CO_RECALLED_RELATION;
+        let conn = lock_conn!(self)?;
+        // Full refresh: the co-recall edge set is re-aggregated from
+        // `recall_signals` every dream cycle, so stale pairs must not linger.
+        conn.execute(
+            "DELETE FROM notes_links WHERE agent_id = ?1 AND relation = ?2",
+            params![agent_id, CO_RECALLED_RELATION],
+        )
+        .map_err(|e| AlephError::config(format!("replace_co_recall_links delete: {e}")))?;
+        // DO NOTHING on conflict: an existing semantic link (wikilink / typed
+        // relation) for the pair always wins over the behavioral edge.
+        for (from, to, confidence) in rows {
+            conn.execute(
+                "INSERT INTO notes_links (agent_id, from_note, to_note, to_raw, relation, confidence) \
+                 VALUES (?1, ?2, ?3, ?3, ?4, ?5) \
+                 ON CONFLICT(agent_id, from_note, to_note) DO NOTHING",
+                params![agent_id, from, to, CO_RECALLED_RELATION, f64::from(*confidence)],
+            )
+            .map_err(|e| AlephError::config(format!("replace_co_recall_links insert: {e}")))?;
+        }
+        Ok(())
+    }
+
     async fn replace_graph_cache(
         &self,
         agent_id: &str,

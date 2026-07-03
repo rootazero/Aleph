@@ -58,6 +58,10 @@ impl DreamStage for SkillDistillStage {
         let mut applied = 0usize;
         let dim_hint = ctx.embedder.dimensions() as u32;
 
+        // Fingerprints of supersedes the recall-evidence gate rejected on
+        // prior cycles — loaded once so re-proposals drop without re-gating.
+        let rejected_fingerprints = ctx.database.distill_rejects(&ctx.agent_id).unwrap_or_default();
+
         for path in &synthesis_paths {
             let content = match ctx.load_content(path).await {
                 Some(c) => c,
@@ -161,6 +165,20 @@ impl DreamStage for SkillDistillStage {
                             ));
                         continue;
                     }
+                }
+                // Recall-evidence gate (SkillOpt F-gate analog): a destructive
+                // Supersede must strictly out-score the target note's recall
+                // support, and a previously rejected edit never re-applies.
+                if let Some(record) = super::gate_action_evidence(
+                    &ctx,
+                    &action,
+                    &rejected_fingerprints,
+                    "skill_distill",
+                )
+                .await
+                {
+                    ctx.report.distill_actions.push(record);
+                    continue;
                 }
                 match ctx
                     .indexer
