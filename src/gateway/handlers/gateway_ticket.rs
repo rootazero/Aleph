@@ -40,6 +40,12 @@ pub async fn handle_ticket_create(
 
     let ttl_ms = ttl_seconds.map(|s| s as i64 * 1000);
 
+    // Opportunistic hygiene — clear expired tickets / tokens on this chokepoint
+    // so there is no dedicated prune daemon. Best-effort, never fails the call.
+    if let Err(e) = ctx.device_token_mgr.prune_now() {
+        tracing::debug!("ticket.create: prune failed: {e}");
+    }
+
     match ctx.device_token_mgr.create_bootstrap_ticket(ttl_ms) {
         Ok(ticket) => {
             // Expiration is 5 minutes from now by default; compute client-facing value.

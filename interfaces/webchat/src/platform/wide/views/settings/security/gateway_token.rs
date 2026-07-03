@@ -19,6 +19,14 @@ use serde_json::json;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 
+/// One paired remote Panel device, as returned by `gateway.devices.list`.
+#[derive(Clone)]
+struct PairedDevice {
+    device_id: String,
+    device_name: String,
+    last_seen_at: Option<i64>,
+}
+
 /// Build a LAN URL carrying a bootstrap ticket from the current page origin.
 #[cfg(target_arch = "wasm32")]
 fn pairing_url(ticket: &str) -> String {
@@ -71,6 +79,48 @@ pub fn GatewayTokenSection() -> impl IntoView {
     let pairing_ticket = RwSignal::new(String::new());
     let pairing_expires_at = RwSignal::new(Option::<i64>::None);
     let pairing_error = RwSignal::new(Option::<String>::None);
+
+    // Paired-device inventory state.
+    let devices = RwSignal::new(Vec::<PairedDevice>::new());
+    let devices_error = RwSignal::new(Option::<String>::None);
+    let devices_reload = RwSignal::new(0u32);
+
+    Effect::new(move |_| {
+        // Re-run on connect, after a rotate (via `reload`), and after a revoke.
+        let _ = reload.get();
+        let _ = devices_reload.get();
+        if !state.is_connected.get() {
+            return;
+        }
+        spawn_local(async move {
+            match state.rpc_call("gateway.devices.list", json!({})).await {
+                Ok(v) => {
+                    let list = v
+                        .get("devices")
+                        .and_then(|d| d.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    let parsed = list
+                        .into_iter()
+                        .filter_map(|d| {
+                            Some(PairedDevice {
+                                device_id: d.get("device_id")?.as_str()?.to_string(),
+                                device_name: d
+                                    .get("device_name")
+                                    .and_then(|x| x.as_str())
+                                    .unwrap_or("Unknown")
+                                    .to_string(),
+                                last_seen_at: d.get("last_seen_at").and_then(|x| x.as_i64()),
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    devices.set(parsed);
+                    devices_error.set(None);
+                }
+                Err(e) => devices_error.set(Some(e)),
+            }
+        });
+    });
 
     Effect::new(move |_| {
         // Re-run on connect and after a rotate.
@@ -180,6 +230,61 @@ pub fn GatewayTokenSection() -> impl IntoView {
                             <p class="text-xs text-text-secondary">{expires}</p>
                         </div>
                     })
+                }}
+            </div>
+
+            <hr class="border-border mb-4" />
+
+            // --- Paired devices ---
+            <div class="mb-6">
+                <h3 class="text-sm font-semibold mb-2">{"Paired devices"}</h3>
+                <p class="text-xs text-text-secondary mb-3">
+                    {"Remote devices that paired via a pairing link. Revoke one to lock it out on its next reconnect. Rotating the shared token below revokes them all at once."}
+                </p>
+                {move || devices_error.get().map(|e| view! {
+                    <div class="p-2 mb-3 bg-danger-subtle text-danger rounded text-sm">{e}</div>
+                })}
+                {move || {
+                    let list = devices.get();
+                    if list.is_empty() {
+                        return view! {
+                            <p class="text-xs text-text-tertiary">{"No paired devices."}</p>
+                        }.into_any();
+                    }
+                    view! {
+                        <div>
+                            {list.into_iter().map(|d| {
+                                let id = d.device_id.clone();
+                                let revoke = move |_| {
+                                    let id = id.clone();
+                                    spawn_local(async move {
+                                        let _ = state
+                                            .rpc_call("gateway.devices.revoke", json!({ "device_id": id }))
+                                            .await;
+                                        devices_reload.update(|n| *n += 1);
+                                    });
+                                };
+                                let last_seen = d.last_seen_at
+                                    .and_then(chrono::DateTime::from_timestamp_millis)
+                                    .map(|dt| format!("Last seen {}", dt.to_rfc3339()))
+                                    .unwrap_or_else(|| "Never connected".to_string());
+                                view! {
+                                    <div class="flex items-center gap-2 mb-2 p-2 rounded bg-surface-sunken border border-border">
+                                        <div class="flex-1 min-w-0">
+                                            <div class="text-sm font-medium truncate">{d.device_name}</div>
+                                            <div class="text-xs text-text-tertiary">{last_seen}</div>
+                                        </div>
+                                        <button
+                                            class="text-xs px-3 py-1.5 rounded border border-border text-danger hover:bg-danger-subtle"
+                                            on:click=revoke
+                                        >
+                                            {"Revoke"}
+                                        </button>
+                                    </div>
+                                }
+                            }).collect_view()}
+                        </div>
+                    }.into_any()
                 }}
             </div>
 

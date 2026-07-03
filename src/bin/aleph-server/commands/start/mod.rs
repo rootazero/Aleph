@@ -443,13 +443,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         });
     {
         let rotate_bus = event_bus.clone();
+        let rotate_devices = device_token_mgr.clone();
         server
             .handlers_mut()
             .register("gateway.token.rotate", move |req| {
                 let bus = rotate_bus.clone();
+                let devices = rotate_devices.clone();
                 async move {
-                    let resp =
-                        alephcore::gateway::handlers::gateway_token::handle_token_rotate(req).await;
+                    let resp = alephcore::gateway::handlers::gateway_token::handle_token_rotate(
+                        req,
+                        Some(devices),
+                    )
+                    .await;
                     // Only broadcast when rotation succeeded — don't kick sessions on failure.
                     if resp.error.is_none() {
                         let _ = bus.publish_frame(
@@ -476,6 +481,42 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         },
                     );
                     alephcore::gateway::handlers::gateway_ticket::handle_ticket_create(req, ctx)
+                        .await
+                }
+            });
+    }
+
+    // Paired-device management RPCs: list / revoke remote Panel devices paired
+    // via the bootstrap-ticket flow. Authorized-only (login wall). Scope-guarded
+    // to `device_type = "panel"` so they never touch cluster nodes.
+    {
+        let list_mgr = device_token_mgr.clone();
+        server
+            .handlers_mut()
+            .register("gateway.devices.list", move |req| {
+                let ctx = Arc::new(
+                    alephcore::gateway::handlers::gateway_devices::DevicesHandlerContext {
+                        device_token_mgr: list_mgr.clone(),
+                    },
+                );
+                async move {
+                    alephcore::gateway::handlers::gateway_devices::handle_devices_list(req, ctx)
+                        .await
+                }
+            });
+    }
+    {
+        let revoke_mgr = device_token_mgr.clone();
+        server
+            .handlers_mut()
+            .register("gateway.devices.revoke", move |req| {
+                let ctx = Arc::new(
+                    alephcore::gateway::handlers::gateway_devices::DevicesHandlerContext {
+                        device_token_mgr: revoke_mgr.clone(),
+                    },
+                );
+                async move {
+                    alephcore::gateway::handlers::gateway_devices::handle_devices_revoke(req, ctx)
                         .await
                 }
             });
