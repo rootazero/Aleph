@@ -148,6 +148,17 @@ pub const fn default_shell_timeout() -> u64 {
 /// Default "kept full" tool set — daily single-chat essentials plus the
 /// on-demand schema loader. Non-core tools are schema-collapsed. See
 /// `ProgressiveDisclosureRewriter`.
+///
+/// INVARIANT — do not drop `subagent` or `get_tool_schema` from this set.
+/// They are the only two tools that appear in a request's live tool surface
+/// yet are ABSENT from the `get_tool_schema` schema snapshot: `subagent` is
+/// attached out-of-band via `ScopedToolService::with_subagent_tool`, and
+/// `get_tool_schema` is registered into the loop registry AFTER the snapshot
+/// is captured (see `run_loop/inner.rs`). If either were collapsed, the model
+/// would be told to call `get_tool_schema(<it>)`, which would miss and mislead
+/// on a headline capability. Keeping them core means they are never collapsed,
+/// which is what closes the "collapsed-but-unsnapshotted" bug class. Guarded
+/// by `snapshot_exempt_tools_must_stay_core`.
 pub fn default_core_tools() -> Vec<String> {
     [
         "ask_user", "subagent", "bash", "code_exec", "code_check",
@@ -708,6 +719,31 @@ mod core_tools_tests {
         assert!(c.core.iter().any(|t| t == "subagent"));
         assert_eq!(c.core.len(), 19);
         assert!(!c.truncate_tool_descriptions);
+    }
+
+    /// Regression guard for the progressive-disclosure snapshot invariant.
+    ///
+    /// `subagent` and `get_tool_schema` are the only tools that appear in a
+    /// request's live tool surface yet are absent from the `get_tool_schema`
+    /// schema snapshot (subagent is attached out-of-band; get_tool_schema is
+    /// registered after the snapshot is taken — see `run_loop/inner.rs`). If
+    /// either is dropped from `core` it gets collapsed, and calling
+    /// `get_tool_schema(<it>)` then misses — a misleading failure on a headline
+    /// capability. This test pins them to `core` so a future edit to the list
+    /// cannot silently reopen that bug. See `default_core_tools`.
+    #[test]
+    fn snapshot_exempt_tools_must_stay_core() {
+        let core = default_core_tools();
+        assert!(
+            core.iter().any(|t| t == "subagent"),
+            "subagent must stay core: it is attached out-of-band and absent from \
+             the get_tool_schema snapshot, so collapsing it makes get_tool_schema miss"
+        );
+        assert!(
+            core.iter().any(|t| t == "get_tool_schema"),
+            "get_tool_schema must stay core: it is registered after the snapshot is \
+             taken, so it cannot resolve its own collapsed schema"
+        );
     }
 
     #[test]
