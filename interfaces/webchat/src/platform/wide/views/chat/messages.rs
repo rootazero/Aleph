@@ -8,7 +8,7 @@ use super::reasoning::ReasoningPanel;
 use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState, QueuedPrompt};
 use super::timeline::{self, TimelineRow};
 use super::PlanArchiveCell;
-use crate::components::markdown::{MarkdownRenderer, TypewriterRenderer};
+use crate::components::markdown::TypewriterRenderer;
 use crate::components::tool_card::{tool_headline, tool_icon, ToolCard, ToolKind};
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
@@ -736,11 +736,10 @@ fn MessageBubble(
                             })}
                             <div class=bubble_class_reactive id=bubble_dom_id>
                                 {tool_calls_view}
-                                {if is_streaming {
-                                    view! { <TypewriterRenderer content=content message_id=message_id /> }.into_any()
-                                } else {
-                                    view! { <MarkdownRenderer content=content /> }.into_any()
-                                }}
+                                // Assistant text — always the paced renderer; it
+                                // keeps sweeping past stream completion and falls
+                                // back to full Markdown for history/finished text.
+                                <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming />
                                 {error_view}
                                 {model_view}
                             </div>
@@ -758,10 +757,11 @@ fn MessageBubble(
                                     {content}
                                 </div>
                             }.into_any()
-                        } else if is_streaming {
-                            view! { <TypewriterRenderer content=content message_id=message_id /> }.into_any()
                         } else {
-                            view! { <MarkdownRenderer content=content /> }.into_any()
+                            // Assistant text — always the paced renderer; it keeps
+                            // sweeping past stream completion and falls back to
+                            // full Markdown for history/finished text.
+                            view! { <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming /> }.into_any()
                         }}
                         {error_view}
                         {model_view}

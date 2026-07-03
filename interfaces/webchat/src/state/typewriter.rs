@@ -10,13 +10,55 @@
 //! Before this, `typing_speed` was a configured-but-dead knob — defined,
 //! validated (50-400), surfaced in the Panel slider + i18n + example TOML, yet
 //! consumed by nothing. The slider did nothing. This module is its consumer.
+//!
+//! # Why a counter, not a start-timestamp
+//!
+//! An earlier version paced reveal as `floor((now - reveal_start) * cps)` — a
+//! wall-clock offset from a single start stamp. That had two fatal flaws for a
+//! real agent stream:
+//!
+//! 1. **Completion dumped the tail.** Reveal only ran while `is_streaming` was
+//!    true; the instant the backend finished (`run_complete`) the bubble
+//!    switched to a full render, discarding whatever the sweep had not yet
+//!    reached. For any response that generates faster than `cps` (nearly all of
+//!    them at 200 cps), the text appeared all at once — the typewriter was
+//!    invisible.
+//! 2. **Pauses banked budget.** A tool call or model stall mid-turn let elapsed
+//!    time accrue while no text arrived; when text resumed, `elapsed * cps` had
+//!    run far ahead of the content and dumped it with no pacing.
+//!
+//! The counter model fixes both. Each message owns a [`Reveal`] cursor advanced
+//! by the *real* per-frame delta (`dt * cps`, carrying the sub-integer
+//! remainder), clamped to the characters that have actually arrived. It is
+//! **decoupled from `is_streaming`**: the sweep keeps advancing after the stream
+//! ends until it catches up to the final text, and only then does the bubble
+//! switch to full Markdown. When the reveal is caught up to the content that has
+//! arrived so far, `last_ms` is re-anchored to *now* so a subsequent content
+//! pause never banks budget.
 
 use leptos::prelude::*;
 use std::collections::HashMap;
 
 /// Fallback chars-per-second until the live `behavior.typing_speed` loads.
 /// Matches `src/config/types/general.rs::default_typing_speed`.
-const DEFAULT_CPS: u32 = 50;
+const DEFAULT_CPS: u32 = 200;
+
+/// Reveal cursor for one streaming message's typewriter sweep.
+///
+/// `Copy` so it lives in a `HashMap` value and round-trips through the untracked
+/// bookkeeping in [`TypewriterClock::advance_for`] with zero allocation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Reveal {
+    /// Characters revealed so far (a prefix length in `char`s, not bytes).
+    pub revealed: usize,
+    /// Carried sub-integer progress. At 200 cps / 30 fps a frame yields ~6.6
+    /// chars, but at low cps a frame can be worth <1 char; carrying the
+    /// remainder stops the reveal from stalling by flooring away every frame.
+    pub frac: f64,
+    /// Wall-clock (ms, page-load relative) of the last advance — the anchor the
+    /// next frame's `dt` is measured from.
+    pub last_ms: f64,
+}
 
 /// Shared, app-root reveal clock read by every streaming bubble.
 ///
@@ -36,10 +78,11 @@ pub struct TypewriterClock {
     /// (the backend already coalesces to a single final chunk in instant mode;
     /// this keeps the Panel honest if a stray streamed delta still arrives).
     pub instant: RwSignal<bool>,
-    /// `message_id → reveal-start timestamp (ms)`. Persists across the
-    /// per-token remount of a streaming bubble (the keyed `<For>` recreates the
-    /// bubble on every delta) so the reveal is continuous, not reset each token.
-    starts: RwSignal<HashMap<String, f64>>,
+    /// `message_id → reveal cursor`. Persists across the per-token remount of a
+    /// streaming bubble (the keyed `<For>` recreates the bubble on every delta)
+    /// so the reveal is continuous, not reset each token. Also persists *past*
+    /// stream completion so the sweep can finish revealing the final text.
+    reveals: RwSignal<HashMap<String, Reveal>>,
 }
 
 impl Default for TypewriterClock {
@@ -55,90 +98,217 @@ impl TypewriterClock {
             tick: RwSignal::new(0),
             cps: RwSignal::new(DEFAULT_CPS),
             instant: RwSignal::new(false),
-            starts: RwSignal::new(HashMap::new()),
+            reveals: RwSignal::new(HashMap::new()),
         }
     }
 
-    /// Reveal-start timestamp for `id`, inserting `now` on first sight.
+    /// Whether `id` has an in-flight reveal cursor.
     ///
-    /// Uses untracked read/write: the start map is bookkeeping, not a render
-    /// input — re-render is driven by [`tick`](Self::tick), so touching the map
-    /// reactively would be a spurious dependency. Returns the *existing* start
-    /// for a message already streaming, which is what keeps reveal continuous
-    /// across the bubble's per-token remount.
+    /// A message with no cursor was never streamed live in this session (e.g.
+    /// loaded from history), so the renderer shows it in full immediately rather
+    /// than replaying a typewriter sweep. Untracked: this is a mount-time
+    /// routing decision, not a reactive input.
     #[must_use]
-    pub fn start_for(&self, id: &str, now: f64) -> f64 {
-        if let Some(t) = self.starts.with_untracked(|m| m.get(id).copied()) {
-            return t;
-        }
-        self.starts.update_untracked(|m| {
-            m.insert(id.to_string(), now);
+    pub fn has_reveal(&self, id: &str) -> bool {
+        self.reveals.with_untracked(|m| m.contains_key(id))
+    }
+
+    /// Advance `id`'s reveal cursor to `now` and return the new revealed length.
+    ///
+    /// First sight anchors the cursor at `now` with nothing revealed (so the
+    /// first frame's `dt` is ~0 and the sweep starts from the beginning rather
+    /// than jumping). Uses untracked read/write: the cursor map is bookkeeping,
+    /// not a render input — re-render is driven by [`tick`](Self::tick), so
+    /// touching it reactively would be a spurious self-dependency.
+    #[must_use]
+    pub fn advance_for(&self, id: &str, total: usize, now: f64, cps: u32, instant: bool) -> usize {
+        let prev = self
+            .reveals
+            .with_untracked(|m| m.get(id).copied())
+            .unwrap_or(Reveal {
+                revealed: 0,
+                frac: 0.0,
+                last_ms: now,
+            });
+        let next = advance_reveal(prev, total, now, cps, instant);
+        self.reveals.update_untracked(|m| {
+            m.insert(id.to_string(), next);
         });
-        now
+        next.revealed
+    }
+
+    /// Drop `id`'s reveal cursor once its sweep has finished.
+    ///
+    /// Called when a completed message has fully revealed: the bubble switches
+    /// to static full Markdown, so the cursor is dead weight. Pruning keeps the
+    /// map bounded over a long session and makes any later re-render fall
+    /// through the history path (full render, no replay).
+    pub fn finish(&self, id: &str) {
+        self.reveals.update_untracked(|m| {
+            m.remove(id);
+        });
     }
 }
 
-/// Number of leading characters to reveal given elapsed time and pacing.
+/// Advance a [`Reveal`] by the real elapsed wall-clock at `cps`, clamped to
+/// `total`.
 ///
-/// Pure (no `web_sys`) so the pacing law is host-testable. Reveal-all when
-/// pacing is off (`instant`, `cps == 0`) or the clock is degenerate
-/// (`elapsed_ms < 0`, e.g. `performance.now()` unavailable → `0 - start`).
-/// Otherwise reveal `floor(elapsed_secs * cps)` chars, clamped to `total`.
+/// Pure (no `web_sys`) so the pacing law is host-testable. Reveals everything at
+/// once when pacing is off (`instant`, `cps == 0`). A non-positive or non-finite
+/// `dt` (first frame, or `performance.now()` unavailable → `0`) advances
+/// nothing — it only re-anchors `last_ms`, so the sweep never jumps on a
+/// degenerate clock. When already caught up to `total`, `last_ms` is re-anchored
+/// to `now` without banking budget, so a following content pause (tool call /
+/// model stall) resumes smoothly instead of dumping.
 #[must_use]
-pub fn revealed_len(total: usize, elapsed_ms: f64, cps: u32, instant: bool) -> usize {
-    if instant || cps == 0 || elapsed_ms.is_nan() || elapsed_ms < 0.0 {
-        return total;
+pub fn advance_reveal(prev: Reveal, total: usize, now: f64, cps: u32, instant: bool) -> Reveal {
+    if instant || cps == 0 {
+        return Reveal {
+            revealed: total,
+            frac: 0.0,
+            last_ms: now,
+        };
     }
-    let allowed = (elapsed_ms / 1000.0 * f64::from(cps)).floor();
-    if allowed <= 0.0 {
-        0
-    } else if allowed >= total as f64 {
-        total
+    let dt = now - prev.last_ms;
+    if !dt.is_finite() || dt <= 0.0 {
+        // Degenerate clock (first frame / unavailable perf): anchor, don't move.
+        return Reveal {
+            revealed: prev.revealed.min(total),
+            frac: prev.frac,
+            last_ms: now,
+        };
+    }
+    if prev.revealed >= total {
+        // Caught up to the content that has arrived — heartbeat, never bank.
+        return Reveal {
+            revealed: total,
+            frac: 0.0,
+            last_ms: now,
+        };
+    }
+    let budget = dt / 1000.0 * f64::from(cps) + prev.frac;
+    let whole = budget.floor();
+    let new_revealed = prev
+        .revealed
+        .saturating_add(whole as usize)
+        .min(total);
+    let frac = if new_revealed >= total {
+        0.0
     } else {
-        allowed as usize
+        budget - whole
+    };
+    Reveal {
+        revealed: new_revealed,
+        frac,
+        last_ms: now,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::revealed_len;
+    use super::{advance_reveal, Reveal};
+
+    /// Cursor anchored at `t=0` with nothing revealed — the first-sight state.
+    fn fresh() -> Reveal {
+        Reveal {
+            revealed: 0,
+            frac: 0.0,
+            last_ms: 0.0,
+        }
+    }
 
     #[test]
     fn instant_reveals_all() {
-        assert_eq!(revealed_len(10, 0.0, 50, true), 10);
+        let r = advance_reveal(fresh(), 10, 0.0, 200, true);
+        assert_eq!(r.revealed, 10);
     }
 
     #[test]
     fn zero_cps_reveals_all() {
-        assert_eq!(revealed_len(10, 0.0, 0, false), 10);
+        let r = advance_reveal(fresh(), 10, 0.0, 0, false);
+        assert_eq!(r.revealed, 10);
     }
 
     #[test]
-    fn negative_elapsed_reveals_all() {
-        // performance.now() unavailable → now_ms()==0, 0 - start < 0.
-        assert_eq!(revealed_len(10, -5.0, 50, false), 10);
+    fn first_frame_does_not_advance() {
+        // now == last_ms → dt 0 → anchor only, reveal stays 0 (no jump even
+        // when the cursor is first created many ms into the page's life).
+        let r = advance_reveal(fresh(), 10, 0.0, 200, false);
+        assert_eq!(r.revealed, 0);
+        assert_eq!(r.last_ms, 0.0);
     }
 
     #[test]
-    fn zero_elapsed_reveals_none() {
-        assert_eq!(revealed_len(10, 0.0, 50, false), 0);
-    }
-
-    #[test]
-    fn paces_proportional_to_elapsed() {
+    fn advances_by_elapsed() {
+        // 100ms at 200cps = 20 chars, but only 10 exist → clamp.
+        let r = advance_reveal(fresh(), 10, 100.0, 200, false);
+        assert_eq!(r.revealed, 10);
         // 100ms at 50cps = 5 chars.
-        assert_eq!(revealed_len(10, 100.0, 50, false), 5);
+        let r = advance_reveal(fresh(), 10, 100.0, 50, false);
+        assert_eq!(r.revealed, 5);
     }
 
     #[test]
-    fn clamps_to_total_when_caught_up() {
-        // 1000ms at 50cps = 50 chars, but only 10 exist.
-        assert_eq!(revealed_len(10, 1000.0, 50, false), 10);
+    fn carries_fractional_progress() {
+        // 1ms at 200cps = 0.2 char — floors to 0 revealed but banks the 0.2 so
+        // repeated tiny frames still make progress instead of stalling forever.
+        let a = advance_reveal(fresh(), 10, 1.0, 200, false);
+        assert_eq!(a.revealed, 0);
+        assert!((a.frac - 0.2).abs() < 1e-9);
+        // Next 1ms frame: 0.2 banked + 0.2 = 0.4, still 0 whole chars.
+        let b = advance_reveal(a, 10, 2.0, 200, false);
+        assert_eq!(b.revealed, 0);
+        assert!((b.frac - 0.4).abs() < 1e-9);
+        // Reach t=5ms: 5 * 0.2 = 1.0 → exactly 1 char revealed.
+        let c = advance_reveal(b, 10, 5.0, 200, false);
+        assert_eq!(c.revealed, 1);
     }
 
     #[test]
-    fn floors_partial_char() {
-        // 30ms at 50cps = 1.5 → 1 char (never reveal a fractional glyph).
-        assert_eq!(revealed_len(10, 30.0, 50, false), 1);
+    fn clamps_to_total_and_drops_frac() {
+        let prev = Reveal {
+            revealed: 8,
+            frac: 0.5,
+            last_ms: 0.0,
+        };
+        // 1000ms at 200cps = 200 chars, far past the remaining 2.
+        let r = advance_reveal(prev, 10, 1000.0, 200, false);
+        assert_eq!(r.revealed, 10);
+        assert_eq!(r.frac, 0.0);
+    }
+
+    #[test]
+    fn caught_up_heartbeats_without_banking() {
+        // Already showing all 10 chars. A long idle gap (tool call) must NOT
+        // bank budget: last_ms re-anchors to now, revealed stays clamped.
+        let prev = Reveal {
+            revealed: 10,
+            frac: 0.0,
+            last_ms: 0.0,
+        };
+        let r = advance_reveal(prev, 10, 5000.0, 200, false);
+        assert_eq!(r.revealed, 10);
+        assert_eq!(r.last_ms, 5000.0);
+        // Content grows to 30 chars after the pause. The next 33ms frame paces
+        // ~6.6 chars from where we were — NOT a 5000ms dump.
+        let grown = advance_reveal(r, 30, 5033.0, 200, false);
+        assert!(grown.revealed <= 17, "paced, not dumped: {}", grown.revealed);
+        assert!(grown.revealed >= 10);
+    }
+
+    #[test]
+    fn negative_or_nan_dt_anchors_without_moving() {
+        let prev = Reveal {
+            revealed: 3,
+            frac: 0.0,
+            last_ms: 100.0,
+        };
+        // Clock went backwards (now < last_ms).
+        let back = advance_reveal(prev, 10, 50.0, 200, false);
+        assert_eq!(back.revealed, 3);
+        assert_eq!(back.last_ms, 50.0);
+        // NaN now (performance unavailable path is 0, but guard NaN too).
+        let nan = advance_reveal(prev, 10, f64::NAN, 200, false);
+        assert_eq!(nan.revealed, 3);
     }
 }
