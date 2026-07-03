@@ -26,10 +26,14 @@ use super::helpers::{
 
 macro_rules! lock_conn {
     ($self:expr) => {
-        $self
-            .conn
-            .lock()
-            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))
+        // Recover from a poisoned mutex instead of failing permanently: a panic
+        // while some other note-store call held the lock must not brick every
+        // subsequent note operation (the poison flag is sticky). The connection
+        // is still usable — the panicking op simply didn't commit. Mirrors the
+        // `.unwrap_or_else(|e| e.into_inner())` recovery used elsewhere (P7).
+        // Wrapped in `Ok` so the existing `lock_conn!(self)?` call sites keep
+        // their fallible shape without a per-site change.
+        Ok::<_, AlephError>($self.conn.lock().unwrap_or_else(|e| e.into_inner()))
     };
 }
 
@@ -328,6 +332,15 @@ impl NoteStore for SqliteMemoryBackend {
         )
         .map_err(|e| AlephError::config(format!("remove_note_index sources: {e}")))?;
 
+        // Fact-level provenance rows are keyed by (agent_id, note_path); a
+        // permanent delete must clear them too, otherwise every removed note
+        // leaks orphan provenance rows (an unbounded growth over time).
+        tx.execute(
+            "DELETE FROM notes_provenance WHERE agent_id = ?1 AND note_path = ?2",
+            params![agent_id, path],
+        )
+        .map_err(|e| AlephError::config(format!("remove_note_index provenance: {e}")))?;
+
         // Clear the embedding too: an orphan vector for a deleted note keeps
         // occupying KNN slots forever (retrieval skips it on the missing file,
         // but it still displaces real notes from the top-K). The vec0 virtual
@@ -538,6 +551,13 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         limit: usize,
     ) -> Result<Vec<NoteIndexEntry>, AlephError> {
+        // An empty / whitespace-only query would build a bare `MATCH '""'`,
+        // which FTS5 can reject as a syntax error. Nothing can match it, so
+        // short-circuit to "no results" before touching the connection.
+        if query.split_whitespace().next().is_none() {
+            return Ok(Vec::new());
+        }
+
         let conn = lock_conn!(self)?;
 
         // FTS5 reserves `[`, `]`, `^`, `*`, `:`, `(`, `)`, `"` and operator

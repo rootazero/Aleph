@@ -426,6 +426,14 @@ impl RateLimiter {
 #[must_use]
 pub fn scope_for_method(method: &str) -> RateLimitScope {
     match method {
+        // Authentication attempts: `connect` is where a remote client
+        // presents (or retries) a Gateway token, so it gets the strict
+        // brute-force window (10/min + 5-min lockout) instead of the
+        // generous RpcDefault one. Loopback is exempt upstream, and a
+        // legitimate remote client issues one `connect` per session — only
+        // token guessing and stale-token retry storms hit this ceiling.
+        "connect" => RateLimitScope::Auth,
+
         // State-changing writes
         "config.patch" | "config.apply" | "config.set" | "memory.store" | "memory.delete"
         | "session.compact" | "session.delete" | "plugins.install" | "plugins.uninstall"
@@ -638,6 +646,9 @@ mod tests {
             scope_for_method("voice.stream.audio"),
             RateLimitScope::RpcRealtime
         );
+
+        // Token-bearing handshake gets the strict auth window.
+        assert_eq!(scope_for_method("connect"), RateLimitScope::Auth);
 
         // Default
         assert_eq!(scope_for_method("session.list"), RateLimitScope::RpcDefault);

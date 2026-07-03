@@ -6,7 +6,7 @@
 //!
 //! Summary source (three-tier fallback):
 //!   1. First bullet line of the body (≤ 80 chars)
-//!   2. frontmatter `summary:` field — TODO: wired when Spec 6 writes it
+//!   2. frontmatter `summary:` field (for prose notes with no leading bullet)
 //!   3. Filename humanized (hyphens/underscores → spaces)
 
 use crate::error::AlephError;
@@ -122,28 +122,67 @@ impl IndexMdGenerator {
             .join(&safe_cat)
             .join(format!("{}.md", entry.filename));
         if let Ok(raw) = tokio::fs::read_to_string(&note_path).await {
-            if let Some(first_bullet) = first_body_bullet(&raw) {
+            let (frontmatter, body) = split_frontmatter_raw(&raw);
+            // Tier 1: first body bullet.
+            if let Some(first_bullet) = first_body_bullet(body) {
                 return Ok(first_bullet);
             }
+            // Tier 2: explicit frontmatter `summary:` field. Prose-body notes
+            // with no leading bullet used to fall straight through to the
+            // humanized filename; an authored summary now surfaces instead.
+            if let Some(summary) = frontmatter_summary(frontmatter) {
+                return Ok(summary);
+            }
         }
+        // Tier 3: humanized filename.
         Ok(humanize_filename(&entry.filename))
     }
 }
 
-fn first_body_bullet(raw: &str) -> Option<String> {
-    let body = if let Some(rest) = raw.strip_prefix("---\n") {
-        if let Some(end) = rest.find("\n---") {
-            &rest[end + 4..]
-        } else {
-            rest
-        }
-    } else {
-        raw
+/// Split raw note markdown into `(frontmatter, body)` using **line-anchored**
+/// `---` fences: a `\n---` embedded inside a multi-line YAML value must not be
+/// mistaken for the closing fence. Returns `("", raw)` when there is no opening
+/// fence, and `("", rest)` when an opening fence has no matching close.
+fn split_frontmatter_raw(raw: &str) -> (&str, &str) {
+    let Some(rest) = raw.strip_prefix("---\n") else {
+        return ("", raw);
     };
+    let mut offset = 0;
+    for line in rest.split_inclusive('\n') {
+        let trimmed = line.strip_suffix('\n').unwrap_or(line);
+        if trimmed == "---" {
+            return (&rest[..offset], &rest[offset + line.len()..]);
+        }
+        offset += line.len();
+    }
+    ("", rest)
+}
+
+fn first_body_bullet(body: &str) -> Option<String> {
     for line in body.lines() {
         let t = line.trim_start();
         if let Some(rest) = t.strip_prefix("- ") {
             return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Extract the scalar value of the frontmatter `summary:` key, with surrounding
+/// YAML quotes stripped. Returns `None` when the key is absent or empty.
+fn frontmatter_summary(frontmatter: &str) -> Option<String> {
+    for line in frontmatter.lines() {
+        if let Some(value) = line.trim().strip_prefix("summary:") {
+            let value = value.trim();
+            if value.is_empty() {
+                return None;
+            }
+            let unquoted = value
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .or_else(|| value.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+                .unwrap_or(value);
+            return Some(unquoted.to_string());
         }
     }
     None
@@ -226,6 +265,43 @@ mod tests {
         let entries = vec![entry("learning", "rust", 1_700_000_000)];
         let s = g.render(&entries, None).await.unwrap();
         assert!(s.contains("The user likes Rust macros a lot."));
+    }
+
+    #[tokio::test]
+    async fn frontmatter_summary_used_when_no_bullet() {
+        // Tier 2: a prose-body note (no leading bullet) with an explicit
+        // frontmatter `summary:` surfaces that summary instead of the
+        // humanized filename.
+        let dir = tempfile::tempdir().unwrap();
+        let g = IndexMdGenerator::new(dir.path());
+        tokio::fs::create_dir_all(dir.path().join("project"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            dir.path().join("project/design-doc.md"),
+            "---\ncategory: project\nsummary: \"Ingest pipeline redesign notes\"\n---\n\n## Overview\n\nSome prose without any bullet list.\n",
+        )
+        .await
+        .unwrap();
+        let entries = vec![entry("project", "design-doc", 1_700_000_000)];
+        let s = g.render(&entries, None).await.unwrap();
+        assert!(
+            s.contains("Ingest pipeline redesign notes"),
+            "frontmatter summary should be used as the index summary; got: {s}"
+        );
+        assert!(
+            !s.contains("design doc"),
+            "should not fall through to the humanized filename when summary present"
+        );
+    }
+
+    #[test]
+    fn frontmatter_summary_strips_quotes_and_ignores_body_fence() {
+        // A `\n---` inside the body must not truncate the frontmatter scan.
+        let raw = "---\nsummary: 'quoted value'\n---\nbody line\n---\nmore body\n";
+        let (fm, body) = split_frontmatter_raw(raw);
+        assert_eq!(frontmatter_summary(fm).as_deref(), Some("quoted value"));
+        assert!(body.starts_with("body line"));
     }
 
     #[tokio::test]

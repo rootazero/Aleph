@@ -3,6 +3,7 @@
 //! Handles WebSocket connections and dispatches JSON-RPC 2.0 requests
 //! to registered handlers.
 
+mod flood_guard;
 mod handler;
 mod metrics_endpoint;
 mod per_client_buffer;
@@ -635,17 +636,6 @@ impl GatewayServer {
                 ));
             }
         });
-    }
-
-    /// Gracefully shut down the gateway: notify all clients, then wait for a grace period.
-    pub async fn graceful_shutdown(&self, reason: &str) {
-        info!("Gateway graceful shutdown: {reason}");
-        let event = TopicEvent::new(
-            "system.shutdown",
-            serde_json::json!({"reason": reason, "grace_period_ms": 5000}),
-        );
-        let _ = self.event_bus.publish_json(&event);
-        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 
     /// Run the Gateway server

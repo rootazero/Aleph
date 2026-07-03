@@ -335,6 +335,8 @@ mod tests {
                 links: vec!["[P2]".into(), "[P50]".into(), "learning/raw".into()],
                 tags: vec![],
                 relations: vec![],
+                confidence: 1.0,
+                severity: Default::default(),
             }],
             schema_proposals: vec![],
         };

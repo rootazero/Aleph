@@ -811,6 +811,8 @@ async fn dedup_redirects_near_duplicate_create_to_append() {
         links: vec!["learning/rust".into()],
         tags: vec![],
         relations: vec![],
+        confidence: 1.0,
+        severity: Default::default(),
     }];
     let out = ing.dedup_redirect_creates("default", ops, &related).await;
     assert_eq!(out.len(), 1);
@@ -870,6 +872,8 @@ async fn dedup_disabled_keeps_create_unchanged() {
         links: vec!["learning/rust".into()],
         tags: vec![],
         relations: vec![],
+        confidence: 1.0,
+        severity: Default::default(),
     }];
     let out = ing.dedup_redirect_creates("default", ops, &related).await;
     assert!(
@@ -923,6 +927,8 @@ async fn dedup_never_self_redirects() {
         links: vec!["learning/rust".into()],
         tags: vec![],
         relations: vec![],
+        confidence: 1.0,
+        severity: Default::default(),
     }];
     let out = ing.dedup_redirect_creates("default", ops, &related).await;
     assert!(
@@ -980,6 +986,8 @@ async fn run_dedup_tier(seed_vec: Vec<f32>, budget: RelatedBudget) -> Vec<PageOp
         links: vec!["learning/rust".into()],
         tags: vec![],
         relations: vec![],
+        confidence: 1.0,
+        severity: Default::default(),
     }];
     ing.dedup_redirect_creates("default", ops, &related).await
 }
@@ -1054,6 +1062,8 @@ fn linkless_create(path: &str) -> PageOp {
         links: vec![],
         tags: vec![],
         relations: vec![],
+        confidence: 1.0,
+        severity: Default::default(),
     }
 }
 
@@ -1235,6 +1245,8 @@ async fn enforce_link_contract_links_via_keywords_when_related_empty() {
         links: vec![],
         tags: vec![],
         relations: vec![],
+        confidence: 1.0,
+        severity: Default::default(),
     }];
     // related is EMPTY → fallback path, scoped to AGENT ("main").
     let out = ing.enforce_link_contract(AGENT, ops, &[]).await;

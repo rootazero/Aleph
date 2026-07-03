@@ -334,6 +334,11 @@ async fn handle_connection(
     // Last observed cumulative event-overflow count. The bus->buffer forwarder
     // accounts global-hop drops here; the ping tick below acts on any growth.
     let last_overflow: u64 = 0;
+    // Closes the socket after too many login-wall rejections (stale-token
+    // retry loops); see `flood_guard` module docs.
+    let mut flood_guard = super::flood_guard::UnauthorizedFloodGuard::new(
+        super::flood_guard::MAX_UNAUTHORIZED_STRIKES,
+    );
 
     loop {
         tokio::select! {
@@ -560,6 +565,15 @@ async fn handle_connection(
                                             error!(
                                                 "Failed to send auth-required response to {}: {}",
                                                 conn_id, e
+                                            );
+                                            break;
+                                        }
+                                        if flood_guard.record_rejection() {
+                                            warn!(
+                                                "Connection {} closed: {} requests without a \
+                                                 valid Gateway token (flood guard)",
+                                                conn_id,
+                                                flood_guard.strikes()
                                             );
                                             break;
                                         }

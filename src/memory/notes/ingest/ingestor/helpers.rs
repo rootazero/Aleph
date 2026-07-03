@@ -8,15 +8,20 @@ use crate::memory::notes::ingest::ref_table::RefTable;
 use crate::memory::notes::ingest::retrieve::RelatedPage;
 use crate::memory::notes::KnowledgeNote;
 
-/// Build a `CandidateNote` for the gate from a `PageOp`. Returns `None` for
-/// op kinds that this scoped commit does not gate (Append/Update/Contradict/
-/// Link/Supersede). The candidate's `confidence` and `severity` come from
-/// the LLM-generated note shape; in this scoped commit `PageOp::Create`
-/// does not carry those fields, so we use `KnowledgeNote::default()` (which
-/// sets `confidence = 1.0` and `severity = Low`) so the gate's default
-/// thresholds (`min_confidence = 0.5`, `high_severity_min_confidence = 0.8`)
-/// admit them. Confidence/severity wiring on `PageOp::Create` is a
-/// follow-up task once the planner prompt is updated to emit them.
+/// Build a `CandidateNote` for the gate from a `PageOp`. Returns `None` for the
+/// still-ungated op kinds (Append/Update/Link/Supersede), which apply
+/// immediately without review.
+///
+/// - `Create`: `confidence`/`severity` are the planner LLM's self-assessment —
+///   the gate defers low-confidence creations and holds `High`/`Critical` pages
+///   to a higher bar. Plans predating those fields default to `1.0`/`Low`
+///   (serde), preserving the pre-wiring "admit everything" behaviour.
+/// - `Contradict`: gated as a review-bound candidate (`contradicts_existing` →
+///   Defer) carrying the original op in `replay_op` so the reviewer replays the
+///   contradiction verbatim on approval rather than overwriting the note.
+///
+/// R7: the model judges its own output (confidence / whether to contradict); the
+/// gate is a deterministic threshold, not a re-judgement.
 pub(crate) fn candidate_from_pageop(agent_id: &str, op: &PageOp) -> Option<CandidateNote> {
     match op {
         PageOp::Create {
@@ -25,6 +30,8 @@ pub(crate) fn candidate_from_pageop(agent_id: &str, op: &PageOp) -> Option<Candi
             facts,
             links,
             tags,
+            confidence,
+            severity,
             ..
         } => {
             let category = note_path
@@ -37,6 +44,8 @@ pub(crate) fn candidate_from_pageop(agent_id: &str, op: &PageOp) -> Option<Candi
                 tags: tags.clone(),
                 facts: facts.clone(),
                 links: links.clone(),
+                confidence: confidence.clamp(0.0, 1.0),
+                severity: *severity,
                 ..KnowledgeNote::default()
             };
             Some(CandidateNote {
@@ -48,12 +57,50 @@ pub(crate) fn candidate_from_pageop(agent_id: &str, op: &PageOp) -> Option<Candi
                 action: NoteWriteAction::Create,
                 bypass_review: false,
                 contradicts_existing: false,
+                replay_op: None,
             })
         }
-        // Scoped out in this commit; pass-through.
+        // A `Contradict` asserts existing knowledge is wrong — the classic
+        // anti-feedback vector. Route it through the gate as a review-bound
+        // candidate (`contradicts_existing` → Defer) carrying the original op so
+        // the reviewer can replay the contradiction verbatim on approval. No new
+        // `PageOp` fields needed: deferral is driven by `contradicts_existing`,
+        // not confidence. If the op fails to serialize (never expected), fall
+        // through to `None` so it applies immediately as before (no silent drop).
+        PageOp::Contradict {
+            note_path,
+            new_claim,
+            ..
+        } => {
+            let replay = serde_json::to_value(op).ok()?;
+            let category = note_path
+                .split_once('/')
+                .map(|(c, _)| c.to_string())
+                .unwrap_or_default();
+            let note = KnowledgeNote {
+                title: note_path
+                    .split_once('/')
+                    .map(|(_, f)| f.to_string())
+                    .unwrap_or_else(|| note_path.clone()),
+                category: category.clone(),
+                facts: vec![new_claim.clone()],
+                ..KnowledgeNote::default()
+            };
+            Some(CandidateNote {
+                agent_id: agent_id.to_string(),
+                category,
+                note,
+                source_path: None,
+                fact_provenance: Vec::new(),
+                action: NoteWriteAction::Update,
+                bypass_review: false,
+                contradicts_existing: true,
+                replay_op: Some(replay),
+            })
+        }
+        // Still ungated: applied immediately without review.
         PageOp::Append { .. }
         | PageOp::Update { .. }
-        | PageOp::Contradict { .. }
         | PageOp::Link { .. }
         | PageOp::Supersede { .. } => None,
     }
@@ -243,4 +290,79 @@ pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
     dot / (na.sqrt() * nb.sqrt())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::notes::note::types::Severity;
+
+    fn create_op(confidence: f32, severity: Severity) -> PageOp {
+        PageOp::Create {
+            note_path: "reference/x".into(),
+            title: "X".into(),
+            summary: String::new(),
+            facts: vec![],
+            links: vec![],
+            tags: vec![],
+            relations: vec![],
+            source_ids: vec![],
+            confidence,
+            severity,
+        }
+    }
+
+    #[test]
+    fn candidate_carries_llm_confidence_and_severity() {
+        // The gate can only defer low-confidence / high-severity creations if
+        // the candidate actually reflects the planner's self-assessment rather
+        // than a hardcoded default — this is the wiring the gate depends on.
+        let c = candidate_from_pageop("default", &create_op(0.42, Severity::High))
+            .expect("Create must be gated");
+        assert_eq!(c.note.confidence, 0.42);
+        assert_eq!(c.note.severity, Severity::High);
+    }
+
+    #[test]
+    fn candidate_clamps_out_of_range_confidence() {
+        let c = candidate_from_pageop("default", &create_op(1.5, Severity::Low)).unwrap();
+        assert_eq!(c.note.confidence, 1.0);
+    }
+
+    #[test]
+    fn link_and_other_ops_stay_ungated() {
+        let op = PageOp::Link {
+            from: "a/b".into(),
+            to: "c/d".into(),
+        };
+        assert!(candidate_from_pageop("default", &op).is_none());
+        let op = PageOp::Append {
+            note_path: "a/b".into(),
+            new_facts: vec![],
+            new_links: vec![],
+            new_relations: vec![],
+            source_ids: vec![],
+        };
+        assert!(candidate_from_pageop("default", &op).is_none());
+    }
+
+    #[test]
+    fn contradict_is_gated_with_replay_op() {
+        // A Contradict must become a review-bound candidate: it defers via
+        // `contradicts_existing` and carries the original op for verbatim replay
+        // on approval (so approval re-applies the contradiction, not an overwrite).
+        let op = PageOp::Contradict {
+            note_path: "reference/rust".into(),
+            new_claim: "tokio is not single-threaded".into(),
+            evidence_source_ids: vec!["raw-1".into()],
+        };
+        let c = candidate_from_pageop("default", &op).expect("Contradict must be gated");
+        assert!(c.contradicts_existing, "must route to the gate's Defer path");
+        assert_eq!(c.note.category, "reference");
+        assert_eq!(c.note.facts, vec!["tokio is not single-threaded"]);
+        let replay = c.replay_op.expect("must carry the original op for replay");
+        // Round-trips back to the same op.
+        let back: PageOp = serde_json::from_value(replay).unwrap();
+        assert!(matches!(back, PageOp::Contradict { .. }));
+    }
 }

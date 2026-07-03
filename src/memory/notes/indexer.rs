@@ -98,6 +98,13 @@ pub struct NoteIndexer<S: NoteStore> {
     store: Arc<S>,
     orientation:
         Option<crate::sync_primitives::Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
+    /// Optional embedding provider. When present, every full note write
+    /// (`write_note`, `write_note_raw`, `rename_note`) refreshes the note's
+    /// vector so it becomes searchable immediately — instead of only after the
+    /// next background `reembed_all` sweep. `None` is a graceful no-op (the
+    /// FTS leg still works, and interactive tools that own their own embedder
+    /// remain unaffected).
+    embedder: Option<Arc<dyn crate::memory::embedding_provider::EmbeddingProvider>>,
 }
 
 impl<S: NoteStore> NoteIndexer<S> {
@@ -110,6 +117,7 @@ impl<S: NoteStore> NoteIndexer<S> {
             memory_dir,
             store,
             orientation: None,
+            embedder: None,
         }
     }
 
@@ -125,10 +133,74 @@ impl<S: NoteStore> NoteIndexer<S> {
         self
     }
 
+    /// Attach an embedding provider so every full note write refreshes the
+    /// note's vector on the spot (embed-on-write), making it immediately
+    /// visible to hybrid/vector recall. Without it, freshly written notes are
+    /// FTS-only until the next `reembed_all` sweep.
+    #[must_use]
+    pub fn with_embedder(
+        mut self,
+        embedder: Arc<dyn crate::memory::embedding_provider::EmbeddingProvider>,
+    ) -> Self {
+        self.embedder = Some(embedder);
+        self
+    }
+
     fn notify_orientation(&self, agent_id: &str, category: &str, filename: &str) {
         if let Some(w) = &self.orientation {
             w.invalidate(agent_id, &format!("{category}/{filename}"));
         }
+    }
+
+    /// Embed `content` and upsert the note's vector so it is searchable
+    /// immediately after a write. Best-effort: a missing embedder is a no-op,
+    /// and an embed/upsert failure is logged but never fails the write — the
+    /// note is already on disk and the `reembed_all` sweep is the safety net.
+    async fn refresh_embedding(&self, agent_id: &str, category: &str, title: &str, content: &str) {
+        let Some(embedder) = &self.embedder else {
+            return;
+        };
+        if content.trim().is_empty() {
+            return;
+        }
+        match embedder.embed(content).await {
+            Ok(embedding) => {
+                let dim = embedding.len() as u32;
+                let note_path = format!("{category}/{title}");
+                if let Err(e) = self
+                    .store
+                    .upsert_embedding(&note_path, agent_id, &embedding, dim)
+                    .await
+                {
+                    tracing::warn!(path = %note_path, error = %e, "indexer: embedding upsert failed");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "indexer: embed-on-write failed (vector index stays stale)");
+            }
+        }
+    }
+
+    /// Shared post-write pipeline for a full note write: reparse the on-disk
+    /// markdown, sync the SQLite index, invalidate orientation, and refresh the
+    /// vector (embed-on-write). Every full-write entry point (`write_note`,
+    /// `write_note_raw`) funnels through here so the index / orientation / vector
+    /// side-effects stay in lockstep and no writer can silently forget one.
+    async fn finalize_write(
+        &self,
+        agent_id: &str,
+        category: &str,
+        safe_title: &str,
+        content: &str,
+    ) -> Result<(), AlephError> {
+        let reparsed = KnowledgeNote::from_markdown(safe_title, content).map_err(|e| {
+            AlephError::other(format!("reparse after write {category}/{safe_title}: {e}"))
+        })?;
+        self.store.index_note(&reparsed, agent_id, category).await?;
+        self.notify_orientation(agent_id, category, safe_title);
+        self.refresh_embedding(agent_id, category, safe_title, content)
+            .await;
+        Ok(())
     }
 
     /// Getter for the memory directory.
@@ -373,12 +445,10 @@ impl<S: NoteStore> NoteIndexer<S> {
         );
         atomic_write_file(&path, &content).await?;
 
-        // Sync to SQLite immediately so callers don't have to wait for full_rebuild.
-        let reparsed = KnowledgeNote::from_markdown(&safe_title, &content)
-            .map_err(|e| AlephError::other(format!("reparse after write: {e}")))?;
-        self.store.index_note(&reparsed, agent_id, category).await?;
-
-        self.notify_orientation(agent_id, category, &safe_title);
+        // Sync index + orientation + vector immediately so callers don't have to
+        // wait for full_rebuild / reembed_all.
+        self.finalize_write(agent_id, category, &safe_title, &content)
+            .await?;
         Ok(path)
     }
 
@@ -424,14 +494,11 @@ impl<S: NoteStore> NoteIndexer<S> {
 
         atomic_write_file(&path, content).await?;
 
-        // Sync to SQLite immediately so the graph reflects the edit without
-        // waiting for the next full_rebuild. Index under the path `category`
-        // (the file's physical location), mirroring `write_note`.
-        let reparsed = KnowledgeNote::from_markdown(&safe_title, content)
-            .map_err(|e| AlephError::other(format!("reparse after raw write: {e}")))?;
-        self.store.index_note(&reparsed, agent_id, category).await?;
-
-        self.notify_orientation(agent_id, category, &safe_title);
+        // Sync index + orientation + vector immediately so the graph reflects
+        // the edit without waiting for the next full_rebuild. Index under the
+        // path `category` (the file's physical location), mirroring `write_note`.
+        self.finalize_write(agent_id, category, &safe_title, content)
+            .await?;
         Ok(path)
     }
 
@@ -630,13 +697,30 @@ impl<S: NoteStore> NoteIndexer<S> {
                         continue;
                     }
                     // Re-index the affected file
-                    let _ = self.index_file(agent_id, cat, &path).await;
+                    if let Err(e) = self.index_file(agent_id, cat, &path).await {
+                        tracing::warn!(path = %path.display(), error = %e, "rename: re-index after wikilink rewrite failed (index left stale)");
+                    }
                 }
             }
         }
 
-        // Index the renamed file
-        let _ = self.index_file(agent_id, &category, &new_path).await;
+        // Index the renamed file. A failure here leaves the new path unindexed
+        // (the old path's row was already removed), so surface it rather than
+        // swallowing it — the file is on disk and full_rebuild will recover.
+        if let Err(e) = self.index_file(agent_id, &category, &new_path).await {
+            tracing::warn!(path = %new_path.display(), error = %e, "rename: re-index of renamed note failed (index left stale)");
+        }
+
+        // Re-embed under the new path: `remove_note_index` dropped the old
+        // path's vector, and `index_file` does not embed, so without this the
+        // renamed note falls out of vector search until the next reembed sweep.
+        // Guard on the embedder to skip the disk read in FTS-only deployments.
+        if self.embedder.is_some() {
+            if let Ok(content) = fs::read_to_string(&new_path).await {
+                self.refresh_embedding(agent_id, &category, &safe_new, &content)
+                    .await;
+            }
+        }
 
         self.notify_orientation(agent_id, &category, &safe_old);
         self.notify_orientation(agent_id, &category, &safe_new);

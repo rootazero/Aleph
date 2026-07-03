@@ -871,16 +871,7 @@ where
                                                 // not bleed into a later plain
                                                 // turn in this reused session
                                                 // (spec §6). Best-effort.
-                                                if let Some(strat) = crate::strategy::global() {
-                                                    if let Err(e) =
-                                                        strat.delete(&crate::strategy::goal_key(
-                                                            &session_key_str,
-                                                        ))
-                                                    {
-                                                        warn!(error = %e, session = %session_key_str,
-                                                            "goal pursuit: failed to clear welded strategy on complete (ignored)");
-                                                    }
-                                                }
+                                                clear_goal_welded_strategy(&session_key_str);
                                             }
                                         }
                                         Some(reason) => {
@@ -918,6 +909,13 @@ where
                                                     );
                                                 }
                                             } else {
+                                                // Vetoed with no runway left → the
+                                                // reopen path Blocked the goal. This
+                                                // is an authoritative dormant end —
+                                                // clear the welded plan (the failed
+                                                // plan must not bleed into later
+                                                // plain turns; a user resume re-reasons).
+                                                clear_goal_welded_strategy(&session_key_str);
                                                 info!(session = %session_key_str,
                                                     "goal pursuit: objective gate vetoed at iteration cap, goal blocked");
                                             }
@@ -966,15 +964,45 @@ where
                                     let blocked = goal
                                         .clone()
                                         .with_status(crate::goal::GoalStatus::Blocked, now_ms)
-                                        .with_note(Some(note), now_ms);
+                                        .with_note(Some(note.clone()), now_ms);
                                     if let Err(e) = store.put(&blocked) {
                                         warn!(error = %e, session = %session_key_str,
                                             "goal pursuit: failed to persist cap-reached block");
                                     } else {
+                                        // Authoritative dormant end — clear the
+                                        // welded plan (mirror loop's cap-stop) so
+                                        // it does not bleed into later plain turns.
+                                        clear_goal_welded_strategy(&session_key_str);
+                                        // R5: a Blocked goal is invisible in the
+                                        // prompt (only Active surfaces), so the
+                                        // most common autonomous ending — hitting
+                                        // a cap — was silent. Ping the origin
+                                        // channel like loop's cap-exhaustion stop;
+                                        // Panel-only sessions rely on the stored note.
+                                        let origin = match crate::gateway::event_emitter::origin_fanout::channel_registry() {
+                                            Some(reg) => agent
+                                                .origin_route(&request.session_key)
+                                                .await
+                                                .map(|(ch, conv)| (reg, ch, conv)),
+                                            None => None,
+                                        };
+                                        notify_origin(origin.as_ref(), format!("⏹ {note}")).await;
                                         info!(session = %session_key_str,
                                             continuations_used = goal.continuations_used,
-                                            "goal pursuit: iteration cap reached, goal blocked for user guidance");
+                                            "goal pursuit: cap reached, goal blocked for user guidance");
                                     }
+                                } else if goal.status == crate::goal::GoalStatus::Complete
+                                    && matches!(goal.pursuit, crate::goal::PursuitMode::Active { .. })
+                                {
+                                    // Active-pursuit goal the model self-reported
+                                    // Complete with NO gate to arbitrate it (a gate
+                                    // would have routed through `awaiting_gate`
+                                    // above, which owns the weld clear on confirm).
+                                    // This is the common gate-less autonomous
+                                    // completion — an authoritative terminal end,
+                                    // so clear the welded plan here (idempotent for
+                                    // the already-gate-Passed case).
+                                    clear_goal_welded_strategy(&session_key_str);
                                 }
                             }
                             Ok(None) => {} // No goal for this session — common path, silent.
@@ -1073,7 +1101,7 @@ where
                                             .map(|(ch, conv)| (reg, ch, conv)),
                                         None => None,
                                     };
-                                    notify_loop_origin(origin.as_ref(), format!("⏹ {note}")).await;
+                                    notify_origin(origin.as_ref(), format!("⏹ {note}")).await;
                                     info!(session = %session_key_str, note = %note,
                                         "loop: safety cap reached, loop stopped");
                                 }
@@ -1341,9 +1369,18 @@ fn spawn_continuation_run(
                         }
                     }
                     ContinuationKind::Goal => {
-                        warn!(error = %e, session = %session_key_str,
-                            "goal pursuit: continuation hit a busy agent; blocking goal for user guidance");
-                        block_goal_on_failure(&session_key_str, &e, origin.as_ref()).await;
+                        // A scheduling collision, not a pursuit failure — the
+                        // loop sibling above treats it as benign, and goals now
+                        // do too. The busy holder is another run of this agent
+                        // (commonly a user turn racing this session's own
+                        // continuation): its completion re-enters the goal hook
+                        // under the SAME session key and re-arms the pursuit. So
+                        // leave the goal Active rather than permanently Blocking
+                        // it — a user simply chatting while a goal pursues must
+                        // not spuriously kill the work they asked for (loop's
+                        // "视同 Cancelled 留 Active" parity, R5).
+                        info!(session = %session_key_str,
+                            "goal pursuit: continuation hit a busy agent; leaving goal active, next completed run re-arms it");
                     }
                 }
             } else {
@@ -1362,6 +1399,27 @@ fn spawn_continuation_run(
             }
         }
     });
+}
+
+/// Clear the goal-welded Strategy for a session (best-effort). Called at every
+/// authoritative goal termination — gate-confirmed complete, cap/deadline/
+/// budget exhaustion, gate-veto-at-cap, and failure block — so the stale plan
+/// neither bleeds into later plain turns of the reused session (the goal tier is
+/// resolved FIRST in `resolve_active_strategy`) nor blocks a future same-
+/// objective `goal set` from re-planning. The loop sibling clears `loop_key`
+/// inline at its cap-stop / failure-stop; this is goal's single-source
+/// equivalent so those sites do not each hand-roll the delete. The tool-side
+/// terminations (`goal clear`, self-reported terminal `update`) clear the same
+/// key in `builtin_tools/goal.rs`; only Passive-complete and Blocked are cleared
+/// there — Active-pursuit completion is gate-arbitrated here so a gate veto can
+/// still reopen the goal WITH its plan intact.
+fn clear_goal_welded_strategy(session_key_str: &str) {
+    if let Some(strat) = crate::strategy::global() {
+        if let Err(e) = strat.delete(&crate::strategy::goal_key(session_key_str)) {
+            info!(session = %session_key_str, error = %e,
+                "goal pursuit: failed to clear welded strategy on termination (ignored)");
+        }
+    }
 }
 
 /// G3: when an autonomous continuation fails (non-cancellation), transition the
@@ -1399,6 +1457,11 @@ async fn block_goal_on_failure(
                 if let Err(e) = store.put(&blocked) {
                     warn!(error = %e, session = %session_key_str,
                         "goal pursuit: failed to persist failure block");
+                } else {
+                    // Authoritative dormant end — clear the welded plan so the
+                    // failed plan does not bleed into later plain turns (mirror
+                    // the cap-stop / loop failure-stop cleanup).
+                    clear_goal_welded_strategy(session_key_str);
                 }
             }
             // Already terminal (complete/blocked/paused) or no goal → nothing
@@ -1408,18 +1471,11 @@ async fn block_goal_on_failure(
                 "goal pursuit: goal lookup failed during failure block"),
         }
     }
-    if let Some((reg, ch, conv)) = origin {
-        let msg = crate::gateway::channel::OutboundMessage::text(
-            conv.clone(),
-            format!("⚠️ Autonomous pursuit of your standing goal halted: {reason}"),
-        );
-        if let Err(e) = reg
-            .send(&crate::gateway::channel::ChannelId::new(ch.clone()), msg)
-            .await
-        {
-            warn!(channel = %ch, error = %e, "goal pursuit: failed to deliver halt notice");
-        }
-    }
+    notify_origin(
+        origin,
+        format!("⚠️ Autonomous pursuit of your standing goal halted: {reason}"),
+    )
+    .await;
 }
 
 /// Loop sibling of [`block_goal_on_failure`]: when a clock-driven loop tick run
@@ -1459,18 +1515,20 @@ async fn stop_loop_on_failure(
             }
         }
     }
-    notify_loop_origin(
+    notify_origin(
         origin,
         format!("⚠️ Your timer loop halted on an error and was stopped: {reason}"),
     )
     .await;
 }
 
-/// Best-effort deliver a loop stop notice to the session's bound origin
-/// channel (R5). Shared by the failure stop and the cap-exhaustion stop so
-/// every unattended ending is equally visible; Panel-only sessions have no
-/// origin and rely on the stop reason stored for `loop(action='status')`.
-async fn notify_loop_origin(
+/// Best-effort deliver a continuation stop/halt notice to the session's bound
+/// origin channel (R5). Shared by both the loop endings (failure stop +
+/// cap-exhaustion stop) and the goal endings (failure block + cap/deadline/
+/// budget exhaustion block) so every unattended ending is equally visible;
+/// Panel-only sessions have no origin and rely on the stored stop reason
+/// (loop) / blocked note (goal).
+async fn notify_origin(
     origin: Option<&(
         Arc<crate::gateway::channel_registry::ChannelRegistry>,
         String,
@@ -1484,7 +1542,7 @@ async fn notify_loop_origin(
             .send(&crate::gateway::channel::ChannelId::new(ch.clone()), msg)
             .await
         {
-            warn!(channel = %ch, error = %e, "loop: failed to deliver halt notice");
+            warn!(channel = %ch, error = %e, "continuation: failed to deliver origin notice");
         }
     }
 }

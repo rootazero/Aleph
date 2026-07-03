@@ -54,6 +54,67 @@ async fn ensure_dirs_creates_all_categories() {
     }
 }
 
+struct StubEmbedder;
+
+#[async_trait::async_trait]
+impl crate::memory::embedding_provider::EmbeddingProvider for StubEmbedder {
+    async fn embed(&self, _text: &str) -> Result<Vec<f32>, AlephError> {
+        Ok(vec![0.25_f32; 768])
+    }
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+        Ok(texts.iter().map(|_| vec![0.25_f32; 768]).collect())
+    }
+    fn dimensions(&self) -> usize {
+        768
+    }
+    fn model_name(&self) -> &str {
+        "stub"
+    }
+    fn provider_id(&self) -> &str {
+        "stub"
+    }
+}
+
+#[tokio::test]
+async fn write_note_embeds_on_write_only_with_embedder() {
+    // W1: with an embedder attached, write_note refreshes the note's vector so
+    // it is immediately vector-searchable instead of waiting for reembed_all.
+    // Without one, the write path stays FTS-only (byte-identical old behaviour).
+    let dir = TempDir::new().unwrap();
+    let db = create_test_db();
+    let note = KnowledgeNote {
+        title: "Vectorable".to_string(),
+        category: "learning".to_string(),
+        facts: vec!["some content worth embedding".to_string()],
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+
+    // No embedder → no vector after the write.
+    let plain = NoteIndexer::new(dir.path().to_path_buf(), db.clone());
+    plain.write_note(AGENT, "learning", &note).await.unwrap();
+    assert!(
+        db.get_embedding("learning/Vectorable", AGENT, 768)
+            .await
+            .unwrap()
+            .is_none(),
+        "a plain indexer must not embed on write"
+    );
+
+    // With an embedder → vector present immediately after the write.
+    let indexer = NoteIndexer::new(dir.path().to_path_buf(), db.clone())
+        .with_embedder(Arc::new(StubEmbedder));
+    indexer.write_note(AGENT, "learning", &note).await.unwrap();
+    assert_eq!(
+        db.get_embedding("learning/Vectorable", AGENT, 768)
+            .await
+            .unwrap(),
+        Some(vec![0.25_f32; 768]),
+        "embed-on-write must upsert the note's vector"
+    );
+}
+
 #[tokio::test]
 async fn full_rebuild_indexes_all_notes() {
     let dir = TempDir::new().unwrap();
