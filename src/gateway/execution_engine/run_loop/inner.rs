@@ -773,6 +773,49 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 if let Some(rs) = orchestrator.harness.routing_store() {
                     t = t.with_routing_store(rs);
                 }
+                // Stage A (P1) — inherit the main harness's `[stability]`
+                // runaway protection so a stuck/looping/hung subagent aborts on
+                // the same stall watchdog, consecutive-failure cap, and per-turn
+                // timeout the parent run enforces. The whole plumbing
+                // (SubagentTool → AgentRuntime → SpawnerBase → HarnessDeps)
+                // existed and was documented "inherited by subagents", but this
+                // construction site never populated it — subagents ran unbounded.
+                // `None` (no [stability] config / mocks / simple engine) leaves
+                // subagents unbounded, matching the main harness.
+                if let Some(sc) = orchestrator.harness.stall_config() {
+                    t = t.with_stall_config(sc);
+                }
+                if let Some(cap) = orchestrator.harness.consecutive_failure_cap() {
+                    t = t.with_consecutive_failure_cap(cap);
+                }
+                if let Some(tt) = orchestrator.harness.turn_timeout() {
+                    t = t.with_turn_timeout(tt);
+                }
+                // P3 Stage I — hand subagents the shared plugin-registry handle
+                // so a role declaring `mcp_servers:` frontmatter can provision
+                // its per-agent MCP scope (reference validation + referenced-tool
+                // snapshot at spawn). The whole chain (SubagentTool →
+                // AgentRuntime → SpawnerBase → McpScope::provision) existed but
+                // this construction site never populated it, so such a subagent
+                // fail-loud'd at spawn ("plugin_registry is None but
+                // agent_def.mcp_servers is non-empty"). `None` (mocks / simple
+                // engine with no extension manager) leaves MCP scope disabled,
+                // which only fail-louds if a role actually declares mcp_servers.
+                if let Some(ext) = extension_manager.as_ref() {
+                    t = t.with_plugin_registry(ext.plugin_registry_handle());
+                }
+                // Fix 4 — thread the capture-filter registry so a spawned
+                // subagent's completion fires `on_delegation` memory-extension
+                // hooks (spawn.rs `dispatch_on_delegation`) and the child's
+                // memory writes route through the capture filter. The whole
+                // chain (SubagentTool → AgentRuntime → SpawnerBase) existed and
+                // `dispatch_on_delegation` was fully built, but this site never
+                // populated `capture_registry`, so `deleg_registry` was always
+                // None. `None` (tests / simple engine / no memory extensions)
+                // leaves it dormant — the registry no-ops when empty.
+                if let Some(cr) = self.capture_registry.as_ref() {
+                    t = t.with_capture_registry(cr.clone());
+                }
                 if let Some(ref mgr) = self.teammate_manager {
                     t = t.with_teammate_manager(mgr.clone());
                 }

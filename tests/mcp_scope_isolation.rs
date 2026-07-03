@@ -57,7 +57,7 @@ fn registry_with_global_tool(plugin_id: &str, tool_name: &str) -> PluginRegistry
 #[tokio::test]
 async fn i_t1_happy_reference_path() {
     let registry = registry_with_global_tool("github", "gh-search");
-    let global = Arc::new(registry);
+    let global = Arc::new(tokio::sync::RwLock::new(registry));
     let agent = AgentDef::new("scoped", AgentMode::SubAgent).with_mcp_servers(vec![
         McpServerSpec::Reference {
             name: "github".into(),
@@ -91,7 +91,7 @@ async fn i_t1_happy_reference_path() {
 #[tokio::test]
 async fn i_t2_happy_inline_path() {
     let registry = PluginRegistry::new();
-    let global = Arc::new(registry);
+    let global = Arc::new(tokio::sync::RwLock::new(registry));
     let agent = AgentDef::new("scoped", AgentMode::SubAgent).with_mcp_servers(vec![
         McpServerSpec::Inline {
             name: "fresh".into(),
@@ -119,7 +119,7 @@ async fn i_t2_happy_inline_path() {
 #[tokio::test]
 async fn i_t3_name_conflict_at_spawn_time() {
     let registry = registry_with_global_tool("github", "gh-search");
-    let global = Arc::new(registry);
+    let global = Arc::new(tokio::sync::RwLock::new(registry));
     let agent = AgentDef::new("scoped", AgentMode::SubAgent).with_mcp_servers(vec![
         McpServerSpec::Inline {
             name: "github".into(),
@@ -142,7 +142,7 @@ async fn i_t3_name_conflict_at_spawn_time() {
 #[tokio::test]
 async fn i_t4_provision_perf_budget_warn_only() {
     let registry = registry_with_global_tool("github", "gh-search");
-    let global = Arc::new(registry);
+    let global = Arc::new(tokio::sync::RwLock::new(registry));
     let agent = AgentDef::new("scoped", AgentMode::SubAgent).with_mcp_servers(vec![
         McpServerSpec::Reference {
             name: "github".into(),
@@ -170,7 +170,7 @@ async fn i_t4_provision_perf_budget_warn_only() {
 #[tokio::test]
 async fn i_t5_drop_teardown_emits_leaked_event() {
     let registry = PluginRegistry::new();
-    let global = Arc::new(registry);
+    let global = Arc::new(tokio::sync::RwLock::new(registry));
     let sink = CapturingSink::default();
     let arc_sink: Arc<dyn TraceSink> = Arc::new(sink.clone());
 

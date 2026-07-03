@@ -1,15 +1,16 @@
-//! `A2ASubAgent` — `SubAgent` trait implementation for A2A remote delegation
+//! `A2ASubAgent` — A2A remote delegation engine
 //!
 //! Integrates `SmartRouter` (routing) + `A2AClientPool` (communication) to delegate
 //! tasks to remote agents via the A2A protocol.
 
+#[cfg(test)]
 use async_trait::async_trait;
 
 use crate::a2a::adapter::client::{fold_stream, A2AClient, A2AClientPool};
 use crate::a2a::domain::{A2AMessage, A2ARole};
 use crate::a2a::port::RegisteredAgent;
 use crate::a2a::service::SmartRouter;
-use crate::agents::sub_agents::{SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult};
+use crate::agents::sub_agents::{SubAgentRequest, SubAgentResult};
 use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegistry};
 use crate::memory::namespace::NamespaceScope;
@@ -20,17 +21,9 @@ use crate::sync_primitives::Arc;
 ///
 /// Uses `SmartRouter` for intent-based agent discovery and `A2AClientPool`
 /// for managing HTTP connections to remote agents.
-///
-/// The `cached_names` field holds a lowercased list of agent names, skill names,
-/// and skill aliases from the registry. This enables `can_handle` (which is sync)
-/// to match user prompts that mention registered agent names without needing
-/// an async resolver call. Call `refresh_agent_names()` after agent registration
-/// changes to keep the cache current.
 pub struct A2ASubAgent {
     smart_router: Arc<SmartRouter>,
     client_pool: Arc<A2AClientPool>,
-    /// Cached lowercased agent/skill names for sync `can_handle` matching
-    cached_names: crate::sync_primitives::AsyncRwLock<Vec<String>>,
     /// Optional writer for raw memory delegation hooks (Spec 1 G2).
     /// When set, `execute` will write a `RawMemory(Delegation{child_agent_id})`
     /// row before returning a successful result.
@@ -59,7 +52,6 @@ impl A2ASubAgent {
         Self {
             smart_router,
             client_pool,
-            cached_names: crate::sync_primitives::AsyncRwLock::new(Vec::new()),
             raw_memory_writer: None,
             capture_registry: None,
         }
@@ -84,49 +76,12 @@ impl A2ASubAgent {
         self
     }
 
-    /// Refresh the cached agent names from the resolver.
-    ///
-    /// Call this after registering or unregistering agents in the `CardRegistry`
-    /// so that `can_handle` can match natural language prompts against current
-    /// agent names, skill names, and aliases.
-    pub async fn refresh_agent_names(&self) {
-        if let Ok(agents) = self.smart_router.list_agents().await {
-            let mut names = Vec::new();
-            for agent in &agents {
-                let name_lower = agent.card.name.to_lowercase();
-                // Only cache names with >= 2 chars to avoid false positives
-                if name_lower.chars().count() >= 2 {
-                    names.push(name_lower);
-                }
-                for skill in &agent.card.skills {
-                    let skill_lower = skill.name.to_lowercase();
-                    if skill_lower.chars().count() >= 2 {
-                        names.push(skill_lower);
-                    }
-                    if let Some(ref aliases) = skill.aliases {
-                        for alias in aliases {
-                            let alias_lower = alias.to_lowercase();
-                            if alias_lower.chars().count() >= 2 {
-                                names.push(alias_lower);
-                            }
-                        }
-                    }
-                }
-            }
-            tracing::debug!(count = names.len(), "Refreshed A2A agent name cache");
-            let mut cache = self.cached_names.write().await;
-            *cache = names;
-        } else {
-            tracing::warn!("Failed to list agents from SmartRouter for name cache");
-        }
-    }
-
     /// Send a delegation request to an already-resolved remote agent.
     ///
     /// Streaming-first: consumes the remote agent's SSE stream (idle-timeout
     /// liveness + live progress). When the remote has no `/a2a/stream` route
     /// (non-Aleph agents), transparently falls back to [`Self::dispatch_sync`].
-    /// Shared by [`Self::execute`] and [`Self::execute_delegation`].
+    /// Used by [`Self::execute_delegation`].
     async fn dispatch(
         &self,
         agent: &RegisteredAgent,
@@ -406,92 +361,6 @@ pub(crate) fn emit_delegation_primitives(
     }
 }
 
-/// Return true if `name` appears inside a quoted span of `text`.
-/// Mirrors the quote styles used by `SmartRouter::try_exact_name`:
-/// double quotes (`"name"`) and Chinese quotes (`「name」`).
-fn is_quoted_substring(text: &str, name: &str) -> bool {
-    let double = format!("\"{}\"", name);
-    let chinese = format!("\u{300C}{}\u{300D}", name);
-    text.contains(&double) || text.contains(&chinese)
-}
-
-#[async_trait]
-impl SubAgent for A2ASubAgent {
-    fn id(&self) -> &str {
-        "a2a"
-    }
-
-    fn name(&self) -> &str {
-        "A2A Remote Agent"
-    }
-
-    fn description(&self) -> &str {
-        "Delegates tasks to remote agents via A2A protocol"
-    }
-
-    fn capabilities(&self) -> Vec<SubAgentCapability> {
-        vec![SubAgentCapability::Custom]
-    }
-
-    fn can_handle(&self, request: &SubAgentRequest) -> bool {
-        // Priority 1: Explicit target
-        if request.target.as_deref() == Some("a2a") {
-            return true;
-        }
-
-        // Priority 2: Check if prompt quotes any cached agent/skill name.
-        // SmartRouter.route() only resolves exact quoted names in this tier,
-        // so substring matching here would claim prompts route() cannot handle.
-        let names = match self.cached_names.try_read() {
-            Ok(names) => names,
-            Err(_) => return false,
-        };
-        if names.is_empty() {
-            return false;
-        }
-
-        let prompt_lower = request.prompt.to_lowercase();
-        names
-            .iter()
-            .any(|name| is_quoted_substring(&prompt_lower, name))
-    }
-
-    async fn execute(&self, request: SubAgentRequest) -> crate::error::Result<SubAgentResult> {
-        tracing::info!(
-            request_id = %request.id,
-            prompt = %request.prompt.chars().take(100).collect::<String>(),
-            "Executing A2A delegation"
-        );
-
-        // 1. Route to best matching agent
-        let decision = self
-            .smart_router
-            .route(&request.prompt)
-            .await
-            .map_err(|e| crate::error::AlephError::other(format!("A2A routing failed: {e}")))?;
-
-        let decision = match decision {
-            Some(d) => d,
-            None => {
-                return Ok(SubAgentResult::failure(
-                    request.id.clone(),
-                    "No matching A2A agent found for this request".to_string(),
-                ));
-            }
-        };
-
-        tracing::info!(
-            agent = %decision.agent.card.name,
-            confidence = %decision.confidence,
-            method = ?decision.method,
-            "Routed to remote agent"
-        );
-
-        // 2. Dispatch to the resolved remote agent
-        self.dispatch(&decision.agent, &request).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,182 +410,6 @@ mod tests {
         let router = Arc::new(SmartRouter::new(resolver));
         let pool = Arc::new(A2AClientPool::new());
         A2ASubAgent::new(router, pool)
-    }
-
-    #[test]
-    fn id_returns_a2a() {
-        let agent = build_sub_agent(vec![]);
-        assert_eq!(agent.id(), "a2a");
-    }
-
-    #[test]
-    fn name_returns_correct_value() {
-        let agent = build_sub_agent(vec![]);
-        assert_eq!(agent.name(), "A2A Remote Agent");
-    }
-
-    #[test]
-    fn description_is_nonempty() {
-        let agent = build_sub_agent(vec![]);
-        assert!(!agent.description().is_empty());
-    }
-
-    #[test]
-    fn capabilities_includes_custom() {
-        let agent = build_sub_agent(vec![]);
-        let caps = agent.capabilities();
-        assert!(caps.contains(&SubAgentCapability::Custom));
-    }
-
-    #[test]
-    fn can_handle_with_a2a_target() {
-        let agent = build_sub_agent(vec![]);
-        let request = SubAgentRequest::new("Do something").with_target("a2a");
-        assert!(agent.can_handle(&request));
-    }
-
-    #[test]
-    fn can_handle_without_target_returns_false_when_no_cache() {
-        let agent = build_sub_agent(vec![]);
-        let request = SubAgentRequest::new("Do something");
-        assert!(!agent.can_handle(&request));
-    }
-
-    #[test]
-    fn can_handle_with_other_target_returns_false() {
-        let agent = build_sub_agent(vec![]);
-        let request = SubAgentRequest::new("Do something").with_target("mcp");
-        assert!(!agent.can_handle(&request));
-    }
-
-    #[tokio::test]
-    async fn can_handle_matches_agent_name_in_prompt() {
-        let agents = vec![RegisteredAgent {
-            card: AgentCard {
-                id: "trading-id".to_string(),
-                name: "交易助手".to_string(),
-                version: "1.0.0".to_string(),
-                description: Some("Trading agent".to_string()),
-                provider: None,
-                documentation_url: None,
-                interfaces: vec![],
-                skills: vec![],
-                security: vec![],
-                extensions: vec![],
-                default_input_modes: vec![],
-                default_output_modes: vec![],
-            },
-            trust_level: TrustLevel::Trusted,
-            base_url: "http://localhost:8080/trading".to_string(),
-            last_seen: chrono::Utc::now(),
-            health: AgentHealth::Healthy,
-            auth_token: None,
-        }];
-        let sub = build_sub_agent(agents);
-        sub.refresh_agent_names().await;
-
-        // Should match — prompt quotes the agent name (route() Tier 1 resolves
-        // only quoted names, so can_handle mirrors that).
-        let request = SubAgentRequest::new("请使用「交易助手」agent分析黄金走势");
-        assert!(sub.can_handle(&request));
-
-        // Should not match — unrelated prompt
-        let request = SubAgentRequest::new("今天天气怎么样");
-        assert!(!sub.can_handle(&request));
-    }
-
-    #[tokio::test]
-    async fn can_handle_matches_skill_name() {
-        let agents = vec![RegisteredAgent {
-            card: AgentCard {
-                id: "dev-id".to_string(),
-                name: "DevBot".to_string(),
-                version: "1.0.0".to_string(),
-                description: None,
-                provider: None,
-                documentation_url: None,
-                interfaces: vec![],
-                skills: vec![AgentSkill {
-                    id: "code-review".to_string(),
-                    name: "Code Review".to_string(),
-                    description: None,
-                    aliases: Some(vec!["审查代码".to_string()]),
-                    examples: None,
-                    input_types: None,
-                    output_types: None,
-                }],
-                security: vec![],
-                extensions: vec![],
-                default_input_modes: vec![],
-                default_output_modes: vec![],
-            },
-            trust_level: TrustLevel::Trusted,
-            base_url: "http://localhost:8080/dev".to_string(),
-            last_seen: chrono::Utc::now(),
-            health: AgentHealth::Healthy,
-            auth_token: None,
-        }];
-        let sub = build_sub_agent(agents);
-        sub.refresh_agent_names().await;
-
-        // Match by quoted skill name
-        let request = SubAgentRequest::new(r#"please do a "Code Review" on this PR"#);
-        assert!(sub.can_handle(&request));
-
-        // Match by quoted alias
-        let request = SubAgentRequest::new("帮我「审查代码」");
-        assert!(sub.can_handle(&request));
-    }
-
-    #[tokio::test]
-    async fn can_handle_case_insensitive() {
-        let agents = vec![RegisteredAgent {
-            card: AgentCard {
-                id: "bot-id".to_string(),
-                name: "CodeBot".to_string(),
-                version: "1.0.0".to_string(),
-                description: None,
-                provider: None,
-                documentation_url: None,
-                interfaces: vec![],
-                skills: vec![],
-                security: vec![],
-                extensions: vec![],
-                default_input_modes: vec![],
-                default_output_modes: vec![],
-            },
-            trust_level: TrustLevel::Trusted,
-            base_url: "http://localhost:8080/codebot".to_string(),
-            last_seen: chrono::Utc::now(),
-            health: AgentHealth::Healthy,
-            auth_token: None,
-        }];
-        let sub = build_sub_agent(agents);
-        sub.refresh_agent_names().await;
-
-        let request = SubAgentRequest::new(r#"ask "CODEBOT" to help"#);
-        assert!(sub.can_handle(&request));
-    }
-
-    #[test]
-    fn can_handle_empty_cache_returns_false() {
-        let agent = build_sub_agent(vec![]);
-        // No refresh_agent_names called, cache is empty
-        let request = SubAgentRequest::new("请使用交易助手分析黄金");
-        assert!(!agent.can_handle(&request));
-    }
-
-    #[tokio::test]
-    async fn execute_no_agents_returns_failure() {
-        let agent = build_sub_agent(vec![]);
-        let request = SubAgentRequest::new("Do something").with_target("a2a");
-        let result = agent.execute(request).await.unwrap();
-        assert!(!result.success);
-        assert!(result
-            .error
-            .as_ref()
-            .unwrap()
-            .contains("No matching A2A agent"));
     }
 
     #[tokio::test]

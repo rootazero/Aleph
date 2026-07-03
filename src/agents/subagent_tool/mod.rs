@@ -84,8 +84,11 @@ pub struct SubagentTool {
     /// A3 — parent run's cancellation token. Each spawn path derives a
     /// `child_token()` so a cancelled parent stops its subagents.
     pub(super) parent_cancel: Option<CancellationToken>,
-    /// B2 — global plugin registry, threaded into each `AgentRuntime`.
-    pub(super) plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
+    /// B2 — shared plugin-registry handle, threaded into each `AgentRuntime`.
+    /// `Arc<RwLock<..>>` (not an owned snapshot) so `McpScope::provision` reads
+    /// the live registry under its own guard at spawn time.
+    pub(super) plugin_registry:
+        Option<Arc<tokio::sync::RwLock<crate::extension::registry::PluginRegistry>>>,
     /// B3 — stall watchdog config inherited by subagents.
     pub(super) stall_config: Option<crate::harness::StallConfig>,
     /// B3 — consecutive-failure cap inherited by subagents.
@@ -177,11 +180,11 @@ impl SubagentTool {
         self
     }
 
-    /// B2 — wire the global plugin registry for per-agent MCP scope.
+    /// B2 — wire the shared plugin-registry handle for per-agent MCP scope.
     #[must_use]
     pub fn with_plugin_registry(
         mut self,
-        registry: Arc<crate::extension::registry::PluginRegistry>,
+        registry: Arc<tokio::sync::RwLock<crate::extension::registry::PluginRegistry>>,
     ) -> Self {
         self.plugin_registry = Some(registry);
         self

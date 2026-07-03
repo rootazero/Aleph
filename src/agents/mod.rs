@@ -61,7 +61,7 @@ pub use rig::{
 };
 
 // Re-export sub_agents module types for convenience
-pub use sub_agents::{SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult};
+pub use sub_agents::{SubAgentRequest, SubAgentResult};
 
 // Re-export swarm module types for convenience
 pub use swarm::{AgentEvent, AgentMessageBus, CriticalEvent, EventTier, ImportantEvent, InfoEvent};

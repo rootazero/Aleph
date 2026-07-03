@@ -521,6 +521,31 @@ pub trait HarnessRunner: Send + Sync {
         None
     }
 
+    /// Stage A (P1) — the `[stability]` stall-watchdog config this runner
+    /// installs on its own harness. The gateway threads it into `SubagentTool`
+    /// so spawned subagents get the same runaway protection as the main run
+    /// (previously the spawner's `stall_config` field existed but no
+    /// production caller ever populated it — the documented "inherited by
+    /// subagents" contract was silently broken). Default `None` keeps test
+    /// mocks and the simple engine watchdog-free.
+    fn stall_config(&self) -> Option<crate::harness::deps::StallConfig> {
+        None
+    }
+
+    /// Stage A (P1) — the `[stability]` consecutive-failure cap this runner
+    /// installs. Threaded into `SubagentTool` so subagents bound the same
+    /// failure streak the main run does. Default `None` = uncapped.
+    fn consecutive_failure_cap(&self) -> Option<usize> {
+        None
+    }
+
+    /// Stage A (P1) — the `[stability]` per-turn wall-clock timeout this runner
+    /// installs. Threaded into `SubagentTool` so a hung subagent turn aborts
+    /// on the same deadline the main run enforces. Default `None` = no timeout.
+    fn turn_timeout(&self) -> Option<std::time::Duration> {
+        None
+    }
+
     /// Estimate the context-window occupancy of this session's *next* prompt,
     /// for sessions that never ran an LLM turn (no persisted real occupancy).
     /// Deterministic token counting only — no LLM call (R7). Default `None`

@@ -1651,9 +1651,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 let a2a_sub_agent = Arc::new(
                     A2ASubAgent::new(smart_router, client_pool.clone())
                         .with_raw_memory_writer(memory_db.clone()
-                            as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>),
+                            as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>)
+                        .with_capture_registry(agent_result.memory_ext_registry.clone()),
                 );
-                a2a_sub_agent.refresh_agent_names().await;
 
                 // 10. Publish the late-bound handle so the `a2a_delegate` and
                 // `a2a_agents` builtin tools (registered earlier in the tool
@@ -1673,10 +1673,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // 11. One-shot startup card refresh: upgrade config agents'
                 // placeholder cards to their real Agent Cards in the
                 // background. Non-blocking — never delays startup.
-                alephcore::a2a::service::spawn_card_refresh(
-                    card_registry.clone(),
-                    a2a_sub_agent.clone(),
-                );
+                alephcore::a2a::service::spawn_card_refresh(card_registry.clone());
 
                 // 12. Optional periodic agent health monitor (opt-in via
                 // `a2a.health_check_interval_secs`). Probes registered agents
