@@ -422,13 +422,17 @@ impl AgentHarness {
 
         // 1. Fetch full event log and compute the tail boundary.
         let events = self.deps.session.get_events(session_id, None, None).await?;
-        // Record the persisted-log boundary this turn's prompt is built from, so
-        // the outer loop's follow-up check can tell a steering message that
-        // arrived *during* this turn (index >= watermark) from input the prompt
-        // already covered. Captured on the raw log before the guardrail's
-        // in-memory rewrite, which never mutates the persisted event count.
-        self.last_prompt_log_len
-            .store(events.len(), Ordering::Relaxed);
+        // Record the persisted-log boundary this turn's prompt is built from
+        // (seq of the last event the prompt covers), so the outer loop's
+        // follow-up check and the consecutive-failure watchdog can tell events
+        // that arrived *during* this turn (seq > watermark) from input the
+        // prompt already covered — and fetch only that tail. An empty log
+        // stores 0, which the consumers treat as the cold "no prompt yet"
+        // sentinel (the store assigns seqs from 1). Captured on the raw log
+        // before the guardrail's in-memory rewrite, which never mutates the
+        // persisted events.
+        self.last_prompt_seq
+            .store(events.last().map_or(0, |r| r.seq), Ordering::Relaxed);
         let tail_start = super::tail_start_index(&events);
 
         // 1a. Stage 5a (#9): Input guardrail. Inspect the latest UserMessage

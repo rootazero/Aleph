@@ -283,7 +283,7 @@ pub(super) async fn build_steering_rescue_request(
 /// is appended to the log *before* the assistant message that turn commits.
 /// The harness still catches it: the outer loop's follow-up check compares the
 /// log against the final turn's prompt boundary watermark
-/// (`AgentHarness::last_prompt_log_len`), so a message at or beyond that
+/// (`AgentHarness::last_prompt_seq`), so a message past that
 /// boundary — including one wedged before the trailing assistant message —
 /// re-enters the loop and is answered in the same run. Only if the run has
 /// already torn down (no live loop to continue) does it defer to the next

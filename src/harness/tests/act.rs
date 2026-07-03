@@ -35,7 +35,11 @@ struct MockSession {
 
 impl MockSession {
     fn new(initial: Vec<SessionEvent>) -> Arc<Self> {
-        let mut inner = MockSessionInner::default();
+        // Match the real store: seqs are assigned from 1 (0 = empty head).
+        let mut inner = MockSessionInner {
+            next_seq: 1,
+            ..MockSessionInner::default()
+        };
         for event in initial {
             let seq = inner.next_seq;
             inner.next_seq += 1;
@@ -65,10 +69,22 @@ impl SessionService for MockSession {
     async fn get_events(
         &self,
         _id: &SessionId,
-        _from: Option<EventSeq>,
-        _to: Option<EventSeq>,
+        from: Option<EventSeq>,
+        to: Option<EventSeq>,
     ) -> Result<Vec<SessionEventRecord>, SessionError> {
-        Ok(self.inner.lock().await.events.clone())
+        // Honor the seq range like the real store (`seq >= from && seq <= to`)
+        // so range-based production reads (watermark tails) stay testable.
+        let from = from.unwrap_or(0);
+        let to = to.unwrap_or(EventSeq::MAX);
+        Ok(self
+            .inner
+            .lock()
+            .await
+            .events
+            .iter()
+            .filter(|r| r.seq >= from && r.seq <= to)
+            .cloned()
+            .collect())
     }
 
     async fn emit_event(
@@ -1634,10 +1650,10 @@ async fn serial_batch_defers_all_when_steer_present_before_first_call() {
     };
     let harness = AgentHarness::new(deps);
 
-    // Watermark = 2 events before the steer; the steer lands at index 2, at or
-    // beyond the boundary, so `has_unanswered_user_message` fires.
+    // Watermark = seq 2 (the prompt covered the first two events); the steer
+    // lands at seq 3, past the boundary, so `has_unanswered_user_message` fires.
     harness
-        .last_prompt_log_len
+        .last_prompt_seq
         .store(2, std::sync::atomic::Ordering::Relaxed);
 
     let sid = sample_session_id();
@@ -1725,7 +1741,7 @@ async fn serial_batch_runs_full_when_no_midturn_steer() {
     let harness = AgentHarness::new(deps);
 
     harness
-        .last_prompt_log_len
+        .last_prompt_seq
         .store(2, std::sync::atomic::Ordering::Relaxed);
 
     let sid = sample_session_id();
@@ -1814,10 +1830,10 @@ async fn group_boundary_defers_remaining_groups_when_steer_present() {
     };
     let harness = AgentHarness::new(deps);
 
-    // Watermark = 2 events before the steer; the steer lands at index 2, at or
-    // beyond the boundary, so `has_unanswered_user_message` fires.
+    // Watermark = seq 2 (the prompt covered the first two events); the steer
+    // lands at seq 3, past the boundary, so `has_unanswered_user_message` fires.
     harness
-        .last_prompt_log_len
+        .last_prompt_seq
         .store(2, std::sync::atomic::Ordering::Relaxed);
 
     let sid = sample_session_id();
