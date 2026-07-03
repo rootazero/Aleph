@@ -150,7 +150,7 @@ pub const fn default_shell_timeout() -> u64 {
 /// `ProgressiveDisclosureRewriter`.
 pub fn default_core_tools() -> Vec<String> {
     [
-        "ask_user", "bash", "code_exec", "code_check",
+        "ask_user", "subagent", "bash", "code_exec", "code_check",
         "file_read", "file_write", "file_edit", "file_ops",
         "search", "web_fetch", "memory_search", "remember",
         "skill_read", "skill_list", "scratchpad", "note_manage",
@@ -705,7 +705,8 @@ mod core_tools_tests {
         let c = ToolsConfig::default();
         assert!(c.core.iter().any(|t| t == "bash"));
         assert!(c.core.iter().any(|t| t == "get_tool_schema"));
-        assert_eq!(c.core.len(), 18);
+        assert!(c.core.iter().any(|t| t == "subagent"));
+        assert_eq!(c.core.len(), 19);
         assert!(!c.truncate_tool_descriptions);
     }
 
