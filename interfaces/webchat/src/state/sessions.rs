@@ -202,6 +202,56 @@ impl SessionMap {
     pub fn tab_strip_visible(&self) -> bool {
         self.order.with(|o| o.len() >= 2)
     }
+
+    /// 绑定 run 到会话：登记路由、running+1、回填 meta.session_key。
+    pub fn bind_run(&self, run_id: &str, conv: ConvId, session_key: Option<&str>) {
+        self.route.update(|m| {
+            m.insert(run_id.to_string(), conv);
+        });
+        self.running.update(|m| {
+            *m.entry(conv).or_insert(0) += 1;
+        });
+        if let Some(sk) = session_key {
+            self.meta.update(|m| {
+                if let Some(meta) = m.get_mut(&conv) {
+                    meta.session_key = Some(sk.to_string());
+                }
+            });
+        }
+    }
+
+    /// run 结束：running-1（归 0 移除）、清路由。
+    pub fn settle_run(&self, run_id: &str) {
+        let conv = self.route.try_update(|m| m.remove(run_id)).flatten();
+        if let Some(conv) = conv {
+            self.running.update(|m| {
+                if let Some(n) = m.get_mut(&conv) {
+                    *n = n.saturating_sub(1);
+                    if *n == 0 {
+                        m.remove(&conv);
+                    }
+                }
+            });
+        }
+    }
+
+    #[must_use]
+    pub fn route_lookup(&self, run_id: &str) -> Option<ConvId> {
+        self.route.with_untracked(|m| m.get(run_id).copied())
+    }
+
+    /// 响应式读：会话是否进行中（红点）。
+    #[must_use]
+    pub fn is_running(&self, conv: ConvId) -> bool {
+        self.running.with(|m| m.get(&conv).is_some_and(|n| *n > 0))
+    }
+
+    /// 侧栏行按 backend session_key 反查 ConvId（用于红点）。
+    #[must_use]
+    pub fn conv_for_session_key(&self, sk: &str) -> Option<ConvId> {
+        self.meta
+            .with_untracked(|m| m.iter().find(|(_, v)| v.session_key.as_deref() == Some(sk)).map(|(k, _)| *k))
+    }
 }
 
 #[cfg(test)]
@@ -265,6 +315,29 @@ mod tests {
             assert!(!map.tab_strip_visible());
             let _b = map.open_conversation("agent-b", "B");
             assert!(map.tab_strip_visible());
+        });
+    }
+
+    #[test]
+    fn bind_and_settle_run_refcounts_and_routes() {
+        with_owner(|| {
+            let map = SessionMap::new();
+            let c = map.open_conversation("agent-a", "A");
+
+            map.bind_run("run-1", c, Some("sess-9"));
+            assert_eq!(map.route_lookup("run-1"), Some(c));
+            assert!(map.is_running(c));
+            assert_eq!(map.conv_for_session_key("sess-9"), Some(c));
+            assert_eq!(map.meta(c).unwrap().session_key.as_deref(), Some("sess-9"));
+
+            // 同会话第二个并发 run。
+            map.bind_run("run-2", c, Some("sess-9"));
+            map.settle_run("run-1");
+            assert!(map.is_running(c), "still running: run-2 in flight");
+            assert_eq!(map.route_lookup("run-1"), None, "settled run route cleared");
+
+            map.settle_run("run-2");
+            assert!(!map.is_running(c), "all runs settled");
         });
     }
 }
