@@ -48,13 +48,15 @@ pub fn tick_delay_ms(state: &LoopState, now_ms: u64) -> u64 {
 
 /// The prompt re-injected each tick: the user's fixed prompt plus a one-line
 /// reminder of the loop controls (so the model can re-pace or stop) and the
-/// *remaining quota* (ticks left before the cap, time left until the deadline)
-/// so the model can self-pace and wrap up — the intelligence lives in the
-/// prompt, not in deterministic no-progress detection (R7/R9). Mirrors
-/// `goal_pursuit::continuation_prompt`'s pace surfacing. `now_ms` (0 = clock
-/// unavailable) turns an absolute deadline into a relative "time left".
+/// *remaining quota* (ticks left before the cap, time left until the deadline,
+/// token budget left) so the model can self-pace and wrap up — the
+/// intelligence lives in the prompt, not in deterministic no-progress
+/// detection (R7/R9). Mirrors `goal_pursuit::continuation_prompt`'s pace
+/// surfacing. `now_ms` (0 = clock unavailable) turns an absolute deadline into
+/// a relative "time left"; `tokens_now` (0 = counter unavailable) turns the
+/// token budget into a "left of budget" clause.
 #[must_use]
-pub fn tick_prompt(state: &LoopState, now_ms: u64) -> String {
+pub fn tick_prompt(state: &LoopState, tokens_now: u64, now_ms: u64) -> String {
     let n = state.iterations_used.saturating_add(1);
 
     // This tick (number `n`) is the last one the iteration cap permits when
@@ -79,6 +81,16 @@ pub fn tick_prompt(state: &LoopState, now_ms: u64) -> String {
             quota.push_str(&format!(
                 " ~{} until the time limit.",
                 fmt_duration_ms(deadline - now_ms)
+            ));
+        }
+    }
+    // Surface the token budget the hook silently enforces — without this the
+    // loop's binding constraint is invisible and it just stops mid-watch.
+    if let Some(budget) = state.token_budget {
+        if state.baseline_captured && tokens_now > 0 {
+            quota.push_str(&format!(
+                " ~{} of {budget} token budget left.",
+                budget.saturating_sub(state.tokens_used(tokens_now))
             ));
         }
     }
@@ -250,7 +262,7 @@ mod tests {
 
     #[test]
     fn tick_prompt_restates_prompt_and_controls() {
-        let p = tick_prompt(&fixed(), 2_000);
+        let p = tick_prompt(&fixed(), 0, 2_000);
         assert!(p.contains("check CI"));
         assert!(p.contains("action='stop'"));
     }
@@ -259,7 +271,7 @@ mod tests {
     fn tick_prompt_surfaces_remaining_ticks_before_cap() {
         // max 5, used 1 → this is tick 2, four left after it: "3 tick(s) left".
         let l = fixed().with_max_iterations(Some(5)).spent_iteration();
-        let p = tick_prompt(&l, 2_000);
+        let p = tick_prompt(&l, 0, 2_000);
         assert!(p.contains("3 tick(s) left before the cap"), "{p}");
         assert!(!p.contains("LAST tick"), "{p}");
     }
@@ -268,7 +280,7 @@ mod tests {
     fn tick_prompt_warns_on_last_tick() {
         // max 2, used 1 → this is tick 2 == cap: the loop will not fire again.
         let l = fixed().with_max_iterations(Some(2)).spent_iteration();
-        let p = tick_prompt(&l, 2_000);
+        let p = tick_prompt(&l, 0, 2_000);
         assert!(p.contains("LAST tick"), "{p}");
         assert!(p.contains("Wrap up"), "{p}");
         // No misleading "N tick(s) left" on the final tick.
@@ -279,15 +291,28 @@ mod tests {
     fn tick_prompt_surfaces_deadline_time_left() {
         let l = fixed().with_deadline_ms(Some(310_000));
         // now 10_000 → 300_000 ms == 5m left.
-        let p = tick_prompt(&l, 10_000);
+        let p = tick_prompt(&l, 0, 10_000);
         assert!(p.contains("~5m until the time limit"), "{p}");
     }
 
     #[test]
     fn tick_prompt_uncapped_loop_has_no_quota_clause() {
-        let p = tick_prompt(&fixed(), 2_000);
+        let p = tick_prompt(&fixed(), 0, 2_000);
         assert!(!p.contains("tick(s) left"), "{p}");
         assert!(!p.contains("time limit"), "{p}");
+        assert!(!p.contains("token budget"), "{p}");
+    }
+
+    #[test]
+    fn tick_prompt_surfaces_token_budget_left() {
+        // budget 5000, baseline 1000, live total 2500 → 1500 spent, 3500 left.
+        let l = fixed().with_token_budget(Some(5_000)).with_baseline(1_000);
+        let p = tick_prompt(&l, 2_500, 2_000);
+        assert!(p.contains("~3500 of 5000 token budget left"), "{p}");
+        // Counter unavailable (0) or baseline not captured → clause omitted.
+        assert!(!tick_prompt(&l, 0, 2_000).contains("token budget"), "inert");
+        let uncaptured = fixed().with_token_budget(Some(5_000));
+        assert!(!tick_prompt(&uncaptured, 2_500, 2_000).contains("token budget"));
     }
 
     #[test]

@@ -213,16 +213,58 @@ impl LoopTool {
             (None, Some(_)) => None, // a deadline is itself a bound
             (None, None) => Some(DEFAULT_SOFT_MAX_ITERATIONS),
         };
-        let state = LoopState::new(session, &prompt, cadence, now)
+        let mut state = LoopState::new(session, &prompt, cadence, now)
             .with_max_iterations(effective_max)
             .with_deadline_ms(deadline)
             .with_token_budget(args.token_budget);
+        // Honor next_wake on a model-paced start so the model's chosen pace
+        // applies from tick 1 instead of the 10-minute fallback; on a fixed
+        // cadence it is contradictory — reject with the same guidance as
+        // `update` rather than silently ignoring an accepted argument.
+        if let Some(nw) = &args.next_wake {
+            if matches!(state.cadence, Cadence::ModelPaced { .. }) {
+                let delta = parse_interval_ms(nw)?;
+                state = state.with_next_wake_ms(Some(now.saturating_add(delta)));
+            } else {
+                return Err("next_wake only paces a model-paced loop; omit `interval` \
+                     on start for model-paced cadence, or drop `next_wake`"
+                    .to_string());
+            }
+        }
+        // `start` claims a fresh plan slot: clear any leftover loop-keyed
+        // Strategy (e.g. from an overwritten still-active loop) so
+        // maybe_plan_strategy plans for THIS objective instead of silently
+        // welding the old one. Best-effort, same as the stop-side cleanup.
+        let replaced_active = self.registry.get(session).is_some_and(|p| p.is_active());
+        if let Some(strat) = crate::strategy::global() {
+            if let Err(e) = strat.delete(&crate::strategy::loop_key(session)) {
+                info!(session = %session, error = %e,
+                    "loop start: failed to clear leftover welded strategy (ignored)");
+            }
+        }
+        let cadence_desc = state.cadence.describe();
         self.registry.put(state);
+        // Honest confirmation: say what was actually registered — the parsed
+        // cadence, whether a previous loop was replaced, and the silently
+        // applied default cap (which the model can raise or replace).
+        let lead = if replaced_active {
+            "Loop started, replacing this session's previous loop."
+        } else {
+            "Loop started in this session."
+        };
+        let cap_note = match (args.max_iterations, deadline) {
+            (None, None) => format!(
+                " A default safety cap of {DEFAULT_SOFT_MAX_ITERATIONS} ticks applies \
+                 (pass max_iterations or timeout_minutes to change it)."
+            ),
+            _ => String::new(),
+        };
         Ok(LoopOutput {
             success: true,
-            message: "Loop started in this session. It will re-run every tick and \
-                 will not self-stop — call loop(action='stop') to end it."
-                .to_string(),
+            message: format!(
+                "{lead} It will re-run ({cadence_desc}) and will not self-stop — \
+                 call loop(action='stop') to end it.{cap_note}"
+            ),
         })
     }
 
@@ -345,10 +387,27 @@ impl LoopTool {
         if let Some(p) = args.prompt.as_deref().filter(|p| !p.trim().is_empty()) {
             state = state.with_prompt(p);
         }
+        // A pacing or target change supersedes the tick already in flight:
+        // its prompt and delay were captured at claim time, so without this
+        // the change would silently wait out the OLD wake (hours, for a slow
+        // loop) before taking effect. Clearing the pending marker makes the
+        // sleeping tick's confirm_fire mismatch (it skips), and this very
+        // run's completion re-claims a fresh tick from the updated state.
+        // Cap-only updates keep the in-flight tick and its schedule.
+        let reschedule = args.interval.is_some()
+            || args.next_wake.is_some()
+            || args.prompt.as_deref().is_some_and(|p| !p.trim().is_empty());
+        if reschedule {
+            state = state.with_pending_tick(None);
+        }
         self.registry.put(state);
         Ok(LoopOutput {
             success: true,
-            message: "Loop updated.".to_string(),
+            message: if reschedule {
+                "Loop updated; the next tick is rescheduled from now.".to_string()
+            } else {
+                "Loop updated.".to_string()
+            },
         })
     }
 
@@ -500,6 +559,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_model_paced_honors_next_wake() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("s");
+        tool.run(LoopArgs {
+            action: LoopAction::Start,
+            interval: None,
+            prompt: Some("watch CI".to_string()),
+            max_iterations: Some(5),
+            timeout_minutes: None,
+            token_budget: None,
+            next_wake: Some("2m".to_string()),
+        })
+        .await
+        .unwrap();
+        let st = reg.get("s").unwrap();
+        assert!(
+            st.next_wake_ms.is_some(),
+            "first wake seeded from next_wake instead of the 10m fallback"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_next_wake_on_fixed_cadence_is_rejected() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("s");
+        let res = tool
+            .run(LoopArgs {
+                action: LoopAction::Start,
+                interval: Some("5m".to_string()),
+                prompt: Some("p".to_string()),
+                max_iterations: None,
+                timeout_minutes: None,
+                token_budget: None,
+                next_wake: Some("2m".to_string()),
+            })
+            .await;
+        assert!(res.is_err(), "contradictory next_wake+interval must reject");
+        assert!(reg.get("s").is_none(), "no loop registered on rejection");
+    }
+
+    #[tokio::test]
+    async fn start_confirmation_is_honest_about_cadence_cap_and_replacement() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("s");
+        let args = |prompt: &str| LoopArgs {
+            action: LoopAction::Start,
+            interval: Some("5m".to_string()),
+            prompt: Some(prompt.to_string()),
+            max_iterations: None,
+            timeout_minutes: None,
+            token_budget: None,
+            next_wake: None,
+        };
+        let out = tool.run(args("watch deploy")).await.unwrap();
+        assert!(out.message.contains("every 5m"), "{}", out.message);
+        assert!(
+            out.message
+                .contains(&DEFAULT_SOFT_MAX_ITERATIONS.to_string()),
+            "silently applied default cap must be disclosed: {}",
+            out.message
+        );
+        assert!(!out.message.contains("replacing"), "{}", out.message);
+        // Starting again over the still-active loop must say so.
+        let out2 = tool.run(args("watch staging")).await.unwrap();
+        assert!(out2.message.contains("replacing"), "{}", out2.message);
+        assert_eq!(reg.get("s").unwrap().prompt, "watch staging");
+    }
+
+    #[tokio::test]
     async fn stop_marks_loop_stopped() {
         let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
         reg.put(crate::looping::LoopState::new(
@@ -579,6 +707,56 @@ mod tests {
                 interval_ms: 600_000
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn update_pacing_supersedes_in_flight_tick_but_cap_update_keeps_it() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        reg.put(
+            crate::looping::LoopState::new(
+                "s",
+                "p",
+                crate::looping::Cadence::Fixed {
+                    interval_ms: 3_600_000,
+                },
+                0,
+            )
+            .with_pending_tick(Some(99_999)),
+        );
+        let tool = LoopTool::new(reg.clone()).with_session_for_test("s");
+        // Cap-only update: the scheduled tick keeps its slot.
+        let out = tool
+            .run(LoopArgs {
+                action: LoopAction::Update,
+                interval: None,
+                prompt: None,
+                max_iterations: Some(9),
+                timeout_minutes: None,
+                token_budget: None,
+                next_wake: None,
+            })
+            .await
+            .unwrap();
+        assert!(out.success);
+        assert!(!out.message.contains("rescheduled"), "{}", out.message);
+        assert_eq!(reg.get("s").unwrap().pending_tick_wake_ms, Some(99_999));
+        // Re-pacing supersedes the in-flight tick (it would otherwise sleep
+        // out the old 1h wake before the new cadence applied).
+        let out = tool
+            .run(LoopArgs {
+                action: LoopAction::Update,
+                interval: Some("2m".to_string()),
+                prompt: None,
+                max_iterations: None,
+                timeout_minutes: None,
+                token_budget: None,
+                next_wake: None,
+            })
+            .await
+            .unwrap();
+        assert!(out.success);
+        assert!(out.message.contains("rescheduled"), "{}", out.message);
+        assert!(reg.get("s").unwrap().pending_tick_wake_ms.is_none());
     }
 
     #[tokio::test]

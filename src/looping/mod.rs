@@ -15,6 +15,38 @@ use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+/// How long past its scheduled wake an in-flight tick may stay unconfirmed
+/// before the registry treats it as dead and lets a new tick be claimed. A
+/// live tick clears its pending marker within milliseconds of waking; only a
+/// panicked/aborted task leaves it behind, and without this grace the loop
+/// would stall forever as an `Active` that never fires again.
+const PENDING_TICK_STALE_GRACE_MS: u64 = 60_000;
+
+/// Retry delay when a woken tick found the agent's run slot held by another
+/// run (AgentBusy). Short enough that a watch loop resumes promptly once the
+/// slot frees, long enough not to hammer a long-running collision. Must stay
+/// below `PENDING_TICK_STALE_GRACE_MS` so a re-armed tick is never treated as
+/// stale before it wakes.
+const BUSY_RETRY_DELAY_MS: u64 = 30_000;
+
+/// Outcome of [`LoopRegistry::try_claim_tick`] — the single atomic decision
+/// the continuation hook acts on after a run completes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TickDecision {
+    /// A tick was claimed: spawn it with `delay_ms`; at fire time it must
+    /// [`LoopRegistry::confirm_fire`] with `wake_ms` before executing.
+    Fire {
+        delay_ms: u64,
+        wake_ms: u64,
+        prompt: String,
+    },
+    /// A safety cap tripped: the loop was stopped and `note` stored as its
+    /// stop reason (returned so the caller can log/notify).
+    Exhausted { note: String },
+    /// Nothing to do: no active loop, or a tick is already in flight.
+    Idle,
+}
+
 /// In-memory map of `session_key` → `LoopState`.
 #[derive(Default)]
 pub struct LoopRegistry {
@@ -50,6 +82,141 @@ impl LoopRegistry {
     /// Drop the loop for a session.
     pub fn remove(&self, session_id: &str) {
         self.lock().remove(session_id);
+    }
+
+    /// The continuation hook's whole post-run decision, under ONE lock guard:
+    /// seed the token baseline, gate on an in-flight tick, then either claim
+    /// the next tick (bump the counter, stamp the pending wake) or stop an
+    /// exhausted loop with its reason. Read-modify-write races that plagued
+    /// the get→await→put shape (a hook `put` resurrecting a loop the user
+    /// stopped mid-await, or two completing runs each enqueuing a tick) are
+    /// impossible here. `tokens_total` is the session's live cumulative token
+    /// count (`None` → unavailable, budget unenforced this tick).
+    #[must_use]
+    pub fn try_claim_tick(
+        &self,
+        session_id: &str,
+        tokens_total: Option<u64>,
+        now_ms: u64,
+    ) -> TickDecision {
+        let mut map = self.lock();
+        let Some(current) = map.get(session_id) else {
+            return TickDecision::Idle;
+        };
+        if !current.is_active() {
+            return TickDecision::Idle;
+        }
+        // Lazy token-baseline capture on the first claim that sees a budget:
+        // just-captured → 0 spent, never a false over-budget.
+        let state = match (current.token_budget, current.baseline_captured, tokens_total) {
+            (Some(_), false, Some(total)) => current.clone().with_baseline(total),
+            _ => current.clone(),
+        };
+        // Budget enforcement needs the live total; without one (or without a
+        // budget at all) pass 0 so only the iteration/deadline caps apply.
+        let tokens_now = if state.token_budget.is_some() {
+            tokens_total.unwrap_or(0)
+        } else {
+            0
+        };
+        // A tick already in flight blocks another claim — this is the fan-out
+        // gate. Past the stale grace the enqueued task is presumed dead and
+        // the claim proceeds (its own confirm_fire will then mismatch).
+        if let Some(wake) = state.pending_tick_wake_ms {
+            if now_ms < wake.saturating_add(PENDING_TICK_STALE_GRACE_MS) {
+                // Persist a just-seeded baseline even when skipping.
+                map.insert(session_id.to_string(), state);
+                return TickDecision::Idle;
+            }
+        }
+        if pursuit::should_fire(&state, tokens_now, now_ms) {
+            let delay_ms = pursuit::tick_delay_ms(&state, now_ms);
+            let prompt = pursuit::tick_prompt(&state, tokens_now, now_ms);
+            let wake_ms = now_ms.saturating_add(delay_ms);
+            // Bump BEFORE the tick runs so caps hold even if it crashes; clear
+            // the consumed model-paced wake so a model that forgot to re-set
+            // `next_wake` falls back to the cadence default instead of
+            // busy-looping on a stale past wake.
+            map.insert(
+                session_id.to_string(),
+                state
+                    .spent_iteration()
+                    .with_next_wake_ms(None)
+                    .with_pending_tick(Some(wake_ms)),
+            );
+            TickDecision::Fire {
+                delay_ms,
+                wake_ms,
+                prompt,
+            }
+        } else if pursuit::exhausted(&state, tokens_now, now_ms) {
+            let note = pursuit::stop_reason_note(&state, tokens_now, now_ms);
+            map.insert(
+                session_id.to_string(),
+                state
+                    .with_status(LoopStatus::Stopped)
+                    .with_stop_reason(Some(note.clone())),
+            );
+            TickDecision::Exhausted { note }
+        } else {
+            TickDecision::Idle
+        }
+    }
+
+    /// Re-arm a tick after an AgentBusy collision: the woken tick already
+    /// confirmed (pending cleared) but could not run because another run of
+    /// this agent held the slot — possibly in a DIFFERENT session, whose
+    /// completion re-enters the hook under ITS OWN key and therefore never
+    /// re-arms this loop. Without this, a busy collision left the loop a
+    /// silently dormant `Active` until the user next spoke in this exact
+    /// session. Re-stamps the pending marker with a short retry delay so the
+    /// SAME claimed tick fires again shortly — no iteration bump (the tick was
+    /// already counted at claim). Returns `(delay_ms, wake_ms)` to schedule,
+    /// or `None` when the loop is gone/stopped, another tick was claimed
+    /// meanwhile, or a cap has since tripped (which stops the loop with its
+    /// reason, exactly like the claim path).
+    #[must_use]
+    pub fn rearm_after_busy(&self, session_id: &str, now_ms: u64) -> Option<(u64, u64)> {
+        let mut map = self.lock();
+        match map.get(session_id) {
+            Some(s) if s.is_active() && s.pending_tick_wake_ms.is_none() => {
+                // Deadline may have passed while the collision played out;
+                // token budget is claim-side only (no live counter here).
+                if pursuit::exhausted(s, 0, now_ms) {
+                    let note = pursuit::stop_reason_note(s, 0, now_ms);
+                    let stopped = s
+                        .clone()
+                        .with_status(LoopStatus::Stopped)
+                        .with_stop_reason(Some(note));
+                    map.insert(session_id.to_string(), stopped);
+                    return None;
+                }
+                let wake = now_ms.saturating_add(BUSY_RETRY_DELAY_MS);
+                let rearmed = s.clone().with_pending_tick(Some(wake));
+                map.insert(session_id.to_string(), rearmed);
+                Some((BUSY_RETRY_DELAY_MS, wake))
+            }
+            _ => None,
+        }
+    }
+
+    /// Fire-time gate for a woken tick: proceed only if the loop is still
+    /// Active and this tick is still the one on the books (`wake_ms` matches
+    /// the pending marker), clearing the marker in the same lock guard. A
+    /// `false` means the tick was superseded — the user stopped the loop or
+    /// started a new one during the delay — and must NOT execute (the ghost
+    /// tick this kills used to burn a full stale LLM turn).
+    #[must_use]
+    pub fn confirm_fire(&self, session_id: &str, wake_ms: u64) -> bool {
+        let mut map = self.lock();
+        match map.get(session_id) {
+            Some(s) if s.is_active() && s.pending_tick_wake_ms == Some(wake_ms) => {
+                let cleared = s.clone().with_pending_tick(None);
+                map.insert(session_id.to_string(), cleared);
+                true
+            }
+            _ => false,
+        }
     }
 }
 
@@ -114,5 +281,142 @@ mod tests {
         reg.put(st("a").with_status(LoopStatus::Stopped));
         assert!(reg.get("a").is_some(), "get returns regardless of status");
         assert!(reg.get_active("a").is_none(), "get_active skips Stopped");
+    }
+
+    #[test]
+    fn claim_fires_and_stamps_pending_wake() {
+        let reg = LoopRegistry::default();
+        reg.put(st("a")); // Fixed 1000ms cadence
+        let d = reg.try_claim_tick("a", None, 5_000);
+        let TickDecision::Fire {
+            delay_ms, wake_ms, ..
+        } = d
+        else {
+            panic!("expected Fire, got {d:?}");
+        };
+        assert_eq!(delay_ms, 1_000);
+        assert_eq!(wake_ms, 6_000);
+        let s = reg.get("a").unwrap();
+        assert_eq!(s.iterations_used, 1, "bumped before the tick runs");
+        assert_eq!(s.pending_tick_wake_ms, Some(6_000));
+    }
+
+    #[test]
+    fn claim_while_tick_in_flight_is_idle() {
+        // The fan-out gate: a user turn completing while a tick sleeps must
+        // NOT enqueue a second chain.
+        let reg = LoopRegistry::default();
+        reg.put(st("a"));
+        assert!(matches!(
+            reg.try_claim_tick("a", None, 5_000),
+            TickDecision::Fire { .. }
+        ));
+        assert_eq!(reg.try_claim_tick("a", None, 5_500), TickDecision::Idle);
+        assert_eq!(
+            reg.get("a").unwrap().iterations_used,
+            1,
+            "skipped claim must not burn a tick"
+        );
+    }
+
+    #[test]
+    fn stale_pending_tick_is_reclaimed() {
+        // A pending marker long past its wake (dead task) must not stall the
+        // loop forever.
+        let reg = LoopRegistry::default();
+        reg.put(st("a").with_pending_tick(Some(6_000)));
+        let past_grace = 6_000 + PENDING_TICK_STALE_GRACE_MS + 1;
+        assert!(matches!(
+            reg.try_claim_tick("a", None, past_grace),
+            TickDecision::Fire { .. }
+        ));
+    }
+
+    #[test]
+    fn claim_on_exhausted_loop_stops_with_reason() {
+        let reg = LoopRegistry::default();
+        reg.put(st("a").with_max_iterations(Some(1)).spent_iteration());
+        let d = reg.try_claim_tick("a", None, 5_000);
+        assert!(matches!(&d, TickDecision::Exhausted { note } if note.contains("iteration")));
+        let s = reg.get("a").unwrap();
+        assert!(!s.is_active());
+        assert!(s.stop_reason.is_some());
+    }
+
+    #[test]
+    fn claim_seeds_token_baseline_once() {
+        let reg = LoopRegistry::default();
+        reg.put(st("a").with_token_budget(Some(500)));
+        // First claim with a live total seeds the baseline (0 spent → fires).
+        assert!(matches!(
+            reg.try_claim_tick("a", Some(10_000), 5_000),
+            TickDecision::Fire { .. }
+        ));
+        let s = reg.get("a").unwrap();
+        assert!(s.baseline_captured);
+        assert_eq!(s.tokens_at_start, 10_000);
+        // Over budget on a later claim → Exhausted with the budget note.
+        reg.put(s.with_pending_tick(None));
+        let d = reg.try_claim_tick("a", Some(10_600), 6_000);
+        assert!(matches!(&d, TickDecision::Exhausted { note } if note.contains("token budget")));
+    }
+
+    #[test]
+    fn rearm_after_busy_restamps_pending_without_iteration_bump() {
+        let reg = LoopRegistry::default();
+        reg.put(st("a"));
+        let TickDecision::Fire { wake_ms, .. } = reg.try_claim_tick("a", None, 5_000) else {
+            panic!("expected Fire");
+        };
+        assert!(reg.confirm_fire("a", wake_ms), "tick fires");
+        let ticks_before = reg.get("a").unwrap().iterations_used;
+        // AgentBusy at fire time → re-arm the same tick with a retry delay.
+        let (delay, wake) = reg.rearm_after_busy("a", 7_000).expect("re-armed");
+        assert_eq!(wake, 7_000 + delay);
+        let s = reg.get("a").unwrap();
+        assert_eq!(s.pending_tick_wake_ms, Some(wake));
+        assert_eq!(s.iterations_used, ticks_before, "retry must not burn a tick");
+        // While the retry is pending, neither a second re-arm nor a fresh
+        // claim may double-schedule.
+        assert!(reg.rearm_after_busy("a", 7_100).is_none());
+        assert_eq!(reg.try_claim_tick("a", None, 7_100), TickDecision::Idle);
+        // The retry confirms and fires like any tick.
+        assert!(reg.confirm_fire("a", wake));
+    }
+
+    #[test]
+    fn rearm_after_busy_refuses_stopped_and_stops_past_deadline() {
+        let reg = LoopRegistry::default();
+        reg.put(st("stopped").with_status(LoopStatus::Stopped));
+        assert!(reg.rearm_after_busy("stopped", 5_000).is_none());
+        // Deadline passed during the collision → stop with the real reason
+        // instead of re-arming a tick that could only fire out of bounds.
+        reg.put(st("late").with_deadline_ms(Some(4_000)));
+        assert!(reg.rearm_after_busy("late", 5_000).is_none());
+        let s = reg.get("late").unwrap();
+        assert!(!s.is_active());
+        assert!(s.stop_reason.as_deref().unwrap_or("").contains("time"));
+    }
+
+    #[test]
+    fn confirm_fire_clears_pending_and_gates_supersede() {
+        let reg = LoopRegistry::default();
+        reg.put(st("a"));
+        let TickDecision::Fire { wake_ms, .. } = reg.try_claim_tick("a", None, 5_000) else {
+            panic!("expected Fire");
+        };
+        // Wrong wake (superseded by a stop/start cycle) → refuse.
+        assert!(!reg.confirm_fire("a", wake_ms + 1));
+        // Matching wake → proceed exactly once.
+        assert!(reg.confirm_fire("a", wake_ms));
+        assert!(reg.get("a").unwrap().pending_tick_wake_ms.is_none());
+        assert!(!reg.confirm_fire("a", wake_ms), "second confirm refused");
+        // Stopped during the delay → refuse.
+        reg.put(st("b"));
+        let TickDecision::Fire { wake_ms: wb, .. } = reg.try_claim_tick("b", None, 5_000) else {
+            panic!("expected Fire");
+        };
+        reg.put(reg.get("b").unwrap().with_status(LoopStatus::Stopped));
+        assert!(!reg.confirm_fire("b", wb), "ghost tick must not execute");
     }
 }

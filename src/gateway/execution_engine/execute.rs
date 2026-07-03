@@ -12,7 +12,12 @@ use tracing::{info, warn};
 /// Pure gate for the naked agent-loop strategic planner. ORIGIN/PLUMBING FACTS
 /// ONLY (R7 — never a message-content heuristic): fire only for a genuine human
 /// interactive first message. Excludes cron / group-chat member / subagent /
-/// ephemeral runs (non-interactive `SessionKey`), resume runs, and empty input.
+/// ephemeral runs (non-interactive `SessionKey`), resume runs, empty input,
+/// and slash-command invocations (a `/name ...` first message is protocol
+/// syntax, not a naked objective — `/goal`·`/loop` run their OWN planner, and
+/// planning over raw slash text would weld a garbage session Strategy; most
+/// slash inputs used to be excluded implicitly by the fast path's metadata
+/// flag, but `/loop`·`/goal` now deliberately fall through to the full loop).
 /// Pure ⇒ host-testable without an LLM or a live gateway.
 fn naked_loop_planner_should_fire(
     session_key: &crate::routing::session_key::SessionKey,
@@ -20,7 +25,12 @@ fn naked_loop_planner_should_fire(
     is_resume: bool,
     input: &str,
 ) -> bool {
-    is_first_message && session_key.is_interactive() && !is_resume && !input.trim().is_empty()
+    let trimmed = input.trim();
+    is_first_message
+        && session_key.is_interactive()
+        && !is_resume
+        && !trimmed.is_empty()
+        && !trimmed.starts_with('/')
 }
 
 /// Cap the planner objective at a generous UTF-8 char boundary. Naked-loop input
@@ -962,11 +972,13 @@ where
                     }
 
                     // Loop continuation hook: the clock-gated sibling of the
-                    // goal hook above. Fires only when this session has an
-                    // Active loop that has not hit a safety cap. Increments the
-                    // tick counter BEFORE spawning so caps are enforced even if
-                    // a tick crashes. Re-fires via the SAME spawn machinery as
-                    // goal, but with a cadence delay.
+                    // goal hook above. The whole post-run decision — lazy
+                    // token-baseline capture, in-flight-tick dedupe, cap
+                    // enforcement, counter bump — is ONE atomic registry call
+                    // (`try_claim_tick`), so a stop/update racing this hook can
+                    // never be clobbered, and two completing runs (this hook
+                    // fires after EVERY run in the session, user turns
+                    // included) can never each enqueue a parallel tick chain.
                     if let Some(loop_reg) = crate::looping::global() {
                         let session_key_str = request.session_key.to_key_string();
                         if let Some(state) = loop_reg.get_active(&session_key_str) {
@@ -974,95 +986,81 @@ where
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map_or(0, |d| d.as_millis() as u64);
 
-                            // Token-budget accounting — mirrors the goal hook
-                            // above. ONLY runs when the loop carries a
-                            // token_budget; the common no-budget path reads no
-                            // session state and stays behavior-identical. On the
-                            // first tick that sees a budget, capture the real
-                            // baseline (the session's cumulative total now) and
-                            // re-register it; thereafter pass the live total so
-                            // `should_fire`/`exhausted` enforce the budget.
-                            // Previously these calls hardcoded 0, so `over_budget`
-                            // could never fire — the budget was advertised but dead.
-                            let (state, tokens_now) = if state.token_budget.is_some() {
+                            // Live cumulative token total, read (await) BEFORE
+                            // the atomic claim; only needed when the loop
+                            // carries a budget — the common no-budget path
+                            // reads no session state. `None` → budget
+                            // unenforced this tick (iteration/deadline caps
+                            // still apply inside the claim).
+                            let tokens_total = if state.token_budget.is_some() {
                                 match self.session_manager.as_ref() {
                                     Some(sm) => {
                                         match sm.get_total_tokens(&request.session_key).await {
-                                            Ok(Some(total)) if state.baseline_captured => {
-                                                (state, total)
-                                            }
-                                            Ok(Some(total)) => {
-                                                // Seed baseline lazily. The
-                                                // downstream put (bumped / stopped)
-                                                // persists it; just-captured → 0
-                                                // spent, never a false over-budget.
-                                                (state.with_baseline(total), total)
-                                            }
-                                            // No row yet / read error / no manager →
-                                            // skip budget enforcement this tick
-                                            // (iteration + deadline caps still apply).
-                                            Ok(None) => (state, 0),
+                                            Ok(total) => total,
                                             Err(e) => {
                                                 warn!(error = %e, session = %session_key_str,
                                                     "loop: session token read failed; budget unenforced this tick");
-                                                (state, 0)
+                                                None
                                             }
                                         }
                                     }
-                                    None => (state, 0),
+                                    None => None,
                                 }
                             } else {
-                                (state, 0)
+                                None
                             };
 
-                            if crate::looping::pursuit::should_fire(&state, tokens_now, now_ms) {
-                                // Clear the consumed model-paced wake so a loop whose
-                                // model forgot to re-set `next_wake` falls back to the
-                                // cadence default next tick instead of busy-looping:
-                                // once `now_ms` passes a stale `next_wake_ms`,
-                                // `tick_delay_ms` clamps to 0 and every subsequent tick
-                                // fires back-to-back until the iteration cap. Harmless
-                                // for Fixed cadence (it ignores `next_wake_ms`); a model
-                                // that does re-pace each tick re-sets it before the next
-                                // enqueue, so it is unaffected. `delay` below is computed
-                                // from the un-bumped `&state`, so THIS tick's pacing is
-                                // unchanged — only the NEXT tick is governed by the clear.
-                                let bumped =
-                                    state.clone().spent_iteration().with_next_wake_ms(None);
-                                let delay = crate::looping::pursuit::tick_delay_ms(&state, now_ms);
-                                let prompt = crate::looping::pursuit::tick_prompt(&state, now_ms);
-                                loop_reg.put(bumped);
-                                spawn_continuation_run(
-                                    cont_deps.registry.clone(),
-                                    cont_deps.adapter.clone(),
-                                    request.session_key.clone(),
-                                    session_key_str.clone(),
+                            match loop_reg.try_claim_tick(&session_key_str, tokens_total, now_ms) {
+                                crate::looping::TickDecision::Fire {
+                                    delay_ms,
+                                    wake_ms,
                                     prompt,
-                                    cont_deps.event_bus.clone(),
-                                    Some(delay),
-                                    ContinuationKind::Loop,
-                                );
-                                info!(session = %session_key_str, delay_ms = delay,
-                                    ticks = state.iterations_used.saturating_add(1),
-                                    "loop: enqueued next tick");
-                            } else if crate::looping::pursuit::exhausted(&state, tokens_now, now_ms)
-                            {
-                                // Distinguish token-budget / wall-clock exhaustion
-                                // from the iteration cap so the user sees the real
-                                // stop reason (mirrors the goal hook). The note is
-                                // STORED on the loop (not just logged) so
-                                // loop(action='status') can explain why a silently
-                                // capped watch loop ended on the user's next turn.
-                                let note = crate::looping::pursuit::stop_reason_note(
-                                    &state, tokens_now, now_ms,
-                                );
-                                loop_reg.put(
-                                    state
-                                        .with_status(crate::looping::LoopStatus::Stopped)
-                                        .with_stop_reason(Some(note.clone())),
-                                );
-                                info!(session = %session_key_str, note = %note,
-                                    "loop: safety cap reached, loop stopped");
+                                } => {
+                                    spawn_continuation_run(
+                                        cont_deps.registry.clone(),
+                                        cont_deps.adapter.clone(),
+                                        request.session_key.clone(),
+                                        session_key_str.clone(),
+                                        prompt,
+                                        cont_deps.event_bus.clone(),
+                                        Some(delay_ms),
+                                        ContinuationKind::Loop { wake_ms },
+                                    );
+                                    info!(session = %session_key_str, delay_ms,
+                                        "loop: enqueued next tick");
+                                }
+                                crate::looping::TickDecision::Exhausted { note } => {
+                                    // The claim already stored Stopped + the
+                                    // stop reason for loop(action='status').
+                                    // Mirror the tool-stop cleanup here too:
+                                    // clear the loop-welded Strategy so the
+                                    // stale plan does not bleed into every
+                                    // later turn of this reused session (and a
+                                    // future start can re-plan).
+                                    if let Some(strat) = crate::strategy::global() {
+                                        if let Err(e) = strat
+                                            .delete(&crate::strategy::loop_key(&session_key_str))
+                                        {
+                                            info!(session = %session_key_str, error = %e,
+                                                "loop: failed to delete welded strategy on cap stop (ignored)");
+                                        }
+                                    }
+                                    // Cap stops were the one silent ending —
+                                    // the failure path already notifies. Tell
+                                    // the origin channel (R5); Panel-only
+                                    // sessions rely on the stored stop_reason.
+                                    let origin = match crate::gateway::event_emitter::origin_fanout::channel_registry() {
+                                        Some(reg) => agent
+                                            .origin_route(&request.session_key)
+                                            .await
+                                            .map(|(ch, conv)| (reg, ch, conv)),
+                                        None => None,
+                                    };
+                                    notify_loop_origin(origin.as_ref(), format!("⏹ {note}")).await;
+                                    info!(session = %session_key_str, note = %note,
+                                        "loop: safety cap reached, loop stopped");
+                                }
+                                crate::looping::TickDecision::Idle => {}
                             }
                         }
                     }
@@ -1168,7 +1166,11 @@ where
 #[derive(Clone, Copy, Debug)]
 enum ContinuationKind {
     Goal,
-    Loop,
+    /// A clock-driven loop tick. Carries the wake stamped by
+    /// `LoopRegistry::try_claim_tick`; at fire time the tick must
+    /// `confirm_fire` with it — a mismatch means the loop was stopped or
+    /// replaced during the delay and the tick must not execute.
+    Loop { wake_ms: u64 },
 }
 
 /// 入队一次自主续跑 run（同一 session、同一 agent，给定 prompt）。
@@ -1186,7 +1188,9 @@ fn spawn_continuation_run(
 ) {
     let cont_request = super::RunRequest {
         run_id: uuid::Uuid::new_v4().to_string(),
-        input: prompt,
+        // Cloned (not moved) so the AgentBusy retry below can re-enqueue the
+        // SAME tick prompt without recomputing it.
+        input: prompt.clone(),
         session_key: session_key.clone(),
         timeout_secs: None,
         metadata: {
@@ -1211,6 +1215,19 @@ fn spawn_continuation_run(
         if let Some(d) = delay_ms {
             tokio::time::sleep(std::time::Duration::from_millis(d)).await;
         }
+        // Fire-time gate: the registry state may have changed during the
+        // (minutes-long) sleep — loop(stop), a cap stop, or a fresh start all
+        // supersede this tick. Without the atomic confirm, a stopped loop
+        // still burned one full stale LLM turn (ghost tick).
+        if let ContinuationKind::Loop { wake_ms } = kind {
+            let confirmed = crate::looping::global()
+                .is_some_and(|reg| reg.confirm_fire(&session_key_str, wake_ms));
+            if !confirmed {
+                info!(session = %session_key_str,
+                    "loop: tick superseded during its delay (loop stopped or replaced); skipping");
+                return;
+            }
+        }
         let Some(cont_agent) = registry.get(&cont_agent_id).await else {
             warn!(
                 agent_id = %cont_agent_id,
@@ -1234,6 +1251,9 @@ fn spawn_continuation_run(
                 .map(|(ch, conv)| (reg, ch, conv)),
             None => None,
         };
+        // Kept for the AgentBusy retry re-spawn (the original is consumed by
+        // the emitter construction just below).
+        let retry_bus = event_bus.clone();
         // G1: broadcast the continuation live (Panel + `aleph watch`) via the
         // gateway event bus when one is wired; fall back to collect-and-drop in
         // tests / non-gateway contexts so those paths stay behavior-identical.
@@ -1264,6 +1284,51 @@ fn spawn_continuation_run(
             if matches!(e, ExecutionError::Cancelled) {
                 info!(session = %session_key_str, kind = ?kind,
                     "continuation cancelled by user");
+            } else if matches!(e, ExecutionError::AgentBusy(_)) {
+                // A scheduling collision, not a pursuit failure: another run
+                // of this agent held the slot when the tick fired — possibly
+                // in a DIFFERENT session, whose completion re-enters the hook
+                // under its own key and would never re-arm THIS loop. The old
+                // behavior turned the collision into a terminal stop with a
+                // confusing "halted by an error: Agent is busy" receipt; a
+                // bare skip would instead strand the loop silently dormant.
+                // So: re-arm the SAME claimed tick with a short retry delay
+                // (atomic in the registry, no iteration bump) and re-enqueue.
+                // Goals keep the visible blocking path below — they have no
+                // pending/claim machinery to retry through, and a Blocked
+                // goal is user-recoverable and notified.
+                match kind {
+                    ContinuationKind::Loop { .. } => {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| d.as_millis() as u64);
+                        let rearmed = crate::looping::global()
+                            .and_then(|r| r.rearm_after_busy(&session_key_str, now));
+                        match rearmed {
+                            Some((delay_ms, wake_ms)) => {
+                                info!(session = %session_key_str, delay_ms,
+                                    "loop: agent busy at tick fire; re-armed the tick with a retry delay");
+                                spawn_continuation_run(
+                                    registry.clone(),
+                                    adapter.clone(),
+                                    session_key.clone(),
+                                    session_key_str.clone(),
+                                    prompt.clone(),
+                                    retry_bus.clone(),
+                                    Some(delay_ms),
+                                    ContinuationKind::Loop { wake_ms },
+                                );
+                            }
+                            None => info!(session = %session_key_str,
+                                "loop: agent busy at tick fire; loop no longer active, re-claimed, or capped — tick dropped"),
+                        }
+                    }
+                    ContinuationKind::Goal => {
+                        warn!(error = %e, session = %session_key_str,
+                            "goal pursuit: continuation hit a busy agent; blocking goal for user guidance");
+                        block_goal_on_failure(&session_key_str, &e, origin.as_ref()).await;
+                    }
+                }
             } else {
                 match kind {
                     ContinuationKind::Goal => {
@@ -1271,7 +1336,7 @@ fn spawn_continuation_run(
                             "goal pursuit: continuation run failed; blocking goal for user guidance");
                         block_goal_on_failure(&session_key_str, &e, origin.as_ref()).await;
                     }
-                    ContinuationKind::Loop => {
+                    ContinuationKind::Loop { .. } => {
                         warn!(error = %e, session = %session_key_str,
                             "loop: tick run failed; stopping loop for user guidance");
                         stop_loop_on_failure(&session_key_str, &e, origin.as_ref()).await;
@@ -1366,13 +1431,38 @@ async fn stop_loop_on_failure(
                     .with_status(crate::looping::LoopStatus::Stopped)
                     .with_stop_reason(Some(format!("Halted by an error: {reason}"))),
             );
+            // Mirror the tool-stop cleanup (loop_manage stop): clear the
+            // loop-welded Strategy so the stale plan neither bleeds into
+            // later turns nor blocks a future start from re-planning.
+            if let Some(strat) = crate::strategy::global() {
+                if let Err(e) = strat.delete(&crate::strategy::loop_key(session_key_str)) {
+                    info!(session = %session_key_str, error = %e,
+                        "loop: failed to delete welded strategy on failure stop (ignored)");
+                }
+            }
         }
     }
+    notify_loop_origin(
+        origin,
+        format!("⚠️ Your timer loop halted on an error and was stopped: {reason}"),
+    )
+    .await;
+}
+
+/// Best-effort deliver a loop stop notice to the session's bound origin
+/// channel (R5). Shared by the failure stop and the cap-exhaustion stop so
+/// every unattended ending is equally visible; Panel-only sessions have no
+/// origin and rely on the stop reason stored for `loop(action='status')`.
+async fn notify_loop_origin(
+    origin: Option<&(
+        Arc<crate::gateway::channel_registry::ChannelRegistry>,
+        String,
+        String,
+    )>,
+    text: String,
+) {
     if let Some((reg, ch, conv)) = origin {
-        let msg = crate::gateway::channel::OutboundMessage::text(
-            conv.clone(),
-            format!("⚠️ Your timer loop halted on an error and was stopped: {reason}"),
-        );
+        let msg = crate::gateway::channel::OutboundMessage::text(conv.clone(), text);
         if let Err(e) = reg
             .send(&crate::gateway::channel::ChannelId::new(ch.clone()), msg)
             .await
@@ -1396,6 +1486,22 @@ mod naked_loop_planner_tests {
             false,
             "research X and email Bob"
         ));
+    }
+
+    #[test]
+    fn gate_excludes_slash_command_input() {
+        // `/loop`·`/goal` fall through the fast path on purpose (their first
+        // tick/pursuit is scheduled by the completion hook) — the naked-loop
+        // planner must not plan over raw slash syntax; they run their own
+        // planners, and double-planning would weld a stale session Strategy.
+        let k = SessionKey::main("a");
+        assert!(!naked_loop_planner_should_fire(
+            &k,
+            true,
+            false,
+            "/loop watch CI every 5m"
+        ));
+        assert!(!naked_loop_planner_should_fire(&k, true, false, "  /goal x"));
     }
 
     #[test]

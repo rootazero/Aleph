@@ -13,8 +13,8 @@ use super::layers::{
     RoleLayer, RuntimeCapabilitiesLayer, RuntimeContextLayer, SecurityLayer, SessionBudgetLayer,
     SessionContextGuideLayer, SessionResumeLayer, SkillInstructionsLayer, SkillModeLayer,
     SoulLayer, SpecialActionsLayer, StandingGoalLayer, StrategyLayer, StrategyPointerLayer,
-    ThinkingGuidanceLayer, ToolRuntimeStateLayer, ToolUsageGrammarLayer, ToolsLayer,
-    VoiceModeLayer,
+    ThinkingGuidanceLayer, TimerLoopLayer, ToolRuntimeStateLayer, ToolUsageGrammarLayer,
+    ToolsLayer, VoiceModeLayer,
 };
 use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
@@ -323,6 +323,7 @@ impl PromptPipeline {
             Box::new(MemoryAugmentationLayer),
             Box::new(MemoryProtocolLayer),
             Box::new(SessionContextGuideLayer),
+            Box::new(TimerLoopLayer),
             Box::new(StandingGoalLayer),
             Box::new(ExecutionPlanLayer),
             Box::new(StrategyPointerLayer),
@@ -460,7 +461,9 @@ mod tests {
         // hint, 2026-06-19). See `default_layers`.
         // → 44 (MultiStepConductLayer @805 Stable — autonomous scratchpad
         // planning + interactive progress narration, 2026-06-28).
-        assert_eq!(pipeline.layer_count(), 44);
+        // → 45 (TimerLoopLayer @1753 Dynamic — re-surfaces the session's
+        // active watch loop per turn, 2026-07-03).
+        assert_eq!(pipeline.layer_count(), 45);
     }
 
     #[test]
@@ -790,6 +793,8 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"execution_plan"));
         // StandingGoalLayer re-surfaces the active standing goal per turn.
         assert!(dynamic_names.contains(&"standing_goal"));
+        // TimerLoopLayer re-surfaces the active watch loop per turn.
+        assert!(dynamic_names.contains(&"timer_loop"));
         // ExtraFilesLayer renders user-configured `[prompt.extra_files]`
         // content, re-read off disk per prompt build — naturally dynamic.
         assert!(dynamic_names.contains(&"extra_files"));
