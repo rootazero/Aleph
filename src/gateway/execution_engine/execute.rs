@@ -379,7 +379,12 @@ where
                 .unwrap_or_default();
         }
 
-        // Propagate session key to memory_search so scope=current_session works
+        // Propagate session key to the shared registry handle. This handle is
+        // process-global and rewritten by every concurrent run, so it is NOT
+        // authoritative during tool execution: session-binding tools (loop /
+        // goal / scratchpad / strategy / memory_search) read the per-run
+        // TURN_CONTEXT task-local first and only fall back to this handle on
+        // non-scoped paths (direct invocations outside the dispatch chokepoint).
         if let Some(sk_handle) = self.tool_registry.session_key_handle() {
             *sk_handle.write().await = request.session_key.to_key_string();
         }
