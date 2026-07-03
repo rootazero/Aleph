@@ -10,7 +10,6 @@ use crate::memory::notes::indexer::NoteIndexer;
 use crate::memory::notes::ingest::plan::{ApplyReport, PageOp};
 use crate::memory::notes::note::{sanitize_title, KnowledgeNote, Relation};
 use crate::memory::notes::store::NoteStore;
-use crate::sync_primitives::Arc;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -62,8 +61,14 @@ struct StagedWrite {
 }
 
 pub struct CompoundApplyTx<'a, S: NoteStore + Send + Sync + 'static> {
-    indexer: &'a Arc<NoteIndexer<S>>,
-    store: &'a Arc<S>,
+    // Plain references (not `&Arc<..>`): the tx only calls methods through them,
+    // never clones the Arc, so borrowing the inner value keeps the API free of
+    // the caller's ownership choice. Callers holding `Arc<..>` pass `&arc` and
+    // deref-coercion supplies the `&..` — existing call sites are unchanged,
+    // and value-holding callers (e.g. the dream stage's `ctx.indexer`) can now
+    // construct a tx to replay a deferred op.
+    indexer: &'a NoteIndexer<S>,
+    store: &'a S,
     agent_id: &'a str,
     memory_dir: PathBuf,
     tx_id: String,
@@ -77,8 +82,8 @@ pub struct CompoundApplyTx<'a, S: NoteStore + Send + Sync + 'static> {
 
 impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
     pub fn new(
-        indexer: &'a Arc<NoteIndexer<S>>,
-        store: &'a Arc<S>,
+        indexer: &'a NoteIndexer<S>,
+        store: &'a S,
         memory_dir: impl Into<PathBuf>,
         agent_id: &'a str,
     ) -> Self {
@@ -132,6 +137,8 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 tags,
                 relations,
                 source_ids,
+                confidence,
+                severity,
             } => {
                 let (category, filename) = split_path(note_path)?;
                 let safe = sanitize_title(&filename)?;
@@ -145,6 +152,11 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                     links: links.clone(),
                     relations: relations.iter().cloned().map(Relation::clamped).collect(),
                     source_notes: self.resolve_sources(source_ids),
+                    // Carry the LLM's self-assessment onto the persisted note so
+                    // retrieval re-ranking (severity boost) and the governance
+                    // gate see the model's judgement, not a hardcoded default.
+                    confidence: confidence.clamp(0.0, 1.0),
+                    severity: *severity,
                     created_at: chrono::Utc::now().timestamp(),
                     updated_at: chrono::Utc::now().timestamp(),
                     content_hash: String::new(),
@@ -510,6 +522,7 @@ mod tests {
     use super::*;
     use crate::memory::notes::indexer::NoteIndexer;
     use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::sync_primitives::Arc;
 
     #[test]
     fn ensure_origin_marker_idempotent_when_present() {
@@ -556,6 +569,8 @@ mod tests {
             tags: vec!["rust".into()],
             relations: vec![],
             source_ids: vec![],
+            confidence: 1.0,
+            severity: Default::default(),
         })
         .await
         .unwrap();
@@ -582,6 +597,8 @@ mod tests {
                 tags: vec![],
                 relations: vec![],
                 source_ids: vec![],
+                confidence: 1.0,
+                severity: Default::default(),
             })
             .await
             .unwrap();
@@ -617,6 +634,8 @@ mod tests {
             tags: vec![],
             relations: vec![],
             source_ids: vec![],
+            confidence: 1.0,
+            severity: Default::default(),
         })
         .await
         .unwrap();
@@ -640,6 +659,8 @@ mod tests {
             tags: vec![],
             relations: vec![],
             source_ids: vec![],
+            confidence: 1.0,
+            severity: Default::default(),
         })
         .await
         .unwrap();
@@ -682,6 +703,8 @@ mod tests {
                 confidence: 0.9,
             }],
             source_ids: vec![],
+            confidence: 1.0,
+            severity: Default::default(),
         })
         .await
         .unwrap();
@@ -722,6 +745,8 @@ mod tests {
                     confidence: 0.5,
                 }],
                 source_ids: vec![],
+                confidence: 1.0,
+                severity: Default::default(),
             })
             .await
             .unwrap();
@@ -792,6 +817,8 @@ mod tests {
                     tags: vec![],
                     relations: vec![],
                     source_ids: vec![],
+                    confidence: 1.0,
+                    severity: Default::default(),
                 })
             }),
             path.clone().prop_map(|p| PageOp::Append {
@@ -861,6 +888,8 @@ mod tests {
             tags: vec![],
             relations: vec![],
             source_ids: vec!["raw-A".into(), "raw-B".into()],
+            confidence: 1.0,
+            severity: Default::default(),
         })
         .await
         .unwrap();
@@ -899,6 +928,8 @@ mod tests {
             tags: vec![],
             relations: vec![],
             source_ids: vec![], // LLM omitted → fall back to batch
+            confidence: 1.0,
+            severity: Default::default(),
         })
         .await
         .unwrap();
@@ -930,6 +961,8 @@ mod tests {
             tags: vec![],
             relations: vec![],
             source_ids: vec![],
+            confidence: 1.0,
+            severity: Default::default(),
         })
         .await
         .unwrap();

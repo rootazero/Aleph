@@ -888,8 +888,25 @@ impl DreamDaemon {
             .unwrap_or_default();
 
         // --- Phase 1: Collect signals ---
-        let raw_metrics =
-            compute_raw_metrics(&note_index, self.database.as_ref(), DEFAULT_AGENT_ID).await;
+        // The prior cycle's report carries the LLM-produced rot counts
+        // (contradictions / stale marks / merged duplicates). Read it once here
+        // and reuse it for both the baseline and post-cycle metric collection so
+        // the rot signals reflect real, model-judged corpus health rather than a
+        // structural zero. `read_last` failure (fresh install, corrupt log) is a
+        // graceful `None` → zero rates, never aborting the cycle.
+        let prior_report = EventLog::new(memory_dir.join(DEFAULT_AGENT_ID))
+            .read_last(1)
+            .await
+            .ok()
+            .and_then(|mut evs| evs.pop())
+            .map(|ev| ev.report);
+        let raw_metrics = compute_raw_metrics(
+            &note_index,
+            self.database.as_ref(),
+            DEFAULT_AGENT_ID,
+            prior_report.as_ref(),
+        )
+        .await;
         let signal_snapshot = SignalSnapshot::from_metrics(&raw_metrics);
 
         // --- Phase 2: Mutation gate evaluation ---
@@ -1070,8 +1087,17 @@ impl DreamDaemon {
             .list_notes(DEFAULT_AGENT_ID)
             .await
             .unwrap_or_default();
-        let post_metrics =
-            compute_raw_metrics(&post_index, self.database.as_ref(), DEFAULT_AGENT_ID).await;
+        // Same prior report as the baseline: the rot term is a lagging signal, so
+        // both sides of the evolution gate carry the identical penalty and it
+        // cancels in the health *delta* — the gate still judges on this cycle's
+        // recall change, while `best_health` now tracks an honest absolute level.
+        let post_metrics = compute_raw_metrics(
+            &post_index,
+            self.database.as_ref(),
+            DEFAULT_AGENT_ID,
+            prior_report.as_ref(),
+        )
+        .await;
         report.distill_recalled = post_metrics.skill_notes_recalled;
         let candidate_health = memory_health_score(&SignalSnapshot::from_metrics(&post_metrics));
         let best_before = *self.best_health.lock().unwrap_or_else(|e| e.into_inner());
@@ -1176,6 +1202,7 @@ async fn compute_raw_metrics(
     notes: &[NoteIndexEntry],
     store: &SqliteMemoryBackend,
     agent_id: &str,
+    prior: Option<&DreamReport>,
 ) -> RawMetrics {
     let day_ago = now_timestamp() - 86_400;
     let notes_added_24h = notes.iter().filter(|n| n.created_at >= day_ago).count() as u32;
@@ -1227,6 +1254,28 @@ async fn compute_raw_metrics(
             }
         };
 
+    // Rot signals (contradiction / duplication / staleness) are *semantic*
+    // judgements the pipeline's LLM stages already made last cycle — `note_drift`
+    // counts contradictions & stale marks, consolidation counts merged duplicates
+    // — and recorded in the persisted `DreamReport`. We read those counts back
+    // rather than re-deriving them with rules (R7: no deterministic re-judgement).
+    // This is a *lagging* signal, exactly as the `source: "dream_report"` label on
+    // these signals always intended; the first-ever cycle has no prior and reads
+    // zero (byte-compatible with the previous hardcoded-zero behaviour), then
+    // self-corrects after one cycle. Normalised against corpus size so a handful
+    // of contradictions in a large corpus is a small, honest penalty — not alarmist.
+    let (duplication_rate, contradiction_rate, staleness_rate) = match prior {
+        Some(r) if total_notes > 0 => {
+            let n = f64::from(total_notes);
+            (
+                (f64::from(r.notes_consolidated) / n).clamp(0.0, 1.0),
+                (f64::from(r.contradictions_found) / n).clamp(0.0, 1.0),
+                (f64::from(r.notes_marked_stale) / n).clamp(0.0, 1.0),
+            )
+        }
+        _ => (0.0, 0.0, 0.0),
+    };
+
     RawMetrics {
         total_notes,
         notes_added_24h,
@@ -1234,6 +1283,9 @@ async fn compute_raw_metrics(
         never_recalled_count,
         skill_notes_total,
         skill_notes_recalled,
+        duplication_rate,
+        contradiction_rate,
+        staleness_rate,
         tool_calls_total_24h: tool_total,
         tool_calls_failed_24h: tool_failed,
         tool_avg_duration_ms_24h: tool_avg_ms,
@@ -1442,7 +1494,7 @@ mod tests {
         let notes = vec![entry(now), entry(now - 90_000), entry(now - 100)];
         let temp = std::env::temp_dir().join(format!("aleph_metrics_{}", uuid::Uuid::new_v4()));
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
-        let m = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID).await;
+        let m = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID, None).await;
         assert_eq!(m.total_notes, 3);
         assert_eq!(m.notes_added_24h, 2);
         // With no tool invocations recorded yet, the new fields stay zero.
@@ -1476,7 +1528,7 @@ mod tests {
             store.insert_raw_memory(&raw).await.unwrap();
         }
 
-        let m = compute_raw_metrics(&[], store.as_ref(), DEFAULT_AGENT_ID).await;
+        let m = compute_raw_metrics(&[], store.as_ref(), DEFAULT_AGENT_ID, None).await;
         assert_eq!(m.tool_calls_total_24h, 3);
         assert_eq!(m.tool_calls_failed_24h, 1);
         // (10 + 30 + 0) / 3 = 13
@@ -1519,7 +1571,7 @@ mod tests {
             .await
             .unwrap();
 
-        let m = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID).await;
+        let m = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID, None).await;
         // Skill recall: 1 of 2 skill notes recalled → skill_recall_rate = 0.5,
         // which keeps the wasted-distillation gate from misfiring (its bug was
         // a structural recalled=0).
@@ -1532,6 +1584,86 @@ mod tests {
         // The derived skill_recall_rate signal must now be non-zero.
         let snap = SignalSnapshot::from_metrics(&m);
         assert!((snap.score("skill_recall_rate") - 0.5).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn compute_raw_metrics_folds_in_prior_report_rot() {
+        use crate::memory::dreaming::selector::{GateDecision, StrategySelector};
+
+        let temp = std::env::temp_dir().join(format!("aleph_metrics_rot_{}", uuid::Uuid::new_v4()));
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+        let now = now_timestamp();
+        let note = |path: &str| NoteIndexEntry {
+            path: path.into(),
+            filename: path.rsplit('/').next().unwrap_or(path).into(),
+            agent_id: DEFAULT_AGENT_ID.into(),
+            category: "reference".into(),
+            tags: vec![],
+            link_count: 0,
+            created_at: now,
+            updated_at: now,
+            content_hash: "h".into(),
+        };
+        let notes: Vec<NoteIndexEntry> = (0..10).map(|i| note(&format!("reference/n{i}"))).collect();
+
+        // No prior report → rot rates read a structural zero (self-evolution's
+        // pre-fix behaviour) and the selector's stability gate is wide open.
+        let without = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID, None).await;
+        assert_eq!(without.contradiction_rate, 0.0);
+        assert_eq!(without.duplication_rate, 0.0);
+        assert_eq!(without.staleness_rate, 0.0);
+        let stability_open = SignalSnapshot::from_metrics(&without);
+        assert_eq!(stability_open.score("high_contradiction_rate"), 0.0);
+
+        // Prior cycle's LLM stages found rot: 4 contradictions, 5 merged
+        // duplicates, 2 stale marks over a 10-note corpus.
+        let prior = DreamReport {
+            contradictions_found: 4,
+            notes_consolidated: 5,
+            notes_marked_stale: 2,
+            ..Default::default()
+        };
+        let with = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID, Some(&prior)).await;
+        assert!((with.contradiction_rate - 0.4).abs() < 1e-9);
+        assert!((with.duplication_rate - 0.5).abs() < 1e-9);
+        assert!((with.staleness_rate - 0.2).abs() < 1e-9);
+
+        // The revived rot signals must actually close the selector's stability
+        // gate: with contradiction 0.4 + duplication 0.5, stability drops to
+        // 1 - (0.4 + 0.5)/2 = 0.55 — still above MIN_STABILITY here, but the
+        // health score must now carry a real penalty (was structurally inflated).
+        let snap = SignalSnapshot::from_metrics(&with);
+        assert!((snap.score("high_contradiction_rate") - 0.4).abs() < 1e-9);
+        assert!((snap.score("high_duplication_rate") - 0.5).abs() < 1e-9);
+        let healthy = memory_health_score(&stability_open);
+        let rotten = memory_health_score(&snap);
+        assert!(
+            rotten < healthy,
+            "rot penalty must lower health: rotten={rotten} healthy={healthy}"
+        );
+
+        // Sanity: a heavily-rotten prior actually forces Consolidate over
+        // Synthesize even when growth pressure is high (the dead-gate bug).
+        let mut hot = notes.clone();
+        for (i, n) in hot.iter_mut().enumerate() {
+            n.created_at = now; // all fresh → high growth pressure
+            n.path = format!("reference/hot{i}");
+        }
+        let rotten_prior = DreamReport {
+            contradictions_found: 9,
+            notes_consolidated: 9,
+            ..Default::default()
+        };
+        let hot_m =
+            compute_raw_metrics(&hot, store.as_ref(), DEFAULT_AGENT_ID, Some(&rotten_prior)).await;
+        let decision = StrategySelector::new()
+            .select(&SignalSnapshot::from_metrics(&hot_m), &GateDecision::Allow);
+        assert_eq!(
+            decision.strategy,
+            DreamStrategy::Consolidate,
+            "high rot must veto synthesis via stability gate, got {:?}",
+            decision.strategy
+        );
     }
 
     #[tokio::test]

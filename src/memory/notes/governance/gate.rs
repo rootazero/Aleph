@@ -28,6 +28,16 @@ pub struct CandidateNote {
     pub action: NoteWriteAction,
     pub bypass_review: bool,
     pub contradicts_existing: bool,
+    /// When set, this candidate is a **deferred non-Create op** (e.g.
+    /// `Contradict`) carried as a serialized `PageOp`, not a materialized note.
+    /// On review approval the reviewer replays this op through the apply
+    /// transaction instead of `write_note`-ing `note` — a plain write would
+    /// overwrite the target note with the delta. Kept as an opaque
+    /// `serde_json::Value` so the governance layer takes no dependency on the
+    /// ingest plan types. `None` = Create / materialized note (back-compat
+    /// default for rows enqueued before this field existed).
+    #[serde(default)]
+    pub replay_op: Option<serde_json::Value>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -156,6 +166,7 @@ mod tests {
             action: NoteWriteAction::Create,
             bypass_review: false,
             contradicts_existing: false,
+            replay_op: None,
         }
     }
 
