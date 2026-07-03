@@ -16,6 +16,8 @@ use crate::memory::store::MemoryBackend;
 use crate::sync_primitives::Arc;
 
 /// Convert a `NoteIndexEntry` into a `NoteNodeDto`.
+/// `community_id` is left `None` here; callers that have the community map
+/// (graph.query) fill it in a second pass.
 fn entry_to_dto(entry: &NoteIndexEntry) -> NoteNodeDto {
     NoteNodeDto {
         id: entry.path.clone(),
@@ -24,6 +26,8 @@ fn entry_to_dto(entry: &NoteIndexEntry) -> NoteNodeDto {
         category: entry.category.clone(),
         tags: entry.tags.clone(),
         link_count: entry.link_count,
+        community_id: None,
+        updated_at: Some(entry.updated_at),
     }
 }
 
@@ -123,18 +127,34 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         }
     };
 
-    let nodes: Vec<NoteNodeDto> = entries.iter().map(entry_to_dto).collect();
+    // Community map (cold cache => empty) + agent-scoped total for truncation.
+    let communities = db.community_ids(agent_id).await.unwrap_or_default();
+    let total = db.count_notes(agent_id).await.ok().map(|t| t.max(0) as usize);
+
+    let nodes: Vec<NoteNodeDto> = entries
+        .iter()
+        .map(|e| {
+            let mut dto = entry_to_dto(e);
+            dto.community_id = communities.get(&e.path).map(|&c| c.max(0) as u32);
+            dto
+        })
+        .collect();
     let edges: Vec<NoteLinkDto> = links
         .into_iter()
-        .map(|(from, to)| NoteLinkDto {
+        .map(|(from, to, relation)| NoteLinkDto {
             from,
             to,
             label: None,
-            kind: None,
+            // NULL relation = plain body wikilink.
+            kind: Some(relation.unwrap_or_else(|| "wikilink".to_string())),
         })
         .collect();
 
-    let response = GraphQueryResponse { nodes, edges };
+    let response = GraphQueryResponse {
+        nodes,
+        edges,
+        total,
+    };
 
     match serde_json::to_value(response) {
         Ok(v) => JsonRpcResponse::success(req.id, v),
@@ -696,6 +716,18 @@ mod tests {
         assert!(
             !ids.iter().any(|id| id.contains("BetaOnly")),
             "beta note must NOT appear when querying alpha: {ids:?}"
+        );
+
+        // Enriched fields (Plan 2): agent-scoped total, per-node updated_at,
+        // per-edge kind (plain wikilinks map to "wikilink").
+        assert!(result.total.is_some(), "total should be populated");
+        assert!(
+            result.nodes.iter().all(|n| n.updated_at.is_some()),
+            "every node carries updated_at"
+        );
+        assert!(
+            result.edges.iter().all(|e| e.kind.is_some()),
+            "every edge carries a kind"
         );
     }
 
