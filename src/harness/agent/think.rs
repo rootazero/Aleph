@@ -457,6 +457,17 @@ impl AgentHarness {
         //    resolve tool names for tool_result messages.
         let mut messages = super::prompt::build_prompt(&events, tail_start);
 
+        // 2+. Append the per-run recall context (memory retrieval + routing
+        //     experience) as a transient trailing user message. Mechanical
+        //     placement, no cognition (R10): the bridge rendered the text
+        //     pre-loop; the tail position keeps per-query recall bytes out of
+        //     the system prompt so they never re-key the conversation-prefix
+        //     cache, and puts the recalled facts adjacent to the read head.
+        //     Recomputed into the vec fresh each Think, never persisted.
+        if let Some(recall) = self.deps.recall_context.as_deref() {
+            messages.push(crate::providers::message::UnifiedMessage::user(recall));
+        }
+
         // Fetch the cached metadata-form tool schema once. O(1) `Arc::clone`
         // on the steady-state path. Hoisted above BOTH the preflight pass and
         // the budget check so the preflight pressure gate and the budget sensor

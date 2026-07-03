@@ -413,6 +413,7 @@ fn build_deps(
         trace_sink: None,
         system_prompt: None,
         system_prompt_parts: None,
+        recall_context: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,

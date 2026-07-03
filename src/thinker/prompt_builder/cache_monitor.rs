@@ -5,15 +5,12 @@
 //! unexpectedly.
 
 use crate::sync_primitives::Mutex;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 
 // =============================================================================
 // Internal state
 // =============================================================================
 
 struct MonitorState {
-    stable_hash: Option<u64>,
     consecutive_misses: u32,
     total_calls: u64,
     total_hits: u64,
@@ -22,7 +19,6 @@ struct MonitorState {
 impl MonitorState {
     const fn new() -> Self {
         Self {
-            stable_hash: None,
             consecutive_misses: 0,
             total_calls: 0,
             total_hits: 0,
@@ -36,9 +32,11 @@ impl MonitorState {
 
 /// Monitor for prompt cache hit/miss tracking.
 ///
-/// Thread-safe via interior mutability.  Callers update the stable-content
-/// hash before each LLM call and record the `cache_read_tokens` value from
-/// the resulting `TokenUsage` to detect consecutive cache misses.
+/// Thread-safe via interior mutability.  Callers record the
+/// `cache_read_tokens` value from each call's `TokenUsage` to detect
+/// consecutive cache misses. (A per-call stable-content hash comparator
+/// used to live here too; it never gained a production caller and was
+/// wrong-grained for the process-wide singleton — removed per YAGNI.)
 pub struct CacheMonitor {
     state: Mutex<MonitorState>,
 }
@@ -50,27 +48,6 @@ impl CacheMonitor {
         Self {
             state: Mutex::new(MonitorState::new()),
         }
-    }
-
-    /// Hash `stable_content` and compare with the previously stored hash.
-    ///
-    /// Returns `true` when the hash has changed from its previous value
-    /// (indicating the stable portion of the prompt has been modified),
-    /// and `false` on the first call or when the content is unchanged.
-    pub fn update_stable_hash(&self, stable_content: &str) -> bool {
-        // Fast non-cryptographic hash for change detection within a single process.
-        //
-        // NOTE: `DefaultHasher` is NOT stable across Rust versions or process restarts.
-        // This is acceptable here because `CacheMonitor` is session-scoped and in-memory.
-        // Do NOT persist or compare hashes across processes.
-        let mut hasher = DefaultHasher::new();
-        stable_content.hash(&mut hasher);
-        let new_hash = hasher.finish();
-
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let changed = state.stable_hash.is_some_and(|old| old != new_hash);
-        state.stable_hash = Some(new_hash);
-        changed
     }
 
     /// Record cache usage from a completed LLM call.
@@ -152,26 +129,6 @@ pub fn global_cache_monitor() -> &'static CacheMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn initial_hash_update_returns_false() {
-        let monitor = CacheMonitor::new();
-        assert!(!monitor.update_stable_hash("hello world"));
-    }
-
-    #[test]
-    fn same_hash_returns_false() {
-        let monitor = CacheMonitor::new();
-        monitor.update_stable_hash("same content");
-        assert!(!monitor.update_stable_hash("same content"));
-    }
-
-    #[test]
-    fn changed_hash_returns_true() {
-        let monitor = CacheMonitor::new();
-        monitor.update_stable_hash("first content");
-        assert!(monitor.update_stable_hash("different content"));
-    }
 
     #[test]
     fn hit_rate_tracks_correctly() {

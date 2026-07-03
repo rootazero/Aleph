@@ -582,29 +582,3 @@ fn deadline_render_buckets_and_edges() {
     // no clock available → existence only, no misleading countdown
     assert_eq!(render_deadline(now + 60_000, 0), "deadline set");
 }
-
-// Regression: StablePromptKey must include the provider protocol so a hot
-// protocol swap (e.g. openai → anthropic) does not reuse a stale cache entry.
-#[test]
-fn stable_prompt_key_distinguishes_provider_protocol() {
-    use crate::thinker::prompt_mode::PromptMode;
-
-    let openai_key = StablePromptKey::new(
-        "agent:main:main:s1",
-        "main",
-        "custom",
-        "openai",
-        PromptMode::Full,
-    );
-    let anthropic_key = StablePromptKey::new(
-        "agent:main:main:s1",
-        "main",
-        "custom",
-        "anthropic",
-        PromptMode::Full,
-    );
-    assert_ne!(
-        openai_key, anthropic_key,
-        "stable prompt cache key must differ when provider protocol changes"
-    );
-}

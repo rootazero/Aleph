@@ -82,7 +82,8 @@
 - **代码锚点**：`src/thinker/prompt_pipeline.rs`（按优先级跑 layers）、`src/thinker/prompt_layer.rs`（Layer trait + AssemblyPath）、`src/thinker/layers/`（40+ 具体 layer，优先级 50→1755）、`src/thinker/prompt_builder/mod.rs`（输出与缓存）
 - **职责**：按优先级排序的 layer 流水线，分 Basic/Soul/Context/Cached 路径组装静态+动态内容，产出完整系统提示。
 - **状态**：✅ 已实现，含 layer 稳定性分化（Stable/Dynamic 驱动缓存分层）。
-- **打磨话术**：「调系统提示词的某段内容 → 找对应 `src/thinker/layers/<X>.rs`（按 priority）。要改‘文字越少信息密度不变’这类全局风格 → 改 `soul.rs` 的 voice/directives 或对应 layer 的模板，不要散落式硬编码。」
+- **缓存纪律（2026-07-03 重构）**：系统提示位于所有消息级 prompt-cache 断点的前缀里——**任何每 run 变化的字节放进系统提示都会整段打穿对话历史缓存**。因此：① 每查询记忆召回/路由经验不再走 `MemoryAugmentationLayer`（已撤回），改由 `HarnessDeps::recall_context` 作为**瞬态尾部 user 消息**投放（bridge `prompt_build.rs` 产出 → `think.rs` 逐轮追加，不落盘）；② `RuntimeContextLayer` 的 `time=` 粗化到小时、`time_ms=` 移除（cron 精确时间由 registry 执行时注入 `__current_time_ms`）；③ 会话级 stable-prompt LRU 已删除（stable 输入每 run 全新加载，渲染是纯函数，重建字节稳定；LRU 只会把中途变更的 strategy/skills/identity 钉死成陈旧前缀）。
+- **打磨话术**：「调系统提示词的某段内容 → 找对应 `src/thinker/layers/<X>.rs`（按 priority）。要改‘文字越少信息密度不变’这类全局风格 → 改 `soul.rs` 的 voice/directives 或对应 layer 的模板，不要散落式硬编码。**加新 layer 前先问：内容是否每 run 变化？是 → 别进系统提示，走 recall_context 式尾部瞬态投放。**」
 
 ### 1.2 Prompt 预算与 Token 控制 (Prompt Budget)
 - **口语关键词**：prompt 预算、token 控制、prompt 大小、truncation、bootstrap 上限

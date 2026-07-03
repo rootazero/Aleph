@@ -201,11 +201,7 @@ pub async fn handle_update(
         // derives it from the DTO name.
         {
             let empty = std::collections::HashMap::new();
-            let existing = cfg
-                .search
-                .as_ref()
-                .map(|s| &s.backends)
-                .unwrap_or(&empty);
+            let existing = cfg.search.as_ref().map(|s| &s.backends).unwrap_or(&empty);
             for backend_dto in &dto.backends {
                 let provider_type = existing
                     .get(&backend_dto.name)
@@ -957,7 +953,10 @@ mod tests {
             "clearing searxng base_url must be rejected: {response:?}"
         );
         let msg = &response.error.as_ref().unwrap().message;
-        assert!(msg.contains("base_url"), "error names the missing field: {msg}");
+        assert!(
+            msg.contains("base_url"),
+            "error names the missing field: {msg}"
+        );
 
         // The in-memory entry is untouched — nothing was clobbered before the
         // rejection, so a follow-up get still shows the working config.
@@ -1008,7 +1007,10 @@ mod tests {
             "google without engine_id must be rejected: {response:?}"
         );
         let msg = &response.error.as_ref().unwrap().message;
-        assert!(msg.contains("engine_id"), "error names the missing field: {msg}");
+        assert!(
+            msg.contains("engine_id"),
+            "error names the missing field: {msg}"
+        );
 
         // Rejection happened before any mutation — no search section was
         // created as a side effect.

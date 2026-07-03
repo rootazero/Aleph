@@ -90,6 +90,7 @@ mod stubs {
             trace_sink: None,
             system_prompt: None,
             system_prompt_parts: None,
+            recall_context: None,
             chain_context: chain,
             guardrails: None,
             max_iterations: None,

@@ -78,6 +78,15 @@ pub struct HarnessDeps {
     /// the parts into a string for the legacy field too (so adapters that
     /// only read `system_prompt` still see the full prompt).
     pub system_prompt_parts: Option<Vec<crate::thinker::prompt_builder::SystemPromptPart>>,
+    /// Per-run recall context (hybrid memory retrieval + routing experience),
+    /// rendered once pre-loop by the harness bridge and appended by `think`
+    /// as a transient trailing user message — never persisted, never in the
+    /// system prompt. Recall varies per user query, and any varying bytes in
+    /// the system prompt sit ahead of every message-level prompt-cache
+    /// breakpoint, re-keying the whole conversation prefix each run; at the
+    /// message tail a changed recall costs only itself (codex initial-context
+    /// / hermes frozen-prompt parity). `None` → no extra message.
+    pub recall_context: Option<String>,
     /// Position of this harness instance in the subagent call chain.
     /// Stage 4 seam (#11). Defaults to a fresh root chain (depth=0). The
     /// subagent spawner overrides this with `parent.chain.child()` so each

@@ -193,6 +193,28 @@ impl ContextCompactor {
         fresh_tail: usize,
         session_id: Option<&str>,
     ) -> anyhow::Result<CompactResult> {
+        let result = self.compact_inner(messages, fresh_tail, session_id).await?;
+        // A compaction that actually rewrote the message list legitimately
+        // breaks the provider prompt cache. Tell the process-wide monitor so
+        // its consecutive-miss warning doesn't fire spuriously on the next
+        // few (expectedly cold) calls. Skipped outcomes leave messages
+        // untouched, so the cache expectation stands.
+        if !matches!(result.strategy_used, CompactStrategy::Skipped { .. }) {
+            crate::thinker::prompt_builder::cache_monitor::global_cache_monitor()
+                .notify_compaction();
+        }
+        Ok(result)
+    }
+
+    /// Body of [`compact`](Self::compact) — all strategy selection and early
+    /// `Skipped` exits live here so the wrapper above can observe the final
+    /// outcome once.
+    async fn compact_inner(
+        &self,
+        messages: &mut Vec<UnifiedMessage>,
+        fresh_tail: usize,
+        session_id: Option<&str>,
+    ) -> anyhow::Result<CompactResult> {
         let effective_tail = fresh_tail.max(self.config.fresh_tail);
 
         // Step 1: determine compression window
