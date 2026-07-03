@@ -37,7 +37,9 @@ impl ToolRegistry for BuiltinToolRegistry {
 
     fn smart_recall_config_handle(
         &self,
-    ) -> Option<Arc<RwLock<Option<crate::config::types::profile::SmartRecallConfig>>>> {
+    ) -> Option<
+        Arc<RwLock<HashMap<String, crate::config::types::profile::SmartRecallConfig>>>,
+    > {
         self.memory_search_tool
             .as_ref()
             .map(|t| t.smart_recall_config_handle())

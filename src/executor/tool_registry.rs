@@ -37,14 +37,21 @@ pub trait ToolRegistry: Send + Sync {
         None
     }
 
-    /// Get the shared `SmartRecallConfig` handle for the `memory_search` tool.
+    /// Get the shared per-agent `SmartRecallConfig` map for the `memory_search` tool.
     ///
-    /// The execution engine writes the active workspace profile's `SmartRecallConfig`
-    /// here so the `memory_search` tool can use Two-Phase Smart Recall.
+    /// The execution engine writes the running agent's profile `SmartRecallConfig`
+    /// under that agent's id so the `memory_search` tool can use Two-Phase Smart
+    /// Recall. Per-agent entries (not one global slot) so concurrent runs of
+    /// different agents cannot overwrite each other's profile mid-turn.
     fn smart_recall_config_handle(
         &self,
-    ) -> Option<Arc<tokio::sync::RwLock<Option<crate::config::types::profile::SmartRecallConfig>>>>
-    {
+    ) -> Option<
+        Arc<
+            tokio::sync::RwLock<
+                std::collections::HashMap<String, crate::config::types::profile::SmartRecallConfig>,
+            >,
+        >,
+    > {
         None
     }
 

@@ -69,6 +69,21 @@ pub fn current_turn_context() -> Option<TurnContext> {
     TURN_CONTEXT.try_with(|t| t.clone()).ok()
 }
 
+/// Agent id of the turn currently executing a tool, or `None` outside a
+/// scoped turn (direct calls, non-gateway paths, tests).
+///
+/// Agent-scoped tools (`memory_search` workspace + smart-recall resolution)
+/// MUST prefer this over the shared `Arc<RwLock<…>>` registry handles: those
+/// handles are process-global and rewritten at every run start, so a
+/// concurrent run of another agent can overwrite them mid-turn and the tool
+/// would bind to the wrong agent's workspace/profile.
+#[must_use]
+pub fn current_agent_id() -> Option<String> {
+    TURN_CONTEXT
+        .try_with(|t| t.session_key.agent_id().to_string())
+        .ok()
+}
+
 #[cfg(test)]
 mod caller_tier_tests {
     use super::*;

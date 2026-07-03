@@ -375,12 +375,16 @@ where
         }
 
         // Propagate the active agent's memory scope + smart-recall profile to
-        // memory_search. Both handles were built for exactly this write (see
-        // MemorySearchTool::default_workspace_handle / smart_recall_config_handle)
-        // but previously had no writer: memory_search always searched the
-        // DEFAULT_AGENT workspace regardless of which agent was running, and
-        // the profile's [profiles.*.smart_recall] config never reached the
-        // Two-Phase Smart Recall gate.
+        // memory_search (see MemorySearchTool::default_workspace_handle /
+        // smart_recall_config_handle).
+        //
+        // The workspace handle is process-global and rewritten by every
+        // concurrent run, so it is NOT authoritative during tool execution:
+        // memory_search reads the per-run TURN_CONTEXT task-local first
+        // (turn_context::current_agent_id) and only falls back to this handle
+        // on non-scoped paths. The smart-recall map is keyed per agent, so a
+        // concurrent run of another agent writes its own entry instead of
+        // clobbering this run's profile.
         let env_agent_id = request.session_key.agent_id().to_string();
         if let Some(ws_handle) = self.tool_registry.workspace_handle() {
             *ws_handle.write().await = env_agent_id.clone();
@@ -395,7 +399,15 @@ where
                 }
                 None => None,
             };
-            *sr_handle.write().await = smart_recall;
+            let mut slots = sr_handle.write().await;
+            match smart_recall {
+                Some(cfg) => {
+                    slots.insert(env_agent_id.clone(), cfg);
+                }
+                None => {
+                    slots.remove(&env_agent_id);
+                }
+            }
         }
 
         // Pre-extract skill context from the slash mode JSON so the agent
