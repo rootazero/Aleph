@@ -67,6 +67,7 @@ pub mod fs;
 pub mod gateway_credentials;
 pub mod gateway_identity;
 pub mod gateway_metrics;
+pub mod gateway_devices;
 pub mod gateway_ticket;
 pub mod gateway_token;
 pub mod general_config;

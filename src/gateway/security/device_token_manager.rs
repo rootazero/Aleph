@@ -15,7 +15,8 @@ use sha2::Digest;
 use uuid::Uuid;
 
 use crate::gateway::security::store::{
-    BootstrapTicketError, ConsumedBootstrapTicket, DeviceTokenRow, DeviceUpsertData, SecurityStore,
+    BootstrapTicketError, ConsumedBootstrapTicket, DeviceRow, DeviceTokenRow, DeviceUpsertData,
+    SecurityStore,
 };
 use crate::sync_primitives::Arc;
 
@@ -153,6 +154,55 @@ impl DeviceTokenManager {
         let tokens = self.store.prune_expired_device_tokens(before_ms)?;
         Ok((tickets, tokens))
     }
+
+    /// Prune expired bootstrap tickets and device tokens as of now. Thin
+    /// wrapper for opportunistic pruning at RPC chokepoints (no daemon task).
+    pub fn prune_now(&self) -> Result<(usize, usize), DeviceTokenError> {
+        self.prune_expired(current_timestamp_ms())
+    }
+
+    /// List paired remote Panel devices (active only).
+    ///
+    /// Excludes cluster nodes (`role = "node"`), which are enrolled and
+    /// deregistered through their own path (`cluster.rs`); only rows issued by
+    /// the bootstrap-ticket exchange (`device_type = "panel"`) are returned.
+    pub fn list_panel_devices(&self) -> Result<Vec<DeviceRow>, DeviceTokenError> {
+        Ok(self
+            .store
+            .list_devices()?
+            .into_iter()
+            .filter(|d| d.device_type.as_deref() == Some("panel"))
+            .collect())
+    }
+
+    /// Revoke one paired Panel device and all its tokens.
+    ///
+    /// Guarded to `device_type = "panel"` so a Panel-facing device-management
+    /// RPC can never revoke a cluster node. Returns `false` when the id is
+    /// unknown, already revoked, or not a Panel device.
+    pub fn revoke_panel_device(&self, device_id: &str) -> Result<bool, DeviceTokenError> {
+        let is_panel = self
+            .list_panel_devices()?
+            .iter()
+            .any(|d| d.device_id == device_id);
+        if !is_panel {
+            return Ok(false);
+        }
+        self.revoke_device(device_id)
+    }
+
+    /// Revoke every paired Panel device and its tokens. Used when the shared
+    /// Gateway token is rotated ("revoke all remotes"). Cluster nodes are left
+    /// untouched. Returns the number of devices revoked.
+    pub fn revoke_all_panel_devices(&self) -> Result<usize, DeviceTokenError> {
+        let mut revoked = 0;
+        for device in self.list_panel_devices()? {
+            if self.revoke_device(&device.device_id)? {
+                revoked += 1;
+            }
+        }
+        Ok(revoked)
+    }
 }
 
 /// Hash a device token for storage using SHA-256.
@@ -235,5 +285,73 @@ mod tests {
             .validate_device_token(&result.device_token)
             .unwrap()
             .is_none());
+    }
+
+    /// Seed a cluster node directly in the store (role=node), bypassing the
+    /// bootstrap-ticket flow which only ever mints `device_type = "panel"`.
+    fn seed_node(mgr: &DeviceTokenManager, device_id: &str) {
+        mgr.store
+            .upsert_device(&DeviceUpsertData {
+                device_id,
+                device_name: "a-node",
+                device_type: Some("node"),
+                public_key: b"",
+                fingerprint: device_id,
+                role: "node",
+                scopes: &["*".to_string()],
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn list_panel_devices_excludes_cluster_nodes() {
+        let mgr = manager();
+        let ticket = mgr.create_bootstrap_ticket(None).unwrap();
+        mgr.exchange_bootstrap_ticket(&ticket, Some("panel-1".to_string()), None, None)
+            .unwrap();
+        seed_node(&mgr, "node-1");
+
+        let panels = mgr.list_panel_devices().unwrap();
+        assert_eq!(panels.len(), 1);
+        assert_eq!(panels[0].device_id, "panel-1");
+    }
+
+    #[test]
+    fn revoke_panel_device_refuses_cluster_node() {
+        let mgr = manager();
+        seed_node(&mgr, "node-1");
+        // A node id is not a panel device: revoke is a no-op and leaves it active.
+        assert!(!mgr.revoke_panel_device("node-1").unwrap());
+        assert!(mgr
+            .store
+            .list_devices()
+            .unwrap()
+            .iter()
+            .any(|d| d.device_id == "node-1"));
+    }
+
+    #[test]
+    fn revoke_all_panel_devices_spares_nodes_and_kills_tokens() {
+        let mgr = manager();
+        let ticket = mgr.create_bootstrap_ticket(None).unwrap();
+        let paired = mgr
+            .exchange_bootstrap_ticket(&ticket, Some("panel-1".to_string()), None, None)
+            .unwrap();
+        seed_node(&mgr, "node-1");
+
+        let revoked = mgr.revoke_all_panel_devices().unwrap();
+        assert_eq!(revoked, 1);
+        // Panel device token no longer validates.
+        assert!(mgr
+            .validate_device_token(&paired.device_token)
+            .unwrap()
+            .is_none());
+        // Cluster node survives.
+        assert!(mgr
+            .store
+            .list_devices()
+            .unwrap()
+            .iter()
+            .any(|d| d.device_id == "node-1"));
     }
 }
