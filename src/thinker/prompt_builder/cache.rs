@@ -252,4 +252,56 @@ mod tests {
         assert!(!parts[1].content.contains("<strategy>"));
         assert!(!parts[0].content.contains("<strategy_reminder>"));
     }
+
+    #[test]
+    fn cached_full_prompt_injects_soul_and_agents_identity_files() {
+        // Regression guard (feature 1.3, identity wiring): SOUL.md (persona,
+        // SoulLayer @50) and AGENTS.md (project context, ProfileLayer @75) are
+        // user-editable identity files that `IdentityFilesLayer` defers to
+        // those two layers (`HANDLED_ELSEWHERE`). If SoulLayer / ProfileLayer
+        // omit `AssemblyPath::Cached`, both files vanish from every main-loop
+        // prompt — the live path is `build_system_prompt_cached_with_mode` —
+        // even though `self_config` / `identity.*` write them correctly. This
+        // locks both into the cacheable stable prefix (same class of fix the
+        // Role / Citation layers already carry).
+        use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
+
+        let files = IdentityFiles {
+            identity_dir: std::path::PathBuf::from("/tmp/test-agent"),
+            files: vec![
+                IdentityFile {
+                    name: "SOUL.md",
+                    content: Some("You are Aleph, a calm and precise assistant.".to_string()),
+                    truncated: false,
+                    original_size: 44,
+                },
+                IdentityFile {
+                    name: "AGENTS.md",
+                    content: Some("This project uses Rust and tokio.".to_string()),
+                    truncated: false,
+                    original_size: 33,
+                },
+            ],
+        };
+        let builder = PromptBuilder::new(PromptConfig::default()).with_identity_files(files);
+        let parts = builder.build_system_prompt_cached_with_mode(&[], PromptMode::Full);
+
+        // Both layers are Stable → they ride part 0 (the cacheable prefix).
+        assert!(
+            parts[0].content.contains("# Soul"),
+            "cached Full prompt must carry the SOUL.md persona header"
+        );
+        assert!(
+            parts[0].content.contains("calm and precise assistant"),
+            "cached Full prompt must carry SOUL.md content"
+        );
+        assert!(
+            parts[0].content.contains("## Project Context"),
+            "cached Full prompt must carry the AGENTS.md project context header"
+        );
+        assert!(
+            parts[0].content.contains("Rust and tokio"),
+            "cached Full prompt must carry AGENTS.md content"
+        );
+    }
 }

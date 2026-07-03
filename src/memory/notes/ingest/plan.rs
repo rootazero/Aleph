@@ -1,7 +1,16 @@
 //! Data model for the compound-ingest plan and its outputs.
 
+use crate::memory::notes::note::types::Severity;
 use crate::memory::notes::note::Relation;
 use serde::{Deserialize, Serialize};
+
+/// Back-compat default for `PageOp::Create.confidence`: plans emitted before the
+/// planner learned to rate its output carry no `confidence`, and must keep
+/// admitting at the governance gate exactly as they did before the field
+/// existed. Mirrors `KnowledgeNote::default().confidence` (1.0).
+fn default_confidence() -> f32 {
+    1.0
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestPlan {
@@ -34,6 +43,16 @@ pub enum PageOp {
         /// LLM-attributed; empty means the apply layer falls back to the batch set.
         #[serde(default)]
         source_ids: Vec<String>,
+        /// LLM self-assessed confidence in this page's facts, in `[0,1]`. The
+        /// governance gate defers creations below `min_confidence`. Plans emitted
+        /// before this field existed default to `1.0` (see `default_confidence`)
+        /// so they admit exactly as before — no ingest regression.
+        #[serde(default = "default_confidence")]
+        confidence: f32,
+        /// LLM-judged importance. `High`/`Critical` pages must clear a higher
+        /// confidence bar at the gate. Defaults to `Low` for older plans.
+        #[serde(default)]
+        severity: Severity,
     },
     Append {
         note_path: String,
@@ -144,6 +163,8 @@ mod tests {
                 tags: vec!["rust".into()],
                 relations: vec![],
                 source_ids: vec![],
+                confidence: 0.9,
+                severity: Severity::Med,
             },
             PageOp::Append {
                 note_path: "learning/rust-async".into(),
@@ -197,6 +218,8 @@ mod tests {
             tags: vec![],
             relations: vec![],
             source_ids: vec![],
+            confidence: 1.0,
+            severity: Severity::Low,
         };
         assert_eq!(p.primary_path(), "a/b");
 
@@ -267,6 +290,8 @@ mod tests {
             tags: vec![],
             relations: vec![],
             source_ids: vec!["raw-uuid-1".into(), "raw-uuid-2".into()],
+            confidence: 1.0,
+            severity: Severity::Low,
         };
         let j = serde_json::to_string(&op).unwrap();
         let back: PageOp = serde_json::from_str(&j).unwrap();
@@ -277,11 +302,22 @@ mod tests {
             _ => panic!("expected create"),
         }
 
-        // Old JSON WITHOUT source_ids still parses (serde default = empty).
+        // Old JSON WITHOUT source_ids / confidence / severity still parses, and
+        // the gate-facing fields default to the pre-field behaviour (1.0 / Low)
+        // so a plan emitted before the planner rated its output admits unchanged.
         let legacy = r#"{"kind":"create","note_path":"a/b","title":"T","summary":"","facts":[],"links":[],"tags":[]}"#;
         let op2: PageOp = serde_json::from_str(legacy).unwrap();
         match op2 {
-            PageOp::Create { source_ids, .. } => assert!(source_ids.is_empty()),
+            PageOp::Create {
+                source_ids,
+                confidence,
+                severity,
+                ..
+            } => {
+                assert!(source_ids.is_empty());
+                assert_eq!(confidence, 1.0);
+                assert_eq!(severity, Severity::Low);
+            }
             _ => panic!("expected create"),
         }
 

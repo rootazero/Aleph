@@ -8,7 +8,6 @@ use super::PromptBuilder;
 use crate::thinker::context::{DisableReason, DisabledTool, EnvironmentContract};
 use crate::thinker::interaction::Capability;
 use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
-use crate::thinker::soul::SoulManifest;
 
 impl PromptBuilder {
     // ========== Shared prompt section builders ==========
@@ -247,97 +246,6 @@ impl PromptBuilder {
                 language_name
             ));
         }
-    }
-
-    // ========== Soul/Identity Section Builders ==========
-
-    /// Append soul/identity section at the very top of the prompt
-    ///
-    /// This section has the highest priority and defines core personality.
-    /// All soul fields are sanitized at Moderate level since they come from
-    /// user-editable files.
-    pub fn append_soul_section(&self, prompt: &mut String, soul: &SoulManifest) {
-        if soul.is_empty() {
-            return;
-        }
-
-        prompt.push_str("# Identity\n\n");
-
-        // Core identity statement
-        if !soul.identity.is_empty() {
-            let identity = sanitize_for_prompt(&soul.identity, SanitizeLevel::Moderate);
-            let identity = sanitize_for_prompt(&identity, SanitizeLevel::Light);
-            prompt.push_str(&identity);
-            prompt.push_str("\n\n");
-        }
-
-        // Communication style
-        if !soul.voice.tone.is_empty() {
-            let tone = sanitize_for_prompt(&soul.voice.tone, SanitizeLevel::Moderate);
-            let tone = sanitize_for_prompt(&tone, SanitizeLevel::Light);
-            prompt.push_str("## Communication Style\n\n");
-            prompt.push_str(&format!("- **Tone**: {tone}\n"));
-            prompt.push_str(&format!("- **Verbosity**: {:?}\n", soul.voice.verbosity));
-            prompt.push_str(&format!(
-                "- **Formatting**: {:?}\n",
-                soul.voice.formatting_style
-            ));
-            if let Some(ref notes) = soul.voice.language_notes {
-                let notes = sanitize_for_prompt(notes, SanitizeLevel::Moderate);
-                let notes = sanitize_for_prompt(&notes, SanitizeLevel::Light);
-                prompt.push_str(&format!("- **Language Notes**: {notes}\n"));
-            }
-            prompt.push('\n');
-        }
-
-        // Relationship mode
-        prompt.push_str("## Relationship with User\n\n");
-        prompt.push_str(soul.relationship.description());
-        prompt.push_str("\n\n");
-
-        // Expertise domains
-        if !soul.expertise.is_empty() {
-            prompt.push_str("## Areas of Expertise\n\n");
-            for domain in &soul.expertise {
-                let domain = sanitize_for_prompt(domain, SanitizeLevel::Moderate);
-                let domain = sanitize_for_prompt(&domain, SanitizeLevel::Light);
-                prompt.push_str(&format!("- {domain}\n"));
-            }
-            prompt.push('\n');
-        }
-
-        // Behavioral directives
-        if !soul.directives.is_empty() {
-            prompt.push_str("## Behavioral Directives\n\n");
-            for directive in &soul.directives {
-                let directive = sanitize_for_prompt(directive, SanitizeLevel::Moderate);
-                let directive = sanitize_for_prompt(&directive, SanitizeLevel::Light);
-                prompt.push_str(&format!("- {directive}\n"));
-            }
-            prompt.push('\n');
-        }
-
-        // Anti-patterns
-        if !soul.anti_patterns.is_empty() {
-            prompt.push_str("## What I Never Do\n\n");
-            for anti in &soul.anti_patterns {
-                let anti = sanitize_for_prompt(anti, SanitizeLevel::Moderate);
-                let anti = sanitize_for_prompt(&anti, SanitizeLevel::Light);
-                prompt.push_str(&format!("- {anti}\n"));
-            }
-            prompt.push('\n');
-        }
-
-        // Custom addendum
-        if let Some(ref addendum) = soul.addendum {
-            let addendum = sanitize_for_prompt(addendum, SanitizeLevel::Moderate);
-            let addendum = sanitize_for_prompt(&addendum, SanitizeLevel::Light);
-            prompt.push_str("## Additional Context\n\n");
-            prompt.push_str(&addendum);
-            prompt.push_str("\n\n");
-        }
-
-        prompt.push_str("---\n\n");
     }
 
     // ========== Environment Contract & Security Section Builders ==========

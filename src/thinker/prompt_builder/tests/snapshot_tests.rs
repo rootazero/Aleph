@@ -33,28 +33,6 @@ fn capture_snapshot_basic_path_without_soul() {
     );
 }
 
-#[test]
-fn capture_snapshot_soul_path_with_soul() {
-    use crate::thinker::soul::SoulManifest;
-
-    let soul = SoulManifest {
-        identity: "I am Aleph.".to_string(),
-        ..Default::default()
-    };
-    let builder = PromptBuilder::new(PromptConfig::default()).with_soul(soul);
-    let snapshot = builder.capture_snapshot(&[]);
-
-    assert_eq!(
-        snapshot.path,
-        AssemblyPath::Soul,
-        "path should be Soul when soul is attached"
-    );
-    assert!(
-        !snapshot.stable_prefix.is_empty(),
-        "stable_prefix should be non-empty with soul"
-    );
-}
-
 // ---------- build_from_snapshot ----------
 
 #[test]

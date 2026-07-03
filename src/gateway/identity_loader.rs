@@ -15,8 +15,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::thinker::soul::SoulManifest;
-
 /// Cached file entry with content and modification time.
 pub(crate) struct CachedFile {
     content: String,
@@ -68,17 +66,6 @@ impl IdentityFileLoader {
             },
         );
         Some(content)
-    }
-
-    /// Load and parse `SOUL.md` via `SoulManifest::from_file`.
-    ///
-    /// Returns `None` if the file does not exist or fails to parse.
-    pub fn load_soul(&mut self, identity_dir: &Path) -> Option<SoulManifest> {
-        let path = identity_dir.join("SOUL.md");
-        if !path.exists() {
-            return None;
-        }
-        SoulManifest::from_file(&path).ok()
     }
 
     /// Load `AGENTS.md` from the agent identity directory.
@@ -145,39 +132,5 @@ mod tests {
     fn test_default_creates_empty_loader() {
         let loader = IdentityFileLoader::default();
         assert!(loader.cache.is_empty());
-    }
-
-    #[test]
-    fn test_load_soul() {
-        let tmp = TempDir::new().unwrap();
-        let identity_dir = tmp.path();
-
-        // Write a SOUL.md with YAML frontmatter
-        let soul_content = r#"---
-identity: "I am a test soul"
-relationship: peer
-voice:
-  tone: casual
----
-
-## Directives
-
-- Be helpful
-"#;
-        fs::write(identity_dir.join("SOUL.md"), soul_content).unwrap();
-
-        let mut loader = IdentityFileLoader::new();
-        let result = loader.load_soul(identity_dir);
-
-        // SoulManifest::from_file should succeed with valid frontmatter
-        // If it doesn't, that's also OK — we just test the method exists and runs
-        match result {
-            Some(manifest) => {
-                assert_eq!(manifest.identity, "I am a test soul");
-            }
-            None => {
-                // from_file may fail with test content — that's acceptable
-            }
-        }
     }
 }

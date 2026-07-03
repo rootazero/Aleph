@@ -2,17 +2,6 @@
 
 use super::identity_files::sanitize_identity_content;
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
-use crate::thinker::prompt_mode::PromptMode;
-use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
-
-/// The Moderate→Light double sanitize pass applied to every
-/// `SoulManifest`-derived field before injection. Factored out of the ~7
-/// identical inline call sites; behavior is byte-identical to the pairs it
-/// replaces.
-fn soul_sanitize(s: &str) -> String {
-    let moderate = sanitize_for_prompt(s, SanitizeLevel::Moderate);
-    sanitize_for_prompt(&moderate, SanitizeLevel::Light)
-}
 
 pub struct SoulLayer;
 
@@ -24,111 +13,32 @@ impl PromptLayer for SoulLayer {
         50
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[AssemblyPath::Soul]
+        // `Cached` is the live main-loop path
+        // (`build_system_prompt_cached_with_mode`). Without it, SOUL.md — which
+        // `IdentityFilesLayer` defers here via `HANDLED_ELSEWHERE` — would
+        // vanish from every production prompt (same class of bug the Role /
+        // Citation layers were fixed for). `Soul` is kept for the legacy
+        // soul-path builders still exercised by tests.
+        &[AssemblyPath::Soul, AssemblyPath::Cached]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
-        // Priority 1: workspace SOUL.md. This file crosses the same
+        // The live identity-injection source is the agent-dir SOUL.md file,
+        // rendered raw under a `# Soul` header. It crosses the same
         // user-editable trust boundary as the other identity files, so it gets
         // the same injection-pattern + invisible-Unicode scan that
         // `IdentityFilesLayer` applies to IDENTITY.md / TOOLS.md / HEARTBEAT.md.
         // SOUL.md is deliberately excluded from that layer (rendered here
-        // instead), so without this it was the one identity file injected raw —
-        // this closes the bypass while staying byte-identical for clean content.
+        // instead) — this closes the bypass while staying byte-identical for
+        // clean content. The legacy `SoulManifest`→prompt path was dissolved in
+        // favor of this single file-based source of truth; the `identity.*`
+        // RPC / CLI now read/write SOUL.md directly. See
+        // `src/gateway/handlers/identity.rs`.
         if let Some(soul_content) = input.identity_file("SOUL.md") {
             let safe = sanitize_identity_content("SOUL.md", soul_content);
             output.push_str("# Soul\n\n");
             output.push_str(&safe);
             output.push_str("\n\n---\n\n");
-            return;
         }
-
-        // Priority 2: SoulManifest (legacy fallback)
-        let soul = match input.soul {
-            Some(s) => s,
-            None => return,
-        };
-
-        if soul.is_empty() {
-            return;
-        }
-
-        output.push_str("# Identity\n\n");
-
-        // Core identity statement
-        if !soul.identity.is_empty() {
-            output.push_str(&soul_sanitize(&soul.identity));
-            output.push_str("\n\n");
-        }
-
-        // In Minimal mode, only emit identity line
-        if input.mode == PromptMode::Minimal {
-            return;
-        }
-
-        // Communication style. Rendered for any non-empty soul (we are past
-        // the `is_empty` guard): verbosity and formatting always carry an
-        // actionable behavioral hint, so they must emit even when no explicit
-        // tone is set. The tone line is conditional on a tone being present.
-        output.push_str("## Communication Style\n\n");
-        if !soul.voice.tone.is_empty() {
-            output.push_str(&format!(
-                "- **Tone**: {}\n",
-                soul_sanitize(&soul.voice.tone)
-            ));
-        }
-        output.push_str(&format!(
-            "- **Verbosity**: {}\n",
-            soul.voice.verbosity.prompt_hint()
-        ));
-        output.push_str(&format!(
-            "- **Formatting**: {}\n",
-            soul.voice.formatting_style.prompt_hint()
-        ));
-        if let Some(ref notes) = soul.voice.language_notes {
-            output.push_str(&format!("- **Language Notes**: {}\n", soul_sanitize(notes)));
-        }
-        output.push('\n');
-
-        // Relationship mode
-        output.push_str("## Relationship with User\n\n");
-        output.push_str(soul.relationship.description());
-        output.push_str("\n\n");
-
-        // Expertise domains
-        if !soul.expertise.is_empty() {
-            output.push_str("## Areas of Expertise\n\n");
-            for domain in &soul.expertise {
-                output.push_str(&format!("- {}\n", soul_sanitize(domain)));
-            }
-            output.push('\n');
-        }
-
-        // Behavioral directives
-        if !soul.directives.is_empty() {
-            output.push_str("## Behavioral Directives\n\n");
-            for directive in &soul.directives {
-                output.push_str(&format!("- {}\n", soul_sanitize(directive)));
-            }
-            output.push('\n');
-        }
-
-        // Anti-patterns
-        if !soul.anti_patterns.is_empty() {
-            output.push_str("## What I Never Do\n\n");
-            for anti in &soul.anti_patterns {
-                output.push_str(&format!("- {}\n", soul_sanitize(anti)));
-            }
-            output.push('\n');
-        }
-
-        // Custom addendum
-        if let Some(ref addendum) = soul.addendum {
-            output.push_str("## Additional Context\n\n");
-            output.push_str(&soul_sanitize(addendum));
-            output.push_str("\n\n");
-        }
-
-        output.push_str("---\n\n");
     }
 }
 
@@ -137,86 +47,14 @@ mod tests {
     use super::*;
     use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
     use crate::thinker::prompt_builder::PromptConfig;
-    use crate::thinker::prompt_mode::PromptMode;
-    use crate::thinker::soul::{SoulManifest, SoulVoice, Verbosity};
     use std::path::PathBuf;
-
-    #[test]
-    fn test_soul_basic() {
-        let layer = SoulLayer;
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let soul = SoulManifest {
-            identity: "I am Aleph.".to_string(),
-            voice: SoulVoice {
-                tone: "friendly".to_string(),
-                verbosity: Verbosity::Balanced,
-                ..Default::default()
-            },
-            directives: vec!["Be helpful".to_string()],
-            anti_patterns: vec!["Never lie".to_string()],
-            ..Default::default()
-        };
-        let input = LayerInput::soul(&config, &tools, &soul);
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-
-        assert!(out.contains("# Identity"));
-        assert!(out.contains("I am Aleph."));
-        assert!(out.contains("Communication Style"));
-        assert!(out.contains("friendly"));
-        assert!(out.contains("Behavioral Directives"));
-        assert!(out.contains("Be helpful"));
-        assert!(out.contains("What I Never Do"));
-        assert!(out.contains("Never lie"));
-        assert!(out.contains("---"));
-    }
-
-    #[test]
-    fn renders_verbosity_hint_without_tone() {
-        // A soul with no tone but an explicit identity must still emit the
-        // Communication Style block with human-readable verbosity/formatting
-        // hints (regression: previously gated behind a non-empty tone).
-        let layer = SoulLayer;
-        let config = PromptConfig::default();
-        let soul = SoulManifest {
-            identity: "I am Aleph.".to_string(),
-            voice: SoulVoice {
-                verbosity: Verbosity::Concise,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let input = LayerInput::soul(&config, &[], &soul);
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-
-        assert!(out.contains("Communication Style"));
-        assert!(out.contains("brief"), "verbosity hint should render");
-        // No leaked enum debug names in the prompt.
-        assert!(!out.contains("Concise"));
-        assert!(!out.contains("Verbosity::"));
-    }
-
-    #[test]
-    fn test_soul_empty() {
-        let layer = SoulLayer;
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let soul = SoulManifest::default();
-        let input = LayerInput::soul(&config, &tools, &soul);
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-
-        assert!(out.is_empty());
-    }
 
     #[test]
     fn test_soul_none() {
         let layer = SoulLayer;
         let config = PromptConfig::default();
         let tools = vec![];
-        let input = LayerInput::basic(&config, &tools); // no soul
+        let input = LayerInput::basic(&config, &tools); // no identity files
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
@@ -226,54 +64,17 @@ mod tests {
     #[test]
     fn test_soul_paths() {
         let paths = SoulLayer.paths();
-        assert_eq!(paths.len(), 1);
+        assert_eq!(paths.len(), 2);
         assert!(paths.contains(&AssemblyPath::Soul));
+        // Must ride the live main-loop path so SOUL.md actually reaches the
+        // production prompt.
+        assert!(paths.contains(&AssemblyPath::Cached));
     }
 
     #[test]
-    fn soul_layer_minimal_mode_identity_only() {
+    fn renders_workspace_soul_file() {
         let layer = SoulLayer;
         let config = PromptConfig::default();
-        let soul = SoulManifest {
-            identity: "I am Aleph.".to_string(),
-            voice: SoulVoice {
-                tone: "Warm and professional".to_string(),
-                ..Default::default()
-            },
-            directives: vec!["Always help.".to_string()],
-            ..Default::default()
-        };
-        let input = LayerInput::soul(&config, &[], &soul).with_mode(PromptMode::Minimal);
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-
-        // Should contain identity
-        assert!(out.contains("I am Aleph"), "Should contain identity");
-        // Should NOT contain communication style or directives
-        assert!(
-            !out.contains("Communication Style"),
-            "Should not contain style in Minimal"
-        );
-        assert!(
-            !out.contains("Always help"),
-            "Should not contain directives in Minimal"
-        );
-    }
-
-    #[test]
-    fn prefers_workspace_soul_over_manifest() {
-        let layer = SoulLayer;
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let soul = SoulManifest {
-            identity: "I am Aleph.".to_string(),
-            voice: SoulVoice {
-                tone: "friendly".to_string(),
-                verbosity: Verbosity::Balanced,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
         let workspace = IdentityFiles {
             identity_dir: PathBuf::from("/tmp/test"),
             files: vec![IdentityFile {
@@ -283,62 +84,14 @@ mod tests {
                 original_size: 37,
             }],
         };
-        let input = LayerInput::soul(&config, &tools, &soul).with_identity_files(&workspace);
+        let input = LayerInput::basic(&config, &[]).with_identity_files(&workspace);
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
-        // Workspace SOUL.md should be used
         assert!(out.contains("# Soul"), "Should have Soul header");
         assert!(
             out.contains("custom soul from workspace"),
             "Should contain workspace SOUL.md content"
-        );
-        // SoulManifest should NOT be used
-        assert!(
-            !out.contains("# Identity"),
-            "Should not contain manifest Identity header"
-        );
-        assert!(
-            !out.contains("I am Aleph"),
-            "Should not contain manifest identity"
-        );
-    }
-
-    #[test]
-    fn falls_back_to_manifest_when_no_workspace_soul() {
-        let layer = SoulLayer;
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let soul = SoulManifest {
-            identity: "I am Aleph.".to_string(),
-            voice: SoulVoice {
-                tone: "friendly".to_string(),
-                verbosity: Verbosity::Balanced,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        // Workspace with no SOUL.md
-        let workspace = IdentityFiles {
-            identity_dir: PathBuf::from("/tmp/test"),
-            files: vec![],
-        };
-        let input = LayerInput::soul(&config, &tools, &soul).with_identity_files(&workspace);
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-
-        // SoulManifest fallback should be used
-        assert!(
-            out.contains("# Identity"),
-            "Should contain manifest Identity header"
-        );
-        assert!(
-            out.contains("I am Aleph"),
-            "Should contain manifest identity"
-        );
-        assert!(
-            !out.contains("# Soul"),
-            "Should not contain workspace Soul header"
         );
     }
 

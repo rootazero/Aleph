@@ -881,17 +881,42 @@ pub enum TraceAction {
 
 #[derive(Subcommand)]
 pub enum IdentityAction {
-    /// Get current identity/soul
-    Get,
-    /// Set identity from JSON manifest
-    Set {
-        /// Soul manifest as JSON string
-        manifest: String,
+    /// Show the live identity (SOUL.md) and identity-file status
+    Get {
+        /// Target agent id (defaults to the daemon's default agent)
+        #[arg(long)]
+        agent: Option<String>,
     },
-    /// Clear session identity override
-    Clear,
-    /// List identity sources
-    List,
+    /// Write an identity file (SOUL.md by default) from inline content or a
+    /// file. Takes effect on the next turn.
+    Set {
+        /// Markdown content to write (omit when using --file)
+        content: Option<String>,
+        /// Read content from this file instead of the inline argument
+        #[arg(long, value_name = "PATH")]
+        file: Option<String>,
+        /// Which identity file to write (default: SOUL.md)
+        #[arg(long = "file-name", value_name = "NAME")]
+        file_name: Option<String>,
+        /// Target agent id (defaults to the daemon's default agent)
+        #[arg(long)]
+        agent: Option<String>,
+    },
+    /// Remove a custom identity file (SOUL.md by default), reverting to default
+    Clear {
+        /// Which identity file to clear (default: SOUL.md)
+        #[arg(long = "file-name", value_name = "NAME")]
+        file_name: Option<String>,
+        /// Target agent id (defaults to the daemon's default agent)
+        #[arg(long)]
+        agent: Option<String>,
+    },
+    /// List identity files (exists / size / path)
+    List {
+        /// Target agent id (defaults to the daemon's default agent)
+        #[arg(long)]
+        agent: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

@@ -200,6 +200,48 @@ impl LoopRegistry {
         }
     }
 
+    /// Atomically commit a tool-side field update (caps / prompt / cadence /
+    /// `next_wake`) to an Active loop under ONE lock guard, so it can never
+    /// clobber the `pending_tick_wake_ms` a concurrent `confirm_fire` /
+    /// `rearm_after_busy` mutated between the tool's read and this write.
+    ///
+    /// The `loop` tool computes `next` from a `get` snapshot that may be stale
+    /// by the time it writes back — during a user turn the loop's next tick is
+    /// sleeping with a pending marker, and if that tick fires (or re-arms after
+    /// an AgentBusy) in the tool's read→write gap, a plain `put` would restore
+    /// the tool's stale pending and strand the loop: a resurrected past marker
+    /// blocks the next `try_claim_tick` until the 60s stale grace elapses. This
+    /// method re-reads the LIVE pending here and keeps it, so the tick pipeline
+    /// stays the single owner of that field (the documented invariant: never
+    /// `put` a hand-carried pending). `reschedule` = the update re-paced or
+    /// re-targeted the loop, so the in-flight tick is superseded — clear the
+    /// marker (its `confirm_fire` then mismatches and skips) and this run's
+    /// completion re-claims a fresh tick from the updated state.
+    ///
+    /// `iterations_used` and every other field are taken from `next`: they are
+    /// not concurrently mutated during a user turn (the counter only bumps in
+    /// `try_claim_tick`, which the completion hook runs AFTER the turn, never
+    /// interleaved with an in-turn tool call). Returns `false` — a no-op — if
+    /// the loop vanished or was stopped since the tool's read (a concurrent
+    /// stop won the race); the caller reports that honestly.
+    #[must_use]
+    pub fn commit_field_update(&self, next: LoopState, reschedule: bool) -> bool {
+        let mut map = self.lock();
+        match map.get(&next.session_id) {
+            Some(live) if live.is_active() => {
+                let pending = if reschedule {
+                    None
+                } else {
+                    live.pending_tick_wake_ms
+                };
+                let session = next.session_id.clone();
+                map.insert(session, next.with_pending_tick(pending));
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Fire-time gate for a woken tick: proceed only if the loop is still
     /// Active and this tick is still the one on the books (`wake_ms` matches
     /// the pending marker), clearing the marker in the same lock guard. A
@@ -396,6 +438,55 @@ mod tests {
         let s = reg.get("late").unwrap();
         assert!(!s.is_active());
         assert!(s.stop_reason.as_deref().unwrap_or("").contains("time"));
+    }
+
+    #[test]
+    fn commit_field_update_preserves_live_pending_not_stale() {
+        // The race the atomic commit exists to close: the tool read a snapshot
+        // carrying pending=100, computed a cap change, but a tick fired+re-armed
+        // meanwhile so the LIVE pending is now 200. A plain put would restore
+        // the stale 100 and stall the loop; commit must keep the live 200.
+        let reg = LoopRegistry::default();
+        reg.put(st("a").with_pending_tick(Some(100)));
+        let stale_next = st("a")
+            .with_max_iterations(Some(9))
+            .with_pending_tick(Some(100));
+        // Simulate the concurrent tick pipeline moving pending to 200.
+        reg.put(reg.get("a").unwrap().with_pending_tick(Some(200)));
+        assert!(reg.commit_field_update(stale_next, false), "active → commits");
+        let s = reg.get("a").unwrap();
+        assert_eq!(s.max_iterations, Some(9), "cap change applied");
+        assert_eq!(
+            s.pending_tick_wake_ms,
+            Some(200),
+            "live pending preserved, stale clobber avoided"
+        );
+    }
+
+    #[test]
+    fn commit_field_update_reschedule_clears_pending() {
+        // A re-pace / re-target supersedes the in-flight tick: pending cleared
+        // regardless of what the live marker was, so confirm_fire mismatches.
+        let reg = LoopRegistry::default();
+        reg.put(st("a").with_pending_tick(Some(200)));
+        let next = st("a").with_cadence(Cadence::Fixed {
+            interval_ms: 120_000,
+        });
+        assert!(reg.commit_field_update(next, true));
+        assert!(reg.get("a").unwrap().pending_tick_wake_ms.is_none());
+    }
+
+    #[test]
+    fn commit_field_update_refuses_stopped_or_missing_loop() {
+        // Lost the race to a concurrent stop / cap-exhaustion → no-op false,
+        // so the tool reports the update did not land instead of lying.
+        let reg = LoopRegistry::default();
+        reg.put(st("a").with_status(LoopStatus::Stopped));
+        assert!(!reg.commit_field_update(st("a").with_max_iterations(Some(5)), false));
+        assert!(
+            !reg.commit_field_update(st("gone").with_max_iterations(Some(5)), false),
+            "no loop for this session → false"
+        );
     }
 
     #[test]

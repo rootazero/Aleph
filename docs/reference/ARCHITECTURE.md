@@ -707,19 +707,30 @@ The prompt system lives entirely in `src/thinker/`. The sole public entry point 
 ### PromptBuilder
 
 ```rust
-// Standard usage
-let builder = PromptBuilder::new(config);
+// Standard usage — identity is a single file-based source of truth:
+// agent-dir SOUL.md (persona), AGENTS.md (project context), etc. ride in via
+// `with_identity_files`; `SoulLayer` / `ProfileLayer` render them.
+let builder = PromptBuilder::new(config).with_identity_files(identity_files);
 let prompt = builder.build_system_prompt(&tools);
 
-// With soul identity
-let prompt = builder.build_system_prompt_with_soul(&tools, &soul, profile);
+// Production main-loop entry point — two-part split (cacheable stable prefix +
+// per-request dynamic suffix) on `AssemblyPath::Cached`. This is what the
+// harness bridge calls.
+let parts = builder.build_system_prompt_cached_with_mode(&tools, mode);
 
-// Sub-agent usage (replaces old prompt_sections::resolve())
-let prompt = builder.build_for_agent(&agent_def, &tools, &soul);
+// Sub-agent usage
+let prompt = builder.build_for_agent_basic(&agent_def, &tools);
 
-// Mode + budget control
-let result = builder.build_with_budget(&tools, &soul, profile, PromptMode::Compact, &budget);
+// Context-aware (channel paradigm + security envelope)
+let prompt = builder.build_system_prompt_with_context(&resolved_context);
 ```
+
+> The legacy `SoulManifest`→prompt builders (`build_system_prompt_with_soul` /
+> `build_for_agent` / `build_with_budget` / `build_system_prompt_with_mode` /
+> `build_system_prompt_with_full_context`) were removed together with the dead
+> System-B identity injection. Identity now flows exclusively from the
+> agent-dir files threaded via `with_identity_files`; the `SoulManifest` struct
+> survives only as the parser behind the `identity.get` RPC.
 
 ### 29 Layers (sorted by priority)
 
@@ -727,7 +738,7 @@ let result = builder.build_with_budget(&tools, &soul, profile, PromptMode::Compa
 
 | Priority | Layer | Notes |
 |----------|-------|-------|
-| 50 | `SoulLayer` | Identity / personality |
+| 50 | `SoulLayer` | Renders agent-dir SOUL.md (identity / personality); participates in the live `Cached` main-loop path |
 | 55 | `AgentRoleLayer` | Sub-agent role header + protocol blocks (NEW) |
 | 75 | `ProfileLayer` | Workspace profile overlay |
 | 100 | `RoleLayer` | Base assistant role |

@@ -3,14 +3,14 @@
 
 use alephcore::agent_loop::ToolInfo;
 // TODO: removed — types deleted: Observation, StructuredThinking, ThinkingParser
-use alephcore::thinker::identity::IdentityResolver;
+// `IdentityResolver` (System B) dissolved — identity is now the single
+// file-based source of truth; see `src/gateway/handlers/identity.rs`.
 use alephcore::thinker::prompt_builder::SystemPromptPart;
 use alephcore::thinker::soul::SoulManifest;
 use alephcore::thinker::{
     InteractionManifest, PromptBuilder, PromptConfig, ResolvedContext, SecurityContext,
 };
 // TODO: removed — types deleted: Message, MessageRole
-use std::path::PathBuf;
 
 /// Thinker test context
 /// Stores state for PromptBuilder BDD scenarios
@@ -52,12 +52,8 @@ pub struct ThinkerContext {
     // ═══ Embodiment Engine ═══
     /// Soul manifest for testing
     pub soul: Option<SoulManifest>,
-    /// Global soul for fallback (used when clearing session override)
-    pub global_soul: Option<SoulManifest>,
     /// Soul file content for parsing tests
     pub soul_content: Option<String>,
-    /// Identity resolver
-    pub identity_resolver: Option<IdentityResolver>,
 
     // ═══ CoT Transparency ═══
     /// Reasoning text for parsing
@@ -201,20 +197,6 @@ impl ThinkerContext {
                 Err(e) => panic!("Failed to parse soul content: {}", e),
             }
         }
-    }
-
-    /// Build system prompt with soul
-    pub fn build_system_prompt_with_soul(&mut self) {
-        if let Some(builder) = &self.builder {
-            let soul = self.soul.clone().unwrap_or_default();
-            self.system_prompt =
-                Some(builder.build_system_prompt_with_soul(&self.tools, &soul, None));
-        }
-    }
-
-    /// Initialize identity resolver with temp global path
-    pub fn init_identity_resolver(&mut self) {
-        self.identity_resolver = Some(IdentityResolver::new(PathBuf::from("/nonexistent")));
     }
 
     // ═══ CoT Transparency Helpers ═══

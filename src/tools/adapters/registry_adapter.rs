@@ -125,16 +125,17 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
 pub(crate) const CONFIRMATION_REQUIRED_TOOLS: &[&str] =
     &["vault_store", "agent_delete", "team_disband"];
 
-/// Extract the bounded target path for a path-bearing file mutator
-/// (`file_write` / `file_edit` / `apply_patch`). Returns `None` for any other
-/// tool (including read-only `file_read`, which is in [`READ_ONLY_TOOLS`] and
-/// keeps the `Shared` claim). Used by [`RegistryToolAdapter::concurrency_claim`]
-/// to give these mutators a same-path-serializing scope so writes to different
-/// files parallelize while writes to the same file serialize.
+/// Extract the bounded target path for a single-path file mutator
+/// (`file_write` / `file_edit`). Returns `None` for any other tool (including
+/// read-only `file_read`, which is in [`READ_ONLY_TOOLS`] and keeps the
+/// `Shared` claim, and multi-file `apply_patch`, whose footprint is parsed
+/// from its patch body by [`apply_patch_claim`]). Used by
+/// [`RegistryToolAdapter::concurrency_claim`] to give these mutators a
+/// same-path-serializing scope so writes to different files parallelize while
+/// writes to the same file serialize.
 fn bounded_file_writer_path(name: &str, input: &Value) -> Option<String> {
     let candidates: &[&str] = match name {
         "file_write" | "file_edit" => &["file_path", "path"],
-        "apply_patch" => &["path"],
         _ => return None,
     };
     candidates
@@ -169,6 +170,28 @@ fn file_ops_claim(input: &Value) -> crate::tools::concurrency::ConcurrencyClaim 
     }
 }
 
+/// Resolve the [`crate::tools::concurrency::ConcurrencyClaim`] for an
+/// `apply_patch` call from the files its V4A envelope will touch.
+///
+/// `apply_patch` is the only multi-file mutator: it carries a whole patch body
+/// and *no* single path argument, so its blast radius is parsed from the
+/// envelope (every Add/Delete/Update target + any `*** Move to:` destination)
+/// via [`patch_target_paths`](crate::builtin_tools::file_ops::patch_target_paths)
+/// — the same parser the executor runs, so the scheduled footprint cannot drift
+/// from the files actually mutated. Binding to that set lets disjoint patches
+/// parallelize while patches sharing a file serialize.
+///
+/// `ConcurrencyClaim::paths` degrades to whole-world exclusive when the patch
+/// names no extractable path (missing `patch` field, empty, or unparseable), so
+/// a malformed patch serializes against everything rather than racing.
+fn apply_patch_claim(input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+    use crate::tools::concurrency::ConcurrencyClaim;
+    let Some(patch) = input.get("patch").and_then(Value::as_str) else {
+        return ConcurrencyClaim::global();
+    };
+    ConcurrencyClaim::paths(crate::builtin_tools::file_ops::patch_target_paths(patch))
+}
+
 #[async_trait]
 impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
     fn name(&self) -> &str {
@@ -201,9 +224,16 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
         if name == "file_ops" {
             return file_ops_claim(input);
         }
-        // `file_write` / `file_edit` / `apply_patch` mutate exactly their target
-        // path. Bind them to that concrete path so two writes to the same file
-        // serialize while writes to different files parallelize.
+        // `apply_patch` carries a multi-file V4A envelope and no single path
+        // field; its blast radius is every file the patch body touches, parsed
+        // from the envelope. Bind to that set so disjoint patches parallelize
+        // while patches sharing a file serialize.
+        if name == "apply_patch" {
+            return apply_patch_claim(input);
+        }
+        // `file_write` / `file_edit` mutate exactly their target path. Bind them
+        // to that concrete path so two writes to the same file serialize while
+        // writes to different files parallelize.
         if let Some(path) = bounded_file_writer_path(name, input) {
             return ConcurrencyClaim::paths(std::iter::once(path));
         }
@@ -428,6 +458,7 @@ mod tests {
             "bash",
             "code_exec",
             "file_ops",
+            "apply_patch",
             "self_manage",
             "vault_store",
             "cron_manage",
@@ -539,6 +570,7 @@ mod tests {
             make_unified_tool("file_ops", "File operations"),
             make_unified_tool("file_write", "Write a file"),
             make_unified_tool("file_read", "Read a file"),
+            make_unified_tool("apply_patch", "Apply a V4A patch"),
             make_unified_tool("bash", "Run commands"),
             make_unified_tool("search", "Search"),
         ];
@@ -583,6 +615,36 @@ mod tests {
                 .unwrap()
                 .concurrency_claim(&json!({"path": "/src/a.rs"})),
             ConcurrencyClaim::Shared
+        );
+
+        // apply_patch -> bounded to the files its envelope touches, NOT the
+        // whole-world `Global` it always degraded to before (its args carry no
+        // `path` field, so the old `bounded_file_writer_path` lookup missed).
+        let patch = "*** Begin Patch\n\
+*** Update File: src/a.rs\n\
+@@\n\
+-old\n\
++new\n\
+*** Delete File: src/b.rs\n\
+*** End Patch\n";
+        let claim = registry
+            .get("apply_patch")
+            .unwrap()
+            .concurrency_claim(&json!({ "patch": patch }));
+        assert_eq!(
+            claim,
+            ConcurrencyClaim::paths(["src/a.rs", "src/b.rs"]),
+            "apply_patch must scope to its patched files so disjoint patches parallelize"
+        );
+
+        // A malformed / unparseable patch degrades to whole-world exclusive
+        // (serializes) rather than racing on a wrong narrow footprint.
+        assert_eq!(
+            registry
+                .get("apply_patch")
+                .unwrap()
+                .concurrency_claim(&json!({ "patch": "not a valid patch" })),
+            ConcurrencyClaim::global()
         );
 
         // bash stays whole-world exclusive.

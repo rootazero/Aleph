@@ -756,10 +756,29 @@ async fn dispatch_trace(server_url: &str, action: TraceAction, json: bool) -> Cl
 async fn dispatch_identity(server_url: &str, action: IdentityAction, json: bool) -> CliResult<()> {
     use commands::identity_cmd;
     match action {
-        IdentityAction::Get => identity_cmd::get(server_url, json).await,
-        IdentityAction::Set { manifest } => identity_cmd::set(server_url, &manifest, json).await,
-        IdentityAction::Clear => identity_cmd::clear(server_url, json).await,
-        IdentityAction::List => identity_cmd::list(server_url, json).await,
+        IdentityAction::Get { agent } => identity_cmd::get(server_url, agent.as_deref(), json).await,
+        IdentityAction::Set {
+            content,
+            file,
+            file_name,
+            agent,
+        } => {
+            identity_cmd::set(
+                server_url,
+                content.as_deref(),
+                file.as_deref(),
+                file_name.as_deref(),
+                agent.as_deref(),
+                json,
+            )
+            .await
+        }
+        IdentityAction::Clear { file_name, agent } => {
+            identity_cmd::clear(server_url, file_name.as_deref(), agent.as_deref(), json).await
+        }
+        IdentityAction::List { agent } => {
+            identity_cmd::list(server_url, agent.as_deref(), json).await
+        }
     }
 }
 

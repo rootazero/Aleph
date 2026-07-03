@@ -124,7 +124,7 @@ pub mod wizard;
 pub mod workspace;
 
 pub use config::{handle_get_full_config, handle_patch_config};
-pub use identity::SharedIdentityResolver;
+pub use identity::{IdentityHandlerContext, SharedIdentityCtx};
 
 use crate::gateway::security::SharedTokenManager;
 use crate::sync_primitives::Arc;
@@ -450,9 +450,10 @@ impl HandlerRegistry {
         registry.register("clawhub.install", clawhub::handle_install);
 
         // Identity handlers (identity.get/set/clear/list) are wired against the
-        // live `SharedIdentityResolver` by `register_identity_handlers` at
-        // server boot. No placeholder is registered here: an unwired registry
-        // correctly reports METHOD_NOT_FOUND rather than a misleading stub error.
+        // live agent identity directory via `SharedIdentityCtx` by
+        // `register_identity_handlers` at server boot. No placeholder is
+        // registered here: an unwired registry correctly reports
+        // METHOD_NOT_FOUND rather than a misleading stub error.
 
         // Workspace handlers (placeholders - actual handlers wired with AgentEnvStore)
         registry.register("workspace.create", |req| async move {
@@ -1108,10 +1109,10 @@ mod tests {
 
     #[test]
     fn test_identity_handlers_not_registered_until_boot() {
-        // identity.get/set/clear/list are wired against the live
-        // SharedIdentityResolver by register_identity_handlers at server boot,
-        // not in HandlerRegistry::new(). An unwired registry must report
-        // METHOD_NOT_FOUND rather than a misleading placeholder stub error.
+        // identity.get/set/clear/list are wired against the live agent
+        // identity directory (SharedIdentityCtx) by register_identity_handlers
+        // at server boot, not in HandlerRegistry::new(). An unwired registry
+        // must report METHOD_NOT_FOUND rather than a misleading placeholder stub.
         let registry = HandlerRegistry::new();
         assert!(!registry.has_method("identity.get"));
         assert!(!registry.has_method("identity.set"));

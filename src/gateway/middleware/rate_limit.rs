@@ -9,7 +9,7 @@ use tower::{Layer, Service};
 use tracing::warn;
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
-use crate::gateway::rate_limiter::{scope_for_method, RateLimitKey, RateLimiter};
+use crate::gateway::rate_limiter::{scope_for_method, RateLimitKey, RateLimitScope, RateLimiter};
 
 #[derive(Clone)]
 pub struct RateLimitLayer {
@@ -66,6 +66,18 @@ where
         let method = req.method.clone();
 
         let scope = scope_for_method(&method);
+        // `connect` maps to the strict Auth window (with lockout), which the
+        // WS dispatch loop enforces per client IP upstream. This layer pools
+        // every remote caller into the one shared "rpc" identity, so letting
+        // the Auth lockout trip here would let a single token-guessing client
+        // lock every remote Panel out of the handshake (cross-client DoS).
+        // Pool handshakes into the lockout-free default bucket instead — it
+        // still bounds aggregate dispatch load.
+        let scope = if matches!(scope, RateLimitScope::Auth) {
+            RateLimitScope::RpcDefault
+        } else {
+            scope
+        };
         // The dispatch loop scopes the caller's network position into a
         // task-local before calling the chain. A loopback caller (the desktop
         // App's local Panel) must flow through the limiter's own loopback
@@ -168,6 +180,31 @@ mod tests {
                     retry > 0,
                     "retry hint must be real, not the old hardcoded 0"
                 );
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn connect_uses_the_default_bucket_here_not_the_pooled_auth_lockout() {
+        // A hair-trigger auth window: 1 attempt/min with a 5-min lockout. If
+        // this layer applied the Auth scope to its shared "rpc" identity, the
+        // 2nd remote connect would lock every remote caller out.
+        let mut config = RateLimitConfig::default();
+        config.auth.max_requests = 1;
+        config.auth.window_secs = 60;
+        config.auth.lockout_secs = Some(300);
+        let mut svc = RateLimitService::new(Ok200, Arc::new(RateLimiter::new(config)));
+        CALLER_IS_LOOPBACK
+            .scope(false, async {
+                for i in 0..5 {
+                    let req =
+                        JsonRpcRequest::with_id("connect", None, serde_json::json!(i));
+                    let resp = svc.call(req).await.unwrap();
+                    assert!(
+                        resp.error.is_none(),
+                        "connect {i} must use the lockout-free default bucket here"
+                    );
+                }
             })
             .await;
     }

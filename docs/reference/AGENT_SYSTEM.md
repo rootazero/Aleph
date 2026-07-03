@@ -227,8 +227,8 @@ The Thinker is responsible for LLM interactions and decision making.
 | `InteractionManifest` | `interaction.rs` | Channel capability awareness |
 | `SecurityContext` | `security_context.rs` | Policy-driven permissions |
 | `ContextAggregator` | `context.rs` | Reconcile interaction and security |
-| `SoulManifest` | `soul.rs` | Identity/personality definition |
-| `IdentityResolver` | `identity.rs` | Layered identity resolution |
+| `SoulManifest` | `soul.rs` | SOUL.md structured parser (for `identity.get` preview) |
+| identity files | `identity_files.rs` | Single file-based identity source (SOUL.md), read/written by `self_config` + `identity.*` |
 
 ### Thinking Levels
 
@@ -398,31 +398,41 @@ For background/scheduled tasks, two additional decision types:
 
 ## Embodiment Engine
 
-**Location**: `src/thinker/soul.rs`, `src/thinker/identity.rs`
+**Location**: `src/thinker/identity_files.rs` (file I/O — the single source of truth),
+`src/thinker/layers/{soul,profile}.rs` (prompt injection), `src/thinker/soul.rs`
+(`SoulManifest` structured parser, used only for the `identity.get` preview).
 
-The Embodiment Engine gives the AI a consistent identity and personality through layered soul definitions.
+The Embodiment Engine gives the AI a consistent identity and personality from a
+**single file-based source of truth** — the per-agent identity files under
+`~/.aleph/agents/{id}/` (`SOUL.md` = persona, `AGENTS.md` = project context). Both
+the `self_config` LLM tool and the `identity.*` RPC/CLI write these files, and the
+prompt layers inject them into the system prompt each turn, so an edit takes effect
+on the next turn.
+
+> **History**: identity was once resolved by a session/project/global priority stack
+> (`IdentityResolver` → `SoulManifest`), but that resolver was never wired into prompt
+> assembly, so its overrides silently no-op'd. It was dissolved (2026-07) in favor of
+> the single file-based source below.
 
 ### Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    IdentityResolver                              │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │ Priority Stack                                           │    │
-│  │   ┌─────────────┐                                        │    │
-│  │   │  Session    │ ← Runtime override (highest)           │    │
-│  │   ├─────────────┤                                        │    │
-│  │   │  Project    │ ← .soul/identity.md                    │    │
-│  │   ├─────────────┤                                        │    │
-│  │   │  Global     │ ← ~/.aleph/soul.md                     │    │
-│  │   ├─────────────┤                                        │    │
-│  │   │  Default    │ ← Empty manifest (lowest)              │    │
-│  │   └─────────────┘                                        │    │
-│  └─────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
+Write path (any of):                Inject path (every turn):
+┌──────────────────────┐            ┌──────────────────────────────────┐
+│ self_config LLM tool │──┐         │ IdentityFiles::load              │
+│ identity.* RPC / CLI │──┤         │   ├─ SOUL.md  → SoulLayer        │
+└──────────────────────┘  │         │   └─ AGENTS.md → ProfileLayer    │
+                          ▼         │ (both run on the Cached path →   │
+        ~/.aleph/agents/{id}/       │  land in the cacheable prefix    │
+          ├─ SOUL.md   (persona) ──▶│  of the system prompt)           │
+          └─ AGENTS.md (project) ──▶└──────────────────────────────────┘
 ```
 
 ### SoulManifest
+
+Structured view of a `SOUL.md` file, parsed by `SoulManifest::from_file`. It is a
+**read-only preview** surfaced by `identity.get` — the raw `SOUL.md` markdown (not this
+struct) is what gets injected into the prompt.
 
 ```rust
 pub struct SoulManifest {
@@ -471,12 +481,15 @@ I am Aleph, your AI programming partner.
 
 ### RPC Methods
 
+All operate on `~/.aleph/agents/{agent_id}/` (`agent_id` optional, defaults to the
+daemon's boot agent) — the same files `self_config` writes.
+
 | Method | Description |
 |--------|-------------|
-| `identity.get` | Returns effective SoulManifest |
-| `identity.set` | Sets session-level override |
-| `identity.clear` | Clears session override |
-| `identity.list` | Lists available identity sources |
+| `identity.get` | Live `SOUL.md` (raw markdown + parsed `SoulManifest` preview) + identity-file status |
+| `identity.set` | Write an identity file (`SOUL.md` by default), snapshotting the prior version |
+| `identity.clear` | Snapshot and remove `SOUL.md` (revert to the default persona) |
+| `identity.list` | List identity files (exists / size / path) |
 
 ---
 
