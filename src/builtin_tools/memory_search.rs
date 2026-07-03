@@ -143,9 +143,11 @@ pub struct MemorySearchTool {
     /// Shared session key for the current session, set by the execution engine.
     /// Used to scope "`current_session`" searches to the active session's summaries.
     default_session_key: Arc<RwLock<String>>,
-    /// Smart recall config from the active workspace profile.
-    /// Updated by the execution engine when workspace is resolved.
-    smart_recall_config: Arc<RwLock<Option<SmartRecallConfig>>>,
+    /// Per-agent smart recall configs, keyed by agent id and written by the
+    /// execution engine at run start. A map (not a single slot) so concurrent
+    /// runs of different agents each write their own entry instead of racing
+    /// on one process-global value.
+    smart_recall_config: Arc<RwLock<std::collections::HashMap<String, SmartRecallConfig>>>,
 }
 
 impl MemorySearchTool {
@@ -229,7 +231,7 @@ impl MemorySearchTool {
             _indexer: indexer,
             default_workspace: Arc::new(RwLock::new(DEFAULT_AGENT.to_string())),
             default_session_key: Arc::new(RwLock::new(String::new())),
-            smart_recall_config: Arc::new(RwLock::new(None)),
+            smart_recall_config: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -252,12 +254,15 @@ impl MemorySearchTool {
         Arc::clone(&self.default_session_key)
     }
 
-    /// Get a shared handle to the smart recall config.
+    /// Get a shared handle to the per-agent smart recall configs.
     ///
-    /// The execution engine writes the active workspace profile's `SmartRecallConfig`
-    /// here after workspace resolution.
+    /// The execution engine writes the running agent's profile
+    /// `SmartRecallConfig` under that agent's id after workspace resolution
+    /// (absent key = smart recall disabled for that agent).
     #[must_use]
-    pub fn smart_recall_config_handle(&self) -> Arc<RwLock<Option<SmartRecallConfig>>> {
+    pub fn smart_recall_config_handle(
+        &self,
+    ) -> Arc<RwLock<std::collections::HashMap<String, SmartRecallConfig>>> {
         Arc::clone(&self.smart_recall_config)
     }
 
@@ -278,7 +283,16 @@ impl MemorySearchTool {
         // workspaces: [...] → Multiple
         // workspace: "x" → Single
         // default → Single (active workspace)
-        let default_ws = self.default_workspace.read().await;
+        //
+        // Per-run truth first: the shared workspace handle is process-global
+        // and rewritten at every run start, so a concurrent run of another
+        // agent can overwrite it mid-turn and this search would read the
+        // wrong agent's workspace. The task-local is scoped per tool call by
+        // the dispatch chokepoint and cannot race.
+        let default_ws = match crate::tools::turn_context::current_agent_id() {
+            Some(agent_id) => agent_id,
+            None => self.default_workspace.read().await.clone(),
+        };
         let workspace_filter = if args.cross_workspace.unwrap_or(false) {
             AgentEnvFilter::All
         } else if let Some(ref wss) = args.workspaces {
@@ -357,8 +371,12 @@ impl MemorySearchTool {
             tokens_saved,
         ) = if scope == "all" || scope == "both" {
             // Determine if Smart Recall should be used:
-            // Only for single-workspace queries where user didn't explicitly request cross-workspace
-            let smart_recall_cfg = self.smart_recall_config.read().await;
+            // Only for single-workspace queries where user didn't explicitly request cross-workspace.
+            // Keyed by the running agent's id (default_ws, resolved above from
+            // the per-run task-local) so a concurrent run of another agent —
+            // which writes its own map entry — cannot swap the profile mid-turn.
+            let smart_recall_cfg: Option<SmartRecallConfig> =
+                self.smart_recall_config.read().await.get(&default_ws).cloned();
             let use_smart_recall = matches!(&workspace_filter, AgentEnvFilter::Single(_))
                 && args.cross_workspace.is_none()
                 && args.workspaces.is_none()
@@ -476,7 +494,6 @@ impl MemorySearchTool {
                 let result = RetrievalResult { facts };
                 (result, Vec::new(), false)
             };
-            drop(smart_recall_cfg);
 
             debug!(
                 facts_count = retrieval_result.facts.len(),
