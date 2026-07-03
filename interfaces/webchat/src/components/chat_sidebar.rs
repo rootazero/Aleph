@@ -572,15 +572,17 @@ pub fn ChatSidebar() -> impl IntoView {
         });
     };
 
-    // Start a new chat for the selected agent.
-    // Just clear UI state — the backend will create a new epoch session
-    // when the first message is sent (session_key=None triggers next epoch).
+    // 新建对话：在选中 agent 下开一个新 ConvId 并激活（开新标签），
+    // 不清空/顶掉当前正在跑的会话。session_key=None → 首次 send 触发新 epoch。
     let on_new_chat = move |_: web_sys::MouseEvent| {
         if let Some(agent_id) = selected_agent.get_untracked() {
-            chat.clear_session();
+            let conv = session_map.open_conversation(&agent_id, t_string!(i18n, chat.new_chat).to_string());
+            session_map.activate(chat, conv);
             if let Some(ws) = workspace {
                 ws.reset();
             }
+            // activate 已把单例恢复为空态；显式 clear 保证干净。
+            chat.clear_session();
             chat.agent_id.set(Some(agent_id));
         }
     };
