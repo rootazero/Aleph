@@ -20,15 +20,16 @@ impl MemoryContextProvider {
     /// Create a provider with the legacy 2-argument signature. No
     /// [`AiProvider`] supplied → the assembler falls back to the deterministic
     /// skeleton for every turn. Use [`Self::with_provider`] to wire a real
-    /// LLM reranker.
-    pub fn new(memory_db: MemoryBackend, embedder: Arc<dyn EmbeddingProvider>) -> Self {
+    /// LLM reranker. `embedder: None` = FTS-only deployment: retrieval
+    /// degrades to keyword search, memory injection keeps working.
+    pub fn new(memory_db: MemoryBackend, embedder: Option<Arc<dyn EmbeddingProvider>>) -> Self {
         Self::with_config(memory_db, embedder, MemoryContextConfig::default())
     }
 
     /// Create with legacy 2-arg + custom config.
     pub fn with_config(
         memory_db: MemoryBackend,
-        embedder: Arc<dyn EmbeddingProvider>,
+        embedder: Option<Arc<dyn EmbeddingProvider>>,
         config: MemoryContextConfig,
     ) -> Self {
         Self::assemble_default(
@@ -43,7 +44,7 @@ impl MemoryContextProvider {
     /// Create with an [`AiProvider`] so the LLM re-rank path is active.
     pub fn with_provider(
         memory_db: MemoryBackend,
-        embedder: Arc<dyn EmbeddingProvider>,
+        embedder: Option<Arc<dyn EmbeddingProvider>>,
         provider: Arc<dyn AiProvider>,
         assembler_config: AssemblerConfig,
         config: MemoryContextConfig,
@@ -164,7 +165,7 @@ impl MemoryContextProvider {
 
     pub(crate) fn assemble_default(
         memory_db: MemoryBackend,
-        embedder: Arc<dyn EmbeddingProvider>,
+        embedder: Option<Arc<dyn EmbeddingProvider>>,
         provider: Option<Arc<dyn AiProvider>>,
         assembler_config: AssemblerConfig,
         config: MemoryContextConfig,
@@ -182,8 +183,15 @@ impl MemoryContextProvider {
         // scoring. Both builders no-op when their config is disabled/inactive
         // (the default), so the legacy ranking is preserved byte-for-byte until
         // the user opts in via `memory.rerank` / `memory.retrieval_scoring`.
+        // No embedder → FTS-only retrieval; the notes are local, so
+        // prompt-injected memory (auto-recall / orientation / profile) keeps
+        // working without an embedding provider.
+        let retrieval = match embedder {
+            Some(emb) => NoteFactRetrieval::new(indexer, emb),
+            None => NoteFactRetrieval::new_fts_only(indexer),
+        };
         let retrieval = Arc::new(
-            NoteFactRetrieval::new(indexer, embedder)
+            retrieval
                 .with_rerank_config(&assembler_config.rerank)
                 .with_scoring_config(&assembler_config.retrieval_scoring)
                 .with_expansion_config(&assembler_config.expansion),

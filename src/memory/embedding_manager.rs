@@ -76,7 +76,8 @@ impl EmbeddingManager {
         } else {
             warn!(
                 reason = reason.as_str(),
-                "No embedding provider resolved — semantic memory disabled. \
+                "No embedding provider resolved — vector (semantic) recall disabled; \
+                 memory retrieval degrades to keyword (FTS) search. \
                  Pin `active_provider_id` or set it to `auto` for local-first selection."
             );
         }

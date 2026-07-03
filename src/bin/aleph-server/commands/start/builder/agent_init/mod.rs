@@ -630,7 +630,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // Build a fresh assembler dedicated to the reflector (same config as MCP).
             let reflector_mcp = super::init_memory_context_provider(
                 memory_db,
-                emb,
+                Some(emb),
                 Some(prov.clone()),
                 app_config.memory.assembler_config(),
             );
@@ -901,10 +901,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // path (Spec 1, B strategy); otherwise the deterministic skeleton runs.
         // Spec 4 Task 11: extension registry threaded in for on_retrieve dispatch.
         // Spec 5 Task 12: wiki handle threaded in for build_orientation_user_message.
-        if let Some(ref emb) = embedder_out {
+        // Wired unconditionally: without an embedder the assembler degrades to
+        // FTS-only retrieval, so notes auto-recall, orientation, and profile
+        // injection all survive a deployment with no embedding provider.
+        {
             let mcp = super::init_memory_context_provider_with_extensions(
                 memory_db,
-                emb.clone(),
+                embedder_out.clone(),
                 default_prov.clone(),
                 app_config.memory.assembler_config(),
                 Some(memory_ext_registry.clone()),
