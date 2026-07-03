@@ -42,6 +42,20 @@ func registerAxHandlers(_ router: Router) async {
         )
         return try encodeCodable(QueryListResult(elements: list))
     }
+
+    await router.register("ax.set_value") { params in
+        try requireAxTrusted()
+        let args = try decodeCodable(params, as: SetValueParams.self)
+        let result = try await querier.setValue(args)
+        return try encodeCodable(result)
+    }
+
+    await router.register("ax.perform_action") { params in
+        try requireAxTrusted()
+        let args = try decodeCodable(params, as: PerformActionParams.self)
+        let result = try await querier.performAction(args)
+        return try encodeCodable(result)
+    }
 }
 
 // MARK: - Permission guard

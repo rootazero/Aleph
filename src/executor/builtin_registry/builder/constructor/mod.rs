@@ -287,7 +287,7 @@ impl BuiltinToolRegistry {
             .with_vision_bridge(Arc::clone(&vision_bridge))
             .with_approval_policy(Arc::clone(&approval_policy));
 
-        // AX query tools (macOS only; tools degrade gracefully on other platforms).
+        // AX query tools (macOS + Windows UIA; degrade gracefully on Linux).
         let desktop_ax_query_focused_tool = crate::builtin_tools::DesktopAxQueryFocused::new()
             .with_platform(Arc::clone(&desktop_platform));
         let desktop_ax_query_tree_tool = crate::builtin_tools::DesktopAxQueryTree::new()

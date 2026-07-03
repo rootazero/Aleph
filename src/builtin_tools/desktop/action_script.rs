@@ -385,6 +385,11 @@ const fn blank_batch_action() -> DesktopBatchAction {
         coord_space: None,
         coord_factors: None,
         describe: None,
+        role: None,
+        element_title: None,
+        ax_action_name: None,
+        pid: None,
+        observe: None,
     }
 }
 

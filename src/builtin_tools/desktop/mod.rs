@@ -8,7 +8,9 @@ mod coord_resolve;
 mod gui_locate;
 mod interactable;
 mod native;
+mod observe;
 mod perm;
+mod recovery;
 mod safety;
 pub mod session_lock;
 mod set_of_marks;
@@ -183,6 +185,9 @@ impl DesktopTool {
             if sub_args.coord_factors.is_none() {
                 sub_args.coord_factors = args.coord_factors;
             }
+            if sub_args.observe.is_none() {
+                sub_args.observe = args.observe.clone();
+            }
 
             // Prevent nested batch. The type system already prevents an
             // inner DesktopBatchAction from carrying its own actions list,
@@ -278,6 +283,41 @@ impl DesktopTool {
                 })
             }
         }
+    }
+
+    /// Hard-refuse mutating actions while a credential vault is frontmost, and
+    /// refuse launching/quitting/focusing one. Fail-open: if the frontmost app
+    /// cannot be determined, proceed — this guard is defense-in-depth on top
+    /// of approval + content hard-blocks, not the only line.
+    async fn check_blocked_app(&self, args: &DesktopArgs) -> Option<DesktopOutput> {
+        let platform = self.platform.as_ref()?;
+
+        // Target guard: launching / quitting / restarting a blocked app.
+        if matches!(
+            args.action.as_str(),
+            "launch_app" | "quit_app" | "restart_app"
+        ) {
+            if let Some(bid) = args.bundle_id.as_deref() {
+                if let Some(reason) = safety::blocked_app_reason(bid, bid) {
+                    return Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(reason),
+                    });
+                }
+            }
+            return None; // launch of a non-blocked app needs no frontmost check
+        }
+
+        // Frontmost guard for every other mutating action.
+        let system = platform.system()?;
+        let apps = system.list_running_apps().await.ok()?;
+        let front = apps.iter().find(|a| a.is_active)?;
+        safety::blocked_app_reason(&front.name, &front.bundle_id).map(|reason| DesktopOutput {
+            success: false,
+            data: None,
+            message: Some(reason),
+        })
     }
 
     fn no_capability_output(&self) -> DesktopOutput {
@@ -381,6 +421,15 @@ fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
             args.text.clone().unwrap_or_default(),
         )),
 
+        "set_value" => Some((
+            ActionType::DesktopType,
+            args.text.clone().unwrap_or_default(),
+        )),
+        "ax_action" => Some((
+            ActionType::DesktopClick,
+            format!("ax_action({})", args.ax_action_name.as_deref().unwrap_or("?")),
+        )),
+
         _ => Some((
             ActionType::DesktopClick,
             format!("unknown: {}", args.action),
@@ -404,7 +453,7 @@ fn check_hard_block(args: &DesktopArgs) -> Option<DesktopOutput> {
         // that would otherwise sidestep this content gate. Hold it to the same
         // bar so the staged-then-pasted path cannot smuggle a catastrophic
         // payload onto a live desktop.
-        "type_text" | "paste" | "clipboard_write" => args
+        "type_text" | "paste" | "clipboard_write" | "set_value" => args
             .text
             .as_deref()
             .and_then(|t| safety::check_typed_text(t).err()),
@@ -500,6 +549,8 @@ Actions:
 - batch: Execute multiple actions sequentially. Requires actions array.
 - paste: Paste text via clipboard (Cmd+V). Better for multiline text than type_text.
 - wait_visual: Wait until the screen settles. Polls screenshots and returns when two consecutive captures match, or after `timeout_ms` (default 5000, max 60000). Use after navigation or clicks that trigger animation. Returns `{stable: bool, polls, elapsed_ms}` — `stable=false` means timeout, not failure.
+- set_value: Set a text field's value directly via the accessibility API and VERIFY the write by reading it back — the reliable way to fill forms (multiline, non-ASCII, replacing existing content). Locate the element with role ("AXTextField") and/or element_title, optionally x/y as a nearest-center hint (honors coord_space). Requires text. Result carries verification.state = "verified" | "unverified". Prefer this over click + type_text; type_text is a blind synthetic fallback.
+- ax_action: Trigger a native accessibility action (ax_action_name, e.g. "AXPress", "AXShowMenu") on an element located the same way. More reliable than a synthetic click for buttons/menus when the app exposes AX actions. macOS only today; other platforms report the capability as unavailable.
 
 Examples:
 {"action":"click","x":500,"y":300}
@@ -521,6 +572,8 @@ Examples:
 {"action":"wait_visual","timeout_ms":8000,"region":{"x":0,"y":0,"width":1280,"height":800}}
 {"action":"screenshot","format":"jpeg","quality":0.9,"max_width":1920}
 {"action":"screenshot","describe":true}
+{"action":"set_value","role":"AXTextField","element_title":"Email","text":"a@b.c"}
+{"action":"ax_action","ax_action_name":"AXPress","element_title":"Save"}
 
 Coordinate space — by default, `x` / `y` / `start_x` / `end_x` / `region` are pixels (top-left origin). To use UI-TARS-style normalized [0, 1000] × [0, 1000] coordinates that scale to any display, set `coord_space:"normalized"` (and optionally `coord_factors:[w,h]` to override the 1000×1000 default). The runtime rescales against the primary display (or `display_id`) before dispatch.
 
@@ -528,6 +581,10 @@ IMPORTANT — a full-screen `screenshot` is usually downscaled to fit the result
 
 {"action":"click","coord_space":"normalized","x":500,"y":500}
 {"action":"batch","coord_space":"normalized","actions":[{"action":"click","x":300,"y":400},{"action":"type_text","text":"hi"}]}
+
+Act→observe in one call — mutating actions accept `observe:"state"` (result gains `post_state`: frontmost app + focused element after a 300ms settle) or `observe:"screenshot"` (additionally a fresh bounded screenshot as `post_screenshot`). Use it on the last action of a step instead of a separate screenshot round-trip. In a batch, sub-actions inherit the batch-level `observe`.
+
+{"action":"click","x":500,"y":300,"observe":"state"}
 
 Pythonic action script — UI-TARS-finetuned models can emit `script` containing one or more `Action: ...` lines instead of JSON. Supported verbs: click, left_double, right_single, middle_click, drag, hover, type, hotkey, press, release, scroll, wait, finished, call_user. A trailing `\n` in `type(content='…\n')` types the text then presses Enter (submit). `press(key='ctrl')` / `release(key='ctrl')` hold a key (or chord like `ctrl shift`) down and release it later — distinct from `hotkey`, which presses and releases atomically. Box formats `(x,y)`, `[x1,y1,x2,y2]`, `<point>x y</point>`, `<bbox>x1 y1 x2 y2</bbox>` all parse. Inherits `coord_space` / `coord_factors` from the same call.
 
@@ -574,6 +631,15 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
         //     host honors the signal, it does not drive a loop.
         if let Some(out) = loop_control_output(&args) {
             return Ok(out);
+        }
+
+        // 1.6 Blocked-app guard: never drive a credential vault. Leaf mutating
+        //     actions only — batch sub-actions re-enter call() and get checked
+        //     individually against the then-current frontmost app.
+        if args.action != "batch" && classify_approval(&args).is_some() {
+            if let Some(out) = self.check_blocked_app(&args).await {
+                return Ok(out);
+            }
         }
 
         // 2. Normalize coordinate space for leaf actions. Batches defer per
@@ -627,7 +693,35 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
 
         // 7. Execute via platform
         if let Some(ref platform) = self.platform {
-            if let Some(output) = self.call_via_platform(platform, &args).await? {
+            if let Some(mut output) = self.call_via_platform(platform, &args).await? {
+                // 7.5 act→observe fusion: on success, a mutating leaf action may
+                //     carry its own post-state so the model saves a round-trip.
+                //     Never turns a succeeded action into a failure —
+                //     observation is strictly additive to `data`.
+                let wants_observe = matches!(args.observe.as_deref(), Some("state" | "screenshot"));
+                if wants_observe && output.success && classify_approval(&args).is_some() {
+                    let post = observe::gather_post_state(platform).await;
+                    let mut data = output.data.take().unwrap_or_else(|| serde_json::json!({}));
+                    if let Some(obj) = data.as_object_mut() {
+                        obj.insert("post_state".into(), post);
+                    }
+                    output.data = Some(data);
+
+                    if args.observe.as_deref() == Some("screenshot") {
+                        let mut shot_args =
+                            DesktopArgs::from(&types::DesktopBatchAction::empty("screenshot"));
+                        shot_args.max_width = Some(1568);
+                        if let Ok(Some(shot)) = self.call_via_platform(platform, &shot_args).await
+                        {
+                            if let (Some(obj), Some(shot_data)) = (
+                                output.data.as_mut().and_then(|d| d.as_object_mut()),
+                                shot.data,
+                            ) {
+                                obj.insert("post_screenshot".into(), shot_data);
+                            }
+                        }
+                    }
+                }
                 return Ok(output);
             }
         }

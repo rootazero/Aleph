@@ -72,7 +72,7 @@ fn bridge_err_output(err: impl std::fmt::Display) -> DesktopOutput {
     DesktopOutput {
         success: false,
         data: None,
-        message: Some(format!("AX query failed: {err}")),
+        message: Some(super::recovery::with_hint(format!("AX query failed: {err}"))),
     }
 }
 
@@ -102,7 +102,8 @@ impl AlephTool for DesktopAxQueryFocused {
     const DESCRIPTION: &'static str =
         "Return the UI element currently holding keyboard focus via the OS accessibility API. \
          Response contains an `element` field (null if no focused element). \
-         macOS only — requires Accessibility permission.";
+         Available on macOS (Accessibility permission required) and Windows (UI Automation); \
+         unavailable on Linux — fall back to screenshot + gui_locate there.";
 
     type Args = DesktopAxQueryFocusedArgs;
     type Output = DesktopOutput;
@@ -153,7 +154,9 @@ impl AlephTool for DesktopAxQueryTree {
     const DESCRIPTION: &'static str =
         "Return the AX element tree for a process (the frontmost app if `pid` is omitted). \
          Bounded by `max_depth` (default 6). Response contains an `element` field \
-         with nested `children`. macOS only — requires Accessibility permission.";
+         with nested `children`. Available on macOS (Accessibility permission required) and \
+         Windows (UI Automation); unavailable on Linux — fall back to screenshot + gui_locate \
+         there.";
 
     type Args = DesktopAxQueryTreeArgs;
     type Output = DesktopOutput;
@@ -208,7 +211,8 @@ impl AlephTool for DesktopAxQueryByRole {
     const DESCRIPTION: &'static str =
         "Collect all AX elements whose role matches `role` (e.g. \"AXButton\") in a process. \
          If `pid` is omitted, the frontmost application is queried. Response contains an \
-         `elements` array. macOS only — requires Accessibility permission.";
+         `elements` array. Available on macOS (Accessibility permission required) and Windows \
+         (UI Automation); unavailable on Linux — fall back to screenshot + gui_locate there.";
 
     type Args = DesktopAxQueryByRoleArgs;
     type Output = DesktopOutput;
@@ -295,19 +299,23 @@ fn element_to_json(index: usize, el: &AxElement) -> serde_json::Value {
 }
 
 /// Flatten an AX tree into an indexed list of interactable elements,
-/// returning `(elements, truncated)` where `truncated` is set when the list
-/// was cut to `max_elements`.
-fn flatten_interactable(root: &AxElement, max_elements: usize) -> (Vec<serde_json::Value>, bool) {
+/// returning `(elements, truncated, total)` where `truncated` is set when the
+/// list was cut to `max_elements` and `total` is the pre-truncation count.
+fn flatten_interactable(
+    root: &AxElement,
+    max_elements: usize,
+) -> (Vec<serde_json::Value>, bool, usize) {
     let mut collected: Vec<&AxElement> = Vec::new();
     collect_interactable(root, &mut collected);
-    let truncated = collected.len() > max_elements;
+    let total = collected.len();
+    let truncated = total > max_elements;
     let elements = collected
         .into_iter()
         .take(max_elements)
         .enumerate()
         .map(|(index, el)| element_to_json(index, el))
         .collect();
-    (elements, truncated)
+    (elements, truncated, total)
 }
 
 /// LLM tool: snapshot an app's interactable UI as a flat, indexed element
@@ -338,7 +346,8 @@ impl AlephTool for DesktopAxSnapshot {
          `name`/`value`, and a pre-computed `center` [x, y]; pass that `center` straight \
          to the `desktop` tool's `click` / `double_click` / `hover` actions. Prefer this \
          over eyeballing pixel coordinates from a screenshot. Omit `pid` to snapshot the \
-         frontmost app. macOS only — requires Accessibility permission.";
+         frontmost app. Available on macOS (Accessibility permission required) and Windows \
+         (UI Automation); unavailable on Linux — fall back to screenshot + gui_locate there.";
 
     type Args = DesktopAxSnapshotArgs;
     type Output = DesktopOutput;
@@ -366,13 +375,22 @@ impl AlephTool for DesktopAxSnapshot {
         };
         match ax.query_tree(params).await {
             Ok(Some(root)) => {
-                let (elements, truncated) = flatten_interactable(&root, max_elements);
+                let (elements, truncated, total) = flatten_interactable(&root, max_elements);
+                let focused = match ax.query_focused().await {
+                    Ok(Some(el)) => Some(json!({
+                        "role": el.role,
+                        "title": el.title,
+                    })),
+                    _ => None,
+                };
                 Ok(DesktopOutput {
                     success: true,
                     data: Some(json!({
                         "app_pid": root.pid,
                         "count": elements.len(),
                         "truncated": truncated,
+                        "total_interactable": total,
+                        "focused": focused,
                         "elements": elements,
                     })),
                     message: None,
@@ -492,9 +510,10 @@ mod tests {
                 leaf("AXButton", Some("ghost"), Some(rect(5.0, 5.0, 0.0, 0.0))),
             ],
         };
-        let (elements, truncated) = flatten_interactable(&tree, 200);
+        let (elements, truncated, total) = flatten_interactable(&tree, 200);
         assert!(!truncated);
         assert_eq!(elements.len(), 1);
+        assert_eq!(total, 1);
         assert_eq!(elements[0]["role"], "AXButton");
         assert_eq!(elements[0]["name"], "Save");
         assert_eq!(elements[0]["index"], 0);
@@ -521,9 +540,30 @@ mod tests {
             pid: 1,
             children,
         };
-        let (elements, truncated) = flatten_interactable(&tree, 3);
+        let (elements, truncated, total) = flatten_interactable(&tree, 3);
         assert!(truncated);
         assert_eq!(elements.len(), 3);
+        assert_eq!(total, 5);
         assert_eq!(elements[2]["index"], 2);
+    }
+
+    #[test]
+    fn flatten_reports_total_before_truncation() {
+        let root = AxElement {
+            role: "AXWindow".to_string(),
+            title: None,
+            value: None,
+            bounds: None,
+            pid: 1,
+            children: vec![
+                leaf("AXButton", Some("a"), Some(rect(0.0, 0.0, 10.0, 10.0))),
+                leaf("AXButton", Some("b"), Some(rect(0.0, 0.0, 10.0, 10.0))),
+                leaf("AXButton", Some("c"), Some(rect(0.0, 0.0, 10.0, 10.0))),
+            ],
+        };
+        let (elements, truncated, total) = flatten_interactable(&root, 2);
+        assert_eq!(elements.len(), 2);
+        assert!(truncated);
+        assert_eq!(total, 3);
     }
 }

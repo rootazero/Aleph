@@ -16,6 +16,8 @@ use super::screen::Region;
 pub const METHOD_QUERY_FOCUSED: &str = "ax.query_focused";
 pub const METHOD_QUERY_TREE: &str = "ax.query_tree";
 pub const METHOD_QUERY_BY_ROLE: &str = "ax.query_by_role";
+pub const METHOD_SET_VALUE: &str = "ax.set_value";
+pub const METHOD_PERFORM_ACTION: &str = "ax.perform_action";
 pub const NOTIFY_MUTATION: &str = "ax.mutation";
 pub const SUGGESTED_TIMEOUT_MS: u64 = 3_000;
 
@@ -48,6 +50,75 @@ pub struct QueryByRoleParams {
     /// pid of the target application; `null` means "use the frontmost app".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
+}
+
+/// Stateless element locator for `ax.set_value` / `ax.perform_action`.
+///
+/// The bridge re-walks the AX tree on every call and picks the best match:
+/// role filter → title match (exact beats contains, case-insensitive) →
+/// nearest `center` tiebreak. No element handles cross the IPC boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AxLocator {
+    /// pid of the target application; `null` means "use the frontmost app".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+    /// AX role filter, e.g. `"AXTextField"`. Optional but recommended.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Title/label to match (exact beats contains, case-insensitive).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Global screen-point `[x, y]` used as a nearest-center tiebreak. The
+    /// bridge compares this against AX bounds in global screen POINTS, so a
+    /// `coord_space:"normalized"`-derived pixel center can be off by the
+    /// display scale factor on Retina displays — supply `role`/`title` as
+    /// the primary locator key; `center` only breaks ties.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub center: Option<[f64; 2]>,
+}
+
+/// Params for `ax.set_value`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetValueParams {
+    pub locator: AxLocator,
+    /// New value written to the element's `AXValue` attribute.
+    pub value: String,
+}
+
+/// Params for `ax.perform_action`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PerformActionParams {
+    pub locator: AxLocator,
+    /// AX action name passed through verbatim, e.g. `"AXPress"`.
+    pub action: String,
+}
+
+/// Post-write verification outcome.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AxVerification {
+    /// `"verified"` when the read-back value matches the written value,
+    /// `"unverified"` otherwise (see `reason`).
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// First 200 chars of the value read back after the write.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_preview: Option<String>,
+}
+
+/// Result for `ax.set_value` and `ax.perform_action`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AxActionResult {
+    /// Whether the native AX call was issued successfully.
+    pub performed: bool,
+    /// Always `"accessibility"` — mirrors orca's action-path metadata.
+    pub path: String,
+    /// The element acted on (children pruned), for model visibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched: Option<AxElement>,
+    /// Present for `set_value`; absent for `perform_action`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification: Option<AxVerification>,
 }
 
 // ── Response types ───────────────────────────────────────────────────────────
@@ -153,5 +224,30 @@ mod tests {
         let back: QueryListResult = serde_json::from_str(&json).unwrap();
         assert_eq!(back.elements.len(), 1);
         assert_eq!(back.elements[0].role, "AXButton");
+    }
+
+    #[test]
+    fn set_value_params_roundtrip() {
+        let p = SetValueParams {
+            locator: AxLocator {
+                pid: None,
+                role: Some("AXTextField".into()),
+                title: Some("Email".into()),
+                center: Some([100.0, 200.0]),
+            },
+            value: "a@b.c".into(),
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let back: SetValueParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.locator.role.as_deref(), Some("AXTextField"));
+        assert_eq!(back.value, "a@b.c");
+    }
+
+    #[test]
+    fn ax_action_result_verification_optional() {
+        let json = r#"{"performed":true,"path":"accessibility"}"#;
+        let r: AxActionResult = serde_json::from_str(json).unwrap();
+        assert!(r.performed);
+        assert!(r.verification.is_none());
     }
 }

@@ -78,6 +78,40 @@ pub fn check_key_combo(_keys: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Password managers and credential vaults the agent must never drive.
+///
+/// Matching is against the app's bundle id (prefix) OR its display name
+/// (case-insensitive substring) so the same table covers macOS bundle ids
+/// and Windows/Linux executable names. orca ships the same guard with the
+/// same rationale: no automation inside a credential vault, ever.
+const BLOCKED_APPS: &[(&str, &str)] = &[
+    // (bundle-id prefix, name substring)
+    ("com.1password.", "1password"),
+    ("com.agilebits.onepassword", "1password"),
+    ("com.bitwarden.", "bitwarden"),
+    ("com.dashlane.", "dashlane"),
+    ("com.lastpass.", "lastpass"),
+    ("com.nordsec.nordpass", "nordpass"),
+    ("me.proton.pass", "proton pass"),
+    ("org.keepassxc.", "keepassxc"),
+];
+
+/// Return a refusal reason when `name`/`bundle_id` identify a blocked app.
+pub fn blocked_app_reason(name: &str, bundle_id: &str) -> Option<String> {
+    let name_l = name.to_lowercase();
+    let bid_l = bundle_id.to_lowercase();
+    for (bid_prefix, name_sub) in BLOCKED_APPS {
+        if bid_l.starts_with(bid_prefix) || name_l.contains(name_sub) {
+            return Some(format!(
+                "Refused: '{name}' is a password manager — computer use is \
+                 blocked in credential vaults for safety. Ask the user to \
+                 handle credentials themselves."
+            ));
+        }
+    }
+    None
+}
+
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 /// Collapse every run of whitespace to a single space.
@@ -267,5 +301,22 @@ mod tests {
         // Cmd+L (open location) must not be confused with a system shortcut.
         let location = ["cmd".to_string(), "l".to_string()];
         assert!(check_key_combo(&location).is_ok());
+    }
+
+    #[test]
+    fn blocks_password_managers() {
+        assert!(blocked_app_reason("1Password 8", "com.1password.1password").is_some());
+        assert!(blocked_app_reason("Bitwarden", "com.bitwarden.desktop").is_some());
+        assert!(blocked_app_reason("KeePassXC", "org.keepassxc.keepassxc").is_some());
+        // Name-only match (Windows/Linux exe without bundle id)
+        assert!(blocked_app_reason("LastPass", "lastpass.exe").is_some());
+    }
+
+    #[test]
+    fn allows_ordinary_apps() {
+        assert!(blocked_app_reason("Safari", "com.apple.Safari").is_none());
+        assert!(blocked_app_reason("TextEdit", "com.apple.TextEdit").is_none());
+        // "pass" substring must not overmatch
+        assert!(blocked_app_reason("Passbook Viewer", "com.example.passbook").is_none());
     }
 }

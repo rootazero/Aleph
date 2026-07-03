@@ -286,7 +286,9 @@ impl AlephTool for DesktopSom {
          to act on from the image, then pass that element's `center` straight to the \
          `desktop` tool's `click`/`double_click`/`hover` actions. Prefer this over a plain \
          `screenshot` when you must point at something. Omit `pid` for the frontmost app. \
-         macOS only — requires Accessibility + Screen Recording permission.";
+         Available on macOS (Accessibility + Screen Recording permission required) and \
+         Windows (UI Automation); unavailable on Linux — fall back to screenshot + gui_locate \
+         there.";
 
     type Args = DesktopSomArgs;
     type Output = DesktopOutput;
