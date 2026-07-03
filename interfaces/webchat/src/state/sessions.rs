@@ -340,4 +340,34 @@ mod tests {
             assert!(!map.is_running(c), "all runs settled");
         });
     }
+
+    #[test]
+    fn background_conv_accumulates_without_touching_singleton() {
+        with_owner(|| {
+            let map = SessionMap::new();
+            let singleton = ChatState::new();
+            let a = map.open_conversation("agent-a", "A");
+            let b = map.open_conversation("agent-b", "B");
+
+            // A 活跃并起一个 run；随后切到 B —— A 变后台。
+            map.activate(singleton, a);
+            singleton.start_assistant_message("run-a");
+            map.bind_run("run-a", a, Some("sess-a"));
+            map.activate(singleton, b);
+
+            // 后台把 A 的 chunk 灌进 live[a]，不应污染当前单例(B)。
+            let a_chat = map.chat_for(a, singleton).expect("A background chat");
+            a_chat.append_chunk("run-a", "hello");
+
+            assert_eq!(a_chat.assistant_text_for_run("run-a"), "hello");
+            assert!(
+                singleton.assistant_text_for_run("run-a").is_empty(),
+                "singleton (B) must not receive A's chunk"
+            );
+
+            // 切回 A：单例恢复到累积后的转录。
+            map.activate(singleton, a);
+            assert_eq!(singleton.assistant_text_for_run("run-a"), "hello");
+        });
+    }
 }
