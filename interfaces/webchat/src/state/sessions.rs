@@ -29,7 +29,8 @@ pub struct ConvMeta {
 /// 活跃会话注册表。全字段 `Copy`，可无 `Arc` 直接 `provide_context`。
 #[derive(Clone, Copy)]
 pub struct SessionMap {
-    /// 后台会话的常驻 `ChatState`。**不含**当前活跃会话（其数据在单例里）。
+    /// 每会话持久 `ChatState`（一次创建、跨切换复用）。**含**当前活跃会话的条目
+    /// ——活跃会话的渲染数据活在单例里，但其持久态仍留在这里以便下次切走时复用。
     live: RwSignal<HashMap<ConvId, ChatState>>,
     /// 每会话元数据。
     meta: RwSignal<HashMap<ConvId, ConvMeta>>,
@@ -43,6 +44,8 @@ pub struct SessionMap {
     running: RwSignal<HashMap<ConvId, usize>>,
     /// 捕获 app-root Owner，用于在稳定 arena 下创建后台 `ChatState`。
     owner: StoredValue<Owner>,
+    /// 每个后台会话的子 Owner，用于 close 时回收其 signals（防止按切换次数泄漏）。
+    owners: RwSignal<HashMap<ConvId, Owner>>,
     /// `ConvId` 生成器。
     next_id: RwSignal<u64>,
 }
@@ -65,6 +68,7 @@ impl SessionMap {
             route: RwSignal::new(HashMap::new()),
             running: RwSignal::new(HashMap::new()),
             owner: StoredValue::new(owner),
+            owners: RwSignal::new(HashMap::new()),
             next_id: RwSignal::new(0),
         }
     }
@@ -88,9 +92,21 @@ impl SessionMap {
         id
     }
 
-    /// 在捕获的 root owner 下新建一个后台 `ChatState`。
-    fn spawn_background(&self) -> ChatState {
-        self.owner.with_value(|o| o.with(ChatState::new))
+    /// 取得（或首次创建）`conv` 的持久后台 `ChatState`。创建在可释放的子 Owner 下，
+    /// 一旦创建就在 `live` 中常驻复用，不再随每次切换重建（防止按切换次数泄漏）。
+    fn ensure_background(&self, conv: ConvId) -> ChatState {
+        if let Some(chat) = self.live.with_untracked(|m| m.get(&conv).copied()) {
+            return chat;
+        }
+        let child = self.owner.with_value(|o| o.with(Owner::new));
+        let chat = child.with(ChatState::new);
+        self.owners.update(|m| {
+            m.insert(conv, child);
+        });
+        self.live.update(|m| {
+            m.insert(conv, chat);
+        });
+        chat
     }
 
     /// 活跃会话的 `ChatState` = 单例投影；后台会话 = `live[conv]`。
@@ -112,27 +128,21 @@ impl SessionMap {
         self.meta.with_untracked(|m| m.get(&conv).cloned())
     }
 
-    /// 打开或聚焦会话。切换时把出向会话数据落到 `live`，把入向会话数据拉进单例。
+    /// 打开或聚焦会话。切换时把出向会话数据落回其持久后台态，把入向会话的持久
+    /// 后台态拉进单例（两者都是同一个持久 `ChatState`，一次创建、跨切换复用）。
     pub fn activate(&self, singleton: ChatState, conv: ConvId) {
         let current = self.active.get_untracked();
         if current == Some(conv) {
             return;
         }
-        // 1. 出向会话：把单例当前数据复制进一个常驻后台 ChatState。
+        // 1. 出向会话：把单例当前数据复制回其持久后台态。
         if let Some(prev) = current {
-            let bg = self.spawn_background();
+            let bg = self.ensure_background(prev);
             bg.restore_from(singleton.capture_snapshot());
-            self.live.update(|m| {
-                m.insert(prev, bg);
-            });
         }
-        // 2. 入向会话：从 live 取其后台态（若无则空）拉进单例，并移除其 live 条目
-        //    （不变量：活跃会话不在 live 里）。
-        let incoming = self.live.try_update(|m| m.remove(&conv)).flatten();
-        match incoming {
-            Some(bg) => singleton.restore_from(bg.capture_snapshot()),
-            None => singleton.restore_from(Default::default()),
-        }
+        // 2. 入向会话：从其持久后台态恢复进单例（保留 live 条目，不移除）。
+        let incoming = self.ensure_background(conv);
+        singleton.restore_from(incoming.capture_snapshot());
         // 3. order 补齐 + 更新 active。
         self.order.update(|o| {
             if !o.contains(&conv) {
@@ -142,7 +152,7 @@ impl SessionMap {
         self.active.set(Some(conv));
     }
 
-    /// 关闭会话（丢弃其后台态、meta、running）。活跃则聚焦左邻。
+    /// 关闭会话（丢弃其后台态、meta、running，回收其子 Owner）。活跃则聚焦左邻。
     pub fn close(&self, singleton: ChatState, conv: ConvId) {
         let was_active = self.active.get_untracked() == Some(conv);
         self.live.update(|m| {
@@ -151,6 +161,10 @@ impl SessionMap {
         self.running.update(|m| {
             m.remove(&conv);
         });
+        // 释放该会话后台态的子 Owner（回收其 signals；防按切换次数泄漏）。
+        if let Some(child) = self.owners.try_update(|m| m.remove(&conv)).flatten() {
+            child.cleanup();
+        }
 
         let order = self.order.get_untracked();
         let idx = order.iter().position(|c| *c == conv);
@@ -170,11 +184,8 @@ impl SessionMap {
         if was_active {
             match neighbour {
                 Some(next) => {
-                    let bg = self.live.try_update(|m| m.remove(&next)).flatten();
-                    match bg {
-                        Some(bg) => singleton.restore_from(bg.capture_snapshot()),
-                        None => singleton.restore_from(Default::default()),
-                    }
+                    let bg = self.ensure_background(next);
+                    singleton.restore_from(bg.capture_snapshot());
                     self.active.set(Some(next));
                 }
                 None => {

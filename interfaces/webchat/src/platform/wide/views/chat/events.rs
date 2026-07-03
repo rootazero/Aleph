@@ -265,8 +265,13 @@ fn resolve_target(
     session_key: Option<&str>,
 ) -> Option<ChatState> {
     let conv = match event_type {
-        // New run / `reasoning` without a run_id: route to the active conversation.
-        "run_accepted" | "reasoning" => sessions.active_conv(),
+        // New run: route to the active conversation.
+        "run_accepted" => sessions.active_conv(),
+        // `reasoning` without a run_id: route to the active conversation too;
+        // with a run_id it must follow that run's owning conversation like
+        // every other event, so it doesn't bleed into whichever conversation
+        // happens to be in the foreground.
+        "reasoning" if run_id.is_empty() => sessions.active_conv(),
         _ => sessions.route_lookup(run_id),
     }?;
     if event_type == "run_accepted" {
