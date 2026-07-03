@@ -18,6 +18,18 @@ pub struct NodeExcerpt {
     pub tags: Vec<String>,
     pub body_markdown: String,
     pub breadcrumb: Vec<String>,
+    pub backlinks: Vec<String>,
+}
+
+/// Turn a note path like `a/b/c.md` into breadcrumb dir segments `["a","b"]`.
+/// Drops the final filename component, empty segments, and `.` segments.
+fn breadcrumb_from_path(path: &str) -> Vec<String> {
+    let mut segs: Vec<&str> = path
+        .split('/')
+        .filter(|s| !s.is_empty() && *s != ".")
+        .collect();
+    segs.pop(); // drop the filename (last component)
+    segs.into_iter().map(str::to_owned).collect()
 }
 
 /// Sidebar variant of the node detail view. 240 px content width — the
@@ -58,7 +70,8 @@ pub fn NodeDetailPanel(
                         category: detail.node.category,
                         tags: detail.node.tags,
                         body_markdown: detail.content,
-                        breadcrumb: Vec::new(),
+                        breadcrumb: breadcrumb_from_path(&detail.node.path),
+                        backlinks: detail.backlinks,
                     };
                     excerpts.update(|m| {
                         m.insert(id, ex);
@@ -106,6 +119,7 @@ fn DetailFor(
     let body_html = render_excerpt(&excerpt.body_markdown);
     let breadcrumb = excerpt.breadcrumb.clone();
     let tags = excerpt.tags.clone();
+    let backlinks = excerpt.backlinks.clone();
     let node_id = excerpt.id.clone();
     let node_id_for_list = excerpt.id.clone();
     let title = excerpt.name.clone();
@@ -250,6 +264,29 @@ fn DetailFor(
                     </div>
                 }
             })}
+            {(!backlinks.is_empty()).then(|| {
+                let bl = backlinks.clone();
+                view! {
+                    <div style="margin-top:10px">
+                        <div style="text-transform:uppercase;font-size:9.5px;color:var(--text-meta);letter-spacing:0.05em;margin-bottom:4px">
+                            "Backlinks"
+                        </div>
+                        <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:3px">
+                            {bl.into_iter().map(|id| {
+                                let id_click = id.clone();
+                                view! {
+                                    <li
+                                        style="font-size:11px;color:var(--cat-reference);padding:3px 6px;border-radius:4px;background:rgba(96,165,250,0.08);cursor:pointer"
+                                        on:click=move |_| mem.selected_node.set(Some(id_click.clone()))
+                                    >
+                                        {id}
+                                    </li>
+                                }
+                            }).collect_view()}
+                        </ul>
+                    </div>
+                }
+            })}
         </div>
     }
 }
@@ -305,5 +342,29 @@ fn RecentVisitedList() -> impl IntoView {
                 })
             }}
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::breadcrumb_from_path;
+
+    #[test]
+    fn breadcrumb_strips_filename_and_splits_dirs() {
+        assert_eq!(
+            breadcrumb_from_path("project/aleph/notes/foo.md"),
+            vec!["project", "aleph", "notes"]
+        );
+    }
+
+    #[test]
+    fn breadcrumb_empty_for_bare_filename() {
+        assert_eq!(breadcrumb_from_path("foo.md"), Vec::<String>::new());
+        assert_eq!(breadcrumb_from_path(""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn breadcrumb_ignores_empty_and_dot_segments() {
+        assert_eq!(breadcrumb_from_path("/a//b/c.md"), vec!["a", "b"]);
     }
 }
