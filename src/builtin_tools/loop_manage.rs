@@ -159,6 +159,14 @@ impl LoopTool {
         if let Some(s) = &self.test_session {
             return s.clone();
         }
+        // Per-run truth first: the shared registry handle is process-global
+        // and rewritten at every run start, so a concurrent run of another
+        // agent can overwrite it mid-turn and `start` would bind the loop to
+        // that run's session. The task-local is scoped per tool call by the
+        // dispatch chokepoint and cannot race.
+        if let Some(sk) = crate::tools::turn_context::current_session_key() {
+            return sk;
+        }
         match &self.session_key {
             Some(h) => h.read().await.clone(),
             None => String::new(),
@@ -914,5 +922,34 @@ mod tests {
         assert!(sstore.get(&loop_key("sess-loop-stop")).unwrap().is_none());
         // ...but leaves a co-existing goal-keyed strategy untouched.
         assert!(sstore.get(&goal_key("sess-loop-stop")).unwrap().is_some());
+    }
+
+    /// Regression: the shared registry handle is process-global and rewritten
+    /// at every run start, so a concurrent run of another agent can overwrite
+    /// it mid-turn. The turn's `TURN_CONTEXT` task-local must win so
+    /// `loop(start)` binds to the run that actually made the call; the handle
+    /// stays as the fallback for non-scoped paths.
+    #[tokio::test]
+    async fn session_prefers_turn_context_over_shared_handle() {
+        use crate::routing::session_key::SessionKey;
+        use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let handle = Arc::new(RwLock::new("concurrent-run-session".to_string()));
+        let tool = LoopTool::new(reg).with_session_key_handle(Some(handle));
+
+        let run_key = SessionKey::main("own-run");
+        let turn = TurnContext {
+            session_key: run_key.clone(),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+        };
+        let bound = TURN_CONTEXT.scope(turn, tool.session()).await;
+        assert_eq!(bound, run_key.to_key_string());
+
+        // Outside a scoped turn the shared handle remains the fallback.
+        assert_eq!(tool.session().await, "concurrent-run-session");
     }
 }

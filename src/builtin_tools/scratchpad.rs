@@ -164,7 +164,14 @@ impl ScratchpadTool {
     }
 
     /// Current live session key, or empty string when no handle is wired.
+    /// Prefers the per-run `TURN_CONTEXT` task-local — the shared handle is
+    /// process-global and rewritten at every run start, so a concurrent run
+    /// of another agent can overwrite it mid-turn and the registry would
+    /// bind the project to the wrong session.
     async fn current_session_key(&self) -> String {
+        if let Some(sk) = crate::tools::turn_context::current_session_key() {
+            return sk;
+        }
         match &self.session_key {
             Some(h) => h.read().await.clone(),
             None => String::new(),

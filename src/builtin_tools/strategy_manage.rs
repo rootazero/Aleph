@@ -82,6 +82,13 @@ impl StrategyTool {
         if let Some(s) = &self.test_session {
             return s.clone();
         }
+        // Per-run truth first: the shared registry handle is process-global
+        // and rewritten at every run start, so a concurrent run of another
+        // agent can overwrite it mid-turn. The task-local is scoped per tool
+        // call by the dispatch chokepoint and cannot race.
+        if let Some(sk) = crate::tools::turn_context::current_session_key() {
+            return sk;
+        }
         match &self.session_key {
             Some(h) => h.read().await.clone(),
             None => String::new(),

@@ -308,7 +308,15 @@ impl MemorySearchTool {
         // This restores the search path that was gutted when the facts table
         // was removed (Task 24); session data now lives in raw_memories.
         let session_facts: Vec<FactResult> = if scope == "current_session" || scope == "both" {
-            let session_key = self.default_session_key.read().await;
+            // Per-run truth first: the shared handle is process-global and
+            // rewritten at every run start, so a concurrent run of another
+            // agent can overwrite it mid-turn and this search would read the
+            // wrong session. The task-local is scoped per tool call by the
+            // dispatch chokepoint and cannot race.
+            let session_key = match crate::tools::turn_context::current_session_key() {
+                Some(sk) => sk,
+                None => self.default_session_key.read().await.clone(),
+            };
             if session_key.is_empty() {
                 Vec::new()
             } else {
@@ -319,7 +327,7 @@ impl MemorySearchTool {
                 // from workspace_filter here would query "main" and miss every
                 // row stored under "default" — silently returning nothing.
                 let agent_id = "default";
-                let path_prefix = format!("aleph://session/{}/", *session_key);
+                let path_prefix = format!("aleph://session/{session_key}/");
                 // Saturate: max_results is LLM-supplied and unclamped, so a
                 // huge value must not overflow-panic in debug builds.
                 let fetch_limit = args.max_results.saturating_mul(2);
