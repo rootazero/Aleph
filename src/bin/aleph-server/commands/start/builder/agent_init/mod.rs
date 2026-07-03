@@ -730,6 +730,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             default_timeout_secs: app_config.execution.default_timeout_secs,
             scratchpad_progress_push: app_config.execution.progress_push,
             mid_turn_steering: app_config.execution.mid_turn_steering,
+            core_tools: app_config.tools.core.clone(),
+            truncate_tool_descriptions: app_config.tools.truncate_tool_descriptions,
             ..Default::default()
         };
         let resilience_db: Option<Arc<alephcore::resilience::StateDatabase>> = {

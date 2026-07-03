@@ -89,6 +89,11 @@ pub struct ExecutionEngineConfig {
     /// (see `scratchpad_progress_sink`). Default off — opt in via
     /// `[execution] progress_push`.
     pub scratchpad_progress_push: bool,
+    /// Tools kept at full schema (progressive tool disclosure). Sourced from
+    /// `[tools] core`. `["*"]`/empty disables collapsing (escape hatch).
+    pub core_tools: Vec<String>,
+    /// Mirror of `[tools] truncate_tool_descriptions`.
+    pub truncate_tool_descriptions: bool,
 }
 
 impl Default for ExecutionEngineConfig {
@@ -99,6 +104,8 @@ impl Default for ExecutionEngineConfig {
             enable_tracing: true,
             mid_turn_steering: true,
             scratchpad_progress_push: false,
+            core_tools: crate::config::types::tools::default_core_tools(),
+            truncate_tool_descriptions: false,
         }
     }
 }

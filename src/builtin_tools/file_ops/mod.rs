@@ -22,6 +22,8 @@ pub(crate) mod write;
 
 // Re-export public API
 pub use apply_patch::{ApplyPatchArgs, ApplyPatchOutput, ApplyPatchTool};
+// Blast-radius extractor for the concurrency scheduler (crate-internal).
+pub(crate) use apply_patch::patch_target_paths;
 pub use edit::FileEditTool;
 pub use read::FileReadTool;
 pub use tool::FileOpsTool;

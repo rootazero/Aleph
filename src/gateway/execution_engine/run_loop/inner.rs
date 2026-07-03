@@ -597,6 +597,35 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 }
             }
 
+            // Register the on-demand schema loader ONLY when progressive
+            // disclosure is active. When disabled (core empty / ["*"]), nothing
+            // is collapsed, so get_tool_schema has nothing to serve and must NOT
+            // appear — keeping the tool surface byte-identical to pre-feature
+            // (escape hatch) and preserving prompt-cache continuity.
+            if crate::tools::scoped::ProgressiveDisclosureRewriter::is_enabled(
+                &self.config.core_tools,
+            ) {
+                // Snapshot every tool's ORIGINAL full schema before progressive
+                // disclosure collapses them, then register the on-demand loader.
+                let schema_snapshot: std::collections::HashMap<String, serde_json::Value> =
+                    loop_registry_inner
+                        .tool_definitions()
+                        .into_iter()
+                        .map(|d| (d.name, d.parameters))
+                        .collect();
+                loop_registry_inner.register(Box::new(
+                    crate::tools::schema_lookup::SchemaLookupTool::new(std::sync::Arc::new(
+                        schema_snapshot,
+                    )),
+                ));
+                // Ensure the loader survives a non-empty allow-filter (empty =
+                // allow-all; inserting into an empty set would flip it restrictive).
+                if !allowed_names.is_empty() {
+                    allowed_names
+                        .insert(crate::tools::schema_lookup::SchemaLookupTool::NAME.to_string());
+                }
+            }
+
             let loop_registry = Arc::new(loop_registry_inner);
 
             // Compose refresh sources: plugin tools (when an extension manager
@@ -636,6 +665,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     hook_session_id.clone(),
                     tool_permissions.clone(),
                     unattended,
+                    &self.config.core_tools,
+                    self.config.truncate_tool_descriptions,
                 );
 
             // Trace sink — built before SubagentTool so it can be inherited by
@@ -860,6 +891,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 hook_session_id.clone(),
                 tool_permissions.clone(),
                 unattended,
+                &self.config.core_tools,
+                self.config.truncate_tool_descriptions,
             );
 
             // Build FlowRequest. A resumed run carries no fresh input — the
