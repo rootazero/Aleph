@@ -1554,12 +1554,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         });
     }
 
-    // Identity resolver (shared for session-level overrides)
-    let identity_resolver: alephcore::gateway::handlers::identity::SharedIdentityResolver =
-        Arc::new(tokio::sync::RwLock::new(
-            alephcore::thinker::identity::IdentityResolver::with_defaults(),
+    // Identity handlers operate on the default agent's identity files
+    // (`~/.aleph/agents/{id}/SOUL.md` …) — the single source of truth shared
+    // with the `self_config` LLM tool and injected into the prompt each turn.
+    let identity_ctx: alephcore::gateway::handlers::identity::SharedIdentityCtx =
+        Arc::new(alephcore::gateway::handlers::identity::IdentityHandlerContext::new(
+            default_agent_id.clone(),
         ));
-    register_identity_handlers(&mut server, &identity_resolver);
+    register_identity_handlers(&mut server, &identity_ctx);
 
     // Initialize A2A subsystem (if enabled)
     {

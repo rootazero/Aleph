@@ -21,7 +21,6 @@ use crate::config::types::agents_def::{
 use crate::config::types::profile::ProfileConfig;
 use crate::config::types::provider::ProviderConfig;
 use crate::gateway::identity_loader::IdentityFileLoader;
-use crate::thinker::soul::SoulManifest;
 use crate::thinker::soul_archetypes::{compose_soul, SoulArchetype};
 
 // =============================================================================
@@ -95,9 +94,6 @@ pub struct ResolvedAgent {
 
     /// Resolved profile configuration
     pub profile: ProfileConfig,
-
-    /// Parsed SOUL.md manifest (if present in workspace)
-    pub soul: Option<SoulManifest>,
 
     /// Raw SOUL.md content (if present in workspace)
     pub soul_md: Option<String>,
@@ -364,7 +360,6 @@ impl AgentDefinitionResolver {
         // 6. Load SOUL.md, AGENTS.md from agent identity directory.
         // MEMORY.md is owned by the curated memory module and read at prompt
         // build time — see `MemoryContextProvider::build_curated_message`.
-        let soul = self.identity_loader.load_soul(&agent_dir);
         let soul_md = self.identity_loader.load(&agent_dir, "SOUL.md");
         let agents_md = self.identity_loader.load_agents_md(&agent_dir);
 
@@ -382,7 +377,6 @@ impl AgentDefinitionResolver {
             workspace_path,
             agent_dir,
             profile,
-            soul,
             soul_md,
             agents_md,
             model,

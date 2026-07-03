@@ -61,49 +61,19 @@ Feature: Embodiment Engine
     Then the soul should have 2 anti-patterns
     And the soul anti-patterns should contain "condescending"
 
-  # ═══ Identity Resolution ═══
+  # Identity Resolution scenarios were removed: the layered `IdentityResolver`
+  # (session-override / global-soul → SoulManifest) it exercised was a
+  # disconnected island never wired into prompt assembly and has been dissolved
+  # in favor of the single file-based source of truth (agent-dir SOUL.md). The
+  # `identity.*` RPC / CLI now read/write those files directly; see
+  # `src/gateway/handlers/identity.rs`.
 
-  Scenario: Session override takes highest priority
-    Given a global soul with identity "Global identity"
-    And a session override soul with identity "Session identity"
-    When I resolve identity
-    Then the effective identity should be "Session identity"
-
-  Scenario: Global soul is used when no override
-    Given a global soul with identity "Global identity"
-    When I resolve identity
-    Then the effective identity should be "Global identity"
-
-  Scenario: Empty resolver returns default soul
-    Given no soul files configured
-    When I resolve identity
-    Then the soul should be empty
-
-  Scenario: Clear session override falls back to global
-    Given a global soul with identity "Global identity"
-    And a session override soul with identity "Session identity"
-    When I clear the session override
-    And I resolve identity
-    Then the effective identity should be "Global identity"
-
-  # ═══ Prompt Integration ═══
-
-  Scenario: Soul section appears in system prompt
-    Given a soul with identity "I am Aleph"
-    And a soul with directive "Be helpful"
-    When I build the system prompt with soul
-    Then the prompt should contain "# Identity"
-    And the prompt should contain "I am Aleph"
-    And the prompt should contain "Behavioral Directives"
-    And the prompt should contain "Be helpful"
-
-  Scenario: Empty soul produces no soul section
-    Given an empty soul
-    When I build the system prompt with soul
-    Then the prompt should not contain "# Identity"
-    And the prompt should contain "AI assistant"
-
-  Scenario: Soul appears before role section
-    Given a soul with identity "I am Aleph"
-    When I build the system prompt with soul
-    Then "# Identity" should appear before "Your Role"
+  # Prompt Integration scenarios were removed: they exercised the
+  # `SoulManifest`→prompt path (`build_system_prompt_with_soul`) that was
+  # dissolved with the rest of System B. The live identity-injection source is
+  # now the agent-dir SOUL.md file rendered raw by `SoulLayer`. That file-based
+  # path is covered end-to-end by `SoulLayer` unit tests (`src/thinker/layers/
+  # soul.rs`) and the production cached-path regression
+  # (`cached_full_prompt_injects_soul_and_agents_identity_files` in
+  # `src/thinker/prompt_builder/cache.rs`). Parsing above still tests the live
+  # `SoulManifest` parser consumed by the `identity.get` RPC.

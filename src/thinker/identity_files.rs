@@ -5,6 +5,8 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::thinker::prompt_budget::truncate_with_head_tail;
 
 /// Canonical identity file names, loaded in this order.
@@ -180,6 +182,159 @@ impl IdentityFiles {
             .find(|f| f.name == name)
             .and_then(|f| f.content.as_deref())
     }
+}
+
+// =============================================================================
+// Identity-file write helpers (single source of truth for identity-file I/O)
+//
+// Shared by the two write surfaces over the SAME agent-dir identity files:
+//   * `self_config` tool  — the LLM's in-conversation edit path (R8)
+//   * `identity.*` gateway handlers — the external RPC / CLI edit path
+// Keeping validation + backup here (not duplicated per caller) means both
+// surfaces enforce the identical safety boundary on one source of truth.
+// =============================================================================
+
+/// How many timestamped backups to keep per identity file.
+pub(crate) const MAX_IDENTITY_BACKUPS: usize = 5;
+
+/// Maximum byte size accepted for an identity file write (1 MB).
+pub const MAX_IDENTITY_FILE_SIZE: usize = 1024 * 1024;
+
+/// Validate an identity file name against the canonical allow-list and reject
+/// path-traversal characters. Returns a human-readable reason on rejection so
+/// each caller can wrap it in its own error type.
+pub fn validate_identity_file_name(name: &str) -> Result<(), String> {
+    if !IDENTITY_FILE_NAMES.contains(&name) {
+        return Err("Invalid file name".to_string());
+    }
+    if name.contains("..") || name.contains('/') || name.contains('\\') || name.contains('\0') {
+        return Err("Invalid characters in file name".to_string());
+    }
+    Ok(())
+}
+
+/// Snapshot the current content of an identity file before it is overwritten,
+/// into `<agent_dir>/backups/<file>.<UTC timestamp>`. Returns the backup path,
+/// or `None` when the file does not exist yet (first write) or the snapshot
+/// could not be taken — backup is best-effort protection, never a write gate.
+pub(crate) fn backup_identity_file(
+    agent_dir: &Path,
+    file_name: &str,
+    path: &Path,
+) -> Option<PathBuf> {
+    if !path.exists() {
+        return None;
+    }
+    let backups_dir = agent_dir.join("backups");
+    std::fs::create_dir_all(&backups_dir).ok()?;
+    let ts = chrono::Utc::now().format("%Y%m%dT%H%M%S%3fZ");
+    let backup_path = backups_dir.join(format!("{file_name}.{ts}"));
+    std::fs::copy(path, &backup_path).ok()?;
+    prune_identity_backups(&backups_dir, file_name, MAX_IDENTITY_BACKUPS);
+    Some(backup_path)
+}
+
+/// Keep only the newest `keep` backups for one identity file. The timestamp
+/// suffix is zero-padded UTC, so lexicographic order equals chronological.
+pub(crate) fn prune_identity_backups(backups_dir: &Path, file_name: &str, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(backups_dir) else {
+        return;
+    };
+    let prefix = format!("{file_name}.");
+    let mut names: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with(&prefix))
+        .collect();
+    if names.len() <= keep {
+        return;
+    }
+    names.sort();
+    let excess = names.len() - keep;
+    for name in names.into_iter().take(excess) {
+        let _ = std::fs::remove_file(backups_dir.join(name));
+    }
+}
+
+/// Status metadata for one canonical identity file (existence + on-disk size).
+#[derive(Debug, Clone, Serialize)]
+pub struct IdentityFileStatus {
+    /// Canonical file name (e.g. "SOUL.md").
+    pub name: &'static str,
+    /// Whether the file currently exists on disk.
+    pub exists: bool,
+    /// On-disk byte size (0 when absent).
+    pub size: u64,
+    /// Absolute path to the file.
+    pub path: String,
+}
+
+/// List every canonical identity file under `agent_dir` with existence + size.
+#[must_use]
+pub fn list_identity_file_status(agent_dir: &Path) -> Vec<IdentityFileStatus> {
+    IDENTITY_FILE_NAMES
+        .iter()
+        .map(|&name| {
+            let path = agent_dir.join(name);
+            let (exists, size) =
+                std::fs::metadata(&path).map_or((false, 0), |m| (true, m.len()));
+            IdentityFileStatus {
+                name,
+                exists,
+                size,
+                path: path.display().to_string(),
+            }
+        })
+        .collect()
+}
+
+/// Outcome of a successful identity-file write.
+#[derive(Debug)]
+pub struct IdentityWriteOutcome {
+    /// Number of bytes written to the live file.
+    pub bytes_written: usize,
+    /// Where the previous version was snapshotted, if one existed.
+    pub backup_path: Option<PathBuf>,
+}
+
+/// Write `content` to `<agent_dir>/<file_name>`, validating the name, enforcing
+/// the size cap, creating the directory, and snapshotting any prior version
+/// first. `MEMORY.md` is rejected — it is owned by the curated-memory module,
+/// not the identity-file path. Returns the write outcome or a human-readable
+/// error reason.
+///
+/// This is the single low-level write used by both the `self_config` tool and
+/// the `identity.*` handlers so the two paths cannot drift.
+pub fn write_identity_file(
+    agent_dir: &Path,
+    file_name: &str,
+    content: &str,
+) -> Result<IdentityWriteOutcome, String> {
+    if file_name.eq_ignore_ascii_case("MEMORY.md") {
+        return Err("MEMORY.md is owned by the curated-memory module, not the identity-file \
+                    path. Use the `remember` tool for memory edits."
+            .to_string());
+    }
+    validate_identity_file_name(file_name)?;
+
+    if content.len() > MAX_IDENTITY_FILE_SIZE {
+        return Err(format!(
+            "Content exceeds maximum size limit of {MAX_IDENTITY_FILE_SIZE} bytes"
+        ));
+    }
+
+    std::fs::create_dir_all(agent_dir)
+        .map_err(|e| format!("Failed to create agent directory: {e}"))?;
+
+    let path = agent_dir.join(file_name);
+    let backup_path = backup_identity_file(agent_dir, file_name, &path);
+
+    std::fs::write(&path, content).map_err(|e| format!("Failed to write {file_name}: {e}"))?;
+
+    Ok(IdentityWriteOutcome {
+        bytes_written: content.len(),
+        backup_path,
+    })
 }
 
 #[cfg(test)]
@@ -379,5 +534,93 @@ mod tests {
         let big = IdentityFilesConfig::for_context_window(1_000_000);
         assert_eq!(big.per_file_max_chars, 100_000);
         assert_eq!(big.total_max_chars, 400_000);
+    }
+
+    #[test]
+    fn validate_identity_file_name_accepts_canonical_and_rejects_others() {
+        assert!(validate_identity_file_name("SOUL.md").is_ok());
+        assert!(validate_identity_file_name("IDENTITY.md").is_ok());
+        // Not on the allow-list.
+        assert!(validate_identity_file_name("MEMORY.md").is_err());
+        assert!(validate_identity_file_name("evil.md").is_err());
+        // Path traversal is rejected even if it were on the list.
+        assert!(validate_identity_file_name("../SOUL.md").is_err());
+    }
+
+    #[test]
+    fn list_identity_file_status_reports_existence_and_size() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("SOUL.md"), "you are aleph").unwrap();
+
+        let status = list_identity_file_status(dir.path());
+        assert_eq!(status.len(), IDENTITY_FILE_NAMES.len());
+        let soul = status.iter().find(|s| s.name == "SOUL.md").unwrap();
+        assert!(soul.exists);
+        assert_eq!(soul.size, "you are aleph".len() as u64);
+        let heartbeat = status.iter().find(|s| s.name == "HEARTBEAT.md").unwrap();
+        assert!(!heartbeat.exists);
+        assert_eq!(heartbeat.size, 0);
+    }
+
+    #[test]
+    fn write_identity_file_creates_and_backs_up() {
+        let dir = TempDir::new().unwrap();
+
+        // First write: no prior content, so no backup.
+        let first = write_identity_file(dir.path(), "SOUL.md", "version one").unwrap();
+        assert_eq!(first.bytes_written, "version one".len());
+        assert!(first.backup_path.is_none());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("SOUL.md")).unwrap(),
+            "version one"
+        );
+
+        // Overwrite: previous content must be snapshotted.
+        let second = write_identity_file(dir.path(), "SOUL.md", "version two").unwrap();
+        let backup = second.backup_path.expect("overwrite must back up");
+        assert_eq!(fs::read_to_string(&backup).unwrap(), "version one");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("SOUL.md")).unwrap(),
+            "version two"
+        );
+    }
+
+    #[test]
+    fn write_identity_file_rejects_memory_md_and_bad_names() {
+        let dir = TempDir::new().unwrap();
+        let mem = write_identity_file(dir.path(), "MEMORY.md", "x").unwrap_err();
+        assert!(mem.contains("remember"));
+        assert!(!dir.path().join("MEMORY.md").exists());
+
+        let bad = write_identity_file(dir.path(), "../../etc/passwd", "x").unwrap_err();
+        assert!(bad.contains("Invalid"));
+    }
+
+    #[test]
+    fn prune_keeps_newest_backups_only() {
+        let tmp = TempDir::new().unwrap();
+        let backups_dir = tmp.path().join("backups");
+        std::fs::create_dir_all(&backups_dir).unwrap();
+        // Seven fake backups with ascending (= chronological) suffixes,
+        // plus one for another file that must be untouched.
+        for i in 1..=7 {
+            std::fs::write(backups_dir.join(format!("SOUL.md.2026010100000{i}Z")), "x").unwrap();
+        }
+        std::fs::write(backups_dir.join("TOOLS.md.20260101000001Z"), "y").unwrap();
+
+        prune_identity_backups(&backups_dir, "SOUL.md", 5);
+
+        let mut remaining: Vec<String> = std::fs::read_dir(&backups_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("SOUL.md."))
+            .collect();
+        remaining.sort();
+        assert_eq!(remaining.len(), 5);
+        // The two OLDEST were pruned.
+        assert_eq!(remaining[0], "SOUL.md.20260101000003Z");
+        // Other files' backups are untouched.
+        assert!(backups_dir.join("TOOLS.md.20260101000001Z").exists());
     }
 }

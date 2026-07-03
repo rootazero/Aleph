@@ -1,6 +1,6 @@
 use super::{
     group_chat_handlers, identity_handlers, oauth_handlers, Arc, GatewayServer, GroupChatExecutor,
-    SharedIdentityResolver, SharedOrchestrator,
+    SharedIdentityCtx, SharedOrchestrator,
 };
 
 pub(in crate::commands::start) fn register_daemon_handlers(
@@ -77,32 +77,17 @@ pub(in crate::commands::start) fn register_oauth_handlers(
 
 pub(in crate::commands::start) fn register_identity_handlers(
     server: &mut GatewayServer,
-    resolver: &SharedIdentityResolver,
+    ctx: &SharedIdentityCtx,
 ) {
-    register_handler!(
-        server,
-        "identity.get",
-        identity_handlers::handle_get,
-        resolver
-    );
-    register_handler!(
-        server,
-        "identity.set",
-        identity_handlers::handle_set,
-        resolver
-    );
+    register_handler!(server, "identity.get", identity_handlers::handle_get, ctx);
+    register_handler!(server, "identity.set", identity_handlers::handle_set, ctx);
     register_handler!(
         server,
         "identity.clear",
         identity_handlers::handle_clear,
-        resolver
+        ctx
     );
-    register_handler!(
-        server,
-        "identity.list",
-        identity_handlers::handle_list,
-        resolver
-    );
+    register_handler!(server, "identity.list", identity_handlers::handle_list, ctx);
 }
 
 // ─── register_group_chat_handlers ───────────────────────────────────────────

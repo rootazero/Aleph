@@ -6,33 +6,8 @@
 // `HarnessDeps::recall_context`.)
 
 use super::super::*;
-use crate::thinker::soul::SoulManifest;
 
 // ========== Integration tests: public API via Pipeline ==========
-
-#[test]
-fn test_build_system_prompt_with_soul() {
-    let builder = PromptBuilder::new(PromptConfig::default());
-
-    let soul = SoulManifest {
-        identity: "I am Aleph.".to_string(),
-        directives: vec!["Help users".to_string()],
-        ..Default::default()
-    };
-
-    let prompt = builder.build_system_prompt_with_soul(&[], &soul, None);
-
-    // Soul should appear first
-    let identity_pos = prompt.find("# Identity").unwrap();
-    let role_pos = prompt.find("Your Role").unwrap();
-    assert!(
-        identity_pos < role_pos,
-        "Identity should appear before Role"
-    );
-
-    // Standard sections should still be present
-    assert!(prompt.contains("Your Role"), "Missing role section");
-}
 
 #[test]
 fn test_thinking_guidance_disabled_by_default() {
@@ -70,26 +45,6 @@ fn test_thinking_guidance_enabled() {
 
     // Should contain alternatives guidance
     assert!(prompt.contains("Acknowledging Alternatives"));
-}
-
-#[test]
-fn test_thinking_guidance_with_soul() {
-    let config = PromptConfig {
-        thinking_transparency: true,
-        ..Default::default()
-    };
-    let builder = PromptBuilder::new(config);
-
-    let soul = SoulManifest {
-        identity: "Test assistant.".to_string(),
-        ..Default::default()
-    };
-
-    let prompt = builder.build_system_prompt_with_soul(&[], &soul, None);
-
-    // Both soul and thinking guidance should be present
-    assert!(prompt.contains("# Identity"));
-    assert!(prompt.contains("## Thinking Transparency"));
 }
 
 #[test]

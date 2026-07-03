@@ -10,19 +10,16 @@ mod sections;
 #[cfg(test)]
 mod tests;
 
-use crate::config::ProfileConfig;
 use crate::tool_metadata::tool_index::HydrationResult;
 use crate::tools::info::ToolInfo;
 
 use crate::agents::AgentDef;
 
 use super::identity_files::IdentityFiles;
-use super::inbound_context::InboundContext;
-use super::prompt_budget::{PromptResult, TokenBudget};
+use super::prompt_budget::TokenBudget;
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability};
 use super::prompt_mode::PromptMode;
 use super::prompt_pipeline::PromptPipeline;
-use super::soul::SoulManifest;
 
 /// Parent agent's stable prompt snapshot for fork path reuse.
 ///
@@ -136,9 +133,6 @@ pub struct PromptBuilder {
     /// Optional agent definition for sub-agent prompt assembly.
     /// When set, `build_system_prompt` will inject agent role via `AgentRoleLayer`.
     agent_def: Option<crate::agents::AgentDef>,
-    /// Optional soul manifest for identity/personality.
-    /// When set, `build_system_prompt` uses the Soul assembly path.
-    soul: Option<SoulManifest>,
     /// Loaded identity files (SOUL.md, IDENTITY.md, AGENTS.md, TOOLS.md,
     /// HEARTBEAT.md) from `~/.aleph/agents/{agent_id}/`. When set, these are
     /// threaded into every `LayerInput` so `SoulLayer`, `IdentityFilesLayer`,
@@ -197,7 +191,6 @@ impl PromptBuilder {
             config,
             pipeline,
             agent_def: None,
-            soul: None,
             identity_files: None,
             curated_memory_envelope: None,
             chain_context: None,
@@ -216,15 +209,6 @@ impl PromptBuilder {
     /// and protocol sections via `AgentRoleLayer`.
     pub fn with_agent(mut self, agent_def: crate::agents::AgentDef) -> Self {
         self.agent_def = Some(agent_def);
-        self
-    }
-
-    /// Attach a soul manifest for identity/personality injection.
-    ///
-    /// When set, `build_system_prompt` uses the Soul assembly path,
-    /// injecting soul content at the top of the prompt.
-    pub fn with_soul(mut self, soul: SoulManifest) -> Self {
-        self.soul = Some(soul);
         self
     }
 
@@ -323,14 +307,8 @@ impl PromptBuilder {
 
     /// Build the system prompt
     pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
-        let (path, input) = match &self.soul {
-            Some(soul) => (
-                AssemblyPath::Soul,
-                LayerInput::soul(&self.config, tools, soul),
-            ),
-            None => (AssemblyPath::Basic, LayerInput::basic(&self.config, tools)),
-        };
-        let input = input
+        let path = AssemblyPath::Basic;
+        let input = LayerInput::basic(&self.config, tools)
             .with_identity_files_opt(self.identity_files.as_ref())
             .with_extra_files_opt(self.extra_files.as_deref());
         let input = match &self.agent_def {
@@ -377,64 +355,6 @@ impl PromptBuilder {
         self.pipeline.execute(AssemblyPath::Hydration, &input)
     }
 
-    /// Build system prompt with soul section at the top
-    ///
-    /// This is the primary entry point when using the Embodiment Engine.
-    /// Soul content appears at the very top of the prompt for highest priority.
-    /// When a workspace profile is provided, its `system_prompt` is injected
-    /// between Soul (priority 50) and Role (priority 100).
-    pub fn build_system_prompt_with_soul(
-        &self,
-        tools: &[ToolInfo],
-        soul: &SoulManifest,
-        profile: Option<&ProfileConfig>,
-    ) -> String {
-        let input = LayerInput::soul(&self.config, tools, soul)
-            .with_profile(profile)
-            .with_identity_files_opt(self.identity_files.as_ref())
-            .with_extra_files_opt(self.extra_files.as_deref());
-        let input = match &self.config.mcp_instructions {
-            Some(instructions) => input.with_mcp_instructions(instructions),
-            None => input,
-        };
-        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
-        let input = input.with_chain_context_opt(self.chain_context.as_ref());
-        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
-        let input = input
-            .with_behavior_name_opt(self.behavior_name.as_deref())
-            .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref());
-        let input = input.with_iteration_cap_opt(self.iteration_cap);
-        self.pipeline.execute(AssemblyPath::Soul, &input)
-    }
-
-    /// Build system prompt for a sub-agent.
-    ///
-    /// Injects the agent's role header and protocol sections via `AgentRoleLayer`.
-    /// This replaces the old `PromptBuilder::for_agent()` from the pre-Harness era.
-    pub fn build_for_agent(
-        &self,
-        agent_def: &crate::agents::AgentDef,
-        tools: &[ToolInfo],
-        soul: &SoulManifest,
-    ) -> String {
-        let input = LayerInput::soul(&self.config, tools, soul)
-            .with_agent_def(agent_def)
-            .with_identity_files_opt(self.identity_files.as_ref())
-            .with_extra_files_opt(self.extra_files.as_deref());
-        let input = match &self.config.mcp_instructions {
-            Some(instructions) => input.with_mcp_instructions(instructions),
-            None => input,
-        };
-        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
-        let input = input.with_chain_context_opt(self.chain_context.as_ref());
-        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
-        let input = input
-            .with_behavior_name_opt(self.behavior_name.as_deref())
-            .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref());
-        let input = input.with_iteration_cap_opt(self.iteration_cap);
-        self.pipeline.execute(AssemblyPath::Soul, &input)
-    }
-
     /// Build system prompt for a sub-agent (basic path, no soul).
     ///
     /// Lighter variant for sub-agents that don't have a `SoulManifest`.
@@ -463,15 +383,8 @@ impl PromptBuilder {
 
     /// Capture the current stable layers output as a reusable snapshot.
     pub fn capture_snapshot(&self, tools: &[ToolInfo]) -> PromptSnapshot {
-        let path = match &self.soul {
-            Some(_) => AssemblyPath::Soul,
-            None => AssemblyPath::Basic,
-        };
-        let input = match &self.soul {
-            Some(soul) => LayerInput::soul(&self.config, tools, soul),
-            None => LayerInput::basic(&self.config, tools),
-        };
-        let input = input
+        let path = AssemblyPath::Basic;
+        let input = LayerInput::basic(&self.config, tools)
             .with_identity_files_opt(self.identity_files.as_ref())
             .with_extra_files_opt(self.extra_files.as_deref());
         let input = match &self.config.mcp_instructions {
@@ -499,13 +412,10 @@ impl PromptBuilder {
         agent_def: &AgentDef,
         tools: &[ToolInfo],
     ) -> String {
-        let input = match &self.soul {
-            Some(soul) => LayerInput::soul(&self.config, tools, soul),
-            None => LayerInput::basic(&self.config, tools),
-        }
-        .with_agent_def(agent_def)
-        .with_identity_files_opt(self.identity_files.as_ref())
-        .with_extra_files_opt(self.extra_files.as_deref());
+        let input = LayerInput::basic(&self.config, tools)
+            .with_agent_def(agent_def)
+            .with_identity_files_opt(self.identity_files.as_ref())
+            .with_extra_files_opt(self.extra_files.as_deref());
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
@@ -533,97 +443,6 @@ impl PromptBuilder {
     /// Access the underlying config mutably (for dynamic modifications).
     pub const fn config_mut(&mut self) -> &mut PromptConfig {
         &mut self.config
-    }
-
-    /// Build system prompt with explicit mode control.
-    pub fn build_system_prompt_with_mode(
-        &self,
-        tools: &[ToolInfo],
-        soul: &SoulManifest,
-        profile: Option<&ProfileConfig>,
-        mode: PromptMode,
-    ) -> String {
-        let input = LayerInput::soul(&self.config, tools, soul)
-            .with_profile(profile)
-            .with_mode(mode)
-            .with_identity_files_opt(self.identity_files.as_ref())
-            .with_extra_files_opt(self.extra_files.as_deref());
-        let input = match &self.config.mcp_instructions {
-            Some(instructions) => input.with_mcp_instructions(instructions),
-            None => input,
-        };
-        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
-        let input = input.with_chain_context_opt(self.chain_context.as_ref());
-        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
-        let input = input
-            .with_behavior_name_opt(self.behavior_name.as_deref())
-            .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref());
-        let input = input.with_iteration_cap_opt(self.iteration_cap);
-        self.pipeline
-            .execute_with_mode(AssemblyPath::Soul, &input, mode)
-    }
-
-    /// Build system prompt with mode and budget control.
-    ///
-    /// Combines soul-path assembly, mode filtering, and token budget
-    /// enforcement into a single call.  Returns a [`PromptResult`] with
-    /// truncation metadata when sections are removed to fit the budget.
-    pub fn build_with_budget(
-        &self,
-        tools: &[ToolInfo],
-        soul: &SoulManifest,
-        profile: Option<&ProfileConfig>,
-        mode: PromptMode,
-        budget: &TokenBudget,
-    ) -> PromptResult {
-        let input = LayerInput::soul(&self.config, tools, soul)
-            .with_profile(profile)
-            .with_mode(mode)
-            .with_identity_files_opt(self.identity_files.as_ref())
-            .with_extra_files_opt(self.extra_files.as_deref());
-        let input = match &self.config.mcp_instructions {
-            Some(instructions) => input.with_mcp_instructions(instructions),
-            None => input,
-        };
-        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
-        let input = input.with_chain_context_opt(self.chain_context.as_ref());
-        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
-        let input = input
-            .with_behavior_name_opt(self.behavior_name.as_deref())
-            .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref());
-        let input = input.with_iteration_cap_opt(self.iteration_cap);
-        self.pipeline
-            .assemble(AssemblyPath::Soul, &input, mode, budget)
-    }
-
-    /// Build system prompt with full context (soul + profile + identity files + inbound).
-    ///
-    /// This is the comprehensive entry point that passes all available context
-    /// through to the prompt pipeline via `LayerInput`.
-    pub fn build_system_prompt_with_full_context(
-        &self,
-        tools: &[ToolInfo],
-        soul: &SoulManifest,
-        profile: Option<&ProfileConfig>,
-        identity_files: Option<&IdentityFiles>,
-        inbound: Option<&InboundContext>,
-    ) -> String {
-        let input = LayerInput::soul(&self.config, tools, soul)
-            .with_profile(profile)
-            .with_identity_files_opt(identity_files)
-            .with_inbound_opt(inbound);
-        let input = match &self.config.mcp_instructions {
-            Some(instructions) => input.with_mcp_instructions(instructions),
-            None => input,
-        };
-        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
-        let input = input.with_chain_context_opt(self.chain_context.as_ref());
-        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
-        let input = input
-            .with_behavior_name_opt(self.behavior_name.as_deref())
-            .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref());
-        let input = input.with_iteration_cap_opt(self.iteration_cap);
-        self.pipeline.execute(AssemblyPath::Soul, &input)
     }
 
     /// Build system prompt using `ResolvedContext`

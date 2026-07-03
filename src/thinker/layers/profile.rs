@@ -20,7 +20,12 @@ impl PromptLayer for ProfileLayer {
         !matches!(mode, PromptMode::Minimal)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[AssemblyPath::Soul, AssemblyPath::Context]
+        // `Cached` is the live main-loop path
+        // (`build_system_prompt_cached_with_mode`). Without it, AGENTS.md —
+        // which `IdentityFilesLayer` defers here via `HANDLED_ELSEWHERE` —
+        // would vanish from every production prompt (same class of bug the
+        // Role / Citation layers were fixed for).
+        &[AssemblyPath::Soul, AssemblyPath::Context, AssemblyPath::Cached]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         // Priority 1: workspace AGENTS.md
@@ -54,7 +59,6 @@ mod tests {
     use crate::config::ProfileConfig;
     use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
     use crate::thinker::prompt_builder::PromptConfig;
-    use crate::thinker::soul::SoulManifest;
     use std::path::PathBuf;
 
     #[test]
@@ -62,12 +66,11 @@ mod tests {
         let layer = ProfileLayer;
         let config = PromptConfig::default();
         let tools = vec![];
-        let soul = SoulManifest::default();
         let profile = ProfileConfig {
             system_prompt: Some("You are a senior Rust engineer.".to_string()),
             ..Default::default()
         };
-        let input = LayerInput::soul(&config, &tools, &soul).with_profile(Some(&profile));
+        let input = LayerInput::basic(&config, &tools).with_profile(Some(&profile));
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
@@ -80,12 +83,11 @@ mod tests {
         let layer = ProfileLayer;
         let config = PromptConfig::default();
         let tools = vec![];
-        let soul = SoulManifest::default();
         let profile = ProfileConfig {
             system_prompt: None,
             ..Default::default()
         };
-        let input = LayerInput::soul(&config, &tools, &soul).with_profile(Some(&profile));
+        let input = LayerInput::basic(&config, &tools).with_profile(Some(&profile));
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
@@ -97,8 +99,7 @@ mod tests {
         let layer = ProfileLayer;
         let config = PromptConfig::default();
         let tools = vec![];
-        let soul = SoulManifest::default();
-        let input = LayerInput::soul(&config, &tools, &soul);
+        let input = LayerInput::basic(&config, &tools);
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
@@ -110,12 +111,11 @@ mod tests {
         let layer = ProfileLayer;
         let config = PromptConfig::default();
         let tools = vec![];
-        let soul = SoulManifest::default();
         let profile = ProfileConfig {
             system_prompt: Some("".to_string()),
             ..Default::default()
         };
-        let input = LayerInput::soul(&config, &tools, &soul).with_profile(Some(&profile));
+        let input = LayerInput::basic(&config, &tools).with_profile(Some(&profile));
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
@@ -127,7 +127,6 @@ mod tests {
         let layer = ProfileLayer;
         let config = PromptConfig::default();
         let tools = vec![];
-        let soul = SoulManifest::default();
         let profile = ProfileConfig {
             system_prompt: Some("You are a senior Rust engineer.".to_string()),
             ..Default::default()
@@ -141,7 +140,7 @@ mod tests {
                 original_size: 24,
             }],
         };
-        let input = LayerInput::soul(&config, &tools, &soul)
+        let input = LayerInput::basic(&config, &tools)
             .with_profile(Some(&profile))
             .with_identity_files(&ws);
         let mut out = String::new();
@@ -159,7 +158,6 @@ mod tests {
         let layer = ProfileLayer;
         let config = PromptConfig::default();
         let tools = vec![];
-        let soul = SoulManifest::default();
         let profile = ProfileConfig {
             system_prompt: Some("You are a senior Rust engineer.".to_string()),
             ..Default::default()
@@ -174,7 +172,7 @@ mod tests {
                 original_size: 16,
             }],
         };
-        let input = LayerInput::soul(&config, &tools, &soul)
+        let input = LayerInput::basic(&config, &tools)
             .with_profile(Some(&profile))
             .with_identity_files(&ws);
         let mut out = String::new();
@@ -192,6 +190,9 @@ mod tests {
         assert!(paths.contains(&AssemblyPath::Soul));
         assert!(paths.contains(&AssemblyPath::Context));
         assert!(!paths.contains(&AssemblyPath::Basic));
+        // Must ride the live main-loop path so AGENTS.md / profile system_prompt
+        // actually reach the production prompt.
+        assert!(paths.contains(&AssemblyPath::Cached));
     }
 
     #[test]

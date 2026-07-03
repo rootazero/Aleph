@@ -93,11 +93,12 @@
 - **打磨话术**：「这是‘系统提示’侧的字符预算（`prompt_budget.rs`），不要和‘对话历史’侧的 token 压力（`context/budget/`）搞混——两层独立。」
 
 ### 1.3 人格与灵魂注入 (Identity & Soul)
-- **口语关键词**：人格、soul、identity、语气、persona、声调
-- **代码锚点**：`src/thinker/soul.rs`（SoulManifest：identity/voice/directives）、`src/thinker/identity.rs`（三层优先级：session override > 全局 > 默认）、`src/thinker/layers/soul.rs`（SoulLayer @priority50，SOUL.md 优先）、`src/thinker/identity_files.rs`
-- **职责**：workspace `SOUL.md` / 全局 `~/.aleph/soul.md` / session override 三层堆栈，注入身份、语气、冗长度、格式化方针。
-- **状态**：✅ 已实现。
-- **打磨话术**：「改人格/语气走 SoulLayer 与 SOUL.md，三层优先级在 `identity.rs`。」
+- **口语关键词**：人格、soul、identity、语气、persona、声调、对话改身份
+- **代码锚点**：`src/thinker/identity_files.rs`（**单一真相源**：canonical 身份文件 SOUL.md/IDENTITY.md/… 的加载 + 写入/备份/校验/列举助手，被两个写入面共用）、`src/thinker/layers/soul.rs`（SoulLayer @priority50 注入 agent-dir SOUL.md，`paths()` 含 `Cached`）、`src/thinker/layers/profile.rs`（ProfileLayer @priority75 注入 AGENTS.md，`paths()` 含 `Cached`）、`src/builtin_tools/self_config.rs`（LLM 对话写身份文件，R8）、`src/gateway/handlers/identity.rs`（`identity.get/set/clear/list` RPC/CLI 写同一份文件）、`src/thinker/soul.rs`（`SoulManifest` 现仅作 SOUL.md 的**结构化解析器**用于 `identity.get` 预览，不再是运行时注入对象）
+- **职责**：身份 = agent-dir `~/.aleph/agents/{id}/SOUL.md`（+ AGENTS.md/IDENTITY.md 等），每轮从磁盘读入、经 `SoulLayer`/`ProfileLayer` 注入生产 prompt（`AssemblyPath::Cached` 主路径）。**一个真相源，两个写入面**：`self_config` 工具（LLM 对话内改）与 `identity.*` RPC/CLI（外部人类改）都读写这同一份文件，共用 `identity_files.rs` 的 validate/backup 助手。改动次轮生效。
+- **状态**：✅ 已实现（2026-07-03 溶解重构 + Phase D2 死代码清理 + 注入接线修复）。
+- **架构史**：旧「三层 SoulManifest」System B（`IdentityResolver` session-override > 全局 `~/.aleph/soul.md` > 默认 → SoulLayer 优先级2）是一座**从未连进 prompt 组装的死岛**——`identity.set` 静默无效、`identity.get` 与真正注入的 agent-dir SOUL.md 各说各话。已删除 `IdentityResolver` 并把 `identity.*` 重指向单一文件源。**Phase D2（已完成）**：溶解整条 `SoulManifest`→prompt 死管线——`prompt_builder` 的 `with_soul`/`build_system_prompt_with_soul`/`build_for_agent`/`build_with_budget`/`build_system_prompt_with_mode`/`build_system_prompt_with_full_context`、`SoulLayer` 优先级2 manifest 渲染、`LayerInput.soul`、`append_soul_section`、`ResolvedAgent.soul`/`IdentityFileLoader::load_soul` 全部删除（`SoulManifest` struct+parser 保留）。**🔴 同批修复的核心接线 bug**：`SoulLayer.paths()`/`ProfileLayer.paths()` 原本**缺 `AssemblyPath::Cached`**，而生产主循环唯一入口 `build_system_prompt_cached_with_mode` 走 `Cached` 路径 → 用户写的 SOUL.md(人格)/AGENTS.md(项目上下文) **从未注入过生产 prompt**（写路径通、注入断，与 Role/Citation 修过的同类 bug 一致）。已给两个 layer 的 `paths()` 补 `Cached` + 回归测试 `cached_full_prompt_injects_soul_and_agents_identity_files`。
+- **打磨话术**：「改人格/语气 = 写 agent-dir `SOUL.md`：对话内走 `self_config` 工具，外部走 `aleph identity set`。两者共用 `identity_files.rs`，是同一份文件。注入走 `SoulLayer`/`ProfileLayer`（`Cached` 主路径）——2026-07-03 前它俩漏挂 `Cached`，SOUL.md/AGENTS.md 其实从没进过 prompt，现已修。别再找 `identity.rs` 的三层优先级——已溶解。」
 
 ---
 

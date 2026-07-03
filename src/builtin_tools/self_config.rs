@@ -15,6 +15,7 @@ use crate::config::patcher::{get_nested_value, ConfigPatcher, PatchRequest};
 use crate::config::Config;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
+use crate::thinker::identity_files::{backup_identity_file, validate_identity_file_name};
 use crate::tools::AlephTool;
 
 use super::error::ToolError;
@@ -147,66 +148,13 @@ impl SelfConfigTool {
 
 // =============================================================================
 // Security Validation
+//
+// Identity-file name validation + backup/prune now live in
+// `crate::thinker::identity_files` (the single source of truth for
+// identity-file I/O), shared with the `identity.*` gateway handlers so both
+// write surfaces enforce the identical safety boundary. `validate_identity_file_name`
+// and `backup_identity_file` are imported at the top of this module.
 // =============================================================================
-
-fn validate_file_name(name: &str) -> std::result::Result<(), ToolError> {
-    use crate::thinker::identity_files::IDENTITY_FILE_NAMES;
-    if !IDENTITY_FILE_NAMES.contains(&name) {
-        return Err(ToolError::InvalidArgs("Invalid file name".into()));
-    }
-    if name.contains("..") || name.contains('/') || name.contains('\\') || name.contains('\0') {
-        return Err(ToolError::InvalidArgs(
-            "Invalid characters in file name".into(),
-        ));
-    }
-    Ok(())
-}
-
-/// How many timestamped backups to keep per identity file.
-const MAX_IDENTITY_BACKUPS: usize = 5;
-
-/// Snapshot the current content of an identity file before it is overwritten,
-/// into `<agent_dir>/backups/<file>.<UTC timestamp>`. Returns the backup path,
-/// or `None` when the file does not exist yet (first write) or the snapshot
-/// could not be taken — backup is best-effort protection, never a write gate.
-fn backup_identity_file(
-    agent_dir: &std::path::Path,
-    file_name: &str,
-    path: &std::path::Path,
-) -> Option<PathBuf> {
-    if !path.exists() {
-        return None;
-    }
-    let backups_dir = agent_dir.join("backups");
-    std::fs::create_dir_all(&backups_dir).ok()?;
-    let ts = chrono::Utc::now().format("%Y%m%dT%H%M%S%3fZ");
-    let backup_path = backups_dir.join(format!("{file_name}.{ts}"));
-    std::fs::copy(path, &backup_path).ok()?;
-    prune_identity_backups(&backups_dir, file_name, MAX_IDENTITY_BACKUPS);
-    Some(backup_path)
-}
-
-/// Keep only the newest `keep` backups for one identity file. The timestamp
-/// suffix is zero-padded UTC, so lexicographic order equals chronological.
-fn prune_identity_backups(backups_dir: &std::path::Path, file_name: &str, keep: usize) {
-    let Ok(entries) = std::fs::read_dir(backups_dir) else {
-        return;
-    };
-    let prefix = format!("{file_name}.");
-    let mut names: Vec<String> = entries
-        .filter_map(|e| e.ok())
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|n| n.starts_with(&prefix))
-        .collect();
-    if names.len() <= keep {
-        return;
-    }
-    names.sort();
-    let excess = names.len() - keep;
-    for name in names.into_iter().take(excess) {
-        let _ = std::fs::remove_file(backups_dir.join(name));
-    }
-}
 
 // =============================================================================
 // Operation Implementations
@@ -244,7 +192,7 @@ impl SelfConfigTool {
     }
 
     fn read_file(&self, file_name: &str) -> Result<SelfConfigOutput> {
-        validate_file_name(file_name)?;
+        validate_identity_file_name(file_name).map_err(|m| ToolError::InvalidArgs(m.into()))?;
         let path = self.agent_dir.join(file_name);
         match std::fs::read_to_string(&path) {
             Ok(content) => Ok(SelfConfigOutput {
@@ -277,7 +225,7 @@ impl SelfConfigTool {
             .into());
         }
 
-        validate_file_name(file_name)?;
+        validate_identity_file_name(file_name).map_err(|m| ToolError::InvalidArgs(m.into()))?;
 
         if content.len() > MAX_FILE_CONTENT_SIZE {
             return Ok(SelfConfigOutput {
@@ -922,34 +870,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(live, "version two");
-    }
-
-    #[test]
-    fn test_prune_keeps_newest_backups_only() {
-        let tmp = TempDir::new().unwrap();
-        let backups_dir = tmp.path().join("backups");
-        std::fs::create_dir_all(&backups_dir).unwrap();
-        // Seven fake backups with ascending (= chronological) suffixes,
-        // plus one for another file that must be untouched.
-        for i in 1..=7 {
-            std::fs::write(backups_dir.join(format!("SOUL.md.2026010100000{i}Z")), "x").unwrap();
-        }
-        std::fs::write(backups_dir.join("TOOLS.md.20260101000001Z"), "y").unwrap();
-
-        prune_identity_backups(&backups_dir, "SOUL.md", 5);
-
-        let mut remaining: Vec<String> = std::fs::read_dir(&backups_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.starts_with("SOUL.md."))
-            .collect();
-        remaining.sort();
-        assert_eq!(remaining.len(), 5);
-        // The two OLDEST were pruned.
-        assert_eq!(remaining[0], "SOUL.md.20260101000003Z");
-        // Other files' backups are untouched.
-        assert!(backups_dir.join("TOOLS.md.20260101000001Z").exists());
     }
 
     #[tokio::test]

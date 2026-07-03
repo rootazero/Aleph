@@ -14,7 +14,7 @@ use alephcore::gateway::handlers::discord_panel as discord_panel_handlers;
 use alephcore::gateway::handlers::group_chat as group_chat_handlers;
 use alephcore::gateway::handlers::group_chat::SharedOrchestrator;
 use alephcore::gateway::handlers::identity as identity_handlers;
-use alephcore::gateway::handlers::identity::SharedIdentityResolver;
+use alephcore::gateway::handlers::identity::SharedIdentityCtx;
 use alephcore::gateway::handlers::memory as memory_handlers;
 use alephcore::gateway::handlers::oauth as oauth_handlers;
 use alephcore::gateway::handlers::session as session_handlers;

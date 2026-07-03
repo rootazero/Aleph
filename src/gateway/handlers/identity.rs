@@ -1,144 +1,165 @@
 //! Identity Management Handlers
 //!
-//! Provides RPC methods for managing AI identity/soul during sessions.
+//! RPC methods for reading/writing the AI's **identity files** (`SOUL.md`,
+//! `IDENTITY.md`, …) — the single source of truth for the assistant's persona.
+//! These are the exact files the `self_config` LLM tool edits in-conversation,
+//! and that `SoulLayer` / `IdentityFilesLayer` inject into the system prompt
+//! each turn, so a change here takes effect on the next turn.
 //!
-//! ## Methods
+//! Historically these handlers manipulated a session-scoped `SoulManifest`
+//! override held in an `IdentityResolver` that was **never wired into prompt
+//! assembly** — so `identity.set` silently no-op'd. They now operate directly
+//! on the agent identity directory, the same source `self_config` writes, so
+//! the RPC/CLI surface is honest and effective.
 //!
 //! | Method | Description |
 //! |--------|-------------|
-//! | identity.get | Returns the effective `SoulManifest` |
-//! | identity.set | Sets session-level identity override |
-//! | identity.clear | Clears session identity override |
-//! | identity.list | Lists available identity sources |
+//! | identity.get   | Live `SOUL.md` (raw + parsed structured preview) + identity-file status |
+//! | identity.set   | Write an identity file (`SOUL.md` by default), snapshotting the prior version |
+//! | identity.clear | Snapshot and remove `SOUL.md` (revert to the default persona) |
+//! | identity.list  | List identity files (exists / size / path) |
 //!
-//! These handlers require an `IdentityResolver` to be wired at Gateway initialization.
+//! All operate on `~/.aleph/agents/{agent_id}/`. `agent_id` is an optional
+//! request field, defaulting to the daemon's default agent captured at boot.
 
-use crate::sync_primitives::Arc;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use tokio::sync::RwLock;
+use std::path::PathBuf;
+
+use serde::Deserialize;
+use serde_json::{json, Value};
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use crate::thinker::identity::{IdentityResolver, IdentitySource};
+use crate::sync_primitives::Arc;
+use crate::thinker::identity_files::{
+    backup_identity_file, list_identity_file_status, validate_identity_file_name,
+    write_identity_file,
+};
 use crate::thinker::soul::SoulManifest;
 
-/// Shared identity resolver for handlers
-pub type SharedIdentityResolver = Arc<RwLock<IdentityResolver>>;
+/// The default identity file that `get` / `set` / `clear` target when the
+/// request does not name one.
+const DEFAULT_IDENTITY_FILE: &str = "SOUL.md";
 
 // ============================================================================
-// Request/Response Types
+// Shared handler context
 // ============================================================================
 
-/// Request for identity.set
-#[derive(Debug, Clone, Deserialize)]
-pub struct IdentitySetRequest {
-    /// The soul manifest to set as session override
-    pub soul: SoulManifest,
+/// Context shared by the identity handlers: the default agent whose identity
+/// directory they operate on when a request omits `agent_id`, plus the base
+/// under which agent directories live (`~/.aleph/agents/`).
+pub struct IdentityHandlerContext {
+    default_agent_id: String,
+    agents_base: PathBuf,
 }
 
-/// Response for identity.get
-#[derive(Debug, Clone, Serialize)]
-pub struct IdentityGetResponse {
-    /// The effective soul manifest
-    pub soul: SoulManifest,
-    /// Whether a session override is active
-    pub has_session_override: bool,
-}
+impl IdentityHandlerContext {
+    /// Production constructor: agent identity directories live under
+    /// `~/.aleph/agents/`. Falls back to a relative path only if the home
+    /// directory cannot be resolved (mirrors `SelfConfigTool::new`).
+    #[must_use]
+    pub fn new(default_agent_id: impl Into<String>) -> Self {
+        let agents_base = crate::discovery::aleph_agents_dir()
+            .unwrap_or_else(|_| PathBuf::from(".aleph").join("agents"));
+        Self {
+            default_agent_id: default_agent_id.into(),
+            agents_base,
+        }
+    }
 
-/// Response for identity.list
-#[derive(Debug, Clone, Serialize)]
-pub struct IdentityListResponse {
-    /// Available identity sources
-    pub sources: Vec<IdentitySource>,
-}
+    /// Explicit constructor with a custom agents base directory (used in tests
+    /// to point at a temp dir).
+    #[must_use]
+    pub fn with_base(default_agent_id: impl Into<String>, agents_base: impl Into<PathBuf>) -> Self {
+        Self {
+            default_agent_id: default_agent_id.into(),
+            agents_base: agents_base.into(),
+        }
+    }
 
-// ============================================================================
-// Handler Functions
-// ============================================================================
-
-/// Handle identity.get - returns the effective `SoulManifest`
-///
-/// # Example Request
-///
-/// ```json
-/// {"jsonrpc":"2.0","method":"identity.get","id":1}
-/// ```
-///
-/// # Example Response
-///
-/// ```json
-/// {
-///     "jsonrpc": "2.0",
-///     "result": {
-///         "soul": {
-///             "identity": "I am Aleph, your AI assistant.",
-///             "directives": ["Be helpful", "Be concise"]
-///         },
-///         "has_session_override": false
-///     },
-///     "id": 1
-/// }
-/// ```
-pub async fn handle_get(
-    request: JsonRpcRequest,
-    resolver: SharedIdentityResolver,
-) -> JsonRpcResponse {
-    let resolver = resolver.read().await;
-
-    let response = IdentityGetResponse {
-        soul: resolver.resolve(),
-        has_session_override: resolver.has_session_override(),
-    };
-
-    match serde_json::to_value(&response) {
-        Ok(value) => JsonRpcResponse::success(request.id, value),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to serialize response: {e}"),
-        ),
+    /// Resolve the `(agent_id, agent_dir)` a request targets, honoring an
+    /// optional `agent_id` field and rejecting path-unsafe ids.
+    fn resolve(&self, params: Option<&Value>) -> Result<(String, PathBuf), String> {
+        let agent_id = params
+            .and_then(|p| p.get("agent_id"))
+            .and_then(Value::as_str)
+            .map_or_else(|| self.default_agent_id.clone(), str::to_string);
+        if agent_id.is_empty()
+            || agent_id.contains('/')
+            || agent_id.contains('\\')
+            || agent_id.contains("..")
+            || agent_id.contains('\0')
+        {
+            return Err(format!("Invalid agent_id: {agent_id:?}"));
+        }
+        let dir = self.agents_base.join(&agent_id);
+        Ok((agent_id, dir))
     }
 }
 
-/// Handle identity.set - sets session-level identity override
-///
-/// # Example Request
-///
-/// ```json
-/// {
-///     "jsonrpc": "2.0",
-///     "method": "identity.set",
-///     "params": {
-///         "soul": {
-///             "identity": "I am a specialized coding assistant.",
-///             "directives": ["Focus on code quality", "Explain concisely"]
-///         }
-///     },
-///     "id": 1
-/// }
-/// ```
-///
-/// # Example Response
-///
-/// ```json
-/// {"jsonrpc":"2.0","result":{"success":true},"id":1}
-/// ```
-pub async fn handle_set(
-    request: JsonRpcRequest,
-    resolver: SharedIdentityResolver,
-) -> JsonRpcResponse {
-    let params = match &request.params {
-        Some(params) => params,
+/// Shared handle passed into each identity handler.
+pub type SharedIdentityCtx = Arc<IdentityHandlerContext>;
+
+// ============================================================================
+// identity.get
+// ============================================================================
+
+/// Handle `identity.get` — return the live `SOUL.md` (raw + a best-effort
+/// structured preview parsed via [`SoulManifest::from_file`]) plus the status
+/// of every identity file.
+pub async fn handle_get(request: JsonRpcRequest, ctx: SharedIdentityCtx) -> JsonRpcResponse {
+    let (agent_id, agent_dir) = match ctx.resolve(request.params.as_ref()) {
+        Ok(v) => v,
+        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
+    };
+
+    let soul_path = agent_dir.join(DEFAULT_IDENTITY_FILE);
+    let soul_md = std::fs::read_to_string(&soul_path).ok();
+    // Structured preview parsed from the live SOUL.md. Best-effort: an
+    // unparseable or absent file still returns its raw text (or null).
+    let parsed = SoulManifest::from_file(&soul_path).ok();
+    let files = list_identity_file_status(&agent_dir);
+    let has_custom_identity = files.iter().any(|f| f.exists);
+
+    let value = json!({
+        "agent_id": agent_id,
+        "soul_md": soul_md.map_or(Value::Null, Value::String),
+        "parsed": serde_json::to_value(&parsed).unwrap_or(Value::Null),
+        "files": serde_json::to_value(&files).unwrap_or_default(),
+        "has_custom_identity": has_custom_identity,
+    });
+    JsonRpcResponse::success(request.id, value)
+}
+
+// ============================================================================
+// identity.set
+// ============================================================================
+
+/// Request for `identity.set`.
+#[derive(Debug, Deserialize)]
+struct IdentitySetRequest {
+    /// Full markdown content to write.
+    content: String,
+    /// Which identity file to write (defaults to `SOUL.md`). Must be a
+    /// canonical identity file name.
+    #[serde(default)]
+    file_name: Option<String>,
+}
+
+/// Handle `identity.set` — write markdown content to an identity file
+/// (`SOUL.md` by default), snapshotting any prior version. Takes effect on the
+/// next turn (the file is re-read into the prompt each turn).
+pub async fn handle_set(request: JsonRpcRequest, ctx: SharedIdentityCtx) -> JsonRpcResponse {
+    let params = match request.params.as_ref() {
+        Some(p) => p,
         None => {
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                "Missing required parameter: soul".to_string(),
+                "Missing required parameter: content".to_string(),
             );
         }
     };
 
-    let set_request: IdentitySetRequest = match serde_json::from_value(params.clone()) {
+    let set: IdentitySetRequest = match serde_json::from_value(params.clone()) {
         Ok(r) => r,
         Err(e) => {
             return JsonRpcResponse::error(
@@ -149,90 +170,109 @@ pub async fn handle_set(
         }
     };
 
-    let mut resolver = resolver.write().await;
-    resolver.set_session_override(set_request.soul);
-
-    JsonRpcResponse::success(request.id, json!({"success": true}))
-}
-
-/// Handle identity.clear - clears session identity override
-///
-/// # Example Request
-///
-/// ```json
-/// {"jsonrpc":"2.0","method":"identity.clear","id":1}
-/// ```
-///
-/// # Example Response
-///
-/// ```json
-/// {"jsonrpc":"2.0","result":{"success":true,"had_override":true},"id":1}
-/// ```
-pub async fn handle_clear(
-    request: JsonRpcRequest,
-    resolver: SharedIdentityResolver,
-) -> JsonRpcResponse {
-    let mut resolver = resolver.write().await;
-    let had_override = resolver.has_session_override();
-    resolver.clear_session_override();
-
-    JsonRpcResponse::success(
-        request.id,
-        json!({
-            "success": true,
-            "had_override": had_override
-        }),
-    )
-}
-
-/// Handle identity.list - lists available identity sources
-///
-/// # Example Request
-///
-/// ```json
-/// {"jsonrpc":"2.0","method":"identity.list","id":1}
-/// ```
-///
-/// # Example Response
-///
-/// ```json
-/// {
-///     "jsonrpc": "2.0",
-///     "result": {
-///         "sources": [
-///             {
-///                 "source_type": "global",
-///                 "path": "/Users/user/.aleph/soul.md",
-///                 "loaded": true
-///             },
-///             {
-///                 "source_type": "session",
-///                 "path": "<session>",
-///                 "loaded": true
-///             }
-///         ]
-///     },
-///     "id": 1
-/// }
-/// ```
-pub async fn handle_list(
-    request: JsonRpcRequest,
-    resolver: SharedIdentityResolver,
-) -> JsonRpcResponse {
-    let resolver = resolver.read().await;
-
-    let response = IdentityListResponse {
-        sources: resolver.list_sources(),
+    let (agent_id, agent_dir) = match ctx.resolve(request.params.as_ref()) {
+        Ok(v) => v,
+        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
     };
 
-    match serde_json::to_value(&response) {
-        Ok(value) => JsonRpcResponse::success(request.id, value),
+    let file_name = set.file_name.as_deref().unwrap_or(DEFAULT_IDENTITY_FILE);
+    match write_identity_file(&agent_dir, file_name, &set.content) {
+        Ok(outcome) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "success": true,
+                "agent_id": agent_id,
+                "file_name": file_name,
+                "bytes_written": outcome.bytes_written,
+                "backup_path": outcome.backup_path.map(|p| p.display().to_string()),
+                "note": "Identity updated. Takes effect on the next turn.",
+            }),
+        ),
+        Err(e) => JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
+    }
+}
+
+// ============================================================================
+// identity.clear
+// ============================================================================
+
+/// Handle `identity.clear` — snapshot and remove an identity file (`SOUL.md`
+/// by default), reverting to the default persona. Idempotent: clearing an
+/// absent file succeeds with `had_content: false`.
+pub async fn handle_clear(request: JsonRpcRequest, ctx: SharedIdentityCtx) -> JsonRpcResponse {
+    let (agent_id, agent_dir) = match ctx.resolve(request.params.as_ref()) {
+        Ok(v) => v,
+        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
+    };
+
+    let file_name = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("file_name"))
+        .and_then(Value::as_str)
+        .unwrap_or(DEFAULT_IDENTITY_FILE)
+        .to_string();
+
+    if let Err(e) = validate_identity_file_name(&file_name) {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, e);
+    }
+
+    let path = agent_dir.join(&file_name);
+    if !path.exists() {
+        return JsonRpcResponse::success(
+            request.id,
+            json!({
+                "success": true,
+                "agent_id": agent_id,
+                "file_name": file_name,
+                "had_content": false,
+                "backup_path": Value::Null,
+                "note": "No custom identity file to clear.",
+            }),
+        );
+    }
+
+    let backup = backup_identity_file(&agent_dir, &file_name, &path);
+    match std::fs::remove_file(&path) {
+        Ok(()) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "success": true,
+                "agent_id": agent_id,
+                "file_name": file_name,
+                "had_content": true,
+                "backup_path": backup.map(|p| p.display().to_string()),
+                "note": "Identity reverted to default. Takes effect on the next turn.",
+            }),
+        ),
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to serialize response: {e}"),
+            format!("Failed to remove {file_name}: {e}"),
         ),
     }
+}
+
+// ============================================================================
+// identity.list
+// ============================================================================
+
+/// Handle `identity.list` — report the status (exists / size / path) of every
+/// canonical identity file for the target agent.
+pub async fn handle_list(request: JsonRpcRequest, ctx: SharedIdentityCtx) -> JsonRpcResponse {
+    let (agent_id, agent_dir) = match ctx.resolve(request.params.as_ref()) {
+        Ok(v) => v,
+        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
+    };
+
+    let files = list_identity_file_status(&agent_dir);
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "agent_id": agent_id,
+            "files": serde_json::to_value(&files).unwrap_or_default(),
+        }),
+    )
 }
 
 // ============================================================================
@@ -242,132 +282,174 @@ pub async fn handle_list(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use tempfile::TempDir;
 
-    async fn create_test_resolver() -> SharedIdentityResolver {
-        Arc::new(RwLock::new(IdentityResolver::new(PathBuf::from(
-            "/nonexistent",
-        ))))
+    /// Build a context whose agents base is a temp dir, with a pre-created
+    /// agent directory for `agent_id`.
+    fn ctx_with_agent(base: &std::path::Path, agent_id: &str) -> SharedIdentityCtx {
+        std::fs::create_dir_all(base.join(agent_id)).unwrap();
+        Arc::new(IdentityHandlerContext::with_base(agent_id, base))
     }
 
     #[tokio::test]
-    async fn test_handle_get_default() {
-        let resolver = create_test_resolver().await;
-        let request = JsonRpcRequest::with_id("identity.get", None, json!(1));
+    async fn get_reports_absent_identity() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_with_agent(tmp.path(), "main");
+        let req = JsonRpcRequest::with_id("identity.get", None, json!(1));
 
-        let response = handle_get(request, resolver).await;
-
-        assert!(response.is_success());
-        let result = response.result.unwrap();
-        assert!(!result["has_session_override"].as_bool().unwrap());
+        let resp = handle_get(req, ctx).await;
+        assert!(resp.is_success());
+        let r = resp.result.unwrap();
+        assert_eq!(r["agent_id"], "main");
+        assert!(r["soul_md"].is_null());
+        assert_eq!(r["has_custom_identity"], false);
+        // All canonical files listed, none existing.
+        assert_eq!(r["files"].as_array().unwrap().len(), 5);
     }
 
     #[tokio::test]
-    async fn test_handle_set() {
-        let resolver = create_test_resolver().await;
+    async fn set_then_get_roundtrips_and_takes_effect_on_disk() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_with_agent(tmp.path(), "main");
 
-        let soul = SoulManifest {
-            identity: "Test identity".to_string(),
-            ..Default::default()
-        };
-
-        let request = JsonRpcRequest::new(
+        let set_req = JsonRpcRequest::new(
             "identity.set",
-            Some(json!({ "soul": soul })),
+            Some(json!({ "content": "You are Aleph, calm and precise." })),
             Some(json!(1)),
         );
+        let set_resp = handle_set(set_req, ctx.clone()).await;
+        assert!(set_resp.is_success(), "{:?}", set_resp.error);
+        assert_eq!(set_resp.result.unwrap()["success"], true);
 
-        let response = handle_set(request, resolver.clone()).await;
-        assert!(response.is_success());
+        // The write landed in the live SOUL.md the prompt reads.
+        let live = std::fs::read_to_string(tmp.path().join("main").join("SOUL.md")).unwrap();
+        assert_eq!(live, "You are Aleph, calm and precise.");
 
-        // Verify the override was set
-        let resolver = resolver.read().await;
-        assert!(resolver.has_session_override());
-        let resolved = resolver.resolve();
-        assert_eq!(resolved.identity, "Test identity");
+        // identity.get now returns it.
+        let get_resp = handle_get(
+            JsonRpcRequest::with_id("identity.get", None, json!(2)),
+            ctx,
+        )
+        .await;
+        let r = get_resp.result.unwrap();
+        assert_eq!(r["soul_md"], "You are Aleph, calm and precise.");
+        assert_eq!(r["has_custom_identity"], true);
     }
 
     #[tokio::test]
-    async fn test_handle_set_missing_params() {
-        let resolver = create_test_resolver().await;
-        let request = JsonRpcRequest::with_id("identity.set", None, json!(1));
+    async fn set_parses_structured_preview_from_frontmatter() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_with_agent(tmp.path(), "main");
 
-        let response = handle_set(request, resolver).await;
+        let content = "---\nidentity: I am a test soul\nrelationship: peer\n---\n\n## Directives\n\n- Be helpful\n";
+        handle_set(
+            JsonRpcRequest::new(
+                "identity.set",
+                Some(json!({ "content": content })),
+                Some(json!(1)),
+            ),
+            ctx.clone(),
+        )
+        .await;
 
-        assert!(response.is_error());
-        assert_eq!(response.error.unwrap().code, INVALID_PARAMS);
+        let r = handle_get(
+            JsonRpcRequest::with_id("identity.get", None, json!(2)),
+            ctx,
+        )
+        .await
+        .result
+        .unwrap();
+        assert_eq!(r["parsed"]["identity"], "I am a test soul");
+        assert_eq!(r["parsed"]["relationship"], "peer");
     }
 
     #[tokio::test]
-    async fn test_handle_clear() {
-        let resolver = create_test_resolver().await;
-
-        // First set an override
-        {
-            let mut r = resolver.write().await;
-            r.set_session_override(SoulManifest {
-                identity: "Test".to_string(),
-                ..Default::default()
-            });
-        }
-
-        let request = JsonRpcRequest::with_id("identity.clear", None, json!(1));
-        let response = handle_clear(request, resolver.clone()).await;
-
-        assert!(response.is_success());
-        let result = response.result.unwrap();
-        assert!(result["had_override"].as_bool().unwrap());
-
-        // Verify cleared
-        let resolver = resolver.read().await;
-        assert!(!resolver.has_session_override());
+    async fn set_missing_content_is_invalid() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_with_agent(tmp.path(), "main");
+        let resp = handle_set(
+            JsonRpcRequest::with_id("identity.set", None, json!(1)),
+            ctx,
+        )
+        .await;
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
     }
 
     #[tokio::test]
-    async fn test_handle_clear_no_override() {
-        let resolver = create_test_resolver().await;
-        let request = JsonRpcRequest::with_id("identity.clear", None, json!(1));
-
-        let response = handle_clear(request, resolver).await;
-
-        assert!(response.is_success());
-        let result = response.result.unwrap();
-        assert!(!result["had_override"].as_bool().unwrap());
+    async fn set_rejects_non_identity_file() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_with_agent(tmp.path(), "main");
+        let resp = handle_set(
+            JsonRpcRequest::new(
+                "identity.set",
+                Some(json!({ "content": "x", "file_name": "MEMORY.md" })),
+                Some(json!(1)),
+            ),
+            ctx,
+        )
+        .await;
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("remember"));
     }
 
     #[tokio::test]
-    async fn test_handle_list_empty() {
-        let resolver = create_test_resolver().await;
-        let request = JsonRpcRequest::with_id("identity.list", None, json!(1));
+    async fn clear_backs_up_and_removes_then_is_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_with_agent(tmp.path(), "main");
+        std::fs::write(tmp.path().join("main").join("SOUL.md"), "custom").unwrap();
 
-        let response = handle_list(request, resolver).await;
+        let resp = handle_clear(
+            JsonRpcRequest::with_id("identity.clear", None, json!(1)),
+            ctx.clone(),
+        )
+        .await;
+        let r = resp.result.unwrap();
+        assert_eq!(r["had_content"], true);
+        assert!(!tmp.path().join("main").join("SOUL.md").exists());
+        // A backup was taken.
+        assert!(r["backup_path"].is_string());
 
-        assert!(response.is_success());
-        let result = response.result.unwrap();
-        let sources = result["sources"].as_array().unwrap();
-        assert!(sources.is_empty());
+        // Second clear: nothing to remove.
+        let resp2 = handle_clear(
+            JsonRpcRequest::with_id("identity.clear", None, json!(2)),
+            ctx,
+        )
+        .await;
+        assert_eq!(resp2.result.unwrap()["had_content"], false);
     }
 
     #[tokio::test]
-    async fn test_handle_list_with_session() {
-        let resolver = create_test_resolver().await;
+    async fn list_reports_all_identity_files() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_with_agent(tmp.path(), "main");
+        std::fs::write(tmp.path().join("main").join("SOUL.md"), "hi").unwrap();
 
-        // Set an override
-        {
-            let mut r = resolver.write().await;
-            r.set_session_override(SoulManifest {
-                identity: "Test".to_string(),
-                ..Default::default()
-            });
-        }
+        let resp = handle_list(
+            JsonRpcRequest::with_id("identity.list", None, json!(1)),
+            ctx,
+        )
+        .await;
+        let files = resp.result.unwrap()["files"].as_array().unwrap().clone();
+        assert_eq!(files.len(), 5);
+        let soul = files.iter().find(|f| f["name"] == "SOUL.md").unwrap();
+        assert_eq!(soul["exists"], true);
+    }
 
-        let request = JsonRpcRequest::with_id("identity.list", None, json!(1));
-        let response = handle_list(request, resolver).await;
-
-        assert!(response.is_success());
-        let result = response.result.unwrap();
-        let sources = result["sources"].as_array().unwrap();
-        assert_eq!(sources.len(), 1);
-        assert_eq!(sources[0]["source_type"], "session");
+    #[tokio::test]
+    async fn rejects_path_unsafe_agent_id() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_with_agent(tmp.path(), "main");
+        let resp = handle_get(
+            JsonRpcRequest::new(
+                "identity.get",
+                Some(json!({ "agent_id": "../escape" })),
+                Some(json!(1)),
+            ),
+            ctx,
+        )
+        .await;
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
     }
 }

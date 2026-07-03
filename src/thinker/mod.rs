@@ -9,7 +9,6 @@
 
 pub mod cache;
 pub mod context;
-pub mod identity;
 pub mod identity_files;
 pub mod inbound_context;
 pub mod interaction;
@@ -36,7 +35,6 @@ use crate::sync_primitives::Arc;
 
 pub use cache::{CacheControl, CacheStrategy};
 pub use context::ContextAggregator;
-pub use identity::{IdentityResolver, IdentitySource};
 pub use interaction::{
     Capability, InteractionConstraints, InteractionManifest, InteractionParadigm,
 };

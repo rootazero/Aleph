@@ -538,61 +538,16 @@ async fn given_soul_file_content(w: &mut AlephWorld, step: &Step) {
     }
 }
 
-#[given(expr = "a global soul with identity {string}")]
-async fn given_global_soul(w: &mut AlephWorld, identity: String) {
-    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    ctx.init_identity_resolver();
-    // Create a soul that will be returned by global path
-    let soul = alephcore::thinker::soul::SoulManifest {
-        identity,
-        ..Default::default()
-    };
-    ctx.soul = Some(soul.clone());
-    ctx.global_soul = Some(soul);
-}
+// Identity-resolution steps (global-soul / session-override / resolve / clear)
+// were removed alongside the dissolved `IdentityResolver` (System B). See
+// `embodiment.feature` and `src/gateway/handlers/identity.rs`.
 
-#[given(expr = "a session override soul with identity {string}")]
-async fn given_session_override(w: &mut AlephWorld, identity: String) {
-    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    if ctx.identity_resolver.is_none() {
-        ctx.init_identity_resolver();
-    }
-    let override_soul = alephcore::thinker::soul::SoulManifest {
-        identity,
-        ..Default::default()
-    };
-    if let Some(resolver) = ctx.identity_resolver.as_mut() {
-        resolver.set_session_override(override_soul);
-    }
-}
-
-#[given("no soul files configured")]
-async fn given_no_soul_files(w: &mut AlephWorld) {
-    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    ctx.init_identity_resolver();
-}
-
-#[given(expr = "a soul with identity {string}")]
-async fn given_soul_with_identity(w: &mut AlephWorld, identity: String) {
-    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    let mut soul = ctx.soul.take().unwrap_or_default();
-    soul.identity = identity;
-    ctx.soul = Some(soul);
-}
-
-#[given(expr = "a soul with directive {string}")]
-async fn given_soul_with_directive(w: &mut AlephWorld, directive: String) {
-    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    let mut soul = ctx.soul.take().unwrap_or_default();
-    soul.directives.push(directive);
-    ctx.soul = Some(soul);
-}
-
-#[given("an empty soul")]
-async fn given_empty_soul(w: &mut AlephWorld) {
-    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    ctx.soul = Some(alephcore::thinker::soul::SoulManifest::default());
-}
+// Prompt-integration steps (`a soul with identity/directive`, `an empty soul`,
+// `I build the system prompt with soul`) were removed with the dissolved
+// `SoulManifest`→prompt path. File-based SOUL.md injection is covered by
+// `SoulLayer` unit tests + the cached-path regression in
+// `src/thinker/prompt_builder/cache.rs`. The parse steps below still exercise
+// the live `SoulManifest` parser used by the `identity.get` RPC.
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Embodiment Engine - When Steps
@@ -602,35 +557,6 @@ async fn given_empty_soul(w: &mut AlephWorld) {
 async fn when_parse_soul_file(w: &mut AlephWorld) {
     let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
     ctx.parse_soul_content();
-}
-
-#[when("I resolve identity")]
-async fn when_resolve_identity(w: &mut AlephWorld) {
-    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    if let Some(resolver) = &ctx.identity_resolver {
-        // If we have a soul set (simulating global), use it
-        // Otherwise, resolve from resolver
-        if ctx.soul.is_none() {
-            ctx.soul = Some(resolver.resolve());
-        }
-    }
-}
-
-#[when("I clear the session override")]
-async fn when_clear_session_override(w: &mut AlephWorld) {
-    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    if let Some(resolver) = ctx.identity_resolver.as_mut() {
-        resolver.clear_session_override();
-    }
-    // Restore from global soul (simulating fallback to global)
-    ctx.soul = ctx.global_soul.clone();
-}
-
-#[when("I build the system prompt with soul")]
-async fn when_build_prompt_with_soul(w: &mut AlephWorld) {
-    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    ctx.init_builder();
-    ctx.build_system_prompt_with_soul();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -722,32 +648,6 @@ async fn then_soul_anti_patterns_contain(w: &mut AlephWorld, expected: String) {
         "Expected anti-patterns to contain '{}', got {:?}",
         expected,
         soul.anti_patterns
-    );
-}
-
-#[then(expr = "the effective identity should be {string}")]
-async fn then_effective_identity(w: &mut AlephWorld, expected: String) {
-    let ctx = w.thinker.as_ref().expect("No thinker context");
-
-    // First check if we have a resolver with session override
-    if let Some(resolver) = &ctx.identity_resolver {
-        if resolver.has_session_override() {
-            let resolved = resolver.resolve();
-            assert_eq!(
-                resolved.identity, expected,
-                "Expected identity '{}', got '{}'",
-                expected, resolved.identity
-            );
-            return;
-        }
-    }
-
-    // Otherwise use the soul set in context (simulating global/project soul)
-    let soul = ctx.soul.as_ref().expect("No soul");
-    assert_eq!(
-        soul.identity, expected,
-        "Expected identity '{}', got '{}'",
-        expected, soul.identity
     );
 }
 
