@@ -65,6 +65,17 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .map(|(_, canonical)| (*canonical).to_string())
             .unwrap_or(cmd_name);
 
+        // Continuation-driven tools must NOT take the L0 fast path: it
+        // returns before the post-run continuation hook, so a loop started
+        // (or goal set) here would sit registered but never scheduled — the
+        // loop's first tick / the goal's first pursuit only fire from a full
+        // agent run's completion. Falling through also lets the LLM map the
+        // free-text args onto the tool's structured schema, which the fast
+        // path's generic arg mapping cannot deserialize for these tools.
+        if cmd_name == "loop" || cmd_name == "goal" {
+            return None;
+        }
+
         // Check if this matches a registered tool
         if self.tool_registry.get_tool(&cmd_name).is_some() {
             let mode = serde_json::json!({

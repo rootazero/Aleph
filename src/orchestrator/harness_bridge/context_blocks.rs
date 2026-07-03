@@ -43,6 +43,21 @@ pub async fn active_standing_goal(session_key: &str) -> Option<String> {
     Some(render_goal_summary(&goal, now_ms))
 }
 
+/// Fetch the session's active timer loop as a compact summary (watch prompt
+/// + status) for `TimerLoopLayer`. The clock-gated sibling of
+/// `active_standing_goal`: between ticks the model had no idea a watch was
+/// running in this session (the tick reminder exists only inside tick
+/// turns), so on an ordinary user turn it could neither report on the loop
+/// nor avoid starting a duplicate. Returns `None` (→ layer emits nothing)
+/// when the loop subsystem is uninitialized or the session has no Active
+/// loop. `async` for uniformity with its `tokio::join!` siblings.
+pub async fn active_timer_loop(session_key: &str) -> Option<String> {
+    let reg = crate::looping::global()?;
+    let state = reg.get_active(session_key)?;
+    let now_ms = u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0);
+    Some(format!("{} ({})", state.prompt, state.human_summary(now_ms)))
+}
+
 /// Fetch the session's welded Strategy for the prompt weld. Returns the
 /// `Strategy` struct (the caller renders both the `<strategy>` body and the
 /// guardrail echo from it). Thin async wrapper over `resolve_active_strategy`,

@@ -81,6 +81,16 @@ pub struct LoopState {
     /// fall back to the cadence default. For `Fixed` cadence this is ignored.
     #[serde(default)]
     pub next_wake_ms: Option<u64>,
+    /// Absolute epoch-ms fire time of the tick already enqueued by the
+    /// continuation hook. `None` → no tick in flight. Set when a tick is
+    /// enqueued, cleared when it actually fires: an in-flight tick blocks
+    /// further enqueues (every completed run in the session re-enters the
+    /// hook — without this gate each user turn would spawn one more
+    /// self-perpetuating tick chain), and a woken tick only executes if its
+    /// wake still matches (a stop/start during the delay supersedes it).
+    /// `#[serde(default)]` → old payloads read `None`.
+    #[serde(default)]
+    pub pending_tick_wake_ms: Option<u64>,
     pub iterations_used: u32,
     /// Optional safety cap: stop after this many ticks. `None` → unbounded.
     #[serde(default)]
@@ -127,6 +137,7 @@ impl LoopState {
             prompt: prompt.to_string(),
             cadence,
             next_wake_ms: None,
+            pending_tick_wake_ms: None,
             iterations_used: 0,
             max_iterations: None,
             deadline_ms: None,
@@ -207,6 +218,14 @@ impl LoopState {
     #[must_use]
     pub const fn with_next_wake_ms(mut self, next_wake_ms: Option<u64>) -> Self {
         self.next_wake_ms = next_wake_ms;
+        self
+    }
+
+    /// Record (or clear) the in-flight tick's scheduled fire time. Paired
+    /// with the registry's claim/confirm cycle; see `pending_tick_wake_ms`.
+    #[must_use]
+    pub const fn with_pending_tick(mut self, wake_ms: Option<u64>) -> Self {
+        self.pending_tick_wake_ms = wake_ms;
         self
     }
 
