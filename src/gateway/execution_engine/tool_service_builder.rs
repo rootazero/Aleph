@@ -83,6 +83,10 @@ pub(super) fn mcp_tool_registry() -> Option<&'static Arc<crate::tools::ToolHandl
 ///   `None` rather than a default config so the hot path stays a no-op.
 /// * `unattended` — true for an autonomous continuation run; makes the service
 ///   fail closed on confirm-gated tools (no human to approve).
+/// * `core_tools` — tool names kept at full schema (progressive tool
+///   disclosure). Empty or `["*"]` disables collapsing (escape hatch).
+/// * `truncate_tool_descriptions` — also truncate non-core tool descriptions
+///   when collapsing their schema.
 pub fn build_request_tool_service(
     tool_registry: Arc<LoopToolRegistry>,
     allowed_tools: BTreeSet<String>,
@@ -93,6 +97,8 @@ pub fn build_request_tool_service(
     session_id: impl Into<String>,
     tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
     unattended: bool,
+    core_tools: &[String],
+    truncate_tool_descriptions: bool,
 ) -> Arc<dyn ToolService> {
     let mut svc = ScopedToolService::new(tool_registry, allowed_tools);
     if let Some(st) = subagent_tool {
@@ -133,6 +139,14 @@ pub fn build_request_tool_service(
     // config gate suspends for operator approval instead of hard-rejecting).
     if let Some(requester) = CONFIG_APPROVAL_REQUESTER.get() {
         svc = svc.with_config_approval(Arc::clone(requester));
+    }
+    // Progressive tool disclosure: collapse non-core tool schemas. `None`
+    // (core empty / ["*"]) leaves the service byte-identical to old behavior.
+    if let Some(rewriter) = crate::tools::scoped::ProgressiveDisclosureRewriter::from_config(
+        core_tools,
+        truncate_tool_descriptions,
+    ) {
+        svc = svc.with_definition_rewriter(rewriter);
     }
     Arc::new(svc)
 }
@@ -179,6 +193,8 @@ mod tests {
             "",
             None,
             false,
+            &[],
+            false,
         );
         let defs = svc.list().await;
         assert!(defs.iter().any(|d| d.name == "read_file"));
@@ -191,12 +207,102 @@ mod tests {
         let registry = Arc::new(reg);
 
         let allowed: BTreeSet<String> = ["other".to_string()].into_iter().collect();
-        let svc =
-            build_request_tool_service(registry, allowed, None, None, None, None, "", None, false);
+        let svc = build_request_tool_service(
+            registry,
+            allowed,
+            None,
+            None,
+            None,
+            None,
+            "",
+            None,
+            false,
+            &[],
+            false,
+        );
         let defs = svc.list().await;
         assert!(
             defs.iter().all(|d| d.name != "read_file"),
             "read_file is not in allowed set so must be filtered"
         );
+    }
+}
+
+#[cfg(test)]
+mod progressive_tests {
+    use super::*;
+    use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
+    use async_trait::async_trait;
+    use serde_json::{json, Value};
+    use std::collections::BTreeSet;
+    use tokio_util::sync::CancellationToken;
+
+    struct Fat(&'static str);
+    #[async_trait]
+    impl LoopTool for Fat {
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn description(&self) -> &str {
+            "fat tool"
+        }
+        fn schema(&self) -> Value {
+            json!({"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["a","b"]})
+        }
+        async fn execute(&self, _i: Value, _c: CancellationToken) -> ToolResult {
+            ToolResult::Success { output: json!({}) }
+        }
+    }
+
+    #[tokio::test]
+    async fn non_core_schema_collapsed_core_kept() {
+        let mut reg = LoopToolRegistry::new();
+        reg.register(Box::new(Fat("bash")));
+        reg.register(Box::new(Fat("browser_navigate")));
+        let svc = build_request_tool_service(
+            std::sync::Arc::new(reg),
+            BTreeSet::new(),
+            None,
+            None,
+            None,
+            None,
+            "",
+            None,
+            false,
+            &["bash".to_string()],
+            false, // core, truncate
+        );
+        let schema = svc.metadata_schema();
+        let bash = schema.iter().find(|d| d.name == "bash").unwrap();
+        let nav = schema.iter().find(|d| d.name == "browser_navigate").unwrap();
+        assert!(bash.parameters.get("properties").is_some()); // core kept
+        assert!(nav.parameters.get("properties").is_none()); // non-core collapsed
+        assert_eq!(nav.parameters["additionalProperties"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn wildcard_core_keeps_all_full() {
+        let mut reg = LoopToolRegistry::new();
+        reg.register(Box::new(Fat("browser_navigate")));
+        let svc = build_request_tool_service(
+            std::sync::Arc::new(reg),
+            BTreeSet::new(),
+            None,
+            None,
+            None,
+            None,
+            "",
+            None,
+            false,
+            &["*".to_string()],
+            false,
+        );
+        let nav = svc
+            .metadata_schema()
+            .iter()
+            .find(|d| d.name == "browser_navigate")
+            .cloned()
+            .unwrap();
+        assert!(nav.parameters.get("properties").is_some()); // escape hatch: full
     }
 }

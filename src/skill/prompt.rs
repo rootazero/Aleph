@@ -16,15 +16,18 @@ use std::borrow::Cow;
 /// `<version>` differs from a previous turn, the body changed and must be
 /// re-read. Pure scaffolding (a content hash, no reasoning) — R10-compliant.
 ///
-/// The 16-hex prefix (64 bits) is collision-resistant enough for change
-/// detection while staying compact in the prompt.
+/// The 8-hex prefix (32 bits) is collision-resistant enough for change
+/// detection — a skill's edited body colliding with its own prior digest is a
+/// ~1-in-4-billion event, and a false "unchanged" only risks one stale re-read
+/// — while halving the per-entry cost across the whole `<available_skills>`
+/// index (92 skills × ~8 fewer hex chars each).
 #[must_use]
 fn content_version(skill: &SkillManifest) -> String {
     use std::fmt::Write as _;
     let digest = Sha256::digest(skill.content().as_str().as_bytes());
-    let mut tag = String::with_capacity("sha256:".len() + 16);
+    let mut tag = String::with_capacity("sha256:".len() + 8);
     tag.push_str("sha256:");
-    for byte in &digest[..8] {
+    for byte in &digest[..4] {
         let _ = write!(tag, "{byte:02x}");
     }
     tag
@@ -635,10 +638,10 @@ mod tests {
     fn full_fragment_includes_version_tag() {
         let skill = make_skill("Deploy", "Ships the app");
         let xml = build_skills_prompt_xml(&[&skill]);
-        // sha256: prefix + 16 hex chars (8 bytes).
+        // sha256: prefix + 8 hex chars (4 bytes).
         assert!(xml.contains("<version>sha256:"));
         let tag = content_version(&skill);
-        assert_eq!(tag.len(), "sha256:".len() + 16);
+        assert_eq!(tag.len(), "sha256:".len() + 8);
         assert!(xml.contains(&format!("<version>{tag}</version>")));
     }
 

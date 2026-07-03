@@ -84,11 +84,13 @@ pub struct SpawnerBase {
     /// Stage A (P1) — trace sink, cloned from parent's `HarnessDeps`.
     /// Subagent run events flow into the same sink as the main runner.
     pub trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
-    /// P3 Stage I — global plugin registry. Used by `McpScope::provision`
-    /// for per-agent MCP scope lookups. `None` means MCP scope is disabled
-    /// (legacy callers + tests with no `mcp_servers`); a non-empty
+    /// P3 Stage I — shared plugin-registry handle. Used by `McpScope::provision`
+    /// for per-agent MCP scope lookups (validated + snapshotted under a read
+    /// guard at provision time). `None` means MCP scope is disabled (legacy
+    /// callers + tests with no `mcp_servers`); a non-empty
     /// `agent_def.mcp_servers` will fail-loud if this is `None`.
-    pub plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
+    pub plugin_registry:
+        Option<Arc<tokio::sync::RwLock<crate::extension::registry::PluginRegistry>>>,
     /// A2 — global cap on concurrently-running subagent spawns. `None` skips
     /// the cap (direct test callers); `Some(_)` makes `spawn()` acquire a
     /// permit held for the child's full lifetime.

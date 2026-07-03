@@ -6,6 +6,6 @@
 mod traits;
 
 pub use traits::{
-    Artifact, ExecutionContextInfo, StepContextInfo, SubAgent, SubAgentCapability, SubAgentRequest,
-    SubAgentResult, ToolCallRecord,
+    Artifact, ExecutionContextInfo, StepContextInfo, SubAgentRequest, SubAgentResult,
+    ToolCallRecord,
 };

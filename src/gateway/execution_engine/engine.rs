@@ -104,6 +104,15 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// `enabled` or `plan_naked_loop` is off, so the first-message planner
     /// trigger in `execute.rs` stays dormant (fail-soft, P7).
     pub(super) planner_provider: Option<Arc<dyn crate::providers::AiProvider>>,
+    /// Capture-filter registry threaded into spawned subagents. When set, a
+    /// delegated child's completion fires `on_delegation` memory-extension hooks
+    /// and the child's own memory writes go through the capture filter. Shares
+    /// the same `Arc<MemoryExtensionRegistry>` the session compactor uses;
+    /// `None` (tests / simple engine / no memory extensions) leaves subagent
+    /// delegation capture dormant — `dispatch_on_delegation` no-ops on an empty
+    /// registry, so this is a fail-soft default (P7).
+    pub(super) capture_registry:
+        Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -141,6 +150,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             continuation_deps: Arc::new(std::sync::OnceLock::new()),
             channel_registry: Arc::new(tokio::sync::OnceCell::new()),
             planner_provider: None,
+            capture_registry: None,
         }
     }
 
@@ -191,6 +201,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         provider: Arc<crate::thinker::MemoryContextProvider>,
     ) -> Self {
         self.memory_context_provider = Some(provider);
+        self
+    }
+
+    /// Thread the capture-filter registry so spawned subagents inherit it — the
+    /// child's memory writes go through the capture filter and its completion
+    /// fires `on_delegation` memory-extension hooks. Shares the same registry
+    /// the session compactor uses.
+    #[must_use]
+    pub fn with_capture_registry(
+        mut self,
+        registry: Arc<crate::memory::extensions::MemoryExtensionRegistry>,
+    ) -> Self {
+        self.capture_registry = Some(registry);
         self
     }
 

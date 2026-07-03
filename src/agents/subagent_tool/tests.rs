@@ -424,7 +424,9 @@ fn test_builder_methods() {
 #[test]
 fn with_plugin_registry_builder_smoke() {
     use crate::extension::registry::PluginRegistry;
-    let tool = make_tool().with_plugin_registry(Arc::new(PluginRegistry::new()));
+    let tool = make_tool().with_plugin_registry(Arc::new(tokio::sync::RwLock::new(
+        PluginRegistry::new(),
+    )));
     let _ = tool;
 }
 

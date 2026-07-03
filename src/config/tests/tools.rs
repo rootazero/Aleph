@@ -77,6 +77,8 @@ fn test_unified_tools_config_from_legacy() {
         allowed_commands: vec![],
         shell_timeout_seconds: 30,
         system_info_enabled: false,
+        core: default_core_tools(),
+        truncate_tool_descriptions: false,
     };
 
     // Create legacy McpConfig with some servers

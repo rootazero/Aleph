@@ -126,10 +126,50 @@ pub struct ToolsConfig {
     /// Enable system info service
     #[serde(default = "default_true")]
     pub system_info_enabled: bool,
+
+    /// Tools kept at FULL schema in every request. Every other tool has its
+    /// `input_schema` collapsed to an open placeholder (name + description stay
+    /// visible); the model calls `get_tool_schema("<name>")` to load full
+    /// parameters on demand. `["*"]` or empty = disable collapsing (all tools
+    /// full — byte-identical to pre-feature behavior).
+    #[serde(default = "default_core_tools")]
+    pub core: Vec<String>,
+
+    /// When true, non-core tools also have their description truncated to the
+    /// first sentence (extra token savings at some discoverability cost).
+    #[serde(default)]
+    pub truncate_tool_descriptions: bool,
 }
 
 pub const fn default_shell_timeout() -> u64 {
     30
+}
+
+/// Default "kept full" tool set — daily single-chat essentials plus the
+/// on-demand schema loader. Non-core tools are schema-collapsed. See
+/// `ProgressiveDisclosureRewriter`.
+///
+/// INVARIANT — do not drop `subagent` or `get_tool_schema` from this set.
+/// They are the only two tools that appear in a request's live tool surface
+/// yet are ABSENT from the `get_tool_schema` schema snapshot: `subagent` is
+/// attached out-of-band via `ScopedToolService::with_subagent_tool`, and
+/// `get_tool_schema` is registered into the loop registry AFTER the snapshot
+/// is captured (see `run_loop/inner.rs`). If either were collapsed, the model
+/// would be told to call `get_tool_schema(<it>)`, which would miss and mislead
+/// on a headline capability. Keeping them core means they are never collapsed,
+/// which is what closes the "collapsed-but-unsnapshotted" bug class. Guarded
+/// by `snapshot_exempt_tools_must_stay_core`.
+pub fn default_core_tools() -> Vec<String> {
+    [
+        "ask_user", "subagent", "bash", "code_exec", "code_check",
+        "file_read", "file_write", "file_edit", "file_ops",
+        "search", "web_fetch", "memory_search", "remember",
+        "skill_read", "skill_list", "scratchpad", "note_manage",
+        "system", "get_tool_schema",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
 }
 
 impl Default for ToolsConfig {
@@ -148,6 +188,8 @@ impl Default for ToolsConfig {
             ],
             shell_timeout_seconds: default_shell_timeout(),
             system_info_enabled: true,
+            core: default_core_tools(),
+            truncate_tool_descriptions: false,
         }
     }
 }
@@ -663,4 +705,53 @@ pub struct McpServerConfig {
     /// Trigger keywords for natural language command detection
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triggers: Option<Vec<String>>,
+}
+
+#[cfg(test)]
+mod core_tools_tests {
+    use super::*;
+
+    #[test]
+    fn default_core_contains_essentials() {
+        let c = ToolsConfig::default();
+        assert!(c.core.iter().any(|t| t == "bash"));
+        assert!(c.core.iter().any(|t| t == "get_tool_schema"));
+        assert!(c.core.iter().any(|t| t == "subagent"));
+        assert_eq!(c.core.len(), 19);
+        assert!(!c.truncate_tool_descriptions);
+    }
+
+    /// Regression guard for the progressive-disclosure snapshot invariant.
+    ///
+    /// `subagent` and `get_tool_schema` are the only tools that appear in a
+    /// request's live tool surface yet are absent from the `get_tool_schema`
+    /// schema snapshot (subagent is attached out-of-band; get_tool_schema is
+    /// registered after the snapshot is taken — see `run_loop/inner.rs`). If
+    /// either is dropped from `core` it gets collapsed, and calling
+    /// `get_tool_schema(<it>)` then misses — a misleading failure on a headline
+    /// capability. This test pins them to `core` so a future edit to the list
+    /// cannot silently reopen that bug. See `default_core_tools`.
+    #[test]
+    fn snapshot_exempt_tools_must_stay_core() {
+        let core = default_core_tools();
+        assert!(
+            core.iter().any(|t| t == "subagent"),
+            "subagent must stay core: it is attached out-of-band and absent from \
+             the get_tool_schema snapshot, so collapsing it makes get_tool_schema miss"
+        );
+        assert!(
+            core.iter().any(|t| t == "get_tool_schema"),
+            "get_tool_schema must stay core: it is registered after the snapshot is \
+             taken, so it cannot resolve its own collapsed schema"
+        );
+    }
+
+    #[test]
+    fn core_roundtrips_and_supports_wildcard_sentinel() {
+        let toml = r#"core = ["*"]
+truncate_tool_descriptions = true"#;
+        let c: ToolsConfig = toml::from_str(toml).unwrap();
+        assert_eq!(c.core, vec!["*".to_string()]);
+        assert!(c.truncate_tool_descriptions);
+    }
 }

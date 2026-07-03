@@ -818,7 +818,9 @@ mod tests {
         )]);
         let mut base = make_base(provider);
         // Provide an empty registry — every reference lookup returns "not found".
-        base.plugin_registry = Some(Arc::new(crate::extension::registry::PluginRegistry::new()));
+        base.plugin_registry = Some(Arc::new(tokio::sync::RwLock::new(
+            crate::extension::registry::PluginRegistry::new(),
+        )));
 
         let cancel = CancellationToken::new();
         let req = SpawnRequest {

@@ -3,47 +3,10 @@
 //! Defines the interface for all sub-agents in the delegation system.
 
 use std::collections::HashMap;
-use std::fmt;
 
-use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-use crate::error::Result;
-
-/// Capability that a sub-agent can provide
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum SubAgentCapability {
-    /// Can execute MCP tools from external servers
-    McpToolExecution,
-    /// Can execute skills (DAG workflows)
-    SkillExecution,
-    /// Can perform web searches
-    WebSearch,
-    /// Can perform file operations
-    FileOperations,
-    /// Can execute code
-    CodeExecution,
-    /// Can generate media (images, video, audio)
-    MediaGeneration,
-    /// Custom capability (e.g., A2A remote delegation)
-    Custom,
-}
-
-impl fmt::Display for SubAgentCapability {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::McpToolExecution => write!(f, "mcp_tool_execution"),
-            Self::SkillExecution => write!(f, "skill_execution"),
-            Self::WebSearch => write!(f, "web_search"),
-            Self::FileOperations => write!(f, "file_operations"),
-            Self::CodeExecution => write!(f, "code_execution"),
-            Self::MediaGeneration => write!(f, "media_generation"),
-            Self::Custom => write!(f, "custom"),
-        }
-    }
-}
 
 /// Request to a sub-agent
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -488,42 +451,6 @@ impl Artifact {
     pub fn with_mime_type(mut self, mime: impl Into<String>) -> Self {
         self.mime_type = Some(mime.into());
         self
-    }
-}
-
-/// The core sub-agent trait
-///
-/// All specialized sub-agents must implement this trait.
-#[async_trait]
-pub trait SubAgent: Send + Sync {
-    /// Get the sub-agent's unique ID
-    fn id(&self) -> &str;
-
-    /// Get the sub-agent's display name
-    fn name(&self) -> &str;
-
-    /// Get the sub-agent's description
-    fn description(&self) -> &str;
-
-    /// Get the capabilities this sub-agent provides
-    fn capabilities(&self) -> Vec<SubAgentCapability>;
-
-    /// Check if this sub-agent can handle the given request
-    fn can_handle(&self, request: &SubAgentRequest) -> bool;
-
-    /// Execute the request
-    ///
-    /// This is the main entry point for sub-agent execution.
-    async fn execute(&self, request: SubAgentRequest) -> Result<SubAgentResult>;
-
-    /// Get available tools/actions for this sub-agent
-    fn available_actions(&self) -> Vec<String> {
-        Vec::new()
-    }
-
-    /// Check if a specific action is available
-    fn has_action(&self, action: &str) -> bool {
-        self.available_actions().iter().any(|a| a == action)
     }
 }
 

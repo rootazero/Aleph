@@ -60,6 +60,8 @@ mod types;
 // Markdown skill system
 pub mod markdown_skill;
 
+pub mod schema_lookup;
+
 // Schema strictification for strict-mode tool calling
 pub mod schema_strictify;
 

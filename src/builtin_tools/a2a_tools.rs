@@ -320,7 +320,6 @@ impl AlephTool for A2AAgentsTool {
                         auth_token: args.token.clone(),
                     })
                     .await;
-                deps.sub_agent.refresh_agent_names().await;
 
                 let agents = list_summaries(registry).await?;
                 let message = format!(
@@ -360,7 +359,6 @@ impl AlephTool for A2AAgentsTool {
                     .unregister(&target_id)
                     .await
                     .map_err(|e| AlephError::tool(format!("Failed to remove agent: {e}")))?;
-                deps.sub_agent.refresh_agent_names().await;
 
                 let agents = list_summaries(registry).await?;
                 let message = format!("Removed remote A2A agent '{needle}'");
