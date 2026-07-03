@@ -398,17 +398,30 @@ impl LoopTool {
         // A pacing or target change supersedes the tick already in flight:
         // its prompt and delay were captured at claim time, so without this
         // the change would silently wait out the OLD wake (hours, for a slow
-        // loop) before taking effect. Clearing the pending marker makes the
-        // sleeping tick's confirm_fire mismatch (it skips), and this very
+        // loop) before taking effect. The in-flight tick's pending marker is
+        // cleared so its confirm_fire mismatches (it skips), and this very
         // run's completion re-claims a fresh tick from the updated state.
         // Cap-only updates keep the in-flight tick and its schedule.
         let reschedule = args.interval.is_some()
             || args.next_wake.is_some()
             || args.prompt.as_deref().is_some_and(|p| !p.trim().is_empty());
-        if reschedule {
-            state = state.with_pending_tick(None);
+        // Commit atomically: `state` was built from a `get` snapshot taken
+        // above, but a concurrent tick fire/re-arm may have moved the LIVE
+        // pending marker since. `commit_field_update` re-reads it under the
+        // registry lock and preserves it (or clears it when `reschedule`),
+        // so a cap-only update never resurrects a stale pending and stalls
+        // the loop — the tick pipeline stays the sole owner of that field.
+        if !self.registry.commit_field_update(state, reschedule) {
+            // The loop was stopped between our read and this write (a
+            // concurrent stop / cap-exhaustion won the race). Report honestly
+            // rather than claiming an update that did not land.
+            return Ok(LoopOutput {
+                success: false,
+                message: "Loop is no longer active (it was stopped while updating); \
+                     call loop(action='start') to begin a new one."
+                    .to_string(),
+            });
         }
-        self.registry.put(state);
         Ok(LoopOutput {
             success: true,
             message: if reschedule {
