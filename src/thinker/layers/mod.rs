@@ -42,6 +42,10 @@ pub use execution_plan::ExecutionPlanLayer;
 mod standing_goal;
 pub use standing_goal::StandingGoalLayer;
 
+// --- Timer-loop layer (active watch loop status, re-surfaced per turn) ---
+mod timer_loop;
+pub use timer_loop::TimerLoopLayer;
+
 // --- Strategy layer (welded <strategy> envelope, Stable prefix, prio 70) ---
 mod strategy;
 pub use strategy::StrategyLayer;

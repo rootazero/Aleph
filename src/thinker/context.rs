@@ -220,6 +220,12 @@ pub struct ResolvedContext {
     /// the harness bridge; `None` (no active goal) emits nothing.
     #[serde(skip, default)]
     pub standing_goal: Option<String>,
+    /// Active timer-loop summary (watch prompt + status), rendered by
+    /// `TimerLoopLayer` (priority 1753) as `<timer_loop>`. Populated from
+    /// the loop registry in the harness bridge; `None` (no active loop)
+    /// emits nothing.
+    #[serde(skip, default)]
+    pub timer_loop: Option<String>,
     /// Full `<strategy>` body for `StrategyLayer` (priority 70, Stable),
     /// rendered once from the session's active `Strategy` via
     /// `render_strategy_summary`. Populated in the harness bridge from
@@ -316,6 +322,7 @@ impl ContextAggregator {
             sandbox_summary: None,
             execution_plan: None,
             standing_goal: None,
+            timer_loop: None,
             strategy: None,
             strategy_guardrails: None,
             voice: VoiceContext::Off,

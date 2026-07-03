@@ -101,6 +101,17 @@ const CACHE_EXTEND_MIN_TOKENS: usize = 4096;
 /// of re-summarizing the already-condensed text from scratch.
 const CONTEXT_SUMMARY_PREFIX: &str = "[Context Summary]";
 
+/// Summarizer-input token budget for a single compaction call. The window is
+/// anchored at the oldest compressible message and extended forward until the
+/// serialized (per-message-capped) transcript reaches this many estimated
+/// tokens — bounding the side-channel summarization call so a long compressible
+/// span cannot overflow the (possibly flash-tier) summarizer's own context
+/// window. Chosen well below common flash-tier windows (64k+) to leave room for
+/// the prompt scaffold and the summary output; spans larger than this fold into
+/// the running summary incrementally across turns via the cache extend-merge in
+/// [`ContextCompactor::reapply_cached`].
+const SUMMARIZER_INPUT_TOKEN_BUDGET: usize = 48_000;
+
 /// LLM-based context compactor.
 ///
 /// Compresses older conversation history into a concise summary, keeping
@@ -257,23 +268,37 @@ impl ContextCompactor {
             }
         }
 
-        // Step 3: limit window and serialize. Snap the head boundary forward too:
-        // the summary is inserted at `window_start`, so if that index sits on a
-        // `ToolResult` whose `ToolCall` stays in the kept head, draining the
-        // result would orphan the call. Advancing past the result keeps the pair
-        // intact in the head.
-        let window_start = snap_boundary_forward(
+        // Step 3: select the compaction window. Anchor it at the OLDEST
+        // compressible message (the head), not a fixed slice before the fresh
+        // tail: the previous tail-anchored `max_window` window summarized only
+        // the newest pre-tail messages and left the oldest history raw, re-sent
+        // uncompressed on every turn until an escalation to session-split. The
+        // window now extends forward from the head until a summarizer-input
+        // token budget (or the `max_window` message ceiling) is reached, so the
+        // prefix that actually bloats the context is compressed first. Any span
+        // beyond the budget rides raw for one turn and folds into the running
+        // summary incrementally via `reapply_cached`'s bounded extend-merge.
+        //
+        // `snap_boundary_forward` on both ends preserves tool-call/result pairs:
+        // the head snap avoids draining a result whose call stays in the (empty)
+        // kept head, and `select_window_end` snaps its end past any tool-result
+        // run so the kept region never begins on an orphan.
+        let window_start = snap_boundary_forward(messages.as_slice(), 0);
+        let window_end = select_window_end(
             messages.as_slice(),
-            cut_end.saturating_sub(self.config.max_window),
+            window_start,
+            cut_end,
+            self.config.max_window,
+            SUMMARIZER_INPUT_TOKEN_BUDGET,
         );
 
         // Guard: a zero-width window means there is nothing to compress.
-        if window_start >= cut_end {
+        if window_start >= window_end {
             return Ok(CompactResult {
                 tokens_before: 0,
                 tokens_after: 0,
                 strategy_used: CompactStrategy::Skipped {
-                    reason: "compression window is empty (max_window may be zero)".into(),
+                    reason: "compression window is empty".into(),
                 },
             });
         }
@@ -304,7 +329,7 @@ impl ContextCompactor {
         // any mutation below. Every success path stores it so the next turn's
         // rebuilt prompt hits the cache fast path above instead of paying the
         // side-channel LLM call again.
-        let window_hash = hash_window(&messages[window_start..cut_end]);
+        let window_hash = hash_window(&messages[window_start..window_end]);
 
         // Fast path: reuse pre-existing hierarchical session summaries (zero
         // API cost). Active only when summary reuse is wired and the caller
@@ -312,7 +337,7 @@ impl ContextCompactor {
         if let (Some(reuse), Some(sid)) = (self.summary_reuse.as_ref(), session_id) {
             let source =
                 SessionSummarySource::new(reuse.backend.clone(), sid, reuse.agent_id.clone());
-            if let Some(reuse_result) = source.try_reuse(messages, window_start, cut_end).await {
+            if let Some(reuse_result) = source.try_reuse(messages, window_start, window_end).await {
                 if let Some(text) = first_message_text(&messages[window_start]) {
                     self.store_cache(window_start, cut_end, window_hash, text.to_string());
                 }
@@ -325,7 +350,7 @@ impl ContextCompactor {
             }
         }
 
-        let window = &messages[window_start..cut_end];
+        let window = &messages[window_start..window_end];
         let transcript = serialize_transcript(window);
         let tokens_before = estimate_tokens(&transcript);
 
@@ -346,8 +371,8 @@ impl ContextCompactor {
         let prompt = match first_message_text(&messages[window_start])
             .and_then(strip_context_summary_prefix)
         {
-            Some(prior) if window_start + 1 < cut_end => {
-                let new_transcript = serialize_transcript(&messages[window_start + 1..cut_end]);
+            Some(prior) if window_start + 1 < window_end => {
+                let new_transcript = serialize_transcript(&messages[window_start + 1..window_end]);
                 build_summary_update_prompt(prior, &new_transcript, token_budget, focus.as_deref())
             }
             _ => build_window_summary_prompt(&transcript, token_budget, focus.as_deref()),
@@ -378,9 +403,9 @@ impl ContextCompactor {
                 let tokens_after = estimate_tokens(&summary);
 
                 // Remove the compressed window and insert the summary at window_start
-                messages.drain(window_start..cut_end);
+                messages.drain(window_start..window_end);
                 messages.insert(window_start, summary_msg);
-                self.store_cache(window_start, cut_end, window_hash, summary_text);
+                self.store_cache(window_start, window_end, window_hash, summary_text);
 
                 Ok(CompactResult {
                     tokens_before,
@@ -396,9 +421,9 @@ impl ContextCompactor {
                     let summary_text = format!("[Context Summary]\n{truncated}");
                     let summary_msg = UnifiedMessage::user(summary_text.clone());
 
-                    messages.drain(window_start..cut_end);
+                    messages.drain(window_start..window_end);
                     messages.insert(window_start, summary_msg);
-                    self.store_cache(window_start, cut_end, window_hash, summary_text);
+                    self.store_cache(window_start, window_end, window_hash, summary_text);
 
                     Ok(CompactResult {
                         tokens_before,
@@ -441,6 +466,22 @@ impl ContextCompactor {
         c: CompactionCache,
         cut_end: usize,
     ) -> anyhow::Result<CompactResult> {
+        // Bound how far this merge extends the cover. A head-anchored initial
+        // window can leave a large un-summarized gap between the cached summary
+        // (ending at `c.end`) and the fresh-tail boundary; folding all of it in
+        // one call could overflow the side-channel summarizer. Cap the extend
+        // target to one summarizer-input budget forward of `c.end`, so the
+        // summary advances by at most a budget-worth per turn and the remainder
+        // folds in on later turns. When the gap already fits, this is a no-op
+        // (returns the original `cut_end`); when there is no new growth it
+        // collapses to `c.end`, routing to the zero-LLM cache-reuse path below.
+        let cut_end = select_window_end(
+            messages,
+            c.end,
+            cut_end,
+            self.config.max_window,
+            SUMMARIZER_INPUT_TOKEN_BUDGET,
+        );
         // Hash over the wider range BEFORE mutating: this is the fingerprint a
         // future rebuild will present for the extended cover.
         let extended_hash = hash_window(&messages[c.start..cut_end]);
@@ -609,6 +650,51 @@ fn snap_boundary_forward(messages: &[UnifiedMessage], idx: usize) -> usize {
     i
 }
 
+/// Select the exclusive end of a compaction window that starts at `start`.
+///
+/// Walks forward from `start`, accumulating each message's *capped* transcript
+/// token estimate (matching what [`serialize_transcript`] actually sends the
+/// summarizer, via [`cap_transcript_text`]), and stops once `budget_tokens` is
+/// reached or `max_messages` messages have been taken — whichever binds first.
+/// The end is then snapped forward past any tool-result run (so the kept region
+/// never begins on an orphaned result whose call was drained into the summary)
+/// and clamped to `[start + 1, hard_end]`, so the window is always non-empty and
+/// never spills past the fresh-tail boundary `hard_end`.
+///
+/// This is the single source of window bounding shared by the from-scratch
+/// window selection in [`ContextCompactor::compact_inner`] and the extend-merge
+/// in [`ContextCompactor::reapply_cached`], keeping both calls within the same
+/// summarizer-input budget.
+fn select_window_end(
+    messages: &[UnifiedMessage],
+    start: usize,
+    hard_end: usize,
+    max_messages: usize,
+    budget_tokens: usize,
+) -> usize {
+    if start >= hard_end {
+        return hard_end;
+    }
+    let msg_ceiling = start.saturating_add(max_messages.max(1));
+    let mut acc = 0usize;
+    let mut end = start;
+    while end < hard_end && end < msg_ceiling {
+        let text = messages[end].text_content();
+        let capped = cap_transcript_text(&text);
+        acc = acc.saturating_add(estimate_tokens(capped.as_ref()));
+        end += 1;
+        if acc >= budget_tokens {
+            break;
+        }
+    }
+    // Snap past any tool-result run so the kept region [end..] never begins on an
+    // orphan, then clamp: never past the fresh-tail boundary, always ≥ 1 message.
+    snap_boundary_forward(messages, end)
+        .min(hard_end)
+        .max(start + 1)
+        .min(hard_end)
+}
+
 /// Content fingerprint of a message window: role discriminant + text content
 /// per message. Deterministic across turns because the prompt builder and the
 /// preflight cheap passes are deterministic functions of an append-only
@@ -757,6 +843,46 @@ mod tests {
         assert_eq!(messages.len(), 7);
 
         // First message should be the summary
+        let first_text = first_message_text(&messages[0]).unwrap();
+        assert!(first_text.starts_with("[Context Summary]"));
+    }
+
+    #[tokio::test]
+    async fn head_anchored_window_compresses_oldest_first() {
+        // A long conversation: the compaction window must anchor at the OLDEST
+        // message (shed the prefix that bloats every turn), not a fixed slice
+        // before the fresh tail. With default max_window=40 the oldest 40
+        // messages are summarized while the newer pre-tail gap rides raw — the
+        // opposite of the old tail-anchored window, which left the oldest
+        // history uncompressed and re-sent it verbatim every turn.
+        let provider = Arc::new(MockProvider::new("Summary of earlier conversation."));
+        let compactor = ContextCompactor::new(provider, CompactorConfig::default());
+
+        // 60 messages, fresh_tail 6 → cut_end = 54. Oldest at index 0, a newer
+        // pre-tail turn at index 45 (inside the [40..54] raw gap).
+        let mut messages = make_messages(60);
+        messages[0] = UnifiedMessage::user("OLDEST_MARKER first task");
+        messages[45] = UnifiedMessage::user("MIDGAP_MARKER newer pre-tail turn");
+
+        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        assert_eq!(result.strategy_used, CompactStrategy::LlmSummary);
+
+        let joined: String = messages
+            .iter()
+            .map(UnifiedMessage::text_content)
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The oldest message was drained into the summary…
+        assert!(
+            !joined.contains("OLDEST_MARKER"),
+            "oldest message must be compressed away, not left raw"
+        );
+        // …while the newer pre-tail gap message survives verbatim — proving the
+        // window is anchored at the head, not the tail.
+        assert!(
+            joined.contains("MIDGAP_MARKER"),
+            "newer pre-tail message must ride raw (oldest-first anchoring)"
+        );
         let first_text = first_message_text(&messages[0]).unwrap();
         assert!(first_text.starts_with("[Context Summary]"));
     }
@@ -1133,6 +1259,58 @@ mod tests {
         assert_eq!(snap_boundary_forward(&messages, 4), 4);
         // Out-of-range / end index is preserved.
         assert_eq!(snap_boundary_forward(&messages, 5), 5);
+    }
+
+    #[test]
+    fn select_window_end_bounds_by_message_ceiling() {
+        // Small messages + generous token budget → the max_messages ceiling
+        // binds, measured forward from the head.
+        let messages = make_messages(50);
+        let end = select_window_end(&messages, 0, 44, 40, SUMMARIZER_INPUT_TOKEN_BUDGET);
+        assert_eq!(end, 40, "window bounded to max_messages from the head");
+    }
+
+    #[test]
+    fn select_window_end_bounds_by_token_budget() {
+        // A tiny budget binds before the message ceiling: the window stops as
+        // soon as the accumulated capped transcript exceeds the budget.
+        let messages = make_messages(50);
+        let end = select_window_end(&messages, 0, 44, 40, 5);
+        assert!(
+            (1..40).contains(&end),
+            "token budget must bind before the message ceiling, got {end}"
+        );
+    }
+
+    #[test]
+    fn select_window_end_clamps_to_hard_end_and_min_one() {
+        let messages = make_messages(10);
+        // hard_end below the ceiling → clamp to hard_end.
+        assert_eq!(select_window_end(&messages, 0, 4, 40, SUMMARIZER_INPUT_TOKEN_BUDGET), 4);
+        // start == hard_end → empty, returns hard_end (caller guards).
+        assert_eq!(select_window_end(&messages, 4, 4, 40, SUMMARIZER_INPUT_TOKEN_BUDGET), 4);
+    }
+
+    #[test]
+    fn select_window_end_snaps_past_trailing_tool_result() {
+        // A boundary landing on a tool-result run must snap forward so the kept
+        // region [end..] never begins on an orphaned result.
+        let messages = vec![
+            UnifiedMessage::user("ask"),
+            UnifiedMessage::Assistant {
+                content: vec![ContentBlock::ToolCall {
+                    thought_signature: None,
+                    id: "c1".into(),
+                    name: "search".into(),
+                    arguments: serde_json::json!({}),
+                }],
+            },
+            UnifiedMessage::tool_result("c1", "search", "r1", false),
+            UnifiedMessage::user("next"),
+        ];
+        // max_messages=2 lands the raw end on index 2 (the tool_result) → snap to 3.
+        let end = select_window_end(&messages, 0, 4, 2, SUMMARIZER_INPUT_TOKEN_BUDGET);
+        assert_eq!(end, 3, "end snaps past the tool_result so [end..] has no orphan");
     }
 
     #[test]

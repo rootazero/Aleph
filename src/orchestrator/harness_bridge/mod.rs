@@ -45,7 +45,8 @@ mod tests;
 // Re-export every item that was `pub` / `pub(crate)` at the old path so
 // external callers (`...::harness_bridge::X`) keep working unchanged.
 pub use context_blocks::{
-    active_execution_plan, active_standing_goal, active_strategy, compute_runtime_state_blocks,
+    active_execution_plan, active_standing_goal, active_strategy, active_timer_loop,
+    compute_runtime_state_blocks,
 };
 // Crate-internal helpers tests reach via the parent path (`super::X`); keep
 // them addressable at the module root after the split.

@@ -486,13 +486,15 @@ impl AgentHarnessRunner {
         // `join!` polls all on the current task, so there is no spawn cost and
         // no extra `Send` bound; all futures take a shared `&session_key_str`
         // borrow, which co-exist fine.
-        let (exec_plan, standing, strategy) = tokio::join!(
+        let (exec_plan, standing, timer_loop, strategy) = tokio::join!(
             active_execution_plan(&session_key_str),
             active_standing_goal(&session_key_str),
+            active_timer_loop(&session_key_str),
             active_strategy(&session_key_str),
         );
         resolved_context.execution_plan = exec_plan;
         resolved_context.standing_goal = standing;
+        resolved_context.timer_loop = timer_loop;
         // Render the welded Strategy into its two prompt surfaces: the full
         // `<strategy>` body for the Stable `StrategyLayer` (cacheable head) and
         // the guardrail-only echo for the Dynamic `StrategyPointerLayer` (per-
