@@ -15,6 +15,25 @@ use crate::sync_primitives::Arc;
 use crate::tools::scoped::ToolDefinitionRewriter;
 use crate::tools::service::ToolDefinition;
 
+/// First-sentence head for description truncation. Returns `Some(head)` only
+/// when a clean sentence boundary exists (a `". "` whose preceding token is
+/// not a common abbreviation); otherwise `None` (caller keeps the full text).
+fn first_sentence_head(desc: &str) -> Option<&str> {
+    const ABBREVS: &[&str] = &["e.g", "i.e", "etc", "vs", "cf", "al", "no", "fig"];
+    let mut search_from = 0;
+    while let Some(rel) = desc[search_from..].find(". ") {
+        let end = search_from + rel; // index of the '.'
+        let head = &desc[..end];
+        let last_word = head.rsplit(|c: char| c.is_whitespace()).next().unwrap_or("");
+        // Skip boundaries that fall right after a known abbreviation token.
+        if !ABBREVS.iter().any(|a| last_word.eq_ignore_ascii_case(a)) {
+            return Some(head);
+        }
+        search_from = end + 2; // move past this ". "
+    }
+    None
+}
+
 /// Collapses non-core tools' schemas at request time. Deterministic per
 /// `(name, core, truncate)`, so it is safe under the `metadata_schema()`
 /// generation cache.
@@ -52,9 +71,10 @@ impl ToolDefinitionRewriter for ProgressiveDisclosureRewriter {
         def.input_schema = json!({ "type": "object", "additionalProperties": true });
 
         if self.truncate_desc {
-            if let Some((head, _)) = def.description.split_once(". ") {
+            if let Some(head) = first_sentence_head(&def.description) {
                 def.description = head.to_string();
             }
+            // else: no clean boundary → keep full description (fail-safe, never garbled)
         }
         def.description.push_str(&format!(
             " [Parameters collapsed — call get_tool_schema(tool_name=\"{}\") to load the full input schema before calling this tool.]",
@@ -110,5 +130,30 @@ mod tests {
         assert!(ProgressiveDisclosureRewriter::from_config(&["*".into()], false).is_none());
         assert!(ProgressiveDisclosureRewriter::from_config(&[], false).is_none());
         assert!(ProgressiveDisclosureRewriter::from_config(&["bash".into()], false).is_some());
+    }
+
+    #[test]
+    fn truncate_does_not_garble_abbreviations() {
+        let rw = ProgressiveDisclosureRewriter::new(std::collections::BTreeSet::new(), true);
+        let mut d = ToolDefinition {
+            name: "test_cmd".to_string(),
+            description: "Executes a command, e.g. ls -la. Use carefully.".to_string(),
+            input_schema: json!({"type":"object"}),
+            source: ToolSource::Builtin,
+            metadata: ToolDefinitionMetadata::default(),
+        };
+        rw.rewrite(&mut d);
+        // Should NOT contain the garbled fragment
+        assert!(!d.description.contains("Executes a command, e.g ["));
+        // Should NOT start with garbled "e.g"
+        assert!(!d.description.starts_with("Executes a command, e.g "));
+        // Should contain the hint about get_tool_schema
+        assert!(d.description.contains("get_tool_schema"));
+    }
+
+    #[test]
+    fn mixed_wildcard_disables() {
+        let result = ProgressiveDisclosureRewriter::from_config(&["bash".into(), "*".into()], false);
+        assert!(result.is_none());
     }
 }
