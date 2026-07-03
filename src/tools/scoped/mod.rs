@@ -14,11 +14,13 @@
 mod builder;
 mod dispatch;
 mod traits;
+mod progressive_disclosure;
 
 #[cfg(test)]
 mod tests;
 
 pub use traits::{ToolDefinitionRewriter, ToolHookDecorator};
+pub use progressive_disclosure::ProgressiveDisclosureRewriter;
 
 use std::collections::BTreeSet;
 
