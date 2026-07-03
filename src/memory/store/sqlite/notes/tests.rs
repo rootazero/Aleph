@@ -751,4 +751,60 @@ mod tests {
         let citing = backend.notes_citing("default", "raw-1").await.unwrap();
         assert_eq!(citing, vec!["preference/typescript".to_string()]);
     }
+
+    #[tokio::test]
+    async fn get_graph_data_surfaces_edge_relation_kind() {
+        let backend = make_backend();
+        backend
+            .index_note(&make_note("a", "reference"), "agent1", "reference")
+            .await
+            .unwrap();
+        backend
+            .index_note(&make_note("b", "reference"), "agent1", "reference")
+            .await
+            .unwrap();
+        // Discover the actual stored paths (path convention is internal).
+        let (nodes, _e) = backend.get_graph_data("agent1", 100).await.unwrap();
+        assert!(nodes.len() >= 2, "expected both seeded notes");
+        let a = nodes[0].path.clone();
+        let b = nodes[1].path.clone();
+        backend
+            .add_link_with_relation("agent1", &a, &b, "semantic")
+            .await
+            .unwrap();
+
+        let (_n, edges) = backend.get_graph_data("agent1", 100).await.unwrap();
+        let e = edges
+            .iter()
+            .find(|(f, t, _)| f == &a && t == &b)
+            .expect("edge a->b present");
+        assert_eq!(e.2.as_deref(), Some("semantic"));
+    }
+
+    #[tokio::test]
+    async fn count_notes_is_agent_scoped() {
+        let backend = make_backend();
+        backend
+            .index_note(&make_note("a", "reference"), "agent1", "reference")
+            .await
+            .unwrap();
+        backend
+            .index_note(&make_note("b", "reference"), "agent1", "reference")
+            .await
+            .unwrap();
+        assert_eq!(backend.count_notes("agent1").await.unwrap(), 2);
+        assert_eq!(backend.count_notes("other-agent").await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn community_ids_reads_graph_cache() {
+        let backend = make_backend();
+        backend
+            .replace_graph_cache("agent1", &[("notes/a".to_string(), 7usize, 0.5f32, 3usize)])
+            .await
+            .unwrap();
+        let map = backend.community_ids("agent1").await.unwrap();
+        assert_eq!(map.get("notes/a").copied(), Some(7));
+        assert!(backend.community_ids("other-agent").await.unwrap().is_empty());
+    }
 }

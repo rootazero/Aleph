@@ -1,6 +1,6 @@
+mod galaxy_build;
 mod galaxy_canvas;
 pub mod gl;
-pub mod node_card;
 mod node_detail_panel;
 
 pub use node_detail_panel::{NodeDetailPanel, NodeExcerpt};
@@ -9,8 +9,8 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::graph::GraphApi;
-use crate::canvas_engine::adapter::{GraphQueryResponse, NoteNodeDto};
 use crate::canvas_engine::interaction::CanvasEvent;
+use galaxy_build::{build_galaxy, compute_highlight_set, fold_to_lod};
 use leptos::callback::Callback;
 
 use crate::context::DashboardState;
@@ -23,7 +23,7 @@ use crate::api::agents::AgentsApi;
 #[component]
 #[must_use]
 pub fn CanvasView() -> impl IntoView {
-    view! { <RadialCanvasView /> }
+    view! { <GalaxyCanvasView /> }
 }
 
 /// 3D WebGL galaxy canvas host.
@@ -32,7 +32,7 @@ pub fn CanvasView() -> impl IntoView {
 /// is single-threaded. The `on_event` closure captures only `Copy` reactive signals so it can
 /// satisfy the `Send + Sync` bound.
 #[component]
-fn RadialCanvasView() -> impl IntoView {
+fn GalaxyCanvasView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let mem = expect_context::<MemoryState>();
 
@@ -102,12 +102,11 @@ fn RadialCanvasView() -> impl IntoView {
     let fold_threshold = mem.fold_threshold;
     let set_fold_threshold = mem.fold_threshold;
 
-    // Full-graph node cache — populated once on mount, used to compute the
-    // ghost-dot ring of orphans (nodes outside the current connected component).
-    let all_dtos: RwSignal<Vec<NoteNodeDto>> = RwSignal::new(Vec::new());
-
     // 3D galaxy data built from the full graph.query response via force-layout seed.
     let galaxy_data: RwSignal<Option<gl::GraphData>> = RwSignal::new(None);
+
+    // (shown_count, total) when graph.query hit the node cap; None otherwise.
+    let truncation: RwSignal<Option<(usize, usize)>> = RwSignal::new(None);
 
     // Intent channels: host → GalaxyCanvas → Scene (non-Send bridge via signals).
     // `focus_request` triggers fly_to_node; `highlight_request` triggers set_highlight.
@@ -146,10 +145,10 @@ fn RadialCanvasView() -> impl IntoView {
                 set_selected_node.set(None);
                 search_query.set(String::new());
                 set_fold_threshold.set(DEFAULT_FOLD);
-                all_dtos.set(Vec::new());
                 // Clear 3D galaxy signals so the new agent's galaxy rebuilds from scratch.
                 // The galaxy-build Effect repopulates galaxy_data when it re-runs.
                 galaxy_data.set(None);
+                truncation.set(None);
                 focus_request.set(None);
                 highlight_request.set(None);
                 highlight_edges_request.set(None);
@@ -174,9 +173,14 @@ fn RadialCanvasView() -> impl IntoView {
             // Fetch the full graph and build the 3D galaxy seed from its topology.
             let query_result = GraphApi::query(&state, &agent, 500, vec![]).await.ok();
             if let Some(ref r) = query_result {
-                all_dtos.set(r.nodes.clone());
                 // Build deterministic 3D galaxy seed from full-graph topology.
                 galaxy_data.set(Some(build_galaxy(r)));
+                // Surface a "showing top N of M" badge when the query truncated.
+                truncation.set(
+                    r.total
+                        .filter(|&t| t > r.nodes.len())
+                        .map(|t| (r.nodes.len(), t)),
+                );
             }
         });
     });
@@ -187,6 +191,8 @@ fn RadialCanvasView() -> impl IntoView {
     let on_event = move |event: CanvasEvent| match event {
         CanvasEvent::SelectNode(id) => {
             set_selected_node.set(Some(id.clone()));
+            // Record the visit so NodeDetailPanel's "Recently visited" list accrues.
+            mem.push_recent(id.clone());
             // Drive the scene via intent channels:
             // 1. Fly camera to selected node.
             focus_request.set(Some(id.clone()));
@@ -222,8 +228,6 @@ fn RadialCanvasView() -> impl IntoView {
     // subscription.
     //
     // On a match, drive the 3D galaxy's intent channels: fly-to + highlight + open panel.
-    // active_request is NOT set here — it drove the retired radial-fetch path; leaving
-    // it disconnected from search prevents stale graph.neighbors fetches in the console.
     Effect::new(move || {
         mem.search_nonce.get(); // subscribe to Enter-submit pulses only
         let query = search_query.get_untracked();
@@ -328,6 +332,13 @@ fn RadialCanvasView() -> impl IntoView {
                 hovered_node=hover_intent
                 highlight_edges_request=highlight_edges_request
             />
+            // Truncation badge: shown when graph.query returned fewer nodes than the agent has.
+            {move || truncation.get().map(|(shown, total)| view! {
+                <div class="absolute top-2 right-2 pointer-events-none text-[11px] text-white/70
+                            bg-black/40 rounded px-2 py-0.5 select-none">
+                    {format!("showing top {shown} of {total}")}
+                </div>
+            })}
             // NodeDetailPanel: overlay when a node is selected in the galaxy.
             {move || selected_node.get().map(|_| view! {
                 <div class="absolute bottom-0 right-0 w-72 max-h-[60%] overflow-y-auto
@@ -340,147 +351,6 @@ fn RadialCanvasView() -> impl IntoView {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Private helpers shared by RadialCanvasView Effects
-// ---------------------------------------------------------------------------
-
-/// Build the initial 3D galaxy GraphData from a full-graph query response.
-///
-/// Node positions come from `ForceLayout::seed` (deterministic, hash-derived)
-/// so the scene's starting positions match what the layout engine expects.
-/// Scene::set_graph then builds a ForceLayout over these positions and animates
-/// them to their settled state over up to MAX_SETTLE_STEPS frames.
-fn build_galaxy(resp: &GraphQueryResponse) -> gl::GraphData {
-    use crate::canvas_engine::category_color::category_rgb;
-    use gl::layout3d::ForceLayout;
-    use gl::{GalaxyNode, GraphData};
-
-    let mut id_index = std::collections::HashMap::new();
-    for (i, n) in resp.nodes.iter().enumerate() {
-        id_index.insert(n.id.clone(), i as u32);
-    }
-
-    // Memory links are directed rows, but the galaxy is an undirected graph:
-    // reciprocal wikilinks (A→B and B→A) and duplicate rows must collapse to a
-    // single edge, or each pair draws two oppositely-bowed bézier arcs (the
-    // "double arc" artifact). Also drops self-loops.
-    let edges = dedup_undirected_edges(
-        resp.edges
-            .iter()
-            .filter_map(|e| Some((*id_index.get(&e.from)?, *id_index.get(&e.to)?))),
-    );
-
-    let ids: Vec<String> = resp.nodes.iter().map(|n| n.id.clone()).collect();
-    let layout = ForceLayout::new(ids.len(), &edges);
-    let positions = layout.seed(&ids);
-
-    let nodes: Vec<GalaxyNode> = resp
-        .nodes
-        .iter()
-        .zip(positions)
-        .map(|(n, pos)| GalaxyNode {
-            id: n.id.clone(),
-            name: n.name.clone(),
-            category: n.category.clone(),
-            link_count: n.link_count as u32,
-            pos,
-            color: category_rgb(&n.category),
-        })
-        .collect();
-
-    GraphData { nodes, edges }
-}
-
-/// Collapse directed link rows into unique undirected edges.
-///
-/// Reciprocal links (`A→B` and `B→A`) and exact duplicates fold to one
-/// `(min, max)` pair; self-loops (`A→A`) are dropped. First-appearance order is
-/// preserved so the renderer's edge ordering stays deterministic across rebuilds.
-/// Normalizing to `(min, max)` also matches the edge-highlight key normalization
-/// in `gl::edges::EdgeRenderer::set_highlight`.
-fn dedup_undirected_edges(directed: impl Iterator<Item = (u32, u32)>) -> Vec<(u32, u32)> {
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for (a, b) in directed {
-        if a == b {
-            continue; // degenerate self-loop
-        }
-        let key = (a.min(b), a.max(b));
-        if seen.insert(key) {
-            out.push(key);
-        }
-    }
-    out
-}
-
-/// Map the Fold slider value (UI range 0..=10) to an edge-density LOD in [0,1]
-/// for the galaxy renderer. Higher slider = denser graph: `fold=0` → lod 1.0
-/// (only the ~90th-percentile backbone survives `Scene::recompute_filtered_edges`),
-/// `fold=10` → lod 0.0 (all edges). The full slider travel spans the full LOD
-/// range, replacing the old `1.0 - (ft-1)/999` map whose 0..10 input only
-/// produced lod∈[0.991,1.0] (visibly no change).
-fn fold_to_lod(fold: usize) -> f32 {
-    let ft = fold.min(10) as f32;
-    (1.0 - ft / 10.0).clamp(0.0, 1.0)
-}
-
-/// Compute the highlight set for a selected node: the selected node's index
-/// plus all topologically adjacent node indices (one hop).
-///
-/// Returns a `HashSet<u32>` of node indices (matching `GraphData.nodes` order).
-/// The scene's `set_highlight` will dim any node NOT in this set.
-fn compute_highlight_set(
-    data: &gl::GraphData,
-    selected_id: &str,
-) -> std::collections::HashSet<u32> {
-    // Find the selected node's index.
-    let Some(sel_idx) = data.nodes.iter().position(|n| n.id == selected_id) else {
-        return std::collections::HashSet::new();
-    };
-    let sel_idx = sel_idx as u32;
-
-    // Collect direct neighbors via edges.
-    let mut hl = std::collections::HashSet::new();
-    hl.insert(sel_idx);
-    for &(a, b) in &data.edges {
-        if a == sel_idx {
-            hl.insert(b);
-        } else if b == sel_idx {
-            hl.insert(a);
-        }
-    }
-    hl
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dedup_collapses_reciprocal_and_duplicate_edges() {
-        // (0,1) and (1,0) are the same undirected edge; (2,3) appears twice.
-        let directed = [(0u32, 1u32), (1, 0), (2, 3), (2, 3), (3, 4)];
-        let out = dedup_undirected_edges(directed.into_iter());
-        assert_eq!(out, vec![(0, 1), (2, 3), (3, 4)]);
-    }
-
-    #[test]
-    fn dedup_drops_self_loops() {
-        let directed = [(5u32, 5u32), (0, 1)];
-        let out = dedup_undirected_edges(directed.into_iter());
-        assert_eq!(out, vec![(0, 1)]);
-    }
-
-    #[test]
-    fn fold_to_lod_spans_full_visible_range() {
-        // Full slider travel (0..=10) must cover the full LOD range so the
-        // control is visibly effective (the old 0..10→[0.991,1.0] map did not).
-        assert_eq!(fold_to_lod(0), 1.0); // sparsest: backbone only
-        assert_eq!(fold_to_lod(10), 0.0); // densest: all edges
-        assert_eq!(fold_to_lod(5), 0.5); // midpoint
-                                         // Monotonic decreasing: higher slider = denser graph (lower lod).
-        assert!(fold_to_lod(2) > fold_to_lod(8));
-        // Out-of-range slider values clamp instead of overflowing the LOD range.
-        assert_eq!(fold_to_lod(99), 0.0);
-    }
-}
+// Pure graph→galaxy transforms (`build_galaxy`, `fold_to_lod`,
+// `compute_highlight_set`, …) live in `galaxy_build.rs` — this file holds only
+// the component's reactive wiring.

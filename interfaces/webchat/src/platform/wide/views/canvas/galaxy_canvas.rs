@@ -234,14 +234,21 @@ pub fn GalaxyCanvas(
         let cy = ev.client_y() as f32;
 
         if ptr_down_pm.get() {
-            // Drag: update orbit camera.
+            // Drag: pan (Shift-drag or middle-button drag) translates the look-at
+            // centre; a plain left-drag orbits. Modifier/button are read live off
+            // the event, so no gesture state needs threading through pointerdown.
             let (lx, ly) = last_ptr_pm.get();
             let dx = cx - lx;
             let dy = cy - ly;
             last_ptr_pm.set((cx, cy));
             let t_ms = perf_now();
+            let pan = ev.shift_key() || (ev.buttons() & 4) != 0;
             if let Some(s) = scene_pm.borrow_mut().as_mut() {
-                s.on_drag(dx, dy, t_ms);
+                if pan {
+                    s.on_pan(dx, dy, t_ms);
+                } else {
+                    s.on_drag(dx, dy, t_ms);
+                }
             }
         } else {
             // Hover (no button down): pick and emit HoverNode on transition.

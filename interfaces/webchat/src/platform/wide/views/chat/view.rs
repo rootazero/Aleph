@@ -5,7 +5,6 @@
 //! - [`super::composer`] — textarea + attachments + slash palette + send
 
 use super::composer::InputArea;
-use super::events::subscribe_run_events;
 use super::messages::MessageList;
 use super::state::{ChatState, PendingAttachment};
 use super::team_events::subscribe_team_events;
@@ -31,9 +30,6 @@ pub fn ChatView() -> impl IntoView {
     // (left column) and this view share one session / agent selection.
     let chat = expect_context::<ChatState>();
     let workspace = expect_context::<WorkspaceState>();
-
-    // Subscribe to run.* events directly (no Effect — this is a one-shot mount action)
-    let sub_id = subscribe_run_events(&dashboard, chat, workspace);
 
     // Team chat: subscribe to team.<id>.* events alongside the single-agent stream.
     // Harmless when not in team mode (the handler short-circuits on topic prefix).
@@ -98,7 +94,6 @@ pub fn ChatView() -> impl IntoView {
 
     let dash_for_cleanup = dashboard;
     on_cleanup(move || {
-        dash_for_cleanup.unsubscribe_events(sub_id);
         dash_for_cleanup.unsubscribe_events(team_sub_id);
         // Tell the Gateway to stop forwarding stream.* and team.* events
         let dash = dash_for_cleanup;

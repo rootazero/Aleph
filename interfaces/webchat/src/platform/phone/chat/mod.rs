@@ -12,9 +12,6 @@ use leptos::task::spawn_local;
 use leptos_router::hooks::use_location;
 
 use crate::context::DashboardState;
-use crate::state::layout::WorkspaceState;
-use crate::views::chat::events::subscribe_run_events;
-use crate::views::chat::ChatState;
 
 use self::history::PhoneChatHistory;
 use self::thread::PhoneChatThread;
@@ -27,11 +24,6 @@ use self::thread::PhoneChatThread;
 #[must_use]
 pub fn PhoneChat() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
-    let chat = expect_context::<ChatState>();
-    let workspace = expect_context::<WorkspaceState>();
-
-    // Drive ChatState from run.* events (single-agent stream only — no team).
-    let sub_id = subscribe_run_events(&dashboard, chat, workspace);
 
     // Ask the Gateway to forward stream.* once connected (poll up to ~5s).
     {
@@ -50,7 +42,6 @@ pub fn PhoneChat() -> impl IntoView {
     }
 
     on_cleanup(move || {
-        dashboard.unsubscribe_events(sub_id);
         let dash = dashboard;
         spawn_local(async move {
             let _ = dash.unsubscribe_topic("stream.*").await;

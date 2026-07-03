@@ -18,6 +18,7 @@ use super::TodoPanel;
 use crate::api::chat::{ChatApi, ChatAttachment};
 use crate::components::team_task_strip::TeamTaskStrip;
 use crate::context::DashboardState;
+use crate::state::sessions::SessionMap;
 use crate::i18n::{t_string, use_i18n};
 use attachments::{read_file_list_into, AttachmentPreviewBar};
 use leptos::prelude::*;
@@ -51,6 +52,7 @@ const DOCTOR_REPAIR_PROMPT: &str = "运行 doctor 工具诊断系统健康状况
 pub(super) fn InputArea() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    let sessions = expect_context::<SessionMap>();
     let i18n = use_i18n();
 
     let input_text = RwSignal::new(String::new());
@@ -203,6 +205,11 @@ pub(super) fn InputArea() -> impl IntoView {
         // Per-turn model override stamped on ChatState → daemon's run
         // loop short-circuits its provider-fallback chain.
         let model_override = chat.selected_model.get();
+        // Capture the conversation active at *send* time. Binding the run to
+        // this (rather than to whichever tab is focused when `run_accepted`
+        // arrives) is what lets the user send in A, switch to B, and still have
+        // A's reply stream into A (I1).
+        let send_conv = sessions.active_conv();
         let dash = dashboard;
         spawn_local(async move {
             let sk = session_key.as_deref();
@@ -211,6 +218,9 @@ pub(super) fn InputArea() -> impl IntoView {
             let mo = model_override.as_ref();
             match ChatApi::send(&dash, &text, sk, api_attachments, aid, pr, mo, false).await {
                 Ok(resp) => {
+                    if let Some(conv) = send_conv {
+                        sessions.bind_run(&resp.run_id, conv, Some(&resp.session_key));
+                    }
                     chat.session_key.set(Some(resp.session_key));
                 }
                 Err(e) => {

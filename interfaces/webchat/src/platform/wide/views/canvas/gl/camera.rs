@@ -57,6 +57,36 @@ impl OrbitCamera {
         self.tgt_distance = distance.clamp(Self::MIN_DIST, Self::MAX_DIST);
     }
 
+    /// Pan: translate the orbit centre (look-at point) by a world-space delta,
+    /// carrying the eye with it. Distinct from `orbit` (angles) and `zoom`
+    /// (distance). Applied to BOTH the live centre and its damping target so a
+    /// pan reads as immediate (no ease-in lag) yet never fights an in-flight
+    /// `fly_to` (which retargets `tgt_center` independently).
+    pub fn pan_world(&mut self, delta: Vec3) {
+        self.center = self.center.add(&delta);
+        self.tgt_center = self.tgt_center.add(&delta);
+    }
+
+    /// World-space (right, up) unit vectors spanning the view plane (perpendicular
+    /// to the view direction). Turns a screen-pixel drag into a world-space pan.
+    /// The elevation clamp in `orbit` keeps the view direction off the poles, so
+    /// `forward × world_up` never degenerates.
+    pub fn screen_basis(&self) -> (Vec3, Vec3) {
+        let forward = self.center.sub(&self.eye()).normalize();
+        let world_up = Vec3::new(0.0, 1.0, 0.0);
+        let right = forward.cross(&world_up).normalize();
+        let up = right.cross(&forward).normalize();
+        (right, up)
+    }
+
+    /// World units spanned by one screen pixel at the look-at plane, for a given
+    /// viewport height. Perspective: proportional to `distance * tan(fovy/2)`, so
+    /// a pixel of drag pans further when zoomed out — matching what the cursor
+    /// sits over.
+    pub fn world_per_pixel(&self, viewport_h: f32) -> f32 {
+        2.0 * self.distance * (Self::FOVY * 0.5).tan() / viewport_h.max(1.0)
+    }
+
     pub fn note_interaction(&mut self, t_ms: f64) {
         self.last_interaction_ms = t_ms;
     }
@@ -146,5 +176,34 @@ mod tests {
 
     fn approx_eq(a: f32, b: f32) {
         assert!((a - b).abs() < 1e-4);
+    }
+
+    #[test]
+    fn pan_world_shifts_center_immediately() {
+        let mut c = OrbitCamera::new(100.0);
+        let t0 = c.target();
+        c.pan_world(Vec3::new(10.0, -4.0, 0.0));
+        let t1 = c.target();
+        // Immediate — no update() needed (both center and tgt_center moved).
+        approx_eq(t1.x - t0.x, 10.0);
+        approx_eq(t1.y - t0.y, -4.0);
+    }
+
+    #[test]
+    fn screen_basis_is_orthonormal() {
+        let c = OrbitCamera::new(100.0);
+        let (r, u) = c.screen_basis();
+        approx_eq(r.length(), 1.0);
+        approx_eq(u.length(), 1.0);
+        assert!(r.dot(&u).abs() < 1e-4, "right must be perpendicular to up");
+    }
+
+    #[test]
+    fn world_per_pixel_positive_and_scales_with_distance() {
+        let near = OrbitCamera::new(100.0);
+        let far = OrbitCamera::new(1000.0);
+        let h = 800.0;
+        assert!(near.world_per_pixel(h) > 0.0);
+        assert!(far.world_per_pixel(h) > near.world_per_pixel(h));
     }
 }

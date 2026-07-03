@@ -72,6 +72,13 @@ pub struct NoteNodeDto {
     pub category: String,
     pub tags: Vec<String>,
     pub link_count: usize,
+    /// Community id from `notes_graph_cache` (Louvain). `None` on a cold cache
+    /// (before the first dream graph-recompute).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub community_id: Option<u32>,
+    /// Note last-modified epoch seconds — drives recency-based visual encoding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -97,6 +104,10 @@ pub struct NoteLinkDto {
 pub struct GraphQueryResponse {
     pub nodes: Vec<NoteNodeDto>,
     pub edges: Vec<NoteLinkDto>,
+    /// Total notes for the agent (nodes may be truncated to `limit`); lets the
+    /// panel show a "showing top N of M" indicator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]

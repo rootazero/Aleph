@@ -28,6 +28,7 @@ use super::super::state::ChatState;
 use crate::api::chat::{ChatApi, ChatAttachment};
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};
+use crate::state::sessions::SessionMap;
 
 /// Recording lifecycle. `Idle ↔ Recording`, then a one-shot `Transcribing`
 /// while the audio round-trips through STT and the send.
@@ -77,6 +78,7 @@ fn stop_tracks(stream: &web_sys::MediaStream) {
 fn transcribe_and_send(
     dash: DashboardState,
     chat: ChatState,
+    sessions: SessionMap,
     base64: String,
     mime: String,
     state: RwSignal<RecState>,
@@ -107,6 +109,9 @@ fn transcribe_and_send(
                 let aid = chat.agent_id.get_untracked();
                 let pr = chat.active_project_root.get_untracked();
                 let mo = chat.selected_model.get_untracked();
+                // Bind to the conversation active at send time (I1), same as the
+                // typed-send path in `composer/mod.rs`.
+                let send_conv = sessions.active_conv();
                 match ChatApi::send(
                     &dash,
                     &text,
@@ -121,6 +126,9 @@ fn transcribe_and_send(
                 .await
                 {
                     Ok(resp) => {
+                        if let Some(conv) = send_conv {
+                            sessions.bind_run(&resp.run_id, conv, Some(&resp.session_key));
+                        }
                         chat.session_key.set(Some(resp.session_key));
                         // Speak this run's reply when it completes (events.rs).
                         chat.mark_speak_run(&resp.run_id);
@@ -138,6 +146,7 @@ fn transcribe_and_send(
 fn read_blob_then(
     dash: DashboardState,
     chat: ChatState,
+    sessions: SessionMap,
     blob: web_sys::Blob,
     mime: String,
     state: RwSignal<RecState>,
@@ -160,7 +169,7 @@ fn read_blob_then(
             state.set(RecState::Idle);
             return;
         }
-        transcribe_and_send(dash, chat, base64, mime.clone(), state, error);
+        transcribe_and_send(dash, chat, sessions, base64, mime.clone(), state, error);
     }) as Box<dyn FnMut()>);
     reader.set_onload(Some(onload.as_ref().unchecked_ref()));
     // One-shot per recording; leaking a single small closure mirrors the
@@ -175,6 +184,7 @@ fn begin(
     handle: Handle,
     dash: DashboardState,
     chat: ChatState,
+    sessions: SessionMap,
     state: RwSignal<RecState>,
     error: RwSignal<Option<String>>,
 ) {
@@ -195,7 +205,7 @@ fn begin(
             Err(e) => {
                 if e.contains("NATIVE_AUDIO_UNAVAILABLE") {
                     // No native helper (Windows/Linux, or signed macOS) → browser.
-                    browser_start(handle, dash, chat, state, error);
+                    browser_start(handle, dash, chat, sessions, state, error);
                 } else {
                     // A real failure (e.g. mic permission denied on macOS).
                     error.set(Some(e));
@@ -211,6 +221,7 @@ fn browser_start(
     handle: Handle,
     dash: DashboardState,
     chat: ChatState,
+    sessions: SessionMap,
     state: RwSignal<RecState>,
     error: RwSignal<Option<String>>,
 ) {
@@ -283,7 +294,7 @@ fn browser_start(
                 stop_tracks(&stream);
             }
             match blob {
-                Some(blob) => read_blob_then(dash, chat, blob, mime, state, error),
+                Some(blob) => read_blob_then(dash, chat, sessions, blob, mime, state, error),
                 None => state.set(RecState::Idle),
             }
         }) as Box<dyn FnMut(web_sys::Event)>);
@@ -315,6 +326,7 @@ fn finish(
     handle: Handle,
     dash: DashboardState,
     chat: ChatState,
+    sessions: SessionMap,
     state: RwSignal<RecState>,
     error: RwSignal<Option<String>>,
 ) {
@@ -343,7 +355,7 @@ fn finish(
                         state.set(RecState::Idle);
                         return;
                     }
-                    transcribe_and_send(dash, chat, base64, mime, state, error);
+                    transcribe_and_send(dash, chat, sessions, base64, mime, state, error);
                 }
                 Err(e) => {
                     error.set(Some(e));
@@ -372,6 +384,7 @@ pub(super) fn VoiceInputButton(
 ) -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    let sessions = expect_context::<SessionMap>();
     let voice_mode = expect_context::<crate::views::voice::VoiceMode>();
     let i18n = use_i18n();
 
@@ -405,7 +418,7 @@ pub(super) fn VoiceInputButton(
         }
         if state.get_untracked() == RecState::Idle {
             long_press.set_value(true);
-            begin(handle.get_value(), dashboard, chat, state, error);
+            begin(handle.get_value(), dashboard, chat, sessions, state, error);
         }
     };
 
@@ -437,12 +450,12 @@ pub(super) fn VoiceInputButton(
             // Long-press already fired → we're recording; release stops it.
             long_press.set_value(false);
             if state.get_untracked() == RecState::Recording {
-                finish(handle.get_value(), dashboard, chat, state, error);
+                finish(handle.get_value(), dashboard, chat, sessions, state, error);
             }
         } else if state.get_untracked() == RecState::Recording {
             // Recording without a long-press means a prior gesture started it
             // (e.g. keyboard); a release here stops it.
-            finish(handle.get_value(), dashboard, chat, state, error);
+            finish(handle.get_value(), dashboard, chat, sessions, state, error);
         } else if state.get_untracked() == RecState::Idle {
             // Quick tap on an idle mic → immersive voice mode.
             voice_mode.open.set(true);
@@ -463,7 +476,9 @@ pub(super) fn VoiceInputButton(
         }
         match state.get_untracked() {
             RecState::Idle => voice_mode.open.set(true),
-            RecState::Recording => finish(handle.get_value(), dashboard, chat, state, error),
+            RecState::Recording => {
+                finish(handle.get_value(), dashboard, chat, sessions, state, error)
+            }
             RecState::Starting | RecState::Transcribing => {}
         }
     };

@@ -1,4 +1,4 @@
-//! Top-of-chat tab strip — one tab per opened `agent_id`.
+//! Top-of-chat tab strip — one tab per opened conversation.
 //!
 //! Floats over the top of `MessageList` inside `ChatView` (absolute
 //! frosted overlay band) — it scrolls with neither the sidebar nor the
@@ -22,7 +22,7 @@ use leptos::ev::keydown;
 use leptos::prelude::*;
 
 use crate::i18n::{t_string, use_i18n};
-use crate::state::sessions::SessionMap;
+use crate::state::sessions::{ConvId, SessionMap};
 use crate::views::chat::state::ChatState;
 
 #[component]
@@ -38,33 +38,25 @@ pub fn SessionTabs() -> impl IntoView {
             <div class="aleph-session-tabs flex items-center gap-1 px-2 py-1
                         text-xs overflow-x-auto">
                 <For
-                    each=move || sessions.tab_order.get()
-                    key=|aid| aid.clone()
-                    children=move |aid: String| view! { <Tab agent_id=aid /> }
+                    each=move || sessions.order.get()
+                    key=|cid| *cid
+                    children=move |cid: ConvId| view! { <Tab conv=cid /> }
                 />
             </div>
         </Show>
     }
 }
 
-/// Single tab pill — label + close button.
+/// Single tab pill — running dot + label + close button.
 #[component]
-fn Tab(agent_id: String) -> impl IntoView {
+fn Tab(conv: ConvId) -> impl IntoView {
     let i18n = use_i18n();
     let sessions = expect_context::<SessionMap>();
     let chat = expect_context::<ChatState>();
 
-    let aid_for_check = agent_id.clone();
-    let is_active = move || {
-        sessions
-            .active
-            .with(|a| a.as_ref().map(|s| s == &aid_for_check).unwrap_or(false))
-    };
-
-    let aid_for_label = agent_id.clone();
-    let aid_for_click = agent_id.clone();
-    let aid_for_close = agent_id.clone();
-    let aid_for_title = agent_id;
+    let is_active = move || sessions.active.with(|a| *a == Some(conv));
+    let is_running = move || sessions.is_running(conv);
+    let label = move || sessions.label(conv);
 
     view! {
         <div
@@ -78,24 +70,24 @@ fn Tab(agent_id: String) -> impl IntoView {
                     "text-text-secondary hover:bg-surface-sunken hover:text-text-primary"
                 }
             )
-            title=aid_for_title
-            on:click={
-                let aid = aid_for_click;
-                move |_| sessions.activate(chat, &aid)
-            }
+            on:click=move |_| sessions.activate(chat, conv)
         >
-            <span class="truncate">{aid_for_label}</span>
+            // 进行中红点（隐现）。
+            <Show when=is_running>
+                <span
+                    class="w-1.5 h-1.5 rounded-full bg-danger animate-pulse shrink-0"
+                    title="running"
+                />
+            </Show>
+            <span class="truncate">{label}</span>
             <button
                 type="button"
                 class="opacity-50 hover:opacity-100 px-1 rounded
                        hover:bg-danger/20 hover:text-danger leading-none"
                 title=move || t_string!(i18n, session_tabs.close_tab).to_string()
-                on:click={
-                    let aid = aid_for_close;
-                    move |ev: web_sys::MouseEvent| {
-                        ev.stop_propagation();
-                        sessions.close(chat, &aid);
-                    }
+                on:click=move |ev: web_sys::MouseEvent| {
+                    ev.stop_propagation();
+                    sessions.close(chat, conv);
                 }
             >
                 "×"

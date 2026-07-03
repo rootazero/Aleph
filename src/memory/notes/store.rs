@@ -142,11 +142,13 @@ pub trait NoteStore: Send + Sync {
     ) -> Result<Vec<NoteIndexEntry>, AlephError>;
 
     /// Top notes by link count + recency, plus edges between visible nodes.
+    /// Each edge is `(from, to, relation)` where `relation` is the
+    /// `notes_links.relation` kind (`None` for plain body wikilinks).
     async fn get_graph_data(
         &self,
         agent_id: &str,
         limit: usize,
-    ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String)>), AlephError>;
+    ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String, Option<String>)>), AlephError>;
 
     /// BFS neighborhood around `center` up to `depth` hops.
     async fn get_neighbors(
@@ -159,6 +161,17 @@ pub trait NoteStore: Send + Sync {
 
     /// Count all notes across all agents.
     async fn count_all_notes(&self) -> Result<i64, AlephError>;
+
+    /// Count notes for a single agent (scoped, unlike `count_all_notes`).
+    /// Lets the graph panel show "showing top N of M" when a query truncates.
+    async fn count_notes(&self, agent_id: &str) -> Result<i64, AlephError>;
+
+    /// Map every cached note path to its community id for one agent
+    /// (`notes_graph_cache`). Empty before the first dream graph-recompute.
+    async fn community_ids(
+        &self,
+        agent_id: &str,
+    ) -> Result<std::collections::HashMap<String, i64>, AlephError>;
 
     /// Find all note paths that share the given filename (for wikilink resolution).
     async fn find_by_filename(
