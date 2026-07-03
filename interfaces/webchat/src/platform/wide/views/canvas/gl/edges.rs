@@ -159,7 +159,7 @@ impl EdgeRenderer {
             .iter()
             .map(|&(a, b)| {
                 let key = (a.min(b), a.max(b));
-                if active && hl.unwrap().contains(&key) {
+                if hl.is_some_and(|s| s.contains(&key)) {
                     1.0
                 } else {
                     0.0

@@ -52,6 +52,10 @@ pub struct Scene {
     /// Recomputed only when `data` or `lod` changes; used every settling frame
     /// to avoid per-frame clone + O(n log n) sort.
     filtered_edges: Vec<(u32, u32)>,
+    /// id → node index, rebuilt on `set_graph`. Turns the per-frame label
+    /// lookups (`node_name` / `screen_pos_of`) and `fly_to_node` from O(n)
+    /// linear scans into O(1). Positions still come from `data.nodes[idx]`.
+    id_index: std::collections::HashMap<String, u32>,
 }
 
 impl Scene {
@@ -80,6 +84,7 @@ impl Scene {
             highlight_edges: None,
             lod: 0.0,
             filtered_edges: Vec::new(),
+            id_index: std::collections::HashMap::new(),
         })
     }
 
@@ -97,6 +102,13 @@ impl Scene {
 
         // Assign data and compute the filtered edge list once for (graph, lod).
         self.data = data;
+        self.id_index = self
+            .data
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id.clone(), i as u32))
+            .collect();
         self.recompute_filtered_edges();
         self.edges
             .upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
@@ -183,7 +195,7 @@ impl Scene {
     /// using the last-frame view-projection matrix. Returns `None` if the node
     /// is behind the camera or not found.
     pub fn screen_pos_of(&self, id: &str) -> Option<(f32, f32)> {
-        let node = self.data.nodes.iter().find(|n| n.id == id)?;
+        let node = self.id_index.get(id).map(|&i| &self.data.nodes[i as usize])?;
         let m = self.last_vp.as_slice();
         let p = &node.pos;
         let cx = m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12];
@@ -205,11 +217,9 @@ impl Scene {
 
     /// Look up a node name by its id. Returns `None` if not found.
     pub fn node_name(&self, id: &str) -> Option<&str> {
-        self.data
-            .nodes
-            .iter()
-            .find(|n| n.id == id)
-            .map(|n| n.name.as_str())
+        self.id_index
+            .get(id)
+            .map(|&i| self.data.nodes[i as usize].name.as_str())
     }
 
     /// Set the highlight set (selected node index + neighbors). Stored so that
@@ -230,8 +240,9 @@ impl Scene {
 
     /// Fly the camera to the node with the given id, if found.
     pub fn fly_to_node(&mut self, id: &str, t_ms: f64) {
-        if let Some(n) = self.data.nodes.iter().find(|n| n.id == id) {
-            self.camera.fly_to(n.pos, 250.0);
+        if let Some(&i) = self.id_index.get(id) {
+            let pos = self.data.nodes[i as usize].pos;
+            self.camera.fly_to(pos, 250.0);
             self.camera.note_interaction(t_ms);
         }
     }
