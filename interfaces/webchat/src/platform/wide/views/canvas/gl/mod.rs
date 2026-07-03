@@ -37,6 +37,9 @@ pub struct GalaxyNode {
 pub struct GraphData {
     pub nodes: Vec<GalaxyNode>,
     pub edges: Vec<(u32, u32)>,
+    /// Per-edge relation kind code (see `edges::edge_kind_code`), same order &
+    /// length as `edges`. Empty when unknown (treated as all-wikilink).
+    pub edge_kinds: Vec<u8>,
 }
 
 /// Edges incident to the selected node, as normalized (min,max) index pairs.
@@ -80,6 +83,7 @@ mod highlight_tests {
         let data = GraphData {
             nodes: vec![node("a"), node("b"), node("c"), node("d")],
             edges: vec![(0, 1), (2, 0), (2, 3)], // a-b, c-a, c-d
+            edge_kinds: vec![0; 3],
         };
         let hl = compute_highlight_edges(&data, "a");
         assert!(hl.contains(&(0, 1))); // a-b
@@ -92,6 +96,7 @@ mod highlight_tests {
         let data = GraphData {
             nodes: vec![node("a")],
             edges: vec![],
+            edge_kinds: vec![],
         };
         assert!(compute_highlight_edges(&data, "zzz").is_empty());
     }

@@ -392,11 +392,13 @@ fn build_galaxy(resp: &GraphQueryResponse) -> gl::GraphData {
     // reciprocal wikilinks (A→B and B→A) and duplicate rows must collapse to a
     // single edge, or each pair draws two oppositely-bowed bézier arcs (the
     // "double arc" artifact). Also drops self-loops.
-    let edges = dedup_undirected_edges(
-        resp.edges
-            .iter()
-            .filter_map(|e| Some((*id_index.get(&e.from)?, *id_index.get(&e.to)?))),
-    );
+    let (edges, edge_kinds) = dedup_undirected_edges(resp.edges.iter().filter_map(|e| {
+        Some((
+            *id_index.get(&e.from)?,
+            *id_index.get(&e.to)?,
+            gl::edges::edge_kind_code(e.kind.as_deref()),
+        ))
+    }));
 
     let ids: Vec<String> = resp.nodes.iter().map(|n| n.id.clone()).collect();
     let communities: Vec<Option<u32>> = resp.nodes.iter().map(|n| n.community_id).collect();
@@ -429,29 +431,38 @@ fn build_galaxy(resp: &GraphQueryResponse) -> gl::GraphData {
         })
         .collect();
 
-    GraphData { nodes, edges }
+    GraphData {
+        nodes,
+        edges,
+        edge_kinds,
+    }
 }
 
-/// Collapse directed link rows into unique undirected edges.
+/// Collapse directed link rows into unique undirected edges, carrying each
+/// edge's relation-kind code.
 ///
 /// Reciprocal links (`A→B` and `B→A`) and exact duplicates fold to one
-/// `(min, max)` pair; self-loops (`A→A`) are dropped. First-appearance order is
-/// preserved so the renderer's edge ordering stays deterministic across rebuilds.
+/// `(min, max)` pair; self-loops (`A→A`) are dropped. First appearance wins —
+/// both the edge order and its kind — so rebuilds stay deterministic.
 /// Normalizing to `(min, max)` also matches the edge-highlight key normalization
-/// in `gl::edges::EdgeRenderer::set_highlight`.
-fn dedup_undirected_edges(directed: impl Iterator<Item = (u32, u32)>) -> Vec<(u32, u32)> {
+/// in `gl::edges::EdgeRenderer::set_highlight`. Returns parallel `(edges, kinds)`.
+fn dedup_undirected_edges(
+    directed: impl Iterator<Item = (u32, u32, u8)>,
+) -> (Vec<(u32, u32)>, Vec<u8>) {
     let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for (a, b) in directed {
+    let mut edges = Vec::new();
+    let mut kinds = Vec::new();
+    for (a, b, kind) in directed {
         if a == b {
             continue; // degenerate self-loop
         }
         let key = (a.min(b), a.max(b));
         if seen.insert(key) {
-            out.push(key);
+            edges.push(key);
+            kinds.push(kind);
         }
     }
-    out
+    (edges, kinds)
 }
 
 /// Map the Fold slider value (UI range 0..=10) to an edge-density LOD in [0,1]
@@ -499,17 +510,19 @@ mod tests {
 
     #[test]
     fn dedup_collapses_reciprocal_and_duplicate_edges() {
-        // (0,1) and (1,0) are the same undirected edge; (2,3) appears twice.
-        let directed = [(0u32, 1u32), (1, 0), (2, 3), (2, 3), (3, 4)];
-        let out = dedup_undirected_edges(directed.into_iter());
-        assert_eq!(out, vec![(0, 1), (2, 3), (3, 4)]);
+        // (0,1) & (1,0) same undirected; (2,3) twice. Kind of first occurrence wins.
+        let directed = [(0u32, 1u32, 1u8), (1, 0, 2), (2, 3, 0), (2, 3, 3), (3, 4, 4)];
+        let (edges, kinds) = dedup_undirected_edges(directed.into_iter());
+        assert_eq!(edges, vec![(0, 1), (2, 3), (3, 4)]);
+        assert_eq!(kinds, vec![1, 0, 4]); // first-seen kind per undirected edge
     }
 
     #[test]
     fn dedup_drops_self_loops() {
-        let directed = [(5u32, 5u32), (0, 1)];
-        let out = dedup_undirected_edges(directed.into_iter());
-        assert_eq!(out, vec![(0, 1)]);
+        let directed = [(5u32, 5u32, 1u8), (0, 1, 2)];
+        let (edges, kinds) = dedup_undirected_edges(directed.into_iter());
+        assert_eq!(edges, vec![(0, 1)]);
+        assert_eq!(kinds, vec![2]);
     }
 
     #[test]
