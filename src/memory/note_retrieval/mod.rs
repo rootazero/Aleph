@@ -41,7 +41,10 @@ const AUTO_RECALL_CHANNEL: &str = "auto-recall";
 /// Notes-based retrieval engine. Drop-in replacement for `FactRetrieval`.
 pub struct NoteFactRetrieval<S: NoteStore + Send + Sync + 'static> {
     indexer: Arc<NoteIndexer<S>>,
-    embedder: Arc<dyn EmbeddingProvider>,
+    /// `None` = FTS-only deployment (no embedding provider configured):
+    /// hybrid/vector legs are skipped and every retrieval degrades to
+    /// keyword (FTS) search instead of failing.
+    embedder: Option<Arc<dyn EmbeddingProvider>>,
     /// Optional cross-encoder reranker applied as a final retrieval stage.
     /// `None` (the default) reproduces the legacy behaviour byte-for-byte.
     reranker: Option<Arc<dyn RerankProvider>>,
@@ -60,7 +63,21 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
     pub fn new(indexer: Arc<NoteIndexer<S>>, embedder: Arc<dyn EmbeddingProvider>) -> Self {
         Self {
             indexer,
-            embedder,
+            embedder: Some(embedder),
+            reranker: None,
+            rerank_weight: 0.6,
+            scoring: RetrievalScoringConfig::default(),
+            expansion: ExpansionConfig::default(),
+        }
+    }
+
+    /// Build a retrieval engine with no embedding provider. All searches run
+    /// FTS-only; `vector_retrieve` returns a config error. Used when the
+    /// deployment has no embedder so prompt-injected memory keeps working.
+    pub fn new_fts_only(indexer: Arc<NoteIndexer<S>>) -> Self {
+        Self {
+            indexer,
+            embedder: None,
             reranker: None,
             rerank_weight: 0.6,
             scoring: RetrievalScoringConfig::default(),
@@ -390,10 +407,23 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         limit: usize,
         sink: &mut TraceSink,
     ) -> Result<Vec<ScoredFact>, AlephError> {
+        // No embedder configured (FTS-only deployment): skip the vector leg
+        // silently — this is a known steady state, not an outage.
+        let Some(embedder) = self.embedder.as_ref() else {
+            let t0 = Instant::now();
+            let results = self.text_retrieve(query, agent_id, limit).await?;
+            sink.record(
+                "fts_search",
+                t0.elapsed().as_millis() as u64,
+                0,
+                results.len(),
+            );
+            return Ok(results);
+        };
         // Embedding requires a remote API call; when that endpoint is
         // unreachable (network outage, provider down) the notes themselves
         // are still local — degrade to FTS-only search instead of failing.
-        let embedding = match self.embedder.embed(query).await {
+        let embedding = match embedder.embed(query).await {
             Ok(e) => e,
             Err(e) => {
                 tracing::warn!(
@@ -480,7 +510,10 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         agent_id: &str,
         limit: usize,
     ) -> Result<Vec<ScoredFact>, AlephError> {
-        let embedding = self.embedder.embed(query).await?;
+        let embedder = self.embedder.as_ref().ok_or_else(|| {
+            AlephError::config("no embedding provider configured; vector search unavailable")
+        })?;
+        let embedding = embedder.embed(query).await?;
         let dim = embedding.len() as u32;
 
         let results = self
@@ -530,8 +563,27 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
             return Ok(Vec::new());
         }
 
+        // No embedder configured (FTS-only deployment): degrade to per-agent
+        // keyword search, mirroring the single-agent path.
+        let Some(embedder) = self.embedder.as_ref() else {
+            let per_agent_limit = limit.max(10);
+            let mut all_results: Vec<ScoredFact> = Vec::new();
+            for agent_id in agent_ids {
+                all_results.extend(self.text_retrieve(query, agent_id, per_agent_limit).await?);
+            }
+            all_results.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            all_results.truncate(limit);
+            let namespace = agent_ids.first().map_or("owner", String::as_str);
+            self.record_recall(query, namespace, &all_results).await;
+            return Ok(all_results);
+        };
+
         // Embed once, reuse across agents
-        let embedding = self.embedder.embed(query).await?;
+        let embedding = embedder.embed(query).await?;
         let dim = embedding.len() as u32;
 
         let mut all_results: Vec<ScoredFact> = Vec::new();
@@ -730,6 +782,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retrieve_works_fts_only_without_embedder() {
+        use crate::memory::notes::KnowledgeNote;
+
+        let dir = tempdir().unwrap();
+        let backend: Arc<SqliteMemoryBackend> =
+            Arc::new(SqliteMemoryBackend::new(dir.path()).unwrap());
+        let note = KnowledgeNote {
+            title: "dreame brand incident".to_string(),
+            category: "general".to_string(),
+            tags: vec!["test".to_string()],
+            facts: vec!["dreame brand incident fact".to_string()],
+            created_at: 1000,
+            updated_at: 1000,
+            content_hash: "hash_dreame".to_string(),
+            ..Default::default()
+        };
+        backend
+            .index_note(&note, "default", "general")
+            .await
+            .unwrap();
+
+        let indexer = Arc::new(NoteIndexer::new(dir.path().to_path_buf(), backend.clone()));
+        let retrieval = NoteFactRetrieval::new_fts_only(indexer);
+
+        let results = retrieval
+            .retrieve("dreame", "default", 10)
+            .await
+            .expect("FTS-only deployment must retrieve without an embedder");
+        assert!(
+            !results.is_empty(),
+            "FTS-only retrieval should surface the indexed note"
+        );
+
+        // Multi-agent smart recall degrades the same way.
+        let multi = retrieval
+            .retrieve_multi_agent("dreame", &["default".to_string()], 10)
+            .await
+            .unwrap();
+        assert!(!multi.is_empty(), "multi-agent FTS fallback should surface the note");
+
+        // Vector search is honestly unavailable.
+        assert!(retrieval
+            .vector_retrieve("dreame", "default", 10)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
     async fn retrieve_empty_returns_empty() {
         let (retrieval, _dir) = create_retrieval().await;
         let results = retrieval
@@ -847,8 +947,11 @@ mod tests {
         retrieval.record_recall("q", "default", &[]).await;
 
         // Reinforcement disabled → recording is skipped even with surfaced notes.
-        let off = NoteFactRetrieval::new(retrieval.indexer.clone(), retrieval.embedder.clone())
-            .with_scoring_config(&inactive_scoring());
+        let off = NoteFactRetrieval::new(
+            retrieval.indexer.clone(),
+            retrieval.embedder.clone().unwrap(),
+        )
+        .with_scoring_config(&inactive_scoring());
         off.record_recall("q", "default", &[scored("notes/x.md", "x", 0.9)])
             .await;
 

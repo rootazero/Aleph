@@ -339,7 +339,7 @@ pub(in crate::commands::start) async fn init_command_handler(
 
 pub(in crate::commands::start) fn init_memory_context_provider(
     memory_db: &MemoryBackend,
-    embedder: std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>,
+    embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     provider: Option<std::sync::Arc<dyn alephcore::providers::AiProvider>>,
     assembler_config: alephcore::AssemblerConfig,
 ) -> std::sync::Arc<alephcore::thinker::MemoryContextProvider> {
@@ -356,9 +356,11 @@ pub(in crate::commands::start) fn init_memory_context_provider(
 
 /// Like `init_memory_context_provider` but wires an optional extension registry, wiki handle,
 /// and profile synthesizer.
+///
+/// `embedder: None` = FTS-only deployment; memory injection still runs.
 pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
     memory_db: &MemoryBackend,
-    embedder: std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>,
+    embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     provider: Option<std::sync::Arc<dyn alephcore::providers::AiProvider>>,
     assembler_config: alephcore::AssemblerConfig,
     extensions: Option<std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry>>,
