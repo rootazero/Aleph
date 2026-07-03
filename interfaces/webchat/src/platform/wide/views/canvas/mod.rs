@@ -1,6 +1,5 @@
 mod galaxy_canvas;
 pub mod gl;
-pub mod node_card;
 mod node_detail_panel;
 
 pub use node_detail_panel::{NodeDetailPanel, NodeExcerpt};
@@ -9,7 +8,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::graph::GraphApi;
-use crate::canvas_engine::adapter::{GraphQueryResponse, NoteNodeDto};
+use crate::canvas_engine::adapter::GraphQueryResponse;
 use crate::canvas_engine::interaction::CanvasEvent;
 use leptos::callback::Callback;
 
@@ -23,7 +22,7 @@ use crate::api::agents::AgentsApi;
 #[component]
 #[must_use]
 pub fn CanvasView() -> impl IntoView {
-    view! { <RadialCanvasView /> }
+    view! { <GalaxyCanvasView /> }
 }
 
 /// 3D WebGL galaxy canvas host.
@@ -32,7 +31,7 @@ pub fn CanvasView() -> impl IntoView {
 /// is single-threaded. The `on_event` closure captures only `Copy` reactive signals so it can
 /// satisfy the `Send + Sync` bound.
 #[component]
-fn RadialCanvasView() -> impl IntoView {
+fn GalaxyCanvasView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let mem = expect_context::<MemoryState>();
 
@@ -102,10 +101,6 @@ fn RadialCanvasView() -> impl IntoView {
     let fold_threshold = mem.fold_threshold;
     let set_fold_threshold = mem.fold_threshold;
 
-    // Full-graph node cache — populated once on mount, used to compute the
-    // ghost-dot ring of orphans (nodes outside the current connected component).
-    let all_dtos: RwSignal<Vec<NoteNodeDto>> = RwSignal::new(Vec::new());
-
     // 3D galaxy data built from the full graph.query response via force-layout seed.
     let galaxy_data: RwSignal<Option<gl::GraphData>> = RwSignal::new(None);
 
@@ -146,7 +141,6 @@ fn RadialCanvasView() -> impl IntoView {
                 set_selected_node.set(None);
                 search_query.set(String::new());
                 set_fold_threshold.set(DEFAULT_FOLD);
-                all_dtos.set(Vec::new());
                 // Clear 3D galaxy signals so the new agent's galaxy rebuilds from scratch.
                 // The galaxy-build Effect repopulates galaxy_data when it re-runs.
                 galaxy_data.set(None);
@@ -174,7 +168,6 @@ fn RadialCanvasView() -> impl IntoView {
             // Fetch the full graph and build the 3D galaxy seed from its topology.
             let query_result = GraphApi::query(&state, &agent, 500, vec![]).await.ok();
             if let Some(ref r) = query_result {
-                all_dtos.set(r.nodes.clone());
                 // Build deterministic 3D galaxy seed from full-graph topology.
                 galaxy_data.set(Some(build_galaxy(r)));
             }
@@ -187,6 +180,8 @@ fn RadialCanvasView() -> impl IntoView {
     let on_event = move |event: CanvasEvent| match event {
         CanvasEvent::SelectNode(id) => {
             set_selected_node.set(Some(id.clone()));
+            // Record the visit so NodeDetailPanel's "Recently visited" list accrues.
+            mem.push_recent(id.clone());
             // Drive the scene via intent channels:
             // 1. Fly camera to selected node.
             focus_request.set(Some(id.clone()));
@@ -222,8 +217,6 @@ fn RadialCanvasView() -> impl IntoView {
     // subscription.
     //
     // On a match, drive the 3D galaxy's intent channels: fly-to + highlight + open panel.
-    // active_request is NOT set here — it drove the retired radial-fetch path; leaving
-    // it disconnected from search prevents stale graph.neighbors fetches in the console.
     Effect::new(move || {
         mem.search_nonce.get(); // subscribe to Enter-submit pulses only
         let query = search_query.get_untracked();
@@ -341,7 +334,7 @@ fn RadialCanvasView() -> impl IntoView {
 }
 
 // ---------------------------------------------------------------------------
-// Private helpers shared by RadialCanvasView Effects
+// Private helpers shared by GalaxyCanvasView Effects
 // ---------------------------------------------------------------------------
 
 /// Build the initial 3D galaxy GraphData from a full-graph query response.
