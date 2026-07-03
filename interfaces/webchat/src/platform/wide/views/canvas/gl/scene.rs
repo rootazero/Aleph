@@ -286,6 +286,18 @@ impl Scene {
         self.camera.note_interaction(t_ms);
     }
 
+    /// Pan the view by a screen-pixel drag: translate the look-at centre along
+    /// the view plane so the point under the cursor stays under the cursor.
+    /// Drag right → content follows right (centre moves −right); drag down (screen
+    /// y grows downward) → content follows down (centre moves +up).
+    pub fn on_pan(&mut self, dx: f32, dy: f32, t_ms: f64) {
+        let wpp = self.camera.world_per_pixel(self.height as f32);
+        let (right, up) = self.camera.screen_basis();
+        let delta = right.scale(-dx * wpp).add(&up.scale(dy * wpp));
+        self.camera.pan_world(delta);
+        self.camera.note_interaction(t_ms);
+    }
+
     pub fn on_wheel(&mut self, delta: f32, t_ms: f64) {
         // Zoom proportional to the actual wheel delta (device-normalized) so the
         // camera follows the wheel instead of jumping a fixed step per event.
