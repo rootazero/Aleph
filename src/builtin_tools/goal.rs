@@ -250,6 +250,22 @@ impl GoalTool {
             let _ = store.put(&key, &strategy);
         }
     }
+
+    /// Delete this session's goal-welded Strategy (best-effort, no-op when no
+    /// global store exists). Single source for every tool-side authoritative
+    /// termination — `clear`, and a self-reported terminal `update` — so the
+    /// stale plan does not bleed into later plain turns of the reused session
+    /// (the goal tier resolves FIRST in `resolve_active_strategy`). Mirrors the
+    /// gateway-side `clear_goal_welded_strategy`; the loop-keyed Strategy (if
+    /// any) is untouched.
+    fn clear_welded_strategy(&self, session: &str) {
+        if let Some(strat) = crate::strategy::global() {
+            if let Err(e) = strat.delete(&crate::strategy::goal_key(session)) {
+                info!(session = %session, error = %e,
+                    "goal: failed to delete welded strategy on termination (ignored)");
+            }
+        }
+    }
 }
 
 /// Hard ceiling on autonomous continuations a single goal may request,
@@ -463,6 +479,20 @@ token_budget. \
                     goal = goal.with_lesson_appended(lesson, now);
                 }
                 self.store.put(&goal)?;
+                // Clear the welded plan on a tool-owned authoritative termination
+                // so the stale plan does not bleed into later plain turns of this
+                // reused session. `Blocked` is never re-arbitrated; a Passive
+                // `Complete` is terminal here (the gateway continuation hook is a
+                // no-op for Passive goals). An Active-pursuit `Complete` is
+                // deliberately NOT cleared here — the gateway gate arbitration
+                // owns it, so a gate veto can still reopen the goal WITH its plan
+                // intact (and the hook clears it on the confirmed/gate-less end).
+                let tool_owned_terminal = matches!(goal.status, GoalStatus::Blocked)
+                    || (matches!(goal.status, GoalStatus::Complete)
+                        && matches!(goal.pursuit, PursuitMode::Passive));
+                if tool_owned_terminal {
+                    self.clear_welded_strategy(&session);
+                }
                 Ok(GoalOutput {
                     success: true,
                     message: format!("Updated. {}", Self::render(&goal, now)),
@@ -474,12 +504,7 @@ token_budget. \
                 // authoritative goal deletion (spec §6 lifecycle). Best-effort:
                 // a missing global / corrupt row is a no-op, never fails the
                 // user's clear. The loop-keyed Strategy (if any) is untouched.
-                if let Some(strat) = crate::strategy::global() {
-                    if let Err(e) = strat.delete(&crate::strategy::goal_key(&session)) {
-                        info!(session = %session, error = %e,
-                            "goal clear: failed to delete welded strategy (ignored)");
-                    }
-                }
+                self.clear_welded_strategy(&session);
                 Ok(GoalOutput {
                     success: true,
                     message: "Standing goal cleared.".to_string(),
@@ -1177,6 +1202,130 @@ mod tests {
         assert!(sstore.get(&goal_key("sess-clear-strat")).unwrap().is_none());
         // ...but leaves a co-existing loop-keyed strategy untouched.
         assert!(sstore.get(&loop_key("sess-clear-strat")).unwrap().is_some());
+    }
+
+    /// Hand-seed a concrete goal-keyed strategy for `session` through the global
+    /// store the tool operates on. Shared by the terminal-clear tests below.
+    fn seed_goal_strategy(session: &str) {
+        use crate::strategy::{goal_key, Strategy};
+        let concrete = Strategy {
+            objective: "o".into(),
+            approach: "a".into(),
+            phases: vec![],
+            guardrails: vec!["stay in scope".into()],
+            success_criteria: "ok".into(),
+            goal_id: None,
+        };
+        crate::strategy::global()
+            .expect("strategy global set")
+            .put(&goal_key(session), &concrete)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_to_blocked_clears_welded_strategy() {
+        use crate::strategy::{goal_key, StrategyStore};
+        use crate::sync_primitives::Arc;
+
+        let sdir = tempfile::tempdir().unwrap();
+        crate::strategy::set_global_for_test(Arc::new(
+            StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
+        ));
+        let sstore = crate::strategy::global().expect("strategy global set");
+
+        let (tool, _d) = tool_with_session("sess-upd-blocked");
+        tool.call(GoalArgs {
+            objective: Some("x".into()),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        seed_goal_strategy("sess-upd-blocked");
+
+        // Model self-reports Blocked → the tool owns this dormant end (the
+        // continuation hook is a no-op for a self-Blocked goal), so it clears
+        // the welded plan.
+        tool.call(GoalArgs {
+            status: Some(GoalStatus::Blocked),
+            ..args(GoalAction::Update)
+        })
+        .await
+        .unwrap();
+        assert!(
+            sstore.get(&goal_key("sess-upd-blocked")).unwrap().is_none(),
+            "update->blocked must clear the welded strategy"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_to_complete_passive_clears_welded_strategy() {
+        use crate::strategy::{goal_key, StrategyStore};
+        use crate::sync_primitives::Arc;
+
+        let sdir = tempfile::tempdir().unwrap();
+        crate::strategy::set_global_for_test(Arc::new(
+            StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
+        ));
+        let sstore = crate::strategy::global().expect("strategy global set");
+
+        let (tool, _d) = tool_with_session("sess-upd-passive");
+        // No pursuit_max_iterations → Passive pursuit (interactive goal).
+        tool.call(GoalArgs {
+            objective: Some("x".into()),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        seed_goal_strategy("sess-upd-passive");
+
+        // Passive Complete is terminal at the tool (the hook never acts on a
+        // Passive goal), so the tool clears the weld.
+        tool.call(GoalArgs {
+            status: Some(GoalStatus::Complete),
+            ..args(GoalAction::Update)
+        })
+        .await
+        .unwrap();
+        assert!(
+            sstore.get(&goal_key("sess-upd-passive")).unwrap().is_none(),
+            "passive update->complete must clear the welded strategy"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_to_complete_active_keeps_welded_strategy_for_gate_arbitration() {
+        use crate::strategy::{goal_key, StrategyStore};
+        use crate::sync_primitives::Arc;
+
+        let sdir = tempfile::tempdir().unwrap();
+        crate::strategy::set_global_for_test(Arc::new(
+            StrategyStore::open(&sdir.path().join("s.db")).unwrap(),
+        ));
+        let sstore = crate::strategy::global().expect("strategy global set");
+
+        let (tool, _d) = tool_with_session("sess-upd-active");
+        // Active pursuit → the model's Complete is a *claim* the gateway gate
+        // arbitrates; the tool must NOT clear the weld, so a gate veto can
+        // reopen the goal WITH its plan intact.
+        tool.call(GoalArgs {
+            objective: Some("x".into()),
+            pursuit_max_iterations: Some(5),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        seed_goal_strategy("sess-upd-active");
+
+        tool.call(GoalArgs {
+            status: Some(GoalStatus::Complete),
+            ..args(GoalAction::Update)
+        })
+        .await
+        .unwrap();
+        assert!(
+            sstore.get(&goal_key("sess-upd-active")).unwrap().is_some(),
+            "active-pursuit update->complete must keep the weld (gate arbitrates)"
+        );
     }
 
     #[tokio::test]
