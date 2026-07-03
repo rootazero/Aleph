@@ -741,6 +741,40 @@ fn parse_patch(input: &str) -> std::result::Result<Vec<PatchOp>, String> {
     Ok(ops)
 }
 
+/// The set of workspace paths a V4A patch envelope will touch — every
+/// `Add` / `Delete` / `Update` target plus any `*** Move to:` destination.
+///
+/// This is the *blast radius* the concurrency scheduler needs to scope an
+/// `apply_patch` call: unlike `file_write` / `file_edit` (one path argument),
+/// `apply_patch` carries a multi-file patch body and *no* path field, so its
+/// footprint can only be recovered by parsing the envelope. Reuses the same
+/// [`parse_patch`] the executor runs, so the scheduled footprint can never
+/// drift from the files actually mutated.
+///
+/// Returns an empty vec when the envelope does not parse. The caller
+/// ([`crate::tools::adapters::registry_adapter`]) feeds that into
+/// `ConcurrencyClaim::paths`, which degrades an empty set to a whole-world
+/// (`Global`) claim — so a malformed patch serializes against everything
+/// rather than inventing a wrong, narrow footprint.
+pub(crate) fn patch_target_paths(patch: &str) -> Vec<String> {
+    let Ok(ops) = parse_patch(patch) else {
+        return Vec::new();
+    };
+    let mut paths = Vec::with_capacity(ops.len());
+    for op in ops {
+        match op {
+            PatchOp::Add { path, .. } | PatchOp::Delete { path } => paths.push(path),
+            PatchOp::Update { path, move_to, .. } => {
+                paths.push(path);
+                if let Some(dest) = move_to {
+                    paths.push(dest);
+                }
+            }
+        }
+    }
+    paths
+}
+
 /// Helper: a hunk body line arrived before any `@@` header. Auto-open an
 /// anonymous hunk so V4A patches that omit the header for a single change
 /// still apply.
@@ -839,6 +873,42 @@ mod tests {
         assert!(parse_patch("").is_err());
         assert!(parse_patch("Hello world\n*** End Patch\n").is_err());
         assert!(parse_patch("*** Begin Patch\n").is_err()); // unterminated
+    }
+
+    #[test]
+    fn target_paths_covers_every_op_and_move_destination() {
+        // Add + Update-with-Move + Delete: the scheduler must see all four
+        // touched paths (the Update contributes both its source and its
+        // `*** Move to:` destination) so an overlapping concurrent patch or
+        // file_edit is correctly serialized.
+        let patch = "*** Begin Patch\n\
+*** Add File: hello.txt\n\
++Hello\n\
+*** Update File: src/app.py\n\
+*** Move to: src/main.py\n\
+@@ def greet():\n\
+-print(\"Hi\")\n\
++print(\"Hello\")\n\
+*** Delete File: old.txt\n\
+*** End Patch\n";
+        let paths = patch_target_paths(patch);
+        assert_eq!(
+            paths,
+            vec![
+                "hello.txt".to_string(),
+                "src/app.py".to_string(),
+                "src/main.py".to_string(),
+                "old.txt".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn target_paths_empty_for_unparseable_patch() {
+        // An unparseable envelope yields no paths, so the caller degrades to a
+        // whole-world (`Global`) claim rather than a wrong narrow footprint.
+        assert!(patch_target_paths("not a patch").is_empty());
+        assert!(patch_target_paths("").is_empty());
     }
 
     #[test]
