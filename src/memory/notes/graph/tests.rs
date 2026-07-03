@@ -442,3 +442,76 @@ fn half_confidence_edge_yields_half_direct_link_contribution() {
     );
     assert!(score_half < score_full);
 }
+
+fn two_node_snapshot(
+    edges: Vec<crate::memory::notes::graph::GraphEdge>,
+) -> crate::memory::notes::graph::GraphSnapshot {
+    use crate::memory::notes::graph::{GraphNode, GraphSnapshot};
+    GraphSnapshot {
+        nodes: vec![
+            GraphNode {
+                path: "g/a".into(),
+                category: "x".into(),
+                sources: vec![],
+            },
+            GraphNode {
+                path: "g/b".into(),
+                category: "x".into(),
+                sources: vec![],
+            },
+        ],
+        edges,
+    }
+}
+
+#[test]
+fn co_recall_edge_is_excluded_from_semantic_confidence() {
+    use crate::memory::notes::graph::*;
+    let snap = two_node_snapshot(vec![GraphEdge {
+        from: "g/a".into(),
+        to: "g/b".into(),
+        rel_type: Some(CO_RECALLED_RELATION.into()),
+        confidence: 0.8,
+    }]);
+    let g = GraphIndex::build(&snap);
+    let (a, b) = (g.index_of("g/a").unwrap(), g.index_of("g/b").unwrap());
+    // Behavioral edge never leaks into the semantic direct-link signal…
+    assert_eq!(g.edge_confidence(a, b), 0.0);
+    // …but carries the fifth signal, symmetric over directions.
+    assert!((g.co_recall_confidence(a, b) - 0.8).abs() < 1e-6);
+    assert!((g.co_recall_confidence(b, a) - 0.8).abs() < 1e-6);
+    // And still participates in the undirected adjacency (candidates/AA).
+    assert!(g.adj[a].contains(&b));
+}
+
+#[test]
+fn semantic_edge_contributes_no_co_recall_signal() {
+    use crate::memory::notes::graph::*;
+    let snap = two_node_snapshot(vec![GraphEdge {
+        from: "g/a".into(),
+        to: "g/b".into(),
+        rel_type: Some("cites".into()),
+        confidence: 0.9,
+    }]);
+    let g = GraphIndex::build(&snap);
+    let (a, b) = (g.index_of("g/a").unwrap(), g.index_of("g/b").unwrap());
+    assert!((g.edge_confidence(a, b) - 0.9).abs() < 1e-6);
+    assert_eq!(g.co_recall_confidence(a, b), 0.0);
+}
+
+#[test]
+fn co_recall_edge_scores_with_fifth_signal_weight() {
+    use crate::memory::notes::graph::*;
+    let snap = two_node_snapshot(vec![GraphEdge {
+        from: "g/a".into(),
+        to: "g/b".into(),
+        rel_type: Some(CO_RECALLED_RELATION.into()),
+        confidence: 0.5,
+    }]);
+    let w = relevance::SignalWeights::default();
+    let g = GraphIndex::build(&snap);
+    // score = co_recall*0.5 + type_affinity = 2.0*0.5 + 1.0 = 2.0
+    // (direct_link contributes nothing: the edge is behavioral).
+    let score = relevance::score_pair(&g, &w, 0, 1);
+    assert!((score - 2.0).abs() < 1e-4, "co-recall score = {score}");
+}

@@ -185,6 +185,10 @@ impl DreamPipeline {
                 }),
                 Box::new(stages::NoteDriftStage),
                 Box::new(stages::IndexRefresherStage),
+                // Materialize behavioral co-recall edges BEFORE the graph
+                // recompute so the 5-signal relevance pass sees them this
+                // cycle. Pure deterministic aggregation, zero LLM.
+                Box::new(stages::CoRecallEdgesStage),
                 // Materialize the note knowledge graph (community/cohesion +
                 // insights) BEFORE weave/decay consume it: weave reads the
                 // freshly-computed `isolated` set and decay benefits from the
@@ -241,6 +245,7 @@ impl DreamPipeline {
                 Box::new(stages::NoteLintStage),
                 Box::new(stages::NoteReviewStage::default()),
                 Box::new(stages::IndexRefresherStage),
+                Box::new(stages::CoRecallEdgesStage),
                 Box::new(stages::GraphRecomputeStage),
             ],
         };

@@ -90,6 +90,11 @@ pub enum DistillOutcome {
     /// format / semantic / safety check (Spec 5). The `error` field on the
     /// record carries the reason.
     FilteredInvalid,
+    /// Dropped before apply because the recall-evidence gate rejected a
+    /// destructive edit: the target note's recall hits outweigh the LLM's
+    /// confidence in the replacement, or the same edit was already rejected
+    /// on a prior cycle. The `error` field carries the reason.
+    FilteredEvidence,
     /// `apply_distill_action` returned an error.
     Error,
 }

@@ -153,6 +153,9 @@ impl DreamStage for FeedbackDistillStage {
         let candidate_set: std::collections::HashSet<&str> =
             candidate_paths.iter().map(String::as_str).collect();
         let mut applied = 0usize;
+        // Fingerprints of supersedes the recall-evidence gate rejected on
+        // prior cycles — loaded once so re-proposals drop without re-gating.
+        let rejected_fingerprints = store.distill_rejects(&ctx.agent_id).unwrap_or_default();
         for raw_action in actions
             .into_iter()
             .take(self.max_per_cycle)
@@ -200,6 +203,20 @@ impl DreamStage for FeedbackDistillStage {
                         ));
                     continue;
                 }
+            }
+            // Recall-evidence gate mirrored from SkillDistill: a destructive
+            // Supersede must strictly out-score the target note's recall
+            // support, and a previously rejected edit never re-applies.
+            if let Some(record) = super::gate_action_evidence(
+                &ctx,
+                &action,
+                &rejected_fingerprints,
+                "feedback_distill",
+            )
+            .await
+            {
+                ctx.report.distill_actions.push(record);
+                continue;
             }
             match ctx
                 .indexer

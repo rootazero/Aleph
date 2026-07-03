@@ -26,10 +26,12 @@
 //!   pressure — proactive. The three compose; none subsumes another.
 
 pub mod budget;
+pub mod evidence;
 pub mod gate;
 pub mod score;
 
 pub use budget::EditBudget;
+pub use evidence::{action_fingerprint, gate_supersede_evidence, EvidenceDecision};
 pub use gate::{evaluate_gate, select_gate_score, GateMetric, GateOutcome};
 pub use score::{memory_health_score, score_merge_candidate, MemoryScore};
 

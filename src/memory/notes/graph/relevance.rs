@@ -1,6 +1,7 @@
-//! 4-signal relevance: direct-link ×3, source-overlap ×4 (IDF-damped),
-//! Adamic-Adar ×1.5, type-affinity ×1. Concurrency for the full pairwise pass
-//! via std threads.
+//! 5-signal relevance: direct-link ×3, source-overlap ×4 (IDF-damped),
+//! Adamic-Adar ×1.5, type-affinity ×1, co-recall ×2 (behavioral: notes
+//! retrieved together by the same queries). Concurrency for the full pairwise
+//! pass via std threads.
 //!
 //! Both evidence signals share one rarity principle: a connector linking few
 //! notes is stronger than one linking many. Adamic-Adar applies it to shared
@@ -20,6 +21,11 @@ pub struct SignalWeights {
     pub source_overlap: f32,
     pub adamic_adar: f32,
     pub type_affinity: f32,
+    /// Behavioral signal: notes recalled together by the same query events.
+    /// Weighted between structural evidence (Adamic-Adar) and an explicit
+    /// semantic link — co-use is strong evidence, but never outranks an
+    /// authored connection.
+    pub co_recall: f32,
 }
 impl Default for SignalWeights {
     fn default() -> Self {
@@ -28,6 +34,7 @@ impl Default for SignalWeights {
             source_overlap: 4.0,
             adamic_adar: 1.5,
             type_affinity: 1.0,
+            co_recall: 2.0,
         }
     }
 }
@@ -42,6 +49,12 @@ pub fn score_pair(g: &GraphIndex, w: &SignalWeights, a: usize, b: usize) -> f32 
     let conf = g.edge_confidence(a, b);
     if conf > 0.0 {
         s += w.direct_link * conf;
+    }
+    // Behavioral fifth signal: co-recall edges are scored separately from
+    // semantic links so query-driven co-use never masquerades as authorship.
+    let co = g.co_recall_confidence(a, b);
+    if co > 0.0 {
+        s += w.co_recall * co;
     }
     // Source-overlap, damped by each shared source's document frequency
     // (Adamic-Adar over the note↔source bipartite graph). df ≥ 2 always holds

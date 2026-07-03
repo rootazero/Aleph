@@ -323,6 +323,20 @@ pub trait NoteStore: Send + Sync {
         Ok(vec![])
     }
 
+    /// Replace the behavioral `co_recalled` edge set for `agent_id` with
+    /// `rows` (`(note_a, note_b, confidence)`). Implementations must never
+    /// overwrite an existing semantic link for the same note pair — the
+    /// behavioral relation only fills gaps in the graph. Default impl is a
+    /// no-op so non-`SQLite` stores and test mocks compile unchanged.
+    async fn replace_co_recall_links(
+        &self,
+        agent_id: &str,
+        rows: &[(String, String, f32)],
+    ) -> Result<(), AlephError> {
+        let _ = (agent_id, rows);
+        Ok(())
+    }
+
     /// Batch-fetch notes (with full content) by exact path, for `agent_id`.
     /// Unknown/deleted paths are omitted; order follows `paths`. The `score`
     /// field is `0.0` (callers assign their own). Mirrors the row ->
@@ -596,6 +610,61 @@ mod tests {
             .unwrap();
         assert_eq!(inc.len(), 1);
         assert_eq!(inc[0], "reference/Cargo");
+    }
+
+    #[tokio::test]
+    async fn co_recall_links_fill_gaps_without_clobbering_semantic_links() {
+        let db = create_test_db();
+        // Index targets first so SourceA's wikilink resolves to a full path.
+        let b = sample_note("TargetB", "reference", vec![]);
+        let c = sample_note("TargetC", "reference", vec![]);
+        let a = sample_note("SourceA", "reference", vec!["TargetB"]);
+        db.index_note(&b, AGENT, "reference").await.unwrap();
+        db.index_note(&c, AGENT, "reference").await.unwrap();
+        db.index_note(&a, AGENT, "reference").await.unwrap();
+
+        let rows = vec![
+            (
+                "reference/SourceA".to_string(),
+                "reference/TargetB".to_string(),
+                0.5_f32,
+            ),
+            (
+                "reference/SourceA".to_string(),
+                "reference/TargetC".to_string(),
+                0.8_f32,
+            ),
+        ];
+        db.replace_co_recall_links(AGENT, &rows).await.unwrap();
+
+        let typed = db
+            .get_typed_relations("reference/SourceA", AGENT)
+            .await
+            .unwrap();
+        // The behavioral A→C edge landed…
+        assert!(typed
+            .iter()
+            .any(|(to, rel)| to == "reference/TargetC" && rel == "co_recalled"));
+        // …but the existing semantic A→B wikilink was NOT converted.
+        assert!(!typed
+            .iter()
+            .any(|(to, rel)| to == "reference/TargetB" && rel == "co_recalled"));
+
+        // Full refresh: an empty replace clears behavioral edges only.
+        db.replace_co_recall_links(AGENT, &[]).await.unwrap();
+        let typed = db
+            .get_typed_relations("reference/SourceA", AGENT)
+            .await
+            .unwrap();
+        assert!(typed.iter().all(|(_, rel)| rel != "co_recalled"));
+        let out = db
+            .get_outgoing_links("reference/SourceA", AGENT)
+            .await
+            .unwrap();
+        assert!(
+            out.contains(&"reference/TargetB".to_string()),
+            "semantic wikilink must survive the behavioral refresh"
+        );
     }
 
     #[tokio::test]

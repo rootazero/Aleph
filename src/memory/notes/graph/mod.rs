@@ -13,6 +13,12 @@ mod tests;
 
 use std::collections::{HashMap, HashSet};
 
+/// Relation label for behavioral co-recall edges in `notes_links`: notes
+/// retrieved together by the same query event. Written by the
+/// `co_recall_edges` dream stage; scored as a distinct relevance signal
+/// (never as a semantic direct link).
+pub const CO_RECALLED_RELATION: &str = "co_recalled";
+
 /// One node in the note graph.
 #[derive(Debug, Clone)]
 pub struct GraphNode {
@@ -161,12 +167,36 @@ impl<'a> GraphIndex<'a> {
         result
     }
 
-    /// Confidence of the strongest edge between `a` and `b` in either
-    /// direction; 0.0 if unconnected. Used to weight the direct-link signal.
+    /// Directed edge confidence from `a` to `b`, split by edge class:
+    /// `co_recall = true` matches only behavioral `co_recalled` edges,
+    /// `false` only semantic ones (wikilinks / typed relations).
+    fn directed_confidence(&self, a: usize, b: usize, co_recall: bool) -> f32 {
+        self.out[a].get(&b).map_or(0.0, |m| {
+            let is_co = m.rel_type.as_deref() == Some(CO_RECALLED_RELATION);
+            if is_co == co_recall {
+                m.confidence
+            } else {
+                0.0
+            }
+        })
+    }
+
+    /// Confidence of the strongest **semantic** edge between `a` and `b` in
+    /// either direction; 0.0 if unconnected. Behavioral `co_recalled` edges
+    /// are excluded — they feed [`Self::co_recall_confidence`] instead, so
+    /// the direct-link signal stays purely semantic.
     #[must_use]
     pub fn edge_confidence(&self, a: usize, b: usize) -> f32 {
-        let f = self.out[a].get(&b).map_or(0.0, |m| m.confidence);
-        let r = self.out[b].get(&a).map_or(0.0, |m| m.confidence);
-        f.max(r)
+        self.directed_confidence(a, b, false)
+            .max(self.directed_confidence(b, a, false))
+    }
+
+    /// Confidence of the strongest behavioral `co_recalled` edge between `a`
+    /// and `b` in either direction; 0.0 if the pair was never co-recalled.
+    /// Fifth relevance signal alongside the four semantic/structural ones.
+    #[must_use]
+    pub fn co_recall_confidence(&self, a: usize, b: usize) -> f32 {
+        self.directed_confidence(a, b, true)
+            .max(self.directed_confidence(b, a, true))
     }
 }
