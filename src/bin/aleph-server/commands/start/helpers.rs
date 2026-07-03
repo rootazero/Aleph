@@ -302,7 +302,21 @@ pub(super) async fn initialize_extension_manager(daemon: bool) {
     }
 }
 
+/// Failsafe budget for the graceful teardown after a shutdown signal. Matches
+/// the SIGTERM→SIGKILL escalation window used by `aleph stop`
+/// (`daemon::stop_running_process`): if the orderly path (axum drain, monitor
+/// shutdown, hooks, plugin stop) has not finished by then — e.g. a long-lived
+/// WebSocket keeps `axum::serve` from returning — force the exit rather than
+/// hang until the supervisor's SIGKILL.
+const SHUTDOWN_FAILSAFE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Spawn Ctrl-C and SIGTERM handlers; return the oneshot receiver for `run_until_shutdown`.
+///
+/// Both signals share one graceful path: forensics → remove PID file → signal
+/// `run_until_shutdown` via the oneshot, so the post-run teardown in
+/// `start_server` (memory/health monitor shutdown, endpoint cleanup,
+/// GatewayStop hooks, plugin stop) runs for supervised SIGTERM stops too, not
+/// just interactive Ctrl-C. A [`SHUTDOWN_FAILSAFE`] watchdog bounds the exit.
 pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Receiver<()> {
     use alephcore::gateway::shutdown_forensics::snapshot_shutdown_context;
 
@@ -310,46 +324,67 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
     let pid_file = args.pid_file.clone();
     let daemon_mode = args.daemon;
     tokio::spawn(async move {
-        if let Err(e) = tokio::signal::ctrl_c().await {
-            // Must NOT fall through to the shutdown path on registration
-            // failure: sending on — or even dropping — `shutdown_tx` both
-            // trigger graceful shutdown (`run_until_shutdown` treats a
-            // closed channel as a signal). Park forever to keep the sender
-            // alive; the server just loses Ctrl-C handling.
-            tracing::warn!("Failed to listen for Ctrl-C: {e}; Ctrl-C shutdown disabled");
-            std::future::pending::<()>().await;
-        }
-        // Forensics: capture context before tearing anything down. Skip
-        // `with_parent_command` here — the Ctrl-C path is the interactive
-        // case where the operator already knows who sent it.
-        let ctx = snapshot_shutdown_context("ctrl_c", None, false);
-        tracing::warn!("{}", ctx.as_log_line());
-        if !daemon_mode {
-            println!("\nShutting down gateway...");
-        }
-        remove_pid_file(&pid_file);
-        if let Err(e) = shutdown_tx.send(()) {
-            tracing::warn!("Failed to send shutdown signal: {:?}", e);
-        }
-    });
-
-    #[cfg(unix)]
-    {
-        let pid_file_term = args.pid_file.clone();
-        tokio::spawn(async move {
+        let ctrl_c = async {
+            if let Err(e) = tokio::signal::ctrl_c().await {
+                // Must NOT fall through to the shutdown path on registration
+                // failure: sending on — or even dropping — `shutdown_tx` both
+                // trigger graceful shutdown (`run_until_shutdown` treats a
+                // closed channel as a signal). Park forever to keep the sender
+                // alive; the server just loses Ctrl-C handling.
+                tracing::warn!("Failed to listen for Ctrl-C: {e}; Ctrl-C shutdown disabled");
+                std::future::pending::<()>().await;
+            }
+        };
+        #[cfg(unix)]
+        let sigterm = async {
             use tokio::signal::unix::{signal, SignalKind};
-            if let Ok(mut stream) = signal(SignalKind::terminate()) {
-                stream.recv().await;
+            match signal(SignalKind::terminate()) {
+                Ok(mut stream) => {
+                    stream.recv().await;
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to listen for SIGTERM: {e}; SIGTERM shutdown disabled");
+                    std::future::pending::<()>().await;
+                }
+            }
+        };
+        #[cfg(not(unix))]
+        let sigterm = std::future::pending::<()>();
+
+        tokio::select! {
+            () = ctrl_c => {
+                // Forensics: capture context before tearing anything down. Skip
+                // `with_parent_command` here — the Ctrl-C path is the interactive
+                // case where the operator already knows who sent it.
+                let ctx = snapshot_shutdown_context("ctrl_c", None, false);
+                tracing::warn!("{}", ctx.as_log_line());
+                if !daemon_mode {
+                    println!("\nShutting down gateway...");
+                }
+            }
+            () = sigterm => {
                 // Forensics: include parent command — SIGTERM usually comes
                 // from launchd / systemd / supervisor scripts and the parent
                 // PID is the diagnostic clue we want.
                 let ctx = snapshot_shutdown_context("SIGTERM", Some(15), true);
                 tracing::warn!("{}", ctx.as_log_line());
-                remove_pid_file(&pid_file_term);
-                std::process::exit(0);
             }
-        });
-    }
+        }
+
+        remove_pid_file(&pid_file);
+        if let Err(e) = shutdown_tx.send(()) {
+            tracing::warn!("Failed to send shutdown signal: {:?}", e);
+        }
+        // Watchdog: if the process is still alive after the failsafe budget,
+        // the orderly path is stuck — exit. On the happy path `start_server`
+        // returns first and the process exits before this fires.
+        tokio::time::sleep(SHUTDOWN_FAILSAFE).await;
+        tracing::warn!(
+            "graceful shutdown did not complete within {}s; forcing exit",
+            SHUTDOWN_FAILSAFE.as_secs()
+        );
+        std::process::exit(0);
+    });
 
     shutdown_rx
 }

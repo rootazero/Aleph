@@ -2523,8 +2523,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Long-running RSS observability — single grep-friendly `[MEMORY]` line
     // every `gateway.memory_monitor_secs` seconds. `0` disables. Bound to
     // graceful shutdown so the final "[MEMORY] reason=shutdown" line lands
-    // on the Ctrl-C path. SIGTERM (`std::process::exit(0)`) bypasses this
-    // — that path already emits its own forensic line.
+    // on both the Ctrl-C and SIGTERM paths (unified in
+    // `setup_graceful_shutdown`; only its failsafe force-exit skips this).
     let mut memory_monitor = alephcore::gateway::memory_monitor::MemoryMonitor::start(
         full_config.gateway.memory_monitor_secs,
     );
@@ -2540,9 +2540,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let run_result = server.run_until_shutdown(shutdown_rx).await;
     memory_monitor.shutdown().await;
     channel_health_monitor.shutdown().await;
-    // Spec C: cleanup endpoint discovery file regardless of outcome.
-    // NOTE: SIGTERM path (setup_graceful_shutdown) calls std::process::exit
-    // and bypasses this cleanup; stale file is overwritten on next start.
+    // Spec C: cleanup endpoint discovery file regardless of outcome. Both
+    // Ctrl-C and SIGTERM reach here via the unified oneshot path; only the
+    // shutdown failsafe force-exit can skip it — the stale file is then
+    // overwritten on next start.
     if let Some(dir) = ipc_data_dir.as_deref() {
         if let Err(e) = alephcore::cli::endpoint::remove_endpoint(dir) {
             tracing::warn!(
@@ -2553,8 +2554,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    // Notify extension hooks of shutdown (best-effort; the SIGTERM path in
-    // setup_graceful_shutdown calls process::exit and bypasses this).
+    // Notify extension hooks of shutdown (best-effort; runs on both Ctrl-C
+    // and SIGTERM via the unified graceful path, bounded by its failsafe).
     alephcore::extension::hooks::fire_global_observer(
         alephcore::extension::HookEvent::GatewayStop,
         "gateway",
