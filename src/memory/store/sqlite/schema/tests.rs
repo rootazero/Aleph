@@ -517,4 +517,49 @@ mod tests {
             .count();
         assert_eq!(count, 1);
     }
+
+    #[test]
+    fn migrate_notes_links_lifecycle_adds_columns_and_backfills_dangling() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        // Legacy-shaped table: no resolved_by / status / label.
+        conn.execute_batch(
+            "CREATE TABLE notes_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id TEXT NOT NULL DEFAULT 'default',
+                from_note TEXT NOT NULL,
+                to_note TEXT NOT NULL,
+                to_raw TEXT NOT NULL,
+                relation TEXT,
+                confidence REAL NOT NULL DEFAULT 1.0,
+                UNIQUE(agent_id, from_note, to_note));
+             INSERT INTO notes_links (agent_id, from_note, to_note, to_raw)
+             VALUES ('a', 'p/x', 'rust', 'rust');          -- legacy dangling marker
+             INSERT INTO notes_links (agent_id, from_note, to_note, to_raw)
+             VALUES ('a', 'p/x', 'ref/rust', 'rust');       -- resolved",
+        )
+        .unwrap();
+
+        migrations::migrate_notes_links_lifecycle(&conn).unwrap();
+
+        let (status_dangling, status_active): (String, String) = conn
+            .query_row(
+                "SELECT
+                   (SELECT status FROM notes_links WHERE to_note = 'rust'),
+                   (SELECT status FROM notes_links WHERE to_note = 'ref/rust')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status_dangling, "dangling");
+        assert_eq!(status_active, "active");
+
+        // Idempotent: second run is a no-op and must not re-flip statuses.
+        conn.execute("UPDATE notes_links SET status = 'tombstone' WHERE to_note = 'rust'", [])
+            .unwrap();
+        migrations::migrate_notes_links_lifecycle(&conn).unwrap();
+        let s: String = conn
+            .query_row("SELECT status FROM notes_links WHERE to_note = 'rust'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(s, "tombstone", "re-run must not re-backfill");
+    }
 }

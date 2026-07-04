@@ -9,6 +9,7 @@ pub mod governance;
 pub mod graph;
 pub mod indexer;
 pub mod keyword_linker;
+pub mod links;
 mod note;
 pub mod orientation;
 pub mod retrieval;
@@ -28,7 +29,9 @@ pub use note::{
 };
 pub use retrieval::{NoteContent, NoteRetrieval};
 pub use search_result::NoteSearchResult;
-pub use wikilink::{extract_wikilinks, remove_wikilink, rewrite_wikilinks};
+pub use wikilink::{
+    extract_wikilinks, extract_wikilinks_with_alias, remove_wikilink, rewrite_wikilinks,
+};
 
 pub mod ingest;
 pub mod profile;

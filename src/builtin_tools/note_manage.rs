@@ -61,6 +61,10 @@ pub enum NoteManageAction {
     List,
     /// Delete a note file and remove it from the index.
     Delete,
+    /// Rename a note (change its filename/title) and rewrite every inbound
+    /// `[[wikilink]]` that referenced the old name. Uses `filename` (current
+    /// name) + `new_title` (target name).
+    Rename,
     /// Read materialized graph-health insights (knowledge gaps, bridges,
     /// surprising connections). Read-only.
     Insights,
@@ -74,7 +78,7 @@ pub enum NoteManageAction {
 /// Arguments for the `note_manage` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NoteManageArgs {
-    /// Action to perform: create, update, append, query, list, delete.
+    /// Action to perform: create, update, append, query, list, delete, rename.
     pub action: NoteManageAction,
 
     /// Note category: preference, plan, learning, project, personal, tool,
@@ -117,12 +121,42 @@ pub struct NoteManageArgs {
     #[serde(default)]
     pub limit: Option<usize>,
 
-    /// Agent ID to scope the note operation to. If absent, defaults to "default".
-    /// When the calling system prompt declares the active agent's id, prefer
-    /// passing it here so the note lands in the caller's per-agent vault rather
-    /// than the global "default" namespace.
+    /// Target name for the `rename` action. `filename` carries the note's
+    /// current name; `new_title` carries the name to rename it to. The
+    /// note's category is located automatically — no need to pass `category`.
+    #[serde(default)]
+    pub new_title: Option<String>,
+
+    /// Typed semantic relations to declare on this note (create/update/append).
+    /// Each entry is `{to, type}`: `to` is a note path or wikilink-style
+    /// target, `type` is a free-form relationship verb (e.g. "refers",
+    /// "derives"). `supersedes` / `superseded_by` / `contradicts` are
+    /// structural-strong edges force-surfaced at retrieval regardless of score.
+    #[serde(default)]
+    pub relations: Option<Vec<NoteRelationArg>>,
+
+    /// Agent ID to scope the note operation to. If absent, the note is scoped
+    /// to the *active chat session's* agent (read from the turn context) so it
+    /// lands in that agent's own vault, falling back to the system default
+    /// agent (`"main"`) outside a gateway turn (cron / internal). Pass this
+    /// explicitly only to target a *different* agent's per-agent vault than the
+    /// one driving the current turn.
     #[serde(default)]
     pub agent_id: Option<String>,
+}
+
+/// A single typed semantic relation declared by the LLM at write time (via
+/// `NoteManageArgs::relations`). Mirrors [`crate::memory::notes::Relation`]
+/// minus `confidence` — tool-authored relations are an explicit statement,
+/// so confidence is fixed at 1.0 by the merge helpers rather than accepted
+/// as caller input.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NoteRelationArg {
+    /// Target note path ("category/filename") or raw wikilink text.
+    pub to: String,
+    /// Free-form relationship verb (no fixed taxonomy — R7 LLM sovereignty).
+    #[serde(rename = "type")]
+    pub rel_type: String,
 }
 
 /// A lightweight note entry returned by list/query.
@@ -290,6 +324,16 @@ impl NoteManageTool {
                     )
                     .await
             }
+            NoteManageAction::Rename => {
+                handler
+                    .log_note_updated(
+                        note_path,
+                        String::new(),
+                        "note_manage rename".to_string(),
+                        EventActor::Agent,
+                    )
+                    .await
+            }
             NoteManageAction::Query
             | NoteManageAction::List
             | NoteManageAction::Insights
@@ -300,13 +344,27 @@ impl NoteManageTool {
         }
     }
 
-    /// Default agent ID (used when `args.agent_id` is absent).
+    /// Default agent ID (used when `args.agent_id` is absent). Must match the
+    /// system-wide `DEFAULT_AGENT_ID` ("main") that every note reader falls back
+    /// to — panel graph, memory recall, dreaming, orientation. A stray literal
+    /// here (the old `"default"`) silently misfiled chat-created notes into a
+    /// namespace nothing reads, making them invisible everywhere.
     const fn agent_id(&self) -> &str {
-        "default"
+        crate::routing::DEFAULT_AGENT_ID
+    }
+
+    /// Test-only accessor for the underlying memory directory, so tests can
+    /// assert against on-disk note paths without duplicating the tool's
+    /// construction args (`indexer` is a private field).
+    #[cfg(test)]
+    fn memory_dir(&self) -> &std::path::Path {
+        self.indexer.memory_dir()
     }
 
     /// Resolve the effective `agent_id` (storage partition key) for this
-    /// invocation: prefer `args.agent_id`, fall back to the tool's default.
+    /// invocation. Priority: explicit `args.agent_id` → the active chat
+    /// session's agent (turn context) → `DEFAULT_AGENT_ID` for non-gateway
+    /// paths (cron / internal / tests).
     ///
     /// When `project_scoped` is enabled and a project root is active for the
     /// run, the base id is composed with the project namespace so notes are
@@ -332,7 +390,28 @@ impl NoteManageTool {
                 )));
             }
         }
-        let base = args.agent_id.as_deref().unwrap_or_else(|| self.agent_id());
+        // Resolution priority:
+        //   1. explicit `args.agent_id` (validated above) — an intentional LLM
+        //      override to target another agent's vault.
+        //   2. the *active session's* agent — read from the per-tool-call turn
+        //      context, which the dispatch chokepoint (`ScopedToolService::
+        //      execute`) scopes around every tool execution, so a concurrent run
+        //      of another agent cannot race it. Without this a note saved while
+        //      chatting with a non-default agent lands in "main" and is invisible
+        //      in that agent's own graph.
+        //   3. `DEFAULT_AGENT_ID` — terminal fallback for non-gateway paths
+        //      (cron / internal / tests) where no turn is scoped.
+        //
+        // The turn-context id comes from a parsed `SessionKey` whose agent_id is
+        // always normalized (`[a-z0-9_-]`, ≤64 chars, no separators), so it is
+        // path-safe by construction and needs no re-validation — the same trust
+        // `memory_search` places in `current_agent_id()`.
+        let session_agent = crate::tools::turn_context::current_agent_id();
+        let base = args
+            .agent_id
+            .as_deref()
+            .or(session_agent.as_deref())
+            .unwrap_or_else(|| self.agent_id());
         Ok(crate::memory::project_scope::scoped_or_base(
             base,
             self.project_scoped,
@@ -404,6 +483,9 @@ impl NoteManageTool {
         }
         if let Some(links) = &args.links {
             note.add_links(links);
+        }
+        if let Some(rels) = &args.relations {
+            merge_relations(&mut note, rels);
         }
 
         // Single write chokepoint: atomic write + reparse-index + orientation.
@@ -568,6 +650,9 @@ impl NoteManageTool {
         if let Some(links) = &args.links {
             note.add_links(links);
         }
+        if let Some(rels) = &args.relations {
+            merge_relations(&mut note, rels);
+        }
         note.updated_at = chrono::Utc::now().timestamp();
 
         // Single write chokepoint: atomic write + reparse-index + orientation
@@ -616,9 +701,10 @@ impl NoteManageTool {
         let new_facts = args.facts.clone().unwrap_or_default();
         let new_links = args.links.clone().unwrap_or_default();
 
-        if new_facts.is_empty() && new_links.is_empty() {
+        let has_relations = args.relations.as_ref().is_some_and(|r| !r.is_empty());
+        if new_facts.is_empty() && new_links.is_empty() && !has_relations {
             return Err(AlephError::tool(
-                "At least one fact or link is required for append",
+                "At least one fact, link, or relation is required for append",
             ));
         }
 
@@ -633,6 +719,21 @@ impl NoteManageTool {
             .append_to_note(agent_id, &note_path, &new_facts, &new_links)
             .await
             .map_err(|e| AlephError::tool(format!("Failed to append to note: {e}")))?;
+
+        if let Some(rels) = &args.relations {
+            let parsed: Vec<crate::memory::notes::Relation> = rels
+                .iter()
+                .map(|r| crate::memory::notes::Relation {
+                    to: r.to.clone(),
+                    rel_type: r.rel_type.clone(),
+                    confidence: 1.0,
+                })
+                .collect();
+            self.indexer
+                .append_relations(agent_id, &note_path, &parsed)
+                .await
+                .map_err(|e| AlephError::tool(format!("Failed to append relations: {e}")))?;
+        }
 
         info!(path = %note_path, facts = new_facts.len(), "Note appended");
 
@@ -934,6 +1035,59 @@ impl NoteManageTool {
         })
     }
 
+    async fn handle_rename(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
+        let agent_id_owned = self.resolve_agent_id(args)?;
+        let agent_id = agent_id_owned.as_str();
+        let filename = args
+            .filename
+            .as_deref()
+            .ok_or_else(|| AlephError::tool("filename is required for rename"))?;
+        let new_title = args
+            .new_title
+            .as_deref()
+            .ok_or_else(|| AlephError::tool("new_title is required for rename"))?;
+        let safe_old = sanitize_title(filename)?;
+        let safe_new = sanitize_title(new_title)?;
+        if safe_old == safe_new {
+            return Err(AlephError::tool("new_title equals current filename"));
+        }
+        // rename_note locates the category itself (find_by_filename); with
+        // duplicate filenames across categories it renames the first hit —
+        // callers can disambiguate by deleting/recreating instead.
+        self.indexer
+            .rename_note(agent_id, &safe_old, &safe_new)
+            .await
+            .map_err(|e| AlephError::tool(format!("Failed to rename note: {e}")))?;
+        // Resolve the new category for an honest note_path in the result.
+        let new_paths = self
+            .indexer
+            .store()
+            .find_by_filename(&safe_new, agent_id)
+            .await
+            .unwrap_or_default();
+        let note_path = new_paths
+            .first()
+            .cloned()
+            .unwrap_or_else(|| format!("other/{safe_new}"));
+        info!(old = %safe_old, new = %safe_new, "Note renamed");
+        self.refresh_embedding(
+            agent_id,
+            note_path.split('/').next().unwrap_or("other"),
+            &safe_new,
+        )
+        .await;
+        Ok(NoteManageResult {
+            related_notes: None,
+            success: true,
+            message: format!(
+                "Renamed '{safe_old}' → '{safe_new}'. Inbound [[wikilinks]] were rewritten."
+            ),
+            note_path: Some(note_path),
+            content: None,
+            notes: None,
+        })
+    }
+
     /// Read materialized knowledge-graph health insights for the agent: knowledge
     /// gaps (isolated notes), sparse communities, bridge notes, and surprising
     /// cross-community connections. Read-only — the insights are materialized by
@@ -1065,7 +1219,7 @@ impl NoteManageTool {
 impl AlephTool for NoteManageTool {
     const NAME: &'static str = "note_manage";
     const DESCRIPTION: &'static str =
-        "Create, update, append, query, list, or delete personal knowledge notes; \
+        "Create, update, append, query, list, delete, or rename personal knowledge notes; \
          `insights` reads knowledge-graph health (gaps, bridges, communities) and \
          `evolution` explains why memory changed (or didn't) in recent dream cycles. \
          Notes are markdown files organized by category (preference, plan, learning, \
@@ -1073,6 +1227,9 @@ impl AlephTool for NoteManageTool {
          transcript, query, contradiction, other, subagent-*). Markdown structure \
          (headings, paragraphs, code blocks) is preserved verbatim in create/update. \
          `query` is hybrid semantic + full-text search. \
+         `rename` renames a note and rewrites every inbound [[wikilink]]. Typed \
+         `relations` ([{to, type}]) declare semantic edges; supersedes/superseded_by/ \
+         contradicts are force-surfaced at retrieval. \
          Use this tool to store and retrieve long-term knowledge and preferences. \
          This is the DURABLE tier — searchable and recalled on relevance, not always \
          in-prompt. If a fact is identity-level and worth re-reading EVERY session \
@@ -1094,6 +1251,8 @@ impl AlephTool for NoteManageTool {
             "note_manage(action='query', query='vim editor preferences', limit=5)".to_string(),
             "note_manage(action='list', category='reference')".to_string(),
             "note_manage(action='delete', category='plan', filename='old-plan')".to_string(),
+            "note_manage(action='rename', filename='old-name', new_title='new-name')".to_string(),
+            "note_manage(action='update', category='plan', filename='new-roadmap', content='...', relations=[{to: 'plan/old-roadmap', type: 'supersedes'}])".to_string(),
             "note_manage(action='insights')".to_string(),
             "note_manage(action='evolution')".to_string(),
         ])
@@ -1107,6 +1266,7 @@ impl AlephTool for NoteManageTool {
             NoteManageAction::Query => self.handle_query(&args).await,
             NoteManageAction::List => self.handle_list(&args).await,
             NoteManageAction::Delete => self.handle_delete(&args).await,
+            NoteManageAction::Rename => self.handle_rename(&args).await,
             NoteManageAction::Insights => self.handle_insights(&args).await,
             NoteManageAction::Evolution => self.handle_evolution(&args).await,
         }?;
@@ -1150,6 +1310,27 @@ fn related_keywords(text: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Merge tool-authored typed relations into the note's frontmatter set,
+/// deduped by (to, rel_type). Tool-authored = explicit statement → confidence 1.0.
+fn merge_relations(note: &mut KnowledgeNote, rels: &[NoteRelationArg]) {
+    for r in rels {
+        let exists = note
+            .relations
+            .iter()
+            .any(|x| x.to == r.to && x.rel_type == r.rel_type);
+        if !exists {
+            note.relations.push(
+                crate::memory::notes::Relation {
+                    to: r.to.clone(),
+                    rel_type: r.rel_type.clone(),
+                    confidence: 1.0,
+                }
+                .clamped(),
+            );
+        }
+    }
 }
 
 /// Validate that the category is one of the known valid values.
@@ -1235,6 +1416,27 @@ mod tests {
         (dir, tool)
     }
 
+    /// All-`None` `NoteManageArgs` base (action is a placeholder — callers
+    /// always override it). Avoids re-listing every field at each call site
+    /// whenever a new optional arg is added.
+    fn blank_args() -> NoteManageArgs {
+        NoteManageArgs {
+            action: NoteManageAction::Query,
+            category: None,
+            filename: None,
+            title: None,
+            content: None,
+            facts: None,
+            links: None,
+            tags: None,
+            query: None,
+            limit: None,
+            new_title: None,
+            relations: None,
+            agent_id: None,
+        }
+    }
+
     fn create_args(filename: &str, content: &str) -> NoteManageArgs {
         NoteManageArgs {
             action: NoteManageAction::Create,
@@ -1242,13 +1444,67 @@ mod tests {
             filename: Some(filename.into()),
             title: Some(filename.into()),
             content: Some(content.into()),
-            facts: None,
-            links: None,
-            tags: None,
-            query: None,
-            limit: None,
-            agent_id: None,
+            ..blank_args()
         }
+    }
+
+    /// The memory directory backing `tool`, for tests that need to read a
+    /// note's on-disk content directly.
+    fn tool_memory_dir(tool: &NoteManageTool) -> &std::path::Path {
+        tool.memory_dir()
+    }
+
+    #[test]
+    fn default_agent_id_matches_system_default_not_stray_default() {
+        // Regression: when the LLM omits `agent_id`, the fallback must equal the
+        // system-wide DEFAULT_AGENT_ID ("main") — the partition every note
+        // reader keys off (panel graph, memory recall, dreaming, orientation).
+        // The old stray "default" misfiled chat notes into a namespace nothing
+        // reads, making them invisible everywhere.
+        let (_dir, tool) = mk_tool();
+        let resolved = tool.resolve_agent_id(&blank_args()).unwrap();
+        assert_eq!(resolved, crate::routing::DEFAULT_AGENT_ID);
+        assert_eq!(resolved, "main");
+        assert_ne!(resolved, "default");
+    }
+
+    /// Turn context for a chat session driven by `agent`. `sync_scope` sets the
+    /// task-local the dispatch chokepoint would set around a real tool call.
+    fn turn_ctx(agent: &str) -> crate::tools::turn_context::TurnContext {
+        crate::tools::turn_context::TurnContext {
+            session_key: crate::routing::session_key::SessionKey::main(agent),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+        }
+    }
+
+    #[test]
+    fn resolve_agent_id_follows_active_session_agent() {
+        // A note saved while chatting with a non-default agent must land in that
+        // agent's own vault — not the hardcoded default. Otherwise the note is
+        // invisible in the session agent's graph (the multi-agent split defect).
+        let (_dir, tool) = mk_tool();
+        let resolved = crate::tools::turn_context::TURN_CONTEXT
+            .sync_scope(turn_ctx("research"), || tool.resolve_agent_id(&blank_args()))
+            .unwrap();
+        assert_eq!(resolved, "research");
+    }
+
+    #[test]
+    fn resolve_agent_id_explicit_arg_overrides_session_agent() {
+        // An explicit `agent_id` is an intentional cross-vault target and must
+        // still win over the active session's agent.
+        let (_dir, tool) = mk_tool();
+        let args = NoteManageArgs {
+            agent_id: Some("archivist".into()),
+            ..blank_args()
+        };
+        let resolved = crate::tools::turn_context::TURN_CONTEXT
+            .sync_scope(turn_ctx("research"), || tool.resolve_agent_id(&args))
+            .unwrap();
+        assert_eq!(resolved, "archivist");
     }
 
     #[test]
@@ -1358,16 +1614,8 @@ mod tests {
         let r = tool
             .call(NoteManageArgs {
                 action: NoteManageAction::Query,
-                category: None,
-                filename: None,
-                title: None,
-                content: None,
-                facts: None,
-                links: None,
-                tags: None,
                 query: Some("tokioruntime".into()),
-                limit: None,
-                agent_id: None,
+                ..blank_args()
             })
             .await
             .unwrap();
@@ -1385,16 +1633,7 @@ mod tests {
         let (_d, tool) = mk_tool();
         let args = NoteManageArgs {
             action: NoteManageAction::Insights,
-            category: None,
-            filename: None,
-            title: None,
-            content: None,
-            facts: None,
-            links: None,
-            tags: None,
-            query: None,
-            limit: None,
-            agent_id: None,
+            ..blank_args()
         };
         let r = tool.call(args).await.unwrap();
         assert!(r.success);
@@ -1412,5 +1651,93 @@ mod tests {
             .unwrap();
         assert!(r.success);
         assert!(r.related_notes.is_none());
+    }
+
+    #[tokio::test]
+    async fn rename_action_renames_and_cascades_inbound_links() {
+        let (_d, tool) = mk_tool();
+        tool.call(create_args("old-name", "- body")).await.unwrap();
+        // linker references old-name
+        let mut linker = create_args("linker", "- see [[old-name]]");
+        linker.links = Some(vec!["old-name".into()]);
+        tool.call(linker).await.unwrap();
+
+        let r = tool
+            .call(NoteManageArgs {
+                action: NoteManageAction::Rename,
+                category: Some("learning".into()),
+                filename: Some("old-name".into()),
+                new_title: Some("new-name".into()),
+                ..blank_args()
+            })
+            .await
+            .unwrap();
+        assert!(r.success);
+        assert_eq!(r.note_path.as_deref(), Some("learning/new-name"));
+        // Inbound body text rewritten by the cascade.
+        let linker_body = std::fs::read_to_string(
+            tool_memory_dir(&tool)
+                .join(crate::routing::DEFAULT_AGENT_ID)
+                .join("learning/linker.md"),
+        )
+        .unwrap();
+        assert!(linker_body.contains("[[new-name]]"));
+        assert!(!linker_body.contains("[[old-name]]"));
+    }
+
+    #[tokio::test]
+    async fn create_with_relations_lands_in_frontmatter() {
+        let (_d, tool) = mk_tool();
+        let mut args = create_args("super-note", "- replaces the old one");
+        args.relations = Some(vec![NoteRelationArg {
+            to: "learning/old-note".into(),
+            rel_type: "supersedes".into(),
+        }]);
+        let r = tool.call(args).await.unwrap();
+        assert!(r.success);
+        let body = std::fs::read_to_string(
+            tool_memory_dir(&tool)
+                .join(crate::routing::DEFAULT_AGENT_ID)
+                .join("learning/super-note.md"),
+        )
+        .unwrap();
+        assert!(body.contains("relations:"), "got:\n{body}");
+        assert!(body.contains("to: learning/old-note"));
+        assert!(body.contains("type: supersedes"));
+    }
+
+    #[tokio::test]
+    async fn append_with_relations_only_succeeds() {
+        // Regression: the append emptiness guard used to reject a
+        // relations-only append ("At least one fact or link is required")
+        // even though the schema advertises relations on append.
+        let (_d, tool) = mk_tool();
+        tool.call(create_args("rel-note", "- base fact"))
+            .await
+            .unwrap();
+
+        let r = tool
+            .call(NoteManageArgs {
+                action: NoteManageAction::Append,
+                category: Some("learning".into()),
+                filename: Some("rel-note".into()),
+                relations: Some(vec![NoteRelationArg {
+                    to: "learning/other-note".into(),
+                    rel_type: "refers".into(),
+                }]),
+                ..blank_args()
+            })
+            .await
+            .unwrap();
+        assert!(r.success);
+        let body = std::fs::read_to_string(
+            tool_memory_dir(&tool)
+                .join(crate::routing::DEFAULT_AGENT_ID)
+                .join("learning/rel-note.md"),
+        )
+        .unwrap();
+        assert!(body.contains("relations:"), "got:\n{body}");
+        assert!(body.contains("to: learning/other-note"));
+        assert!(body.contains("type: refers"));
     }
 }

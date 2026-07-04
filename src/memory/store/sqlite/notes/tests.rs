@@ -323,6 +323,165 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn relink_unresolved_dedupes_colliding_dangling_variants() {
+        // Regression: two dangling wikilink variants on the SAME from_note
+        // that both resolve to the SAME target (tier-2 exact filename +
+        // tier-4 normalized matching) used to violate
+        // UNIQUE(agent_id, from_note, to_note) on the second UPDATE, with no
+        // transaction wrapping the loop — aborting the whole relink pass and
+        // leaving every later dangling row (even on unrelated notes)
+        // unprocessed. `UPDATE OR IGNORE` + cleanup DELETE must dedupe the
+        // losing variant instead of erroring out mid-pass.
+        let backend = make_backend();
+        const AGENT: &str = "agent1";
+
+        // Source note links two raw variants of the same not-yet-existing
+        // target -> both dangle as distinct to_note rows (raw text).
+        let mut source = make_note("source", "wiki");
+        source.links = vec!["Rust Guide".to_string(), "rust guide".to_string()];
+        backend.index_note(&source, AGENT, "wiki").await.unwrap();
+
+        // A second, independent dangling link on a different from_note.
+        let mut other = make_note("other", "wiki");
+        other.links = vec!["Other Target".to_string()];
+        backend.index_note(&other, AGENT, "wiki").await.unwrap();
+
+        {
+            let conn = backend.conn().lock().unwrap();
+            let dangling: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM notes_links \
+                     WHERE agent_id = ?1 AND status = 'dangling'",
+                    rusqlite::params![AGENT],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(dangling, 3, "precondition: all three links start dangling");
+        }
+
+        // Now create the targets so relink_unresolved can resolve them.
+        backend
+            .index_note(&make_note("Rust Guide", "wiki"), AGENT, "wiki")
+            .await
+            .unwrap();
+        backend
+            .index_note(&make_note("Other Target", "wiki"), AGENT, "wiki")
+            .await
+            .unwrap();
+
+        // Must not abort even though two dangling rows collide on the same
+        // resolved target.
+        let relinked = backend
+            .relink_unresolved(AGENT)
+            .await
+            .expect("relink_unresolved must not error on a UNIQUE collision");
+        assert_eq!(
+            relinked, 2,
+            "one deduped edge for the colliding pair + one independent edge"
+        );
+
+        let conn = backend.conn().lock().unwrap();
+
+        // Exactly one active edge remains for the deduped pair.
+        let active_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notes_links \
+                 WHERE agent_id = ?1 AND from_note = 'wiki/source' \
+                 AND to_note = 'wiki/Rust Guide' AND status = 'active'",
+                rusqlite::params![AGENT],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            active_count, 1,
+            "deduped pair must collapse to exactly one active edge"
+        );
+
+        // No dangling duplicate remains from the losing UPDATE OR IGNORE.
+        let dangling_remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notes_links \
+                 WHERE agent_id = ?1 AND from_note = 'wiki/source' AND status = 'dangling'",
+                rusqlite::params![AGENT],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(dangling_remaining, 0, "no dangling duplicate should remain");
+
+        // The independent dangling link also got relinked, proving the pass
+        // did not abort partway through.
+        let independent_active: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notes_links \
+                 WHERE agent_id = ?1 AND from_note = 'wiki/other' \
+                 AND to_note = 'wiki/Other Target' AND status = 'active'",
+                rusqlite::params![AGENT],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            independent_active, 1,
+            "independent dangling link must also be relinked (no mid-pass abort)"
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_inbound_links_dedupes_unique_collision_without_panic() {
+        // Regression: reviving a dangling/tombstone row's `to_note` can collide
+        // with another row already occupying the same UNIQUE(agent_id,
+        // from_note, to_note) key on the SAME from_note — e.g. the source note
+        // was manually re-linked to the target through a different raw
+        // wikilink text while the original link was still dangling. Mirrors
+        // `relink_unresolved_dedupes_colliding_dangling_variants`'s defense:
+        // `UPDATE OR IGNORE` + cleanup DELETE must not error out mid-pass.
+        let backend = make_backend();
+        const AGENT: &str = "agent1";
+
+        // Source links a not-yet-existing target by raw text "Target Note" ->
+        // dangles (to_note falls back to the raw text).
+        let mut source = make_note("source", "wiki");
+        source.links = vec!["Target Note".to_string()];
+        backend.index_note(&source, AGENT, "wiki").await.unwrap();
+
+        // Manually re-link the same source note to the target's eventual full
+        // path via a different raw form — an independent ACTIVE row.
+        backend
+            .add_link_with_relation(AGENT, "wiki/source", "wiki/Target Note", "related")
+            .await
+            .unwrap();
+
+        // Now the target is created — the dangling row's raw text "Target
+        // Note" resolves to the SAME to_note ("wiki/Target Note") as the
+        // active row above.
+        backend
+            .index_note(&make_note("Target Note", "wiki"), AGENT, "wiki")
+            .await
+            .unwrap();
+
+        let revived = backend
+            .backfill_inbound_links(AGENT, &["Target Note".to_string()])
+            .await
+            .expect("backfill must not error on a UNIQUE collision");
+        assert_eq!(
+            revived, 0,
+            "the pre-existing active row wins; OR IGNORE skips the revival"
+        );
+
+        // Exactly one row remains for the (from, to) pair — no duplicate, no
+        // leftover dangling remnant.
+        let conn = backend.conn().lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notes_links \
+                 WHERE agent_id = ?1 AND from_note = 'wiki/source' AND to_note = 'wiki/Target Note'",
+                rusqlite::params![AGENT],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "no duplicate/dangling remnant after the collision");
+    }
+
+    #[tokio::test]
     async fn get_incoming_links_finds_backlinks() {
         let backend = make_backend();
         let mut note1 = make_note("source", "backlinks");
@@ -687,6 +846,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn related_edges_between_filters_visible_and_caps_per_node() {
+        use std::collections::HashSet;
+
+        const AGENT: &str = "agent1";
+        let backend = make_backend();
+
+        // cat/a has 3 related rows (b, c, d); only b and c are "visible".
+        // cat/x has 1 related row to an invisible node → must be dropped entirely.
+        backend
+            .replace_graph_related(
+                AGENT,
+                &[
+                    ("cat/a".to_string(), "cat/b".to_string(), 1.5),
+                    ("cat/a".to_string(), "cat/c".to_string(), 9.0),
+                    ("cat/a".to_string(), "cat/d".to_string(), 4.0),
+                    ("cat/x".to_string(), "cat/invisible".to_string(), 5.0),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let visible: HashSet<String> = ["cat/a", "cat/b", "cat/c", "cat/x"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+
+        // per_node=1 keeps only the top-scored visible row for cat/a (cat/c);
+        // cat/d is excluded because it is not in `visible`, regardless of the cap.
+        let rows = backend
+            .related_edges_between(AGENT, &visible, 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![("cat/a".to_string(), "cat/c".to_string(), 9.0)],
+            "only the top-1 visible-both-ends row for cat/a must survive: {rows:?}"
+        );
+
+        // cat/x's only related row points at an invisible node → dropped even
+        // though cat/x itself is visible (both ends must be visible).
+        assert!(
+            !rows.iter().any(|(n, _, _)| n == "cat/x"),
+            "row with an invisible endpoint must not surface: {rows:?}"
+        );
+
+        // per_node=2 lets cat/b back in (score-DESC: c then b; d stays excluded
+        // because it is not in `visible`).
+        let rows2 = backend
+            .related_edges_between(AGENT, &visible, 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            rows2,
+            vec![
+                ("cat/a".to_string(), "cat/c".to_string(), 9.0),
+                ("cat/a".to_string(), "cat/b".to_string(), 1.5),
+            ]
+        );
+
+        // A different agent has no related rows → empty (scoping holds).
+        let other = backend
+            .related_edges_between("agent2", &visible, 8)
+            .await
+            .unwrap();
+        assert!(other.is_empty());
+    }
+
+    #[tokio::test]
     async fn get_notes_with_content_returns_known_paths_skips_unknown() {
         let backend = make_backend();
 
@@ -776,9 +1003,9 @@ mod tests {
         let (_n, edges) = backend.get_graph_data("agent1", 100).await.unwrap();
         let e = edges
             .iter()
-            .find(|(f, t, _)| f == &a && t == &b)
+            .find(|edge| edge.from == a && edge.to == b)
             .expect("edge a->b present");
-        assert_eq!(e.2.as_deref(), Some("semantic"));
+        assert_eq!(e.relation.as_deref(), Some("semantic"));
     }
 
     #[tokio::test]

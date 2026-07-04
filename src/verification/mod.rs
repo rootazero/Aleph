@@ -33,6 +33,7 @@
 
 pub mod stop_hooks;
 
+pub mod mutation_evidence_verifier;
 pub mod robustness_profile;
 pub mod scratchpad_goal_verifier;
 pub mod stop_hook_verifier;
@@ -42,6 +43,7 @@ pub mod turn_verifier;
 #[cfg(test)]
 mod tests;
 
+pub use mutation_evidence_verifier::MutationEvidenceVerifier;
 pub use robustness_profile::ModelRobustnessProfile;
 pub use scratchpad_goal_verifier::ScratchpadGoalVerifier;
 pub use stop_hook_verifier::StopHookVerifier;

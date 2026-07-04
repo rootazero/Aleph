@@ -33,6 +33,24 @@ pub struct CompressedFact {
     pub path: String,
 }
 
+impl CompressedFact {
+    /// Minimal fact for drill-into-note navigation: only `path`/`category`/
+    /// `content`(title) are load-bearing for the detail views' fetch flow.
+    #[must_use]
+    pub fn stub_from_path(path: &str) -> Self {
+        let (category, filename) = path.split_once('/').unwrap_or(("other", path));
+        Self {
+            id: path.to_string(),
+            agent_id: String::new(),
+            content: filename.to_string(),
+            fact_type: String::new(),
+            created_at: 0,
+            category: category.to_string(),
+            path: path.to_string(),
+        }
+    }
+}
+
 /// Backend `list_facts` response wrapper
 #[derive(Debug, Clone, Deserialize)]
 struct BackendListFactsResponse {
@@ -189,4 +207,27 @@ fn format_timestamp_secs(ts: i64) -> String {
     let hour = date.get_hours();
     let min = date.get_minutes();
     format!("{year:04}-{month:02}-{day:02} {hour:02}:{min:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CompressedFact;
+
+    #[test]
+    fn stub_from_path_splits_category_and_filename() {
+        let fact = CompressedFact::stub_from_path("facts/rust-notes.md");
+        assert_eq!(fact.id, "facts/rust-notes.md");
+        assert_eq!(fact.path, "facts/rust-notes.md");
+        assert_eq!(fact.category, "facts");
+        assert_eq!(fact.content, "rust-notes.md");
+        assert_eq!(fact.agent_id, "");
+        assert_eq!(fact.created_at, 0);
+    }
+
+    #[test]
+    fn stub_from_path_falls_back_to_other_for_bare_filename() {
+        let fact = CompressedFact::stub_from_path("rust-notes.md");
+        assert_eq!(fact.category, "other");
+        assert_eq!(fact.content, "rust-notes.md");
+    }
 }

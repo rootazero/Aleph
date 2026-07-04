@@ -39,7 +39,11 @@ pub fn edge_kind_code(kind: Option<&str>) -> u8 {
         Some("semantic") => 1,
         Some("related") => 2,
         Some("co_recalled") => 3,
+        Some("mention") => 5,
+        Some("related_similarity") => 6,
         Some(_) => 4, // keyword/entity verbs and any future kind
+        // 7 (surprising) is not a wire kind string — it is a build-time
+        // override applied on top of the base kind (see `build_galaxy`).
     }
 }
 
@@ -52,6 +56,9 @@ pub fn edge_kind_color(code: u8) -> Option<[f32; 3]> {
         2 => Some([0.655, 0.545, 0.980]), // related     → purple #a78bfa
         3 => Some([0.984, 0.749, 0.141]), // co_recalled → amber  #fbbf24
         4 => Some([0.204, 0.827, 0.600]), // keyword     → green  #34d399
+        5 => Some([0.42, 0.45, 0.55]),    // mention     → dark slate
+        6 => Some([0.48, 0.40, 0.72]),    // similarity  → violet
+        7 => Some([1.35, 1.15, 0.55]),    // surprising  → gold bloom (>1.0)
         _ => None,                        // 0 wikilink / unknown → endpoint gradient
     }
 }
@@ -147,6 +154,7 @@ impl EdgeRenderer {
         nodes: &[super::GalaxyNode],
         edges: &[(u32, u32)],
         edge_kinds: &[u8],
+        edge_bright: &[f32],
     ) {
         let mut pos_a = Vec::with_capacity(edges.len() * 3);
         let mut pos_b = Vec::with_capacity(edges.len() * 3);
@@ -159,15 +167,26 @@ impl EdgeRenderer {
             pos_a.extend_from_slice(&[na.pos.x, na.pos.y, na.pos.z]);
             pos_b.extend_from_slice(&[nb.pos.x, nb.pos.y, nb.pos.z]);
             // Kind tint: specials override both endpoints with a distinct hue;
-            // wikilink (or unknown) keeps the endpoint-color gradient.
+            // wikilink (or unknown) keeps the endpoint-color gradient. Brightness
+            // (confidence-scaled) is multiplied into whichever color wins.
+            let bright = edge_bright.get(i).copied().unwrap_or(1.0);
             match edge_kinds.get(i).copied().and_then(edge_kind_color) {
                 Some(c) => {
+                    let c = [c[0] * bright, c[1] * bright, c[2] * bright];
                     col_a.extend_from_slice(&c);
                     col_b.extend_from_slice(&c);
                 }
                 None => {
-                    col_a.extend_from_slice(&na.color);
-                    col_b.extend_from_slice(&nb.color);
+                    col_a.extend_from_slice(&[
+                        na.color[0] * bright,
+                        na.color[1] * bright,
+                        na.color[2] * bright,
+                    ]);
+                    col_b.extend_from_slice(&[
+                        nb.color[0] * bright,
+                        nb.color[1] * bright,
+                        nb.color[2] * bright,
+                    ]);
                 }
             }
             // Same phase the node renderer uploads → identical drift per endpoint.
@@ -256,6 +275,8 @@ mod tests {
         assert_eq!(edge_kind_code(Some("related")), 2);
         assert_eq!(edge_kind_code(Some("co_recalled")), 3);
         assert_eq!(edge_kind_code(Some("keyword-verb-whatever")), 4);
+        assert_eq!(edge_kind_code(Some("mention")), 5);
+        assert_eq!(edge_kind_code(Some("related_similarity")), 6);
     }
 
     #[test]
@@ -264,6 +285,13 @@ mod tests {
         assert!(edge_kind_color(1).is_some()); // semantic tinted
         assert!(edge_kind_color(4).is_some());
         assert_eq!(edge_kind_color(99), None); // out-of-range → None
+    }
+
+    #[test]
+    fn edge_kind_color_surprising_exceeds_unit_for_bloom() {
+        // Surprising (7) is intentionally >1.0 so the bloom bright-pass picks
+        // it up even at full brightness multiplier.
+        assert!(edge_kind_color(7).unwrap()[0] > 1.0);
     }
 }
 

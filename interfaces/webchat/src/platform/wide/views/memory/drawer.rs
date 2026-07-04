@@ -10,7 +10,7 @@ use leptos::task::spawn_local;
 use crate::api::graph::GraphApi;
 use crate::api::{CompressedFact, RawMemory};
 use crate::canvas_engine::category_color::category_color;
-use crate::canvas_engine::markdown_excerpt::render_excerpt;
+use crate::canvas_engine::markdown_excerpt::{render_excerpt, wikilink_click_target};
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
 use crate::state::memory::MemoryState;
@@ -29,7 +29,7 @@ pub fn DetailDrawer(target: RwSignal<Option<DrawerTarget>>) -> impl IntoView {
             None => view! { <div></div> }.into_any(),
             Some(DrawerTarget::Note(fact)) => view! {
                 <DrawerShell target=target>
-                    <NoteDetail fact=fact />
+                    <NoteDetail fact=fact target=target />
                 </DrawerShell>
             }
             .into_any(),
@@ -69,10 +69,14 @@ fn DrawerShell(target: RwSignal<Option<DrawerTarget>>, children: Children) -> im
 }
 
 #[component]
-fn NoteDetail(fact: CompressedFact) -> impl IntoView {
+fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> impl IntoView {
     let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
     let mem = expect_context::<MemoryState>();
+
+    let path = fact.path.clone();
+    let stripe = category_color(&fact.category);
+    let title = fact.content.clone();
 
     let body = RwSignal::new(None::<String>);
     let backlinks = RwSignal::new(Vec::<String>::new());
@@ -81,9 +85,12 @@ fn NoteDetail(fact: CompressedFact) -> impl IntoView {
     let is_saving = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
 
-    let path = fact.path.clone();
-    let stripe = category_color(&fact.category);
-    let title = fact.content.clone();
+    // Rename state
+    let is_renaming = RwSignal::new(false);
+    let rename_draft = RwSignal::new(title.clone());
+
+    // Delete state
+    let confirm_delete = RwSignal::new(false);
 
     // Fetch full content + backlinks once on mount.
     {
@@ -130,6 +137,66 @@ fn NoteDetail(fact: CompressedFact) -> impl IntoView {
         }
     };
 
+    let do_rename = {
+        let path = path.clone();
+        move |_| {
+            if is_saving.get_untracked() {
+                return;
+            }
+            let new_title = rename_draft.get_untracked();
+            if new_title.is_empty() {
+                error.set(Some("Title cannot be empty".to_string()));
+                return;
+            }
+            let path = path.clone();
+            let agent = mem.agent_id.get_untracked();
+            is_saving.set(true);
+            error.set(None);
+            spawn_local(async move {
+                match GraphApi::rename_note(&state, &agent, &path, &new_title).await {
+                    Ok(new_id) => {
+                        target.set(Some(DrawerTarget::Note(CompressedFact::stub_from_path(&new_id))));
+                        is_saving.set(false);
+                        is_renaming.set(false);
+                    }
+                    Err(e) => {
+                        is_saving.set(false);
+                        error.set(Some(e));
+                    }
+                }
+            });
+        }
+    };
+
+    let do_delete = {
+        let path = path.clone();
+        move |_| {
+            if is_saving.get_untracked() || !confirm_delete.get_untracked() {
+                // First tap: arm the confirm
+                confirm_delete.set(true);
+                return;
+            }
+            // Second tap: execute delete
+            let path = path.clone();
+            let agent = mem.agent_id.get_untracked();
+            is_saving.set(true);
+            error.set(None);
+            spawn_local(async move {
+                match GraphApi::delete_note(&state, &agent, &path).await {
+                    Ok(()) => {
+                        target.set(None);
+                        is_saving.set(false);
+                    }
+                    Err(e) => {
+                        is_saving.set(false);
+                        confirm_delete.set(false);
+                        error.set(Some(e));
+                    }
+                }
+            });
+        }
+    };
+
     view! {
         <div>
             <div style=format!("height:3px;background:{stripe};border-radius:2px;margin-bottom:8px")></div>
@@ -168,28 +235,102 @@ fn NoteDetail(fact: CompressedFact) -> impl IntoView {
                     </div>
                 }.into_any()
             } else {
+                let rename = do_rename.clone();
+                let delete = do_delete.clone();
                 view! {
                     <div>
-                        {move || match body.get() {
-                            Some(md) => view! {
-                                <div
-                                    class="node-card-full__excerpt text-xs leading-relaxed text-text-secondary"
-                                    inner_html=render_excerpt(&md)
-                                ></div>
-                            }.into_any(),
-                            None => view! {
-                                <div class="text-xs italic text-text-tertiary">{t!(i18n, common.loading)}</div>
-                            }.into_any(),
+                        {move || if is_renaming.get() {
+                            let rename = rename.clone();
+                            view! {
+                                <div>
+                                    <input
+                                        type="text"
+                                        class="w-full p-2 text-xs bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary/50 box-border"
+                                        prop:value=move || rename_draft.get()
+                                        on:input=move |ev| rename_draft.set(event_target_value(&ev))
+                                    />
+                                    <div class="flex gap-2 mt-2">
+                                        <button
+                                            class="px-3 py-1 text-xs rounded-lg bg-primary text-white disabled:opacity-50"
+                                            prop:disabled=move || is_saving.get()
+                                            on:click=rename
+                                        >
+                                            {move || if is_saving.get() {
+                                                view! { {t!(i18n, memory.saving)} }.into_any()
+                                            } else {
+                                                view! { "Confirm" }.into_any()
+                                            }}
+                                        </button>
+                                        <button
+                                            class="px-3 py-1 text-xs rounded-lg border border-border text-text-secondary hover:text-text-primary"
+                                            prop:disabled=move || is_saving.get()
+                                            on:click=move |_| is_renaming.set(false)
+                                        >
+                                            {t!(i18n, memory.cancel)}
+                                        </button>
+                                    </div>
+                                </div>
+                            }.into_any()
+                        } else {
+                            let delete = delete.clone();
+                            view! {
+                                <div>
+                                    {move || match body.get() {
+                                        Some(md) => view! {
+                                            <div
+                                                class="node-card-full__excerpt text-xs leading-relaxed text-text-secondary"
+                                                inner_html=render_excerpt(&md)
+                                                on:click=move |ev| {
+                                                    if let Some(t) = wikilink_click_target(&ev) {
+                                                        navigate_drawer(&state, &mem, target, t);
+                                                    }
+                                                }
+                                            ></div>
+                                        }.into_any(),
+                                        None => view! {
+                                            <div class="text-xs italic text-text-tertiary">{t!(i18n, common.loading)}</div>
+                                        }.into_any(),
+                                    }}
+                                    <div class="flex gap-2 mt-3">
+                                        <button
+                                            class="px-3 py-1 text-xs rounded-lg border border-border text-text-secondary hover:text-text-primary"
+                                            on:click=move |_| {
+                                                draft.set(body.get_untracked().unwrap_or_default());
+                                                error.set(None);
+                                                confirm_delete.set(false);
+                                                is_renaming.set(false);
+                                                is_editing.set(true);
+                                            }
+                                        >
+                                            {t!(i18n, memory.edit)}
+                                        </button>
+                                        <button
+                                            class="px-3 py-1 text-xs rounded-lg border border-border text-text-secondary hover:text-text-primary"
+                                            on:click=move |_| is_renaming.set(true)
+                                        >
+                                            "Rename"
+                                        </button>
+                                        <button
+                                            class="px-3 py-1 text-xs rounded-lg border border-border text-text-secondary hover:text-text-primary"
+                                            style=move || {
+                                                if confirm_delete.get() {
+                                                    "border-color:var(--cat-error,#f44336);color:white;background:var(--cat-error,#f44336)".to_string()
+                                                } else {
+                                                    String::new()
+                                                }
+                                            }
+                                            on:click=delete
+                                        >
+                                            {move || if confirm_delete.get() {
+                                                "Confirm delete?"
+                                            } else {
+                                                "Delete"
+                                            }}
+                                        </button>
+                                    </div>
+                                </div>
+                            }.into_any()
                         }}
-                        <button
-                            class="mt-3 px-3 py-1 text-xs rounded-lg border border-border text-text-secondary hover:text-text-primary"
-                            on:click=move |_| {
-                                draft.set(body.get_untracked().unwrap_or_default());
-                                is_editing.set(true);
-                            }
-                        >
-                            {t!(i18n, memory.edit)}
-                        </button>
                     </div>
                 }.into_any()
             }}
@@ -206,8 +347,16 @@ fn NoteDetail(fact: CompressedFact) -> impl IntoView {
                             {t!(i18n, memory.detail_backlinks)}
                         </div>
                         <ul class="space-y-1">
-                            {bl.into_iter().map(|b| view! {
-                                <li class="text-xs font-mono text-text-secondary break-all">{b}</li>
+                            {bl.into_iter().map(|b| {
+                                let b_click = b.clone();
+                                view! {
+                                    <li
+                                        style="font-size:11px;color:var(--cat-reference);padding:3px 6px;border-radius:4px;background:rgba(96,165,250,0.08);cursor:pointer;word-break:break-all;font-family:monospace"
+                                        on:click=move |_| navigate_drawer(&state, &mem, target, b_click.clone())
+                                    >
+                                        {b}
+                                    </li>
+                                }
                             }).collect_view()}
                         </ul>
                     </div>
@@ -219,6 +368,35 @@ fn NoteDetail(fact: CompressedFact) -> impl IntoView {
             </div>
         </div>
     }
+}
+
+/// Resolve a clicked wikilink target to a node id and load it into the
+/// drawer. Path-form targets navigate directly; bare names resolve via
+/// graph.search (first hit — mirrors `navigate_wl` in the canvas detail
+/// panel). Setting `target_signal` remounts `NoteDetail`, which fetches the
+/// new note on its own.
+fn navigate_drawer(
+    state: &DashboardState,
+    mem: &MemoryState,
+    target_signal: RwSignal<Option<DrawerTarget>>,
+    wl: String,
+) {
+    let state = *state;
+    let mem = *mem;
+    spawn_local(async move {
+        let id = if wl.contains('/') {
+            Some(wl)
+        } else {
+            let agent = mem.agent_id.get_untracked();
+            GraphApi::search(&state, &agent, &wl, 1)
+                .await
+                .ok()
+                .and_then(|r| r.results.first().map(|f| f.id.clone()))
+        };
+        if let Some(id) = id {
+            target_signal.set(Some(DrawerTarget::Note(CompressedFact::stub_from_path(&id))));
+        }
+    });
 }
 
 #[component]

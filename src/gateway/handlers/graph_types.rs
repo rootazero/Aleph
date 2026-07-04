@@ -49,6 +49,25 @@ pub struct GraphUpdateNoteParams {
     pub agent_id: Option<String>,
 }
 
+// === graph.rename_note ===
+#[derive(Debug, Deserialize)]
+pub struct GraphRenameNoteParams {
+    /// Note path `"category/title"` (same id as `graph.node_detail`).
+    pub node_id: String,
+    /// New filename (without `.md`); sanitized server-side.
+    pub new_title: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+}
+
+// === graph.delete_note ===
+#[derive(Debug, Deserialize)]
+pub struct GraphDeleteNoteParams {
+    pub node_id: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+}
+
 // === graph.search ===
 #[derive(Debug, Deserialize)]
 pub struct GraphSearchParams {
@@ -87,8 +106,9 @@ pub struct NoteLinkDto {
     pub to: String,
     /// Free-form display label for the edge, e.g. the wikilink alias from
     /// `[[target|alias]]`. Matches the Obsidian JSON Canvas `edge.label` slot.
-    /// `None` until the storage layer learns to surface aliases (tracked in
-    /// the R2 follow-up "wikilink-kind-extraction").
+    /// `Some(alias)` when the link was written with a pipe alias; `None` for
+    /// plain `[[target]]` wikilinks and typed relations (which carry no
+    /// alias text).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Semantic relation kind, e.g. `"refers"` / `"derives"` / `"follows"` /
@@ -98,6 +118,11 @@ pub struct NoteLinkDto {
     /// from note bodies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// Link-resolution confidence (0.0-1.0) for real edges; `None` for
+    /// similarity edges (`kind = "related_similarity"`), whose relatedness
+    /// score is not a confidence and must not be presented as one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -108,6 +133,33 @@ pub struct GraphQueryResponse {
     /// panel show a "showing top N of M" indicator.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total: Option<usize>,
+    /// Node paths materialized as graph-health "bridge" insights (cut
+    /// vertices connecting otherwise-separate clusters), filtered to nodes
+    /// visible in this response. Empty before the first dream graph-recompute.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bridge_nodes: Vec<String>,
+    /// `(from, to)` pairs materialized as graph-health "surprising" insights
+    /// (unexpectedly strong cross-community edges), filtered to pairs whose
+    /// endpoints are both visible in this response.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub surprising_edges: Vec<(String, String)>,
+}
+
+/// One outgoing link row for `graph.node_detail`, carrying full lifecycle
+/// provenance (unlike the graph feed's active-only edges) so the panel can
+/// render dangling/tombstone links distinctly.
+#[derive(Debug, Serialize)]
+pub struct OutgoingLinkDto {
+    pub to: String,          // resolved path (active/tombstone) or raw (dangling)
+    pub raw: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub confidence: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_by: Option<String>,
+    pub status: String,      // active | dangling | tombstone
 }
 
 #[derive(Debug, Serialize)]
@@ -115,6 +167,7 @@ pub struct NoteDetailResponse {
     pub node: NoteNodeDto,
     pub content: String,
     pub backlinks: Vec<String>,
+    pub outgoing: Vec<OutgoingLinkDto>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

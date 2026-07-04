@@ -808,12 +808,16 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"strategy_pointer"));
         // DoctorRepairHintLayer (@1715) is WebRich-gated per request — Dynamic.
         assert!(dynamic_names.contains(&"doctor_repair_hint"));
-        // 16 → 15: MemoryAugmentationLayer removed 2026-07-03 (recall moved
-        // to the transient trailing message, `HarnessDeps::recall_context`).
+        // 16 → 15 → 16: MemoryAugmentationLayer removed 2026-07-03 (recall
+        // moved to the transient trailing message, `HarnessDeps::recall_context`)
+        // while MemoryProtocolLayer (Dynamic since creation) landed from the
+        // other side of merge b8ea7a7c8 — the two sides were individually
+        // consistent, so this count silently drifted to 15 vs 16 actual.
+        // Every name above is asserted individually; the count pins the set.
         assert_eq!(
             dynamic_names.len(),
-            15,
-            "Exactly 15 dynamic layers expected"
+            16,
+            "Exactly 16 dynamic layers expected"
         );
     }
 

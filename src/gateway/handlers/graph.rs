@@ -5,9 +5,10 @@
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::graph_types::{
-    GraphNeighborsParams, GraphNeighborsResponse, GraphNodeDetailParams, GraphQueryParams,
-    GraphQueryResponse, GraphSearchParams, GraphSearchResponse, GraphUpdateNoteParams,
-    NoteDetailResponse, NoteLinkDto, NoteNodeDto, SearchResultDto,
+    GraphDeleteNoteParams, GraphNeighborsParams, GraphNeighborsResponse, GraphNodeDetailParams,
+    GraphQueryParams, GraphQueryResponse, GraphRenameNoteParams, GraphSearchParams,
+    GraphSearchResponse, GraphUpdateNoteParams, NoteDetailResponse, NoteLinkDto, NoteNodeDto,
+    OutgoingLinkDto, SearchResultDto,
 };
 use crate::memory::notes::store::{NoteIndexEntry, NoteStore};
 use crate::memory::notes::NoteIndexer;
@@ -39,61 +40,6 @@ fn notes_dir() -> std::path::PathBuf {
             .join("memory")
             .join("note")
     })
-}
-
-/// Handle graph.query — returns nodes and edges for visualization.
-///
-/// Requires `NoteStore` wired at Gateway startup.
-pub async fn handle_query(req: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        req.id,
-        INTERNAL_ERROR,
-        "graph.query requires NoteStore — wire in Gateway startup".to_string(),
-    )
-}
-
-/// Handle graph.neighbors — returns neighbors of a node up to a given depth.
-///
-/// Requires `NoteStore` wired at Gateway startup.
-pub async fn handle_neighbors(req: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        req.id,
-        INTERNAL_ERROR,
-        "graph.neighbors requires NoteStore — wire in Gateway startup".to_string(),
-    )
-}
-
-/// Handle `graph.node_detail` — returns full detail for a single note.
-///
-/// Requires `NoteStore` wired at Gateway startup.
-pub async fn handle_node_detail(req: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        req.id,
-        INTERNAL_ERROR,
-        "graph.node_detail requires NoteStore — wire in Gateway startup".to_string(),
-    )
-}
-
-/// Handle graph.search — full-text search over notes.
-///
-/// Requires `NoteStore` wired at Gateway startup.
-pub async fn handle_search(req: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        req.id,
-        INTERNAL_ERROR,
-        "graph.search requires NoteStore — wire in Gateway startup".to_string(),
-    )
-}
-
-/// Handle `graph.update_note` — persist an edited note body.
-///
-/// Requires a `NoteIndexer` wired at Gateway startup.
-pub async fn handle_update_note(req: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        req.id,
-        INTERNAL_ERROR,
-        "graph.update_note requires NoteIndexer — wire in Gateway startup".to_string(),
-    )
 }
 
 // ============================================================================
@@ -141,19 +87,79 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         .collect();
     let edges: Vec<NoteLinkDto> = links
         .into_iter()
-        .map(|(from, to, relation)| NoteLinkDto {
-            from,
-            to,
-            label: None,
+        .map(|row| NoteLinkDto {
+            from: row.from,
+            to: row.to,
+            label: row.label,
             // NULL relation = plain body wikilink.
-            kind: Some(relation.unwrap_or_else(|| "wikilink".to_string())),
+            kind: Some(row.relation.unwrap_or_else(|| "wikilink".to_string())),
+            confidence: Some(row.confidence),
         })
+        .collect();
+
+    // Similarity edges (5-signal + MinHash, materialized by GraphRecompute) —
+    // top-3 per node, deduped against real links by undirected pair.
+    let visible: std::collections::HashSet<String> =
+        entries.iter().map(|e| e.path.clone()).collect();
+    let mut seen: std::collections::HashSet<(String, String)> = edges
+        .iter()
+        .map(|e| undirected_key(&e.from, &e.to))
+        .collect();
+    let mut edges = edges;
+    if let Ok(related) = db.related_edges_between(agent_id, &visible, 3).await {
+        for (from, to, _score) in related {
+            let key = undirected_key(&from, &to);
+            if seen.insert(key) {
+                edges.push(NoteLinkDto {
+                    from,
+                    to,
+                    label: None,
+                    kind: Some("related_similarity".to_string()),
+                    confidence: None,
+                });
+            }
+        }
+    }
+
+    // Graph-health emphasis payloads (bridge nodes + surprising edges).
+    // `sparse` stays orientation-only by design (spec S3).
+    let bridge_nodes: Vec<String> = db
+        .read_graph_insights(agent_id, Some("bridge"))
+        .await
+        .ok()
+        .and_then(|rows| {
+            rows.into_iter()
+                .find_map(|(_, p)| serde_json::from_str::<Vec<String>>(&p).ok())
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| visible.contains(p))
+        .collect();
+    #[derive(serde::Deserialize)]
+    struct SurprisingRow {
+        from: String,
+        to: String,
+    }
+    let surprising_edges: Vec<(String, String)> = db
+        .read_graph_insights(agent_id, Some("surprising"))
+        .await
+        .ok()
+        .and_then(|rows| {
+            rows.into_iter()
+                .find_map(|(_, p)| serde_json::from_str::<Vec<SurprisingRow>>(&p).ok())
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| visible.contains(&r.from) && visible.contains(&r.to))
+        .map(|r| (r.from, r.to))
         .collect();
 
     let response = GraphQueryResponse {
         nodes,
         edges,
         total,
+        bridge_nodes,
+        surprising_edges,
     };
 
     match serde_json::to_value(response) {
@@ -226,6 +232,7 @@ pub async fn handle_neighbors_impl(req: JsonRpcRequest, db: MemoryBackend) -> Js
             to,
             label: None,
             kind: None,
+            confidence: None,
         })
         .collect();
 
@@ -303,11 +310,30 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
         .await
         .unwrap_or_default();
 
+    // Outgoing links with full lifecycle provenance (active/dangling/tombstone),
+    // unlike the graph feed which only surfaces active edges.
+    let outgoing: Vec<OutgoingLinkDto> = db
+        .get_outgoing_link_rows(&params.node_id, agent_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| OutgoingLinkDto {
+            to: r.to_note,
+            raw: r.to_raw,
+            relation: r.relation,
+            label: r.label,
+            confidence: r.confidence,
+            resolved_by: r.resolved_by,
+            status: r.status,
+        })
+        .collect();
+
     let node = entry_to_dto(&entry);
     let response = NoteDetailResponse {
         node,
         content,
         backlinks,
+        outgoing,
     };
 
     match serde_json::to_value(response) {
@@ -386,6 +412,141 @@ pub async fn handle_update_note_impl(
         ),
         Err(e) => {
             JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("update_note failed: {e}"))
+        }
+    }
+}
+
+/// Real implementation of `graph.rename_note`: renames the file, rewrites
+/// every inbound `[[old]]` wikilink, re-indexes, and backfills.
+pub async fn handle_rename_note_impl(
+    req: JsonRpcRequest,
+    indexer: Arc<NoteIndexer<SqliteMemoryBackend>>,
+) -> JsonRpcResponse {
+    let params: GraphRenameNoteParams = match req
+        .params
+        .as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+    {
+        Some(p) => p,
+        None => {
+            return JsonRpcResponse::error(
+                req.id,
+                INVALID_PARAMS,
+                "Missing required params: node_id, new_title".to_string(),
+            )
+        }
+    };
+    let agent_id = params
+        .agent_id
+        .as_deref()
+        .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+    let Some((category, title)) = params.node_id.split_once('/') else {
+        return JsonRpcResponse::error(
+            req.id,
+            INVALID_PARAMS,
+            format!("Invalid node_id (expected \"category/title\"): {}", params.node_id),
+        );
+    };
+    if category.contains("..")
+        || category.contains('\\')
+        || agent_id.contains("..")
+        || agent_id.contains('/')
+        || agent_id.contains('\\')
+    {
+        return JsonRpcResponse::error(
+            req.id,
+            INVALID_PARAMS,
+            "node_id / agent_id must not contain path traversal components".to_string(),
+        );
+    }
+    match indexer.rename_note(agent_id, title, &params.new_title).await {
+        Ok(()) => {
+            // `rename_note` ignores the client-supplied `category` prefix and
+            // re-derives the real one via `find_by_filename(old_title, ..)`
+            // internally — so if the client's category was stale/wrong, the
+            // rename still succeeds against the real file, but the naive
+            // `{category}/{new_title}` reconstruction below would point at a
+            // path that was never written. Look up the canonical new path the
+            // same way note_manage's `handle_rename` does (Task 7's tool
+            // layer), falling back to the client-category form only if the
+            // lookup comes up empty. NOTE (cross-category title collision):
+            // if two categories both contain a note with `new_title`, this
+            // returns the first hit from `find_by_filename`, which may not be
+            // the one that was just renamed — same caveat as note_manage.
+            let new_paths = indexer
+                .store()
+                .find_by_filename(&params.new_title, agent_id)
+                .await
+                .unwrap_or_default();
+            let new_id = new_paths
+                .first()
+                .cloned()
+                .unwrap_or_else(|| format!("{category}/{}", params.new_title));
+            JsonRpcResponse::success(
+                req.id,
+                serde_json::json!({
+                    "node_id": params.node_id,
+                    "new_id": new_id,
+                    "renamed": true
+                }),
+            )
+        }
+        Err(e) => {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("rename_note failed: {e}"))
+        }
+    }
+}
+
+/// Real implementation of `graph.delete_note`: removes file + index; inbound
+/// links become tombstones (D1 — source bodies untouched, revivable).
+pub async fn handle_delete_note_impl(
+    req: JsonRpcRequest,
+    indexer: Arc<NoteIndexer<SqliteMemoryBackend>>,
+) -> JsonRpcResponse {
+    let params: GraphDeleteNoteParams = match req
+        .params
+        .as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+    {
+        Some(p) => p,
+        None => {
+            return JsonRpcResponse::error(
+                req.id,
+                INVALID_PARAMS,
+                "Missing required param: node_id".to_string(),
+            )
+        }
+    };
+    let agent_id = params
+        .agent_id
+        .as_deref()
+        .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+    let Some((category, title)) = params.node_id.split_once('/') else {
+        return JsonRpcResponse::error(
+            req.id,
+            INVALID_PARAMS,
+            format!("Invalid node_id (expected \"category/title\"): {}", params.node_id),
+        );
+    };
+    if category.contains("..")
+        || category.contains('\\')
+        || agent_id.contains("..")
+        || agent_id.contains('/')
+        || agent_id.contains('\\')
+    {
+        return JsonRpcResponse::error(
+            req.id,
+            INVALID_PARAMS,
+            "node_id / agent_id must not contain path traversal components".to_string(),
+        );
+    }
+    match indexer.delete_note(agent_id, category, title).await {
+        Ok(()) => JsonRpcResponse::success(
+            req.id,
+            serde_json::json!({ "node_id": params.node_id, "deleted": true }),
+        ),
+        Err(e) => {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("delete_note failed: {e}"))
         }
     }
 }
@@ -473,6 +634,17 @@ pub async fn handle_search_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonR
     match serde_json::to_value(response) {
         Ok(v) => JsonRpcResponse::success(req.id, v),
         Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("Serialize error: {e}")),
+    }
+}
+
+/// Order-independent key for an edge pair, so a real link `A->B` and a
+/// materialized similarity edge `B->A` are recognized as the same pair for
+/// dedup purposes.
+fn undirected_key(a: &str, b: &str) -> (String, String) {
+    if a <= b {
+        (a.to_string(), b.to_string())
+    } else {
+        (b.to_string(), a.to_string())
     }
 }
 
@@ -593,12 +765,17 @@ mod tests {
         // Seed: center="concept/Rust", hop-1="concept/Cargo", hop-2="concept/Clippy"
         // Rust → Cargo, Cargo → Clippy. Link targets must be full paths so the
         // BFS in get_neighbors (which matches to_note against from_note) traverses.
+        // Index leaf targets BEFORE the notes that link to them: the links
+        // resolver (tier 1, exact path) only marks a full-path wikilink
+        // `status = 'active'` when the target already exists in the index at
+        // write time, and `get_neighbors`'s edge list (used for hop_depth)
+        // only surfaces active rows.
         let rust = make_note("Rust", "concept", vec!["concept/Cargo"]);
         let cargo = make_note("Cargo", "concept", vec!["concept/Clippy"]);
         let clippy = make_note("Clippy", "concept", vec![]);
-        db.index_note(&rust, agent, "concept").await.unwrap();
-        db.index_note(&cargo, agent, "concept").await.unwrap();
         db.index_note(&clippy, agent, "concept").await.unwrap();
+        db.index_note(&cargo, agent, "concept").await.unwrap();
+        db.index_note(&rust, agent, "concept").await.unwrap();
 
         let center_id = "concept/Rust";
         let req = neighbors_request(center_id, 2, 50);
@@ -663,6 +840,7 @@ mod tests {
             to: "B".to_string(),
             label: None,
             kind: None,
+            confidence: None,
         }];
         assert_eq!(compute_hop_depth("A", "B", &edges), 1);
         assert_eq!(compute_hop_depth("B", "A", &edges), 1); // reverse edge
@@ -762,6 +940,45 @@ mod tests {
             !ids.iter().any(|id| id.contains("AlphaOnly")),
             "non-default agent's note must NOT appear when agent_id omitted: {ids:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn graph_query_carries_similarity_edges_and_insights() {
+        let db = make_db();
+        let agent = crate::routing::DEFAULT_AGENT_ID;
+        let a = make_note("A", "concept", vec![]);
+        let b = make_note("B", "concept", vec![]);
+        db.index_note(&a, agent, "concept").await.unwrap();
+        db.index_note(&b, agent, "concept").await.unwrap();
+        // Materialized artifacts (what GraphRecompute would write).
+        db.replace_graph_related(agent, &[("concept/A".into(), "concept/B".into(), 3.2)])
+            .await
+            .unwrap();
+        db.replace_graph_insights(
+            agent,
+            &[
+                ("bridge".into(), serde_json::json!(["concept/A"]).to_string()),
+                (
+                    "surprising".into(),
+                    serde_json::json!([{"from": "concept/A", "to": "concept/B", "score": 0.9}])
+                        .to_string(),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let resp = handle_query_impl(query_request(50, Some(agent)), db).await;
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+        let result: GraphQueryResponse =
+            serde_json::from_value(resp.result.unwrap()).unwrap();
+        assert!(
+            result.edges.iter().any(|e| e.kind.as_deref() == Some("related_similarity")),
+            "similarity edge must surface: {:?}",
+            result.edges
+        );
+        assert_eq!(result.bridge_nodes, vec!["concept/A"]);
+        assert_eq!(result.surprising_edges, vec![("concept/A".into(), "concept/B".into())]);
     }
 
     #[tokio::test]
@@ -918,6 +1135,22 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn node_detail_lists_outgoing_with_provenance() {
+        let db = make_db();
+        let agent = crate::routing::DEFAULT_AGENT_ID;
+        db.index_note(&make_note("t", "concept", vec![]), agent, "concept").await.unwrap();
+        db.index_note(&make_note("s", "concept", vec!["concept/t", "ghost"]), agent, "concept")
+            .await
+            .unwrap();
+        let resp = handle_node_detail_impl(node_detail_request("concept/s", Some(agent)), db).await;
+        let v = resp.result.unwrap();
+        let outgoing = v.get("outgoing").unwrap().as_array().unwrap();
+        assert_eq!(outgoing.len(), 2);
+        let ghost = outgoing.iter().find(|o| o["raw"] == "ghost").unwrap();
+        assert_eq!(ghost["status"], "dangling");
+    }
+
     fn search_request(query: &str, limit: usize, agent_id: Option<&str>) -> JsonRpcRequest {
         let mut params = serde_json::json!({ "query": query, "limit": limit });
         if let Some(id) = agent_id {
@@ -996,6 +1229,110 @@ mod tests {
         assert!(
             !names.iter().any(|n| n.contains("AlphaNote")),
             "non-default agent's hit must NOT appear: {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_note_moves_file_and_reindexes() {
+        let memory_dir = std::env::temp_dir().join(format!("rename_rpc_{}", Uuid::new_v4()));
+        let db = make_db();
+        let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db.clone()));
+        let agent = crate::routing::DEFAULT_AGENT_ID;
+        // Seed a real on-disk note through the indexer write path.
+        indexer
+            .write_note_raw(agent, "reference", "OldTitle",
+                "---\ncategory: reference\ntags: []\ncreated: \"2024-01-01\"\nupdated: \"2024-01-01\"\n---\n\n- fact\n")
+            .await
+            .unwrap();
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "graph.rename_note".into(),
+            params: Some(serde_json::json!({
+                "node_id": "reference/OldTitle", "new_title": "NewTitle", "agent_id": agent })),
+            id: Some(serde_json::json!(1)),
+        };
+        let resp = handle_rename_note_impl(req, indexer).await;
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+        assert!(memory_dir.join(agent).join("reference/NewTitle.md").exists());
+        assert!(!memory_dir.join(agent).join("reference/OldTitle.md").exists());
+        assert!(db.get_note_index("reference/NewTitle", agent).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn delete_note_removes_file_and_index() {
+        let memory_dir = std::env::temp_dir().join(format!("delete_rpc_{}", Uuid::new_v4()));
+        let db = make_db();
+        let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db.clone()));
+        let agent = crate::routing::DEFAULT_AGENT_ID;
+        indexer
+            .write_note_raw(agent, "plan", "Doomed",
+                "---\ncategory: plan\ntags: []\ncreated: \"2024-01-01\"\nupdated: \"2024-01-01\"\n---\n\n- x\n")
+            .await
+            .unwrap();
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "graph.delete_note".into(),
+            params: Some(serde_json::json!({ "node_id": "plan/Doomed", "agent_id": agent })),
+            id: Some(serde_json::json!(1)),
+        };
+        let resp = handle_delete_note_impl(req, indexer).await;
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+        assert!(!memory_dir.join(agent).join("plan/Doomed.md").exists());
+        assert!(db.get_note_index("plan/Doomed", agent).await.unwrap().is_none());
+    }
+
+    /// Traversal in the category segment of node_id (e.g. "../evil/Note")
+    /// must be rejected by the same guard as `update_note`'s, not silently
+    /// forwarded to `rename_note`. Asserts the specific error code + message
+    /// (not just `is_err`) so the test regresses if the guard is ever removed
+    /// or weakened rather than passing vacuously on an unrelated error.
+    #[tokio::test]
+    async fn rename_note_rejects_traversal_category() {
+        let memory_dir =
+            std::env::temp_dir().join(format!("rename_rpc_traversal_{}", Uuid::new_v4()));
+        let db = make_db();
+        let indexer = Arc::new(NoteIndexer::new(memory_dir, db));
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "graph.rename_note".into(),
+            params: Some(serde_json::json!({
+                "node_id": "../evil/Note", "new_title": "NewTitle"
+            })),
+            id: Some(serde_json::json!(1)),
+        };
+        let resp = handle_rename_note_impl(req, indexer).await;
+        let err = resp.error.expect("expected error for traversal category");
+        assert_eq!(err.code, INVALID_PARAMS);
+        assert!(
+            err.message.contains("path traversal"),
+            "expected traversal guard message, got: {}",
+            err.message
+        );
+    }
+
+    /// Same traversal guard, for `graph.delete_note`.
+    #[tokio::test]
+    async fn delete_note_rejects_traversal_category() {
+        let memory_dir =
+            std::env::temp_dir().join(format!("delete_rpc_traversal_{}", Uuid::new_v4()));
+        let db = make_db();
+        let indexer = Arc::new(NoteIndexer::new(memory_dir, db));
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "graph.delete_note".into(),
+            params: Some(serde_json::json!({ "node_id": "../evil/Note" })),
+            id: Some(serde_json::json!(1)),
+        };
+        let resp = handle_delete_note_impl(req, indexer).await;
+        let err = resp.error.expect("expected error for traversal category");
+        assert_eq!(err.code, INVALID_PARAMS);
+        assert!(
+            err.message.contains("path traversal"),
+            "expected traversal guard message, got: {}",
+            err.message
         );
     }
 }

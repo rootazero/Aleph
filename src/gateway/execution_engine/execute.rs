@@ -251,13 +251,21 @@ where
             .await;
 
         // Emit run accepted event
-        let _ = emitter
+        if let Err(e) = emitter
             .emit(StreamEvent::RunAccepted {
                 run_id: run_id.clone(),
                 session_key: request.session_key.to_key_string(),
                 accepted_at: chrono::Utc::now().to_rfc3339(),
             })
-            .await;
+            .await
+        {
+            tracing::warn!(
+                run_id = %run_id,
+                session_key = %request.session_key.to_key_string(),
+                error = %e,
+                "failed to emit RunAccepted stream event"
+            );
+        }
 
         // Log lifecycle event: agent started
         info!(
@@ -1134,14 +1142,22 @@ where
                 // unreachable). The typed `e` is still returned below for
                 // internal callers; only the channel presentation changes.
                 let receipt = super::failure_receipt::FailureReceipt::from_error(&e);
-                let _ = emitter
+                if let Err(emit_err) = emitter
                     .emit(StreamEvent::RunError {
                         run_id: run_id.clone(),
                         seq: final_seq,
                         error: receipt.message,
                         error_code: Some(receipt.code.to_string()),
                     })
-                    .await;
+                    .await
+                {
+                    tracing::warn!(
+                        run_id = %run_id,
+                        error_code = %receipt.code,
+                        error = %emit_err,
+                        "failed to emit RunError stream event"
+                    );
+                }
                 // Preserve the typed variant so downstream callers (cron / heartbeat
                 // executors) can dispatch on `ExecutionError::Timeout`,
                 // `Cancelled`, etc. Collapsing to `Failed(string)` here made the

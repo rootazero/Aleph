@@ -215,6 +215,36 @@ pub fn migrate_notes_links_confidence(conn: &Connection) -> Result<(), AlephErro
     Ok(())
 }
 
+/// Add the link-lifecycle columns to `notes_links` for existing databases:
+/// `resolved_by` (resolution-strategy provenance, NULL = legacy), `status`
+/// (`active | dangling | tombstone`), `label` (`[[target|label]]` display
+/// alias). One-time backfill: rows carrying the legacy dangling marker
+/// (`to_note == to_raw` with no '/') become `status = 'dangling'`.
+/// Safe to call multiple times (checks column existence first).
+pub fn migrate_notes_links_lifecycle(conn: &Connection) -> Result<(), AlephError> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(notes_links)")
+        .map_err(|e| AlephError::config(format!("PRAGMA table_info notes_links: {e}")))?;
+    let has_status = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| AlephError::config(format!("table_info query: {e}")))?
+        .any(|name| name.is_ok_and(|n| n == "status"));
+    drop(stmt);
+
+    if has_status {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "ALTER TABLE notes_links ADD COLUMN resolved_by TEXT; \
+         ALTER TABLE notes_links ADD COLUMN status TEXT NOT NULL DEFAULT 'active'; \
+         ALTER TABLE notes_links ADD COLUMN label TEXT; \
+         UPDATE notes_links SET status = 'dangling' \
+          WHERE to_note = to_raw AND instr(to_raw, '/') = 0;",
+    )
+    .map_err(|e| AlephError::config(format!("migrate notes_links lifecycle: {e}")))?;
+    Ok(())
+}
+
 /// Unify legacy `default`-agent notes rows into `main`, and purge
 /// `test-memory-validation` residue. Idempotent: re-running has no effect
 /// once `default`/`test-memory-validation` rows are gone.

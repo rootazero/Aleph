@@ -5,15 +5,21 @@
 
 use super::prompt_mode::PromptMode;
 
-/// Rough characters-per-token ratio for English-ish text, matching the
-/// `chars / 4` heuristic already used elsewhere in the codebase (e.g. team
-/// transcript budgeting in `teams/broadcast/transcript.rs`). Used only for
-/// human/model-facing *reporting* — truncation itself stays exact and
-/// character-based, never token-estimated.
+/// Rough characters-per-token ratio for English-ish text. **Legacy
+/// reporting-only approximation**: new code that has the source text in hand
+/// must use `context::budget::pressure::estimate_tokens_smart` instead (the
+/// crate's single-source prose ratio, `DEFAULT_PROSE_RATIO`). This constant no
+/// longer participates in any budget math — [`window_char_budget`] derives
+/// its tokens→chars conversion from `pressure::DEFAULT_PROSE_RATIO`. It
+/// survives only because [`estimate_tokens`]'s caller here
+/// ([`render_truncation_notice`]) has just a character count, not the
+/// original text, so content-aware estimation isn't available to it.
 pub const CHARS_PER_TOKEN_ESTIMATE: usize = 4;
 
 /// Estimate a token count from a character count via
-/// [`CHARS_PER_TOKEN_ESTIMATE`]. A reporting aid, not a hard accounting tool.
+/// [`CHARS_PER_TOKEN_ESTIMATE`]. A reporting aid, not a hard accounting tool —
+/// used only where the caller has a char count and no source text (see the
+/// constant's doc comment).
 #[must_use]
 pub const fn estimate_tokens(chars: usize) -> usize {
     chars / CHARS_PER_TOKEN_ESTIMATE
@@ -21,10 +27,11 @@ pub const fn estimate_tokens(chars: usize) -> usize {
 
 /// Fraction of the model's usable context window allotted to the assembled
 /// system prompt before clamping. `0.10` keeps a 200k-token window at the
-/// historical 80k-char ceiling (`200_000 * 0.10 * 4 = 80_000`) while letting a
-/// 1M-token window scale up proportionally instead of staying artificially
-/// capped. Mirrors the history-side model-awareness in
-/// `orchestrator::deps_builder` (feature 2.2) on the prompt side.
+/// historical 80k-char ceiling (`200_000 * 0.10 * 3.5 = 70_000`, floor-clamped
+/// up to `DEFAULT_PROMPT_CHARS`) while letting a 1M-token window scale up
+/// proportionally instead of staying artificially capped. Mirrors the
+/// history-side model-awareness in `orchestrator::deps_builder` (feature 2.2)
+/// on the prompt side.
 pub const PROMPT_WINDOW_FRACTION: f64 = 0.10;
 
 /// Legacy fixed system-prompt character cap. Now doubles as the *floor* for the
@@ -38,7 +45,8 @@ pub const DEFAULT_PROMPT_CHARS: usize = 80_000;
 pub const MAX_PROMPT_CHARS: usize = 480_000;
 
 /// Scale a character budget to a model context window: take `fraction` of the
-/// window (in tokens), widen tokens→chars via [`CHARS_PER_TOKEN_ESTIMATE`],
+/// window (in tokens), widen tokens→chars via the crate-wide prose ratio
+/// ([`pressure::DEFAULT_PROSE_RATIO`](crate::context::budget::pressure::DEFAULT_PROSE_RATIO)),
 /// then clamp into `[floor, ceil]`. Single source of the "size a char cap to
 /// the window" math shared by the system-prompt budget
 /// ([`TokenBudget::from_context_window`]) and the identity / extra-file caps,
@@ -49,10 +57,12 @@ pub const MAX_PROMPT_CHARS: usize = 480_000;
 pub fn window_char_budget(window_tokens: u64, fraction: f64, floor: usize, ceil: usize) -> usize {
     // Lossy cast is intentional: a window beyond usize::MAX is implausible and
     // the subsequent clamp keeps the result bounded regardless.
-    let scaled = (window_tokens as f64 * fraction) as usize;
-    scaled
-        .saturating_mul(CHARS_PER_TOKEN_ESTIMATE)
-        .clamp(floor, ceil)
+    // tokens → chars via the crate-wide prose ratio (single source in
+    // `context::budget::pressure`), replacing the drifted local `/4` constant.
+    let scaled_chars = window_tokens as f64
+        * fraction
+        * crate::context::budget::pressure::DEFAULT_PROSE_RATIO;
+    (scaled_chars as usize).clamp(floor, ceil)
 }
 
 /// Budget configuration for system prompt assembly.
@@ -351,8 +361,9 @@ mod tests {
 
     #[test]
     fn window_budget_matches_legacy_at_200k() {
-        // 200k window * 0.10 * 4 == 80_000 == the historical fixed cap, so the
-        // common mid-window model is byte-identical to the old behaviour.
+        // 200k window * 0.10 * 3.5 == 70_000, floor-clamped up to the
+        // historical fixed cap (80_000), so the common mid-window model is
+        // byte-identical to the old behaviour.
         assert_eq!(
             TokenBudget::from_context_window(200_000).max_total_chars,
             DEFAULT_PROMPT_CHARS
@@ -364,7 +375,7 @@ mod tests {
         // 1M window scales up proportionally (968k usable would too).
         assert_eq!(
             TokenBudget::from_context_window(1_000_000).max_total_chars,
-            400_000
+            350_000 // 100k tokens × 3.5 chars/token (single-source prose ratio)
         );
     }
 
@@ -394,7 +405,8 @@ mod tests {
     fn window_char_budget_clamps_both_ends() {
         assert_eq!(window_char_budget(1_000, 0.10, 5_000, 50_000), 5_000);
         assert_eq!(window_char_budget(1_000_000, 0.10, 5_000, 50_000), 50_000);
-        assert_eq!(window_char_budget(50_000, 0.10, 5_000, 50_000), 20_000);
+        // Unclamped middle case: 50_000 * 0.10 * 3.5 (single-source prose ratio).
+        assert_eq!(window_char_budget(50_000, 0.10, 5_000, 50_000), 17_500);
     }
 
     #[test]

@@ -46,71 +46,6 @@ impl crate::providers::DeltaSink for CallbackSink<'_> {
     }
 }
 
-/// Ephemeral nudge for the grace turn fired by
-/// `LoopDirective::StopDiminishing` — a single tool-less LLM call framed
-/// around lack of measurable progress. Tools are also stripped at the
-/// request layer (no `.with_tools(...)`), so the model cannot loop further.
-const GRACE_NUDGE_DIMINISHING: &str = "You have not been making measurable progress on this task. \
-     Stop calling tools and summarize what you have found so far for the user.";
-
-/// Ephemeral nudge for the grace turn fired when the `max_iterations`
-/// cap trips — same shape as the other nudges but framed around the
-/// iteration limit. Without this turn a runaway that ends on an
-/// unresolved `tool_use` leaves the user with no terminal text.
-const GRACE_NUDGE_MAX_ITERATIONS: &str =
-    "You have reached the maximum number of tool-calling iterations and \
-     cannot call any more tools. Respond now with a final summary for the \
-     user based on what you have accomplished so far.";
-
-/// Ephemeral nudge for the grace turn fired when the verifier-veto safety
-/// cap trips — the model kept trying to finish with required steps still
-/// incomplete. The remaining steps are already in context (the
-/// `[verifier veto] …` messages list them), so this only tells the model to
-/// stop and hand control back to the user. The model writes the actual
-/// message (R7 — no hardcoded user-facing template).
-const GRACE_NUDGE_VERIFIER_VETO: &str =
-    "You have repeatedly tried to finish while required steps from your \
-     execution list remain incomplete, and the safety cap has now stopped \
-     the loop. Do NOT call any more tools. Respond now with a clear message \
-     for the user: which steps remain unfinished, what is blocking you from \
-     completing them, and what decision or input you need from the user to \
-     proceed.";
-
-/// Ephemeral nudge for the grace turn fired when the consecutive-failure
-/// safety cap trips. The recurring error is already in context (the
-/// `ToolError` events), so this only tells the model to stop and surface the
-/// blocker to the user.
-const GRACE_NUDGE_FAILURE_CAP: &str =
-    "Your recent turns have failed repeatedly and the safety cap has now \
-     stopped the loop. Do NOT call any more tools. Respond now with a clear \
-     message for the user: what you were attempting, the specific error or \
-     obstacle that keeps recurring, and what decision or input you need from \
-     the user to proceed.";
-
-/// Ephemeral nudge for the grace turn fired when the `ToolLoopVerifier` halts
-/// an unproductive tool-call loop. The loop ran many tool calls without ever
-/// converging on a deliverable (the original 116-step failure mode), so this
-/// turns the dead halt into a salvage: use everything already gathered to
-/// produce the best possible final answer instead of leaving the user with
-/// only a "stop hook" apology. The model writes the actual content (R7 — no
-/// hardcoded user-facing template).
-const GRACE_NUDGE_TOOL_LOOP_HALT: &str =
-    "The run was stopped to end an unproductive tool-call loop. Do NOT call any \
-     more tools. Using everything you have ALREADY gathered, produce your best \
-     final deliverable for the user now. If a specific piece of data is \
-     genuinely missing, state that gap plainly and deliver the rest — do not \
-     let one missing item block the whole response.";
-
-/// Ephemeral nudge for the grace turn fired when a per-turn or stall timeout
-/// trips — likely a slow or stuck step. The model gets ONE tool-less, short-
-/// budgeted chance to deliver a partial result instead of the run ending with
-/// no terminal text. The model writes the actual content (R7 — no template).
-const GRACE_NUDGE_TIMEOUT: &str =
-    "The time budget for this step was exhausted (a step may be slow or stuck) \
-     and the run is wrapping up. Do NOT call any more tools. Respond now with a \
-     short summary for the user: what you accomplished, what remains, and any \
-     partial result you can deliver right now.";
-
 /// Maximum re-issues of the LLM call when the provider returns a response
 /// with no text, no `tool_calls` and no thinking. A small bound — an empty
 /// response is usually transient; persistent emptiness is a broken
@@ -178,12 +113,12 @@ pub(crate) enum GraceReason {
 impl GraceReason {
     const fn nudge(self) -> &'static str {
         match self {
-            Self::Diminishing => GRACE_NUDGE_DIMINISHING,
-            Self::MaxIterations => GRACE_NUDGE_MAX_ITERATIONS,
-            Self::VerifierVeto => GRACE_NUDGE_VERIFIER_VETO,
-            Self::ConsecutiveFailureCap => GRACE_NUDGE_FAILURE_CAP,
-            Self::ToolLoopHalt => GRACE_NUDGE_TOOL_LOOP_HALT,
-            Self::Timeout => GRACE_NUDGE_TIMEOUT,
+            Self::Diminishing => crate::thinker::nudges::GRACE_NUDGE_DIMINISHING,
+            Self::MaxIterations => crate::thinker::nudges::GRACE_NUDGE_MAX_ITERATIONS,
+            Self::VerifierVeto => crate::thinker::nudges::GRACE_NUDGE_VERIFIER_VETO,
+            Self::ConsecutiveFailureCap => crate::thinker::nudges::GRACE_NUDGE_FAILURE_CAP,
+            Self::ToolLoopHalt => crate::thinker::nudges::GRACE_NUDGE_TOOL_LOOP_HALT,
+            Self::Timeout => crate::thinker::nudges::GRACE_NUDGE_TIMEOUT,
         }
     }
 }
@@ -542,130 +477,35 @@ impl AgentHarness {
                 (None, 0usize)
             };
 
-        // 2c. Compact when directive calls for it and a compactor is wired.
-        if matches!(budget_directive, Some(LoopDirective::CompactAndContinue)) {
-            if let Some(compactor) = self.deps.context_compactor.as_ref() {
-                // `fresh_tail = 0` lets the compactor fall back to its own
-                // config default (matches Task 6 spec). The session id enables
-                // the compactor's zero-API-cost reuse of hierarchical session
-                // summaries when a memory backend is wired.
-                let session_key_str = session_id.to_key_string();
-                match compactor
-                    .compact(&mut messages, 0, Some(session_key_str.as_str()))
-                    .await
-                {
-                    Ok(_) => {
-                        // Re-arm the circuit breaker only when this compaction
-                        // actually reduced pressure. An ineffective compaction
-                        // leaves the breaker counting, so a thrashing run still
-                        // escalates to `FinalReply` (hermes anti-thrash).
-                        if let Some(budget) = self.deps.context_budget.as_ref() {
-                            let system_prompt = self.deps.system_prompt.as_deref().unwrap_or("");
-                            budget.lock().await.note_compaction_effect(
-                                &messages,
-                                system_prompt,
-                                budget_tool_tokens,
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            ?session_id,
-                            ?e,
-                            "context compactor failed; continuing with uncompacted messages",
-                        );
-                    }
-                }
-            }
-        }
-
-        // 2c-fit. `CompactToFit` directive — critical pressure (or a split cap
-        // reached). Compact aggressively down to the model's window, then FALL
-        // THROUGH to the normal LLM call. A run must never end just because
-        // context filled (never-break guarantee). R10-safe: mechanical dispatch
-        // to the external fit helper; no policy, no completion judgement.
-        if matches!(budget_directive, Some(LoopDirective::CompactToFit)) {
-            self.compact_to_fit_in_place(
-                session_id,
-                &mut messages,
-                system_prompt,
-                budget_tool_tokens,
-                true,
-            )
-            .await;
-            // no early return — control falls through to the LLM call below.
-        }
-
-        // 2c-split. `SplitSession` directive — attempt compaction-driven session
-        // split. On success, return `TurnState::Continue` with the child session
-        // id so `run()` can rebind `current_session`. On failure or when the
-        // registrar/compactor is not wired, fall back to compact-to-fit and
-        // continue (never-break). R10-safe: mechanical dispatch to
-        // `perform_session_split` (lives outside the harness); no intent
-        // classification, no new heuristic.
-        if matches!(budget_directive, Some(LoopDirective::SplitSession)) {
-            let split_child = match (
-                self.deps.context_compactor.as_ref(),
+        // 2c. Apply the compaction directive (CompactAndContinue / CompactToFit /
+        // SplitSession) via the context layer's single dispatch entry. Mechanical
+        // delegation (R10): all compaction policy lives in `context::compact`.
+        if let Some(directive) = budget_directive.as_ref() {
+            match crate::context::compact::directive::apply_budget_directive(
+                directive,
+                self.deps.context_compactor.as_deref(),
+                self.deps.context_budget.as_ref(),
                 self.deps.session_epoch_registrar.as_ref(),
-            ) {
-                (Some(compactor), Some(registrar)) => {
-                    match crate::context::compact::session_split::perform_session_split(
-                        self.deps.session.as_ref(),
-                        registrar.as_ref(),
-                        compactor.as_ref(),
-                        session_id,
-                        &events,
-                        tail_start,
-                    )
-                    .await
-                    {
-                        Ok(outcome) => {
-                            if let Some(budget) = self.deps.context_budget.as_ref() {
-                                budget.lock().await.record_split();
-                            }
-                            tracing::info!(
-                                ?session_id,
-                                child = ?outcome.child_session_id,
-                                "session split: continuing run in child session",
-                            );
-                            Some(outcome.child_session_id)
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                ?session_id,
-                                %e,
-                                "session split failed; falling back to compact-to-fit",
-                            );
-                            None
-                        }
-                    }
-                }
-                _ => None, // compactor or registrar not wired — fall back to compact-to-fit
-            };
-
-            if let Some(child) = split_child {
-                // Continue the run in the child; run() rebinds current_session.
-                return Ok(TurnStep {
-                    state: TurnState::Continue,
-                    executed: 0,
-                    vetoed: false,
-                    split_child: Some(child),
-                });
-            }
-            // Fail-soft: registrar/compactor unavailable or the split failed.
-            // Rather than hard-stop (the old ContextBudgetExhausted + grace),
-            // compact to fit and FALL THROUGH to the normal LLM call — the
-            // never-break guarantee. R10-safe: same mechanical fit helper as the
-            // `CompactToFit` arm; no policy, no error-recovery strategy choice.
-            self.compact_to_fit_in_place(
+                self.deps.session.as_ref(),
                 session_id,
                 &mut messages,
+                &events,
+                tail_start,
                 system_prompt,
                 budget_tool_tokens,
-                true,
             )
-            .await;
-            // no early return — control falls through to the LLM call below.
+            .await
+            {
+                crate::context::compact::directive::DirectiveOutcome::SplitTo(child) => {
+                    return Ok(TurnStep {
+                        state: TurnState::Continue,
+                        executed: 0,
+                        vetoed: false,
+                        split_child: Some(child),
+                    });
+                }
+                crate::context::compact::directive::DirectiveOutcome::FellThrough => {}
+            }
         }
 
         // 2d-G1. Last-step soft hint (opencode parity). When the iteration
@@ -1791,8 +1631,10 @@ impl AgentHarness {
     /// return so the caller can fall through to the normal LLM call. Shared by the
     /// `CompactToFit` directive and the `SplitSession` fail-soft path — both must
     /// reduce pressure and continue, never hard-stop (the never-break guarantee).
-    /// R10-safe: mechanical delegation to `context::compact::fit::compact_to_fit`
-    /// (lives outside the harness); no policy, no error-recovery strategy choice.
+    /// R10-safe: mechanical delegation to
+    /// `crate::context::compact::directive::compact_to_fit_and_note` (which
+    /// itself calls `context::compact::fit::compact_to_fit`; lives outside
+    /// the harness); no policy, no error-recovery strategy choice.
     async fn compact_to_fit_in_place(
         &self,
         session_id: &SessionId,
@@ -1801,37 +1643,16 @@ impl AgentHarness {
         budget_tool_tokens: usize,
         use_llm_compactor: bool,
     ) {
-        let Some(budget) = self.deps.context_budget.as_ref() else {
-            return;
-        };
-        let mut guard = budget.lock().await;
-        let session_key_str = session_id.to_key_string();
-        // Reactive fallback passes `false`: the LLM summariser was already tried
-        // on the main path (and the reactive rescue cap governs it), so re-invoking
-        // it here wastes a call and softens the cap. Proactive callers pass `true`
-        // for a full compact (LLM summary → floor).
-        let compactor = if use_llm_compactor {
-            self.deps.context_compactor.as_deref()
-        } else {
-            None
-        };
-        crate::context::compact::fit::compact_to_fit(
-            compactor,
-            &guard,
+        crate::context::compact::directive::compact_to_fit_and_note(
+            self.deps.context_budget.as_ref(),
+            self.deps.context_compactor.as_deref(),
+            session_id,
             messages,
             system_prompt,
             budget_tool_tokens,
-            Some(session_key_str.as_str()),
+            use_llm_compactor,
         )
         .await;
-        // Refresh `last_pressure` to the fitted prompt so a later
-        // `observe_actual_usage` calibration divides the real (post-fit)
-        // prompt_tokens by the post-fit estimate — not the stale pre-fit snapshot
-        // `before_turn` took. Mirrors the `CompactAndContinue` path's
-        // `note_compaction_effect` call and the reactive path's 3a refresh;
-        // omitting it injects a spurious shrink into the tokenizer-ratio EWMA that
-        // degrades every later compaction decision this run.
-        guard.note_compaction_effect(messages.as_slice(), system_prompt, budget_tool_tokens);
     }
 
     /// Fire one tool-less LLM call so the user gets a terminal text
@@ -2184,31 +2005,49 @@ mod tests {
 
     #[test]
     fn grace_reason_diminishing_uses_diminishing_nudge() {
-        assert_eq!(GraceReason::Diminishing.nudge(), GRACE_NUDGE_DIMINISHING);
+        assert_eq!(
+            GraceReason::Diminishing.nudge(),
+            crate::thinker::nudges::GRACE_NUDGE_DIMINISHING
+        );
     }
 
     #[test]
     fn verifier_veto_nudge_is_distinct_and_set() {
-        assert_eq!(GraceReason::VerifierVeto.nudge(), GRACE_NUDGE_VERIFIER_VETO);
-        assert_ne!(GRACE_NUDGE_VERIFIER_VETO, GRACE_NUDGE_MAX_ITERATIONS);
-        assert!(GRACE_NUDGE_VERIFIER_VETO.contains("user"));
+        assert_eq!(
+            GraceReason::VerifierVeto.nudge(),
+            crate::thinker::nudges::GRACE_NUDGE_VERIFIER_VETO
+        );
+        assert_ne!(
+            crate::thinker::nudges::GRACE_NUDGE_VERIFIER_VETO,
+            crate::thinker::nudges::GRACE_NUDGE_MAX_ITERATIONS
+        );
+        assert!(crate::thinker::nudges::GRACE_NUDGE_VERIFIER_VETO.contains("user"));
     }
 
     #[test]
     fn consecutive_failure_nudge_is_distinct_and_set() {
         assert_eq!(
             GraceReason::ConsecutiveFailureCap.nudge(),
-            GRACE_NUDGE_FAILURE_CAP
+            crate::thinker::nudges::GRACE_NUDGE_FAILURE_CAP
         );
-        assert_ne!(GRACE_NUDGE_FAILURE_CAP, GRACE_NUDGE_VERIFIER_VETO);
-        assert!(GRACE_NUDGE_FAILURE_CAP.contains("user"));
+        assert_ne!(
+            crate::thinker::nudges::GRACE_NUDGE_FAILURE_CAP,
+            crate::thinker::nudges::GRACE_NUDGE_VERIFIER_VETO
+        );
+        assert!(crate::thinker::nudges::GRACE_NUDGE_FAILURE_CAP.contains("user"));
     }
 
     #[test]
     fn grace_nudge_timeout_is_distinct_and_addresses_user() {
-        assert_eq!(GraceReason::Timeout.nudge(), GRACE_NUDGE_TIMEOUT);
-        assert_ne!(GRACE_NUDGE_TIMEOUT, GRACE_NUDGE_MAX_ITERATIONS);
-        assert!(GRACE_NUDGE_TIMEOUT.contains("summar"));
+        assert_eq!(
+            GraceReason::Timeout.nudge(),
+            crate::thinker::nudges::GRACE_NUDGE_TIMEOUT
+        );
+        assert_ne!(
+            crate::thinker::nudges::GRACE_NUDGE_TIMEOUT,
+            crate::thinker::nudges::GRACE_NUDGE_MAX_ITERATIONS
+        );
+        assert!(crate::thinker::nudges::GRACE_NUDGE_TIMEOUT.contains("summar"));
     }
 
     /// `CallbackSink` must forward text deltas to `on_delta`, thinking deltas

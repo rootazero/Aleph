@@ -715,12 +715,13 @@ impl HandlerRegistry {
             )
         });
 
-        // Graph visualization handlers (backed by NoteStore — Knowledge Notes are the source of truth)
-        registry.register("graph.query", graph::handle_query);
-        registry.register("graph.neighbors", graph::handle_neighbors);
-        registry.register("graph.node_detail", graph::handle_node_detail);
-        registry.register("graph.search", graph::handle_search);
-        registry.register("graph.update_note", graph::handle_update_note);
+        // Graph visualization handlers (backed by NoteStore — Knowledge Notes are
+        // the source of truth) are wired at Gateway boot in
+        // `register_graph_handlers` (agent_init), which needs the live
+        // `MemoryBackend` / `NoteIndexer`. No placeholder is registered here: an
+        // unwired registry correctly reports METHOD_NOT_FOUND rather than a
+        // misleading stub error (see B7 cleanup — the previous placeholders were
+        // dead code, always overridden before any request could reach them).
 
         // Tools visibility handlers — phase-1 placeholders; agent_init.rs overrides at boot.
         registry.register("tools.catalog", |req| async move {

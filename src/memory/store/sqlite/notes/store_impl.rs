@@ -13,15 +13,19 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::error::AlephError;
 use crate::memory::notes::graph::{GraphEdge, GraphNode, GraphSnapshot};
-use crate::memory::notes::store::{NoteIndexEntry, NoteStore, ReviewQueueRow};
-use crate::memory::notes::{FactProvenance, KnowledgeNote, ProvenanceOrigin};
+use crate::memory::notes::store::{
+    GraphEdgeRow, NoteIndexEntry, NoteStore, OutgoingLinkRow, ReviewQueueRow,
+};
+use crate::memory::notes::{
+    extract_wikilinks_with_alias, FactProvenance, KnowledgeNote, ProvenanceOrigin,
+};
 
 use super::super::vec;
 use super::super::SqliteMemoryBackend;
 
 use super::helpers::{
     body_text_sha256, collect_edges_between, load_note_content_from_disk,
-    provenance_origin_from_str, provenance_origin_to_str, resolve_paths_by_alias, row_to_entry,
+    provenance_origin_from_str, provenance_origin_to_str, row_to_entry,
 };
 
 macro_rules! lock_conn {
@@ -76,69 +80,81 @@ impl NoteStore for SqliteMemoryBackend {
         )
         .map_err(|e| AlephError::config(format!("index_note insert: {e}")))?;
 
-        // Desired outgoing edges: to_note -> (to_raw, relation).
-        // Body wikilinks contribute relation = None; frontmatter `relations:`
-        // contribute relation = Some(type). When both target the same to_note,
-        // the typed relation wins. Keyed by to_note to match the table's
-        // UNIQUE(agent_id, from_note, to_note).
-        let resolve_target = |raw_target: &str| -> Result<String, AlephError> {
-            if raw_target.contains('/') {
-                return Ok(raw_target.to_string());
-            }
-            let mut stmt = conn
-                .prepare(
-                    "SELECT path FROM notes_index WHERE agent_id = ?1 AND filename = ?2 LIMIT 2",
-                )
-                .map_err(|e| AlephError::config(format!("resolve filename prep: {e}")))?;
-            let paths: Vec<String> = stmt
-                .query_map(params![agent_id, raw_target], |r| r.get::<_, String>(0))
-                .map_err(|e| AlephError::config(format!("resolve filename query: {e}")))?
-                .filter_map(|r| r.ok())
-                .collect();
-            if paths.len() == 1 {
-                return Ok(paths[0].clone());
-            }
-            // Fallback: resolve via frontmatter `aliases` only when no filename
-            // matched (a real filename always wins; an ambiguous filename match
-            // stays raw). Lets `[[Bob]]` link to the "Bob Smith" note aliased
-            // "Bob" instead of dangling.
-            if paths.is_empty() {
-                let by_alias = resolve_paths_by_alias(&conn, agent_id, raw_target)
-                    .map_err(|e| AlephError::config(format!("resolve alias query: {e}")))?;
-                if by_alias.len() == 1 {
-                    return Ok(by_alias[0].clone());
-                }
-            }
-            Ok(raw_target.to_string())
-        };
+        use crate::memory::notes::links::{self, LinkStatus};
 
-        // to_note -> (to_raw, relation, confidence)
-        let mut desired: HashMap<String, (String, Option<String>, f32)> = HashMap::new();
+        let resolve_ctx = super::helpers::build_resolve_context(&conn, agent_id)
+            .map_err(|e| AlephError::config(format!("index_note resolve ctx: {e}")))?;
+
+        // Body labels: raw target → display label from `[[target|label]]`.
+        let labels: HashMap<String, String> = note
+            .body
+            .as_deref()
+            .map(|b| {
+                extract_wikilinks_with_alias(b)
+                    .into_iter()
+                    .filter_map(|(t, l)| l.map(|l| (t, l)))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        /// Desired row value per to_note key.
+        struct DesiredEdge {
+            to_raw: String,
+            relation: Option<String>,
+            confidence: f32,
+            resolved_by: Option<&'static str>,
+            status: &'static str,
+            label: Option<String>,
+        }
+
+        // to_note -> DesiredEdge. Body wikilinks first; typed relations
+        // override on the same resolved target (unchanged precedence).
+        let mut desired: HashMap<String, DesiredEdge> = HashMap::new();
         for raw_target in &note.links {
-            let resolved = resolve_target(raw_target)?;
-            desired
-                .entry(resolved)
-                .or_insert_with(|| (raw_target.clone(), None, 1.0));
+            let r = links::resolve(raw_target, &resolve_ctx);
+            let (to_note, status) = match &r.target {
+                Some(t) => (t.clone(), LinkStatus::Active.as_str()),
+                None => (raw_target.clone(), LinkStatus::Dangling.as_str()),
+            };
+            desired.entry(to_note).or_insert_with(|| DesiredEdge {
+                to_raw: raw_target.clone(),
+                relation: None,
+                confidence: r.confidence,
+                resolved_by: r.resolved_by.map(|s| s.as_str()),
+                status,
+                label: labels.get(raw_target).cloned(),
+            });
         }
         for rel in &note.relations {
-            let resolved = resolve_target(&rel.to)?;
-            // Typed relation overrides a plain wikilink to the same target.
+            let r = links::resolve(&rel.to, &resolve_ctx);
+            let (to_note, status) = match &r.target {
+                Some(t) => (t.clone(), LinkStatus::Active.as_str()),
+                None => (rel.to.clone(), LinkStatus::Dangling.as_str()),
+            };
+            // Typed relation overrides a plain wikilink to the same target;
+            // its confidence is the LLM/tool judgement, not the resolver tier.
             desired.insert(
-                resolved,
-                (
-                    rel.to.clone(),
-                    Some(rel.rel_type.clone()),
-                    rel.confidence.clamp(0.0, 1.0),
-                ),
+                to_note,
+                DesiredEdge {
+                    to_raw: rel.to.clone(),
+                    relation: Some(rel.rel_type.clone()),
+                    confidence: rel.confidence.clamp(0.0, 1.0),
+                    resolved_by: r.resolved_by.map(|s| s.as_str()),
+                    status,
+                    label: None,
+                },
             );
         }
 
-        // Existing edges: to_note -> (to_raw, relation, confidence).
-        let existing: HashMap<String, (String, Option<String>, f32)> = {
+        // Existing edges: to_note -> (to_raw, relation, confidence, resolved_by, status, label).
+        let existing: HashMap<
+            String,
+            (String, Option<String>, f32, Option<String>, String, Option<String>),
+        > = {
             let mut stmt = conn
                 .prepare(
-                    "SELECT to_note, to_raw, relation, confidence FROM notes_links \
-                     WHERE agent_id = ?1 AND from_note = ?2",
+                    "SELECT to_note, to_raw, relation, confidence, resolved_by, status, label \
+                     FROM notes_links WHERE agent_id = ?1 AND from_note = ?2",
                 )
                 .map_err(|e| AlephError::config(format!("index_note links scan prep: {e}")))?;
             let rows = stmt
@@ -148,11 +164,16 @@ impl NoteStore for SqliteMemoryBackend {
                         r.get::<_, String>(1)?,
                         r.get::<_, Option<String>>(2)?,
                         r.get::<_, f32>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                        r.get::<_, String>(5)?,
+                        r.get::<_, Option<String>>(6)?,
                     ))
                 })
                 .map_err(|e| AlephError::config(format!("index_note links scan: {e}")))?;
             rows.filter_map(|r| r.ok())
-                .map(|(to_note, to_raw, relation, conf)| (to_note, (to_raw, relation, conf)))
+                .map(|(to_note, to_raw, relation, conf, resolved_by, status, label)| {
+                    (to_note, (to_raw, relation, conf, resolved_by, status, label))
+                })
                 .collect()
         };
 
@@ -169,20 +190,32 @@ impl NoteStore for SqliteMemoryBackend {
         }
 
         // UPSERT new or changed targets; skip unchanged rows (no write storm).
-        for (to_note, (to_raw, relation, confidence)) in &desired {
-            let unchanged = existing.get(to_note).is_some_and(|(er, erel, econf)| {
-                er == to_raw && erel == relation && (econf - confidence).abs() < f32::EPSILON
-            });
+        for (to_note, d) in &desired {
+            let unchanged = existing.get(to_note).is_some_and(
+                |(er, erel, econf, eresolved, estatus, elabel)| {
+                    er == &d.to_raw
+                        && erel == &d.relation
+                        && (econf - d.confidence).abs() < f32::EPSILON
+                        && eresolved.as_deref() == d.resolved_by
+                        && estatus.as_str() == d.status
+                        && elabel.as_deref() == d.label.as_deref()
+                },
+            );
             if unchanged {
                 continue;
             }
             conn.execute(
-                "INSERT INTO notes_links (agent_id, from_note, to_note, to_raw, relation, confidence) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                "INSERT INTO notes_links \
+                   (agent_id, from_note, to_note, to_raw, relation, confidence, resolved_by, status, label) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
                  ON CONFLICT(agent_id, from_note, to_note) \
                  DO UPDATE SET to_raw = excluded.to_raw, relation = excluded.relation, \
-                               confidence = excluded.confidence",
-                params![agent_id, path, to_note, to_raw, relation, confidence],
+                               confidence = excluded.confidence, resolved_by = excluded.resolved_by, \
+                               status = excluded.status, label = excluded.label",
+                params![
+                    agent_id, path, to_note, d.to_raw, d.relation, d.confidence, d.resolved_by,
+                    d.status, d.label
+                ],
             )
             .map_err(|e| AlephError::config(format!("index_note links upsert: {e}")))?;
         }
@@ -309,10 +342,19 @@ impl NoteStore for SqliteMemoryBackend {
         .map_err(|e| AlephError::config(format!("remove_note_index index: {e}")))?;
 
         tx.execute(
-            "DELETE FROM notes_links WHERE (from_note = ?1 OR to_note = ?1) AND agent_id = ?2",
+            "DELETE FROM notes_links WHERE from_note = ?1 AND agent_id = ?2",
             params![path, agent_id],
         )
-        .map_err(|e| AlephError::config(format!("remove_note_index links: {e}")))?;
+        .map_err(|e| AlephError::config(format!("remove_note_index outgoing links: {e}")))?;
+
+        // D1 tombstone semantics: inbound rows are marked, never destroyed —
+        // the linking note's body keeps its [[link]] text and the row revives
+        // via backfill_inbound_links if a same-name note is recreated.
+        tx.execute(
+            "UPDATE notes_links SET status = 'tombstone' WHERE to_note = ?1 AND agent_id = ?2",
+            params![path, agent_id],
+        )
+        .map_err(|e| AlephError::config(format!("remove_note_index tombstone inbound: {e}")))?;
 
         tx.execute(
             "DELETE FROM notes_fts WHERE path = ?1 AND agent_id = ?2",
@@ -543,8 +585,8 @@ impl NoteStore for SqliteMemoryBackend {
     ) -> Result<(), AlephError> {
         let conn = lock_conn!(self)?;
         conn.execute(
-            "INSERT INTO notes_links (agent_id, from_note, to_note, to_raw, relation) \
-             VALUES (?1, ?2, ?3, ?3, ?4) \
+            "INSERT INTO notes_links (agent_id, from_note, to_note, to_raw, relation, status) \
+             VALUES (?1, ?2, ?3, ?3, ?4, 'active') \
              ON CONFLICT(agent_id, from_note, to_note) \
              DO UPDATE SET relation = excluded.relation",
             params![agent_id, from_note, to_note, relation],
@@ -637,7 +679,7 @@ impl NoteStore for SqliteMemoryBackend {
         &self,
         agent_id: &str,
         limit: usize,
-    ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String, Option<String>)>), AlephError> {
+    ) -> Result<(Vec<NoteIndexEntry>, Vec<GraphEdgeRow>), AlephError> {
         let conn = lock_conn!(self)?;
 
         // Top notes by link_count (outgoing) + recency
@@ -754,10 +796,47 @@ impl NoteStore for SqliteMemoryBackend {
         // untyped `(from, to)` shape; only graph.query surfaces edge kind).
         let edges = collect_edges_between(&conn, &visited, agent_id)?
             .into_iter()
-            .map(|(f, t, _)| (f, t))
+            .map(|e| (e.from, e.to))
             .collect();
 
         Ok((entries, edges))
+    }
+
+    async fn get_outgoing_link_rows(
+        &self,
+        path: &str,
+        agent_id: &str,
+    ) -> Result<Vec<OutgoingLinkRow>, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT to_note, to_raw, relation, label, confidence, resolved_by, status \
+                 FROM notes_links WHERE from_note = ?1 AND agent_id = ?2",
+            )
+            .map_err(|e| AlephError::config(format!("get_outgoing_link_rows prepare: {e}")))?;
+
+        let rows = stmt
+            .query_map(params![path, agent_id], |row| {
+                Ok(OutgoingLinkRow {
+                    to_note: row.get::<_, String>(0)?,
+                    to_raw: row.get::<_, String>(1)?,
+                    relation: row.get::<_, Option<String>>(2)?,
+                    label: row.get::<_, Option<String>>(3)?,
+                    confidence: row.get::<_, f32>(4)?,
+                    resolved_by: row.get::<_, Option<String>>(5)?,
+                    status: row.get::<_, String>(6)?,
+                })
+            })
+            .map_err(|e| AlephError::config(format!("get_outgoing_link_rows query: {e}")))?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(
+                row.map_err(|e| AlephError::config(format!("get_outgoing_link_rows row: {e}")))?,
+            );
+        }
+        Ok(out)
     }
 
     async fn find_by_filename(
@@ -1137,7 +1216,7 @@ impl NoteStore for SqliteMemoryBackend {
         let mut stmt = conn
             .prepare(
                 "SELECT id, to_raw FROM notes_links \
-                 WHERE agent_id = ?1 AND to_note = to_raw AND instr(to_raw, '/') = 0",
+                 WHERE agent_id = ?1 AND status = 'dangling'",
             )
             .map_err(|e| AlephError::config(format!("relink prep: {e}")))?;
 
@@ -1149,36 +1228,125 @@ impl NoteStore for SqliteMemoryBackend {
             .filter_map(|r| r.ok())
             .collect();
 
+        // One prefetched context for every dangling row (was per-row double
+        // query in the old resolve_target-mirroring code — this fixes the N+1).
+        let resolve_ctx = super::helpers::build_resolve_context(&conn, agent_id)
+            .map_err(|e| AlephError::config(format!("relink resolve ctx: {e}")))?;
+
         let mut updated = 0usize;
         for (id, raw) in rows {
-            let mut find = conn
-                .prepare(
-                    "SELECT path FROM notes_index \
-                     WHERE agent_id = ?1 AND filename = ?2 LIMIT 2",
-                )
-                .map_err(|e| AlephError::config(format!("relink find: {e}")))?;
-            let mut paths: Vec<String> = find
-                .query_map(params![agent_id, raw], |r| r.get::<_, String>(0))
-                .map_err(|e| AlephError::config(format!("relink find query: {e}")))?
-                .filter_map(|r| r.ok())
-                .collect();
-            // Frontmatter alias fallback (filename priority) — mirrors
-            // index_note's resolve_target so links re-resolve to aliased notes
-            // that were indexed after the linking note.
-            if paths.is_empty() {
-                paths = resolve_paths_by_alias(&conn, agent_id, &raw)
-                    .map_err(|e| AlephError::config(format!("relink alias query: {e}")))?;
-            }
-            if paths.len() == 1 {
+            let r = crate::memory::notes::links::resolve(&raw, &resolve_ctx);
+            if let Some(target) = &r.target {
+                // `OR IGNORE`: two dangling variants on the same from_note can
+                // both resolve to the same target once it exists (tier-4
+                // normalized matching makes this easy, e.g. "[[Rust Guide]]"
+                // and "[[rust guide]]"). The second UPDATE would otherwise
+                // violate UNIQUE(agent_id, from_note, to_note) and — with no
+                // transaction wrapping this loop — abort the whole pass,
+                // leaving every remaining dangling row unprocessed while
+                // earlier updates stay applied. `OR IGNORE` skips the losing
+                // row instead of erroring.
+                let changed = conn
+                    .execute(
+                        "UPDATE OR IGNORE notes_links SET to_note = ?1, confidence = ?2, \
+                                resolved_by = ?3, status = 'active' WHERE id = ?4",
+                        params![target, r.confidence, r.resolved_by.map(|s| s.as_str()), id],
+                    )
+                    .map_err(|e| AlephError::config(format!("relink update: {e}")))?;
+
+                // If the UPDATE was ignored, this row is now a redundant
+                // dangling duplicate of the edge that won — remove it. A
+                // no-op when the UPDATE above succeeded, since status is
+                // already 'active' by the time this runs.
                 conn.execute(
-                    "UPDATE notes_links SET to_note = ?1 WHERE id = ?2",
-                    params![paths[0], id],
+                    "DELETE FROM notes_links WHERE id = ?1 AND status = 'dangling'",
+                    params![id],
                 )
-                .map_err(|e| AlephError::config(format!("relink update: {e}")))?;
-                updated += 1;
+                .map_err(|e| AlephError::config(format!("relink cleanup: {e}")))?;
+
+                if changed > 0 {
+                    updated += 1;
+                }
             }
         }
         Ok(updated)
+    }
+
+    async fn backfill_inbound_links(
+        &self,
+        agent_id: &str,
+        keys: &[String],
+    ) -> Result<usize, AlephError> {
+        use crate::memory::notes::links;
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let conn = lock_conn!(self)?;
+        let placeholders: Vec<String> = (2..=keys.len() + 1).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT id, to_raw FROM notes_links \
+             WHERE agent_id = ?1 AND status IN ('dangling','tombstone') \
+               AND to_raw IN ({})",
+            placeholders.join(", ")
+        );
+        let mut params_v: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(agent_id.to_string())];
+        for k in keys {
+            params_v.push(Box::new(k.clone()));
+        }
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            params_v.iter().map(|p| p.as_ref()).collect();
+        let rows: Vec<(i64, String)> = {
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| AlephError::config(format!("backfill prep: {e}")))?;
+            let scanned: Vec<(i64, String)> = stmt
+                .query_map(params_ref.as_slice(), |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(|e| AlephError::config(format!("backfill scan: {e}")))?
+                .filter_map(|r| r.ok())
+                .collect();
+            scanned
+        };
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let ctx = super::helpers::build_resolve_context(&conn, agent_id)
+            .map_err(|e| AlephError::config(format!("backfill ctx: {e}")))?;
+        let mut revived = 0usize;
+        for (id, raw) in rows {
+            let r = links::resolve(&raw, &ctx);
+            if let Some(target) = r.target {
+                // UNIQUE(agent_id, from_note, to_note) defense, mirroring
+                // relink_unresolved above: reviving this row's to_note can
+                // collide with another row already occupying that (from, to)
+                // key on the same from_note (e.g. the source note was
+                // manually re-linked to the target through a different raw
+                // wikilink text while this row was still dangling/tombstone).
+                // `UPDATE OR IGNORE` skips the losing row instead of erroring
+                // out mid-pass; the follow-up DELETE clears the now-redundant
+                // loser so it doesn't linger as a permanent duplicate.
+                let changed = conn
+                    .execute(
+                        "UPDATE OR IGNORE notes_links SET to_note = ?1, confidence = ?2, \
+                                resolved_by = ?3, status = 'active' WHERE id = ?4",
+                        params![target, r.confidence, r.resolved_by.map(|s| s.as_str()), id],
+                    )
+                    .map_err(|e| AlephError::config(format!("backfill update: {e}")))?;
+
+                conn.execute(
+                    "DELETE FROM notes_links WHERE id = ?1 AND status IN ('dangling', 'tombstone')",
+                    params![id],
+                )
+                .map_err(|e| AlephError::config(format!("backfill cleanup: {e}")))?;
+
+                if changed > 0 {
+                    revived += 1;
+                }
+            }
+        }
+        Ok(revived)
     }
 
     // -----------------------------------------------------------------
@@ -1244,7 +1412,8 @@ impl NoteStore for SqliteMemoryBackend {
             let mut stmt = conn
                 .prepare(
                     "SELECT from_note, to_note, relation, confidence FROM notes_links \
-                     WHERE agent_id = ?1 AND to_note <> '' AND instr(to_note, '/') > 0",
+                     WHERE agent_id = ?1 AND to_note <> '' AND instr(to_note, '/') > 0 \
+                     AND status = 'active'",
                 )
                 .map_err(|e| AlephError::config(format!("load_graph_snapshot edges prep: {e}")))?;
             let rows = stmt
@@ -1285,13 +1454,51 @@ impl NoteStore for SqliteMemoryBackend {
         // relation) for the pair always wins over the behavioral edge.
         for (from, to, confidence) in rows {
             conn.execute(
-                "INSERT INTO notes_links (agent_id, from_note, to_note, to_raw, relation, confidence) \
-                 VALUES (?1, ?2, ?3, ?3, ?4, ?5) \
+                "INSERT INTO notes_links \
+                   (agent_id, from_note, to_note, to_raw, relation, confidence, status) \
+                 VALUES (?1, ?2, ?3, ?3, ?4, ?5, 'active') \
                  ON CONFLICT(agent_id, from_note, to_note) DO NOTHING",
                 params![agent_id, from, to, CO_RECALLED_RELATION, f64::from(*confidence)],
             )
             .map_err(|e| AlephError::config(format!("replace_co_recall_links insert: {e}")))?;
         }
+        Ok(())
+    }
+
+    async fn replace_mention_links(
+        &self,
+        agent_id: &str,
+        rows: &[(String, String)],
+    ) -> Result<(), AlephError> {
+        use crate::memory::notes::links::mentions::{MENTION_CONFIDENCE, MENTION_RELATION};
+        let conn = lock_conn!(self)?;
+        // Wrap DELETE + INSERT loop in a single transaction so a mid-loop
+        // failure cannot leave the mention edge set half-replaced (the full
+        // refresh must be all-or-nothing).
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AlephError::config(format!("replace_mention_links tx begin: {e}")))?;
+        // Full refresh: mentions are re-scanned from the whole corpus every
+        // dream cycle, so stale pairs must not linger.
+        tx.execute(
+            "DELETE FROM notes_links WHERE agent_id = ?1 AND relation = ?2",
+            params![agent_id, MENTION_RELATION],
+        )
+        .map_err(|e| AlephError::config(format!("replace_mention_links delete: {e}")))?;
+        // DO NOTHING on conflict: an existing semantic link (wikilink / typed
+        // relation) for the pair always wins over the mention soft edge.
+        for (from, to) in rows {
+            tx.execute(
+                "INSERT INTO notes_links \
+                   (agent_id, from_note, to_note, to_raw, relation, confidence, resolved_by, status) \
+                 VALUES (?1, ?2, ?3, ?3, ?4, ?5, 'mention_scan', 'active') \
+                 ON CONFLICT(agent_id, from_note, to_note) DO NOTHING",
+                params![agent_id, from, to, MENTION_RELATION, f64::from(MENTION_CONFIDENCE)],
+            )
+            .map_err(|e| AlephError::config(format!("replace_mention_links insert: {e}")))?;
+        }
+        tx.commit()
+            .map_err(|e| AlephError::config(format!("replace_mention_links tx commit: {e}")))?;
         Ok(())
     }
 
@@ -1477,6 +1684,47 @@ impl NoteStore for SqliteMemoryBackend {
         let mut out = Vec::new();
         for row in rows {
             out.push(row.map_err(|e| AlephError::config(format!("related_peers row: {e}")))?);
+        }
+        Ok(out)
+    }
+
+    async fn related_edges_between(
+        &self,
+        agent_id: &str,
+        visible: &std::collections::HashSet<String>,
+        per_node: usize,
+    ) -> Result<Vec<(String, String, f32)>, AlephError> {
+        let conn = lock_conn!(self)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT node_path, related_path, score FROM notes_graph_related \
+                 WHERE agent_id = ?1 ORDER BY node_path, score DESC",
+            )
+            .map_err(|e| AlephError::config(format!("related_edges prep: {e}")))?;
+        let rows = stmt
+            .query_map(params![agent_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, f64>(2)? as f32,
+                ))
+            })
+            .map_err(|e| AlephError::config(format!("related_edges query: {e}")))?;
+        let mut out = Vec::new();
+        let mut count_for: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let (node, related, score) =
+                row.map_err(|e| AlephError::config(format!("related_edges row: {e}")))?;
+            if !visible.contains(&node) || !visible.contains(&related) {
+                continue;
+            }
+            let c = count_for.entry(node.clone()).or_insert(0);
+            if *c >= per_node {
+                continue; // rows are score-DESC within node_path → top-K kept
+            }
+            *c += 1;
+            out.push((node, related, score));
         }
         Ok(out)
     }
@@ -1764,5 +2012,26 @@ impl NoteStore for SqliteMemoryBackend {
             out.push(r.map_err(|e| AlephError::config(format!("notes_citing row: {e}")))?);
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+impl SqliteMemoryBackend {
+    /// Test helper: directly update the status of a link row for testing.
+    /// Used to mark a link as tombstone without going through the full delete flow.
+    pub async fn set_link_status_for_test(
+        &self,
+        from_path: &str,
+        to_raw: &str,
+        new_status: &str,
+        agent_id: &str,
+    ) -> Result<(), AlephError> {
+        let conn = lock_conn!(self)?;
+        conn.execute(
+            "UPDATE notes_links SET status = ?1 WHERE agent_id = ?2 AND from_note = ?3 AND to_raw = ?4",
+            params![new_status, agent_id, from_path, to_raw],
+        )
+        .map_err(|e| AlephError::config(format!("set_link_status_for_test: {e}")))?;
+        Ok(())
     }
 }

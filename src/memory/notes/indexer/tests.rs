@@ -424,10 +424,204 @@ async fn rename_note_cascades_wikilinks() {
     let new_paths = db.find_by_filename("New Name", AGENT).await.unwrap();
     assert!(!new_paths.is_empty());
 
-    // Linker's outgoing links updated
+    // Linker's outgoing links updated. `to_note` is now the full resolved
+    // path rather than the bare title: the wikilink-rewrite loop above
+    // re-indexes Linker.md (as "[[New Name]]") before "New Name" itself is
+    // re-indexed, so that pass leaves the row dangling on the bare text;
+    // rename_note's targeted `backfill_inbound_links` call at the end then
+    // revives it as an active, full-path edge.
     let out = db.get_outgoing_links("other/Linker", AGENT).await.unwrap();
-    assert!(out.contains(&"New Name".to_string()));
+    assert!(
+        out.contains(&"other/New Name".to_string()),
+        "expected the backfilled full-path target, got {out:?}"
+    );
     assert!(!out.contains(&"Old Name".to_string()));
+}
+
+#[tokio::test]
+async fn rename_note_backfills_dangling_links_pointing_at_new_name() {
+    // Rename-trigger variant of `write_note_backfills_dangling_links_in_other_notes`:
+    // the targeted backfill must also fire when a note is renamed INTO the
+    // raw link text (not just created fresh under that name), reviving any
+    // other note that was already dangling on it.
+    let dir = TempDir::new().unwrap();
+    let db = create_test_db();
+    let indexer = NoteIndexer::new(dir.path().to_path_buf(), db.clone());
+
+    // Linker links to "Target", which doesn't exist yet -> dangles.
+    let linker = KnowledgeNote {
+        title: "Linker".to_string(),
+        category: "other".to_string(),
+        links: vec!["Target".to_string()],
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    indexer.write_note(AGENT, "other", &linker).await.unwrap();
+    let rows = db
+        .get_outgoing_link_rows("other/Linker", AGENT)
+        .await
+        .unwrap();
+    let dangling = rows.iter().find(|r| r.to_raw == "Target").unwrap();
+    assert_eq!(dangling.status, "dangling");
+
+    // Write an unrelated note under a different name, then rename it to
+    // "Target" -- rename_note's backfill should revive Linker's dangling row
+    // for the NEW name end-to-end, with no manual relink_unresolved call.
+    let something = KnowledgeNote {
+        title: "Something".to_string(),
+        category: "reference".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    indexer
+        .write_note(AGENT, "reference", &something)
+        .await
+        .unwrap();
+
+    indexer
+        .rename_note(AGENT, "Something", "Target")
+        .await
+        .unwrap();
+
+    let rows = db
+        .get_outgoing_link_rows("other/Linker", AGENT)
+        .await
+        .unwrap();
+    let revived = rows.iter().find(|r| r.to_raw == "Target").unwrap();
+    assert_eq!(revived.status, "active");
+    assert_eq!(revived.to_note, "reference/Target");
+}
+
+#[tokio::test]
+async fn rename_note_cascades_frontmatter_typed_relations() {
+    // Regression: a rename must also re-point OTHER notes' typed relations
+    // (frontmatter `- to: <target>` scalars), not just body `[[wikilinks]]`.
+    // These bare scalars are invisible to `rewrite_wikilinks`, so before the
+    // fix the source note was never re-indexed and its relation row stayed
+    // tombstoned, permanently dangling at the old name.
+    use crate::memory::notes::Relation;
+
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+    let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
+
+    // "linker" references "bob" ONLY through a typed frontmatter relation (no
+    // body wikilink), isolating the new code path from the existing cascade.
+    let bob = KnowledgeNote {
+        title: "bob".to_string(),
+        category: "reference".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    let linker = KnowledgeNote {
+        title: "linker".to_string(),
+        category: "reference".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    indexer.write_note(AGENT, "reference", &bob).await.unwrap();
+    indexer
+        .write_note(AGENT, "reference", &linker)
+        .await
+        .unwrap();
+    indexer
+        .append_relations(
+            AGENT,
+            "reference/linker",
+            &[Relation {
+                to: "reference/bob".to_string(),
+                rel_type: "knows".to_string(),
+                confidence: 1.0,
+            }],
+        )
+        .await
+        .unwrap();
+
+    let linker_md = memory_dir.join(AGENT).join("reference").join("linker.md");
+    let before = fs::read_to_string(&linker_md).await.unwrap();
+    assert!(before.contains("to: reference/bob"), "got:\n{before}");
+
+    // Rename the target: bob -> bob2.
+    indexer.rename_note(AGENT, "bob", "bob2").await.unwrap();
+
+    // (1) On-disk frontmatter is re-pointed (source of truth).
+    let after = fs::read_to_string(&linker_md).await.unwrap();
+    assert!(
+        after.contains("to: reference/bob2"),
+        "frontmatter relation not re-pointed, got:\n{after}"
+    );
+    assert!(
+        !after.contains("to: reference/bob\n"),
+        "stale old target left behind, got:\n{after}"
+    );
+
+    // (2) The notes_links typed-relation row is revived: active and pointing
+    // at the renamed note, not tombstoned on the old name.
+    let rows = db
+        .get_outgoing_link_rows("reference/linker", AGENT)
+        .await
+        .unwrap();
+    let rel = rows
+        .iter()
+        .find(|r| r.relation.as_deref() == Some("knows"))
+        .expect("typed relation row must exist");
+    assert_eq!(
+        rel.status, "active",
+        "relation must be revived; to_note={}, to_raw={}",
+        rel.to_note, rel.to_raw
+    );
+    assert_eq!(rel.to_note, "reference/bob2");
+    assert_eq!(rel.to_raw, "reference/bob2");
+}
+
+#[tokio::test]
+async fn write_note_backfills_dangling_links_in_other_notes() {
+    // End-to-end: finalize_write's best-effort backfill trigger revives a
+    // dangling link in another note once the note it points at is written.
+    let dir = TempDir::new().unwrap();
+    let db = create_test_db();
+    let indexer = NoteIndexer::new(dir.path().to_path_buf(), db.clone());
+
+    // Linker links to "target", which doesn't exist yet -> dangles.
+    let linker = KnowledgeNote {
+        title: "Linker".to_string(),
+        category: "other".to_string(),
+        links: vec!["target".to_string()],
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    indexer.write_note(AGENT, "other", &linker).await.unwrap();
+    let rows = db
+        .get_outgoing_link_rows("other/Linker", AGENT)
+        .await
+        .unwrap();
+    let dangling = rows.iter().find(|r| r.to_raw == "target").unwrap();
+    assert_eq!(dangling.status, "dangling");
+
+    // Writing "target" triggers finalize_write's backfill, reviving Linker's
+    // dangling row end-to-end (no manual relink_unresolved call).
+    let target = KnowledgeNote {
+        title: "target".to_string(),
+        category: "reference".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    indexer.write_note(AGENT, "reference", &target).await.unwrap();
+
+    let rows = db
+        .get_outgoing_link_rows("other/Linker", AGENT)
+        .await
+        .unwrap();
+    let revived = rows.iter().find(|r| r.to_raw == "target").unwrap();
+    assert_eq!(revived.status, "active");
+    assert_eq!(revived.to_note, "reference/target");
 }
 
 #[cfg(test)]
@@ -915,4 +1109,118 @@ async fn delete_note_removes_file_index_and_is_idempotent() {
 
     // Second delete of the same note is a no-op, not an error.
     indexer.delete_note(AGENT, "plan", "old-plan").await.unwrap();
+}
+
+#[tokio::test]
+async fn append_relations_adds_typed_edge_and_indexes_it() {
+    use crate::memory::notes::Relation;
+
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+    let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
+
+    let note = KnowledgeNote {
+        title: "note-a".to_string(),
+        category: "reference".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    indexer.write_note(AGENT, "reference", &note).await.unwrap();
+
+    indexer
+        .append_relations(
+            AGENT,
+            "reference/note-a",
+            &[Relation {
+                to: "reference/note-b".to_string(),
+                rel_type: "supersedes".to_string(),
+                confidence: 1.0,
+            }],
+        )
+        .await
+        .unwrap();
+
+    let on_disk = fs::read_to_string(
+        memory_dir
+            .join(AGENT)
+            .join("reference")
+            .join("note-a.md"),
+    )
+    .await
+    .unwrap();
+    assert!(on_disk.contains("relations:"), "got:\n{on_disk}");
+    assert!(on_disk.contains("to: reference/note-b"));
+    assert!(on_disk.contains("type: supersedes"));
+
+    // The relation is mirrored into notes_links as a typed edge.
+    let typed = db
+        .get_typed_relations("reference/note-a", AGENT)
+        .await
+        .unwrap();
+    assert!(
+        typed
+            .iter()
+            .any(|(to, rel)| to == "reference/note-b" && rel == "supersedes"),
+        "expected typed edge in {typed:?}"
+    );
+}
+
+#[tokio::test]
+async fn append_relations_is_noop_when_all_already_present() {
+    use crate::memory::notes::Relation;
+
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+    let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
+
+    let note = KnowledgeNote {
+        title: "note-c".to_string(),
+        category: "reference".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    indexer.write_note(AGENT, "reference", &note).await.unwrap();
+
+    let rel = Relation {
+        to: "reference/note-d".to_string(),
+        rel_type: "refers".to_string(),
+        confidence: 1.0,
+    };
+    indexer
+        .append_relations(AGENT, "reference/note-c", &[rel.clone()])
+        .await
+        .unwrap();
+    let after_first = fs::read_to_string(
+        memory_dir
+            .join(AGENT)
+            .join("reference")
+            .join("note-c.md"),
+    )
+    .await
+    .unwrap();
+
+    // Calling again with the same (to, rel_type) must not rewrite the file
+    // (no duplicate relation entries, no spurious updated_at bump).
+    indexer
+        .append_relations(AGENT, "reference/note-c", &[rel])
+        .await
+        .unwrap();
+    let after_second = fs::read_to_string(
+        memory_dir
+            .join(AGENT)
+            .join("reference")
+            .join("note-c.md"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(after_first, after_second, "no-op must not rewrite the file");
+    assert_eq!(
+        after_second.matches("to: reference/note-d").count(),
+        1,
+        "relation must not be duplicated"
+    );
 }

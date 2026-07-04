@@ -5,20 +5,14 @@
 
 use crate::providers::message::UnifiedMessage;
 
-/// Estimate token count for a string using a char-length heuristic.
-///
-/// `ratio` is the average number of characters per token (e.g. 3.5 for English).
-///
-/// Counts Unicode scalar values, not UTF-8 bytes: a CJK character is one
-/// character but three bytes, so byte-length over-counts CJK text ~3×. The
-/// sibling estimators (`summary_source`, `pressure::estimate_tokens_smart`)
-/// already count characters; this keeps the budget sensor consistent.
+/// Estimate token count for `content`, treating `ratio` as the prose
+/// (chars-per-token) anchor. Thin forwarding shell over
+/// [`crate::context::budget::pressure::estimate_tokens_aware`] — the single
+/// source of truth — so CJK / code content is charged at its denser ratio
+/// while the caller-supplied anchor still governs ordinary prose.
 #[must_use]
 pub fn estimate_tokens(content: &str, ratio: f64) -> usize {
-    if ratio <= 0.0 {
-        return 0;
-    }
-    (content.chars().count() as f64 / ratio) as usize
+    crate::context::budget::pressure::estimate_tokens_aware(content, ratio)
 }
 
 /// Estimate total tokens across all messages.
@@ -101,12 +95,21 @@ mod tests {
     #[test]
     fn test_estimate_tokens_counts_chars_not_bytes() {
         // 5 CJK characters = 15 UTF-8 bytes. The estimate must be driven by
-        // the 5 characters, not the 15 bytes — otherwise CJK sessions trip
-        // compaction ~3× too early.
+        // the 5 characters, not the 15 bytes — and by default, CJK is charged
+        // at the denser CJK_RATIO (1.5) regardless of the prose_ratio anchor.
+        // So 5 chars / 1.5 = 3.333... ≈ 4 tokens.
         let cjk = "你好世界呀";
         assert_eq!(cjk.chars().count(), 5);
         assert_eq!(cjk.len(), 15);
-        assert_eq!(estimate_tokens(cjk, 1.0), 5);
+        assert_eq!(estimate_tokens(cjk, 1.0), 4);
+    }
+
+    #[test]
+    fn estimate_tokens_charges_cjk_at_dense_ratio() {
+        // ratio 参数仍是散文锚点；CJK 内容由单源以 ~1.5 chars/token 计。
+        let cjk = "忆".repeat(50);
+        let tokens = estimate_tokens(&cjk, 3.5);
+        assert!(tokens >= 30, "expected dense CJK charge, got {tokens}");
     }
 
     // --- estimate_total_tokens ---

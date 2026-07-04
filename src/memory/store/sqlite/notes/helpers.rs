@@ -32,38 +32,31 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<NoteIndexEnt
     })
 }
 
-/// Resolve a bare wikilink target to candidate note paths via frontmatter
-/// `aliases`. Returns the paths of notes whose `aliases_json` contains an
-/// exact match for `raw_target` (e.g. `[[Bob]]` → the note titled
-/// "Bob Smith" carrying alias "Bob").
-///
-/// JSON1-free: deserializes `aliases_json` with serde and matches in Rust,
-/// mirroring the `tags_json` idiom — no reliance on the SQLite JSON extension.
-/// Used as a fallback when filename resolution finds no unique match, so a
-/// real filename always takes priority over an alias.
-pub(crate) fn resolve_paths_by_alias(
+/// Prefetch every note's (path, filename, aliases) for the agent and build
+/// the pure resolution context. One query replaces the per-target lookups
+/// the old `resolve_target` closure issued (personal-vault scale: fine).
+pub(crate) fn build_resolve_context(
     conn: &rusqlite::Connection,
     agent_id: &str,
-    raw_target: &str,
-) -> rusqlite::Result<Vec<String>> {
+) -> rusqlite::Result<crate::memory::notes::links::LinkResolveContext> {
     let mut stmt = conn.prepare(
-        "SELECT path, aliases_json FROM notes_index \
-         WHERE agent_id = ?1 AND aliases_json != '[]'",
+        "SELECT path, filename, aliases_json FROM notes_index WHERE agent_id = ?1",
     )?;
-    let paths = stmt
+    let entries = stmt
         .query_map(rusqlite::params![agent_id], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
         })?
         .filter_map(|r| r.ok())
-        .filter_map(|(path, aliases_json)| {
+        .map(|(path, filename, aliases_json)| {
             let aliases: Vec<String> = serde_json::from_str(&aliases_json).unwrap_or_default();
-            aliases
-                .iter()
-                .any(|a| a.as_str() == raw_target)
-                .then_some(path)
+            (path, filename, aliases)
         })
         .collect();
-    Ok(paths)
+    Ok(crate::memory::notes::links::LinkResolveContext::new(entries))
 }
 
 /// SHA-256 hex digest of a note's body text — used to gate `notes_fts` rewrites.
@@ -111,12 +104,14 @@ pub(crate) async fn load_note_content_from_disk(
     tokio::fs::read_to_string(&file_path).await.ok()
 }
 
-/// Collect all edges where both endpoints are in `visible`, scoped by `agent_id`.
+/// Collect all active edges where both endpoints are in `visible`, scoped by
+/// `agent_id`. Non-active rows (dangling/tombstone) are excluded — the graph
+/// feed only ever shows resolved, live links.
 pub(crate) fn collect_edges_between(
     conn: &rusqlite::Connection,
     visible: &HashSet<String>,
     agent_id: &str,
-) -> Result<Vec<(String, String, Option<String>)>, AlephError> {
+) -> Result<Vec<crate::memory::notes::store::GraphEdgeRow>, AlephError> {
     if visible.is_empty() {
         return Ok(Vec::new());
     }
@@ -129,8 +124,9 @@ pub(crate) fn collect_edges_between(
     let to_clause = to_placeholders.join(", ");
 
     let sql = format!(
-        "SELECT from_note, to_note, relation FROM notes_links \
-         WHERE agent_id = ?1 AND from_note IN ({from_clause}) AND to_note IN ({to_clause})"
+        "SELECT from_note, to_note, relation, label, confidence FROM notes_links \
+         WHERE agent_id = ?1 AND from_note IN ({from_clause}) AND to_note IN ({to_clause}) \
+         AND status = 'active'"
     );
 
     // Params: agent_id + paths (for from IN) + paths again (for to IN)
@@ -152,11 +148,13 @@ pub(crate) fn collect_edges_between(
 
     let rows = stmt
         .query_map(param_refs.as_slice(), |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-            ))
+            Ok(crate::memory::notes::store::GraphEdgeRow {
+                from: row.get::<_, String>(0)?,
+                to: row.get::<_, String>(1)?,
+                relation: row.get::<_, Option<String>>(2)?,
+                label: row.get::<_, Option<String>>(3)?,
+                confidence: row.get::<_, f32>(4)?,
+            })
         })
         .map_err(|e| AlephError::config(format!("collect_edges query: {e}")))?;
 

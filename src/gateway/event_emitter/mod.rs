@@ -38,20 +38,23 @@ pub trait EventEmitter: Send + Sync {
     /// Emit a reasoning/thinking update
     async fn emit_reasoning(&self, run_id: &str, content: &str, complete: bool) {
         let seq = self.next_seq();
-        let _ = self
+        if let Err(e) = self
             .emit(StreamEvent::Reasoning {
                 run_id: run_id.to_string(),
                 seq,
                 content: content.to_string(),
                 is_complete: complete,
             })
-            .await;
+            .await
+        {
+            tracing::debug!(run_id, error = %e, "failed to emit Reasoning stream event");
+        }
     }
 
     /// Emit tool execution start
     async fn emit_tool_start(&self, run_id: &str, tool_name: &str, tool_id: &str, params: Value) {
         let seq = self.next_seq();
-        let _ = self
+        if let Err(e) = self
             .emit(StreamEvent::ToolStart {
                 run_id: run_id.to_string(),
                 seq,
@@ -59,20 +62,26 @@ pub trait EventEmitter: Send + Sync {
                 tool_id: tool_id.to_string(),
                 params,
             })
-            .await;
+            .await
+        {
+            tracing::debug!(run_id, error = %e, "failed to emit ToolStart stream event");
+        }
     }
 
     /// Emit tool execution progress
     async fn emit_tool_update(&self, run_id: &str, tool_id: &str, progress: &str) {
         let seq = self.next_seq();
-        let _ = self
+        if let Err(e) = self
             .emit(StreamEvent::ToolUpdate {
                 run_id: run_id.to_string(),
                 seq,
                 tool_id: tool_id.to_string(),
                 progress: progress.to_string(),
             })
-            .await;
+            .await
+        {
+            tracing::debug!(run_id, error = %e, "failed to emit ToolUpdate stream event");
+        }
     }
 
     /// Emit tool execution completion
@@ -84,7 +93,7 @@ pub trait EventEmitter: Send + Sync {
         duration_ms: u64,
     ) {
         let seq = self.next_seq();
-        let _ = self
+        if let Err(e) = self
             .emit(StreamEvent::ToolEnd {
                 run_id: run_id.to_string(),
                 seq,
@@ -92,19 +101,25 @@ pub trait EventEmitter: Send + Sync {
                 result,
                 duration_ms,
             })
-            .await;
+            .await
+        {
+            tracing::debug!(run_id, error = %e, "failed to emit ToolEnd stream event");
+        }
     }
 
     /// Emit a structured agent trace event
     async fn emit_agent_trace(&self, run_id: &str, event: crate::harness::trace::LoopTraceEvent) {
         let seq = self.next_seq();
-        let _ = self
+        if let Err(e) = self
             .emit(StreamEvent::AgentTrace {
                 run_id: run_id.to_string(),
                 seq,
                 event: event.into(),
             })
-            .await;
+            .await
+        {
+            tracing::debug!(run_id, error = %e, "failed to emit AgentTrace stream event");
+        }
     }
 
     /// Emit response text chunk
@@ -118,7 +133,7 @@ pub trait EventEmitter: Send + Sync {
         is_intermediate: bool,
     ) {
         let seq = self.next_seq();
-        let _ = self
+        if let Err(e) = self
             .emit(StreamEvent::ResponseChunk {
                 run_id: run_id.to_string(),
                 seq,
@@ -129,33 +144,42 @@ pub trait EventEmitter: Send + Sync {
                 is_final,
                 is_intermediate,
             })
-            .await;
+            .await
+        {
+            tracing::debug!(run_id, error = %e, "failed to emit ResponseChunk stream event");
+        }
     }
 
     /// Emit run completion
     async fn emit_run_complete(&self, run_id: &str, summary: RunSummary, duration_ms: u64) {
         let seq = self.next_seq();
-        let _ = self
+        if let Err(e) = self
             .emit(StreamEvent::RunComplete {
                 run_id: run_id.to_string(),
                 seq,
                 summary,
                 total_duration_ms: duration_ms,
             })
-            .await;
+            .await
+        {
+            tracing::warn!(run_id, error = %e, "failed to emit RunComplete stream event");
+        }
     }
 
     /// Emit run error
     async fn emit_run_error(&self, run_id: &str, error: &str, error_code: Option<&str>) {
         let seq = self.next_seq();
-        let _ = self
+        if let Err(e) = self
             .emit(StreamEvent::RunError {
                 run_id: run_id.to_string(),
                 seq,
                 error: error.to_string(),
                 error_code: error_code.map(|s| s.to_string()),
             })
-            .await;
+            .await
+        {
+            tracing::warn!(run_id, error = %e, "failed to emit RunError stream event");
+        }
     }
 
     /// Emit a provider-retry status update (transient failure, retrying).
@@ -168,7 +192,7 @@ pub trait EventEmitter: Send + Sync {
         reason: &str,
     ) {
         let seq = self.next_seq();
-        let _ = self
+        if let Err(e) = self
             .emit(StreamEvent::RunRetrying {
                 run_id: run_id.to_string(),
                 seq,
@@ -177,7 +201,10 @@ pub trait EventEmitter: Send + Sync {
                 max_attempts,
                 reason: reason.to_string(),
             })
-            .await;
+            .await
+        {
+            tracing::warn!(run_id, error = %e, "failed to emit RunRetrying stream event");
+        }
     }
 
     /// Get the next sequence number (must be monotonically increasing)

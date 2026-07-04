@@ -12,7 +12,7 @@ use tokio::fs;
 use crate::error::AlephError;
 use crate::memory::dreaming::distill_action::DistillAction;
 use crate::memory::notes::store::NoteStore;
-use crate::memory::notes::wikilink::rewrite_wikilinks;
+use crate::memory::notes::wikilink::{rewrite_relation_targets, rewrite_wikilinks};
 use crate::memory::notes::{sanitize_title, KnowledgeNote, Severity};
 use crate::utils::atomic_write::atomic_write_file;
 
@@ -197,6 +197,18 @@ impl<S: NoteStore> NoteIndexer<S> {
             AlephError::other(format!("reparse after write {category}/{safe_title}: {e}"))
         })?;
         self.store.index_note(&reparsed, agent_id, category).await?;
+
+        // Backfill: this write may resolve other notes' dangling links to this
+        // note (create / recreate-after-delete) — targeted by to_raw, P7 best-effort.
+        let mut keys: Vec<String> = vec![
+            safe_title.to_string(),
+            format!("{category}/{safe_title}"),
+        ];
+        keys.extend(reparsed.aliases.iter().cloned());
+        if let Err(e) = self.store.backfill_inbound_links(agent_id, &keys).await {
+            tracing::warn!(error = %e, "finalize_write: inbound backfill failed (non-fatal)");
+        }
+
         self.notify_orientation(agent_id, category, safe_title);
         self.refresh_embedding(agent_id, category, safe_title, content)
             .await;
@@ -354,9 +366,10 @@ impl<S: NoteStore> NoteIndexer<S> {
 
         // Re-resolve cross-note wikilinks. The category scan above runs each
         // category in its own task, so a note can be indexed before the note it
-        // links to exists in `notes_index` — `resolve_target` then falls back to
-        // the raw wikilink text. Now that every note is indexed, retry those raw
-        // edges so links resolve regardless of which category task ran first.
+        // links to exists in `notes_index` — the links resolver then dangles the
+        // raw wikilink text (`status = 'dangling'`). Now that every note is
+        // indexed, retry those dangling edges so links resolve regardless of
+        // which category task ran first.
         self.store.relink_unresolved(agent_id).await?;
 
         Ok(total)
@@ -585,6 +598,58 @@ impl<S: NoteStore> NoteIndexer<S> {
         Ok(())
     }
 
+    /// Merge typed relations into an existing note's frontmatter (deduped by
+    /// (to, rel_type)), bump updated_at, rewrite + re-index. No-op when every
+    /// relation already exists.
+    pub async fn append_relations(
+        &self,
+        agent_id: &str,
+        note_path: &str,
+        relations: &[crate::memory::notes::Relation],
+    ) -> Result<(), AlephError> {
+        let (category, filename) =
+            note_path
+                .split_once('/')
+                .ok_or_else(|| AlephError::ConfigError {
+                    message: format!(
+                        "Invalid note_path (expected 'category/filename'): {note_path}"
+                    ),
+                    suggestion: None,
+                })?;
+        let safe_cat = sanitize_title(category).unwrap_or_else(|_| "other".to_string());
+        let safe_title = sanitize_title(filename)?;
+        let file_path = self
+            .memory_dir
+            .join(agent_id)
+            .join(&safe_cat)
+            .join(format!("{safe_title}.md"));
+        let content = fs::read_to_string(&file_path)
+            .await
+            .map_err(|e| AlephError::config(format!("append_relations read: {e}")))?;
+        let mut note = KnowledgeNote::from_markdown(filename, &content)?;
+        let mut added = false;
+        for r in relations {
+            if !note
+                .relations
+                .iter()
+                .any(|x| x.to == r.to && x.rel_type == r.rel_type)
+            {
+                note.relations.push(r.clone().clamped());
+                added = true;
+            }
+        }
+        if !added {
+            return Ok(());
+        }
+        note.updated_at = chrono::Utc::now().timestamp();
+        let md = note.to_markdown();
+        note.content_hash = sha2_hash(&md);
+        atomic_write_file(&file_path, &md).await?;
+        self.store.index_note(&note, agent_id, &safe_cat).await?;
+        self.notify_orientation(agent_id, &safe_cat, &safe_title);
+        Ok(())
+    }
+
     /// Delete a note: remove its index rows (including any embedding) and the
     /// markdown file, then notify orientation. Sanitizes both path segments.
     ///
@@ -687,7 +752,16 @@ impl<S: NoteStore> NoteIndexer<S> {
                     Err(_) => continue,
                 };
 
-                let rewritten = rewrite_wikilinks(&content, old_title, new_title);
+                // Rewrite BOTH body `[[old]]` wikilinks AND frontmatter typed
+                // relations (`- to: old`) — the latter are bare scalars the
+                // wikilink regex cannot see, so without this they dangle after
+                // a rename. Composing both means the `!= content` guard below
+                // also fires (and re-indexes) on a relation-only change.
+                let rewritten = rewrite_relation_targets(
+                    &rewrite_wikilinks(&content, old_title, new_title),
+                    old_title,
+                    new_title,
+                );
                 if rewritten != content {
                     // Write the updated content atomically — a plain fs::write
                     // can leave a truncated source-of-truth file on a crash
@@ -720,6 +794,15 @@ impl<S: NoteStore> NoteIndexer<S> {
                 self.refresh_embedding(agent_id, &category, &safe_new, &content)
                     .await;
             }
+        }
+
+        // Backfill: the new name may resolve other notes' dangling links that
+        // pointed at it before it existed under this title (its own aliases
+        // are unchanged by a rename, and the link-rewrite cascade above
+        // already re-pointed every other note's body) — P7 best-effort.
+        let keys = vec![safe_new.clone(), format!("{category}/{safe_new}")];
+        if let Err(e) = self.store.backfill_inbound_links(agent_id, &keys).await {
+            tracing::warn!(error = %e, "rename_note: inbound backfill failed (non-fatal)");
         }
 
         self.notify_orientation(agent_id, &category, &safe_old);

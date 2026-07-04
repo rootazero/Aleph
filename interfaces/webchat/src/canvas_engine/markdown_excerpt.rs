@@ -17,10 +17,18 @@ pub fn render_excerpt(src: &str) -> String {
     let parser = Parser::new(src);
     let mut out = String::with_capacity(src.len().min(MAX_LEN * 2));
     let mut chars_used = 0_usize;
+    // pulldown splits "[[x]]" into several Text events at the bracket
+    // boundaries (failed reference-link candidates), so wikilink scanning
+    // must run over CONSECUTIVE Text events joined together, not per event.
+    // Code spans arrive as Event::Code (never Text) and thus flush first,
+    // keeping `[[..]]` inside backticks literal.
+    let mut pending = String::new();
 
     for event in parser {
         if chars_used >= MAX_LEN {
+            flush_wikilinks(&mut pending, &mut out);
             out.push('\u{2026}');
+            pending.clear();
             break;
         }
         match event {
@@ -28,8 +36,13 @@ pub fn render_excerpt(src: &str) -> String {
                 let remaining = MAX_LEN.saturating_sub(chars_used);
                 let take = t.chars().take(remaining).collect::<String>();
                 chars_used += take.chars().count();
-                out.push_str(&html_escape(&take));
+                pending.push_str(&take);
+                continue;
             }
+            _ => flush_wikilinks(&mut pending, &mut out),
+        }
+        match event {
+            Event::Text(_) => unreachable!("handled above"),
             Event::Code(t) => {
                 out.push_str("<code>");
                 out.push_str(&html_escape(&t));
@@ -71,7 +84,31 @@ pub fn render_excerpt(src: &str) -> String {
             _ => {}
         }
     }
+    flush_wikilinks(&mut pending, &mut out);
     out
+}
+
+/// Run the wikilink scanner over the joined pending text and emit
+/// escaped text / `<a class="wl">` anchors into `out`.
+fn flush_wikilinks(pending: &mut String, out: &mut String) {
+    if pending.is_empty() {
+        return;
+    }
+    for segment in split_wikilinks(pending) {
+        match segment {
+            WikiSegment::Text(text) => {
+                out.push_str(&html_escape(text));
+            }
+            WikiSegment::Link { target, label } => {
+                out.push_str("<a class=\"wl\" data-wl=\"");
+                out.push_str(&html_escape(target));
+                out.push_str("\">");
+                out.push_str(&html_escape(label.unwrap_or(target)));
+                out.push_str("</a>");
+            }
+        }
+    }
+    pending.clear();
 }
 
 fn html_escape(s: &str) -> String {
@@ -79,6 +116,24 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+/// Event-delegation helper: walk up from the click target to the nearest
+/// element carrying `data-wl` and return its value. Views attach one
+/// `on:click` on the inner_html container instead of per-link closures.
+#[cfg(target_arch = "wasm32")]
+pub fn wikilink_click_target(ev: &web_sys::MouseEvent) -> Option<String> {
+    use wasm_bindgen::JsCast;
+    let el = ev.target()?.dyn_into::<web_sys::Element>().ok()?;
+    let hit = el.closest("[data-wl]").ok()??;
+    hit.get_attribute("data-wl")
+}
+
+/// Non-wasm (test host): no `web_sys` event delegation off-wasm (`Event::target`
+/// / `closest` panic outside a real DOM); never resolves a click target.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wikilink_click_target(_ev: &web_sys::MouseEvent) -> Option<String> {
+    None
 }
 
 /// Allow only a small set of link schemes. Reject `javascript:` and other
@@ -94,6 +149,51 @@ fn sanitize_link_url(url: &str) -> String {
         return format!("#disallowed-{}", scheme);
     }
     trimmed.to_string()
+}
+
+/// One segment of text after wikilink splitting.
+#[derive(Debug, PartialEq)]
+pub(crate) enum WikiSegment<'a> {
+    Text(&'a str),
+    Link { target: &'a str, label: Option<&'a str> },
+}
+
+/// Hand-rolled `[[target]]` / `[[target|label]]` scanner (no regex dep in the
+/// panel). Unclosed `[[` and empty targets fall through as plain text.
+pub(crate) fn split_wikilinks(text: &str) -> Vec<WikiSegment<'_>> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    loop {
+        let Some(open) = rest.find("[[") else {
+            if !rest.is_empty() {
+                out.push(WikiSegment::Text(rest));
+            }
+            return out;
+        };
+        let Some(close_rel) = rest[open + 2..].find("]]") else {
+            if !rest.is_empty() {
+                out.push(WikiSegment::Text(rest));
+            }
+            return out;
+        };
+        let inner = &rest[open + 2..open + 2 + close_rel];
+        if inner.is_empty() || inner.contains("[[") {
+            // Empty or nested-open: emit up to and including "[[" as text and rescan.
+            out.push(WikiSegment::Text(&rest[..open + 2]));
+            rest = &rest[open + 2..];
+            continue;
+        }
+        if open > 0 {
+            out.push(WikiSegment::Text(&rest[..open]));
+        }
+        let (target, label) = match inner.split_once('|') {
+            Some((t, l)) if !l.is_empty() => (t, Some(l)),
+            Some((t, _)) => (t, None),
+            None => (inner, None),
+        };
+        out.push(WikiSegment::Link { target, label });
+        rest = &rest[open + 2 + close_rel + 2..];
+    }
 }
 
 #[cfg(test)]
@@ -154,5 +254,66 @@ mod tests {
         let out = render_excerpt(&long);
         assert!(out.ends_with('\u{2026}'));
         assert!(out.chars().count() <= MAX_LEN + 1);
+    }
+
+    #[test]
+    fn renders_wikilink_as_clickable_anchor() {
+        let out = render_excerpt("see [[rust-notes]] here");
+        assert!(
+            out.contains(r#"<a class="wl" data-wl="rust-notes">rust-notes</a>"#),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn renders_wikilink_alias_label() {
+        let out = render_excerpt("see [[rust-notes|My Rust]] here");
+        assert!(out.contains(r#"data-wl="rust-notes">My Rust</a>"#), "got: {out}");
+    }
+
+    #[test]
+    fn wikilink_target_is_escaped() {
+        let out = render_excerpt(r#"[[a"b]]"#);
+        assert!(out.contains("data-wl=\"a&quot;b\""), "got: {out}");
+        assert!(!out.contains(r#"data-wl="a"b""#));
+    }
+
+    #[test]
+    fn split_wikilinks_handles_mixed_text() {
+        let segs = split_wikilinks("x [[a]] y [[b|B]] [[unclosed");
+        assert_eq!(segs.len(), 5); // "x ", link a, " y ", link b, " [[unclosed"
+        assert!(matches!(segs[1], WikiSegment::Link { target: "a", label: None }));
+        assert!(matches!(segs[3], WikiSegment::Link { target: "b", label: Some("B") }));
+        assert!(matches!(segs[4], WikiSegment::Text(" [[unclosed")));
+    }
+
+    #[test]
+    fn split_wikilinks_handles_cjk_target_and_label() {
+        // Multi-byte (CJK) content around and inside the delimiters must not
+        // panic on byte-index slicing and must split cleanly.
+        let segs = split_wikilinks("]] [[中文|别名]]");
+        assert_eq!(segs.len(), 2, "got: {segs:?}");
+        assert!(matches!(segs[0], WikiSegment::Text("]] ")));
+        assert!(matches!(
+            segs[1],
+            WikiSegment::Link { target: "中文", label: Some("别名") }
+        ));
+    }
+
+    #[test]
+    fn split_wikilinks_treats_empty_brackets_as_literal() {
+        // Empty "[[]]" is not a link: the scanner emits "[[" as text, rescans
+        // the remainder, and the trailing "]]" falls through as text.
+        let segs = split_wikilinks("[[]]");
+        assert_eq!(segs, vec![WikiSegment::Text("[["), WikiSegment::Text("]]")]);
+        // The segments concatenate back to the literal input.
+        let rejoined: String = segs
+            .iter()
+            .map(|s| match s {
+                WikiSegment::Text(t) => *t,
+                WikiSegment::Link { .. } => unreachable!("no links expected"),
+            })
+            .collect();
+        assert_eq!(rejoined, "[[]]");
     }
 }

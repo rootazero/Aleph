@@ -10,6 +10,14 @@
 
 **新增文件须在 PR 描述说明为何无法装进现有 12 个文件之一。**
 
+**口径**：行数按"文件开头到该文件内第一个 `#[cfg(test)]` 之前"计，内联测试不计入预算（超预算就把测试搬去 `src/harness/tests/`，而不是当作行数豁免的借口）。
+
+**当前测量（2026-07-04）：TOTAL 5077 行 — 超 ~4900 红线 177 行，超 4950 容差 127 行。** Tasks 5–7 已从 baseline 5267 减到 5077；Task 8 的下一步（把 `agent/think.rs` 的 `drain_context_overflow` + `try_reactive_compact_and_retry` + `reactive_fit_and_retry` 反应式压缩救援簇下沉）被 BLOCKED——其依赖是读写私有 harness 状态的 `&self` 方法，不是可参数化的 `self.deps.X` 字段。缺口与候选下沉项详见 [HARNESS_PHILOSOPHY.md §4.1](../../docs/reference/HARNESS_PHILOSOPHY.md) 与 `.superpowers/sdd/task-8-report.md`。
+
+**下沉去处（新增代码先看这里，而不是塞回 harness）**：
+- Nudge / 护栏文案 → `src/thinker/nudges.rs`
+- 压缩指令派发（`LoopDirective` → 具体动作）→ `src/context/compact/directive.rs`
+
 ## 加代码前必答 3 问
 
 1. 这是脚手架还是认知？认知必须搬到 prompt。

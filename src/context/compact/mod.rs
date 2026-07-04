@@ -8,6 +8,7 @@
 //! live-compaction path.
 
 pub mod compactor;
+pub mod directive;
 pub mod fit;
 pub mod session_split;
 pub mod summary_utils;
