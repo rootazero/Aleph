@@ -105,6 +105,13 @@ pub fn wikilink_click_target(ev: &web_sys::MouseEvent) -> Option<String> {
     hit.get_attribute("data-wl")
 }
 
+/// Non-wasm (test host): no `web_sys` event delegation off-wasm (`Event::target`
+/// / `closest` panic outside a real DOM); never resolves a click target.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wikilink_click_target(_ev: &web_sys::MouseEvent) -> Option<String> {
+    None
+}
+
 /// Allow only a small set of link schemes. Reject `javascript:` and other
 /// pseudo-URL schemes to prevent XSS when the excerpt is assigned to innerHTML.
 fn sanitize_link_url(url: &str) -> String {

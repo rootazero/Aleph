@@ -10,7 +10,7 @@ use leptos::task::spawn_local;
 use crate::api::graph::GraphApi;
 use crate::api::{CompressedFact, RawMemory};
 use crate::canvas_engine::category_color::category_color;
-use crate::canvas_engine::markdown_excerpt::render_excerpt;
+use crate::canvas_engine::markdown_excerpt::{render_excerpt, wikilink_click_target};
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
 use crate::state::memory::MemoryState;
@@ -29,7 +29,7 @@ pub fn DetailDrawer(target: RwSignal<Option<DrawerTarget>>) -> impl IntoView {
             None => view! { <div></div> }.into_any(),
             Some(DrawerTarget::Note(fact)) => view! {
                 <DrawerShell target=target>
-                    <NoteDetail fact=fact />
+                    <NoteDetail fact=fact target=target />
                 </DrawerShell>
             }
             .into_any(),
@@ -69,7 +69,7 @@ fn DrawerShell(target: RwSignal<Option<DrawerTarget>>, children: Children) -> im
 }
 
 #[component]
-fn NoteDetail(fact: CompressedFact) -> impl IntoView {
+fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> impl IntoView {
     let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
     let mem = expect_context::<MemoryState>();
@@ -175,6 +175,11 @@ fn NoteDetail(fact: CompressedFact) -> impl IntoView {
                                 <div
                                     class="node-card-full__excerpt text-xs leading-relaxed text-text-secondary"
                                     inner_html=render_excerpt(&md)
+                                    on:click=move |ev| {
+                                        if let Some(t) = wikilink_click_target(&ev) {
+                                            navigate_drawer(&state, &mem, target, t);
+                                        }
+                                    }
                                 ></div>
                             }.into_any(),
                             None => view! {
@@ -206,8 +211,16 @@ fn NoteDetail(fact: CompressedFact) -> impl IntoView {
                             {t!(i18n, memory.detail_backlinks)}
                         </div>
                         <ul class="space-y-1">
-                            {bl.into_iter().map(|b| view! {
-                                <li class="text-xs font-mono text-text-secondary break-all">{b}</li>
+                            {bl.into_iter().map(|b| {
+                                let b_click = b.clone();
+                                view! {
+                                    <li
+                                        style="font-size:11px;color:var(--cat-reference);padding:3px 6px;border-radius:4px;background:rgba(96,165,250,0.08);cursor:pointer;word-break:break-all;font-family:monospace"
+                                        on:click=move |_| navigate_drawer(&state, &mem, target, b_click.clone())
+                                    >
+                                        {b}
+                                    </li>
+                                }
                             }).collect_view()}
                         </ul>
                     </div>
@@ -219,6 +232,35 @@ fn NoteDetail(fact: CompressedFact) -> impl IntoView {
             </div>
         </div>
     }
+}
+
+/// Resolve a clicked wikilink target to a node id and load it into the
+/// drawer. Path-form targets navigate directly; bare names resolve via
+/// graph.search (first hit — mirrors `navigate_wl` in the canvas detail
+/// panel). Setting `target_signal` remounts `NoteDetail`, which fetches the
+/// new note on its own.
+fn navigate_drawer(
+    state: &DashboardState,
+    mem: &MemoryState,
+    target_signal: RwSignal<Option<DrawerTarget>>,
+    wl: String,
+) {
+    let state = *state;
+    let mem = *mem;
+    spawn_local(async move {
+        let id = if wl.contains('/') {
+            Some(wl)
+        } else {
+            let agent = mem.agent_id.get_untracked();
+            GraphApi::search(&state, &agent, &wl, 1)
+                .await
+                .ok()
+                .and_then(|r| r.results.first().map(|f| f.id.clone()))
+        };
+        if let Some(id) = id {
+            target_signal.set(Some(DrawerTarget::Note(CompressedFact::stub_from_path(&id))));
+        }
+    });
 }
 
 #[component]

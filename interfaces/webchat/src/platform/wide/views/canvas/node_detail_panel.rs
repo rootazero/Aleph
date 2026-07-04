@@ -249,6 +249,11 @@ fn DetailFor(
                             class="node-card-full__excerpt"
                             style="color:var(--text-body);font-size:12px;line-height:1.55"
                             inner_html=html
+                            on:click=move |ev| {
+                                if let Some(t) = crate::canvas_engine::markdown_excerpt::wikilink_click_target(&ev) {
+                                    navigate_wl(&state, &mem, t);
+                                }
+                            }
                         ></div>
                         <button class="node-detail-btn" style="margin-top:8px" on:click=edit>
                             {t!(i18n, memory.edit)}
@@ -387,6 +392,29 @@ fn RecentVisitedList() -> impl IntoView {
             }}
         </div>
     }
+}
+
+/// Resolve a clicked wikilink target to a node id and select it.
+/// Path-form targets navigate directly; bare names resolve via graph.search
+/// (first hit — same resolution surface the sidebar search uses).
+fn navigate_wl(state: &DashboardState, mem: &MemoryState, target: String) {
+    let state = *state;
+    let mem = *mem;
+    spawn_local(async move {
+        let id = if target.contains('/') {
+            Some(target)
+        } else {
+            let agent = mem.agent_id.get_untracked();
+            GraphApi::search(&state, &agent, &target, 1)
+                .await
+                .ok()
+                .and_then(|r| r.results.first().map(|f| f.id.clone()))
+        };
+        if let Some(id) = id {
+            mem.push_recent(id.clone());
+            mem.selected_node.set(Some(id));
+        }
+    });
 }
 
 #[cfg(test)]

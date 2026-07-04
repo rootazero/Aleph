@@ -8,8 +8,9 @@ use leptos_router::hooks::use_navigate;
 use leptos_router::NavigateOptions;
 
 use crate::api::graph::GraphApi;
+use crate::api::CompressedFact;
 use crate::canvas_engine::category_color::category_color;
-use crate::canvas_engine::markdown_excerpt::render_excerpt;
+use crate::canvas_engine::markdown_excerpt::{render_excerpt, wikilink_click_target};
 use crate::context::DashboardState;
 use crate::platform::phone::shell::PhoneShell;
 use crate::state::memory::MemoryState;
@@ -76,7 +77,16 @@ pub fn PhoneMemoryDetail() -> impl IntoView {
 
                 {move || match body.get() {
                     Some(md) => view! {
-                        <div class="node-card-full__excerpt" style="font-size:14px; line-height:1.6; color:var(--color-text-secondary);" inner_html=render_excerpt(&md)></div>
+                        <div
+                            class="node-card-full__excerpt"
+                            style="font-size:14px; line-height:1.6; color:var(--color-text-secondary);"
+                            inner_html=render_excerpt(&md)
+                            on:click=move |ev| {
+                                if let Some(t) = wikilink_click_target(&ev) {
+                                    navigate_phone(&dashboard, &mem, st, t);
+                                }
+                            }
+                        ></div>
                     }.into_any(),
                     None => view! {
                         <div style="font-size:13px; font-style:italic; color:var(--color-text-tertiary);">"Loading…"</div>
@@ -93,8 +103,17 @@ pub fn PhoneMemoryDetail() -> impl IntoView {
                         <div style="margin-top:18px;">
                             <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.12em; color:var(--color-text-tertiary); margin-bottom:6px;">"Backlinks"</div>
                             <div class="list">
-                                {bl.into_iter().map(|b| view! {
-                                    <div class="cell"><div class="cell-body"><div class="cell-sub mono" style="word-break:break-all;">{b}</div></div></div>
+                                {bl.into_iter().map(|b| {
+                                    let b_click = b.clone();
+                                    view! {
+                                        <div
+                                            class="cell"
+                                            style="cursor:pointer;"
+                                            on:click=move |_| navigate_phone(&dashboard, &mem, st, b_click.clone())
+                                        >
+                                            <div class="cell-body"><div class="cell-sub mono" style="word-break:break-all;">{b}</div></div>
+                                        </div>
+                                    }
                                 }).collect_view()}
                             </div>
                         </div>
@@ -104,4 +123,33 @@ pub fn PhoneMemoryDetail() -> impl IntoView {
             </PhoneShell>
         }.into_any()
     }
+}
+
+/// Resolve a clicked wikilink target to a node id and load it into the
+/// detail screen. Path-form targets navigate directly; bare names resolve
+/// via graph.search (first hit — mirrors `navigate_wl` in the canvas detail
+/// panel). Setting `st.selected` re-triggers the fetch Effect above, which
+/// reloads the body + backlinks for the new note without leaving the route.
+fn navigate_phone(
+    dashboard: &DashboardState,
+    mem: &MemoryState,
+    st: PhoneMemoryState,
+    target: String,
+) {
+    let dashboard = *dashboard;
+    let mem = *mem;
+    spawn_local(async move {
+        let id = if target.contains('/') {
+            Some(target)
+        } else {
+            let agent = mem.agent_id.get_untracked();
+            GraphApi::search(&dashboard, &agent, &target, 1)
+                .await
+                .ok()
+                .and_then(|r| r.results.first().map(|f| f.id.clone()))
+        };
+        if let Some(id) = id {
+            st.selected.set(Some(CompressedFact::stub_from_path(&id)));
+        }
+    });
 }
