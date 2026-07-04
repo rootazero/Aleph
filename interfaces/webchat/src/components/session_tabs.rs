@@ -22,6 +22,7 @@ use leptos::ev::keydown;
 use leptos::prelude::*;
 
 use crate::i18n::{t_string, use_i18n};
+use crate::state::layout::WorkspaceState;
 use crate::state::sessions::{ConvId, SessionMap};
 use crate::views::chat::state::ChatState;
 
@@ -30,8 +31,9 @@ use crate::views::chat::state::ChatState;
 pub fn SessionTabs() -> impl IntoView {
     let sessions = expect_context::<SessionMap>();
     let chat = expect_context::<ChatState>();
+    let workspace = use_context::<WorkspaceState>();
 
-    install_tab_hotkeys(sessions, chat);
+    install_tab_hotkeys(sessions, chat, workspace);
 
     view! {
         <Show when=move || sessions.tab_strip_visible()>
@@ -53,6 +55,7 @@ fn Tab(conv: ConvId) -> impl IntoView {
     let i18n = use_i18n();
     let sessions = expect_context::<SessionMap>();
     let chat = expect_context::<ChatState>();
+    let workspace = use_context::<WorkspaceState>();
 
     let is_active = move || sessions.active.with(|a| *a == Some(conv));
     let is_running = move || sessions.is_running(conv);
@@ -70,7 +73,15 @@ fn Tab(conv: ConvId) -> impl IntoView {
                     "text-text-secondary hover:bg-surface-sunken hover:text-text-primary"
                 }
             )
-            on:click=move |_| sessions.activate(chat, conv)
+            on:click=move |_| {
+                sessions.activate(chat, conv);
+                // The detail pane is global, not per-conversation — drop the
+                // outgoing conversation's selection/pin so it doesn't leak
+                // into the tab we just switched to (final-review F1).
+                if let Some(ws) = workspace {
+                    ws.clear_selection();
+                }
+            }
         >
             // 进行中红点（隐现）。
             <Show when=is_running>
@@ -98,7 +109,7 @@ fn Tab(conv: ConvId) -> impl IntoView {
 
 /// Bind ⌘1..9 / ⌘W (plus Ctrl- variants for non-mac browsers / Windows).
 /// Listener is leaked deliberately — same pattern as `state::hotkey::install`.
-fn install_tab_hotkeys(sessions: SessionMap, chat: ChatState) {
+fn install_tab_hotkeys(sessions: SessionMap, chat: ChatState, workspace: Option<WorkspaceState>) {
     window_event_listener(keydown, move |ev: web_sys::KeyboardEvent| {
         let mod_pressed = ev.meta_key() || ev.ctrl_key();
         if !mod_pressed || ev.alt_key() {
@@ -114,6 +125,10 @@ fn install_tab_hotkeys(sessions: SessionMap, chat: ChatState) {
             if (1..=9).contains(&digit) && key.len() == 1 {
                 ev.prevent_default();
                 sessions.switch_by_index(chat, (digit - 1) as usize);
+                // See Tab's on:click — same global-pane leak (final-review F1).
+                if let Some(ws) = workspace {
+                    ws.clear_selection();
+                }
                 return;
             }
         }

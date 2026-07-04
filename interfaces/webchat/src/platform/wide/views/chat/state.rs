@@ -459,23 +459,23 @@ impl ChatState {
         }
     }
 
-    /// Whether run `run_id`'s step strip is expanded. `default_open` is the
-    /// state to use when the user hasn't toggled it (running strips default
-    /// open, completed strips default collapsed).
+    /// Whether explore group `key` is expanded. `default_open` is the state
+    /// to use when the user hasn't toggled it (running groups default open,
+    /// completed groups default collapsed).
     #[must_use]
-    pub fn strip_is_open(&self, run_id: &str, default_open: bool) -> bool {
+    pub fn strip_is_open(&self, key: &str, default_open: bool) -> bool {
         self.strip_open
-            .with(|m| m.get(run_id).copied())
+            .with(|m| m.get(key).copied())
             .unwrap_or(default_open)
     }
 
-    /// Toggle run `run_id`'s step-strip expand state, seeding from
+    /// Toggle explore group `key`'s expand state, seeding from
     /// `default_open` when the user hasn't toggled it before. The stored
-    /// override survives the strip row's per-token remount.
-    pub fn toggle_strip(&self, run_id: &str, default_open: bool) {
-        let next = !self.strip_is_open(run_id, default_open);
+    /// override survives the group row's per-token remount.
+    pub fn toggle_strip(&self, key: &str, default_open: bool) {
+        let next = !self.strip_is_open(key, default_open);
         self.strip_open.update(|m| {
-            m.insert(run_id.to_string(), next);
+            m.insert(key.to_string(), next);
         });
     }
 

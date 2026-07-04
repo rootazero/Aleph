@@ -508,7 +508,9 @@ pub fn ToolCard(
                 </Show>
                 <Show when=succeeded>
                     <span class="shrink-0 text-[11px] text-success">"✓"</span>
-                    {move || status.get().and_then(|(_, d, _)| d).map(|d| view! {
+                    // Sub-second completions just show the ✓ — a "0s" label reads as
+                    // broken, not fast (final-review F4).
+                    {move || status.get().and_then(|(_, d, _)| d).filter(|d| *d >= 1000).map(|d| view! {
                         <span class="shrink-0 text-[10px] font-mono text-text-tertiary">
                             {crate::state::run_clock::fmt_elapsed(d as i64)}
                         </span>

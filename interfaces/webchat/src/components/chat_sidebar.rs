@@ -214,8 +214,7 @@ pub(crate) async fn hydrate_session_history(
             // replay set.
             if let Some(ws) = workspace {
                 ws.unseen_activity.set(0);
-                ws.selected_tool.set(None);
-                ws.pinned.set(false);
+                ws.clear_selection();
             }
 
             // Re-project the gauge from the persisted occupancy. This is the

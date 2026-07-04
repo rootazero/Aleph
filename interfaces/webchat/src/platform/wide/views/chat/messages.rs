@@ -820,7 +820,7 @@ fn ExploreGroupRow(
         Memo::new(move |_| chat.strip_is_open(&k, default_open))
     };
 
-    // 折叠头摘要：运行中 "🔍 探索中… N 项"；完成 "✓ 探索了 N 项（读取×3 · 搜索×1）"
+    // 折叠头摘要：运行中 "🔍 探索中… N 项"；完成 "✓ 探索了 N 项 (读取×3 · 搜索×1)"
     let n = tools.len();
     let counts = summarize_tools(
         &tools.iter().map(|t| (t.tool_id.clone(), t.tool_name.clone())).collect::<Vec<_>>(),
@@ -837,7 +837,7 @@ fn ExploreGroupRow(
     .collect::<Vec<_>>()
     .join(" · ");
     let header = move || if completed {
-        format!("{} {} {}（{}）",
+        format!("{} {} {} ({})",
             t_string!(i18n, chat.explore_done), n,
             t_string!(i18n, chat.explore_items), counts.clone())
     } else {

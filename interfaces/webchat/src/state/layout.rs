@@ -201,6 +201,17 @@ impl WorkspaceState {
         self.unseen_activity.set(0);
         self.files_drawer_open.set(false);
         self.selected_file.set(None);
+        self.clear_selection();
+    }
+
+    /// Clear the detail-pane selection + pin. `selected_tool`/`pinned` are
+    /// global (not per-conversation), so any conversation switch that keeps
+    /// the singleton's captured payloads intact (unlike [`Self::reset`],
+    /// which wipes them for a full session reload) must still drop the
+    /// pointer left over from the outgoing conversation — otherwise the
+    /// detail pane can show another conversation's tool, and a stale pin
+    /// blocks the new foreground's live-follow.
+    pub fn clear_selection(&self) {
         self.selected_tool.set(None);
         self.pinned.set(false);
     }
@@ -461,6 +472,28 @@ mod tests {
         ws.reset();
         assert!(ws.selected_tool.get_untracked().is_none());
         assert!(!ws.pinned.get_untracked());
+    }
+
+    /// Regression for final-review F1: tab switch must clear the leftover
+    /// selection/pin without wiping captured payloads (unlike `reset()`,
+    /// which is only safe on a full session reload since payloads aren't
+    /// per-conversation).
+    #[test]
+    fn clear_selection_drops_selection_and_pin_but_keeps_payloads() {
+        let owner = Owner::new();
+        owner.set();
+        let ws = test_ws(LayoutMode::Split);
+        ws.select_tool("r1", "t1");
+        ws.record_tool_args("r1", "t1", serde_json::json!({"q": "x"}));
+        assert!(ws.pinned.get_untracked());
+
+        ws.clear_selection();
+
+        assert!(ws.selected_tool.get_untracked().is_none());
+        assert!(!ws.pinned.get_untracked());
+        // The other conversation's captured payload must survive — clearing
+        // selection on tab switch is not a full reset.
+        assert!(ws.get_tool_payload("r1", "t1").is_some());
     }
 
     #[test]
