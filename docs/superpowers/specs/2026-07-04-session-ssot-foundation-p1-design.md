@@ -7,6 +7,19 @@
 
 ---
 
+## 0. 拓扑修正 (Topology Correction — 2026-07-04 深挖后)
+
+> spec 初稿把 `messages` 表笼统称"SessionStore"。深挖后精确拓扑如下（写计划的真实地基）：
+
+- **`SqliteSessionStore = SessionManager`**（type alias，`session_store/sqlite_backend/mod.rs:13`）——生产默认后端。所以生产其实只有**两个**存储：`messages` 表（SessionManager，同一 `Arc<Mutex<Connection>>`）+ `session_events`（SessionService）。二者同一 `sessions.db` 文件、**两张表、两条独立连接**。
+- **Panel 读路径**：`chat.history` → `SessionStore::get_history_before` → SessionManager `messages` 表（`handlers/chat.rs:252`）。默认后端 `FileSessionStore` **不启用**（仅 `general.session_store_backend="file"` 时）。
+- **messages 唯一写漏斗**：一切经 `SessionStore::append_message` → `SessionManager.add_message_with_meta`（`sqlite_backend/mod.rs:149`，`#[deprecated]`）。生产调用者 = `AgentInstance::add_message_with_run_id`（`agent_instance.rs:466`）+ `orphan_notice.rs:54`；上游是**执行引擎** `execution_engine/{execute,simple,fast_path}.rs` + `openai_api/completions/agent.rs`。
+- **真正的重复**：**执行引擎**把 user/assistant 写进 `messages`，**同时** harness 把同样的 user/assistant 写进 `session_events`（外加 shim 反向镜像 messages→events）。这才是"双写"根因。
+- **shim 位置**：`add_message_with_meta` 内部（`crud.rs:244-246`），一次性 messages→events 镜像。
+
+**因此 P1 翻转箭头的精确含义**：① 让 `session_events`（harness 已写）成权威；② **projector 订阅 events → 写 messages**（复用 `append_message`，保留 derived_title/FTS/token 记账/compaction 触发）；③ **移除执行引擎对 `add_message` 的直写**（projector 已覆盖）；④ 删 shim（否则 event→projector→append_message→shim→event 成环）。④ 之后 `append_message` 只被 projector 调用 = single-writer。
+- **⚠️ 新增关注点（token 关联）**：执行引擎 `add_message` 携带 `input_tokens`/`output_tokens`/`model`；而 harness 事件里 token 在 `LlmCallEnded`/`BudgetUpdated`、model 在 `LlmCallStarted`。projector 物化 `AssistantMessage` 时须**跨事件聚合**同 turn 的 token/model，否则 `messages`/`sessions` 表 token 记账回退为 0。见计划 Task「投影聚合」。
+
 ## 1. 目标 (Goal)
 
 把 `session_events` 确立为**唯一权威的跨-run 会话日志**，`messages`/`SessionStore` 降为**从事件重建的只读投影**。消除有损 shim、assistant 双写、相关性丢失、"从外部 history 再 seed"四个 G1 症状。**Panel 读路径（`chat.history`）零改动**。
