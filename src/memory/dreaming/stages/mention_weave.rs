@@ -50,7 +50,7 @@ impl DreamStage for MentionWeaveStage {
         };
 
         // Parse + scan off the async runtime (CPU-bound over the whole corpus).
-        let mut edges = tokio::task::spawn_blocking(move || {
+        let edges = tokio::task::spawn_blocking(move || {
             let docs: Vec<MentionDoc> = hydrated
                 .into_iter()
                 .filter_map(|r| {
@@ -70,12 +70,9 @@ impl DreamStage for MentionWeaveStage {
         .await
         .map_err(|e| AlephError::other(format!("mention_weave join: {e}")))?;
 
-        if edges.len() > MAX_MENTIONS_PER_CYCLE {
-            tracing::info!(
-                dropped = edges.len() - MAX_MENTIONS_PER_CYCLE,
-                "mention_weave: per-cycle cap applied"
-            );
-            edges.truncate(MAX_MENTIONS_PER_CYCLE);
+        let (edges, dropped) = apply_cycle_cap(edges, MAX_MENTIONS_PER_CYCLE);
+        if dropped > 0 {
+            tracing::info!(dropped, "mention_weave: per-cycle cap applied");
         }
         let edge_count = edges.len();
         store.replace_mention_links(&agent_id, &edges).await?;
@@ -88,13 +85,58 @@ impl DreamStage for MentionWeaveStage {
     }
 }
 
+/// Pure cycle-cap discipline: keep the first `cap` edges, report how many were
+/// dropped. `scan_mentions` returns pairs sorted by `(from, to)`, so the cut
+/// is deterministic across cycles (pathological-corpus guard, spec M1).
+#[must_use]
+fn apply_cycle_cap(
+    mut edges: Vec<(String, String)>,
+    cap: usize,
+) -> (Vec<(String, String)>, usize) {
+    let dropped = edges.len().saturating_sub(cap);
+    edges.truncate(cap);
+    (edges, dropped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn pair(a: &str, b: &str) -> (String, String) {
+        (a.into(), b.into())
+    }
+
     #[test]
     fn stage_name_is_mention_weave() {
         assert_eq!(MentionWeaveStage.name(), "mention_weave");
+    }
+
+    #[test]
+    fn cycle_cap_truncates_and_reports_dropped() {
+        let n = 3;
+        let edges: Vec<(String, String)> = (0..MAX_MENTIONS_PER_CYCLE + n)
+            .map(|i| pair(&format!("s/from-{i:03}"), &format!("t/to-{i:03}")))
+            .collect();
+        let (capped, dropped) = apply_cycle_cap(edges, MAX_MENTIONS_PER_CYCLE);
+        assert_eq!(capped.len(), MAX_MENTIONS_PER_CYCLE);
+        assert_eq!(dropped, n);
+        // Deterministic cut: the first `cap` pairs (scan order) survive.
+        assert_eq!(capped[0], pair("s/from-000", "t/to-000"));
+        assert_eq!(
+            capped[MAX_MENTIONS_PER_CYCLE - 1],
+            pair(
+                &format!("s/from-{:03}", MAX_MENTIONS_PER_CYCLE - 1),
+                &format!("t/to-{:03}", MAX_MENTIONS_PER_CYCLE - 1)
+            )
+        );
+    }
+
+    #[test]
+    fn cycle_cap_under_cap_is_untouched() {
+        let edges = vec![pair("a/x", "b/y"), pair("b/y", "a/x")];
+        let (capped, dropped) = apply_cycle_cap(edges.clone(), MAX_MENTIONS_PER_CYCLE);
+        assert_eq!(capped, edges);
+        assert_eq!(dropped, 0);
     }
 
     // -----------------------------------------------------------------

@@ -1470,9 +1470,15 @@ impl NoteStore for SqliteMemoryBackend {
     ) -> Result<(), AlephError> {
         use crate::memory::notes::links::mentions::{MENTION_CONFIDENCE, MENTION_RELATION};
         let conn = lock_conn!(self)?;
+        // Wrap DELETE + INSERT loop in a single transaction so a mid-loop
+        // failure cannot leave the mention edge set half-replaced (the full
+        // refresh must be all-or-nothing).
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AlephError::config(format!("replace_mention_links tx begin: {e}")))?;
         // Full refresh: mentions are re-scanned from the whole corpus every
         // dream cycle, so stale pairs must not linger.
-        conn.execute(
+        tx.execute(
             "DELETE FROM notes_links WHERE agent_id = ?1 AND relation = ?2",
             params![agent_id, MENTION_RELATION],
         )
@@ -1480,7 +1486,7 @@ impl NoteStore for SqliteMemoryBackend {
         // DO NOTHING on conflict: an existing semantic link (wikilink / typed
         // relation) for the pair always wins over the mention soft edge.
         for (from, to) in rows {
-            conn.execute(
+            tx.execute(
                 "INSERT INTO notes_links \
                    (agent_id, from_note, to_note, to_raw, relation, confidence, resolved_by, status) \
                  VALUES (?1, ?2, ?3, ?3, ?4, ?5, 'mention_scan', 'active') \
@@ -1489,6 +1495,8 @@ impl NoteStore for SqliteMemoryBackend {
             )
             .map_err(|e| AlephError::config(format!("replace_mention_links insert: {e}")))?;
         }
+        tx.commit()
+            .map_err(|e| AlephError::config(format!("replace_mention_links tx commit: {e}")))?;
         Ok(())
     }
 
