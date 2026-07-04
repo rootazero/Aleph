@@ -43,13 +43,23 @@ pub(super) async fn seed_session(
             }
         }
         FlowInput::History { turns, prompt } => {
-            for turn in turns {
-                match turn {
-                    FlowHistoryTurn::User(content) => {
-                        emit_message(service, session_id, content, true).await?;
-                    }
-                    FlowHistoryTurn::Assistant(content) => {
-                        emit_message(service, session_id, content, false).await?;
+            // Only seed prior turns into a fresh (empty) log. For a continuation
+            // (log already non-empty) the turns are already persisted — re-seeding
+            // would duplicate the whole history. The new user turn below always runs.
+            let existing = service
+                .get_events(session_id, None, Some(1))
+                .await
+                .map(|e| !e.is_empty())
+                .unwrap_or(false);
+            if !existing {
+                for turn in turns {
+                    match turn {
+                        FlowHistoryTurn::User(content) => {
+                            emit_message(service, session_id, content, true).await?;
+                        }
+                        FlowHistoryTurn::Assistant(content) => {
+                            emit_message(service, session_id, content, false).await?;
+                        }
                     }
                 }
             }

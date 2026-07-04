@@ -311,6 +311,49 @@ async fn seed_session_history_replays_turns_and_adds_prompt() {
 }
 
 #[tokio::test]
+async fn history_input_does_not_reseed_when_log_nonempty() {
+    let service = fresh_service();
+    let sid = SessionKey::ephemeral("seed-noreseed");
+
+    // Pre-seed ONE user message so the log is non-empty
+    seed_session(service.as_ref(), &sid, FlowInput::Prompt("earlier".into()))
+        .await
+        .unwrap();
+
+    // Then seed History with the SAME history turn + a new prompt
+    let turns = vec![FlowHistoryTurn::User(MessageContent {
+        text: "earlier".into(),
+        blocks: Vec::new(),
+        thinking: None,
+        thinking_signature: None,
+    })];
+    seed_session(
+        service.as_ref(),
+        &sid,
+        FlowInput::History {
+            turns,
+            prompt: "new".into(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Collect user texts from get_events
+    let events = service.get_events(&sid, None, None).await.unwrap();
+    let user_texts: Vec<String> = events
+        .iter()
+        .filter_map(|r| match &r.event {
+            SessionEvent::UserMessage { content, .. } => Some(content.text.clone()),
+            _ => None,
+        })
+        .collect();
+
+    // Assert: "earlier" is NOT re-seeded (would appear twice without the guard),
+    // only the new "new" is added
+    assert_eq!(user_texts, vec!["earlier".to_string(), "new".to_string()]);
+}
+
+#[tokio::test]
 async fn seed_session_multimodal_emits_one_user_per_entry() {
     let service = fresh_service();
     let sid = SessionKey::ephemeral("seed-multimodal");
