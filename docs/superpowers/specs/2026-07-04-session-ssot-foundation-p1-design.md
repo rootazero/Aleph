@@ -1,6 +1,7 @@
 # Phase 1 · SSOT 地基 — 详细设计 (Single Source of Truth Foundation)
 
 > **Date**: 2026-07-04
+> **Status**: ✅ Implemented (2026-07-04, commits `e7047c1ec..eb30b0ac4`, 13 commits). Single-writer flip complete; §8 verification gate passed (mechanical + census + opus whole-branch review = Merge-with-fixes, fixes applied). Residual: Panel projection is eventually-consistent (P2 events→messages reconciler backlog); E2E manual check pending on a running server.
 > **Umbrella**: `2026-07-04-session-lifecycle-contract-design.md`
 > **Solves**: G1（双历史裂脑）
 > **Risk**: 🔴 高（触及会话写入热点 `SessionManager.add_message`）——收尾须走 §8 重构后检验。
