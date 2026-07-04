@@ -1,0 +1,139 @@
+//! Verify-on-stop soft gate (hermes `verification_stop.py` parity, nudge form).
+//!
+//! Mechanical trigger only (R7-safe): the model is stopping (`end_turn`),
+//! the recent tool window contains a file-mutation tool, and no
+//! execution-evidence tool ran after the last mutation. Fires at most once
+//! per session, as a `Veto` nudge — the model remains free to stop again
+//! on the very next turn (nudge, NOT a gate).
+//!
+//! R7 / R10 note: pure structural check over tool NAMES in the recent
+//! window — no content inspection, no semantic judgment, zero LLM calls.
+//! A stronger model that verifies its own edits never triggers this.
+
+use std::collections::HashSet;
+
+use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
+
+use crate::error::ErrorClass;
+use crate::sync_primitives::Mutex;
+use crate::thinker::nudges::MUTATION_EVIDENCE_NUDGE;
+use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
+
+/// Tools whose presence in the window means "files were mutated this run".
+const MUTATION_TOOLS: &[&str] = &["file_write", "file_edit", "apply_patch"];
+/// Tools whose presence AFTER the last mutation counts as verification
+/// evidence (mechanical proxy: something was executed/observed post-edit).
+const EVIDENCE_TOOLS: &[&str] = &["bash", "code_exec", "code_check"];
+/// Bound on the once-per-session memory (mechanical hygiene, no LRU needed:
+/// entries are one small String per session; clear wholesale at capacity).
+const NUDGED_SESSIONS_CAP: usize = 1024;
+
+#[derive(Default)]
+pub struct MutationEvidenceVerifier {
+    nudged: Mutex<HashSet<String>>,
+}
+
+#[async_trait]
+impl TurnVerifier for MutationEvidenceVerifier {
+    fn name(&self) -> &str {
+        "mutation_evidence"
+    }
+
+    async fn verify(
+        &self,
+        ctx: &TurnVerifyContext<'_>,
+        _cancel: &CancellationToken,
+    ) -> VerifierVerdict {
+        // Only at the stop boundary — mid-turn belongs to ToolLoopVerifier.
+        if ctx.stop_reason != Some("end_turn") {
+            return VerifierVerdict::Continue;
+        }
+        let last_mutation = ctx
+            .recent_tool_calls
+            .iter()
+            .rposition(|c| MUTATION_TOOLS.contains(&c.name.as_str()));
+        let Some(mut_idx) = last_mutation else {
+            return VerifierVerdict::Continue;
+        };
+        let evidence_after = ctx.recent_tool_calls[mut_idx + 1..]
+            .iter()
+            .any(|c| EVIDENCE_TOOLS.contains(&c.name.as_str()));
+        if evidence_after {
+            return VerifierVerdict::Continue;
+        }
+        // Once per session: a nudge repeated on every stop becomes a gate.
+        if let Some(sid) = ctx.session_id {
+            let mut nudged = self.nudged.lock().unwrap_or_else(|e| e.into_inner());
+            if nudged.contains(sid) {
+                return VerifierVerdict::Continue;
+            }
+            if nudged.len() >= NUDGED_SESSIONS_CAP {
+                nudged.clear();
+            }
+            nudged.insert(sid.to_string());
+        }
+        VerifierVerdict::Veto {
+            reason: MUTATION_EVIDENCE_NUDGE.to_string(),
+            class: ErrorClass::Recoverable,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::verification::turn_verifier::{ToolCallSummary, TurnVerifier, TurnVerifyContext};
+    use tokio_util::sync::CancellationToken;
+
+    fn ctx<'a>(calls: &'a [ToolCallSummary], stopping: bool) -> TurnVerifyContext<'a> {
+        TurnVerifyContext {
+            iterations: 3,
+            tool_calls_made: calls.len(),
+            final_text: Some("done"),
+            recent_tool_calls: calls,
+            stop_reason: stopping.then_some("end_turn"),
+            session_id: Some("s1"),
+            robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        }
+    }
+
+    fn call(name: &str) -> ToolCallSummary {
+        ToolCallSummary {
+            name: name.to_string(),
+            args_hash: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn vetoes_once_when_stopping_after_unverified_mutation() {
+        let v = MutationEvidenceVerifier::default();
+        let calls = [call("file_edit")];
+        let token = CancellationToken::new();
+        // First stop after an unverified edit → one Veto (nudge).
+        assert!(v.verify(&ctx(&calls, true), &token).await.is_veto());
+        // Same session, second stop → silent (once per session; nudge, not gate).
+        assert!(v.verify(&ctx(&calls, true), &token).await.is_continue());
+    }
+
+    #[tokio::test]
+    async fn stays_silent_when_evidence_follows_mutation() {
+        let v = MutationEvidenceVerifier::default();
+        // Something was executed after the mutation (mechanical evidence proxy)
+        // → do not disturb.
+        let calls = [call("file_edit"), call("bash")];
+        let token = CancellationToken::new();
+        assert!(v.verify(&ctx(&calls, true), &token).await.is_continue());
+    }
+
+    #[tokio::test]
+    async fn stays_silent_mid_turn_and_without_mutations() {
+        let v = MutationEvidenceVerifier::default();
+        let token = CancellationToken::new();
+        let mutating = [call("file_edit")];
+        // Mid-turn (not stopping) → not this verifier's business.
+        assert!(v.verify(&ctx(&mutating, false), &token).await.is_continue());
+        let readonly = [call("file_read")];
+        assert!(v.verify(&ctx(&readonly, true), &token).await.is_continue());
+    }
+}

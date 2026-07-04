@@ -72,6 +72,17 @@ pub const GRACE_NUDGE_TIMEOUT: &str =
      short summary for the user: what you accomplished, what remains, and any \
      partial result you can deliver right now.";
 
+/// Verify-on-stop soft nudge emitted by `MutationEvidenceVerifier`
+/// (`src/verification/mutation_evidence_verifier.rs`) when the model stops
+/// right after mutating files without executing anything to verify the
+/// change. Advisory, once per session: the copy explicitly tells the model
+/// it may finish anyway (nudge, NOT a gate).
+pub const MUTATION_EVIDENCE_NUDGE: &str =
+    "You edited files this run but nothing was executed afterwards to \
+     verify the change. Consider running a quick check (build, test, or \
+     targeted command) before finishing — or finish now if you are \
+     confident verification is unnecessary.";
+
 /// Soft-landing reminder injected one turn before the consecutive-failure cap
 /// fires. Gives a weak model a final chance to change approach or wrap up
 /// before the hard stop. The model writes the user-facing text (R7).
