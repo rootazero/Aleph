@@ -475,7 +475,8 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         | SessionEvent::ToolError { turn_id, .. }
         | SessionEvent::SubagentSpawned { turn_id, .. }
         | SessionEvent::SubagentReturned { turn_id, .. }
-        | SessionEvent::BudgetUpdated { turn_id, .. } => Some(*turn_id),
+        | SessionEvent::BudgetUpdated { turn_id, .. }
+        | SessionEvent::AssistantRunMeta { turn_id, .. } => Some(*turn_id),
         SessionEvent::Error { turn_id, .. } => *turn_id,
         SessionEvent::SessionCreated { .. }
         | SessionEvent::SessionWoken { .. }
@@ -502,6 +503,7 @@ const fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::TurnEnded { .. } => "turn_ended",
         SessionEvent::UserMessage { .. } => "user_message",
         SessionEvent::AssistantMessage { .. } => "assistant_message",
+        SessionEvent::AssistantRunMeta { .. } => "assistant_run_meta",
         SessionEvent::SystemMessage { .. } => "system_message",
         SessionEvent::LlmCallStarted { .. } => "llm_call_started",
         SessionEvent::LlmCallEnded { .. } => "llm_call_ended",

@@ -74,6 +74,9 @@ impl SessionState {
             SessionEvent::AssistantMessage { .. } => {
                 // See UserMessage.
             }
+            SessionEvent::AssistantRunMeta { .. } => {
+                // Observational; metadata persistence is handled by the projector.
+            }
             SessionEvent::SystemMessage { .. } => {
                 // See UserMessage.
             }

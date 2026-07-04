@@ -541,6 +541,28 @@ impl SessionStore for SessionManager {
     async fn set_running(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
         self.set_running(key).await.map_err(map_err)
     }
+
+    async fn stamp_last_assistant_metadata(
+        &self,
+        key: &SessionKey,
+        metadata: &serde_json::Value,
+    ) -> Result<(), SessionStoreError> {
+        let key_str = key.to_key_string();
+        let metadata_json = serde_json::to_string(metadata).map_err(|e| {
+            SessionStoreError::DatabaseError(format!("serialize metadata: {e}"))
+        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Lock error: {e}")))?;
+        conn.execute(
+            "UPDATE messages SET metadata = ?1
+             WHERE id = (SELECT MAX(id) FROM messages WHERE session_key = ?2 AND role = 'assistant')",
+            params![metadata_json, key_str],
+        )
+        .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
+        Ok(())
+    }
 }
 
 #[async_trait]

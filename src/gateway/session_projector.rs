@@ -108,6 +108,27 @@ impl MessageProjector {
                     tracing::warn!(error = %e, "projector assistant append failed");
                 }
             }
+            SessionEvent::AssistantRunMeta {
+                run_id,
+                context_tokens,
+                context_window,
+                total_tokens,
+                ..
+            } => {
+                let occupancy = crate::gateway::execution_engine::helpers::RunContextOccupancy {
+                    context_tokens: *context_tokens,
+                    context_window: *context_window,
+                    total_tokens: *total_tokens,
+                };
+                if let Some(meta) = crate::gateway::agent_instance::build_message_metadata(
+                    Some(run_id),
+                    Some(occupancy),
+                ) {
+                    if let Err(e) = store.stamp_last_assistant_metadata(id, &meta).await {
+                        tracing::warn!(error = %e, "projector: stamp run-meta failed");
+                    }
+                }
+            }
             other => {
                 if let Some(row) = project_row(other) {
                     if let Err(e) = store
@@ -241,6 +262,102 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         store.get_history(id, None).await.unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn projector_stamps_run_meta_on_assistant_row() {
+        let temp = tempdir().unwrap();
+        let config = SessionManagerConfig {
+            db_path: temp.path().join("proj_meta.db"),
+            max_messages: 10_000,
+            compaction_keep: 5_000,
+            ..Default::default()
+        };
+        let manager = SessionManager::new(config).unwrap();
+        let id = SessionId::ephemeral("proj_meta");
+        manager.get_or_create(&id).await.unwrap();
+
+        let store: Arc<dyn SessionStore> = Arc::new(manager);
+        let projector = MessageProjector::new(store.clone());
+
+        let tid = uuid::Uuid::new_v4();
+        let events: &[(EventSeq, SessionEvent)] = &[
+            (1, user_msg(tid)),
+            (
+                2,
+                SessionEvent::LlmCallStarted {
+                    turn_id: tid,
+                    provider: "anthropic".into(),
+                    model: "claude".into(),
+                    at: 1,
+                },
+            ),
+            (
+                3,
+                SessionEvent::LlmCallEnded {
+                    turn_id: tid,
+                    tokens_in: 100,
+                    tokens_out: 50,
+                    finish_reason: "stop".into(),
+                    at: 2,
+                },
+            ),
+            (4, assistant_msg(tid)),
+            (
+                5,
+                SessionEvent::AssistantRunMeta {
+                    turn_id: tid,
+                    run_id: "run_xyz".into(),
+                    context_tokens: 1234,
+                    context_window: 200_000,
+                    total_tokens: 5678,
+                    at: 3,
+                },
+            ),
+        ];
+        for (seq, ev) in events {
+            projector.on_appended(&id, &rec(*seq, ev.clone()));
+        }
+
+        // Wait for the assistant row to appear (user + assistant = 2 rows).
+        let _ = poll_history(&store, &id, 2, Duration::from_secs(2)).await;
+
+        // Poll until the metadata stamp is visible (the drain task processes
+        // AssistantRunMeta immediately after AssistantMessage, but the two DB
+        // writes are async so give it a few extra cycles).
+        let asst = {
+            let mut found = None;
+            for _ in 0..30 {
+                let msgs = store.get_history(&id, None).await.unwrap_or_default();
+                if let Some(row) = msgs
+                    .into_iter()
+                    .find(|m| m.role == "assistant" && m.metadata.is_some())
+                {
+                    found = Some(row);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            found.expect("assistant row with metadata must appear")
+        };
+
+        let meta = asst.metadata.as_ref().unwrap();
+        assert_eq!(
+            meta.get("run_id").and_then(|v| v.as_str()),
+            Some("run_xyz"),
+            "run_id mismatch"
+        );
+        // build_message_metadata stores occupancy values as strings.
+        assert_eq!(
+            meta.get("context_tokens").and_then(|v| v.as_str()),
+            Some("1234"),
+            "context_tokens mismatch"
+        );
+        assert_eq!(
+            meta.get("context_window").and_then(|v| v.as_str()),
+            Some("200000"),
+            "context_window mismatch"
+        );
     }
 
     #[tokio::test]

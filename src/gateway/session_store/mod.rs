@@ -190,6 +190,22 @@ pub trait SessionStore: Send + Sync {
         Ok(0)
     }
 
+    /// Stamp `run_id` + context-window occupancy onto the most recent
+    /// assistant message row for this session. Called by the projector when it
+    /// processes a [`crate::session::events::SessionEvent::AssistantRunMeta`]
+    /// event, so the Panel can restore the occupancy gauge on session reload
+    /// without a live `run_complete` event.
+    ///
+    /// Default: no-op (`Ok(())`). Only the SQLite-backed store overrides this;
+    /// file-backend and test stubs compile unchanged.
+    async fn stamp_last_assistant_metadata(
+        &self,
+        _key: &SessionKey,
+        _metadata: &serde_json::Value,
+    ) -> Result<(), SessionStoreError> {
+        Ok(())
+    }
+
     async fn patch_session(
         &self,
         key: &SessionKey,

@@ -186,6 +186,17 @@ pub enum SessionEvent {
         content: MessageContent,
         at: Timestamp,
     },
+    /// Stamped after the assistant message row is written; carries the
+    /// `run_id` and context-window occupancy so the projector can persist
+    /// them onto the message metadata without coupling the hot path to storage.
+    AssistantRunMeta {
+        turn_id: TurnId,
+        run_id: String,
+        context_tokens: u32,
+        context_window: u32,
+        total_tokens: u64,
+        at: Timestamp,
+    },
     SystemMessage {
         turn_id: TurnId,
         content: String,
