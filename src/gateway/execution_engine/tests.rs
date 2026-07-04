@@ -320,6 +320,15 @@ fn test_cascade_matches_engine_default() {
     );
 }
 
+/// Task 5 (audit 1.3): `max_concurrent_runs` is retired in favor of two
+/// explicit concurrency caps consumed by `ConcurrencyLimiter` (Task 6).
+#[test]
+fn engine_config_default_concurrency_caps() {
+    let c = ExecutionEngineConfig::default();
+    assert_eq!(c.max_runs_global, 8);
+    assert_eq!(c.max_runs_per_agent, 3);
+}
+
 // =============================================================================
 // wait_for_deadline — resettable deadline behavior
 // =============================================================================

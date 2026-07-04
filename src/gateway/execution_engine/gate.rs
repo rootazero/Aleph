@@ -140,7 +140,9 @@ where
                 })
                 .count();
 
-            if agent_runs >= self.config.max_concurrent_runs {
+            // TEMP: this count check is superseded by ConcurrencyLimiter in Task 6;
+            // repointed to keep compiling.
+            if agent_runs >= self.config.max_runs_per_agent {
                 drop(runs);
                 // Release the slot we just reserved before bailing out.
                 agent.set_state(AgentState::Idle).await;
@@ -148,7 +150,7 @@ where
                     "Agent {} has {} active runs (max: {})",
                     request.session_key.agent_id(),
                     agent_runs,
-                    self.config.max_concurrent_runs
+                    self.config.max_runs_per_agent
                 )));
             }
 
