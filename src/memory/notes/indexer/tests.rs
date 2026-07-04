@@ -424,10 +424,74 @@ async fn rename_note_cascades_wikilinks() {
     let new_paths = db.find_by_filename("New Name", AGENT).await.unwrap();
     assert!(!new_paths.is_empty());
 
-    // Linker's outgoing links updated
+    // Linker's outgoing links updated. `to_note` is now the full resolved
+    // path rather than the bare title: the wikilink-rewrite loop above
+    // re-indexes Linker.md (as "[[New Name]]") before "New Name" itself is
+    // re-indexed, so that pass leaves the row dangling on the bare text;
+    // rename_note's targeted `backfill_inbound_links` call at the end then
+    // revives it as an active, full-path edge.
     let out = db.get_outgoing_links("other/Linker", AGENT).await.unwrap();
-    assert!(out.contains(&"New Name".to_string()));
+    assert!(
+        out.contains(&"other/New Name".to_string()),
+        "expected the backfilled full-path target, got {out:?}"
+    );
     assert!(!out.contains(&"Old Name".to_string()));
+}
+
+#[tokio::test]
+async fn rename_note_backfills_dangling_links_pointing_at_new_name() {
+    // Rename-trigger variant of `write_note_backfills_dangling_links_in_other_notes`:
+    // the targeted backfill must also fire when a note is renamed INTO the
+    // raw link text (not just created fresh under that name), reviving any
+    // other note that was already dangling on it.
+    let dir = TempDir::new().unwrap();
+    let db = create_test_db();
+    let indexer = NoteIndexer::new(dir.path().to_path_buf(), db.clone());
+
+    // Linker links to "Target", which doesn't exist yet -> dangles.
+    let linker = KnowledgeNote {
+        title: "Linker".to_string(),
+        category: "other".to_string(),
+        links: vec!["Target".to_string()],
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    indexer.write_note(AGENT, "other", &linker).await.unwrap();
+    let rows = db
+        .get_outgoing_link_rows("other/Linker", AGENT)
+        .await
+        .unwrap();
+    let dangling = rows.iter().find(|r| r.to_raw == "Target").unwrap();
+    assert_eq!(dangling.status, "dangling");
+
+    // Write an unrelated note under a different name, then rename it to
+    // "Target" -- rename_note's backfill should revive Linker's dangling row
+    // for the NEW name end-to-end, with no manual relink_unresolved call.
+    let something = KnowledgeNote {
+        title: "Something".to_string(),
+        category: "reference".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    indexer
+        .write_note(AGENT, "reference", &something)
+        .await
+        .unwrap();
+
+    indexer
+        .rename_note(AGENT, "Something", "Target")
+        .await
+        .unwrap();
+
+    let rows = db
+        .get_outgoing_link_rows("other/Linker", AGENT)
+        .await
+        .unwrap();
+    let revived = rows.iter().find(|r| r.to_raw == "Target").unwrap();
+    assert_eq!(revived.status, "active");
+    assert_eq!(revived.to_note, "reference/Target");
 }
 
 #[tokio::test]

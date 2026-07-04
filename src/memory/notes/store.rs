@@ -284,6 +284,13 @@ pub trait NoteStore: Send + Sync {
     /// `keys` (the new/renamed note's filename, full path, and aliases).
     /// Returns the number of rows revived. Targeted via `idx_notes_links_to_raw`
     /// — NOT a full-table relink sweep (unlike [`relink_unresolved`](Self::relink_unresolved)).
+    ///
+    /// Matching is a literal-string lookup against `to_raw` — it only catches
+    /// rows whose raw wikilink text is byte-identical to one of `keys`. A raw
+    /// link that would only resolve via the tier-4 *normalized* strategy
+    /// (case-folding / full-width variants, see `links::resolve`) is NOT
+    /// revived by this targeted pass; it self-heals only when its owning note
+    /// is next re-indexed or via a full [`relink_unresolved`](Self::relink_unresolved) sweep.
     /// Default impl returns `Ok(0)` so non-SQLite stores and test mocks compile
     /// unchanged; the real body lives on `SqliteMemoryBackend`.
     async fn backfill_inbound_links(
