@@ -3,6 +3,7 @@ use leptos::task::spawn_local;
 use std::collections::HashMap;
 
 use crate::api::graph::GraphApi;
+use crate::canvas_engine::adapter::OutgoingLinkDto;
 use crate::canvas_engine::category_color::category_color;
 use crate::canvas_engine::markdown_excerpt::render_excerpt;
 use crate::context::DashboardState;
@@ -19,6 +20,7 @@ pub struct NodeExcerpt {
     pub body_markdown: String,
     pub breadcrumb: Vec<String>,
     pub backlinks: Vec<String>,
+    pub outgoing: Vec<OutgoingLinkDto>,
 }
 
 /// Turn a note path like `a/b/c.md` into breadcrumb dir segments `["a","b"]`.
@@ -72,6 +74,7 @@ pub fn NodeDetailPanel(
                         body_markdown: detail.content,
                         breadcrumb: breadcrumb_from_path(&detail.node.path),
                         backlinks: detail.backlinks,
+                        outgoing: detail.outgoing,
                     };
                     excerpts.update(|m| {
                         m.insert(id, ex);
@@ -120,6 +123,7 @@ fn DetailFor(
     let breadcrumb = excerpt.breadcrumb.clone();
     let tags = excerpt.tags.clone();
     let backlinks = excerpt.backlinks.clone();
+    let outgoing = excerpt.outgoing.clone();
     let node_id = excerpt.id.clone();
     let node_id_for_list = excerpt.id.clone();
     let title = excerpt.name.clone();
@@ -280,6 +284,46 @@ fn DetailFor(
                                         on:click=move |_| mem.selected_node.set(Some(id_click.clone()))
                                     >
                                         {id}
+                                    </li>
+                                }
+                            }).collect_view()}
+                        </ul>
+                    </div>
+                }
+            })}
+            {(!outgoing.is_empty()).then(|| {
+                let ol = outgoing.clone();
+                view! {
+                    <div style="margin-top:10px">
+                        <div style="text-transform:uppercase;font-size:9.5px;color:var(--text-meta);letter-spacing:0.05em;margin-bottom:4px">
+                            "Links"
+                        </div>
+                        <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:3px">
+                            {ol.into_iter().map(|l| {
+                                let is_active = l.status == "active";
+                                let target = l.to.clone();
+                                let display = l.label.clone().unwrap_or_else(|| l.raw.clone());
+                                let badge = l.relation.clone().map(|r| format!(" · {r}")).unwrap_or_default();
+                                let meta = match l.status.as_str() {
+                                    "dangling" => " · dangling".to_string(),
+                                    "tombstone" => " · 🪦 deleted".to_string(),
+                                    _ => format!(" · {:.0}%", l.confidence * 100.0),
+                                };
+                                let style = match l.status.as_str() {
+                                    "dangling" => "font-size:11px;color:var(--text-meta);font-style:italic;padding:3px 6px",
+                                    "tombstone" => "font-size:11px;color:var(--text-meta);text-decoration:line-through;padding:3px 6px",
+                                    _ => "font-size:11px;color:var(--cat-reference);padding:3px 6px;border-radius:4px;background:rgba(96,165,250,0.08);cursor:pointer",
+                                };
+                                view! {
+                                    <li
+                                        style=style
+                                        on:click=move |_| {
+                                            if is_active {
+                                                mem.selected_node.set(Some(target.clone()));
+                                            }
+                                        }
+                                    >
+                                        {display}{badge}{meta}
                                     </li>
                                 }
                             }).collect_view()}
