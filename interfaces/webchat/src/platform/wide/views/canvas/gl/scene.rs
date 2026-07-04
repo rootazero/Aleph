@@ -52,6 +52,14 @@ pub struct Scene {
     /// Recomputed only when `data` or `lod` changes; used every settling frame
     /// to avoid per-frame clone + O(n log n) sort.
     filtered_edges: Vec<(u32, u32)>,
+    /// Per-edge kind codes aligned with `filtered_edges` (produced in lockstep
+    /// by `recompute_filtered_edges`). Consumed by `EdgeRenderer::upload_indexed`
+    /// to tint edges by relation kind.
+    filtered_edge_kinds: Vec<u8>,
+    /// id → node index, rebuilt on `set_graph`. Turns the per-frame label
+    /// lookups (`node_name` / `screen_pos_of`) and `fly_to_node` from O(n)
+    /// linear scans into O(1). Positions still come from `data.nodes[idx]`.
+    id_index: std::collections::HashMap<String, u32>,
 }
 
 impl Scene {
@@ -80,13 +88,16 @@ impl Scene {
             highlight_edges: None,
             lod: 0.0,
             filtered_edges: Vec::new(),
+            filtered_edge_kinds: Vec::new(),
+            id_index: std::collections::HashMap::new(),
         })
     }
 
     pub fn set_graph(&mut self, data: GraphData) {
         // Build a force layout to animate-settle the incoming positions.
         let n = data.nodes.len();
-        let layout = ForceLayout::new(n, &data.edges);
+        let communities: Vec<Option<u32>> = data.nodes.iter().map(|node| node.community).collect();
+        let layout = ForceLayout::new(n, &data.edges, &communities);
         self.layout = Some(layout);
         self.settling = true;
         self.settle_steps = 0;
@@ -96,9 +107,20 @@ impl Scene {
 
         // Assign data and compute the filtered edge list once for (graph, lod).
         self.data = data;
+        self.id_index = self
+            .data
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id.clone(), i as u32))
+            .collect();
         self.recompute_filtered_edges();
-        self.edges
-            .upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
+        self.edges.upload_indexed(
+            &self.ctx.gl,
+            &self.data.nodes,
+            &self.filtered_edges,
+            &self.filtered_edge_kinds,
+        );
         self.edges.set_highlight(
             &self.ctx.gl,
             &self.filtered_edges,
@@ -112,8 +134,12 @@ impl Scene {
     pub fn set_lod(&mut self, lod: f32) {
         self.lod = lod.clamp(0.0, 1.0);
         self.recompute_filtered_edges();
-        self.edges
-            .upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
+        self.edges.upload_indexed(
+            &self.ctx.gl,
+            &self.data.nodes,
+            &self.filtered_edges,
+            &self.filtered_edge_kinds,
+        );
         self.edges.set_highlight(
             &self.ctx.gl,
             &self.filtered_edges,
@@ -131,8 +157,15 @@ impl Scene {
     /// `upload_indexed` with `&self.filtered_edges` to upload to the GPU without
     /// re-sorting or re-filtering every frame.
     fn recompute_filtered_edges(&mut self) {
+        // Kind for edge `i`, defaulting to 0 (wikilink) if the parallel vec is
+        // absent/short (keeps filtered kinds aligned even for legacy data).
+        let kind_at = |data: &GraphData, i: usize| data.edge_kinds.get(i).copied().unwrap_or(0);
+
         if self.lod <= 0.0 || self.data.nodes.is_empty() {
             self.filtered_edges = self.data.edges.clone();
+            self.filtered_edge_kinds = (0..self.data.edges.len())
+                .map(|i| kind_at(&self.data, i))
+                .collect();
             return;
         }
 
@@ -146,23 +179,28 @@ impl Scene {
 
         if floor == 0 {
             self.filtered_edges = self.data.edges.clone();
+            self.filtered_edge_kinds = (0..self.data.edges.len())
+                .map(|i| kind_at(&self.data, i))
+                .collect();
             return;
         }
 
         // Retain only edges where at least one endpoint is above the floor
         // (weak spokes into strong hubs are still drawn; only weak-to-weak edges
-        // are culled, preserving cluster connectivity).
-        self.filtered_edges = self
-            .data
-            .edges
-            .iter()
-            .copied()
-            .filter(|&(a, b)| {
-                let lc_a = self.data.nodes.get(a as usize).map_or(0, |n| n.link_count);
-                let lc_b = self.data.nodes.get(b as usize).map_or(0, |n| n.link_count);
-                lc_a >= floor || lc_b >= floor
-            })
-            .collect();
+        // are culled, preserving cluster connectivity). Kinds filter in lockstep.
+        let mut fe = Vec::new();
+        let mut fk = Vec::new();
+        for (i, &(a, b)) in self.data.edges.iter().enumerate() {
+            let lc_a = self.data.nodes.get(a as usize).map_or(0, |n| n.link_count);
+            let lc_b = self.data.nodes.get(b as usize).map_or(0, |n| n.link_count);
+            if lc_a >= floor || lc_b >= floor {
+                fe.push((a, b));
+                fk.push(kind_at(&self.data, i));
+            }
+        }
+        self.filtered_edges = fe;
+        self.filtered_edge_kinds = fk;
+        debug_assert_eq!(self.filtered_edges.len(), self.filtered_edge_kinds.len());
     }
 
     /// Screen-space picking: project all nodes through the last-frame view-proj
@@ -182,7 +220,7 @@ impl Scene {
     /// using the last-frame view-projection matrix. Returns `None` if the node
     /// is behind the camera or not found.
     pub fn screen_pos_of(&self, id: &str) -> Option<(f32, f32)> {
-        let node = self.data.nodes.iter().find(|n| n.id == id)?;
+        let node = self.id_index.get(id).map(|&i| &self.data.nodes[i as usize])?;
         let m = self.last_vp.as_slice();
         let p = &node.pos;
         let cx = m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12];
@@ -204,11 +242,9 @@ impl Scene {
 
     /// Look up a node name by its id. Returns `None` if not found.
     pub fn node_name(&self, id: &str) -> Option<&str> {
-        self.data
-            .nodes
-            .iter()
-            .find(|n| n.id == id)
-            .map(|n| n.name.as_str())
+        self.id_index
+            .get(id)
+            .map(|&i| self.data.nodes[i as usize].name.as_str())
     }
 
     /// Set the highlight set (selected node index + neighbors). Stored so that
@@ -229,8 +265,9 @@ impl Scene {
 
     /// Fly the camera to the node with the given id, if found.
     pub fn fly_to_node(&mut self, id: &str, t_ms: f64) {
-        if let Some(n) = self.data.nodes.iter().find(|n| n.id == id) {
-            self.camera.fly_to(n.pos, 250.0);
+        if let Some(&i) = self.id_index.get(id) {
+            let pos = self.data.nodes[i as usize].pos;
+            self.camera.fly_to(pos, 250.0);
             self.camera.note_interaction(t_ms);
         }
     }
@@ -246,6 +283,18 @@ impl Scene {
 
     pub fn on_drag(&mut self, dx: f32, dy: f32, t_ms: f64) {
         self.camera.orbit(dx * 0.005, dy * 0.005);
+        self.camera.note_interaction(t_ms);
+    }
+
+    /// Pan the view by a screen-pixel drag: translate the look-at centre along
+    /// the view plane so the point under the cursor stays under the cursor.
+    /// Drag right → content follows right (centre moves −right); drag down (screen
+    /// y grows downward) → content follows down (centre moves +up).
+    pub fn on_pan(&mut self, dx: f32, dy: f32, t_ms: f64) {
+        let wpp = self.camera.world_per_pixel(self.height as f32);
+        let (right, up) = self.camera.screen_basis();
+        let delta = right.scale(-dx * wpp).add(&up.scale(dy * wpp));
+        self.camera.pan_world(delta);
         self.camera.note_interaction(t_ms);
     }
 
@@ -282,8 +331,12 @@ impl Scene {
                 // Re-upload both edges and nodes (positions changed).
                 // Use the cached filtered_edges list — no clone, no re-sort.
                 // Pass through the stored highlight so it survives settling.
-                self.edges
-                    .upload_indexed(&self.ctx.gl, &self.data.nodes, &self.filtered_edges);
+                self.edges.upload_indexed(
+                    &self.ctx.gl,
+                    &self.data.nodes,
+                    &self.filtered_edges,
+                    &self.filtered_edge_kinds,
+                );
                 self.edges.set_highlight(
                     &self.ctx.gl,
                     &self.filtered_edges,

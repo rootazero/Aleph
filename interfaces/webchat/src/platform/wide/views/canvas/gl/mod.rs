@@ -25,8 +25,11 @@ pub struct GalaxyNode {
     pub category: String,
     pub link_count: u32,
     pub pos: Vec3,
-    /// Base RGB in [0,1] (category color, pre-HDR-boost).
+    /// Base RGB in [0,1] (category color, pre-HDR-boost, recency-scaled).
     pub color: [f32; 3],
+    /// Louvain community id (`None` on a cold graph cache). Drives spatial
+    /// clustering (community centroid gravity in `ForceLayout`).
+    pub community: Option<u32>,
 }
 
 /// The whole-graph render input. `edges` index into `nodes` (resolved from ids).
@@ -34,6 +37,9 @@ pub struct GalaxyNode {
 pub struct GraphData {
     pub nodes: Vec<GalaxyNode>,
     pub edges: Vec<(u32, u32)>,
+    /// Per-edge relation kind code (see `edges::edge_kind_code`), same order &
+    /// length as `edges`. Empty when unknown (treated as all-wikilink).
+    pub edge_kinds: Vec<u8>,
 }
 
 /// Edges incident to the selected node, as normalized (min,max) index pairs.
@@ -68,6 +74,7 @@ mod highlight_tests {
             link_count: 0,
             pos: Vec3::zero(),
             color: [1.0, 1.0, 1.0],
+            community: None,
         }
     }
 
@@ -76,6 +83,7 @@ mod highlight_tests {
         let data = GraphData {
             nodes: vec![node("a"), node("b"), node("c"), node("d")],
             edges: vec![(0, 1), (2, 0), (2, 3)], // a-b, c-a, c-d
+            edge_kinds: vec![0; 3],
         };
         let hl = compute_highlight_edges(&data, "a");
         assert!(hl.contains(&(0, 1))); // a-b
@@ -88,6 +96,7 @@ mod highlight_tests {
         let data = GraphData {
             nodes: vec![node("a")],
             edges: vec![],
+            edge_kinds: vec![],
         };
         assert!(compute_highlight_edges(&data, "zzz").is_empty());
     }

@@ -116,7 +116,7 @@ pub(crate) fn collect_edges_between(
     conn: &rusqlite::Connection,
     visible: &HashSet<String>,
     agent_id: &str,
-) -> Result<Vec<(String, String)>, AlephError> {
+) -> Result<Vec<(String, String, Option<String>)>, AlephError> {
     if visible.is_empty() {
         return Ok(Vec::new());
     }
@@ -129,7 +129,7 @@ pub(crate) fn collect_edges_between(
     let to_clause = to_placeholders.join(", ");
 
     let sql = format!(
-        "SELECT from_note, to_note FROM notes_links \
+        "SELECT from_note, to_note, relation FROM notes_links \
          WHERE agent_id = ?1 AND from_note IN ({from_clause}) AND to_note IN ({to_clause})"
     );
 
@@ -152,7 +152,11 @@ pub(crate) fn collect_edges_between(
 
     let rows = stmt
         .query_map(param_refs.as_slice(), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
         })
         .map_err(|e| AlephError::config(format!("collect_edges query: {e}")))?;
 

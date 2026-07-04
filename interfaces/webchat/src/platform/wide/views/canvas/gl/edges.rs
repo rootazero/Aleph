@@ -31,6 +31,31 @@ pub(super) fn edge_strip_corners(segments: usize) -> Vec<f32> {
     v
 }
 
+/// Map a `notes_links.relation` kind string to a compact code.
+/// `None`/`"wikilink"` = 0 (plain body wikilink, the structural backbone).
+pub fn edge_kind_code(kind: Option<&str>) -> u8 {
+    match kind {
+        None | Some("wikilink") => 0,
+        Some("semantic") => 1,
+        Some("related") => 2,
+        Some("co_recalled") => 3,
+        Some(_) => 4, // keyword/entity verbs and any future kind
+    }
+}
+
+/// Tint color for an edge kind, or `None` to keep the endpoint-color gradient
+/// (used for `wikilink`, the backbone). Specials get a distinct hue so they
+/// stand out against the wikilink filaments.
+pub fn edge_kind_color(code: u8) -> Option<[f32; 3]> {
+    match code {
+        1 => Some([0.133, 0.827, 0.933]), // semantic    → cyan   #22d3ee
+        2 => Some([0.655, 0.545, 0.980]), // related     → purple #a78bfa
+        3 => Some([0.984, 0.749, 0.141]), // co_recalled → amber  #fbbf24
+        4 => Some([0.204, 0.827, 0.600]), // keyword     → green  #34d399
+        _ => None,                        // 0 wikilink / unknown → endpoint gradient
+    }
+}
+
 pub struct EdgeRenderer {
     prog: WebGlProgram,
     vao: WebGlVertexArrayObject,
@@ -116,19 +141,35 @@ impl EdgeRenderer {
     /// Upload edges from an explicit nodes slice + edge-index slice.
     /// Builds one per-instance record (endpoints + colors) per edge; avoids
     /// cloning GraphData.
-    pub fn upload_indexed(&mut self, gl: &Gl, nodes: &[super::GalaxyNode], edges: &[(u32, u32)]) {
+    pub fn upload_indexed(
+        &mut self,
+        gl: &Gl,
+        nodes: &[super::GalaxyNode],
+        edges: &[(u32, u32)],
+        edge_kinds: &[u8],
+    ) {
         let mut pos_a = Vec::with_capacity(edges.len() * 3);
         let mut pos_b = Vec::with_capacity(edges.len() * 3);
         let mut col_a = Vec::with_capacity(edges.len() * 3);
         let mut col_b = Vec::with_capacity(edges.len() * 3);
         let mut phase_a = Vec::with_capacity(edges.len());
         let mut phase_b = Vec::with_capacity(edges.len());
-        for &(a, b) in edges {
+        for (i, &(a, b)) in edges.iter().enumerate() {
             let (na, nb) = (&nodes[a as usize], &nodes[b as usize]);
             pos_a.extend_from_slice(&[na.pos.x, na.pos.y, na.pos.z]);
             pos_b.extend_from_slice(&[nb.pos.x, nb.pos.y, nb.pos.z]);
-            col_a.extend_from_slice(&na.color);
-            col_b.extend_from_slice(&nb.color);
+            // Kind tint: specials override both endpoints with a distinct hue;
+            // wikilink (or unknown) keeps the endpoint-color gradient.
+            match edge_kinds.get(i).copied().and_then(edge_kind_color) {
+                Some(c) => {
+                    col_a.extend_from_slice(&c);
+                    col_b.extend_from_slice(&c);
+                }
+                None => {
+                    col_a.extend_from_slice(&na.color);
+                    col_b.extend_from_slice(&nb.color);
+                }
+            }
             // Same phase the node renderer uploads → identical drift per endpoint.
             phase_a.push(super::nodes::node_phase(&na.id));
             phase_b.push(super::nodes::node_phase(&nb.id));
@@ -159,7 +200,7 @@ impl EdgeRenderer {
             .iter()
             .map(|&(a, b)| {
                 let key = (a.min(b), a.max(b));
-                if active && hl.unwrap().contains(&key) {
+                if hl.is_some_and(|s| s.contains(&key)) {
                     1.0
                 } else {
                     0.0
@@ -205,6 +246,24 @@ mod tests {
         // last pair along=1
         let n = c.len();
         assert!((c[n - 2] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn edge_kind_code_maps_known_relations() {
+        assert_eq!(edge_kind_code(None), 0);
+        assert_eq!(edge_kind_code(Some("wikilink")), 0);
+        assert_eq!(edge_kind_code(Some("semantic")), 1);
+        assert_eq!(edge_kind_code(Some("related")), 2);
+        assert_eq!(edge_kind_code(Some("co_recalled")), 3);
+        assert_eq!(edge_kind_code(Some("keyword-verb-whatever")), 4);
+    }
+
+    #[test]
+    fn edge_kind_color_backbone_is_none_specials_are_some() {
+        assert_eq!(edge_kind_color(0), None); // wikilink → endpoint gradient
+        assert!(edge_kind_color(1).is_some()); // semantic tinted
+        assert!(edge_kind_color(4).is_some());
+        assert_eq!(edge_kind_color(99), None); // out-of-range → None
     }
 }
 

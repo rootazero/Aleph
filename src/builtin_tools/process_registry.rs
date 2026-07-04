@@ -386,6 +386,7 @@ mod tests {
             truncated: None,
             stdout_truncated_bytes: 0,
             stderr_truncated_bytes: 0,
+            advisory: None,
         }
     }
 

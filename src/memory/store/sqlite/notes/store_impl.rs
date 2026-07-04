@@ -426,6 +426,38 @@ impl NoteStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("count_all_notes failed: {e}")))
     }
 
+    async fn count_notes(&self, agent_id: &str) -> Result<i64, AlephError> {
+        let conn = lock_conn!(self)?;
+        conn.query_row(
+            "SELECT COUNT(*) FROM notes_index WHERE agent_id = ?1",
+            params![agent_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| AlephError::config(format!("count_notes failed: {e}")))
+    }
+
+    async fn community_ids(
+        &self,
+        agent_id: &str,
+    ) -> Result<std::collections::HashMap<String, i64>, AlephError> {
+        let conn = lock_conn!(self)?;
+        let mut stmt = conn
+            .prepare("SELECT node_path, community_id FROM notes_graph_cache WHERE agent_id = ?1")
+            .map_err(|e| AlephError::config(format!("community_ids prepare: {e}")))?;
+        let rows = stmt
+            .query_map(params![agent_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map_err(|e| AlephError::config(format!("community_ids query: {e}")))?;
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            let (path, cid) =
+                row.map_err(|e| AlephError::config(format!("community_ids row: {e}")))?;
+            map.insert(path, cid);
+        }
+        Ok(map)
+    }
+
     async fn get_outgoing_links(
         &self,
         path: &str,
@@ -605,7 +637,7 @@ impl NoteStore for SqliteMemoryBackend {
         &self,
         agent_id: &str,
         limit: usize,
-    ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String)>), AlephError> {
+    ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String, Option<String>)>), AlephError> {
         let conn = lock_conn!(self)?;
 
         // Top notes by link_count (outgoing) + recency
@@ -718,8 +750,12 @@ impl NoteStore for SqliteMemoryBackend {
             }
         }
 
-        // Edges between visited nodes
-        let edges = collect_edges_between(&conn, &visited, agent_id)?;
+        // Edges between visited nodes (kind discarded — neighbors keeps its
+        // untyped `(from, to)` shape; only graph.query surfaces edge kind).
+        let edges = collect_edges_between(&conn, &visited, agent_id)?
+            .into_iter()
+            .map(|(f, t, _)| (f, t))
+            .collect();
 
         Ok((entries, edges))
     }

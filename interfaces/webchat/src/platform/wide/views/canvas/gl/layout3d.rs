@@ -1,6 +1,8 @@
 //! 3D force-directed layout: Coulomb repulsion (O(n²)) + Hooke springs +
 //! centering. Deterministic (seed from id hash). Pure — unit-tested on native.
 
+use std::collections::HashMap;
+
 use super::math::Vec3;
 use crate::canvas_engine::fnv1a::fnv1a_32;
 
@@ -8,6 +10,7 @@ const REPULSION: f32 = 8000.0; // ~k_e
 const SPRING_K: f32 = 0.02; // edge stiffness
 const REST_LEN: f32 = 60.0; // spring rest length
 const CENTER_PULL: f32 = 0.002; // gentle pull to origin
+const COMMUNITY_PULL: f32 = 0.015; // gravity toward own community centroid
 const DAMPING: f32 = 0.85; // velocity damping
 const MAX_STEP: f32 = 30.0; // clamp per-step displacement
 const EPS: f32 = 0.5; // convergence threshold (max displacement)
@@ -17,15 +20,22 @@ pub struct ForceLayout {
     edges: Vec<(u32, u32)>,
     vel: Vec<Vec3>,
     last_max_disp: f32,
+    /// Per-node community id (`None` = unassigned). Same order/length as nodes.
+    communities: Vec<Option<u32>>,
 }
 
 impl ForceLayout {
-    pub fn new(node_count: usize, edges: &[(u32, u32)]) -> ForceLayout {
+    pub fn new(
+        node_count: usize,
+        edges: &[(u32, u32)],
+        communities: &[Option<u32>],
+    ) -> ForceLayout {
         ForceLayout {
             n: node_count,
             edges: edges.to_vec(),
             vel: vec![Vec3::zero(); node_count],
             last_max_disp: f32::INFINITY,
+            communities: communities.to_vec(),
         }
     }
 
@@ -68,6 +78,28 @@ impl ForceLayout {
             force[a] = force[a].add(&dir.scale(f));
             force[b] = force[b].sub(&dir.scale(f));
         }
+        // Community centroid gravity: pull each node toward its community's
+        // centroid so Louvain communities settle as spatial clusters. No-op
+        // when no node carries a community (cold cache).
+        if self.communities.iter().any(Option::is_some) {
+            let mut sums: HashMap<u32, (Vec3, usize)> = HashMap::new();
+            for (i, c) in self.communities.iter().enumerate() {
+                if let Some(cid) = c {
+                    let e = sums.entry(*cid).or_insert((Vec3::zero(), 0));
+                    e.0 = e.0.add(&pos[i]);
+                    e.1 += 1;
+                }
+            }
+            for (i, c) in self.communities.iter().enumerate() {
+                if let Some(cid) = c {
+                    let (sum, count) = sums[cid];
+                    let centroid = sum.scale(1.0 / count as f32);
+                    let to_centroid = centroid.sub(&pos[i]);
+                    force[i] = force[i].add(&to_centroid.scale(COMMUNITY_PULL));
+                }
+            }
+        }
+
         // Centering + integrate.
         let mut max_disp = 0.0_f32;
         for i in 0..self.n {
@@ -110,7 +142,7 @@ mod tests {
     #[test]
     fn seed_is_deterministic() {
         let ids: Vec<String> = (0..10).map(|i| format!("n{i}")).collect();
-        let l = ForceLayout::new(10, &line_graph(10));
+        let l = ForceLayout::new(10, &line_graph(10), &vec![None; 10]);
         let a = l.seed(&ids);
         let b = l.seed(&ids);
         assert_eq!(a.len(), 10);
@@ -122,7 +154,7 @@ mod tests {
     #[test]
     fn energy_decreases_over_steps() {
         let ids: Vec<String> = (0..20).map(|i| format!("n{i}")).collect();
-        let mut l = ForceLayout::new(20, &line_graph(20));
+        let mut l = ForceLayout::new(20, &line_graph(20), &vec![None; 20]);
         let mut pos = l.seed(&ids);
         let e0 = l.energy(&pos);
         for _ in 0..200 {
@@ -135,7 +167,7 @@ mod tests {
     #[test]
     fn converges_within_budget() {
         let ids: Vec<String> = (0..15).map(|i| format!("n{i}")).collect();
-        let mut l = ForceLayout::new(15, &line_graph(15));
+        let mut l = ForceLayout::new(15, &line_graph(15), &vec![None; 15]);
         let mut pos = l.seed(&ids);
         for _ in 0..600 {
             l.step(&mut pos);
@@ -151,7 +183,7 @@ mod tests {
         // 2 disjoint pairs: (0-1) edge, (2,3) no edge. After settling, edge pair
         // sits near spring rest length; non-edge pair drifts apart via repulsion.
         let ids: Vec<String> = (0..4).map(|i| format!("n{i}")).collect();
-        let mut l = ForceLayout::new(4, &[(0, 1)]);
+        let mut l = ForceLayout::new(4, &[(0, 1)], &vec![None; 4]);
         let mut pos = l.seed(&ids);
         for _ in 0..400 {
             l.step(&mut pos);
@@ -159,5 +191,21 @@ mod tests {
         let d_edge = pos[0].sub(&pos[1]).length();
         let d_free = pos[2].sub(&pos[3]).length();
         assert!(d_edge < d_free, "edge {d_edge} should be < free {d_free}");
+    }
+
+    #[test]
+    fn same_community_settles_closer_than_cross_community() {
+        // 4 nodes, NO edges. Communities: {0,1}=A, {2,3}=B. Centroid gravity
+        // should pull same-community nodes together despite pure repulsion.
+        let ids: Vec<String> = (0..4).map(|i| format!("n{i}")).collect();
+        let comms = vec![Some(0u32), Some(0), Some(1), Some(1)];
+        let mut l = ForceLayout::new(4, &[], &comms);
+        let mut pos = l.seed(&ids);
+        for _ in 0..400 {
+            l.step(&mut pos);
+        }
+        let same = pos[0].sub(&pos[1]).length();
+        let cross = pos[0].sub(&pos[2]).length();
+        assert!(same < cross, "same-community {same} should be < cross {cross}");
     }
 }
