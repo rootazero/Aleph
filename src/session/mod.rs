@@ -15,7 +15,6 @@ pub mod in_process;
 pub mod observer;
 pub mod projection;
 pub mod service;
-pub mod shim;
 pub mod state;
 pub mod store;
 pub mod tool_trace;

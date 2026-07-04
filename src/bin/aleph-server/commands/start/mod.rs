@@ -361,11 +361,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // disconnect hook captures session-end events (Task 8).
     // Only applicable for the SQLite backend; file backend skips this step.
     //
-    // Phase 5 Task 5: with_session_service intentionally omitted here.
-    // The messages->events shim is superseded by MessageProjector
-    // (events->messages). Keeping it would create an infinite loop:
-    //   append_message -> shim -> emit_event -> observer -> projector -> append_message.
-    // Task 7 removes the shim code entirely.
+    // SSOT: messages are materialized from session_events by MessageProjector; the legacy dual-write shim has been removed.
     let session_store: Arc<dyn SessionStore> = if let Some(sm) = sqlite_sm {
         let sm = sm
             .with_raw_memory_writer(
