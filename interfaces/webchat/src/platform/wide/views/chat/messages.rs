@@ -861,7 +861,10 @@ fn ExploreGroupRow(
     };
 
     let k_for_toggle = key_id;
-    let run_for_click = run_id;
+    // `StoredValue` (Copy handle) — the plain String would be moved into the
+    // `<For>` children closure when `<Show>`'s children run, demoting them to
+    // FnOnce; Show requires Fn (re-runs on every open toggle).
+    let run_for_click = StoredValue::new(run_id);
     view! {
         <div class="my-0.5">
             <button
@@ -889,7 +892,7 @@ fn ExploreGroupRow(
                         children=move |e| {
                             let icon = crate::components::tool_card::tool_icon("", e.kind);
                             let first = e.tool_ids.first().cloned().unwrap_or_default();
-                            let run = run_for_click.clone();
+                            let run = run_for_click.get_value();
                             view! {
                                 <button
                                     type="button"
