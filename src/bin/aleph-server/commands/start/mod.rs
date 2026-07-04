@@ -344,18 +344,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     )
     .await?;
 
-    // Spec 1 G3-A: inject raw-memory writer into SessionManager so the
-    // disconnect hook captures session-end events (Task 8).
-    // Only applicable for the SQLite backend; file backend skips this step.
-    //
-    // Phase 5 Task 9: build the SessionService unconditionally so the
-    // Orchestrator (`initialize_orchestrator` below) gets wired even when
-    // the chosen SessionStore backend is `file`. The `session_events`
-    // SQLite log lives in a separate DB from the main SessionStore; there
-    // is no reason to couple them. (Prior code gated the build behind
-    // `sqlite_sm`, which left `file` deployments without an Orchestrator.)
-    let session_service_and_store =
-        build_sqlite_session_service(&alephcore::gateway::SessionManagerConfig::default().db_path);
     // Capture the epoch registrar from the SQLite SessionManager before it is
     // consumed into `session_store` below. `SessionManager` implements both
     // `SessionStore` and `SessionEpochRegistrar`; saving it here lets the
@@ -366,6 +354,43 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     > = sqlite_sm
         .as_ref()
         .map(|sm| std::sync::Arc::new(sm.clone()) as _);
+    // Build the final session_store first so MessageProjector writes to the
+    // same Arc<dyn SessionStore> that Panel reads from.
+    //
+    // Spec 1 G3-A: inject raw-memory writer into SessionManager so the
+    // disconnect hook captures session-end events (Task 8).
+    // Only applicable for the SQLite backend; file backend skips this step.
+    //
+    // Phase 5 Task 5: with_session_service intentionally omitted here.
+    // The messages->events shim is superseded by MessageProjector
+    // (events->messages). Keeping it would create an infinite loop:
+    //   append_message -> shim -> emit_event -> observer -> projector -> append_message.
+    // Task 7 removes the shim code entirely.
+    let session_store: Arc<dyn SessionStore> = if let Some(sm) = sqlite_sm {
+        let sm = sm
+            .with_raw_memory_writer(
+                memory_db.clone() as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>
+            )
+            .with_event_bus(event_bus.clone());
+        Arc::new(sm)
+    } else {
+        session_store
+    };
+    // Phase 5 Task 9: build the SessionService unconditionally so the
+    // Orchestrator (`initialize_orchestrator` below) gets wired even when
+    // the chosen SessionStore backend is `file`. The `session_events`
+    // SQLite log lives in a separate DB from the main SessionStore; there
+    // is no reason to couple them. (Prior code gated the build behind
+    // `sqlite_sm`, which left `file` deployments without an Orchestrator.)
+    //
+    // Phase 5 Task 5: Wire MessageProjector as the observer so every
+    // session_events append materialises into the `messages` table.
+    let projector: Arc<dyn alephcore::session::observer::SessionEventObserver> =
+        alephcore::gateway::session_projector::MessageProjector::new(session_store.clone());
+    let session_service_and_store = build_sqlite_session_service(
+        &alephcore::gateway::SessionManagerConfig::default().db_path,
+        Some(projector),
+    );
     let session_service_for_orchestrator = session_service_and_store
         .as_ref()
         .map(|(svc, _store)| svc.clone());
@@ -378,22 +403,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     if let Some(store) = session_event_store_for_resume.clone() {
         alephcore::session::store::set_global_session_event_store(store);
     }
-    let session_store: Arc<dyn SessionStore> = if let Some(sm) = sqlite_sm {
-        let mut sm = sm
-            .with_raw_memory_writer(
-                memory_db.clone() as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>
-            )
-            .with_event_bus(event_bus.clone());
-        if let Some(svc) = session_service_for_orchestrator.clone() {
-            sm = sm.with_session_service(svc);
-            if !args.daemon {
-                println!("  Session dual-write enabled (session_events log)");
-            }
-        }
-        Arc::new(sm)
-    } else {
-        session_store
-    };
 
     // Security store + vault construction (early — vault needed for API key
     // resolution).
@@ -1598,10 +1607,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Identity handlers operate on the default agent's identity files
     // (`~/.aleph/agents/{id}/SOUL.md` …) — the single source of truth shared
     // with the `self_config` LLM tool and injected into the prompt each turn.
-    let identity_ctx: alephcore::gateway::handlers::identity::SharedIdentityCtx =
-        Arc::new(alephcore::gateway::handlers::identity::IdentityHandlerContext::new(
+    let identity_ctx: alephcore::gateway::handlers::identity::SharedIdentityCtx = Arc::new(
+        alephcore::gateway::handlers::identity::IdentityHandlerContext::new(
             default_agent_id.clone(),
-        ));
+        ),
+    );
     register_identity_handlers(&mut server, &identity_ctx);
 
     // Initialize A2A subsystem (if enabled)

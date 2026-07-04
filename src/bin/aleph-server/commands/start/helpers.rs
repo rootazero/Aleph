@@ -235,6 +235,7 @@ pub(super) async fn initialize_session_store(
 /// off for this run; the legacy `messages` table remains authoritative).
 pub(super) fn build_sqlite_session_service(
     db_path: &std::path::Path,
+    observer: Option<Arc<dyn alephcore::session::observer::SessionEventObserver>>,
 ) -> Option<(
     Arc<dyn alephcore::session::service::SessionService>,
     Arc<dyn alephcore::session::store::SessionEventStore>,
@@ -260,8 +261,12 @@ pub(super) fn build_sqlite_session_service(
     }
     let store: Arc<dyn alephcore::session::store::SessionEventStore> =
         Arc::new(alephcore::session::store::SqliteEventStore::new(conn));
-    let service: Arc<dyn alephcore::session::service::SessionService> =
-        Arc::new(alephcore::session::in_process::InProcessActorSessionService::new(store.clone()));
+    let svc = alephcore::session::in_process::InProcessActorSessionService::new(store.clone());
+    let svc = match observer {
+        Some(o) => svc.with_observer(o),
+        None => svc,
+    };
+    let service: Arc<dyn alephcore::session::service::SessionService> = Arc::new(svc);
     Some((service, store))
 }
 
