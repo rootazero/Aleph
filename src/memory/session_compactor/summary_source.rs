@@ -141,9 +141,13 @@ fn extract_depth(path: &str) -> u32 {
         .unwrap_or(0)
 }
 
-/// Estimate token count using the 3.5 chars/token heuristic.
+/// Estimate token count using content-aware ratio detection.
+///
+/// Thin alias for [`crate::context::budget::pressure::estimate_tokens_smart`]
+/// — the single source of truth for the prose-anchored, CJK/code-aware
+/// char→token estimate. Kept as a local name so call sites read clearly.
 fn estimate_tokens(text: &str) -> usize {
-    (text.chars().count() as f64 / 3.5).ceil() as usize
+    crate::context::budget::pressure::estimate_tokens_smart(text)
 }
 
 // =============================================================================
@@ -223,5 +227,17 @@ mod tests {
             UnifiedMessage::user("fresh tail"),
         ];
         assert!(source.try_reuse(&mut messages, 0, 2).await.is_none());
+    }
+
+    #[test]
+    fn estimate_tokens_is_cjk_aware() {
+        // 纯 CJK：内容感知估算按 ~1.5 chars/token 计，token 数应显著高于
+        // 平坦 3.5 的旧估算。50 个汉字 → 智能估算 ≈ 34，旧平坦估算 ≈ 15。
+        let cjk = "记".repeat(50);
+        let tokens = estimate_tokens(&cjk);
+        assert!(
+            tokens >= 30,
+            "CJK text must be charged at the dense ratio, got {tokens}"
+        );
     }
 }
