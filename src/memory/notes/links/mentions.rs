@@ -53,16 +53,19 @@ fn body_mentions(body_norm: &str, name_norm: &str, cjk: bool) -> bool {
     while let Some(rel) = body_norm[from..].find(name_norm) {
         let start = from + rel;
         let end = start + name_norm.len();
+        // ASCII-only boundary check: a CJK neighbour must NOT block a match
+        // ("使用Rust开发" does mention "Rust"), so is_ascii_alphanumeric — the
+        // Unicode is_alphanumeric would count ideographs as alphabetic.
         let before_ok = start == 0
             || !body_norm[..start]
                 .chars()
                 .next_back()
-                .is_some_and(|c| c.is_alphanumeric());
+                .is_some_and(|c| c.is_ascii_alphanumeric());
         let after_ok = end >= body_norm.len()
             || !body_norm[end..]
                 .chars()
                 .next()
-                .is_some_and(|c| c.is_alphanumeric());
+                .is_some_and(|c| c.is_ascii_alphanumeric());
         if before_ok && after_ok {
             return true;
         }
@@ -89,6 +92,9 @@ pub fn scan_mentions(docs: &[MentionDoc]) -> Vec<(String, String)> {
         }
     }
     dict.retain(|_, owners| {
+        // sort first: dedup only removes consecutive duplicates, and owner
+        // ordering must not decide whether a name looks unique.
+        owners.sort();
         owners.dedup();
         owners.len() == 1
     });
@@ -161,6 +167,17 @@ mod tests {
             doc("b/日记", &["日记"], "今天研究了记忆系统的检索", &[]),
         ];
         assert_eq!(scan_mentions(&docs), vec![("b/日记".into(), "a/记忆系统".into())]);
+    }
+
+    #[test]
+    fn ascii_name_adjacent_to_cjk_matches() {
+        // CJK neighbours are not ASCII word characters: "使用Rust开发" (no
+        // spaces) must still count as mentioning the note named "Rust".
+        let docs = vec![
+            doc("a/rust", &["Rust"], "x", &[]),
+            doc("b/日记", &["日记"], "使用Rust开发", &[]),
+        ];
+        assert_eq!(scan_mentions(&docs), vec![("b/日记".into(), "a/rust".into())]);
     }
 
     #[test]
