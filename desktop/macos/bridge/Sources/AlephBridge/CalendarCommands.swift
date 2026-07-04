@@ -142,11 +142,9 @@ extension AlephBridge {
 
                 guard let startDate = parseISO8601(start) else {
                     printError("Invalid start date: \(start)")
-                    return
                 }
                 guard let endDate = parseISO8601(end) else {
                     printError("Invalid end date: \(end)")
-                    return
                 }
 
                 let event = EKEvent(eventStore: calendarStore)

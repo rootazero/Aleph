@@ -8,7 +8,6 @@ use super::composer::InputArea;
 use super::messages::MessageList;
 use super::state::{ChatState, PendingAttachment};
 use super::team_events::subscribe_team_events;
-use crate::components::session_tabs::SessionTabs;
 use crate::components::team_participants::TeamParticipants;
 use crate::components::team_task_strip::TaskDrawerOpen;
 use crate::components::team_task_strip::TeamTaskDrawer;
@@ -173,16 +172,12 @@ pub fn ChatView() -> impl IntoView {
                 // toggle on the traffic-light row and reserves the
                 // macOS overlay-titlebar space uniformly across tabs.
                 // On web / Win / Linux native chrome owns window drag.
-                // Overlap container: the scroll area extends to the full height,
-                // the session tab strip FLOATS over the top (frosted chrome band),
+                // Overlap container: the scroll area extends to the full height
                 // and the composer FLOATS over the bottom (real backdrop blur —
-                // messages frost as they flow behind both surfaces).
+                // messages frost as they flow behind it).
                 <div class="relative flex-1 min-h-0">
                     // Message list (scrollable) — or the welcome hero when empty
                     <MessageList />
-                    // Session tab strip overlay — frosted band pinned to the top,
-                    // renders only when ≥2 agents are open.
-                    <div class="absolute inset-x-0 top-0 z-10"><SessionTabs /></div>
                     // Team participants — top-left avatar cluster + popover
                     // (replaces the old left roster rail). Top-left keeps it
                     // clear of the band's workspace toggle + notification bell,

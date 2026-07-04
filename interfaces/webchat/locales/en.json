@@ -1878,9 +1878,6 @@
     "filter_placeholder": "Filter providers and models…",
     "no_match": "no matching models"
   },
-  "session_tabs": {
-    "close_tab": "Close tab (⌘W)"
-  },
   "layout_toggle": {
     "open_pane": "Open workspace pane",
     "close_pane": "Close workspace pane"

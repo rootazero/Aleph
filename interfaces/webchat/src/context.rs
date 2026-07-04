@@ -128,6 +128,7 @@ pub(crate) fn strip_params(search: &str, prefixes: &[&str]) -> String {
 
 /// Legacy helper kept for existing host tests.
 #[cfg(any(target_arch = "wasm32", test))]
+#[allow(dead_code)]
 pub(crate) fn strip_token_param(search: &str) -> String {
     strip_params(search, &["token="])
 }
@@ -213,6 +214,7 @@ fn scrub_credentials_from_url() {}
 
 /// Legacy helpers kept for old call sites during the transition.
 #[cfg(target_arch = "wasm32")]
+#[allow(dead_code)]
 fn read_gateway_token() -> Option<String> {
     let creds = read_connect_credentials();
     creds
@@ -222,6 +224,7 @@ fn read_gateway_token() -> Option<String> {
 }
 
 #[cfg(target_arch = "wasm32")]
+#[allow(dead_code)]
 fn persist_gateway_token(token: &str) {
     if token.starts_with("aleph-dt-") {
         persist_device_token(token);
@@ -231,11 +234,13 @@ fn persist_gateway_token(token: &str) {
 }
 
 #[cfg(target_arch = "wasm32")]
+#[allow(dead_code)]
 fn clear_gateway_token() {
     clear_credentials();
 }
 
 #[cfg(target_arch = "wasm32")]
+#[allow(dead_code)]
 fn scrub_token_from_url() {
     scrub_credentials_from_url();
 }
