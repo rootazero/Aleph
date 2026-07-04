@@ -21,7 +21,6 @@ pub mod provider_badge;
 pub mod provider_key_field;
 pub mod provider_row_card;
 pub mod service_blocking_gate;
-pub mod session_tabs;
 pub mod settings_sidebar;
 pub mod sidebar;
 pub mod team_participants;

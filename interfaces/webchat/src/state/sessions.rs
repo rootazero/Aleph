@@ -231,12 +231,6 @@ impl SessionMap {
         }
     }
 
-    /// 标签条渲染守卫（≥2 会话才显示）。
-    #[must_use]
-    pub fn tab_strip_visible(&self) -> bool {
-        self.order.with(|o| o.len() >= 2)
-    }
-
     /// 绑定 run 到会话：登记路由、running+1、回填 meta.session_key。
     pub fn bind_run(&self, run_id: &str, conv: ConvId, session_key: Option<&str>) {
         self.route.update(|m| {
@@ -337,18 +331,6 @@ mod tests {
             // Switch back to A restores its stamped agent_id into the singleton.
             map.activate(singleton, a);
             assert_eq!(singleton.agent_id.get_untracked(), Some("agent-a".into()));
-        });
-    }
-
-    #[test]
-    fn tab_strip_visible_needs_two() {
-        with_owner(|| {
-            let map = SessionMap::new();
-            assert!(!map.tab_strip_visible());
-            let _a = map.open_conversation("agent-a", "A");
-            assert!(!map.tab_strip_visible());
-            let _b = map.open_conversation("agent-b", "B");
-            assert!(map.tab_strip_visible());
         });
     }
 

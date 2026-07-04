@@ -92,9 +92,10 @@ fn AppContent() -> impl IntoView {
     let voice_mode = VoiceMode::new();
     provide_context(voice_mode);
 
-    // Multi-tab session registry (per-agent). Empty at boot; the chat
-    // sidebar's auto-select-default-agent path is what opens the first
-    // tab. Cmd+1..9 / Cmd+W hotkeys are installed lazily by SessionTabs.
+    // Multi-agent session registry. Empty at boot; the chat sidebar's
+    // auto-select-default-agent path is what opens the first conversation.
+    // The left sidebar's session list drives switching (activate) and shows
+    // the running dot — there is no top tab strip.
     let session_map = SessionMap::new();
     provide_context(session_map);
 

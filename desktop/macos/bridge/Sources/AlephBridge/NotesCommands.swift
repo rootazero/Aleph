@@ -14,7 +14,6 @@ extension AlephBridge {
         static func runAppleScript(_ source: String) -> String {
             guard let script = NSAppleScript(source: source) else {
                 printError("Failed to create AppleScript")
-                return ""
             }
             var errorInfo: NSDictionary?
             let result = script.executeAndReturnError(&errorInfo)

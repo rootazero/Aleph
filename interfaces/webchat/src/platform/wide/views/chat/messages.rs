@@ -12,7 +12,6 @@ use crate::components::markdown::TypewriterRenderer;
 use crate::components::tool_card::ToolCard;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
-use crate::state::sessions::SessionMap;
 use leptos::prelude::*;
 use std::collections::HashMap;
 
@@ -107,7 +106,6 @@ pub(super) fn ChatHero() -> impl IntoView {
 pub(crate) fn MessageList() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
-    let sessions = expect_context::<SessionMap>();
     let scroll_ref = NodeRef::<leptos::html::Div>::new();
 
     // Memoized timeline: the flat message vector folded into day-separated
@@ -186,7 +184,13 @@ pub(crate) fn MessageList() -> impl IntoView {
 
     view! {
         <div class="relative h-full">
-            <div node_ref=scroll_ref class="absolute inset-0 overflow-y-auto chat-scroll-fade" on:scroll=on_scroll>
+            // `overflow-x-hidden` is load-bearing: `overflow-y-auto` alone leaves
+            // `overflow-x: visible`, which the CSS spec promotes to `auto` — so any
+            // descendant a hair too wide (code block, table, sub-pixel rounding from
+            // the centered `max-w-5xl`) grew a permanent horizontal scrollbar across
+            // the bottom of the list. Wide children still scroll inside their own
+            // `overflow-x:auto` boxes; the list itself never scrolls sideways.
+            <div node_ref=scroll_ref class="absolute inset-0 overflow-y-auto overflow-x-hidden chat-scroll-fade" on:scroll=on_scroll>
                 <Show
                     when=move || chat.messages.get().is_empty()
                     fallback=move || view! {
@@ -195,9 +199,6 @@ pub(crate) fn MessageList() -> impl IntoView {
                                 // Roster bar floats over the top; clear its
                                 // measured height (fallback ~2.75rem pre-observe).
                                 "pt-[calc(var(--aleph-team-roster-h,2.75rem)+0.75rem)]".to_string()
-                            } else if sessions.tab_strip_visible() {
-                                // pt-14 = band (~33px) + headroom
-                                "pt-14".to_string()
                             } else {
                                 "pt-6".to_string()
                             };

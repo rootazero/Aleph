@@ -1878,9 +1878,6 @@
     "filter_placeholder": "过滤 Provider 与模型…",
     "no_match": "没有匹配的模型"
   },
-  "session_tabs": {
-    "close_tab": "关闭标签页 (⌘W)"
-  },
   "layout_toggle": {
     "open_pane": "打开工作区面板",
     "close_pane": "关闭工作区面板"
