@@ -348,6 +348,78 @@ async fn test_close_session_with_topic() {
 }
 
 #[tokio::test]
+async fn legacy_session_history_readable_without_events() {
+    use crate::gateway::session_store::types::MessageRecord;
+    use crate::gateway::session_store::SessionStore;
+
+    let temp = tempdir().unwrap();
+    let config = test_config(temp.path().join("test.db"));
+    let manager = SessionManager::new(config).unwrap();
+
+    let key = SessionKey::main("test");
+    manager.get_or_create(&key).await.unwrap();
+
+    // Write two messages directly (legacy session — no session_events).
+    // This simulates a session created before the MessageProjector flip.
+    let user_msg = MessageRecord {
+        id: "msg_1".into(),
+        role: "user".into(),
+        content: "Hello, assistant!".into(),
+        timestamp: chrono::Utc::now().timestamp(),
+        metadata: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        model: None,
+        model_provider: None,
+        tool_call_id: None,
+        tool_name: None,
+    };
+    <SessionManager as SessionStore>::append_message(&manager, &key, user_msg)
+        .await
+        .unwrap();
+
+    let assistant_msg = MessageRecord {
+        id: "msg_2".into(),
+        role: "assistant".into(),
+        content: "Hi there!".into(),
+        timestamp: chrono::Utc::now().timestamp(),
+        metadata: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        model: None,
+        model_provider: None,
+        tool_call_id: None,
+        tool_name: None,
+    };
+    <SessionManager as SessionStore>::append_message(&manager, &key, assistant_msg)
+        .await
+        .unwrap();
+
+    // Assert both messages are readable through the read surface (messages table).
+    let history = <SessionManager as SessionStore>::get_history(&manager, &key, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        history.len(),
+        2,
+        "legacy session should return both messages"
+    );
+    assert_eq!(history[0].role, "user", "first message should be user role");
+    assert_eq!(
+        history[0].content, "Hello, assistant!",
+        "first message content mismatch"
+    );
+    assert_eq!(
+        history[1].role, "assistant",
+        "second message should be assistant role"
+    );
+    assert_eq!(
+        history[1].content, "Hi there!",
+        "second message content mismatch"
+    );
+}
+
+#[tokio::test]
 async fn test_close_session_without_topic() {
     let temp = tempdir().unwrap();
     let config = test_config(temp.path().join("test.db"));

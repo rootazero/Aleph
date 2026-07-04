@@ -1,3 +1,8 @@
+//! Read invariant (P1 SSOT): `messages` is the Panel read surface. Legacy
+//! sessions retain their rows here; new sessions are materialized by
+//! `MessageProjector` from `session_events`. No dual-read branch is needed —
+//! both classes read the same `messages` table.
+
 pub mod error;
 pub mod file_backend;
 pub mod migration;
