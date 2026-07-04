@@ -380,14 +380,37 @@ pub async fn handle_rename_note_impl(
         );
     }
     match indexer.rename_note(agent_id, title, &params.new_title).await {
-        Ok(()) => JsonRpcResponse::success(
-            req.id,
-            serde_json::json!({
-                "node_id": params.node_id,
-                "new_id": format!("{category}/{}", params.new_title),
-                "renamed": true
-            }),
-        ),
+        Ok(()) => {
+            // `rename_note` ignores the client-supplied `category` prefix and
+            // re-derives the real one via `find_by_filename(old_title, ..)`
+            // internally — so if the client's category was stale/wrong, the
+            // rename still succeeds against the real file, but the naive
+            // `{category}/{new_title}` reconstruction below would point at a
+            // path that was never written. Look up the canonical new path the
+            // same way note_manage's `handle_rename` does (Task 7's tool
+            // layer), falling back to the client-category form only if the
+            // lookup comes up empty. NOTE (cross-category title collision):
+            // if two categories both contain a note with `new_title`, this
+            // returns the first hit from `find_by_filename`, which may not be
+            // the one that was just renamed — same caveat as note_manage.
+            let new_paths = indexer
+                .store()
+                .find_by_filename(&params.new_title, agent_id)
+                .await
+                .unwrap_or_default();
+            let new_id = new_paths
+                .first()
+                .cloned()
+                .unwrap_or_else(|| format!("{category}/{}", params.new_title));
+            JsonRpcResponse::success(
+                req.id,
+                serde_json::json!({
+                    "node_id": params.node_id,
+                    "new_id": new_id,
+                    "renamed": true
+                }),
+            )
+        }
         Err(e) => {
             JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("rename_note failed: {e}"))
         }
@@ -1110,5 +1133,59 @@ mod tests {
         assert!(resp.error.is_none(), "{:?}", resp.error);
         assert!(!memory_dir.join(agent).join("plan/Doomed.md").exists());
         assert!(db.get_note_index("plan/Doomed", agent).await.unwrap().is_none());
+    }
+
+    /// Traversal in the category segment of node_id (e.g. "../evil/Note")
+    /// must be rejected by the same guard as `update_note`'s, not silently
+    /// forwarded to `rename_note`. Asserts the specific error code + message
+    /// (not just `is_err`) so the test regresses if the guard is ever removed
+    /// or weakened rather than passing vacuously on an unrelated error.
+    #[tokio::test]
+    async fn rename_note_rejects_traversal_category() {
+        let memory_dir =
+            std::env::temp_dir().join(format!("rename_rpc_traversal_{}", Uuid::new_v4()));
+        let db = make_db();
+        let indexer = Arc::new(NoteIndexer::new(memory_dir, db));
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "graph.rename_note".into(),
+            params: Some(serde_json::json!({
+                "node_id": "../evil/Note", "new_title": "NewTitle"
+            })),
+            id: Some(serde_json::json!(1)),
+        };
+        let resp = handle_rename_note_impl(req, indexer).await;
+        let err = resp.error.expect("expected error for traversal category");
+        assert_eq!(err.code, INVALID_PARAMS);
+        assert!(
+            err.message.contains("path traversal"),
+            "expected traversal guard message, got: {}",
+            err.message
+        );
+    }
+
+    /// Same traversal guard, for `graph.delete_note`.
+    #[tokio::test]
+    async fn delete_note_rejects_traversal_category() {
+        let memory_dir =
+            std::env::temp_dir().join(format!("delete_rpc_traversal_{}", Uuid::new_v4()));
+        let db = make_db();
+        let indexer = Arc::new(NoteIndexer::new(memory_dir, db));
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "graph.delete_note".into(),
+            params: Some(serde_json::json!({ "node_id": "../evil/Note" })),
+            id: Some(serde_json::json!(1)),
+        };
+        let resp = handle_delete_note_impl(req, indexer).await;
+        let err = resp.error.expect("expected error for traversal category");
+        assert_eq!(err.code, INVALID_PARAMS);
+        assert!(
+            err.message.contains("path traversal"),
+            "expected traversal guard message, got: {}",
+            err.message
+        );
     }
 }
