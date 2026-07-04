@@ -207,7 +207,9 @@ pub fn ax_action_to_patterns(action: &str) -> Result<Vec<AxPattern>> {
             AxPattern::Legacy,
         ]),
         "AXShowMenu" => Ok(vec![AxPattern::ExpandCollapse]),
-        other => Err(DesktopError::NotImplemented(format!("ax.perform_action:{other}"))),
+        other => Err(DesktopError::NotImplemented(format!(
+            "ax.perform_action:{other}"
+        ))),
     }
 }
 
@@ -269,10 +271,7 @@ impl AccessibilityCapability for WindowsAccessibility {
         run_blocking(move || imp::set_value(locator, value)).await
     }
 
-    async fn perform_action(
-        &self,
-        params: PerformActionParams,
-    ) -> Result<AxActionResult> {
+    async fn perform_action(&self, params: PerformActionParams) -> Result<AxActionResult> {
         let (locator, action) = (params.locator, params.action);
         run_blocking(move || imp::perform_action(locator, action)).await
     }
@@ -298,13 +297,16 @@ where
 
 #[cfg(windows)]
 mod imp {
-    use super::{ax_action_to_patterns, control_type_to_ax_role, rank_candidates, AxPattern, RankCandidate, MAX_NODES, RESOLVE_DEPTH, ROLE_SCAN_DEPTH};
+    use super::{
+        ax_action_to_patterns, control_type_to_ax_role, rank_candidates, AxPattern, RankCandidate,
+        MAX_NODES, RESOLVE_DEPTH, ROLE_SCAN_DEPTH,
+    };
     use aleph_desktop::{DesktopError, Result};
     use aleph_protocol::desktop_bridge::methods::ax::{
         AxActionResult, AxElement, AxLocator, AxVerification,
     };
-    use windows::core::BSTR;
     use aleph_protocol::desktop_bridge::methods::screen::Region;
+    use windows::core::BSTR;
 
     use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
     use windows::Win32::System::Com::{
@@ -456,7 +458,8 @@ mod imp {
     pub(super) fn value_of(el: &IUIAutomationElement) -> Option<String> {
         // SAFETY: read-only UIA pattern getters; missing pattern surfaces as Err.
         unsafe {
-            if let Ok(vp) = el.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) {
+            if let Ok(vp) = el.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+            {
                 if let Ok(v) = vp.CurrentValue() {
                     let s = v.to_string();
                     if !s.is_empty() {
@@ -464,11 +467,9 @@ mod imp {
                     }
                 }
             }
-            if let Ok(lp) = el
-                .GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
-                    UIA_LegacyIAccessiblePatternId,
-                )
-            {
+            if let Ok(lp) = el.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+                UIA_LegacyIAccessiblePatternId,
+            ) {
                 if let Ok(v) = lp.CurrentValue() {
                     let s = v.to_string();
                     if !s.is_empty() {
@@ -497,7 +498,11 @@ mod imp {
             .as_ref()
             .map_or((0.0, 0.0), |b| (b.x + b.width / 2.0, b.y + b.height / 2.0));
         out.push((
-            RankCandidate { role: node.role, title: node.title, center },
+            RankCandidate {
+                role: node.role,
+                title: node.title,
+                center,
+            },
             el.clone(),
         ));
         *count += 1;
@@ -543,7 +548,9 @@ mod imp {
             role: cand.role.clone(),
             title: cand.title.clone(),
             value: value_of(el),
-            bounds: unsafe { el.CurrentBoundingRectangle() }.ok().map(rect_to_region),
+            bounds: unsafe { el.CurrentBoundingRectangle() }
+                .ok()
+                .map(rect_to_region),
             pid: unsafe { el.CurrentProcessId() }.unwrap_or(0),
             children: Vec::new(),
         };
@@ -568,18 +575,28 @@ mod imp {
                 )
             })?;
         // SAFETY: read-only property getter.
-        if unsafe { vp.CurrentIsReadOnly() }.map(|b| b.as_bool()).unwrap_or(false) {
+        if unsafe { vp.CurrentIsReadOnly() }
+            .map(|b| b.as_bool())
+            .unwrap_or(false)
+        {
             return Err(DesktopError::NotAvailable(
                 "element is read-only; fall back to click + type_text".into(),
             ));
         }
         // SAFETY: documented ValuePattern write.
-        unsafe { vp.SetValue(&BSTR::from(value.as_str())) }
-            .map_err(|e| DesktopError::PlatformError(format!("ValuePattern.SetValue failed: {e}")))?;
+        unsafe { vp.SetValue(&BSTR::from(value.as_str())) }.map_err(|e| {
+            DesktopError::PlatformError(format!("ValuePattern.SetValue failed: {e}"))
+        })?;
         // SAFETY: read-back for verification.
-        let readback = unsafe { vp.CurrentValue() }.map(|b| b.to_string()).unwrap_or_default();
+        let readback = unsafe { vp.CurrentValue() }
+            .map(|b| b.to_string())
+            .unwrap_or_default();
         let verification = if readback == value {
-            AxVerification { state: "verified".into(), reason: None, actual_preview: None }
+            AxVerification {
+                state: "verified".into(),
+                reason: None,
+                actual_preview: None,
+            }
         } else {
             AxVerification {
                 state: "unverified".into(),
@@ -605,32 +622,48 @@ mod imp {
         unsafe {
             match pattern {
                 AxPattern::Invoke => {
-                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId) {
-                        p.Invoke().map_err(|e| DesktopError::PlatformError(format!("Invoke: {e}")))?;
+                    if let Ok(p) =
+                        el.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+                    {
+                        p.Invoke()
+                            .map_err(|e| DesktopError::PlatformError(format!("Invoke: {e}")))?;
                         return Ok(true);
                     }
                 }
                 AxPattern::Toggle => {
-                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId) {
-                        p.Toggle().map_err(|e| DesktopError::PlatformError(format!("Toggle: {e}")))?;
+                    if let Ok(p) =
+                        el.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
+                    {
+                        p.Toggle()
+                            .map_err(|e| DesktopError::PlatformError(format!("Toggle: {e}")))?;
                         return Ok(true);
                     }
                 }
                 AxPattern::SelectionItem => {
-                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId) {
-                        p.Select().map_err(|e| DesktopError::PlatformError(format!("Select: {e}")))?;
+                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(
+                        UIA_SelectionItemPatternId,
+                    ) {
+                        p.Select()
+                            .map_err(|e| DesktopError::PlatformError(format!("Select: {e}")))?;
                         return Ok(true);
                     }
                 }
                 AxPattern::ExpandCollapse => {
-                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(UIA_ExpandCollapsePatternId) {
-                        p.Expand().map_err(|e| DesktopError::PlatformError(format!("Expand: {e}")))?;
+                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(
+                        UIA_ExpandCollapsePatternId,
+                    ) {
+                        p.Expand()
+                            .map_err(|e| DesktopError::PlatformError(format!("Expand: {e}")))?;
                         return Ok(true);
                     }
                 }
                 AxPattern::Legacy => {
-                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(UIA_LegacyIAccessiblePatternId) {
-                        p.DoDefaultAction().map_err(|e| DesktopError::PlatformError(format!("DoDefaultAction: {e}")))?;
+                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+                        UIA_LegacyIAccessiblePatternId,
+                    ) {
+                        p.DoDefaultAction().map_err(|e| {
+                            DesktopError::PlatformError(format!("DoDefaultAction: {e}"))
+                        })?;
                         return Ok(true);
                     }
                 }
@@ -872,67 +905,117 @@ mod tests {
     }
 
     fn cand(role: &str, title: Option<&str>, cx: f64, cy: f64) -> RankCandidate {
-        RankCandidate { role: role.into(), title: title.map(Into::into), center: (cx, cy) }
+        RankCandidate {
+            role: role.into(),
+            title: title.map(Into::into),
+            center: (cx, cy),
+        }
     }
     fn loc(role: Option<&str>, title: Option<&str>, center: Option<[f64; 2]>) -> AxLocator {
-        AxLocator { pid: None, role: role.map(Into::into), title: title.map(Into::into), center }
+        AxLocator {
+            pid: None,
+            role: role.map(Into::into),
+            title: title.map(Into::into),
+            center,
+        }
     }
 
     #[test]
     fn role_filter_excludes_non_matching() {
-        let cands = [cand("AXButton", Some("OK"), 0.0, 0.0), cand("AXTextField", Some("OK"), 0.0, 0.0)];
+        let cands = [
+            cand("AXButton", Some("OK"), 0.0, 0.0),
+            cand("AXTextField", Some("OK"), 0.0, 0.0),
+        ];
         // Only the AXTextField candidate is eligible.
-        assert_eq!(rank_candidates(&cands, &loc(Some("AXTextField"), None, None)), Some(1));
+        assert_eq!(
+            rank_candidates(&cands, &loc(Some("AXTextField"), None, None)),
+            Some(1)
+        );
     }
 
     #[test]
     fn no_match_returns_none() {
         let cands = [cand("AXButton", None, 0.0, 0.0)];
-        assert_eq!(rank_candidates(&cands, &loc(Some("AXTextField"), None, None)), None);
+        assert_eq!(
+            rank_candidates(&cands, &loc(Some("AXTextField"), None, None)),
+            None
+        );
     }
 
     #[test]
     fn exact_title_beats_contains_case_insensitive() {
-        let cands = [cand("AXTextField", Some("Email address"), 0.0, 0.0), cand("AXTextField", Some("email"), 0.0, 0.0)];
+        let cands = [
+            cand("AXTextField", Some("Email address"), 0.0, 0.0),
+            cand("AXTextField", Some("email"), 0.0, 0.0),
+        ];
         // "email" is an exact (case-insensitive) match; "Email address" only contains it.
-        assert_eq!(rank_candidates(&cands, &loc(Some("AXTextField"), Some("Email"), None)), Some(1));
+        assert_eq!(
+            rank_candidates(&cands, &loc(Some("AXTextField"), Some("Email"), None)),
+            Some(1)
+        );
     }
 
     #[test]
     fn center_breaks_ties_when_titles_equal_rank() {
-        let cands = [cand("AXButton", None, 100.0, 100.0), cand("AXButton", None, 10.0, 10.0)];
+        let cands = [
+            cand("AXButton", None, 100.0, 100.0),
+            cand("AXButton", None, 10.0, 10.0),
+        ];
         // No title given → both rank 0; nearest center to (0,0) wins.
-        assert_eq!(rank_candidates(&cands, &loc(Some("AXButton"), None, Some([0.0, 0.0]))), Some(1));
+        assert_eq!(
+            rank_candidates(&cands, &loc(Some("AXButton"), None, Some([0.0, 0.0]))),
+            Some(1)
+        );
     }
 
     #[test]
     fn no_role_filter_considers_all() {
-        let cands = [cand("AXButton", Some("Save"), 0.0, 0.0), cand("AXMenuItem", Some("Save"), 0.0, 0.0)];
+        let cands = [
+            cand("AXButton", Some("Save"), 0.0, 0.0),
+            cand("AXMenuItem", Some("Save"), 0.0, 0.0),
+        ];
         // role=None → first exact-title match wins.
-        assert_eq!(rank_candidates(&cands, &loc(None, Some("Save"), None)), Some(0));
+        assert_eq!(
+            rank_candidates(&cands, &loc(None, Some("Save"), None)),
+            Some(0)
+        );
     }
 
     #[test]
     fn axpress_maps_to_invoke_fallback_chain() {
         assert_eq!(
             ax_action_to_patterns("AXPress").unwrap(),
-            vec![AxPattern::Invoke, AxPattern::Toggle, AxPattern::SelectionItem, AxPattern::Legacy]
+            vec![
+                AxPattern::Invoke,
+                AxPattern::Toggle,
+                AxPattern::SelectionItem,
+                AxPattern::Legacy
+            ]
         );
     }
 
     #[test]
     fn axconfirm_same_as_axpress() {
-        assert_eq!(ax_action_to_patterns("AXConfirm").unwrap(), ax_action_to_patterns("AXPress").unwrap());
+        assert_eq!(
+            ax_action_to_patterns("AXConfirm").unwrap(),
+            ax_action_to_patterns("AXPress").unwrap()
+        );
     }
 
     #[test]
     fn axshowmenu_maps_to_expand_collapse() {
-        assert_eq!(ax_action_to_patterns("AXShowMenu").unwrap(), vec![AxPattern::ExpandCollapse]);
+        assert_eq!(
+            ax_action_to_patterns("AXShowMenu").unwrap(),
+            vec![AxPattern::ExpandCollapse]
+        );
     }
 
     #[test]
     fn unknown_action_is_not_implemented() {
         let err = ax_action_to_patterns("AXFoo").unwrap_err();
-        assert!(matches!(err, aleph_desktop::DesktopError::NotImplemented(_)));
+        assert!(matches!(
+            err,
+            aleph_desktop::DesktopError::NotImplemented(_)
+        ));
     }
 }
