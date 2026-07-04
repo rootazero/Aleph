@@ -21,6 +21,22 @@ pub fn extract_wikilinks(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Extract `(target, display_label)` pairs from `text`. The label is the
+/// `|alias` part of `[[target|alias]]`; `None` for plain `[[target]]` and for
+/// an empty alias (`[[target|]]`).
+pub fn extract_wikilinks_with_alias(text: &str) -> Vec<(String, Option<String>)> {
+    WIKILINK_RE
+        .captures_iter(text)
+        .map(|cap| {
+            let label = cap
+                .get(2)
+                .map(|m| m.as_str().to_string())
+                .filter(|s| !s.is_empty());
+            (cap[1].to_string(), label)
+        })
+        .collect()
+}
+
 /// Replace every `[[old_name]]` with `[[new_name]]`, leaving other links intact.
 pub fn rewrite_wikilinks(text: &str, old_name: &str, new_name: &str) -> String {
     WIKILINK_RE
@@ -121,5 +137,26 @@ mod tests {
     fn remove_drops_full_pipe_form() {
         let text = "x [[stale|Stale]] y";
         assert_eq!(remove_wikilink(text, "stale"), "x  y");
+    }
+
+    #[test]
+    fn extract_with_alias_returns_target_and_label() {
+        let text = "see [[rust|Rust 学习]] and [[plain]]";
+        assert_eq!(
+            extract_wikilinks_with_alias(text),
+            vec![
+                ("rust".to_string(), Some("Rust 学习".to_string())),
+                ("plain".to_string(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_with_alias_empty_label_is_none() {
+        // `[[x|]]` — empty alias capture must not surface as Some("").
+        assert_eq!(
+            extract_wikilinks_with_alias("[[x|]]"),
+            vec![("x".to_string(), None)]
+        );
     }
 }

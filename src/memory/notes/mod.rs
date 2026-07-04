@@ -28,7 +28,9 @@ pub use note::{
 };
 pub use retrieval::{NoteContent, NoteRetrieval};
 pub use search_result::NoteSearchResult;
-pub use wikilink::{extract_wikilinks, remove_wikilink, rewrite_wikilinks};
+pub use wikilink::{
+    extract_wikilinks, extract_wikilinks_with_alias, remove_wikilink, rewrite_wikilinks,
+};
 
 pub mod ingest;
 pub mod profile;
