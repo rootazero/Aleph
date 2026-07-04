@@ -62,6 +62,7 @@ pub mod codex_token_refresher;
 pub mod config;
 pub mod execution_engine;
 pub mod session_manager;
+pub mod session_projector;
 pub mod session_store;
 // loop_callback_adapter removed (depended on old OTAF agent_loop types)
 pub mod bind_mode;
