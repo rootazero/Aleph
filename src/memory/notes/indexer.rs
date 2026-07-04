@@ -12,7 +12,7 @@ use tokio::fs;
 use crate::error::AlephError;
 use crate::memory::dreaming::distill_action::DistillAction;
 use crate::memory::notes::store::NoteStore;
-use crate::memory::notes::wikilink::rewrite_wikilinks;
+use crate::memory::notes::wikilink::{rewrite_relation_targets, rewrite_wikilinks};
 use crate::memory::notes::{sanitize_title, KnowledgeNote, Severity};
 use crate::utils::atomic_write::atomic_write_file;
 
@@ -752,7 +752,16 @@ impl<S: NoteStore> NoteIndexer<S> {
                     Err(_) => continue,
                 };
 
-                let rewritten = rewrite_wikilinks(&content, old_title, new_title);
+                // Rewrite BOTH body `[[old]]` wikilinks AND frontmatter typed
+                // relations (`- to: old`) — the latter are bare scalars the
+                // wikilink regex cannot see, so without this they dangle after
+                // a rename. Composing both means the `!= content` guard below
+                // also fires (and re-indexes) on a relation-only change.
+                let rewritten = rewrite_relation_targets(
+                    &rewrite_wikilinks(&content, old_title, new_title),
+                    old_title,
+                    new_title,
+                );
                 if rewritten != content {
                     // Write the updated content atomically — a plain fs::write
                     // can leave a truncated source-of-truth file on a crash

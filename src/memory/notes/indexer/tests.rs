@@ -495,6 +495,91 @@ async fn rename_note_backfills_dangling_links_pointing_at_new_name() {
 }
 
 #[tokio::test]
+async fn rename_note_cascades_frontmatter_typed_relations() {
+    // Regression: a rename must also re-point OTHER notes' typed relations
+    // (frontmatter `- to: <target>` scalars), not just body `[[wikilinks]]`.
+    // These bare scalars are invisible to `rewrite_wikilinks`, so before the
+    // fix the source note was never re-indexed and its relation row stayed
+    // tombstoned, permanently dangling at the old name.
+    use crate::memory::notes::Relation;
+
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+    let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
+
+    // "linker" references "bob" ONLY through a typed frontmatter relation (no
+    // body wikilink), isolating the new code path from the existing cascade.
+    let bob = KnowledgeNote {
+        title: "bob".to_string(),
+        category: "reference".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    let linker = KnowledgeNote {
+        title: "linker".to_string(),
+        category: "reference".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    indexer.write_note(AGENT, "reference", &bob).await.unwrap();
+    indexer
+        .write_note(AGENT, "reference", &linker)
+        .await
+        .unwrap();
+    indexer
+        .append_relations(
+            AGENT,
+            "reference/linker",
+            &[Relation {
+                to: "reference/bob".to_string(),
+                rel_type: "knows".to_string(),
+                confidence: 1.0,
+            }],
+        )
+        .await
+        .unwrap();
+
+    let linker_md = memory_dir.join(AGENT).join("reference").join("linker.md");
+    let before = fs::read_to_string(&linker_md).await.unwrap();
+    assert!(before.contains("to: reference/bob"), "got:\n{before}");
+
+    // Rename the target: bob -> bob2.
+    indexer.rename_note(AGENT, "bob", "bob2").await.unwrap();
+
+    // (1) On-disk frontmatter is re-pointed (source of truth).
+    let after = fs::read_to_string(&linker_md).await.unwrap();
+    assert!(
+        after.contains("to: reference/bob2"),
+        "frontmatter relation not re-pointed, got:\n{after}"
+    );
+    assert!(
+        !after.contains("to: reference/bob\n"),
+        "stale old target left behind, got:\n{after}"
+    );
+
+    // (2) The notes_links typed-relation row is revived: active and pointing
+    // at the renamed note, not tombstoned on the old name.
+    let rows = db
+        .get_outgoing_link_rows("reference/linker", AGENT)
+        .await
+        .unwrap();
+    let rel = rows
+        .iter()
+        .find(|r| r.relation.as_deref() == Some("knows"))
+        .expect("typed relation row must exist");
+    assert_eq!(
+        rel.status, "active",
+        "relation must be revived; to_note={}, to_raw={}",
+        rel.to_note, rel.to_raw
+    );
+    assert_eq!(rel.to_note, "reference/bob2");
+    assert_eq!(rel.to_raw, "reference/bob2");
+}
+
+#[tokio::test]
 async fn write_note_backfills_dangling_links_in_other_notes() {
     // End-to-end: finalize_write's best-effort backfill trigger revives a
     // dangling link in another note once the note it points at is written.

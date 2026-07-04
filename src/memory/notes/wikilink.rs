@@ -53,6 +53,110 @@ pub fn rewrite_wikilinks(text: &str, old_name: &str, new_name: &str) -> String {
         .into_owned()
 }
 
+/// Rewrite typed-relation `to:` targets in a note's YAML frontmatter so they
+/// track a rename of `old_title` → `new_title`.
+///
+/// Typed relations live in frontmatter as bare scalars (`- to: general/bob`),
+/// not `[[wikilink]]` syntax, so `rewrite_wikilinks` cannot see them and a
+/// rename would leave them dangling. This complements the body-wikilink rewrite
+/// in the rename cascade.
+///
+/// Only `- to:` list items **inside the leading `---` frontmatter block** are
+/// considered; body text and every other field are left byte-for-byte intact
+/// (a `- to:` line in the body is not a relation). A target matches when its
+/// value is either the bare `old_title` or a path form whose final segment is
+/// `old_title` (`general/old_title`); on a match only the title segment is
+/// swapped, preserving any `category/` prefix. `KnowledgeNote` serializes
+/// relations as unquoted scalars; simple surrounding quotes are tolerated for
+/// hand-written notes and normalized to the emitted `- to: <value>` form.
+pub fn rewrite_relation_targets(text: &str, old_title: &str, new_title: &str) -> String {
+    let mut out = String::with_capacity(text.len() + new_title.len());
+    // Frontmatter state: None = before the opening fence, Some(true) = inside,
+    // Some(false) = past the closing fence (body). Only rewrite while inside.
+    let mut state: Option<bool> = None;
+    for (idx, line) in text.split_inclusive('\n').enumerate() {
+        let fence = line.trim_end_matches(['\n', '\r']).trim() == "---";
+        match state {
+            None => {
+                // Frontmatter must open on the very first line, else nothing to do.
+                if idx == 0 && fence {
+                    state = Some(true);
+                    out.push_str(line);
+                } else {
+                    return text.to_string();
+                }
+            }
+            Some(true) => {
+                if fence {
+                    state = Some(false);
+                    out.push_str(line);
+                } else {
+                    out.push_str(&rewrite_relation_line(line, old_title, new_title));
+                }
+            }
+            Some(false) => out.push_str(line),
+        }
+    }
+    out
+}
+
+/// Rewrite a single frontmatter line if it is a `- to: <target>` relation entry
+/// whose target resolves to `old_title`; otherwise return it unchanged.
+/// Indentation and the trailing line terminator are preserved.
+fn rewrite_relation_line(line: &str, old_title: &str, new_title: &str) -> String {
+    let (body, term) = split_line_terminator(line);
+    let trimmed = body.trim_start();
+    let indent = &body[..body.len() - trimmed.len()];
+    let Some(after_dash) = trimmed.strip_prefix('-') else {
+        return line.to_string();
+    };
+    let Some(after_key) = after_dash.trim_start().strip_prefix("to:") else {
+        return line.to_string();
+    };
+    let value = strip_simple_quotes(after_key.trim());
+    match swap_title_segment(value, old_title, new_title) {
+        Some(new_value) => format!("{indent}- to: {new_value}{term}"),
+        None => line.to_string(),
+    }
+}
+
+/// Return `Some(new_value)` when `value` is `old_title` (bare) or `*/old_title`
+/// (path form, final segment == `old_title`), swapping only the title segment.
+fn swap_title_segment(value: &str, old_title: &str, new_title: &str) -> Option<String> {
+    if value == old_title {
+        return Some(new_title.to_string());
+    }
+    value
+        .strip_suffix(old_title)
+        .filter(|prefix| prefix.ends_with('/'))
+        .map(|prefix| format!("{prefix}{new_title}"))
+}
+
+/// Strip a single pair of surrounding ASCII single/double quotes, if present.
+fn strip_simple_quotes(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2
+        && (bytes[0] == b'"' || bytes[0] == b'\'')
+        && bytes[bytes.len() - 1] == bytes[0]
+    {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
+}
+
+/// Split a `split_inclusive('\n')` line into `(body, terminator)`, preserving
+/// `\r\n` vs `\n` vs a final unterminated line.
+fn split_line_terminator(line: &str) -> (&str, &str) {
+    if let Some(body) = line.strip_suffix("\r\n") {
+        (body, "\r\n")
+    } else if let Some(body) = line.strip_suffix('\n') {
+        (body, "\n")
+    } else {
+        (line, "")
+    }
+}
+
 /// Delete every `[[name]]` occurrence from `text`, leaving other links intact.
 ///
 /// Used by `NoteLintStage` (D4) to purge wikilinks pointing at notes that
@@ -158,5 +262,53 @@ mod tests {
             extract_wikilinks_with_alias("[[x|]]"),
             vec![("x".to_string(), None)]
         );
+    }
+
+    #[test]
+    fn rewrite_relation_targets_swaps_bare_title() {
+        let fm = "---\ntitle: a\nrelations:\n  - to: bob\n    type: knows\n    confidence: 1.0000\n---\nbody\n";
+        let out = rewrite_relation_targets(fm, "bob", "bob2");
+        assert!(out.contains("  - to: bob2\n"), "got: {out}");
+        // Sibling type/confidence lines are preserved verbatim.
+        assert!(out.contains("    type: knows\n"), "got: {out}");
+        assert!(out.contains("    confidence: 1.0000\n"), "got: {out}");
+    }
+
+    #[test]
+    fn rewrite_relation_targets_swaps_path_form_last_segment() {
+        // Path-form target: only the final `/bob` segment is swapped.
+        let fm = "---\nrelations:\n  - to: general/bob\n---\nx\n";
+        let out = rewrite_relation_targets(fm, "bob", "bob2");
+        assert!(out.contains("  - to: general/bob2\n"), "got: {out}");
+    }
+
+    #[test]
+    fn rewrite_relation_targets_ignores_non_match_and_body() {
+        // A non-matching relation target and a body `- to: bob` line (past the
+        // closing fence) must both be left untouched.
+        let fm = "---\nrelations:\n  - to: alice\n---\n- to: bob\n";
+        assert_eq!(rewrite_relation_targets(fm, "bob", "bob2"), fm);
+    }
+
+    #[test]
+    fn rewrite_relation_targets_no_frontmatter_is_noop() {
+        let body = "just body\n- to: bob\n";
+        assert_eq!(rewrite_relation_targets(body, "bob", "bob2"), body);
+    }
+
+    #[test]
+    fn rewrite_relation_targets_partial_segment_not_matched() {
+        // `clubob` must NOT match `bob`: a suffix without a `/` boundary.
+        let fm = "---\nrelations:\n  - to: clubob\n---\n";
+        assert_eq!(rewrite_relation_targets(fm, "bob", "bob2"), fm);
+    }
+
+    #[test]
+    fn rewrite_relation_targets_tolerates_quotes_and_crlf() {
+        // Quoted scalar + CRLF terminators: value is compared unquoted and the
+        // `\r\n` terminator is preserved.
+        let fm = "---\r\nrelations:\r\n  - to: \"general/bob\"\r\n---\r\n";
+        let out = rewrite_relation_targets(fm, "bob", "bob2");
+        assert!(out.contains("  - to: general/bob2\r\n"), "got: {out:?}");
     }
 }
