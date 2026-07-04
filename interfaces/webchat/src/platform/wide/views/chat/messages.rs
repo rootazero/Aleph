@@ -223,10 +223,11 @@ pub(crate) fn MessageList() -> impl IntoView {
                                             view! { <MessageBubble message=message clock=clock /> }.into_any()
                                         }
                                     }
-                                    TimelineRow::StepStrip { steps, completed, .. } => view! {
-                                        <StepStrip steps=steps completed=completed />
-                                    }
-                                    .into_any(),
+                                    // Narration / ToolLine / ExploreGroup rendering lands in
+                                    // Task 5 — placeholder keeps the match exhaustive so this
+                                    // crate compiles standalone during Task 2's derivation-only
+                                    // change.
+                                    _ => view! { <span/> }.into_any(),
                                 }
                             />
                             // Reasoning transcript — collapsible chain-of-thought

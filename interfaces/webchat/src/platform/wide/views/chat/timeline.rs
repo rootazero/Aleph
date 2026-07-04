@@ -1,20 +1,24 @@
 //! Timeline derivation — folds the flat chat message vector into a structured
-//! render model with calendar-day separators and per-message clock labels.
+//! render model with calendar-day separators, per-message clock labels, and
+//! a shape-per-row breakdown of a run's intermediate turns.
 //!
 //! This is the *presentation-structure* layer for the message list: it keeps
-//! [`super::messages`] free of date-bucketing logic and concentrates every
-//! `js_sys::Date` touch in a few small bridge fns. The folding core
-//! ([`build_rows`]) is pure — it receives the day-ordinal / label / clock
-//! mappers as closures — so it is exercised by host unit tests without a WASM
-//! runtime.
+//! [`super::messages`] free of date-bucketing and step-shape logic and
+//! concentrates every `js_sys::Date` touch in a few small bridge fns. The
+//! folding core ([`build_rows`]) is pure — it receives the day-ordinal /
+//! label / clock mappers as closures — so it is exercised by host unit tests
+//! without a WASM runtime.
 //!
-//! Why a derived row model instead of a flat `<For>` over messages? Inserting
-//! separators inline would scatter "is this a new day?" state across the
-//! render closure. Modelling the list as an explicit `Vec<TimelineRow>` makes
-//! the segmentation a single, memoizable transform: Leptos recomputes it only
-//! when `messages` changes, not on every reactive read.
+//! Why a derived row model instead of a flat `<For>` over messages? A run's
+//! intermediate turns interleave narration text with tool calls; deriving
+//! [`TimelineRow::Narration`] / [`TimelineRow::ToolLine`] /
+//! [`TimelineRow::ExploreGroup`] rows up front lets the render layer draw
+//! each shape with a dedicated component instead of branching on message
+//! internals per item. Modelling the list as an explicit `Vec<TimelineRow>`
+//! also makes day-separator insertion a single, memoizable transform: Leptos
+//! recomputes it only when `messages` changes, not on every reactive read.
 
-use super::state::ChatMessage;
+use super::state::{ChatMessage, ToolCallEntry};
 
 /// A single render row in the message timeline.
 #[derive(Debug, Clone, PartialEq)]
@@ -27,12 +31,22 @@ pub enum TimelineRow {
     /// A message plus its resolved clock label ("HH:MM", or empty when the
     /// message carries no timestamp — e.g. legacy history rows).
     Message { message: ChatMessage, clock: String },
-    /// A run's consecutive intermediate step bubbles, folded into one bounded
-    /// scrolling strip (keeps the chat column short). `completed` is true when
-    /// no step is still streaming → render auto-collapsed to a summary line.
-    StepStrip {
+    /// An intermediate turn's narration text: no bubble, no strip — rendered
+    /// inline, no-frame. Also covers the streaming cursor placeholder (empty
+    /// content, still streaming, no tool calls yet).
+    Narration { message: ChatMessage },
+    /// A single non-readonly tool call from an intermediate turn, rendered as
+    /// one line item.
+    ToolLine { run_id: String, tool: ToolCallEntry },
+    /// A run of consecutive read-only tool calls (file reads / searches),
+    /// collapsed into one block (mirrors Codex's "Exploring" grouping).
+    ExploreGroup {
+        /// Stable key: `explore:{run_id}:{first_tool_id}`.
+        key: String,
         run_id: String,
-        steps: Vec<ChatMessage>,
+        tools: Vec<ToolCallEntry>,
+        /// True when no tool in the group is still `running` and none of the
+        /// source messages are still streaming.
         completed: bool,
     },
 }
@@ -56,28 +70,56 @@ pub fn build_rows(
 ) -> Vec<TimelineRow> {
     let mut rows = Vec::with_capacity(messages.len() + 2);
     let mut last_day: Option<i64> = None;
-    let mut pending: Vec<ChatMessage> = Vec::new();
+    let mut acc: Option<ExploreAcc> = None;
 
     for m in messages {
-        // Fold every Think→Act *step* bubble of one run into a single StepStrip
-        // so a long run doesn't stretch the column. A step is any iteration-
-        // tagged assistant bubble that is NOT the run's final answer — this
-        // includes the still-streaming current turn (`assistant-{run}` is
-        // stamped as step 1 in `start_assistant_message`), so it folds into the
-        // strip from the first frame instead of dangling below it as a bare bubble.
+        // A step is any iteration-tagged assistant bubble that is NOT the
+        // run's final answer — this includes the still-streaming current turn
+        // (`assistant-{run}` is stamped as step 1 in `start_assistant_message`).
+        // Its narration text and tool calls are derived into separate rows
+        // below instead of folding the whole bubble into one strip.
         if is_step(m) {
-            if pending
-                .first()
-                .is_some_and(|p| run_id_of(p) != run_id_of(m))
-            {
-                flush_strip(&mut rows, &mut pending);
+            let run = run_id_of(m);
+            if acc.as_ref().is_some_and(|a| a.run_id != run) {
+                flush_explore(&mut rows, &mut acc);
             }
-            pending.push(m.clone());
+            let has_narration =
+                !m.content.trim().is_empty() || (m.is_streaming && m.tool_calls.is_empty());
+            if has_narration {
+                flush_explore(&mut rows, &mut acc);
+                rows.push(TimelineRow::Narration { message: m.clone() });
+            }
+            for t in &m.tool_calls {
+                if is_explore_tool(&t.tool_name) {
+                    let a = acc.get_or_insert_with(|| ExploreAcc {
+                        key: format!("explore:{run}:{}", t.tool_id),
+                        run_id: run.clone(),
+                        tools: Vec::new(),
+                        streaming: false,
+                    });
+                    a.tools.push(t.clone());
+                    a.streaming |= m.is_streaming;
+                } else {
+                    flush_explore(&mut rows, &mut acc);
+                    rows.push(TimelineRow::ToolLine {
+                        run_id: run.clone(),
+                        tool: t.clone(),
+                    });
+                }
+            }
+            // Tool-carrying streaming step: keep the group "open" even if
+            // narration was consumed above — streaming flag already folded
+            // per-push.
+            if m.is_streaming && !m.tool_calls.is_empty() {
+                if let Some(a) = acc.as_mut() {
+                    a.streaming = true;
+                }
+            }
             continue;
         }
 
-        // A non-step row closes any open strip before it renders.
-        flush_strip(&mut rows, &mut pending);
+        // A non-step row closes any open explore group before it renders.
+        flush_explore(&mut rows, &mut acc);
 
         let clock = match m.timestamp {
             Some(ts) => {
@@ -98,8 +140,43 @@ pub fn build_rows(
             clock,
         });
     }
-    flush_strip(&mut rows, &mut pending);
+    flush_explore(&mut rows, &mut acc);
     rows
+}
+
+/// Only-read exploration tools (file reads / searches) → collapsed into an
+/// [`TimelineRow::ExploreGroup`] (Codex "Exploring" grouping analog).
+#[must_use]
+pub fn is_explore_tool(tool_name: &str) -> bool {
+    use crate::components::tool_card::ToolKind;
+    matches!(
+        ToolKind::from_name(tool_name),
+        ToolKind::FileRead | ToolKind::Search
+    )
+}
+
+/// Open explore-group accumulator (flushed on narration / action tool /
+/// non-step row / end of input).
+struct ExploreAcc {
+    key: String,
+    run_id: String,
+    tools: Vec<ToolCallEntry>,
+    streaming: bool,
+}
+
+/// Flush the open explore-group accumulator into one `ExploreGroup` row.
+/// No-op when no group is open. `completed` is true when no tool in the
+/// group is still `running` and none of its source messages are streaming.
+fn flush_explore(rows: &mut Vec<TimelineRow>, acc: &mut Option<ExploreAcc>) {
+    if let Some(a) = acc.take() {
+        let completed = !a.streaming && a.tools.iter().all(|t| t.status != "running");
+        rows.push(TimelineRow::ExploreGroup {
+            key: a.key,
+            run_id: a.run_id,
+            tools: a.tools,
+            completed,
+        });
+    }
 }
 
 /// Run id behind a message id (`intermediate-{run}-{n}`, `assistant-{run}`, or
@@ -132,21 +209,6 @@ fn is_step(m: &ChatMessage) -> bool {
     m.role == "assistant" && m.iteration.is_some() && !is_final_answer(m)
 }
 
-/// Flush accumulated intermediate steps into one `StepStrip` row. No-op when
-/// empty. `completed` is true when no step is still streaming.
-fn flush_strip(rows: &mut Vec<TimelineRow>, pending: &mut Vec<ChatMessage>) {
-    if pending.is_empty() {
-        return;
-    }
-    let run_id = run_id_of(&pending[0]);
-    let completed = pending.iter().all(|m| !m.is_streaming);
-    rows.push(TimelineRow::StepStrip {
-        run_id,
-        steps: std::mem::take(pending),
-        completed,
-    });
-}
-
 /// Stable `<For>` key for a timeline row.
 ///
 /// Mirrors the composite key the flat list used (id + volatile fields) so a
@@ -165,22 +227,21 @@ pub fn row_key(row: &TimelineRow) -> String {
             m.model_info.is_some(),
             clock,
         ),
-        TimelineRow::StepStrip {
-            run_id,
-            steps,
+        TimelineRow::Narration { message: m } => {
+            format!("narr:{}:{}:{}", m.id, m.content.len(), m.is_streaming)
+        }
+        TimelineRow::ToolLine { run_id, tool } => format!(
+            "tool:{run_id}:{}:{}:{:?}",
+            tool.tool_id, tool.status, tool.duration_ms
+        ),
+        TimelineRow::ExploreGroup {
+            key,
+            tools,
             completed,
+            ..
         } => {
-            // Include aggregate volatile state (content length + tool counts) so
-            // a late `text_emitted` updating a folded step changes the <For> key
-            // and forces a fresh render — mirroring the Message arm which keys on
-            // content.len(). Without this, a streaming/late step update would
-            // reuse the DOM node and show a stale snapshot.
-            let content_len: usize = steps.iter().map(|s| s.content.len()).sum();
-            let tools: usize = steps.iter().map(|s| s.tool_calls.len()).sum();
-            format!(
-                "strip:{run_id}:{}:{completed}:{content_len}:{tools}",
-                steps.len()
-            )
+            let running = tools.iter().filter(|t| t.status == "running").count();
+            format!("{key}:{}:{completed}:{running}", tools.len())
         }
     }
 }
@@ -383,54 +444,30 @@ mod tests {
         }
     }
 
-    #[test]
-    fn consecutive_intermediates_fold_into_one_strip() {
-        let msgs = vec![
-            msg_user("u1", "hi"),
-            msg_step("intermediate-run-a-1", 1, "s1", false),
-            msg_step("intermediate-run-a-2", 2, "s2", false),
-            msg_final("run-a", "answer"),
-        ];
-        let rows = derive_timeline(&msgs, "Today", "Yesterday");
-        let strips: Vec<&TimelineRow> = rows
-            .iter()
-            .filter(|r| matches!(r, TimelineRow::StepStrip { .. }))
-            .collect();
-        assert_eq!(strips.len(), 1);
-        if let TimelineRow::StepStrip {
-            run_id,
-            steps,
-            completed,
-        } = strips[0]
-        {
-            assert_eq!(run_id, "run-a");
-            assert_eq!(steps.len(), 2);
-            assert!(*completed, "no streaming step → completed");
-        } else {
-            panic!("expected StepStrip");
+    fn tool(id: &str, name: &str, status: &str) -> crate::views::chat::state::ToolCallEntry {
+        crate::views::chat::state::ToolCallEntry {
+            tool_id: id.into(),
+            tool_name: name.into(),
+            status: status.into(),
+            duration_ms: None,
+            started_at_ms: None,
         }
-        assert!(rows
-            .iter()
-            .any(|r| matches!(r, TimelineRow::Message { message, .. } if message.id == "run-a")));
     }
 
-    #[test]
-    fn streaming_step_marks_strip_incomplete() {
-        let msgs = vec![
-            msg_step("intermediate-run-b-1", 1, "s1", false),
-            msg_step("intermediate-run-b-2", 2, "s2", true),
-        ];
-        let rows = derive_timeline(&msgs, "Today", "Yesterday");
-        let strip = rows.iter().find_map(|r| match r {
-            TimelineRow::StepStrip { completed, .. } => Some(*completed),
-            _ => None,
-        });
-        assert_eq!(strip, Some(false));
+    fn msg_step_tools(
+        id: &str,
+        it: usize,
+        content: &str,
+        streaming: bool,
+        tools: Vec<crate::views::chat::state::ToolCallEntry>,
+    ) -> ChatMessage {
+        let mut m = msg_step(id, it, content, streaming);
+        m.tool_calls = tools;
+        m
     }
 
     /// A trailing `assistant-{run}` step bubble (NOT intermediate) carrying a
-    /// tool call — the shape `begin_step` leaves the current turn in. Must fold
-    /// into the strip, not dangle below it.
+    /// tool call — the shape `begin_step` leaves the current turn in.
     fn msg_tool_step(run: &str, it: usize, content: &str, streaming: bool) -> ChatMessage {
         ChatMessage {
             id: format!("assistant-{run}"),
@@ -457,9 +494,8 @@ mod tests {
     }
 
     /// Empty streaming placeholder for the just-started current turn: tagged,
-    /// non-intermediate, no content, no tools. The dangling "#N + cursor" the
-    /// user saw — must fold into the strip (keeping it open) rather than render
-    /// as a bare bubble.
+    /// non-intermediate, no content, no tools — emits the cursor `Narration`
+    /// row rather than rendering as a bare bubble.
     fn msg_empty_step(run: &str, it: usize) -> ChatMessage {
         ChatMessage {
             id: format!("assistant-{run}"),
@@ -480,170 +516,199 @@ mod tests {
     }
 
     #[test]
-    fn trailing_tool_step_folds_into_strip_not_dangling() {
-        // A tool-only run that ended without a text reply (the 200-iteration
-        // convergence case): every turn, including the trailing one, is a step.
+    fn narration_then_tools_emit_in_order() {
+        // 一个 step: 叙述 + 编辑工具 → Narration 行在前，ToolLine 在后
         let msgs = vec![
             msg_user("u1", "hi"),
-            msg_step("intermediate-run-z-1", 1, "trying api", false),
-            msg_tool_step("run-z", 2, "让我尝试使用东方财富的API获取数据", false),
+            msg_step_tools(
+                "intermediate-r1-1",
+                1,
+                "我先改配置",
+                false,
+                vec![tool("t1", "file_edit", "completed")],
+            ),
+            msg_final("r1", "done"),
         ];
         let rows = derive_timeline(&msgs, "Today", "Yesterday");
-        // No standalone assistant Message row (the trailing step folded in).
-        assert!(
-            !rows.iter().any(|r| matches!(
-                r,
-                TimelineRow::Message { message, .. } if message.role == "assistant"
-            )),
-            "trailing tool step must not render as a dangling bubble"
-        );
-        let strip = rows
+        let kinds: Vec<&str> = rows
             .iter()
-            .find_map(|r| match r {
-                TimelineRow::StepStrip {
-                    steps, completed, ..
-                } => Some((steps.len(), *completed)),
-                _ => None,
+            .map(|r| match r {
+                TimelineRow::Message { .. } => "msg",
+                TimelineRow::Narration { .. } => "narr",
+                TimelineRow::ToolLine { .. } => "tool",
+                TimelineRow::ExploreGroup { .. } => "explore",
+                TimelineRow::DaySeparator { .. } => "sep",
             })
-            .expect("a strip");
-        assert_eq!(strip.0, 2, "both steps fold into one strip");
-        assert!(strip.1, "all steps done → strip collapses");
+            .collect();
+        assert_eq!(kinds, vec!["msg", "narr", "tool", "msg"]);
     }
 
     #[test]
-    fn empty_placeholder_step_folds_and_keeps_strip_open() {
+    fn consecutive_readonly_tools_merge_across_steps() {
+        // step1: read+search（无叙述文本，content 空非流式）；step2: 又一个 read
+        // → 三个只读工具并进一个 ExploreGroup（跨消息，中间无叙述打断）
         let msgs = vec![
-            msg_step("intermediate-run-y-1", 1, "step one", false),
-            msg_empty_step("run-y", 2),
+            msg_step_tools(
+                "intermediate-r1-1",
+                1,
+                "",
+                false,
+                vec![
+                    tool("t1", "file_read", "completed"),
+                    tool("t2", "web_search", "completed"),
+                ],
+            ),
+            msg_step_tools(
+                "intermediate-r1-2",
+                2,
+                "",
+                false,
+                vec![tool("t3", "file_read", "completed")],
+            ),
         ];
         let rows = derive_timeline(&msgs, "Today", "Yesterday");
-        assert!(
-            !rows.iter().any(
-                |r| matches!(r, TimelineRow::Message { message, .. } if message.role == "assistant")
+        let group = rows
+            .iter()
+            .find_map(|r| match r {
+                TimelineRow::ExploreGroup {
+                    key,
+                    tools,
+                    completed,
+                    ..
+                } => Some((key.clone(), tools.len(), *completed)),
+                _ => None,
+            })
+            .expect("one explore group");
+        assert_eq!(group.1, 3);
+        assert!(group.2, "all terminal → completed");
+        assert_eq!(group.0, "explore:r1:t1", "key anchors to first tool id");
+    }
+
+    #[test]
+    fn narration_flushes_explore_group() {
+        // read → 叙述 → read ⇒ 两个 ExploreGroup，叙述行夹在中间
+        let msgs = vec![
+            msg_step_tools(
+                "intermediate-r1-1",
+                1,
+                "",
+                false,
+                vec![tool("t1", "file_read", "completed")],
             ),
-            "empty placeholder must fold, not dangle"
-        );
+            msg_step_tools(
+                "intermediate-r1-2",
+                2,
+                "找到了，接着看第二处",
+                false,
+                vec![tool("t2", "file_read", "completed")],
+            ),
+        ];
+        let rows = derive_timeline(&msgs, "Today", "Yesterday");
+        let kinds: Vec<&str> = rows
+            .iter()
+            .map(|r| match r {
+                TimelineRow::Narration { .. } => "narr",
+                TimelineRow::ExploreGroup { .. } => "explore",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, vec!["explore", "narr", "explore"]);
+    }
+
+    #[test]
+    fn action_tool_flushes_explore_group() {
+        let msgs = vec![msg_step_tools(
+            "intermediate-r1-1",
+            1,
+            "",
+            false,
+            vec![
+                tool("t1", "file_read", "completed"),
+                tool("t2", "file_edit", "completed"),
+                tool("t3", "file_read", "completed"),
+            ],
+        )];
+        let rows = derive_timeline(&msgs, "Today", "Yesterday");
+        let kinds: Vec<&str> = rows
+            .iter()
+            .map(|r| match r {
+                TimelineRow::ExploreGroup { .. } => "explore",
+                TimelineRow::ToolLine { .. } => "tool",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, vec!["explore", "tool", "explore"]);
+    }
+
+    #[test]
+    fn running_or_streaming_group_not_completed() {
+        let msgs = vec![msg_step_tools(
+            "intermediate-r1-1",
+            1,
+            "",
+            true,
+            vec![tool("t1", "file_read", "running")],
+        )];
+        let rows = derive_timeline(&msgs, "Today", "Yesterday");
         let completed = rows.iter().find_map(|r| match r {
-            TimelineRow::StepStrip { completed, .. } => Some(*completed),
+            TimelineRow::ExploreGroup { completed, .. } => Some(*completed),
             _ => None,
         });
-        assert_eq!(
-            completed,
-            Some(false),
-            "streaming placeholder keeps strip open"
-        );
+        assert_eq!(completed, Some(false));
     }
 
     #[test]
-    fn pre_stamped_placeholder_folds_into_strip_from_first_frame() {
-        // `start_assistant_message` now stamps the placeholder as step 1, so the
-        // very first frame of a run must show the collapsible step strip instead
-        // of a dangling reply bubble.
-        let msgs = vec![msg_user("u1", "hi"), msg_empty_step("run-x", 1)];
+    fn empty_streaming_placeholder_emits_cursor_narration() {
+        let msgs = vec![msg_empty_step("r1", 1)];
         let rows = derive_timeline(&msgs, "Today", "Yesterday");
-        assert!(
-            !rows.iter().any(
-                |r| matches!(r, TimelineRow::Message { message, .. } if message.role == "assistant")
-            ),
-            "pre-stamped placeholder must fold into strip, not render as a bubble"
-        );
-        let strip = rows
-            .iter()
-            .find_map(|r| match r {
-                TimelineRow::StepStrip { steps, completed, .. } => Some((steps.len(), *completed)),
-                _ => None,
-            })
-            .expect("a strip");
-        assert_eq!(strip.0, 1, "placeholder is the single step in the strip");
-        assert!(!strip.1, "streaming placeholder keeps strip open");
+        assert!(matches!(rows.as_slice(),
+            [TimelineRow::Narration { message }] if message.is_streaming));
     }
 
     #[test]
-    fn pure_text_final_answer_stays_standalone() {
-        // Normal multi-step run that DID end with a text reply: steps fold, the
-        // reply renders as its own bubble.
-        let msgs = vec![
-            msg_step("intermediate-run-w-1", 1, "searching", false),
-            msg_final("run-w", "Here is your answer."),
-        ];
-        let rows = derive_timeline(&msgs, "Today", "Yesterday");
-        assert!(
-            rows.iter().any(|r| matches!(
-                r,
-                TimelineRow::Message { message, .. } if message.id == "run-w"
-            )),
-            "final text answer renders as a standalone bubble"
-        );
-        assert!(
-            rows.iter()
-                .any(|r| matches!(r, TimelineRow::StepStrip { steps, .. } if steps.len() == 1)),
-            "the one tool step still folds into a strip"
-        );
+    fn empty_finished_step_emits_nothing() {
+        let mut m = msg_empty_step("r1", 1);
+        m.is_streaming = false;
+        let rows = derive_timeline(&[m], "Today", "Yesterday");
+        assert!(rows.is_empty());
     }
 
     #[test]
-    fn final_answer_with_tool_call_escapes_the_strip() {
-        // The real bug: the terminating turn emitted the answer text AND a
-        // closing tool call (e.g. a `web_fetch`), then the run ended. Without
-        // the `is_final` flag this trailing bubble — having a non-empty
-        // `tool_calls` — was folded into the step strip instead of rendering as
-        // the conversational reply. `run_complete`/`replay_run` flag it
-        // `is_final`, so it must render as a standalone Message (tool card
-        // inline) while the earlier steps still fold.
-        let mut answer = msg_tool_step("run-r", 2, "根据我的搜索，我为您整理了以下报告……", false);
+    fn final_answer_and_user_stay_message_rows() {
+        // 原 pure_text_final_answer_stays_standalone / final_answer_with_tool_call_escapes_the_strip
+        // 的语义在新模型下保留：final answer 是 Message 行
+        let mut answer = msg_tool_step("r-r", 2, "最终报告……", false);
         answer.is_final = true;
         let msgs = vec![
-            msg_user("u1", "今天美股发生了什么"),
-            msg_step("intermediate-run-r-1", 1, "searching", false),
+            msg_user("u1", "q"),
+            msg_step("intermediate-r-r-1", 1, "searching", false),
             answer,
         ];
         let rows = derive_timeline(&msgs, "Today", "Yesterday");
-        assert!(
-            rows.iter().any(|r| matches!(
-                r,
-                TimelineRow::Message { message, .. }
-                    if message.id == "assistant-run-r" && !message.tool_calls.is_empty()
-            )),
-            "is_final answer renders as a standalone bubble even with a tool call"
-        );
-        assert!(
-            rows.iter()
-                .any(|r| matches!(r, TimelineRow::StepStrip { steps, .. } if steps.len() == 1)),
-            "the earlier tool step still folds into a strip"
-        );
+        assert!(rows.iter().any(|r| matches!(r,
+            TimelineRow::Message { message, .. }
+                if message.id == "assistant-r-r" && !message.tool_calls.is_empty())));
     }
 
     #[test]
-    fn single_turn_reply_has_no_strip() {
-        // A one-shot answer (no tools) is the final answer — plain bubble, no strip.
-        let mut answer = msg_final("run-s", "hello there");
-        answer.iteration = Some(1); // begin_step stamps even single turns
-        let rows = derive_timeline(&[msg_user("u1", "hi"), answer], "Today", "Yesterday");
-        assert!(
-            !rows
-                .iter()
-                .any(|r| matches!(r, TimelineRow::StepStrip { .. })),
-            "a tool-less reply must not be folded into a strip"
-        );
-    }
-
-    #[test]
-    fn row_key_strip_changes_on_content_update() {
-        let s1 = TimelineRow::StepStrip {
-            run_id: "r1".into(),
-            steps: vec![msg_step("intermediate-r1-1", 1, "partial", true)],
-            completed: false,
-        };
-        let s2 = TimelineRow::StepStrip {
-            run_id: "r1".into(),
-            steps: vec![msg_step("intermediate-r1-1", 1, "partial content", true)],
-            completed: false,
-        };
+    fn row_key_narration_changes_on_content_growth() {
+        let m1 = msg_step("intermediate-r1-1", 1, "partial", true);
+        let m2 = msg_step("intermediate-r1-1", 1, "partial more", true);
         assert_ne!(
-            row_key(&s1),
-            row_key(&s2),
-            "key must change when content grows"
+            row_key(&TimelineRow::Narration { message: m1 }),
+            row_key(&TimelineRow::Narration { message: m2 })
         );
+    }
+
+    #[test]
+    fn row_key_explore_changes_on_status_transition() {
+        let g = |status: &str| TimelineRow::ExploreGroup {
+            key: "explore:r1:t1".into(),
+            run_id: "r1".into(),
+            tools: vec![tool("t1", "file_read", status)],
+            completed: status != "running",
+        };
+        assert_ne!(row_key(&g("running")), row_key(&g("completed")));
     }
 
     // Fake mappers: treat each whole "1000ms" bucket as a day.
