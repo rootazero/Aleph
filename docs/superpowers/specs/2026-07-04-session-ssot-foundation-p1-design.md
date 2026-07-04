@@ -100,11 +100,11 @@
 2. 删掉 shim 后，是否所有原 shim 覆盖的写入都由 projector 等价覆盖？（无覆盖缺口）
 3. 老会话 + 新会话 + 崩溃恢复三条路径是否都往返一致？（无路径遗漏）
 
-## 9. 风险与开放问题 (Risks & Open Questions)
+## 9. 风险与已定稿决策 (Risks & Resolved Decisions)
 
 - **最大风险**：`SessionManager.add_message` 是热点、多处调用；改写入语义须逐点核对调用者（§8.2 写入面普查）。
-- **开放问题 A**：`MessageRecord` 加 tool 字段 vs 伴生 tool 记录 vs tool 卡推到 P3——**实现前定稿**。倾向：P1 加最小 `tool_call_id`/`tool_name` 字段（对齐 hermes，直接服务 G3 重载可见 tool 卡）。
-- **开放问题 B**：双读回退落点（Gateway 读 handler vs SessionStore 适配层）——倾向 SessionStore 适配层（对所有读者透明）。
+- **决策 A（已定稿 2026-07-04）**：tool 卡投影 = **P1 给 `MessageRecord` 加最小 `tool_call_id: Option<String>` / `tool_name: Option<String>` 字段**（对齐 hermes messages 表，直接服务 G3 重载可见 tool 卡）。不走伴生记录、不推 P3。
+- **决策 B（已定稿 2026-07-04）**：双读回退落点 = **`SessionStore` 适配层**（对所有读者透明），不散在 Gateway 各读 handler。
 - **P1 不做**：惰性归一（P2）、inflight 快照（P3）、facade（P4）。
 
 ## 10. 非目标 (Out of Scope)
