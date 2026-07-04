@@ -1228,13 +1228,36 @@ impl NoteStore for SqliteMemoryBackend {
         for (id, raw) in rows {
             let r = crate::memory::notes::links::resolve(&raw, &resolve_ctx);
             if let Some(target) = &r.target {
+                // `OR IGNORE`: two dangling variants on the same from_note can
+                // both resolve to the same target once it exists (tier-4
+                // normalized matching makes this easy, e.g. "[[Rust Guide]]"
+                // and "[[rust guide]]"). The second UPDATE would otherwise
+                // violate UNIQUE(agent_id, from_note, to_note) and — with no
+                // transaction wrapping this loop — abort the whole pass,
+                // leaving every remaining dangling row unprocessed while
+                // earlier updates stay applied. `OR IGNORE` skips the losing
+                // row instead of erroring.
+                let changed = conn
+                    .execute(
+                        "UPDATE OR IGNORE notes_links SET to_note = ?1, confidence = ?2, \
+                                resolved_by = ?3, status = 'active' WHERE id = ?4",
+                        params![target, r.confidence, r.resolved_by.map(|s| s.as_str()), id],
+                    )
+                    .map_err(|e| AlephError::config(format!("relink update: {e}")))?;
+
+                // If the UPDATE was ignored, this row is now a redundant
+                // dangling duplicate of the edge that won — remove it. A
+                // no-op when the UPDATE above succeeded, since status is
+                // already 'active' by the time this runs.
                 conn.execute(
-                    "UPDATE notes_links SET to_note = ?1, confidence = ?2, \
-                            resolved_by = ?3, status = 'active' WHERE id = ?4",
-                    params![target, r.confidence, r.resolved_by.map(|s| s.as_str()), id],
+                    "DELETE FROM notes_links WHERE id = ?1 AND status = 'dangling'",
+                    params![id],
                 )
-                .map_err(|e| AlephError::config(format!("relink update: {e}")))?;
-                updated += 1;
+                .map_err(|e| AlephError::config(format!("relink cleanup: {e}")))?;
+
+                if changed > 0 {
+                    updated += 1;
+                }
             }
         }
         Ok(updated)

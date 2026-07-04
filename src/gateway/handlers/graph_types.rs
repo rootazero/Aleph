@@ -87,8 +87,9 @@ pub struct NoteLinkDto {
     pub to: String,
     /// Free-form display label for the edge, e.g. the wikilink alias from
     /// `[[target|alias]]`. Matches the Obsidian JSON Canvas `edge.label` slot.
-    /// `None` until the storage layer learns to surface aliases (tracked in
-    /// the R2 follow-up "wikilink-kind-extraction").
+    /// `Some(alias)` when the link was written with a pipe alias; `None` for
+    /// plain `[[target]]` wikilinks and typed relations (which carry no
+    /// alias text).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Semantic relation kind, e.g. `"refers"` / `"derives"` / `"follows"` /

@@ -323,6 +323,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn relink_unresolved_dedupes_colliding_dangling_variants() {
+        // Regression: two dangling wikilink variants on the SAME from_note
+        // that both resolve to the SAME target (tier-2 exact filename +
+        // tier-4 normalized matching) used to violate
+        // UNIQUE(agent_id, from_note, to_note) on the second UPDATE, with no
+        // transaction wrapping the loop — aborting the whole relink pass and
+        // leaving every later dangling row (even on unrelated notes)
+        // unprocessed. `UPDATE OR IGNORE` + cleanup DELETE must dedupe the
+        // losing variant instead of erroring out mid-pass.
+        let backend = make_backend();
+        const AGENT: &str = "agent1";
+
+        // Source note links two raw variants of the same not-yet-existing
+        // target -> both dangle as distinct to_note rows (raw text).
+        let mut source = make_note("source", "wiki");
+        source.links = vec!["Rust Guide".to_string(), "rust guide".to_string()];
+        backend.index_note(&source, AGENT, "wiki").await.unwrap();
+
+        // A second, independent dangling link on a different from_note.
+        let mut other = make_note("other", "wiki");
+        other.links = vec!["Other Target".to_string()];
+        backend.index_note(&other, AGENT, "wiki").await.unwrap();
+
+        {
+            let conn = backend.conn().lock().unwrap();
+            let dangling: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM notes_links \
+                     WHERE agent_id = ?1 AND status = 'dangling'",
+                    rusqlite::params![AGENT],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(dangling, 3, "precondition: all three links start dangling");
+        }
+
+        // Now create the targets so relink_unresolved can resolve them.
+        backend
+            .index_note(&make_note("Rust Guide", "wiki"), AGENT, "wiki")
+            .await
+            .unwrap();
+        backend
+            .index_note(&make_note("Other Target", "wiki"), AGENT, "wiki")
+            .await
+            .unwrap();
+
+        // Must not abort even though two dangling rows collide on the same
+        // resolved target.
+        let relinked = backend
+            .relink_unresolved(AGENT)
+            .await
+            .expect("relink_unresolved must not error on a UNIQUE collision");
+        assert_eq!(
+            relinked, 2,
+            "one deduped edge for the colliding pair + one independent edge"
+        );
+
+        let conn = backend.conn().lock().unwrap();
+
+        // Exactly one active edge remains for the deduped pair.
+        let active_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notes_links \
+                 WHERE agent_id = ?1 AND from_note = 'wiki/source' \
+                 AND to_note = 'wiki/Rust Guide' AND status = 'active'",
+                rusqlite::params![AGENT],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            active_count, 1,
+            "deduped pair must collapse to exactly one active edge"
+        );
+
+        // No dangling duplicate remains from the losing UPDATE OR IGNORE.
+        let dangling_remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notes_links \
+                 WHERE agent_id = ?1 AND from_note = 'wiki/source' AND status = 'dangling'",
+                rusqlite::params![AGENT],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(dangling_remaining, 0, "no dangling duplicate should remain");
+
+        // The independent dangling link also got relinked, proving the pass
+        // did not abort partway through.
+        let independent_active: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notes_links \
+                 WHERE agent_id = ?1 AND from_note = 'wiki/other' \
+                 AND to_note = 'wiki/Other Target' AND status = 'active'",
+                rusqlite::params![AGENT],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            independent_active, 1,
+            "independent dangling link must also be relinked (no mid-pass abort)"
+        );
+    }
+
+    #[tokio::test]
     async fn get_incoming_links_finds_backlinks() {
         let backend = make_backend();
         let mut note1 = make_note("source", "backlinks");
