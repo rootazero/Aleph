@@ -128,36 +128,45 @@ impl ProjectionReconciler {
         // Legacy guard: a non-empty transcript with no parseable seq is
         // foreign / pre-P1 content — never touch it (would risk duplicates).
         if !transcript.is_empty() && seqs.is_empty() {
+            tracing::debug!(
+                session = ?session_id,
+                "projection reconcile: skipped (legacy transcript, no projector seq ids)"
+            );
             report.skipped_legacy += 1;
             return;
         }
 
         let watermark = seqs.iter().copied().max().unwrap_or(0);
 
-        let tail = match self
-            .event_store
-            .load_events_range(session_id, Some(watermark + 1), None)
-            .await
-        {
-            Ok(t) => t,
+        // Replay the FULL event log (not just the tail above the watermark) so
+        // the token accumulator sees every LlmCall event of a turn that
+        // straddles the watermark. Writes are suppressed for seq <= watermark
+        // (those rows are already materialised — including any mixed/legacy
+        // rows whose ids are not projector seqs), so no duplicate rows are
+        // produced; LlmCall events never write rows, so replaying them below
+        // the watermark only feeds the accumulator.
+        let events = match self.event_store.load_all_events(session_id).await {
+            Ok(e) => e,
             Err(e) => {
-                tracing::warn!(session = ?session_id, error = %e, "projection reconcile: load_events_range failed; skipping");
+                tracing::warn!(session = ?session_id, error = %e, "projection reconcile: load_all_events failed; skipping");
                 return;
             }
         };
-        if tail.is_empty() {
+
+        // Idempotent no-op when nothing sits above the watermark.
+        if events.iter().all(|r| r.seq <= watermark) {
             return;
         }
 
         let before = transcript.len();
         let mut accums = TurnAccums::new();
-        for rec in &tail {
+        for rec in &events {
             project_event(
                 &self.session_store,
                 &mut accums,
                 session_id,
                 rec,
-                Some(&seqs),
+                Some(watermark),
             )
             .await;
         }
@@ -358,6 +367,7 @@ mod tests {
             .await;
 
         assert_eq!(report.skipped_clean, 1);
+        assert_eq!(report.scanned, 1);
         assert_eq!(report.reconciled, 0);
         assert_eq!(report.rows_filled, 0);
         assert!(session_store
@@ -596,5 +606,179 @@ mod tests {
             None,
             "non-numeric suffix"
         );
+    }
+
+    #[tokio::test]
+    async fn straddling_turn_aggregates_tokens_across_watermark() {
+        // A turn with TWO LLM calls and a tool round-trip between them. The
+        // row-producing events up to the crash (user=2, tool_req=6, tool_res=7)
+        // were already flushed to the transcript; the AssistantMessage (10) was
+        // NOT. Watermark = max flushed row seq = 7, which sits BETWEEN the
+        // turn's two LlmCallEnded events (seq 5 and seq 9). The reconciler must
+        // still aggregate BOTH calls onto the back-filled assistant row.
+        let event_store = mem_event_store();
+        let (session_store, _dir) = temp_file_store();
+        let id = SessionKey::ephemeral("recon-straddle");
+        session_store.get_or_create(&id).await.unwrap();
+        let key = id.to_key_string();
+        let tid = uuid::Uuid::new_v4();
+
+        let evs = vec![
+            (
+                1,
+                SessionEvent::TurnStarted {
+                    turn_id: tid,
+                    trigger: TurnTrigger::UserMessage,
+                    at: 1,
+                },
+            ),
+            (
+                2,
+                SessionEvent::UserMessage {
+                    turn_id: tid,
+                    content: mc("q"),
+                    at: 2,
+                    synthetic: false,
+                },
+            ),
+            (
+                3,
+                SessionEvent::RunStarted {
+                    run_id: "r1".into(),
+                    at: 3,
+                    project_root: None,
+                },
+            ),
+            (
+                4,
+                SessionEvent::LlmCallStarted {
+                    turn_id: tid,
+                    provider: "anthropic".into(),
+                    model: "claude".into(),
+                    at: 4,
+                },
+            ),
+            (
+                5,
+                SessionEvent::LlmCallEnded {
+                    turn_id: tid,
+                    tokens_in: 10,
+                    tokens_out: 20,
+                    finish_reason: "tool_use".into(),
+                    at: 5,
+                },
+            ),
+            (
+                6,
+                SessionEvent::ToolCallRequested {
+                    turn_id: tid,
+                    call_id: "c1".into(),
+                    name: "bash_exec".into(),
+                    input: serde_json::json!({"cmd":"ls"}),
+                    at: 6,
+                },
+            ),
+            (
+                7,
+                SessionEvent::ToolResult {
+                    turn_id: tid,
+                    call_id: "c1".into(),
+                    output: ToolOutput {
+                        value: serde_json::json!("ok"),
+                        metadata: Default::default(),
+                    },
+                    at: 7,
+                },
+            ),
+            (
+                8,
+                SessionEvent::LlmCallStarted {
+                    turn_id: tid,
+                    provider: "anthropic".into(),
+                    model: "claude".into(),
+                    at: 8,
+                },
+            ),
+            (
+                9,
+                SessionEvent::LlmCallEnded {
+                    turn_id: tid,
+                    tokens_in: 5,
+                    tokens_out: 7,
+                    finish_reason: "stop".into(),
+                    at: 9,
+                },
+            ),
+            (
+                10,
+                SessionEvent::AssistantMessage {
+                    turn_id: tid,
+                    content: mc("final"),
+                    at: 10,
+                },
+            ),
+        ];
+        append_all(&event_store, &id, &evs).await;
+
+        // Simulate the partial flush: pre-materialise the row-producing events
+        // up to the crash point (seqs 2, 6, 7) with projector-style ids. The
+        // assistant row (seq 10) is intentionally missing.
+        for (seq, role, content, tool_name, tool_call_id) in [
+            (2u64, "user", "q", None, None),
+            (
+                6,
+                "tool",
+                "ls",
+                Some("bash_exec".to_string()),
+                Some("c1".to_string()),
+            ),
+            (
+                7,
+                "tool",
+                "ok",
+                Some("bash_exec".to_string()),
+                Some("c1".to_string()),
+            ),
+        ] {
+            session_store
+                .append_message(
+                    &id,
+                    MessageRecord {
+                        id: format!("{key}:{seq}"),
+                        role: role.into(),
+                        content: content.into(),
+                        timestamp: seq as i64,
+                        metadata: None,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        model: None,
+                        model_provider: None,
+                        tool_call_id,
+                        tool_name,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        ProjectionReconciler::new(event_store.clone(), session_store.clone())
+            .reconcile_interrupted()
+            .await;
+
+        let hist = session_store.get_history(&id, None).await.unwrap();
+        let asst = hist
+            .iter()
+            .find(|m| m.role == "assistant")
+            .expect("assistant row back-filled");
+        assert_eq!(
+            asst.input_tokens, 15,
+            "10 (call 1, below watermark) + 5 (call 2)"
+        );
+        assert_eq!(
+            asst.output_tokens, 27,
+            "20 (call 1, below watermark) + 7 (call 2)"
+        );
+        // 3 pre-flushed rows + 1 back-filled assistant, no duplicates.
+        assert_eq!(hist.len(), 4, "no duplicate rows");
     }
 }

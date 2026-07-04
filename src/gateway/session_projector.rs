@@ -20,7 +20,7 @@
 //! keyed off a per-row source-seq watermark) is a P2 follow-up. Panel display
 //! is therefore best-effort; the SSOT is not.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -71,21 +71,26 @@ impl MessageProjector {
 }
 
 /// Project one session event into `store` — the single source of projection
-/// truth shared by the live drain (`already = None`) and the boot-time
-/// `ProjectionReconciler` (`already = Some(set of materialised seqs)`).
+/// truth shared by the live drain (`materialized_through = None`) and the
+/// boot-time `ProjectionReconciler` (`materialized_through = Some(watermark)`).
 ///
-/// When `already` contains `rec.seq`, a row-producing event still advances the
-/// accumulator but its WRITE is suppressed, so re-projecting an
-/// already-materialised event is a no-op (reconcile idempotency).
+/// When `rec.seq <= materialized_through`, a row-producing event still advances
+/// the accumulator but its WRITE is suppressed: that row is already in the
+/// projection, so re-projecting it is a no-op (reconcile idempotency, and
+/// dup-avoidance for mixed/legacy rows below the watermark). The reconciler
+/// replays the *full* event log with the watermark set to the last materialised
+/// source seq, so a turn's token accumulator sees every `LlmCall*` event even
+/// when the turn straddles the watermark, while its earlier rows stay
+/// suppressed.
 pub(crate) async fn project_event(
     store: &Arc<dyn SessionStore>,
     accums: &mut TurnAccums,
     id: &SessionId,
     rec: &SessionEventRecord,
-    already: Option<&HashSet<u64>>,
+    materialized_through: Option<u64>,
 ) {
     let key = id.to_key_string();
-    let suppress = already.is_some_and(|s| s.contains(&rec.seq));
+    let suppress = materialized_through.is_some_and(|w| rec.seq <= w);
     match &rec.event {
         SessionEvent::LlmCallStarted {
             turn_id,
@@ -160,10 +165,10 @@ pub(crate) async fn project_event(
             }
         }
         other => {
+            if suppress {
+                return;
+            }
             if let Some(row) = project_row(other) {
-                if suppress {
-                    return;
-                }
                 if let Err(e) = store
                     .append_message(
                         id,
@@ -488,7 +493,6 @@ mod tests {
 
     #[tokio::test]
     async fn project_event_suppresses_already_materialised_seq() {
-        use std::collections::HashSet;
         let temp = tempdir().unwrap();
         let config = SessionManagerConfig {
             db_path: temp.path().join("suppress.db"),
@@ -503,31 +507,18 @@ mod tests {
 
         let tid = uuid::Uuid::new_v4();
         let mut accums = TurnAccums::new();
-        let already: HashSet<u64> = [1u64].into_iter().collect();
+        // Everything at or below seq 1 is already materialised.
+        let watermark = Some(1u64);
 
-        // seq 1 is marked already-materialised → its write is suppressed.
-        project_event(
-            &store,
-            &mut accums,
-            &id,
-            &rec(1, user_msg(tid)),
-            Some(&already),
-        )
-        .await;
+        // seq 1 is at the watermark → its write is suppressed.
+        project_event(&store, &mut accums, &id, &rec(1, user_msg(tid)), watermark).await;
         assert!(
             store.get_history(&id, None).await.unwrap().is_empty(),
             "a materialised seq must not be re-written"
         );
 
-        // seq 2 is unseen → written.
-        project_event(
-            &store,
-            &mut accums,
-            &id,
-            &rec(2, user_msg(tid)),
-            Some(&already),
-        )
-        .await;
+        // seq 2 is above the watermark → written.
+        project_event(&store, &mut accums, &id, &rec(2, user_msg(tid)), watermark).await;
         let rows = store.get_history(&id, None).await.unwrap();
         assert_eq!(rows.len(), 1, "an unseen seq must be written");
         assert_eq!(rows[0].role, "user");
