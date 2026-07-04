@@ -209,6 +209,45 @@ pub fn summarize_tools(tools: &[(String, String)]) -> Vec<(ToolKind, usize)> {
     order.into_iter().map(|k| (k, counts[&k])).collect()
 }
 
+/// 探索块展开体的一行：连续 FileRead 合并成一条（文件名去重连接），
+/// Search 等其余只读工具各自一条。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExploreEntry {
+    pub kind: ToolKind,
+    /// 已合成的展示文案（如 "a.rs, b.rs" 或搜索词）。
+    pub label: String,
+    /// 该条覆盖的 tool_id（合并行含多个；点击取 first 进详情栏）。
+    pub tool_ids: Vec<String>,
+}
+
+/// 连续 FileRead 合并去重：将连续的同类文件读取合并为一条，
+/// 文件名去重后以逗号连接；其他工具各占一行。
+#[must_use]
+pub fn explore_entries(items: &[(String, String, Option<String>)]) -> Vec<ExploreEntry> {
+    let mut out: Vec<ExploreEntry> = Vec::new();
+    for (tool_id, name, headline) in items {
+        let kind = ToolKind::from_name(name);
+        let label = headline.clone().unwrap_or_else(|| name.clone());
+        // 连续 FileRead 合并到上一条（label 去重后逗号连接）。
+        if kind == ToolKind::FileRead {
+            if let Some(last) = out.last_mut().filter(|e| e.kind == ToolKind::FileRead) {
+                last.tool_ids.push(tool_id.clone());
+                if !last.label.split(", ").any(|s| s == label) {
+                    last.label.push_str(", ");
+                    last.label.push_str(&label);
+                }
+                continue;
+            }
+        }
+        out.push(ExploreEntry {
+            kind,
+            label,
+            tool_ids: vec![tool_id.clone()],
+        });
+    }
+    out
+}
+
 /// 文件类工具的路径，用于头部 `📄 path`。非文件工具返回 None。
 #[must_use]
 pub fn file_path_of(payload: &Option<ToolPayload>) -> Option<String> {
@@ -1029,5 +1068,30 @@ mod tests {
     #[test]
     fn tool_surface_defaults_inline() {
         assert_eq!(ToolSurface::default(), ToolSurface::Inline);
+    }
+
+    #[test]
+    fn explore_entries_merges_consecutive_reads_dedup() {
+        let items = vec![
+            ("t1".into(), "file_read".into(), Some("a.rs".to_string())),
+            ("t2".into(), "file_read".into(), Some("b.rs".to_string())),
+            ("t3".into(), "file_read".into(), Some("a.rs".to_string())), // dup 去重
+            ("t4".into(), "web_search".into(), Some("panel bug".to_string())),
+            ("t5".into(), "file_read".into(), Some("c.rs".to_string())), // search 打断后新起一条
+        ];
+        let entries = explore_entries(&items);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].label, "a.rs, b.rs");
+        assert_eq!(entries[0].tool_ids, vec!["t1".to_string(), "t2".to_string(), "t3".to_string()]);
+        assert_eq!(entries[1].kind, ToolKind::Search);
+        assert_eq!(entries[1].label, "panel bug");
+        assert_eq!(entries[2].label, "c.rs");
+    }
+
+    #[test]
+    fn explore_entries_headline_fallback_is_tool_name() {
+        let items = vec![("t1".into(), "file_read".into(), None)];
+        let entries = explore_entries(&items);
+        assert_eq!(entries[0].label, "file_read");
     }
 }
