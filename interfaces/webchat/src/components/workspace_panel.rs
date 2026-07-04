@@ -623,6 +623,7 @@ mod tests {
                     tool_name: "search".into(),
                     status: "completed".into(),
                     duration_ms: Some(5),
+                    started_at_ms: None,
                 }],
             ),
             step_msg(
@@ -634,6 +635,7 @@ mod tests {
                     tool_name: "write".into(),
                     status: "running".into(),
                     duration_ms: None,
+                    started_at_ms: None,
                 }],
             ),
         ]);

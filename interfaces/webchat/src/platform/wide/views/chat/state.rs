@@ -252,6 +252,10 @@ pub struct ToolCallEntry {
     pub status: String, // "running" | "completed" | "failed"
     #[serde(default)]
     pub duration_ms: Option<u64>,
+    /// Epoch-ms when the tool first went "running" — drives the live
+    /// elapsed timer on long-running tool rows. Stamped panel-side.
+    #[serde(default)]
+    pub started_at_ms: Option<i64>,
 }
 
 /// Panel-side team member view (roster rail rendering + attribution coloring).
@@ -819,6 +823,7 @@ impl ChatState {
                         tool_name: tool_name.to_string(),
                         status: status.to_string(),
                         duration_ms,
+                        started_at_ms: (status == "running").then(super::timeline::now_millis),
                     });
                 }
             }
@@ -1504,5 +1509,36 @@ mod queue_tests {
         let texts: Vec<_> = drained.iter().map(|p| p.text.clone()).collect();
         assert_eq!(texts, vec!["a", "b"]);
         assert!(chat.prompt_queue.get_untracked().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tool_timestamp_tests {
+    use super::*;
+
+    #[test]
+    fn update_tool_stamps_started_at_on_first_running() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1"); // 建 assistant-r1 容器
+        chat.update_tool("r1", "t1", "bash", "running", None);
+        let started = chat.messages.with_untracked(|m| {
+            m.iter()
+                .flat_map(|m| m.tool_calls.iter())
+                .find(|t| t.tool_id == "t1")
+                .and_then(|t| t.started_at_ms)
+        });
+        assert!(started.is_some(), "first running must stamp started_at_ms");
+
+        // 完成时不覆盖时间戳
+        chat.update_tool("r1", "t1", "bash", "completed", Some(30));
+        let after = chat.messages.with_untracked(|m| {
+            m.iter()
+                .flat_map(|m| m.tool_calls.iter())
+                .find(|t| t.tool_id == "t1")
+                .map(|t| (t.started_at_ms, t.status.clone()))
+        });
+        assert_eq!(after.map(|(s, _)| s), Some(started));
     }
 }

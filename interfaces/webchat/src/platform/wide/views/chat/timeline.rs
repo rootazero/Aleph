@@ -441,6 +441,7 @@ mod tests {
                 tool_name: "code_exec".into(),
                 status: "completed".into(),
                 duration_ms: Some(3),
+                started_at_ms: None,
             }],
             is_streaming: streaming,
             is_intermediate: false,

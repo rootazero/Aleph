@@ -964,6 +964,7 @@ mod step_action_tests {
                     tool_name: tn.to_string(),
                     status: "completed".into(),
                     duration_ms: None,
+                    started_at_ms: None,
                 })
                 .collect(),
             is_streaming: false,
