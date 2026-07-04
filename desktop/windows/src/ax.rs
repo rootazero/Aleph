@@ -33,7 +33,7 @@ use async_trait::async_trait;
 use aleph_desktop::traits::AccessibilityCapability;
 use aleph_desktop::{DesktopError, Result};
 use aleph_protocol::desktop_bridge::methods::ax::{
-    AxElement, AxLocator, QueryByRoleParams, QueryTreeParams,
+    AxActionResult, AxElement, AxLocator, QueryByRoleParams, QueryTreeParams, SetValueParams,
 };
 
 // ── UIA ControlType → macOS AX role mapping (pure, host-testable) ────────────
@@ -214,6 +214,10 @@ pub fn ax_action_to_patterns(action: &str) -> Result<Vec<AxPattern>> {
 #[cfg_attr(not(windows), allow(dead_code))]
 const ROLE_SCAN_DEPTH: u32 = 12;
 
+/// Depth bound for locator resolution walks (`set_value` / `perform_action`).
+#[cfg_attr(not(windows), allow(dead_code))]
+const RESOLVE_DEPTH: u32 = 12;
+
 /// Hard cap on the number of nodes any single walk will materialize. Bounds the
 /// response size and protects against pathological UI trees (P7 defensive
 /// design) — the same spirit as the macOS helper's depth limit.
@@ -258,6 +262,11 @@ impl AccessibilityCapability for WindowsAccessibility {
         let role = params.role;
         run_blocking(move || imp::query_by_role(&role, pid)).await
     }
+
+    async fn set_value(&self, params: SetValueParams) -> Result<AxActionResult> {
+        let (locator, value) = (params.locator, params.value);
+        run_blocking(move || imp::set_value(locator, value)).await
+    }
 }
 
 /// Run COM work on a blocking thread, flattening join failures into a
@@ -280,9 +289,12 @@ where
 
 #[cfg(windows)]
 mod imp {
-    use super::{control_type_to_ax_role, MAX_NODES, ROLE_SCAN_DEPTH};
+    use super::{control_type_to_ax_role, rank_candidates, RankCandidate, MAX_NODES, RESOLVE_DEPTH, ROLE_SCAN_DEPTH};
     use aleph_desktop::{DesktopError, Result};
-    use aleph_protocol::desktop_bridge::methods::ax::AxElement;
+    use aleph_protocol::desktop_bridge::methods::ax::{
+        AxActionResult, AxElement, AxLocator, AxVerification,
+    };
+    use windows::core::BSTR;
     use aleph_protocol::desktop_bridge::methods::screen::Region;
 
     use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
@@ -456,6 +468,122 @@ mod imp {
         None
     }
 
+    /// Flatten the control-view subtree into `(RankCandidate, element)` pairs,
+    /// bounded by `depth_remaining` and the global `MAX_NODES` budget. Each
+    /// element handle is cloned (refcount bump) so it outlives the walk and can
+    /// be acted on once ranking picks it.
+    fn collect_candidates(
+        walker: &IUIAutomationTreeWalker,
+        el: &IUIAutomationElement,
+        depth_remaining: u32,
+        count: &mut usize,
+        out: &mut Vec<(RankCandidate, IUIAutomationElement)>,
+    ) {
+        let node = node_of(el);
+        let center = node
+            .bounds
+            .as_ref()
+            .map_or((0.0, 0.0), |b| (b.x + b.width / 2.0, b.y + b.height / 2.0));
+        out.push((
+            RankCandidate { role: node.role, title: node.title, center },
+            el.clone(),
+        ));
+        *count += 1;
+        if depth_remaining == 0 || *count >= MAX_NODES {
+            return;
+        }
+        // SAFETY: walker child/sibling traversal; windows-rs surfaces "no
+        // element" as Err, terminating each loop naturally.
+        let mut next = unsafe { walker.GetFirstChildElement(el) };
+        while let Ok(child) = next {
+            collect_candidates(walker, &child, depth_remaining - 1, count, out);
+            if *count >= MAX_NODES {
+                break;
+            }
+            next = unsafe { walker.GetNextSiblingElement(&child) };
+        }
+    }
+
+    /// Resolve an [`AxLocator`] to the best-matching live element plus a
+    /// value-enriched summary. Returns `None` when nothing matches the role
+    /// filter (caller converts that to an `Err` with a recovery hint).
+    pub(super) fn resolve(
+        uia: &IUIAutomation,
+        loc: &AxLocator,
+    ) -> Result<Option<(IUIAutomationElement, AxElement)>> {
+        let hwnd = resolve_root_hwnd(loc.pid)?;
+        // SAFETY: `hwnd` is a validated visible/foreground window handle.
+        let root = unsafe { uia.ElementFromHandle(hwnd) }
+            .map_err(|e| DesktopError::PlatformError(format!("ElementFromHandle failed: {e}")))?;
+        // SAFETY: standard "what a user sees" control-view walker.
+        let walker = unsafe { uia.ControlViewWalker() }
+            .map_err(|e| DesktopError::PlatformError(format!("ControlViewWalker failed: {e}")))?;
+        let mut cands: Vec<(RankCandidate, IUIAutomationElement)> = Vec::new();
+        let mut count = 0usize;
+        collect_candidates(&walker, &root, RESOLVE_DEPTH, &mut count, &mut cands);
+
+        let summaries: Vec<RankCandidate> = cands.iter().map(|(c, _)| c.clone()).collect();
+        let Some(idx) = rank_candidates(&summaries, loc) else {
+            return Ok(None);
+        };
+        let (cand, el) = &cands[idx];
+        let summary = AxElement {
+            role: cand.role.clone(),
+            title: cand.title.clone(),
+            value: value_of(el),
+            bounds: unsafe { el.CurrentBoundingRectangle() }.ok().map(rect_to_region),
+            pid: unsafe { el.CurrentProcessId() }.unwrap_or(0),
+            children: Vec::new(),
+        };
+        Ok(Some((el.clone(), summary)))
+    }
+
+    /// Write `value` into the located element's UIA ValuePattern and read it
+    /// back for verification. Only returns `Ok` when a write actually occurred;
+    /// "not located / not settable" is an `Err` (see the Err-vs-Ok contract).
+    pub(super) fn set_value(loc: AxLocator, value: String) -> Result<AxActionResult> {
+        let _com = ComGuard::new();
+        let uia = automation()?;
+        let (el, mut summary) = resolve(&uia, &loc)?.ok_or_else(|| {
+            DesktopError::NotAvailable("no element matched role/title; try `ax_snapshot`".into())
+        })?;
+        // SAFETY: pattern getter; unsupported pattern surfaces as Err.
+        let vp = unsafe { el.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }
+            .map_err(|_| {
+                DesktopError::NotAvailable(
+                    "element does not support a settable value; fall back to click + type_text"
+                        .into(),
+                )
+            })?;
+        // SAFETY: read-only property getter.
+        if unsafe { vp.CurrentIsReadOnly() }.map(|b| b.as_bool()).unwrap_or(false) {
+            return Err(DesktopError::NotAvailable(
+                "element is read-only; fall back to click + type_text".into(),
+            ));
+        }
+        // SAFETY: documented ValuePattern write.
+        unsafe { vp.SetValue(&BSTR::from(value.as_str())) }
+            .map_err(|e| DesktopError::PlatformError(format!("ValuePattern.SetValue failed: {e}")))?;
+        // SAFETY: read-back for verification.
+        let readback = unsafe { vp.CurrentValue() }.map(|b| b.to_string()).unwrap_or_default();
+        let verification = if readback == value {
+            AxVerification { state: "verified".into(), reason: None, actual_preview: None }
+        } else {
+            AxVerification {
+                state: "unverified".into(),
+                reason: Some("value_mismatch".into()),
+                actual_preview: Some(readback.chars().take(200).collect()),
+            }
+        };
+        summary.value = Some(readback.chars().take(200).collect());
+        Ok(AxActionResult {
+            performed: true,
+            path: "accessibility".into(),
+            matched: Some(summary),
+            verification: Some(verification),
+        })
+    }
+
     /// Depth-first walk rooted at `el`, bounded by `depth_remaining` and the
     /// global `MAX_NODES` budget. `count` is the running node tally shared
     /// across the whole walk.
@@ -570,6 +698,12 @@ mod imp {
         unavailable()
     }
     pub(super) fn query_by_role(_role: &str, _pid: Option<i32>) -> Result<Vec<AxElement>> {
+        unavailable()
+    }
+    pub(super) fn set_value(
+        _loc: aleph_protocol::desktop_bridge::methods::ax::AxLocator,
+        _value: String,
+    ) -> Result<aleph_protocol::desktop_bridge::methods::ax::AxActionResult> {
         unavailable()
     }
 }
