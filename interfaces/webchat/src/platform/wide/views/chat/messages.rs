@@ -9,7 +9,7 @@ use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState, QueuedP
 use super::timeline::{self, TimelineRow};
 use super::PlanArchiveCell;
 use crate::components::markdown::TypewriterRenderer;
-use crate::components::tool_card::{tool_headline, tool_icon, ToolCard, ToolKind};
+use crate::components::tool_card::ToolCard;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
@@ -223,11 +223,17 @@ pub(crate) fn MessageList() -> impl IntoView {
                                             view! { <MessageBubble message=message clock=clock /> }.into_any()
                                         }
                                     }
-                                    // Narration / ToolLine / ExploreGroup rendering lands in
-                                    // Task 5 — placeholder keeps the match exhaustive so this
-                                    // crate compiles standalone during Task 2's derivation-only
-                                    // change.
-                                    _ => view! { <span/> }.into_any(),
+                                    TimelineRow::Narration { message } => view! {
+                                        <NarrationRow message=message />
+                                    }.into_any(),
+                                    TimelineRow::ToolLine { run_id, tool } => view! {
+                                        <div class="px-1">
+                                            <ToolCard run_id=run_id tool_id=tool.tool_id tool_name=tool.tool_name />
+                                        </div>
+                                    }.into_any(),
+                                    TimelineRow::ExploreGroup { key, run_id, tools, completed } => view! {
+                                        <ExploreGroupRow key_id=key run_id=run_id tools=tools completed=completed />
+                                    }.into_any(),
                                 }
                             />
                             // Reasoning transcript — collapsible chain-of-thought
@@ -421,28 +427,6 @@ pub(crate) fn run_id_from_message_id(message_id: &str) -> String {
     message_id.to_string()
 }
 
-/// 最后一个带工具调用的步骤的最后一个工具 `(tool_id, tool_name)`。
-/// 用于运行中状态行的「最新动作」。无任何工具时返回 None。
-fn latest_step_tool(steps: &[ChatMessage]) -> Option<(String, String)> {
-    steps
-        .iter()
-        .rev()
-        .find_map(|m| m.tool_calls.last())
-        .map(|t| (t.tool_id.clone(), t.tool_name.clone()))
-}
-
-/// 最后一个非空叙述的首行，UTF-8 安全截断到 `max_chars` 个字符。
-fn step_narration_head(steps: &[ChatMessage], max_chars: usize) -> Option<String> {
-    let raw = steps
-        .iter()
-        .rev()
-        .map(|m| m.content.trim())
-        .find(|c| !c.is_empty())?;
-    let first_line = raw.lines().next().unwrap_or(raw);
-    let truncated: String = first_line.chars().take(max_chars).collect();
-    Some(truncated)
-}
-
 /// Calendar-day separator row — a centered pill anchoring the run of messages
 /// that follow it to "Today" / "Yesterday" / an absolute date.
 #[component]
@@ -462,15 +446,7 @@ fn DaySeparator(label: String) -> impl IntoView {
 /// Single message bubble. `clock` is a pre-resolved "HH:MM" label (empty for
 /// undated/legacy rows) shown in the hover action bar.
 #[component]
-fn MessageBubble(
-    message: ChatMessage,
-    clock: String,
-    /// True when this bubble is one of a run's intermediate steps rendered
-    /// inside the [`StepStrip`]. Steps flow bubble-less and dense; the user
-    /// message and the run's standalone *final answer* keep their bubble.
-    #[prop(optional)]
-    in_strip: bool,
-) -> impl IntoView {
+fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     let i18n = use_i18n();
     let is_user = message.role == "user";
     let has_error = message.error.is_some();
@@ -487,20 +463,11 @@ fn MessageBubble(
     //
     // Bubbles are reserved for the two rows that are conversational turns: the
     // user message (a compact right-aligned chip) and the run's standalone
-    // *final answer* (a left bubble). A run's intermediate steps — folded into
-    // the step strip — flow bubble-less and dense (the opencode / claude-code
-    // transcript look), so the live streaming echo no longer wears card chrome.
+    // *final answer* (a left bubble). A run's intermediate steps flow
+    // bubble-less and dense as `NarrationRow` / `ToolLine` / `ExploreGroup`
+    // rows instead (the opencode / claude-code transcript look).
     let bubble_style = if is_user {
         "min-w-0 max-w-[80%] rounded-2xl px-3.5 py-2 msg-glass-user"
-    } else if in_strip {
-        // Intermediate step inside the run's step strip — no bubble.
-        if has_error {
-            "min-w-0 w-full px-2 py-1 text-danger border-l-2 border-danger/40"
-        } else if message.is_intermediate {
-            "min-w-0 w-full px-2 py-0.5 text-text-secondary text-sm"
-        } else {
-            "min-w-0 w-full px-2 py-1 text-text-primary"
-        }
     } else if has_error {
         // Standalone final answer that errored — keep the bubble, full width
         // so long-form prose/markdown reads comfortably.
@@ -512,44 +479,11 @@ fn MessageBubble(
     };
     let bubble_class = bubble_style.to_string();
 
-    // Tool calls render as ToolCard rows. WorkspaceState (when present)
-    // lets a card look up its captured args/result payload; without it
-    // (e.g. storybook) cards degrade to header-only.
-    let workspace = use_context::<WorkspaceState>();
     let message_run_id = run_id_from_message_id(&message.id);
-
-    // Left-side counterpart to the right-side StepCards: an iteration-tagged
-    // bubble still gets a stable dom id + a reactive highlight ring so the
-    // right panel can scroll-focus and cross-highlight it. The visible `#N`
-    // label was dropped — it added a line of height per step without earning
-    // it; focus is now driven entirely from the right StepCards.
-    let msg_iteration = message.iteration;
-    let focused = {
-        let run = message_run_id.clone();
-        Memo::new(move |_| match (workspace, msg_iteration) {
-            (Some(ws), Some(it)) => ws.is_step_focused(&run, it),
-            _ => false,
-        })
-    };
-    let bubble_class_reactive = {
-        let base = bubble_class;
-        move || {
-            if focused.get() {
-                format!("{base} ring-2 ring-primary/60")
-            } else {
-                base.clone()
-            }
-        }
-    };
-    let bubble_dom_id: Option<String> = match (msg_iteration, is_user) {
-        (Some(it), false) => Some(format!("step-{message_run_id}-{it}")),
-        _ => None,
-    };
 
     let tool_calls_view = if has_tools {
         let tools = message.tool_calls.clone();
         let run_for_cards = message_run_id;
-        let it_for_cards = msg_iteration;
         Some(view! {
             <div class="mb-2 flex flex-col gap-1">
                 {tools.into_iter().map(|tc| {
@@ -558,7 +492,6 @@ fn MessageBubble(
                             run_id=run_for_cards.clone()
                             tool_id=tc.tool_id.clone()
                             tool_name=tc.tool_name
-                            iteration=it_for_cards
                         />
                     }
                 }).collect::<Vec<_>>()}
@@ -735,7 +668,7 @@ fn MessageBubble(
                                     {team_name}
                                 </div>
                             })}
-                            <div class=bubble_class_reactive id=bubble_dom_id>
+                            <div class=bubble_class>
                                 {tool_calls_view}
                                 // Assistant text — always the paced renderer; it
                                 // keeps sweeping past stream completion and falls
@@ -750,7 +683,7 @@ fn MessageBubble(
             } else {
                 // Original layout for user and single-agent assistant messages.
                 view! {
-                    <div class=bubble_class_reactive id=bubble_dom_id>
+                    <div class=bubble_class>
                         {tool_calls_view}
                         {if is_user {
                             view! {
@@ -854,83 +787,128 @@ fn MessageBubble(
     }
 }
 
-/// 一个 run 的中间步骤容器，三态：
-/// - 运行中（`!completed`）：默认收起成「一条会变的状态行」（图标 + 最新动作 +
-///   spinner）；点击展开成扁平步骤流。
-/// - 完成（`completed`）：收起成 `✓ 末步摘要`；点击展开。
-/// - 展开（任一态）：扁平步骤流，每步一行（无内层滚动条、无嵌套）。
-///
-/// 收起态固定为单行，避免思考过程中高度跳动。
-///
-/// 展开/收起按 `run_id` 存于 `ChatState`（`strip_open`），承受 keyed `<For>`
-/// 的每 token 重挂载（见 `ChatState::strip_open` 注释）。
+/// 中间轮叙述 — 无框直排的过程独白，永久留在对话流里。
 #[component]
-fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
+fn NarrationRow(message: ChatMessage) -> impl IntoView {
+    let content = message.content.clone();
+    let message_id = message.id.clone();
+    let is_streaming = message.is_streaming;
+    view! {
+        <div class="px-1 py-0.5 text-sm text-text-secondary leading-relaxed aleph-step-narration">
+            <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming />
+        </div>
+    }
+}
+
+/// 探索聚合块 — 连续只读工具塌缩为一个可展开块（codex Exploring 同源）。
+/// 展开态按 group key 存 `ChatState::strip_open`（扛 per-token remount）。
+#[component]
+fn ExploreGroupRow(
+    key_id: String,
+    run_id: String,
+    tools: Vec<crate::views::chat::state::ToolCallEntry>,
+    completed: bool,
+) -> impl IntoView {
+    use crate::components::tool_card::{explore_entries, summarize_tools, tool_headline, ToolKind};
     let chat = expect_context::<ChatState>();
     let workspace = use_context::<WorkspaceState>();
     let i18n = use_i18n();
-    let run_id = steps
-        .first()
-        .map(|m| run_id_from_message_id(&m.id))
-        .unwrap_or_default();
-    // 运行中默认收起（一条会变的行）；完成默认收起。两态默认都收起。
+
+    let default_open = !completed;
     let open = {
-        let run = run_id.clone();
-        Memo::new(move |_| chat.strip_is_open(&run, false))
+        let k = key_id.clone();
+        Memo::new(move |_| chat.strip_is_open(&k, default_open))
     };
 
-    // 收起态摘要文案：运行中 = 最新动作 headline；完成 = 末步摘要。
-    let steps_for_summary = steps.clone();
-    let summary_main = {
-        let ws = workspace;
-        let run = run_id.clone();
-        move || {
-            if let Some((tool_id, tool_name)) = latest_step_tool(&steps_for_summary) {
-                let kind = ToolKind::from_name(&tool_name);
-                let payload = ws.and_then(|w| w.get_tool_payload(&run, &tool_id));
-                let icon = tool_icon(&tool_name, kind);
-                let headline = tool_headline(kind, &payload).unwrap_or_else(|| {
-                    step_narration_head(&steps_for_summary, 60)
-                        .unwrap_or_else(|| t_string!(i18n, chat.working).to_string())
-                });
-                format!("{icon} {headline}")
-            } else {
-                step_narration_head(&steps_for_summary, 60)
-                    .unwrap_or_else(|| t_string!(i18n, chat.working).to_string())
-            }
-        }
+    // 折叠头摘要：运行中 "🔍 探索中… N 项"；完成 "✓ 探索了 N 项（读取×3 · 搜索×1）"
+    let n = tools.len();
+    let counts = summarize_tools(
+        &tools.iter().map(|t| (t.tool_id.clone(), t.tool_name.clone())).collect::<Vec<_>>(),
+    )
+    .into_iter()
+    .map(|(k, c)| {
+        let label = match k {
+            ToolKind::FileRead => t_string!(i18n, tool_card.cat_read).to_string(),
+            ToolKind::Search => t_string!(i18n, tool_card.cat_search).to_string(),
+            _ => t_string!(i18n, tool_card.cat_tool).to_string(),
+        };
+        format!("{label}×{c}")
+    })
+    .collect::<Vec<_>>()
+    .join(" · ");
+    let header = move || if completed {
+        format!("{} {} {}（{}）",
+            t_string!(i18n, chat.explore_done), n,
+            t_string!(i18n, chat.explore_items), counts.clone())
+    } else {
+        format!("{} {} {}",
+            t_string!(i18n, chat.explore_running), n,
+            t_string!(i18n, chat.explore_items))
     };
 
-    let run_for_toggle = run_id.clone();
+    // 展开体条目：headline 从 payload 现算（合并逻辑在纯函数里）。
+    let entries = {
+        let tools = tools.clone();
+        let run = run_id.clone();
+        Memo::new(move |_| {
+            let items: Vec<(String, String, Option<String>)> = tools.iter().map(|t| {
+                let kind = ToolKind::from_name(&t.tool_name);
+                let payload = workspace.and_then(|w| w.get_tool_payload(&run, &t.tool_id));
+                (t.tool_id.clone(), t.tool_name.clone(), tool_headline(kind, &payload))
+            }).collect();
+            explore_entries(&items)
+        })
+    };
+
+    let k_for_toggle = key_id;
+    let run_for_click = run_id;
     view! {
-        <div class="my-1">
-            <div class="w-full rounded-lg glass-inset">
-                <button
-                    type="button"
-                    class="w-full flex items-center gap-2 px-3 py-1.5 text-left
-                           text-text-tertiary hover:text-text-secondary"
-                    on:click=move |_| chat.toggle_strip(&run_for_toggle, false)
-                >
-                    {move || if completed {
-                        view! { <span class="text-success shrink-0">"\u{2713}"</span> }.into_any()
-                    } else {
-                        view! { <span class="shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span> }.into_any()
-                    }}
-                    <span class="flex-1 min-w-0 truncate text-sm">{summary_main}</span>
-                    <span class="shrink-0 text-[10px]">
-                        {move || if open.get() { "\u{25BE}" } else { "\u{25B8}" }}
-                    </span>
-                </button>
-                <Show when=move || open.get()>
-                    <div class="px-2 pb-2 flex flex-col gap-1">
-                        {steps
-                            .clone()
-                            .into_iter()
-                            .map(|m| view! { <MessageBubble message=m clock=String::new() in_strip=true /> })
-                            .collect_view()}
-                    </div>
-                </Show>
-            </div>
+        <div class="my-0.5">
+            <button
+                type="button"
+                class="w-full flex items-center gap-2 px-1 py-0.5 text-left text-sm
+                       text-text-tertiary hover:text-text-secondary"
+                on:click=move |_| chat.toggle_strip(&k_for_toggle, default_open)
+            >
+                {if completed {
+                    view! { <span class="text-success shrink-0 text-[11px]">"✓"</span> }.into_any()
+                } else {
+                    view! { <span class="shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span> }.into_any()
+                }}
+                <span class="shrink-0">"🔍"</span>
+                <span class="flex-1 min-w-0 truncate">{header}</span>
+                <span class="shrink-0 text-[10px]">
+                    {move || if open.get() { "▾" } else { "▸" }}
+                </span>
+            </button>
+            <Show when=move || open.get()>
+                <div class="pl-7 flex flex-col gap-0.5">
+                    <For
+                        each=move || entries.get()
+                        key=|e| e.tool_ids.join(",")
+                        children=move |e| {
+                            let icon = crate::components::tool_card::tool_icon("", e.kind);
+                            let first = e.tool_ids.first().cloned().unwrap_or_default();
+                            let run = run_for_click.clone();
+                            view! {
+                                <button
+                                    type="button"
+                                    class="flex items-center gap-2 px-1 py-0.5 text-left text-xs
+                                           text-text-tertiary hover:text-primary min-w-0"
+                                    on:click=move |_| {
+                                        if let Some(ws) = workspace {
+                                            ws.select_tool(run.clone(), first.clone());
+                                        }
+                                    }
+                                >
+                                    <span class="shrink-0">{icon}</span>
+                                    <span class="truncate">{e.label.clone()}</span>
+                                </button>
+                            }
+                        }
+                    />
+                </div>
+            </Show>
         </div>
     }
 }
@@ -945,93 +923,5 @@ mod run_id_tests {
         assert_eq!(run_id_from_message_id("intermediate-r1-3"), "r1");
         assert_eq!(run_id_from_message_id("intermediate-run-x-7"), "run-x");
         assert_eq!(run_id_from_message_id("user-0"), "user-0");
-    }
-}
-
-#[cfg(test)]
-mod step_action_tests {
-    use super::{latest_step_tool, step_narration_head};
-    use crate::views::chat::state::{ChatMessage, ToolCallEntry};
-
-    fn msg(id: &str, content: &str, tools: Vec<(&str, &str)>) -> ChatMessage {
-        ChatMessage {
-            id: id.to_string(),
-            role: "assistant".into(),
-            content: content.to_string(),
-            tool_calls: tools
-                .into_iter()
-                .map(|(tid, tn)| ToolCallEntry {
-                    tool_id: tid.to_string(),
-                    tool_name: tn.to_string(),
-                    status: "completed".into(),
-                    duration_ms: None,
-                    started_at_ms: None,
-                })
-                .collect(),
-            is_streaming: false,
-            is_intermediate: true,
-            error: None,
-            model_info: None,
-            iteration: Some(1),
-            timestamp: None,
-            is_final: false,
-            text_finalized: false,
-            agent_id: None,
-            plan_archive: None,
-        }
-    }
-
-    #[test]
-    fn latest_step_tool_picks_last_tool_of_last_step_with_tools() {
-        let steps = vec![
-            msg("intermediate-r1-1", "searching", vec![("t1", "search")]),
-            msg(
-                "intermediate-r1-2",
-                "editing",
-                vec![("t2", "file_edit"), ("t3", "bash")],
-            ),
-        ];
-        assert_eq!(
-            latest_step_tool(&steps),
-            Some(("t3".to_string(), "bash".to_string()))
-        );
-    }
-
-    #[test]
-    fn latest_step_tool_skips_toolless_tail() {
-        let steps = vec![
-            msg("intermediate-r1-1", "searching", vec![("t1", "search")]),
-            msg("intermediate-r1-2", "thinking out loud", vec![]),
-        ];
-        assert_eq!(
-            latest_step_tool(&steps),
-            Some(("t1".to_string(), "search".to_string()))
-        );
-    }
-
-    #[test]
-    fn latest_step_tool_none_when_no_tools() {
-        let steps = vec![msg("intermediate-r1-1", "just text", vec![])];
-        assert_eq!(latest_step_tool(&steps), None);
-    }
-
-    #[test]
-    fn step_narration_head_takes_last_nonempty_first_line_truncated() {
-        let steps = vec![
-            msg("intermediate-r1-1", "first step narration", vec![]),
-            msg("intermediate-r1-2", "second step\nwith two lines", vec![]),
-        ];
-        assert_eq!(
-            step_narration_head(&steps, 100).as_deref(),
-            Some("second step")
-        );
-        // 截断（UTF-8 安全）
-        assert_eq!(step_narration_head(&steps, 6).as_deref(), Some("second"));
-    }
-
-    #[test]
-    fn step_narration_head_none_when_all_empty() {
-        let steps = vec![msg("intermediate-r1-1", "", vec![])];
-        assert_eq!(step_narration_head(&steps, 50), None);
     }
 }

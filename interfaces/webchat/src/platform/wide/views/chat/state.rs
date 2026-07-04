@@ -406,12 +406,12 @@ pub struct ChatState {
     /// task strip + drawer). Empty when not in team mode. Fetched from
     /// `teams.list_tasks` and upserted by `team.<id>.task.<verb>` events.
     pub team_tasks: RwSignal<Vec<CoordTaskDto>>,
-    /// Per-run step-strip expand/collapse override, keyed by `run_id`.
-    /// Absent = use the default (running strips open, completed collapsed);
-    /// present = the user's explicit toggle. Lives here — not as a strip-local
-    /// signal — because `timeline::row_key` folds in content length, so the
-    /// strip row remounts on every streamed token and a component-local `open`
-    /// would reset each time (re-opening a strip the user just collapsed mid-run).
+    /// Per explore-group expand override, keyed by group key. Absent = use the
+    /// default (running groups open, completed collapsed); present = the
+    /// user's explicit toggle. Lives here — not as a group-local signal —
+    /// because `timeline::row_key` folds in content length, so the group row
+    /// remounts on every streamed token and a component-local `open` would
+    /// reset each time (re-opening a group the user just collapsed mid-run).
     /// Ephemeral, like `retry_pulse` — excluded from [`SessionSnapshot`].
     pub strip_open: RwSignal<std::collections::HashMap<String, bool>>,
     /// Active single-chat task plan (scratchpad-driven Todo widget). `None`
