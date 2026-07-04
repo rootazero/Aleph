@@ -118,7 +118,7 @@ impl LinkResolveContext {
         let mut filename_to_paths: HashMap<String, Vec<String>> = HashMap::new();
         let mut alias_to_paths: HashMap<String, Vec<String>> = HashMap::new();
         let mut normalized_to_paths: HashMap<String, Vec<String>> = HashMap::new();
-        let mut push_unique = |m: &mut HashMap<String, Vec<String>>, k: String, p: &str| {
+        let push_unique = |m: &mut HashMap<String, Vec<String>>, k: String, p: &str| {
             let v = m.entry(k).or_default();
             if !v.iter().any(|x| x == p) {
                 v.push(p.to_string());

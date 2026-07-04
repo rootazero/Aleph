@@ -1300,12 +1300,14 @@ impl NoteStore for SqliteMemoryBackend {
             let mut stmt = conn
                 .prepare(&sql)
                 .map_err(|e| AlephError::config(format!("backfill prep: {e}")))?;
-            stmt.query_map(params_ref.as_slice(), |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-            })
-            .map_err(|e| AlephError::config(format!("backfill scan: {e}")))?
-            .filter_map(|r| r.ok())
-            .collect()
+            let scanned: Vec<(i64, String)> = stmt
+                .query_map(params_ref.as_slice(), |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(|e| AlephError::config(format!("backfill scan: {e}")))?
+                .filter_map(|r| r.ok())
+                .collect();
+            scanned
         };
         if rows.is_empty() {
             return Ok(0);

@@ -493,6 +493,10 @@ category: preference
 
     async fn build_test_dream_ctx() -> (DreamContext, Arc<SqliteMemoryBackend>) {
         let temp = std::env::temp_dir().join(format!("aleph_lint_{}", uuid::Uuid::new_v4()));
+        // Create the dir first: a nonexistent path is treated as the DB *file*
+        // by SqliteMemoryBackend::new, which would make memory_dir a file and
+        // break tests that mkdir note categories under it (NotADirectory).
+        std::fs::create_dir_all(&temp).unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
         let provider: std::sync::Arc<dyn crate::providers::AiProvider> =

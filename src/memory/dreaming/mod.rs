@@ -1350,8 +1350,10 @@ mod tests {
                 "feedback_distill",
                 "note_drift",
                 "index_refresher",
+                "co_recall_edges",
                 "graph_recompute",
                 "note_weave",
+                "mention_weave",
                 "note_decay",
                 "skill_lifecycle",
                 "goal_lessons_promote",
@@ -1435,6 +1437,7 @@ mod tests {
                 "note_lint",
                 "note_review",
                 "index_refresher",
+                "co_recall_edges",
                 "graph_recompute"
             ]
         );
