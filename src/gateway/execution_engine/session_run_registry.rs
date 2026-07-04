@@ -13,7 +13,6 @@ use crate::sync_primitives::Mutex;
 
 /// Tracks the single in-flight run per session. `session_key_string -> run_id`.
 #[derive(Default)]
-#[allow(dead_code)] // wired in Task 6 (core gate rewrite replacing agent_instance.rs::try_start_run)
 pub(super) struct SessionRunRegistry {
     running: Mutex<HashMap<String, String>>,
 }
@@ -23,7 +22,6 @@ impl SessionRunRegistry {
     /// `false` = a run is already active on this session (caller routes the
     /// message to the per-session `BusyInputMode` steer/interrupt/queue path).
     #[must_use]
-    #[allow(dead_code)] // wired in Task 6
     pub(super) fn try_claim(&self, session_key: &SessionKey, run_id: &str) -> bool {
         let key = session_key.to_key_string();
         let mut map = self.running.lock().unwrap_or_else(|e| e.into_inner());
@@ -37,7 +35,6 @@ impl SessionRunRegistry {
     /// Release this session's run slot. Idempotent, and only releases when the
     /// stored `run_id` matches — a superseded run's late release can't free a
     /// newer run's claim.
-    #[allow(dead_code)] // wired in Task 6
     pub(super) fn release(&self, session_key: &SessionKey, run_id: &str) {
         let key = session_key.to_key_string();
         let mut map = self.running.lock().unwrap_or_else(|e| e.into_inner());
@@ -47,8 +44,13 @@ impl SessionRunRegistry {
     }
 
     /// Is a run currently active on this session?
+    ///
+    /// Not yet called from production code (`try_claim`'s return value already
+    /// covers the gate's own need); kept for diagnostics / a future status RPC.
+    /// `#[allow(dead_code)]` stays until it gets a non-test caller (mirrors
+    /// `concurrency::ConcurrencyLimiter::snapshot`).
     #[must_use]
-    #[allow(dead_code)] // wired in Task 6
+    #[allow(dead_code)]
     pub(super) fn is_running(&self, session_key: &SessionKey) -> bool {
         let key = session_key.to_key_string();
         self.running

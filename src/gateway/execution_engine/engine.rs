@@ -42,6 +42,14 @@ pub struct ContinuationDeps {
 pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> {
     pub(super) config: ExecutionEngineConfig,
     pub(super) active_runs: Arc<RwLock<HashMap<String, ActiveRun>>>,
+    /// Per-session run mutual-exclusion (replaces the per-agent `AgentState`
+    /// gate — Task 6). Exactly one run may be `Running` per session; sessions
+    /// of the same agent no longer contend with each other.
+    pub(super) session_run_registry: Arc<super::session_run_registry::SessionRunRegistry>,
+    /// Run-lifetime concurrency caps (global + per-agent), held for the whole
+    /// run by the [`super::gate::RunSlot`] guard `execute()` binds at
+    /// admission (Task 6).
+    pub(super) concurrency: Arc<super::concurrency::ConcurrencyLimiter>,
     /// Provider registry for LLM access
     pub(super) provider_registry: Arc<P>,
     /// Tool registry for tool execution
@@ -125,6 +133,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         memory_backend: Option<crate::memory::store::MemoryBackend>,
     ) -> Self {
         Self {
+            session_run_registry: Arc::new(Default::default()),
+            concurrency: Arc::new(super::concurrency::ConcurrencyLimiter::new(
+                config.max_runs_global,
+                config.max_runs_per_agent,
+            )),
             config,
             active_runs: Arc::new(RwLock::new(HashMap::new())),
             provider_registry,

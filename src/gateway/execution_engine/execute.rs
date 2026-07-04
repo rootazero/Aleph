@@ -1,6 +1,6 @@
 use super::gate::GateOutcome;
 use super::{ExecutionEngine, ExecutionError, RunRequest, RunState};
-use crate::gateway::agent_instance::{AgentInstance, AgentState};
+use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
 use crate::resilience::TaskStatus;
@@ -121,17 +121,27 @@ where
         // The bridge task converts the coarse cancel_rx signal into a token cancellation.
         let cancel_token = CancellationToken::new();
 
-        // Admission gate: reserve the agent's run slot, resolve busy-input
-        // policy (Steer / Interrupt / Queue) if it's already held, enforce
-        // the concurrent-run limit, and register the `ActiveRun`. Extracted
-        // to `gate.rs` (Task 2) — see `admit_run` for the verbatim logic.
-        match self
+        // Admission gate: claim the session's run slot, resolve busy-input
+        // policy (Steer / Interrupt / Queue) if it's already held, acquire a
+        // run-lifetime concurrency permit, and register the `ActiveRun`.
+        // Extracted to `gate.rs` (Task 2); Task 6 rewrote the predicate to be
+        // per-session (`SessionRunRegistry`) instead of per-agent
+        // (`AgentState`). `_run_slot` is bound here — in `execute()`'s own
+        // body scope, not inside this match arm — so it lives across the
+        // run's execution (including every early return below and a panic
+        // unwind). It is dropped explicitly further down, at the same point
+        // the legacy per-agent gate used to reset `AgentState::Idle`, which
+        // is before the post-run continuation/steering-rescue logic that may
+        // re-enter `execute()` on the SAME session (see the drop site for why
+        // holding it until the literal end of this function would deadlock
+        // that re-entry).
+        let _run_slot = match self
             .admit_run(&request, &run_id, &agent, cancel_tx)
             .await?
         {
-            GateOutcome::Admitted => {}
+            GateOutcome::Admitted(slot) => slot,
             GateOutcome::HandledInline => return Ok(()),
-        }
+        };
 
         let trace_task_persisted = self
             .persist_run_task_started(&run_id, &request, &agent)
@@ -491,8 +501,14 @@ where
             }
         };
 
-        // Reset agent state so the agent can accept the next request.
-        agent.set_state(AgentState::Idle).await;
+        // Release the session claim + concurrency permit now — this run's own
+        // execution is complete. Explicit (not left to drop at the end of
+        // `execute()`): the post-run continuation/steering-rescue logic below
+        // may re-enter `execute()` on this SAME session (a fresh run, new
+        // run_id), which needs `try_claim` to succeed again. Mirrors where
+        // the legacy per-agent `agent.set_state(AgentState::Idle)` gate
+        // release used to sit.
+        drop(_run_slot);
 
         let final_result = match result {
             Ok(response) => {

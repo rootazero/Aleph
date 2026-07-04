@@ -12,19 +12,20 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::sync_primitives::Mutex;
 
-#[allow(dead_code)] // wired in Task 8 (concurrency snapshot in status/metrics)
+// `snapshot()` (below) has no production caller yet — wired in Task 8
+// (concurrency snapshot surfaced in status/metrics). Keep the allow scoped to
+// that one method + its return type until then.
+#[allow(dead_code)]
 pub(super) struct ConcurrencySnapshot {
     pub(super) global_in_use: usize,
     pub(super) global_total: usize,
 }
 
-#[allow(dead_code)] // wired in Task 6 (gate acquires/holds for run lifetime)
 pub(super) struct RunPermit {
     _global: OwnedSemaphorePermit,
     _agent: OwnedSemaphorePermit,
 }
 
-#[allow(dead_code)] // wired in Task 6 (core gate rewrite)
 pub(super) struct ConcurrencyLimiter {
     global: Arc<Semaphore>,
     global_total: usize,
@@ -34,7 +35,6 @@ pub(super) struct ConcurrencyLimiter {
 
 impl ConcurrencyLimiter {
     #[must_use]
-    #[allow(dead_code)] // wired in Task 6
     pub(super) fn new(global_cap: usize, per_agent_cap: usize) -> Self {
         // Clamp to >=1 (a 0-permit semaphore would deadlock every run).
         let global_cap = global_cap.max(1);
@@ -47,7 +47,6 @@ impl ConcurrencyLimiter {
         }
     }
 
-    #[allow(dead_code)] // only reachable via acquire/try_acquire, wired in Task 6
     fn agent_sem(&self, agent_id: &str) -> Arc<Semaphore> {
         let mut map = self.per_agent.lock().unwrap_or_else(|e| e.into_inner());
         map.entry(agent_id.to_string())
@@ -58,7 +57,6 @@ impl ConcurrencyLimiter {
     /// Acquire both a global and a per-agent permit, awaiting if either cap is
     /// full. The per-agent permit is taken first so a saturated agent waits on
     /// its own sub-cap without consuming a scarce global slot.
-    #[allow(dead_code)] // wired in Task 6
     pub(super) async fn acquire(&self, agent_id: &str) -> RunPermit {
         let agent_sem = self.agent_sem(agent_id);
         let agent = agent_sem.acquire_owned().await.expect("agent sem never closed");
@@ -68,7 +66,6 @@ impl ConcurrencyLimiter {
 
     /// Non-blocking variant. Returns `None` if either cap is currently full.
     #[must_use]
-    #[allow(dead_code)] // wired in Task 6
     pub(super) fn try_acquire(&self, agent_id: &str) -> Option<RunPermit> {
         let agent_sem = self.agent_sem(agent_id);
         let agent = Arc::clone(&agent_sem).try_acquire_owned().ok()?;

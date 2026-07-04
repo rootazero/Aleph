@@ -1,6 +1,7 @@
 //! Tests for the execution engine module.
 
 use super::deadline::wait_for_deadline;
+use super::gate::GateOutcome;
 use super::*;
 use crate::sync_primitives::{AtomicUsize, Ordering};
 
@@ -276,6 +277,220 @@ async fn test_simple_execution_engine_run() {
 
     assert!(has_reasoning, "Should have Reasoning event");
     assert!(has_response, "Should have ResponseChunk event");
+}
+
+// =============================================================================
+// Task 6: per-session admission gate (production `ExecutionEngine<P, R>`)
+// =============================================================================
+//
+// These exercise `ExecutionEngine::admit_run` directly rather than the full
+// `execute()` (which needs a live orchestrator/harness to actually run a
+// turn). `admit_run` IS the wired gate under test — Task 3's own unit tests
+// already cover `SessionRunRegistry` in isolation; these prove it's correctly
+// threaded through the production engine's admission path.
+
+/// Minimal `ToolRegistry` double: `admit_run` never looks up or executes a
+/// tool, so an empty registry satisfies `ExecutionEngine<P, R>`'s generic
+/// bound without pulling in the real (heavy) `BuiltinToolRegistry`.
+struct EmptyToolRegistry;
+
+impl crate::executor::ToolRegistry for EmptyToolRegistry {
+    fn get_tool(&self, _name: &str) -> Option<&crate::tool_metadata::UnifiedTool> {
+        None
+    }
+
+    fn execute_tool(
+        &self,
+        _tool_name: &str,
+        _arguments: serde_json::Value,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = crate::error::Result<serde_json::Value>> + Send + '_>,
+    > {
+        Box::pin(async { Err(crate::error::AlephError::tool("no tools in test registry")) })
+    }
+}
+
+/// A production `ExecutionEngine<P, R>` with the lightest real `P`/`R` the
+/// generic bounds allow, using an explicit config. `admit_run` never calls
+/// into either registry, so these stand in for the real provider/tool stacks
+/// without any network or filesystem setup — this is the smallest real unit
+/// that exercises the wired gate.
+fn test_engine_with_config(
+    config: ExecutionEngineConfig,
+) -> ExecutionEngine<crate::thinker::SingleProviderRegistry, EmptyToolRegistry> {
+    ExecutionEngine::new(
+        config,
+        Arc::new(crate::thinker::SingleProviderRegistry::new(
+            crate::providers::create_mock_provider(),
+        )),
+        Arc::new(EmptyToolRegistry),
+        Vec::new(),
+        None,
+    )
+}
+
+/// Default-config engine for tests that hold at most one permit at a time.
+fn test_engine() -> ExecutionEngine<crate::thinker::SingleProviderRegistry, EmptyToolRegistry> {
+    test_engine_with_config(ExecutionEngineConfig::default())
+}
+
+fn gate_test_request(session_key: &SessionKey, run_id: &str) -> RunRequest {
+    RunRequest {
+        run_id: run_id.to_string(),
+        input: "hello".to_string(),
+        session_key: session_key.clone(),
+        timeout_secs: None,
+        metadata: HashMap::new(),
+        attachments: Vec::new(),
+        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        sandbox_override: None,
+        workspace_override: None,
+        max_iterations_override: None,
+        model_override: None,
+    }
+}
+
+async fn gate_test_agent(temp: &tempfile::TempDir, agent_id: &str) -> Arc<AgentInstance> {
+    let sm = test_session_manager(temp);
+    let config = AgentInstanceConfig {
+        agent_id: agent_id.to_string(),
+        workspace: temp.path().join("workspace"),
+        agent_dir: temp.path().join(format!("agents/{agent_id}")),
+        ..Default::default()
+    };
+    Arc::new(AgentInstance::new(config, sm).unwrap())
+}
+
+/// Task 6 regression: the OLD gate (`agent.try_start_run`, flipping a single
+/// `AgentState` flag shared by the whole `AgentInstance`) rejected a second
+/// run of the SAME agent even on a completely different session — the two
+/// sessions serialized through one agent-wide Idle/Running flag. The NEW gate
+/// claims per-`SessionKey` (`SessionRunRegistry`), so two sessions of the
+/// SAME agent must now both be admitted (true parallelism).
+#[tokio::test]
+async fn two_sessions_same_agent_run_in_parallel() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "parallel-agent").await;
+    // This test holds TWO concurrent same-agent permits (run A's `RunSlot` is
+    // alive while run B acquires). It therefore needs per-agent cap >= 2 (and
+    // global cap >= 2) — set explicitly so the assertion never depends on the
+    // default: if the default per-agent cap were ever lowered to 1, run B's
+    // `admit_run` would block forever on `acquire().await` and this test would
+    // HANG instead of failing cleanly.
+    let engine = test_engine_with_config(ExecutionEngineConfig {
+        max_runs_global: 8,
+        max_runs_per_agent: 3,
+        ..Default::default()
+    });
+
+    let session_a = SessionKey::peer("parallel-agent", "conv-a");
+    let session_b = SessionKey::peer("parallel-agent", "conv-b");
+    // Sanity: genuinely the same agent, genuinely different sessions —
+    // otherwise this test would prove nothing.
+    assert_eq!(session_a.agent_id(), session_b.agent_id());
+    assert_ne!(session_a, session_b);
+
+    let req_a = gate_test_request(&session_a, "run-a");
+    let (tx_a, _rx_a) = mpsc::channel::<()>(1);
+    let outcome_a = engine
+        .admit_run(&req_a, "run-a", &agent, tx_a)
+        .await
+        .expect("run A must be admitted");
+    assert!(
+        matches!(outcome_a, GateOutcome::Admitted(_)),
+        "first run must be admitted"
+    );
+
+    // Same `agent` instance held across both calls — its per-agent
+    // `AgentState` is still "Running" from run A (the new gate never touches
+    // it), so the OLD gate would have rejected this second call outright.
+    // The new per-session gate must admit it: it's a DIFFERENT session.
+    let req_b = gate_test_request(&session_b, "run-b");
+    let (tx_b, _rx_b) = mpsc::channel::<()>(1);
+    let outcome_b = engine
+        .admit_run(&req_b, "run-b", &agent, tx_b)
+        .await
+        .expect("run B on a different session of the SAME agent must be admitted");
+    assert!(
+        matches!(outcome_b, GateOutcome::Admitted(_)),
+        "second run on a DIFFERENT session of the SAME agent must also be admitted"
+    );
+}
+
+/// Task 6 regression: a second message on the SAME session while a run is
+/// still active must still take the busy-input path (`try_claim` returns
+/// `false`) — the session-scoped claim must not accidentally admit two runs
+/// on one session (which would let two runs interleave writes into the same
+/// `session_events` transcript — INV-SEQ / audit 4.2). No orchestrator is
+/// wired in this harness, so `Steer`'s mid-loop injection cannot succeed and
+/// the busy path surfaces as `AgentBusy` — proof `try_claim` rejected the
+/// second run (which busy sub-mode fires is steering.rs's own concern, unit
+/// tested separately).
+#[tokio::test]
+async fn second_message_same_session_takes_busy_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "busy-agent").await;
+    let engine = test_engine();
+
+    let session = SessionKey::peer("busy-agent", "conv-1");
+
+    let req1 = gate_test_request(&session, "run-1");
+    let (tx1, _rx1) = mpsc::channel::<()>(1);
+    let outcome1 = engine
+        .admit_run(&req1, "run-1", &agent, tx1)
+        .await
+        .expect("first run must be admitted");
+    assert!(matches!(outcome1, GateOutcome::Admitted(_)));
+
+    // `outcome1` (and the `RunSlot` it carries) is still alive here — the
+    // session claim from run 1 is still held, so this second call on the
+    // SAME session must be rejected by `try_claim`.
+    let req2 = gate_test_request(&session, "run-2");
+    let (tx2, _rx2) = mpsc::channel::<()>(1);
+    let outcome2 = engine.admit_run(&req2, "run-2", &agent, tx2).await;
+    match outcome2 {
+        Err(ExecutionError::AgentBusy(_)) => {}
+        Ok(_) => panic!(
+            "second run on the SAME session must be rejected by try_claim (busy path), \
+             but was Admitted/HandledInline"
+        ),
+        Err(e) => panic!("expected AgentBusy from the busy path, got a different error: {e}"),
+    }
+
+    drop(outcome1);
+}
+
+/// Task 6: `RunSlot::drop` must release the session claim (alongside the
+/// concurrency permit) — otherwise a completed run would wedge its session
+/// forever. Task 3 already covers `SessionRunRegistry::release` in isolation;
+/// this proves the RAII wiring end-to-end through the actual `admit_run`
+/// gate, catching a regression where `RunSlot` forgot to release on drop or
+/// `execute()` forgot to bind/hold it.
+#[tokio::test]
+async fn run_slot_drop_releases_session_for_reclaim() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "release-agent").await;
+    let engine = test_engine();
+    let session = SessionKey::peer("release-agent", "conv-1");
+
+    let req1 = gate_test_request(&session, "run-1");
+    let (tx1, _rx1) = mpsc::channel::<()>(1);
+    let outcome1 = engine
+        .admit_run(&req1, "run-1", &agent, tx1)
+        .await
+        .expect("first run must be admitted");
+
+    // Release the slot the way `execute()` does on run completion.
+    drop(outcome1);
+
+    // A fresh run on the SAME session must now be admitted again.
+    let req2 = gate_test_request(&session, "run-2");
+    let (tx2, _rx2) = mpsc::channel::<()>(1);
+    let outcome2 = engine
+        .admit_run(&req2, "run-2", &agent, tx2)
+        .await
+        .expect("run after release must be admitted");
+    assert!(matches!(outcome2, GateOutcome::Admitted(_)));
 }
 
 // =============================================================================
