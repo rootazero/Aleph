@@ -25,6 +25,7 @@ mod orchestrator;
 mod persistence;
 mod run_loop;
 mod scratchpad_progress_sink;
+mod session_run_registry;
 mod simple;
 mod slash_command;
 mod steering;
