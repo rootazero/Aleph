@@ -1,8 +1,8 @@
 //! Accessibility tree capability trait.
 //!
-//! Platform implementations that support the macOS Accessibility API
-//! implement this trait and return `Some(&self.ax)` from
-//! [`crate::DesktopPlatform::ax`].
+//! Platform implementations that expose an accessibility tree (macOS via the
+//! Accessibility API, Windows via UI Automation) implement this trait and
+//! return `Some(&self.ax)` from [`crate::DesktopPlatform::ax`].
 
 use async_trait::async_trait;
 
@@ -15,9 +15,12 @@ use crate::error::Result;
 
 /// Query the OS accessibility (AX) element tree.
 ///
-/// All methods are async because the underlying RPC call to the Swift
-/// helper is I/O-bound.  On non-macOS platforms the `DesktopPlatform`
-/// default returns `None` from `ax()`, so these methods are never called.
+/// All methods are async because the backing implementation is I/O-bound
+/// (macOS marshals over the Swift-helper RPC; Windows runs UI Automation COM
+/// on a blocking thread). Platforms without an accessibility tree (currently
+/// Linux) return `None` from `ax()`, so these methods are never called there;
+/// `set_value` / `perform_action` also keep a `NotImplemented` default so a
+/// platform can offer read-only AX without a write path.
 #[async_trait]
 pub trait AccessibilityCapability: Send + Sync {
     /// Return the UI element that currently holds keyboard focus, or `None`
