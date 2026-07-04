@@ -141,12 +141,12 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         .collect();
     let edges: Vec<NoteLinkDto> = links
         .into_iter()
-        .map(|(from, to, relation)| NoteLinkDto {
-            from,
-            to,
-            label: None,
+        .map(|row| NoteLinkDto {
+            from: row.from,
+            to: row.to,
+            label: row.label,
             // NULL relation = plain body wikilink.
-            kind: Some(relation.unwrap_or_else(|| "wikilink".to_string())),
+            kind: Some(row.relation.unwrap_or_else(|| "wikilink".to_string())),
         })
         .collect();
 
@@ -593,12 +593,17 @@ mod tests {
         // Seed: center="concept/Rust", hop-1="concept/Cargo", hop-2="concept/Clippy"
         // Rust → Cargo, Cargo → Clippy. Link targets must be full paths so the
         // BFS in get_neighbors (which matches to_note against from_note) traverses.
+        // Index leaf targets BEFORE the notes that link to them: the links
+        // resolver (tier 1, exact path) only marks a full-path wikilink
+        // `status = 'active'` when the target already exists in the index at
+        // write time, and `get_neighbors`'s edge list (used for hop_depth)
+        // only surfaces active rows.
         let rust = make_note("Rust", "concept", vec!["concept/Cargo"]);
         let cargo = make_note("Cargo", "concept", vec!["concept/Clippy"]);
         let clippy = make_note("Clippy", "concept", vec![]);
-        db.index_note(&rust, agent, "concept").await.unwrap();
-        db.index_note(&cargo, agent, "concept").await.unwrap();
         db.index_note(&clippy, agent, "concept").await.unwrap();
+        db.index_note(&cargo, agent, "concept").await.unwrap();
+        db.index_note(&rust, agent, "concept").await.unwrap();
 
         let center_id = "concept/Rust";
         let req = neighbors_request(center_id, 2, 50);

@@ -776,9 +776,9 @@ mod tests {
         let (_n, edges) = backend.get_graph_data("agent1", 100).await.unwrap();
         let e = edges
             .iter()
-            .find(|(f, t, _)| f == &a && t == &b)
+            .find(|edge| edge.from == a && edge.to == b)
             .expect("edge a->b present");
-        assert_eq!(e.2.as_deref(), Some("semantic"));
+        assert_eq!(e.relation.as_deref(), Some("semantic"));
     }
 
     #[tokio::test]

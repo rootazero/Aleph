@@ -36,6 +36,30 @@ pub struct NoteIndexEntry {
     pub content_hash: String,
 }
 
+/// Full active edge row for graph feeds (query/canvas).
+#[derive(Debug, Clone)]
+pub struct GraphEdgeRow {
+    pub from: String,
+    pub to: String,
+    pub relation: Option<String>,
+    pub label: Option<String>,
+    pub confidence: f32,
+}
+
+/// Full outgoing link row for node detail (includes non-active rows so the
+/// panel can show dangling/tombstone links — they are invisible in the graph
+/// but must be visible in detail).
+#[derive(Debug, Clone)]
+pub struct OutgoingLinkRow {
+    pub to_note: String,
+    pub to_raw: String,
+    pub relation: Option<String>,
+    pub label: Option<String>,
+    pub confidence: f32,
+    pub resolved_by: Option<String>,
+    pub status: String,
+}
+
 /// Strip a single trailing `.md` extension from a note title or filename.
 ///
 /// Note titles/filenames are stored extensionless by convention (see
@@ -114,7 +138,7 @@ pub trait NoteStore: Send + Sync {
 
     /// Paths of notes that link to this note, matching either the resolved
     /// full path or the bare filename. `notes_links.to_note` holds the resolved
-    /// target — a full path when `resolve_target` matched a unique filename,
+    /// target — a full path when the links resolver matched a unique filename,
     /// otherwise the bare wikilink text. Dream stages walking `category/title`
     /// notes pass both forms so resolved and legacy rows are counted alike.
     async fn get_incoming_links_any(
@@ -141,14 +165,14 @@ pub trait NoteStore: Send + Sync {
         limit: usize,
     ) -> Result<Vec<NoteIndexEntry>, AlephError>;
 
-    /// Top notes by link count + recency, plus edges between visible nodes.
-    /// Each edge is `(from, to, relation)` where `relation` is the
-    /// `notes_links.relation` kind (`None` for plain body wikilinks).
+    /// Top notes by link count + recency, plus active edges between visible
+    /// nodes (`status = 'active'` only — dangling/tombstone rows never
+    /// surface in the graph feed).
     async fn get_graph_data(
         &self,
         agent_id: &str,
         limit: usize,
-    ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String, Option<String>)>), AlephError>;
+    ) -> Result<(Vec<NoteIndexEntry>, Vec<GraphEdgeRow>), AlephError>;
 
     /// BFS neighborhood around `center` up to `depth` hops.
     async fn get_neighbors(
@@ -158,6 +182,19 @@ pub trait NoteStore: Send + Sync {
         depth: u8,
         limit: usize,
     ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String)>), AlephError>;
+
+    /// All outgoing link rows for one note, including dangling and tombstone
+    /// (unlike the graph feed, node detail must surface every lifecycle
+    /// state). Default impl returns empty so non-SQLite stores and test
+    /// mocks compile unchanged; the real body lives on `SqliteMemoryBackend`.
+    async fn get_outgoing_link_rows(
+        &self,
+        path: &str,
+        agent_id: &str,
+    ) -> Result<Vec<OutgoingLinkRow>, AlephError> {
+        let _ = (path, agent_id);
+        Ok(Vec::new())
+    }
 
     /// Count all notes across all agents.
     async fn count_all_notes(&self) -> Result<i64, AlephError>;
@@ -719,5 +756,76 @@ mod tests {
         let agent2_notes = db.list_notes("agent2").await.unwrap();
         assert_eq!(agent2_notes.len(), 1);
         assert_eq!(agent2_notes[0].filename, "NoteB");
+    }
+
+    /// Seed one resolvable link (`preference/a` -> `reference/rust`, alias
+    /// "The Rust Note") and one dangling link (`preference/a` -> `ghost`).
+    /// Shared by `index_note_writes_resolution_provenance` and
+    /// `graph_reads_exclude_non_active_rows`.
+    async fn seed_rust_and_ghost_links(db: &SqliteMemoryBackend) {
+        db.index_note(
+            &KnowledgeNote {
+                title: "rust".into(),
+                category: "reference".into(),
+                facts: vec!["body".into()],
+                content_hash: "h0".into(),
+                ..Default::default()
+            },
+            AGENT,
+            "reference",
+        )
+        .await
+        .unwrap();
+        db.index_note(
+            &KnowledgeNote {
+                title: "a".into(),
+                category: "preference".into(),
+                body: Some("see [[rust|The Rust Note]] and [[ghost]]".into()),
+                facts: vec![],
+                links: vec!["rust".into(), "ghost".into()],
+                content_hash: "h1".into(),
+                ..Default::default()
+            },
+            AGENT,
+            "preference",
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn index_note_writes_resolution_provenance() {
+        let db = create_test_db();
+        seed_rust_and_ghost_links(&db).await;
+
+        let rows = db
+            .get_outgoing_link_rows("preference/a", AGENT)
+            .await
+            .unwrap();
+        let rust = rows.iter().find(|r| r.to_note == "reference/rust").unwrap();
+        assert_eq!(rust.status, "active");
+        assert_eq!(rust.resolved_by.as_deref(), Some("exact_filename"));
+        assert!((rust.confidence - 0.95).abs() < 1e-6);
+        assert_eq!(rust.label.as_deref(), Some("The Rust Note"));
+
+        let ghost = rows.iter().find(|r| r.to_note == "ghost").unwrap();
+        assert_eq!(ghost.status, "dangling");
+        assert_eq!(ghost.confidence, 0.0);
+        assert!(ghost.resolved_by.is_none());
+    }
+
+    #[tokio::test]
+    async fn graph_reads_exclude_non_active_rows() {
+        let db = create_test_db();
+        seed_rust_and_ghost_links(&db).await;
+
+        let snap = db.load_graph_snapshot(AGENT).await.unwrap();
+        assert!(
+            snap.edges.iter().all(|e| e.to == "reference/rust"),
+            "snapshot must contain only active resolved edges"
+        );
+        let (_, edges) = db.get_graph_data(AGENT, 50).await.unwrap();
+        assert!(edges.iter().all(|e| e.to == "reference/rust"));
+        assert_eq!(edges[0].label.as_deref(), Some("The Rust Note"));
     }
 }
