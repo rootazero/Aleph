@@ -17,6 +17,7 @@ pub(crate) mod event_drain;
 mod execute;
 mod failure_receipt;
 mod fast_path;
+mod gate;
 pub mod helpers;
 mod history;
 pub mod markdown_skill_refresh;
