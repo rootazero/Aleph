@@ -44,6 +44,14 @@ pub fn PhoneMemoryDetail() -> impl IntoView {
         let Some(fact) = st.selected.get() else {
             return;
         };
+        // Reset to the fresh-mount state on every selection change: same-screen
+        // wikilink/backlink navigation swaps `st.selected` without a remount, so
+        // the previous note's body/backlinks — or a stale error from an earlier
+        // failed load — must not linger under the new title while the fetch is
+        // in flight.
+        body.set(None);
+        backlinks.set(Vec::new());
+        error.set(None);
         if !dashboard.is_connected.get() {
             return;
         }
