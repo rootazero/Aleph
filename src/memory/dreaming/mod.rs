@@ -199,6 +199,10 @@ impl DreamPipeline {
                 // link_weight / the >=3-incoming-links protection, breaking
                 // the orphan→no-link-weight→archived vicious cycle.
                 Box::new(stages::NoteWeaveStage::default()),
+                // Materialize unlinked-mention soft edges AFTER weave (real
+                // links win) and BEFORE decay (mention edges count toward
+                // link_weight the same cycle). Deterministic, zero LLM.
+                Box::new(stages::MentionWeaveStage),
                 Box::new(note_decay()),
                 // System-level skill aging (rule-based Active→Stale at
                 // `skill_stale_after_days`). The Stale→Archived / merge

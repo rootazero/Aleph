@@ -425,6 +425,20 @@ pub trait NoteStore: Send + Sync {
         Ok(())
     }
 
+    /// Full refresh of `relation='mention'` rows (recomputed each dream
+    /// cycle, spec M1). Implementations must never overwrite an existing
+    /// semantic link for the pair — an existing link always wins over the
+    /// mention soft edge. Default impl is a no-op so non-`SQLite` stores and
+    /// test mocks compile unchanged.
+    async fn replace_mention_links(
+        &self,
+        agent_id: &str,
+        rows: &[(String, String)],
+    ) -> Result<(), AlephError> {
+        let _ = (agent_id, rows);
+        Ok(())
+    }
+
     /// Batch-fetch notes (with full content) by exact path, for `agent_id`.
     /// Unknown/deleted paths are omitted; order follows `paths`. The `score`
     /// field is `0.0` (callers assign their own). Mirrors the row ->
@@ -764,6 +778,48 @@ mod tests {
             out.contains(&"reference/TargetB".to_string()),
             "semantic wikilink must survive the behavioral refresh"
         );
+    }
+
+    #[tokio::test]
+    async fn replace_mention_links_full_refresh_and_semantic_wins() {
+        let db = create_test_db();
+        let a = sample_note("a", "x", vec![]);
+        let b = sample_note("b", "x", vec![]);
+        db.index_note(&a, AGENT, "x").await.unwrap();
+        db.index_note(&b, AGENT, "x").await.unwrap();
+        // Pre-existing semantic link a→b.
+        db.add_link_with_relation(AGENT, "x/a", "x/b", "related")
+            .await
+            .unwrap();
+
+        db.replace_mention_links(
+            AGENT,
+            &[
+                ("x/a".to_string(), "x/b".to_string()), // conflicts with semantic → must not clobber
+                ("x/b".to_string(), "x/a".to_string()), // fresh mention
+            ],
+        )
+        .await
+        .unwrap();
+
+        let a_rows = db.get_outgoing_link_rows("x/a", AGENT).await.unwrap();
+        assert_eq!(
+            a_rows[0].relation.as_deref(),
+            Some("related"),
+            "semantic wins"
+        );
+
+        let b_rows = db.get_outgoing_link_rows("x/b", AGENT).await.unwrap();
+        let m = b_rows.iter().find(|r| r.to_note == "x/a").unwrap();
+        assert_eq!(m.relation.as_deref(), Some("mention"));
+        assert!((m.confidence - 0.35).abs() < 1e-6);
+
+        // Second refresh with empty set clears stale mention rows.
+        db.replace_mention_links(AGENT, &[]).await.unwrap();
+        let b_rows = db.get_outgoing_link_rows("x/b", AGENT).await.unwrap();
+        assert!(!b_rows
+            .iter()
+            .any(|r| r.relation.as_deref() == Some("mention")));
     }
 
     #[tokio::test]
