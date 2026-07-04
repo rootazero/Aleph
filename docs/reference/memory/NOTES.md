@@ -184,16 +184,36 @@ Both `[[target]]` and `[[target|alias]]` are matched. `extract_wikilinks` return
 
 ### 5.2 Resolution algorithm
 
-`resolve_wikilink` performs exact-match first, then unique-filename fallback:
+`src/memory/notes/links/resolve.rs` implements the resolution strategy chain as pure functions over a prefetched `LinkResolveContext` — built once per store operation from `notes_index` rows, so `resolve()` itself does zero I/O (mirrors the `graph/` pure-over-snapshot pattern, P4). Four tiers are tried in order; **ambiguity at any tier (≥2 candidates) dangles rather than guessing** — a wrong link in a personal vault is worse than no link, deliberately more conservative than fuzzy-matching schemes:
 
-1. **Contains `/` → exact path match.** If the link text contains `/`, it is treated as a full `category/filename` path. `NoteStore::get_note_index` is queried directly; hit returns the same string, miss returns `None`.
-2. **No `/` → global filename search.** `NoteStore::find_by_filename` scans every category for notes whose filename equals the link text. If exactly one note matches, its full path is returned. If zero or more than one match, resolution returns `None` (ambiguous links are deliberately not guessed).
+| Tier | Match rule | Confidence | `resolved_by` |
+|---|---|---|---|
+| 1 | Target contains `/` → exact `category/filename` path hit | 1.0 | `exact_path` |
+| 2 | No `/` → unique exact filename match | 0.95 | `exact_filename` |
+| 3 | Unique exact alias match (frontmatter `aliases`) | 0.85 | `alias` |
+| 4 | Unique normalized filename-or-alias match (case-fold + full-width→half-width fold, `normalize_link_key`) | 0.7 | `normalized` |
+| — | Miss, or ≥2 candidates at any tier | 0.0 | `None` (dangling) |
 
-There is no fuzzy fallback and no case folding — matches are exact against the stored filename string. Cross-agent resolution is also disabled: every query is scoped by `agent_id`.
+Tier 1 never falls through to the other tiers: a path-form link (`[[category/name]]`) names one specific note, so a miss dangles immediately instead of guessing a filename/alias match elsewhere. Tiers 2–4 test filename and alias candidates in a single merged table per tier (tier 4 merges filename **and** alias into one normalized table — a normalized key hitting both a filename and a different note's alias is itself ambiguous and dangles). `normalize_link_key` is zero-dependency: lowercase + fold `U+FF01..=U+FF5E` / ideographic space `U+3000` to their half-width ASCII equivalents + trim.
 
-### 5.3 Persistence
+`extract_wikilinks_with_alias(text) -> Vec<(String, Option<String>)>` (`src/memory/notes/wikilink.rs`) extracts `(target, alias)` pairs from `[[target|alias]]` syntax alongside the plain-target `extract_wikilinks`. The alias survives end-to-end: `index_note` builds a `to_raw → label` map from it and persists the label into `notes_links.label` (§8), which the panel renders as the edge/excerpt-anchor display text (Obsidian JSON Canvas `edge.label` convention) instead of the raw target string.
 
-Resolved links (really: the raw target strings extracted at index time) are persisted in the `notes_links` table (see §8) as `(agent_id, from_note, to_note)` triples, where `from_note` is the `category/filename` path of the source note and `to_note` is the raw wikilink target as it appeared in the source (before resolution).
+### 5.3 Persistence and lifecycle
+
+Every wikilink target and typed relation is upserted into `notes_links` (§8) as one row keyed by `(agent_id, from_note, to_note)`, carrying the full resolution outcome rather than just the raw pair:
+
+- `to_raw` — the raw target text as written in the source (`[[to_raw]]` or `[[to_raw|label]]`); also the join key for targeted backfill (below).
+- `to_note` — the resolved `category/filename` path on a unique hit; falls back to `to_raw` itself while dangling (so the row stays uniquely keyed per raw target).
+- `resolved_by` — which tier resolved the target (§5.2); the same resolver chain runs for both plain wikilinks and typed relations, so this is populated for either — `NULL` only when the target dangles.
+- `confidence` — the tier's confidence for a plain wikilink, or the LLM/tool-declared confidence for a typed relation (clamped to `[0,1]`; a typed relation's declared confidence overrides the tier's, since it reflects the caller's judgement, not just resolvability).
+- `status` — lifecycle state, `NOT NULL DEFAULT 'active'`, domain `active` | `dangling` | `tombstone`. An unrecognized value from a foreign writer parses back to `active` (`LinkStatus::parse`, P7 fail-toward-visibility) rather than making the row invisible.
+- `label` — the display alias from `[[target|label]]`; `NULL` for plain wikilinks and typed relations.
+
+**Tombstone semantics (delete).** `remove_note_index` deletes the deleted note's own **outgoing** rows outright (`from_note = this path` — the note is gone, its edges have no meaning), but only **marks** its **inbound** rows `status = 'tombstone'` (`to_note = this path`) rather than deleting them: the linking note's body keeps its `[[link]]` text completely untouched, so the row is revivable — recreating a same-named note flips it back to `active` via targeted backfill instead of requiring the linking note to be re-edited.
+
+**Targeted backfill.** `NoteStore::backfill_inbound_links(agent_id, keys)` (`src/memory/store/sqlite/notes/store_impl.rs`) is the create/rename-time counterpart to the corpus-wide `relink_unresolved` sweep (§6.3): it scans only `dangling`/`tombstone` rows whose `to_raw` **literally equals** one of the just-written note's identity keys — title, `category/title`, and frontmatter aliases on create; title and `category/title` on rename (a rename's aliases are unchanged, and its body-side `[[wikilink]]`s are already re-pointed by the rename cascade). `NoteIndexer::finalize_write` (every full write) and `NoteIndexer::rename_note` call it as the last step of their write pipeline, so a note that resolves another note's previously-dangling/tombstoned link becomes visible **within the same write** rather than waiting for the next dream-cycle sweep. Because the match is literal-string on `to_raw` (not a re-run of the tier-4 normalizer), a dangling link differing from the new note's keys only by case/full-width folding is **not** picked up by this targeted pass — it self-heals only on the next `relink_unresolved` sweep or `full_rebuild` (§6.3), both of which re-run the full resolver chain over every dangling row.
+
+**Conflict defenses.** `relink_unresolved` and `backfill_inbound_links` both update candidate rows one at a time outside a single transaction, so a revival that would collide with `UNIQUE(agent_id, from_note, to_note)` — e.g. two dangling variants of the same source note normalizing to the same target — must not abort the whole pass. Each revival runs `UPDATE OR IGNORE notes_links SET to_note = ... WHERE id = ?`; the losing row (update ignored because another row already occupies that key) is then removed by a follow-up `DELETE FROM notes_links WHERE id = ? AND status IN ('dangling','tombstone')`, so no redundant duplicate lingers and every other row in the batch still gets processed.
 
 ## 6. `NoteIndexer` and the Write Pipeline
 
@@ -307,7 +327,7 @@ pub struct NoteIndexEntry {
 
 ## 8. SQLite Schema
 
-DDL is defined in `src/memory/store/sqlite/schema.rs`. All statements use `CREATE ... IF NOT EXISTS` and `init_schema` is idempotent.
+DDL is defined in `src/memory/store/sqlite/schema/ddl.rs`. All statements use `CREATE ... IF NOT EXISTS` and `init_schema` is idempotent.
 
 `notes_index`:
 
@@ -339,13 +359,18 @@ CREATE TABLE IF NOT EXISTS notes_links (
     to_note     TEXT NOT NULL,
     to_raw      TEXT NOT NULL,
     relation    TEXT,
+    confidence  REAL NOT NULL DEFAULT 1.0,
+    resolved_by TEXT,
+    status      TEXT NOT NULL DEFAULT 'active',
+    label       TEXT,
     UNIQUE(agent_id, from_note, to_note)
 );
 CREATE INDEX IF NOT EXISTS idx_notes_links_from ON notes_links(agent_id, from_note);
 CREATE INDEX IF NOT EXISTS idx_notes_links_to ON notes_links(agent_id, to_note);
+CREATE INDEX IF NOT EXISTS idx_notes_links_to_raw ON notes_links(agent_id, to_raw);
 ```
 
-`to_raw` stores the raw wikilink text as written in the source note (before resolution), and `relation` carries an optional typed relation label (from the `Relation` frontmatter field). Both were added when the note graph subsystem landed.
+`to_raw` stores the raw wikilink text as written in the source note (before resolution), and `relation` carries an optional typed relation label (from the `Relation` frontmatter field, or the fixed string `"mention"` for auto-detected soft edges — §14). `confidence` is the resolver tier's confidence or the relation's declared confidence. `resolved_by` / `status` / `label` are the lifecycle columns described in §5.3: which resolver tier fired (or the fixed string `"mention_scan"` for `MentionWeaveStage`-authored soft edges — §14, not itself a resolver tier), the row's `active`/`dangling`/`tombstone` state, and the `[[target|label]]` display alias respectively. `idx_notes_links_to_raw` backs the targeted-backfill lookup (§5.3) that scans dangling/tombstone rows by `to_raw`.
 
 `notes_fts`:
 
@@ -439,10 +464,11 @@ A distinct subsystem lives in `src/skill/` — `SkillSystem`, `SkillId`, `Prompt
 pub enum NoteManageAction {
     Create,    // fails if filename already exists
     Update,    // replace body of existing note (markdown preserved verbatim)
-    Append,    // extend facts + links on existing or new note
+    Append,    // extend facts + links (or relations-only) on existing or new note
     Query,     // hybrid (vector + FTS) search across indexed notes
     List,      // list notes, optionally filtered by category
     Delete,    // remove file + index entry
+    Rename,    // rename filename/title, rewrite every inbound [[wikilink]], backfill
     Insights,  // read materialized graph-health insights (read-only, §14)
     Evolution, // read the memory-evolution gate state from recent dream cycles (read-only)
 }
@@ -454,7 +480,7 @@ Args:
 pub struct NoteManageArgs {
     pub action: NoteManageAction,
     pub category: Option<String>,   // required for create/update/append/delete
-    pub filename: Option<String>,   // required for create/update/append/delete
+    pub filename: Option<String>,   // required for create/update/append/delete; current name for rename
     pub title: Option<String>,      // required for create
     pub content: Option<String>,    // required for create/update body
     pub facts: Option<Vec<String>>, // for append
@@ -462,7 +488,14 @@ pub struct NoteManageArgs {
     pub tags: Option<Vec<String>>,
     pub query: Option<String>,      // required for query
     pub limit: Option<usize>,       // max results for query/list (default: 20)
+    pub new_title: Option<String>,  // required for rename; category is auto-located
+    pub relations: Option<Vec<NoteRelationArg>>, // typed edges on create/update/append
     pub agent_id: Option<String>,   // per-agent vault scoping (default: "default")
+}
+
+pub struct NoteRelationArg {
+    pub to: String,        // target note path or wikilink-style text
+    pub rel_type: String,  // #[serde(rename = "type")] — free-form verb, no fixed taxonomy (R7)
 }
 ```
 
@@ -471,6 +504,10 @@ Mutating actions run `validate_category(category)` directly against `CATEGORY_DI
 `query` is hybrid search: when an embedder is injected (`with_embedder`, wired from the registry's `config.embedder`), the query text is embedded and `hybrid_search_notes` fuses vector + FTS results via RRF — which also gives CJK queries semantic recall that the unicode61 FTS tokenizer cannot. A missing embedder or a failed embed degrades to the FTS path rather than failing (P7). Every query records `recall_signals` on the dedicated channel `"note_manage"` (independent per-day dedup from the auto-recall channel). Output is budgeted: 4,000 chars per note, 24,000 chars total, with honest `…(+N chars truncated)` markers rather than silent cuts.
 
 `create` and `update` store `content` verbatim as the note's `body` (via `set_body`, §4) and route through `NoteIndexer::write_note` — atomic write, orientation notification, supersession section. Both, plus `append`, refresh the note's embedding immediately after a successful write (embed-on-write, best-effort — never fails the write), so the note is discoverable by vector search without waiting for a manual `memory.reembed`. `create` additionally surfaces `related_notes` — semantic neighbors via the embedder's vector search, falling back to per-keyword FTS when no embedder is wired — so the model can weave the new note into the wiki via `links` instead of leaving an orphan island. `delete` routes through `NoteIndexer::delete_note` (§6.1): index rows including embedding, file, and orientation in one owned path.
+
+`rename` takes `filename` (current name) + `new_title` (target name) — the note's category is located automatically via `find_by_filename`, so callers never pass `category` for this action (a duplicate filename across categories renames the first hit; disambiguate by delete/recreate instead). It delegates to `NoteIndexer::rename_note` (§6.1): renames the file, rewrites every inbound `[[old_title]]` wikilink across the corpus, re-indexes, re-embeds under the new path, and runs the targeted `backfill_inbound_links` pass (§5.3) so any dangling/tombstoned link that names the new title resolves within the same call.
+
+`relations` (`Vec<{to, type}>`) declares typed semantic edges and is accepted on `create`, `update`, **and** `append`. Each pair is merged into the note's frontmatter `relations:` list — deduped by `(to, rel_type)` — with confidence fixed at 1.0 (a tool-authored relation is an explicit statement, not a resolver guess); `supersedes` / `superseded_by` / `contradicts` are the structural-strong verbs force-surfaced at retrieval regardless of score. `append`'s previously-strict emptiness guard now allows a **relations-only** append: declaring a relation on an existing note no longer requires also passing `facts` or `links`.
 
 Frontmatter is produced by `KnowledgeNote::to_markdown` (the single real write path). The YAML fields written are those described in §3.
 
@@ -557,6 +594,10 @@ Note scoping itself is orthogonal: notes are keyed by `agent_id` in the filesyst
 | `minhash.rs` | MinHash + LSH content-similarity edges over note bodies (word-level 3-shingles, K=64, zero embeddings, zero new deps) |
 
 The graph is **materialized offline** by `GraphRecomputeStage` (`src/memory/dreaming/stages/graph_recompute.rs`) each dream cycle: it loads the snapshot, runs the four-signal / Louvain / insights algorithms inside `spawn_blocking` plus a MinHash similarity pass, and upserts `notes_graph_cache` + `notes_graph_related` + `notes_graph_insights` — pure deterministic aggregation, zero LLM calls (R7/R10-safe). Consumers: the `note_manage` **Insights** action (§11) reads the materialized insights, and the `note_weave` dream stage uses the `isolated` insight plus `related_peers` four-signal scores for orphan-note backfill. See [FEATURE_LOCATOR.md](../FEATURE_LOCATOR.md) §2.5① for the full anchor map and the NoteWeave three-signal orphan-rescue design.
+
+**MentionWeaveStage** (`src/memory/dreaming/stages/mention_weave.rs`) is a separate, corpus-scanning consumer — not a reader of the materialized cache above. It sits in the Consolidate pipeline between `NoteWeaveStage` (real links win first) and `NoteDecayStage` (so mention edges count toward `link_weight` the same cycle it runs), and scans every note body for **unlinked mentions** of another note's filename/alias via `src/memory/notes/links/mentions.rs::scan_mentions`: deterministic exact matching (ASCII names require word boundaries on both sides; CJK names match as substrings since CJK text has no word boundaries; a name must be ≥4 ASCII chars or ≥2 CJK chars to qualify, and a name owned by more than one note is dropped wholesale — the same never-guess rule as §5.2), zero LLM. Each cycle **fully replaces** the `relation = 'mention'` edge set (`NoteStore::replace_mention_links`, one transaction) — capped at `MAX_MENTIONS_PER_NOTE = 5` per source note and `MAX_MENTIONS_PER_CYCLE = 200` overall (deterministic truncation over the `(from, to)`-sorted scan output) — inserting rows at `confidence = 0.35` with `resolved_by = 'mention_scan'` and `ON CONFLICT(agent_id, from_note, to_note) DO NOTHING`, so an existing real wikilink or typed relation for the same pair always wins over the soft mention edge.
+
+**Canvas / gateway enrichment.** `graph.query` (`src/gateway/handlers/graph.rs::handle_query_impl`) layers three graph-health signals onto the base node/edge feed before returning: top-3-per-node MinHash similarity edges (`related_edges_between`, surfaced as edge kind `related_similarity`, deduped against real links by undirected pair), `bridge_nodes` (the materialized `bridge` insight, filtered to nodes visible in this response), and `surprising_edges` (the materialized `surprising` insight, both endpoints visible). The panel's galaxy renderer (`interfaces/webchat/src/platform/wide/views/canvas/galaxy_build.rs` + `gl/edges.rs`) maps each edge's `relation`/`kind` string to a render code and tint via `edge_kind_code`/`edge_kind_color`; `mention` and `related_similarity` render at a fixed dim brightness (not confidence-scaled, since they are soft/derived edges rather than authored links), and any edge present in `surprising_edges` overrides its base kind with a bloom-emphasized code regardless of its real relation.
 
 ## See Also
 
