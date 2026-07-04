@@ -291,7 +291,9 @@ mod imp {
         COINIT_MULTITHREADED,
     };
     use windows::Win32::UI::Accessibility::{
-        CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTreeWalker,
+        CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern,
+        IUIAutomationTreeWalker, IUIAutomationValuePattern, UIA_LegacyIAccessiblePatternId,
+        UIA_ValuePatternId,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetForegroundWindow, GetWindowThreadProcessId, IsWindowVisible,
@@ -423,6 +425,37 @@ mod imp {
         }
     }
 
+    /// Read an element's textual value: `ValuePattern.CurrentValue`, falling back
+    /// to `LegacyIAccessible.CurrentValue`. Empty strings normalize to `None`.
+    /// Called on-demand for the located/focused element only — never for every
+    /// node of a full tree walk (one COM call per node would slow snapshots).
+    pub(super) fn value_of(el: &IUIAutomationElement) -> Option<String> {
+        // SAFETY: read-only UIA pattern getters; missing pattern surfaces as Err.
+        unsafe {
+            if let Ok(vp) = el.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) {
+                if let Ok(v) = vp.CurrentValue() {
+                    let s = v.to_string();
+                    if !s.is_empty() {
+                        return Some(s);
+                    }
+                }
+            }
+            if let Ok(lp) = el
+                .GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+                    UIA_LegacyIAccessiblePatternId,
+                )
+            {
+                if let Ok(v) = lp.CurrentValue() {
+                    let s = v.to_string();
+                    if !s.is_empty() {
+                        return Some(s);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Depth-first walk rooted at `el`, bounded by `depth_remaining` and the
     /// global `MAX_NODES` budget. `count` is the running node tally shared
     /// across the whole walk.
@@ -457,7 +490,11 @@ mod imp {
         let _com = ComGuard::new();
         let uia = automation()?;
         // SAFETY: documented UIA call; a missing focus surfaces as `Err`.
-        unsafe { uia.GetFocusedElement() }.map_or(Ok(None), |el| Ok(Some(node_of(&el))))
+        unsafe { uia.GetFocusedElement() }.map_or(Ok(None), |el| {
+            let mut node = node_of(&el);
+            node.value = value_of(&el);
+            Ok(Some(node))
+        })
     }
 
     pub(super) fn query_tree(pid: Option<i32>, max_depth: u32) -> Result<Option<AxElement>> {
