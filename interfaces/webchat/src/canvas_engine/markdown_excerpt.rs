@@ -255,4 +255,34 @@ mod tests {
         assert!(matches!(segs[3], WikiSegment::Link { target: "b", label: Some("B") }));
         assert!(matches!(segs[4], WikiSegment::Text(" [[unclosed")));
     }
+
+    #[test]
+    fn split_wikilinks_handles_cjk_target_and_label() {
+        // Multi-byte (CJK) content around and inside the delimiters must not
+        // panic on byte-index slicing and must split cleanly.
+        let segs = split_wikilinks("]] [[中文|别名]]");
+        assert_eq!(segs.len(), 2, "got: {segs:?}");
+        assert!(matches!(segs[0], WikiSegment::Text("]] ")));
+        assert!(matches!(
+            segs[1],
+            WikiSegment::Link { target: "中文", label: Some("别名") }
+        ));
+    }
+
+    #[test]
+    fn split_wikilinks_treats_empty_brackets_as_literal() {
+        // Empty "[[]]" is not a link: the scanner emits "[[" as text, rescans
+        // the remainder, and the trailing "]]" falls through as text.
+        let segs = split_wikilinks("[[]]");
+        assert_eq!(segs, vec![WikiSegment::Text("[["), WikiSegment::Text("]]")]);
+        // The segments concatenate back to the literal input.
+        let rejoined: String = segs
+            .iter()
+            .map(|s| match s {
+                WikiSegment::Text(t) => *t,
+                WikiSegment::Link { .. } => unreachable!("no links expected"),
+            })
+            .collect();
+        assert_eq!(rejoined, "[[]]");
+    }
 }
