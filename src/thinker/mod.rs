@@ -14,6 +14,7 @@ pub mod inbound_context;
 pub mod interaction;
 pub mod layers;
 pub mod memory_context_provider;
+pub mod nudges;
 pub mod project_instructions;
 pub mod prompt_budget;
 pub mod prompt_builder;

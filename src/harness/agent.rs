@@ -50,15 +50,6 @@ mod think;
 /// not itself wait another full `turn_timeout`. Fail-soft on expiry.
 const GRACE_TIMEOUT_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Soft-landing reminder injected one turn before the consecutive-failure cap
-/// fires. Gives a weak model a final chance to change approach or wrap up
-/// before the hard stop. The model writes the user-facing text (R7).
-const SOFT_FAILURE_WARNING: &str = "<system-reminder>\nRepeated tool failures \
-detected. You are one step from the safety cap stopping this run. Either change \
-your approach now (different tool, arguments, or strategy), or stop calling \
-tools and summarize for the user what you attempted and what is blocking you.\n\
-</system-reminder>";
-
 /// A "failure turn" for the consecutive-failure watchdog: the turn made no net
 /// progress because failures outnumber successes. Pure structural count — no
 /// judgment about whether a *successful* call was actually useful (R10-safe).
@@ -684,7 +675,8 @@ impl Harness for AgentHarness {
                                     let warn = SessionEvent::UserMessage {
                                         turn_id: uuid::Uuid::new_v4(),
                                         content: MessageContent {
-                                            text: SOFT_FAILURE_WARNING.to_string(),
+                                            text: crate::thinker::nudges::SOFT_FAILURE_WARNING
+                                            .to_string(),
                                             blocks: Vec::new(),
                                             thinking: None,
                                             thinking_signature: None,
