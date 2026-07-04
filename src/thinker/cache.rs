@@ -105,9 +105,11 @@ impl CacheContext {
     /// Create context from system prompt and messages
     #[must_use]
     pub fn new(system_prompt: &str, _message_count: usize, provider_type: ProviderType) -> Self {
-        // Estimate tokens (rough: 4 chars per token for English text).
+        // Estimate tokens using content-aware single-source estimator.
         // Uses char count (not byte length) so CJK text is not over-estimated.
-        let estimated_tokens = (system_prompt.chars().count() / 4) as u64;
+        // Route to the content-aware single source for consistent token estimation across the codebase.
+        let estimated_tokens =
+            crate::context::budget::pressure::estimate_tokens_smart(system_prompt) as u64;
 
         // Calculate content hash
         let mut hasher = Sha256::new();
