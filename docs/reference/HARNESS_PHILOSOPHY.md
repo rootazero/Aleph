@@ -118,24 +118,43 @@ loop {
 
 ## 4. Aleph 的物理实现 (Physical Topology)
 
-### 4.1 重构成果（2026-04-24 → 2026-04-25）
+### 4.1 重构成果（2026-04-24 P0–P7 dissolution → 2026-07-04 R10 diet）
 
-经 P0–P7 共 8 阶段 dissolution，`src/harness/` 从 **16 文件 / 3712 行** 瘦身到 **9 文件 / ~1500 行**。
+经 P0–P7 共 8 阶段 dissolution，`src/harness/` 从 **16 文件 / 3712 行** 瘦身到 9 文件。2026-07-04 的跨层收口任务（Tasks 5–8）在此基础上把 `agent.rs` 按 Think/Act/Guardrails/Prompt 拆成 `agent/` 子目录四文件、把 nudge 文案与压缩派发下沉出 harness、把内联测试搬去 `src/harness/tests/`，当前物理边界固化为 **12 文件**（与 [src/harness/CLAUDE.md](../../src/harness/CLAUDE.md) 的硬边界一致）：
 
 ```
-src/harness/                          # 笨循环编排核心 (Thin Core)
-├── mod.rs               (28)         # 导出 Harness trait + AgentHarness
-├── agent.rs            (~1000)       # Think→Act 驱动（实质循环）
-├── deps.rs              (62)         # HarnessDeps: DI 容器
-├── trait_def.rs         (99)         # Harness trait + HarnessError + TurnState
-├── callback.rs         (144)         # HarnessCallback (编排级事件)
-├── loop_callback.rs     (62)         # LoopCallback (turn 级钩子)
-├── trace.rs            (265)         # 编排 trace 收集
-├── trace_sink.rs        (19)         # Trace 输出抽象
-└── chain_context.rs    (156)         # turn 间状态接力
+src/harness/                            # 笨循环编排核心 (Thin Core)
+├── mod.rs                  (20)        # 导出 Harness trait + AgentHarness
+├── agent.rs               (212)        # AgentHarness struct + run() 顶层循环
+├── deps.rs                (241)        # HarnessDeps: DI 容器
+├── trait_def.rs           (211)        # Harness trait + HarnessError + TurnState
+├── callback.rs             (94)        # HarnessCallback (编排级事件)
+├── chain_context.rs       (100)        # turn 间状态接力
+├── trace.rs               (387)        # 编排 trace 收集
+├── trace_sink.rs           (33)        # Trace 输出抽象
+└── agent/                              # Task 7 拆分（原 agent.rs 单文件 1713 行）
+    ├── think.rs          (1884)        # Think：LLM 调用 + 守卫 + 验证 + 反应式压缩救援
+    ├── act.rs            (1296)        # Act：工具执行 + 资源域并行调度
+    ├── guardrails.rs      (127)        # 输入/输出/工具调用护栏挂载
+    └── prompt.rs          (472)        # 逐轮消息组装
+                          ─────
+                   TOTAL   5077 行
 ```
 
-只有这些。其它一切搬走。
+只有这些（+ `src/harness/tests/*` 的内联测试外置，不计入预算）。其它一切搬走。
+
+**口径**：每个文件的行数取"文件开头到该文件内第一个 `#[cfg(test)]` 之前"（`awk '/#\[cfg\(test\)\]/{print NR; exit}'`，无 `#[cfg(test)]` 的文件取全文行数）——测试代码不计入 12 文件预算，这也是 Task 7 把 `agent.rs` 内联测试搬到 `src/harness/tests/agent.rs` 的动机。
+
+**已不存在 `loop_callback.rs`**——本节此前记为第 9 个文件（`LoopCallback` turn 级钩子），该类型已在更早的重构中删除/合并进 `callback.rs`，此前的表格是未跟进的过时残留，2026-07-04 一并订正。
+
+**honest 缺口（2026-07-04，不掩盖）**：TOTAL 5077 行，超出本文件与 `src/harness/CLAUDE.md` 共同声明的 ~4900 行红线 177 行、超出 Task 8 验收闸的 4950 行容差 127 行。Task 5–7 已把 baseline 5267 行减到 5077（−190，达成 ≥150 行目标但未达容差）；Task 8 尝试把 Step 2（`drain_context_overflow`）继续下沉但被 BLOCKED——其依赖 `account_intermediate_tokens`/`try_reactive_compact_and_retry` 是读写私有 harness 状态（`AtomicU64`/`Mutex`/CAS 一次性槽位）的 `&self` 方法，不是可参数化的 `self.deps.X` 字段，Task 6 那套"改写成 data 参数"的搬迁范式在这里不适用（详见 `.superpowers/sdd/task-8-report.md`）。留给未来的候选下沉项（按价值排序）：
+1. `try_reactive_compact_and_retry` + `reactive_fit_and_retry`（`agent/think.rs` 内，约 294 行的反应式压缩救援簇）——一起下沉可把 TOTAL 拉到 ~4840（低于 4950），但需要为 `race_llm_call`/`emit`/`set_terminate_reason`/rescue-CAS 设计注入 seam，是独立设计任务而非纯搬迁。
+2. `drain_context_overflow` 自身（~65 行）——只能与候选 1 一起搬，单独搬只是 ~46 行的空壳仍越界。
+3. `fire_grace_turn` 及残余 nudge 管线审计（`agent/think.rs` 1666 行往后）——Task 5 已部分下沉，预期剩余收益较小。
+
+**两个新下沉目的地**（Task 5、Task 6 落地，本轮新增）：
+- Nudge / 护栏文案 → [`src/thinker/nudges.rs`](../../src/thinker/nudges.rs)（6 个 `GRACE_NUDGE_*` + `SOFT_FAILURE_WARNING` + `MUTATION_EVIDENCE_NUDGE`）——R9「智慧在 prompt 中」的具体落地：面向模型的文案是 prompt 内容，不是调度逻辑。
+- 压缩指令派发 → [`src/context/compact/directive.rs`](../../src/context/compact/directive.rs)（`DirectiveOutcome` + `apply_budget_directive` + `compact_to_fit_and_note`）——`LoopDirective` 到具体压缩/session-split 动作的分发落在 Context 层，harness 只消费返回的 `DirectiveOutcome`。
 
 ### 4.2 12 模块归位映射
 
@@ -196,7 +215,7 @@ dissolution 过程中识别并删除了 **~5,200 行无消费者的死代码**�
 
 本哲学是 [CLAUDE.md](../../CLAUDE.md) 多条红线的具体落地：
 
-- **R3 (核心轻量化)** — 1500 行的 harness 是这条红线的活样本
+- **R3 (核心轻量化)** — 12 文件 / 5077 行的 harness（§4.1 详述 honest 缺口）是这条红线的活样本，也是"红线不代表零偏差、偏差要留痕"的活样本
 - **R8 (LLM 主权)** — 笨循环不替 LLM 做推理判断
 - **R10 (智慧在 Prompt 中)** — 移除中间件后智能搬迁到 system prompt
 - **R11 (薄 Harness, 笨循环)** — 本文档对应的最高级红线
@@ -215,7 +234,7 @@ dissolution 过程中识别并删除了 **~5,200 行无消费者的死代码**�
 | 4 | 验证循环 | 计算式 + LLM 当裁判，但**裁判逻辑写在 prompt** | `src/verification/` + R10 |
 | 5 | 权限与安全 | 分层（security/sandbox/approval/pii），按部署调档 | R3 + R9 |
 | 6 | 工具范围 | 暴露当前步骤所需最小工具集 | R8（避免污染推理） |
-| 7 | **Harness 厚度** | **极薄** — 1500 行 9 文件 | **本文档的核心** |
+| 7 | **Harness 厚度** | **极薄** — 12 文件 / 5077 行（超 ~4900 红线 177 行，缺口留痕见 §4.1） | **本文档的核心** |
 
 ---
 

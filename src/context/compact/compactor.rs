@@ -929,6 +929,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn trailing_transient_message_survives_compact_to_fit() {
+        // Spec 5-2 reproduction (Task 11): the harness think loop pushes
+        // `deps.recall_context` as a transient trailing user message BEFORE
+        // pressure measurement and compaction run. If the compaction window
+        // could ever reach that tail message, it would be folded into a
+        // summary and cached via `store_cache` — violating the "never
+        // persisted" contract of the recall context.
+        //
+        // Shape: the provider is forced to fail with fallback_to_truncation
+        // enabled, so the produced summary derives DETERMINISTICALLY from the
+        // window content (`deterministic_truncation` keeps each window
+        // message's first line) — if the window included the sentinel, it
+        // would appear verbatim in the summary. `fresh_tail = 0` is the
+        // harshest caller-side configuration (the CompactAndContinue directive
+        // passes 0; `compact_to_fit` passes `budget.fresh_tail_count()`):
+        // protection then rests solely on the compactor's own
+        // `effective_tail = fresh_tail.max(config.fresh_tail)` clamp.
+        let sentinel = "RECALL_TRANSIENT_SENTINEL_e7a1";
+        let provider =
+            Arc::new(MockProvider::new("ignored").with_error(MockError::Provider("fail".into())));
+        let config = CompactorConfig {
+            fallback_to_truncation: true,
+            ..Default::default()
+        };
+        let compactor = ContextCompactor::new(provider, config);
+
+        let mut messages = make_messages(20);
+        messages.push(UnifiedMessage::user(sentinel));
+
+        let result = compactor
+            .compact(&mut messages, 0, Some("test-session"))
+            .await
+            .unwrap();
+        assert_eq!(
+            result.strategy_used,
+            CompactStrategy::DeterministicTruncation
+        );
+
+        // (1) The transient tail message survives verbatim as the LAST message.
+        let last = messages
+            .last()
+            .map(UnifiedMessage::text_content)
+            .unwrap_or_default();
+        assert_eq!(
+            last, sentinel,
+            "transient recall tail must survive compaction verbatim"
+        );
+
+        // (2) No generated summary contains the sentinel — neither the
+        // in-list summary message…
+        let first_text = first_message_text(&messages[0]).unwrap();
+        assert!(first_text.starts_with("[Context Summary]"));
+        assert!(
+            !first_text.contains(sentinel),
+            "summary must not swallow the transient recall tail"
+        );
+        // …nor the fingerprint-cache entry `store_cache` retained (the cache
+        // re-injects its summary into future turns via `reapply_cached`, so
+        // transient content here would outlive the turn that pushed it).
+        let cached = compactor
+            .cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .expect("a successful compaction stores a cache entry");
+        assert!(
+            !cached.summary.contains(sentinel),
+            "store_cache must never retain transient recall content"
+        );
+    }
+
+    #[tokio::test]
     async fn idempotent_on_already_compacted() {
         let provider = Arc::new(MockProvider::new("ignored"));
         let config = CompactorConfig::default();

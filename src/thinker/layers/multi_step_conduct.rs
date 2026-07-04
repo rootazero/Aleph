@@ -89,13 +89,21 @@ impl PromptLayer for MultiStepConductLayer {
              across many tool calls. In your visible reply (not hidden thinking):\n",
         );
         output.push_str(
-            "- Before an action (or a batch of related actions), post a one-line preamble of what \
-             you're about to do — roughly 8-12 words, e.g. \"Next, I'll set up the data \
-             model.\".\n",
+            "- Before an action or a batch of related actions, post a one-line preamble \
+             (roughly 8-12 words) of what you're about to do. Group logically related \
+             actions under ONE preamble — don't narrate every single tool call.\n",
         );
         output.push_str(
-            "- After finishing each plan step, post a brief recap, e.g. \"Done: the data model is \
-             in place.\", so the user can follow along.\n\n",
+            "- Skip the preamble for a single trivial read (opening one file, one quick \
+             lookup); narrate the batch it belongs to instead.\n",
+        );
+        output.push_str(
+            "- Connect each preamble to what came before — e.g. \"Config found — now \
+             wiring the new field.\" — so progress reads as one thread.\n",
+        );
+        output.push_str(
+            "- After finishing each plan step, post a brief recap, e.g. \"Done: the data \
+             model is in place.\", so the user can follow along.\n\n",
         );
         output.push_str(
             "Keep these to a sentence or two — enough to show momentum, not so much that it \
@@ -170,6 +178,8 @@ mod tests {
         // Lock the anti-over-trigger copy so a future edit can't silently drop it.
         assert!(out.contains("Do not plan trivial work"));
         assert!(out.contains("## Narrate Your Progress"));
+        assert!(out.contains("Group logically related actions"));
+        assert!(out.contains("Skip the preamble for a single trivial read"));
     }
 
     #[test]

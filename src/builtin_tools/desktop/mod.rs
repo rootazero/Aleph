@@ -550,7 +550,7 @@ Actions:
 - paste: Paste text via clipboard (Cmd+V). Better for multiline text than type_text.
 - wait_visual: Wait until the screen settles. Polls screenshots and returns when two consecutive captures match, or after `timeout_ms` (default 5000, max 60000). Use after navigation or clicks that trigger animation. Returns `{stable: bool, polls, elapsed_ms}` — `stable=false` means timeout, not failure.
 - set_value: Set a text field's value directly via the accessibility API and VERIFY the write by reading it back — the reliable way to fill forms (multiline, non-ASCII, replacing existing content). Locate the element with role ("AXTextField") and/or element_title, optionally x/y as a nearest-center hint (honors coord_space). Requires text. Result carries verification.state = "verified" | "unverified". Prefer this over click + type_text; type_text is a blind synthetic fallback.
-- ax_action: Trigger a native accessibility action (ax_action_name, e.g. "AXPress", "AXShowMenu") on an element located the same way. More reliable than a synthetic click for buttons/menus when the app exposes AX actions. macOS only today; other platforms report the capability as unavailable.
+- ax_action: Trigger a native accessibility action (ax_action_name, e.g. "AXPress", "AXShowMenu") on an element located the same way. More reliable than a synthetic click for buttons/menus when the app exposes AX actions. Available on macOS (AX) and Windows (UI Automation: AXPress→Invoke/Toggle/Select, AXShowMenu→Expand); Linux reports the capability as unavailable — fall back to click.
 
 Examples:
 {"action":"click","x":500,"y":300}

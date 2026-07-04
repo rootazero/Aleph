@@ -32,7 +32,10 @@ use async_trait::async_trait;
 
 use aleph_desktop::traits::AccessibilityCapability;
 use aleph_desktop::{DesktopError, Result};
-use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryByRoleParams, QueryTreeParams};
+use aleph_protocol::desktop_bridge::methods::ax::{
+    AxActionResult, AxElement, AxLocator, PerformActionParams, QueryByRoleParams, QueryTreeParams,
+    SetValueParams,
+};
 
 // ── UIA ControlType → macOS AX role mapping (pure, host-testable) ────────────
 
@@ -124,9 +127,99 @@ mod role_map {
     }
 }
 
+/// A flattened UIA element summary used purely for locator ranking. Holds only
+/// the Send-safe scalar fields `rank_candidates` needs, so the ranking decision
+/// is a pure function testable without COM.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+#[derive(Clone, Debug)]
+pub struct RankCandidate {
+    /// Mapped `"AX*"` role string (via `control_type_to_ax_role`).
+    pub role: String,
+    /// Element name/title, if any.
+    pub title: Option<String>,
+    /// Bounding-rect center in physical screen pixels.
+    pub center: (f64, f64),
+}
+
+/// Pick the best candidate for an [`AxLocator`], mirroring the macOS Swift
+/// locator: role is a hard filter; title ranks exact (0) < contains (1) <
+/// no-match (2), case-insensitive; `center` euclidean distance breaks ties.
+/// Returns `None` when the role filter leaves no candidate.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+pub fn rank_candidates(cands: &[RankCandidate], loc: &AxLocator) -> Option<usize> {
+    let mut best: Option<(usize, (u8, f64))> = None;
+    for (i, c) in cands.iter().enumerate() {
+        if let Some(role) = &loc.role {
+            if &c.role != role {
+                continue;
+            }
+        }
+        let title_rank = match (&loc.title, &c.title) {
+            (Some(want), Some(have)) => {
+                let (want, have) = (want.to_lowercase(), have.to_lowercase());
+                if have == want {
+                    0
+                } else if have.contains(&want) {
+                    1
+                } else {
+                    2
+                }
+            }
+            (Some(_), None) => 2,
+            (None, _) => 0,
+        };
+        let dist = match loc.center {
+            Some([x, y]) => {
+                let (dx, dy) = (c.center.0 - x, c.center.1 - y);
+                (dx * dx + dy * dy).sqrt()
+            }
+            None => 0.0,
+        };
+        let key = (title_rank, dist);
+        if best.as_ref().is_none_or(|(_, bk)| key < *bk) {
+            best = Some((i, key));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+/// UIA control patterns the AX write path can invoke, in fallback order.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AxPattern {
+    Invoke,
+    Toggle,
+    SelectionItem,
+    ExpandCollapse,
+    Legacy,
+}
+
+/// Map a macOS-style AX action name onto an ordered UIA-pattern fallback chain.
+/// Covers the actions the tool DESCRIPTION advertises; everything else is an
+/// honest `NotImplemented` the model can read and recover from.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+pub fn ax_action_to_patterns(action: &str) -> Result<Vec<AxPattern>> {
+    match action {
+        "AXPress" | "AXConfirm" => Ok(vec![
+            AxPattern::Invoke,
+            AxPattern::Toggle,
+            AxPattern::SelectionItem,
+            AxPattern::Legacy,
+        ]),
+        "AXShowMenu" => Ok(vec![AxPattern::ExpandCollapse]),
+        other => Err(DesktopError::NotImplemented(format!(
+            "ax.perform_action:{other}"
+        ))),
+    }
+}
+
 /// Depth guard for `query_by_role` (which carries no explicit `max_depth`).
 #[cfg_attr(not(windows), allow(dead_code))]
 const ROLE_SCAN_DEPTH: u32 = 12;
+
+/// Depth bound for locator resolution walks (`set_value` / `perform_action`).
+#[cfg_attr(not(windows), allow(dead_code))]
+const RESOLVE_DEPTH: u32 = 12;
 
 /// Hard cap on the number of nodes any single walk will materialize. Bounds the
 /// response size and protects against pathological UI trees (P7 defensive
@@ -172,6 +265,16 @@ impl AccessibilityCapability for WindowsAccessibility {
         let role = params.role;
         run_blocking(move || imp::query_by_role(&role, pid)).await
     }
+
+    async fn set_value(&self, params: SetValueParams) -> Result<AxActionResult> {
+        let (locator, value) = (params.locator, params.value);
+        run_blocking(move || imp::set_value(locator, value)).await
+    }
+
+    async fn perform_action(&self, params: PerformActionParams) -> Result<AxActionResult> {
+        let (locator, action) = (params.locator, params.action);
+        run_blocking(move || imp::perform_action(locator, action)).await
+    }
 }
 
 /// Run COM work on a blocking thread, flattening join failures into a
@@ -194,10 +297,16 @@ where
 
 #[cfg(windows)]
 mod imp {
-    use super::{control_type_to_ax_role, MAX_NODES, ROLE_SCAN_DEPTH};
+    use super::{
+        ax_action_to_patterns, control_type_to_ax_role, rank_candidates, AxPattern, RankCandidate,
+        MAX_NODES, RESOLVE_DEPTH, ROLE_SCAN_DEPTH,
+    };
     use aleph_desktop::{DesktopError, Result};
-    use aleph_protocol::desktop_bridge::methods::ax::AxElement;
+    use aleph_protocol::desktop_bridge::methods::ax::{
+        AxActionResult, AxElement, AxLocator, AxVerification,
+    };
     use aleph_protocol::desktop_bridge::methods::screen::Region;
+    use windows::core::BSTR;
 
     use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
     use windows::Win32::System::Com::{
@@ -205,7 +314,12 @@ mod imp {
         COINIT_MULTITHREADED,
     };
     use windows::Win32::UI::Accessibility::{
-        CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTreeWalker,
+        CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationExpandCollapsePattern,
+        IUIAutomationInvokePattern, IUIAutomationLegacyIAccessiblePattern,
+        IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern, IUIAutomationTreeWalker,
+        IUIAutomationValuePattern, UIA_ExpandCollapsePatternId, UIA_InvokePatternId,
+        UIA_LegacyIAccessiblePatternId, UIA_SelectionItemPatternId, UIA_TogglePatternId,
+        UIA_ValuePatternId,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetForegroundWindow, GetWindowThreadProcessId, IsWindowVisible,
@@ -337,6 +451,252 @@ mod imp {
         }
     }
 
+    /// Read an element's textual value: `ValuePattern.CurrentValue`, falling back
+    /// to `LegacyIAccessible.CurrentValue`. Empty strings normalize to `None`.
+    /// Called on-demand for the located/focused element only — never for every
+    /// node of a full tree walk (one COM call per node would slow snapshots).
+    pub(super) fn value_of(el: &IUIAutomationElement) -> Option<String> {
+        // SAFETY: read-only UIA pattern getters; missing pattern surfaces as Err.
+        unsafe {
+            if let Ok(vp) = el.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+            {
+                if let Ok(v) = vp.CurrentValue() {
+                    let s = v.to_string();
+                    if !s.is_empty() {
+                        return Some(s);
+                    }
+                }
+            }
+            if let Ok(lp) = el.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+                UIA_LegacyIAccessiblePatternId,
+            ) {
+                if let Ok(v) = lp.CurrentValue() {
+                    let s = v.to_string();
+                    if !s.is_empty() {
+                        return Some(s);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Flatten the control-view subtree into `(RankCandidate, element)` pairs,
+    /// bounded by `depth_remaining` and the global `MAX_NODES` budget. Each
+    /// element handle is cloned (refcount bump) so it outlives the walk and can
+    /// be acted on once ranking picks it.
+    fn collect_candidates(
+        walker: &IUIAutomationTreeWalker,
+        el: &IUIAutomationElement,
+        depth_remaining: u32,
+        count: &mut usize,
+        out: &mut Vec<(RankCandidate, IUIAutomationElement)>,
+    ) {
+        let node = node_of(el);
+        let center = node
+            .bounds
+            .as_ref()
+            .map_or((0.0, 0.0), |b| (b.x + b.width / 2.0, b.y + b.height / 2.0));
+        out.push((
+            RankCandidate {
+                role: node.role,
+                title: node.title,
+                center,
+            },
+            el.clone(),
+        ));
+        *count += 1;
+        if depth_remaining == 0 || *count >= MAX_NODES {
+            return;
+        }
+        // SAFETY: walker child/sibling traversal; windows-rs surfaces "no
+        // element" as Err, terminating each loop naturally.
+        let mut next = unsafe { walker.GetFirstChildElement(el) };
+        while let Ok(child) = next {
+            collect_candidates(walker, &child, depth_remaining - 1, count, out);
+            if *count >= MAX_NODES {
+                break;
+            }
+            next = unsafe { walker.GetNextSiblingElement(&child) };
+        }
+    }
+
+    /// Resolve an [`AxLocator`] to the best-matching live element plus a
+    /// value-enriched summary. Returns `None` when nothing matches the role
+    /// filter (caller converts that to an `Err` with a recovery hint).
+    pub(super) fn resolve(
+        uia: &IUIAutomation,
+        loc: &AxLocator,
+    ) -> Result<Option<(IUIAutomationElement, AxElement)>> {
+        let hwnd = resolve_root_hwnd(loc.pid)?;
+        // SAFETY: `hwnd` is a validated visible/foreground window handle.
+        let root = unsafe { uia.ElementFromHandle(hwnd) }
+            .map_err(|e| DesktopError::PlatformError(format!("ElementFromHandle failed: {e}")))?;
+        // SAFETY: standard "what a user sees" control-view walker.
+        let walker = unsafe { uia.ControlViewWalker() }
+            .map_err(|e| DesktopError::PlatformError(format!("ControlViewWalker failed: {e}")))?;
+        let mut cands: Vec<(RankCandidate, IUIAutomationElement)> = Vec::new();
+        let mut count = 0usize;
+        collect_candidates(&walker, &root, RESOLVE_DEPTH, &mut count, &mut cands);
+
+        let summaries: Vec<RankCandidate> = cands.iter().map(|(c, _)| c.clone()).collect();
+        let Some(idx) = rank_candidates(&summaries, loc) else {
+            return Ok(None);
+        };
+        let (cand, el) = &cands[idx];
+        let summary = AxElement {
+            role: cand.role.clone(),
+            title: cand.title.clone(),
+            value: value_of(el),
+            bounds: unsafe { el.CurrentBoundingRectangle() }
+                .ok()
+                .map(rect_to_region),
+            pid: unsafe { el.CurrentProcessId() }.unwrap_or(0),
+            children: Vec::new(),
+        };
+        Ok(Some((el.clone(), summary)))
+    }
+
+    /// Write `value` into the located element's UIA ValuePattern and read it
+    /// back for verification. Only returns `Ok` when a write actually occurred;
+    /// "not located / not settable" is an `Err` (see the Err-vs-Ok contract).
+    pub(super) fn set_value(loc: AxLocator, value: String) -> Result<AxActionResult> {
+        let _com = ComGuard::new();
+        let uia = automation()?;
+        let (el, mut summary) = resolve(&uia, &loc)?.ok_or_else(|| {
+            DesktopError::NotAvailable("no element matched role/title; try `ax_snapshot`".into())
+        })?;
+        // SAFETY: pattern getter; unsupported pattern surfaces as Err.
+        let vp = unsafe { el.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }
+            .map_err(|_| {
+                DesktopError::NotAvailable(
+                    "element does not support a settable value; fall back to click + type_text"
+                        .into(),
+                )
+            })?;
+        // SAFETY: read-only property getter.
+        if unsafe { vp.CurrentIsReadOnly() }
+            .map(|b| b.as_bool())
+            .unwrap_or(false)
+        {
+            return Err(DesktopError::NotAvailable(
+                "element is read-only; fall back to click + type_text".into(),
+            ));
+        }
+        // SAFETY: documented ValuePattern write.
+        unsafe { vp.SetValue(&BSTR::from(value.as_str())) }.map_err(|e| {
+            DesktopError::PlatformError(format!("ValuePattern.SetValue failed: {e}"))
+        })?;
+        // SAFETY: read-back for verification.
+        let readback = unsafe { vp.CurrentValue() }
+            .map(|b| b.to_string())
+            .unwrap_or_default();
+        let verification = if readback == value {
+            AxVerification {
+                state: "verified".into(),
+                reason: None,
+                actual_preview: None,
+            }
+        } else {
+            AxVerification {
+                state: "unverified".into(),
+                reason: Some("value_mismatch".into()),
+                actual_preview: Some(readback.chars().take(200).collect()),
+            }
+        };
+        summary.value = Some(readback.chars().take(200).collect());
+        Ok(AxActionResult {
+            performed: true,
+            path: "accessibility".into(),
+            matched: Some(summary),
+            verification: Some(verification),
+        })
+    }
+
+    /// Try to invoke one UIA pattern on `el`. `Ok(true)` = performed;
+    /// `Ok(false)` = element does not expose this pattern (caller tries the
+    /// next); `Err` = the pattern's action call itself failed.
+    fn try_pattern(el: &IUIAutomationElement, pattern: AxPattern) -> Result<bool> {
+        // SAFETY: each arm gets a pattern (Err if unsupported → Ok(false)) then
+        // issues its documented action call.
+        unsafe {
+            match pattern {
+                AxPattern::Invoke => {
+                    if let Ok(p) =
+                        el.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+                    {
+                        p.Invoke()
+                            .map_err(|e| DesktopError::PlatformError(format!("Invoke: {e}")))?;
+                        return Ok(true);
+                    }
+                }
+                AxPattern::Toggle => {
+                    if let Ok(p) =
+                        el.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
+                    {
+                        p.Toggle()
+                            .map_err(|e| DesktopError::PlatformError(format!("Toggle: {e}")))?;
+                        return Ok(true);
+                    }
+                }
+                AxPattern::SelectionItem => {
+                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(
+                        UIA_SelectionItemPatternId,
+                    ) {
+                        p.Select()
+                            .map_err(|e| DesktopError::PlatformError(format!("Select: {e}")))?;
+                        return Ok(true);
+                    }
+                }
+                AxPattern::ExpandCollapse => {
+                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(
+                        UIA_ExpandCollapsePatternId,
+                    ) {
+                        p.Expand()
+                            .map_err(|e| DesktopError::PlatformError(format!("Expand: {e}")))?;
+                        return Ok(true);
+                    }
+                }
+                AxPattern::Legacy => {
+                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+                        UIA_LegacyIAccessiblePatternId,
+                    ) {
+                        p.DoDefaultAction().map_err(|e| {
+                            DesktopError::PlatformError(format!("DoDefaultAction: {e}"))
+                        })?;
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// Perform a macOS-style AX action on the located element by trying its
+    /// UIA-pattern fallback chain. Unknown action → `NotImplemented` (from
+    /// `ax_action_to_patterns`); no pattern usable → `NotAvailable`.
+    pub(super) fn perform_action(loc: AxLocator, action: String) -> Result<AxActionResult> {
+        let patterns = ax_action_to_patterns(&action)?;
+        let _com = ComGuard::new();
+        let uia = automation()?;
+        let (el, summary) = resolve(&uia, &loc)?.ok_or_else(|| {
+            DesktopError::NotAvailable("no element matched role/title; try `ax_snapshot`".into())
+        })?;
+        for pattern in patterns {
+            if try_pattern(&el, pattern)? {
+                return Ok(AxActionResult {
+                    performed: true,
+                    path: "accessibility".into(),
+                    matched: Some(summary),
+                    verification: None,
+                });
+            }
+        }
+        Err(DesktopError::NotAvailable(
+            "element exposes no actionable pattern; try click at its center".into(),
+        ))
+    }
+
     /// Depth-first walk rooted at `el`, bounded by `depth_remaining` and the
     /// global `MAX_NODES` budget. `count` is the running node tally shared
     /// across the whole walk.
@@ -371,7 +731,11 @@ mod imp {
         let _com = ComGuard::new();
         let uia = automation()?;
         // SAFETY: documented UIA call; a missing focus surfaces as `Err`.
-        unsafe { uia.GetFocusedElement() }.map_or(Ok(None), |el| Ok(Some(node_of(&el))))
+        unsafe { uia.GetFocusedElement() }.map_or(Ok(None), |el| {
+            let mut node = node_of(&el);
+            node.value = value_of(&el);
+            Ok(Some(node))
+        })
     }
 
     pub(super) fn query_tree(pid: Option<i32>, max_depth: u32) -> Result<Option<AxElement>> {
@@ -447,6 +811,18 @@ mod imp {
         unavailable()
     }
     pub(super) fn query_by_role(_role: &str, _pid: Option<i32>) -> Result<Vec<AxElement>> {
+        unavailable()
+    }
+    pub(super) fn set_value(
+        _loc: aleph_protocol::desktop_bridge::methods::ax::AxLocator,
+        _value: String,
+    ) -> Result<aleph_protocol::desktop_bridge::methods::ax::AxActionResult> {
+        unavailable()
+    }
+    pub(super) fn perform_action(
+        _loc: aleph_protocol::desktop_bridge::methods::ax::AxLocator,
+        _action: String,
+    ) -> Result<aleph_protocol::desktop_bridge::methods::ax::AxActionResult> {
         unavailable()
     }
 }
@@ -526,5 +902,120 @@ mod tests {
         assert_eq!(control_type_to_ax_role(50032), "AXWindow");
         assert_eq!(control_type_to_ax_role(50020), "AXStaticText");
         assert_eq!(control_type_to_ax_role(50004), "AXTextField");
+    }
+
+    fn cand(role: &str, title: Option<&str>, cx: f64, cy: f64) -> RankCandidate {
+        RankCandidate {
+            role: role.into(),
+            title: title.map(Into::into),
+            center: (cx, cy),
+        }
+    }
+    fn loc(role: Option<&str>, title: Option<&str>, center: Option<[f64; 2]>) -> AxLocator {
+        AxLocator {
+            pid: None,
+            role: role.map(Into::into),
+            title: title.map(Into::into),
+            center,
+        }
+    }
+
+    #[test]
+    fn role_filter_excludes_non_matching() {
+        let cands = [
+            cand("AXButton", Some("OK"), 0.0, 0.0),
+            cand("AXTextField", Some("OK"), 0.0, 0.0),
+        ];
+        // Only the AXTextField candidate is eligible.
+        assert_eq!(
+            rank_candidates(&cands, &loc(Some("AXTextField"), None, None)),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn no_match_returns_none() {
+        let cands = [cand("AXButton", None, 0.0, 0.0)];
+        assert_eq!(
+            rank_candidates(&cands, &loc(Some("AXTextField"), None, None)),
+            None
+        );
+    }
+
+    #[test]
+    fn exact_title_beats_contains_case_insensitive() {
+        let cands = [
+            cand("AXTextField", Some("Email address"), 0.0, 0.0),
+            cand("AXTextField", Some("email"), 0.0, 0.0),
+        ];
+        // "email" is an exact (case-insensitive) match; "Email address" only contains it.
+        assert_eq!(
+            rank_candidates(&cands, &loc(Some("AXTextField"), Some("Email"), None)),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn center_breaks_ties_when_titles_equal_rank() {
+        let cands = [
+            cand("AXButton", None, 100.0, 100.0),
+            cand("AXButton", None, 10.0, 10.0),
+        ];
+        // No title given → both rank 0; nearest center to (0,0) wins.
+        assert_eq!(
+            rank_candidates(&cands, &loc(Some("AXButton"), None, Some([0.0, 0.0]))),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn no_role_filter_considers_all() {
+        let cands = [
+            cand("AXButton", Some("Save"), 0.0, 0.0),
+            cand("AXMenuItem", Some("Save"), 0.0, 0.0),
+        ];
+        // role=None → first exact-title match wins.
+        assert_eq!(
+            rank_candidates(&cands, &loc(None, Some("Save"), None)),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn axpress_maps_to_invoke_fallback_chain() {
+        assert_eq!(
+            ax_action_to_patterns("AXPress").unwrap(),
+            vec![
+                AxPattern::Invoke,
+                AxPattern::Toggle,
+                AxPattern::SelectionItem,
+                AxPattern::Legacy
+            ]
+        );
+    }
+
+    #[test]
+    fn axconfirm_same_as_axpress() {
+        assert_eq!(
+            ax_action_to_patterns("AXConfirm").unwrap(),
+            ax_action_to_patterns("AXPress").unwrap()
+        );
+    }
+
+    #[test]
+    fn axshowmenu_maps_to_expand_collapse() {
+        assert_eq!(
+            ax_action_to_patterns("AXShowMenu").unwrap(),
+            vec![AxPattern::ExpandCollapse]
+        );
+    }
+
+    #[test]
+    fn unknown_action_is_not_implemented() {
+        let err = ax_action_to_patterns("AXFoo").unwrap_err();
+        assert!(matches!(
+            err,
+            aleph_desktop::DesktopError::NotImplemented(_)
+        ));
     }
 }

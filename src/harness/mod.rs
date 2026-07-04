@@ -21,6 +21,7 @@ pub use trait_def::{Harness, HarnessError, TurnPhase, TurnState};
 #[cfg(test)]
 mod tests {
     mod act;
+    mod agent;
     mod chain;
     mod driver;
     mod guardrails;

@@ -22,6 +22,7 @@ use leptos::ev::keydown;
 use leptos::prelude::*;
 
 use crate::i18n::{t_string, use_i18n};
+use crate::state::layout::WorkspaceState;
 use crate::state::sessions::{ConvId, SessionMap};
 use crate::views::chat::state::ChatState;
 
@@ -30,8 +31,9 @@ use crate::views::chat::state::ChatState;
 pub fn SessionTabs() -> impl IntoView {
     let sessions = expect_context::<SessionMap>();
     let chat = expect_context::<ChatState>();
+    let workspace = use_context::<WorkspaceState>();
 
-    install_tab_hotkeys(sessions, chat);
+    install_tab_hotkeys(sessions, chat, workspace);
 
     view! {
         <Show when=move || sessions.tab_strip_visible()>
@@ -53,6 +55,7 @@ fn Tab(conv: ConvId) -> impl IntoView {
     let i18n = use_i18n();
     let sessions = expect_context::<SessionMap>();
     let chat = expect_context::<ChatState>();
+    let workspace = use_context::<WorkspaceState>();
 
     let is_active = move || sessions.active.with(|a| *a == Some(conv));
     let is_running = move || sessions.is_running(conv);
@@ -70,7 +73,21 @@ fn Tab(conv: ConvId) -> impl IntoView {
                     "text-text-secondary hover:bg-surface-sunken hover:text-text-primary"
                 }
             )
-            on:click=move |_| sessions.activate(chat, conv)
+            on:click=move |_| {
+                // Only a real foreground switch invalidates the global detail
+                // pane — clicking the already-active tab (activate early-
+                // returns) must not drop the user's selection/pin.
+                let switched = sessions.active.get_untracked() != Some(conv);
+                sessions.activate(chat, conv);
+                // The detail pane is global, not per-conversation — drop the
+                // outgoing conversation's selection/pin so it doesn't leak
+                // into the tab we just switched to (final-review F1).
+                if switched {
+                    if let Some(ws) = workspace {
+                        ws.clear_selection();
+                    }
+                }
+            }
         >
             // 进行中红点（隐现）。
             <Show when=is_running>
@@ -87,7 +104,18 @@ fn Tab(conv: ConvId) -> impl IntoView {
                 title=move || t_string!(i18n, session_tabs.close_tab).to_string()
                 on:click=move |ev: web_sys::MouseEvent| {
                     ev.stop_propagation();
+                    // Closing the foreground tab promotes a neighbour: the
+                    // dead conversation's selection/pin would otherwise stay
+                    // on the pane forever (its ChatState is dropped, so no
+                    // run_complete will ever unpin). Closing a *background*
+                    // tab leaves the foreground untouched — don't clear then.
+                    let was_active = sessions.active.get_untracked() == Some(conv);
                     sessions.close(chat, conv);
+                    if was_active {
+                        if let Some(ws) = workspace {
+                            ws.clear_selection();
+                        }
+                    }
                 }
             >
                 "×"
@@ -98,7 +126,7 @@ fn Tab(conv: ConvId) -> impl IntoView {
 
 /// Bind ⌘1..9 / ⌘W (plus Ctrl- variants for non-mac browsers / Windows).
 /// Listener is leaked deliberately — same pattern as `state::hotkey::install`.
-fn install_tab_hotkeys(sessions: SessionMap, chat: ChatState) {
+fn install_tab_hotkeys(sessions: SessionMap, chat: ChatState, workspace: Option<WorkspaceState>) {
     window_event_listener(keydown, move |ev: web_sys::KeyboardEvent| {
         let mod_pressed = ev.meta_key() || ev.ctrl_key();
         if !mod_pressed || ev.alt_key() {
@@ -113,13 +141,34 @@ fn install_tab_hotkeys(sessions: SessionMap, chat: ChatState) {
         if let Some(digit) = key.chars().next().and_then(|c| c.to_digit(10)) {
             if (1..=9).contains(&digit) && key.len() == 1 {
                 ev.prevent_default();
-                sessions.switch_by_index(chat, (digit - 1) as usize);
+                // See Tab's on:click — same global-pane leak (final-review
+                // F1), same was-active guard: ⌘N onto the current tab is a
+                // no-op switch and must not drop the selection/pin.
+                let idx = (digit - 1) as usize;
+                let target = sessions.order.with_untracked(|o| o.get(idx).copied());
+                let switched = target.is_some() && target != sessions.active.get_untracked();
+                sessions.switch_by_index(chat, idx);
+                if switched {
+                    if let Some(ws) = workspace {
+                        ws.clear_selection();
+                    }
+                }
                 return;
             }
         }
         if key.eq_ignore_ascii_case("w") {
             ev.prevent_default();
+            // ⌘W closes the *active* tab by definition — the promoted
+            // neighbour must not inherit the dead conversation's
+            // selection/pin (see the × button above). No-tab boot state
+            // (`active == None`) has nothing to clear.
+            let had_active = sessions.active.get_untracked().is_some();
             sessions.close_active(chat);
+            if had_active {
+                if let Some(ws) = workspace {
+                    ws.clear_selection();
+                }
+            }
         }
     });
 }

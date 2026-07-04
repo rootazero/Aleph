@@ -26,8 +26,8 @@ use alephcore::orchestrator::{
     loader::load_presets, resolver::RoutingOverrides, sandbox_factory::WorkspaceBuilder,
 };
 use alephcore::verification::{
-    stop_hooks::build_from_config as build_stop_hooks, ScratchpadGoalVerifier, StopHookVerifier,
-    ToolLoopVerifier, VerifierChain,
+    stop_hooks::build_from_config as build_stop_hooks, MutationEvidenceVerifier,
+    ScratchpadGoalVerifier, StopHookVerifier, ToolLoopVerifier, VerifierChain,
 };
 use alephcore::StopHookConfig;
 
@@ -154,6 +154,11 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // explicit user stop-hooks and the death-loop watchdog take
         // precedence. Dormant unless the model has set an objective.
         builder = builder.with(std::sync::Arc::new(ScratchpadGoalVerifier::new()));
+        // Verify-on-stop soft gate: nudges (once per session) when the model
+        // stops right after mutating files with no execution evidence. Listed
+        // last — anti-loop and goal-completion watchdogs take precedence, and
+        // this one is purely advisory (nudge, not gate).
+        builder = builder.with(std::sync::Arc::new(MutationEvidenceVerifier::default()));
         Some(std::sync::Arc::new(builder.build()))
     };
 
