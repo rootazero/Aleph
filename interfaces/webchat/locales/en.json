@@ -59,6 +59,7 @@
     "workspace_hint": "Click any tool chip in the chat to inspect its call here. Switch back to single-column with the toggle in the composer.",
     "workspace_files": "Project Files",
     "workspace_files_hint": "Select a file to preview",
+    "workspace_detail_empty": "Click a tool row on the left to inspect its full args and result",
     "token_wall_title": "Authorize this device",
     "token_wall_instruction": "Enter the Gateway token to connect to this Aleph core. Get it from the core's Settings → Security, or run `aleph-server bootstrap-token` on the core machine. Once authorized, this device has the same access as the local app.",
     "token_wall_submit": "Authorize",

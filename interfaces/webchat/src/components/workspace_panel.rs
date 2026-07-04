@@ -1,15 +1,14 @@
 //! Workspace pane — the right-side surface that opens when
 //! [`LayoutMode::Split`] is active.
 //!
-//! Renders an **activity timeline**: every tool call in the current
-//! session, derived reactively from `ChatState.messages` +
-//! `WorkspaceState.tool_payloads`. Rows expand inline to show args/result
-//! (file-touching tools therefore reveal their content/diff in place).
-//! When no tools have run yet, shows a hero placeholder.
+//! Renders a **tool detail viewer**: the single tool call currently
+//! selected in `WorkspaceState.selected_tool`, full (uncapped) args/result.
+//! Selection either live-follows the most recent tool call (`follow_tool`,
+//! see `events.rs`) or is pinned by a user click (`select_tool`, see
+//! `tool_card.rs`'s overflow row). When nothing is selected yet, shows an
+//! empty-state hint.
 
 use crate::api::fs::{DirEntry, FsApi, ReadFileResult};
-use crate::components::markdown::MarkdownRenderer;
-use crate::components::tool_card::{summarize_tools, ToolCard, ToolKind, ToolSurface};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::{FilePreview, LayoutMode, WorkspaceState};
@@ -17,46 +16,10 @@ use crate::views::chat::state::ChatState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::views::chat::messages::run_id_from_message_id;
-
-/// One agent step (Think→Act iteration) for the workspace timeline: the
-/// iteration's narration plus the tool calls it triggered.
-#[derive(Clone, PartialEq)]
-struct StepGroup {
-    run_id: String,
-    iteration: usize,
-    narration: String,
-    tools: Vec<(String, String)>, // (tool_id, tool_name)
-}
-
-/// Build iteration-grouped steps from the chat transcript. Each assistant
-/// bubble carrying an `iteration` tag becomes one step; its content is the
-/// narration and its `tool_calls` are the step's tools.
-fn timeline_groups(chat: &ChatState) -> Vec<StepGroup> {
-    chat.messages
-        .get()
-        .iter()
-        .filter(|m| m.role == "assistant")
-        .filter_map(|m| {
-            let iteration = m.iteration?;
-            Some(StepGroup {
-                run_id: run_id_from_message_id(&m.id),
-                iteration,
-                narration: m.content.clone(),
-                tools: m
-                    .tool_calls
-                    .iter()
-                    .map(|t| (t.tool_id.clone(), t.tool_name.clone()))
-                    .collect(),
-            })
-        })
-        .collect()
-}
-
 /// Workspace pane root. Renders nothing when [`LayoutMode::ChatOnly`].
 ///
 /// In team mode (`chat.team_id` is Some) shows 交付物/任务 tabs instead of the
-/// single-agent ActivityTimeline + FilesDrawer. Single-agent path is unchanged.
+/// single-agent ToolDetailView + FilesDrawer.
 #[component]
 #[must_use]
 pub fn WorkspacePanel() -> impl IntoView {
@@ -84,44 +47,11 @@ pub fn WorkspacePanel() -> impl IntoView {
         >
             <Show
                     when=move || chat.team_id.get().is_some()
-                    fallback=move || {
-                        // Right-pane auto-follow: stick the activity timeline to
-                        // its bottom as new steps stream in, mirroring the chat
-                        // list's stick-to-bottom (see `messages::MessageList`).
-                        // Only follows when the user is already near the bottom
-                        // (≤64px) so scrolling up to read earlier steps isn't
-                        // yanked back during a live run.
-                        let scroll_ref = NodeRef::<leptos::html::Div>::new();
-                        let stuck = RwSignal::new(true);
-                        let on_scroll = move |_ev: web_sys::Event| {
-                            if let Some(el) = scroll_ref.get() {
-                                let el: &web_sys::HtmlElement = &el;
-                                let distance = f64::from(el.scroll_height())
-                                    - f64::from(el.scroll_top())
-                                    - f64::from(el.client_height());
-                                stuck.set(distance <= 64.0);
-                            }
-                        };
-                        Effect::new(move |_| {
-                            // Re-run as steps / tool calls stream into the timeline.
-                            let _ = chat.messages.get();
-                            if let Some(el) = scroll_ref.get() {
-                                if stuck.get_untracked() {
-                                    let el: &web_sys::HtmlElement = &el;
-                                    el.set_scroll_top(el.scroll_height());
-                                }
-                            }
-                        });
-                        view! {
-                            <div
-                                node_ref=scroll_ref
-                                on:scroll=on_scroll
-                                class="flex-1 overflow-y-auto px-4 pb-3 aleph-content-top"
-                            >
-                                <ActivityTimeline />
-                            </div>
-                            <FilesDrawer />
-                        }
+                    fallback=move || view! {
+                        <div class="flex-1 overflow-y-auto px-4 pb-3 aleph-content-top">
+                            <ToolDetailView />
+                        </div>
+                        <FilesDrawer />
                     }
                 >
                     // Team-mode tab header. `aleph-content-top` clears the
@@ -168,137 +98,65 @@ pub fn WorkspacePanel() -> impl IntoView {
     }
 }
 
-/// The reactive activity timeline — one card per agent step (iteration).
+/// 详情查看器 — 右栏主体：当前选中工具的完整 args/result/diff（不封顶）。
+/// 选中来源：直播跟随（events.rs → follow_tool）或用户点选（select_tool）。
 #[component]
-fn ActivityTimeline() -> impl IntoView {
-    let chat = expect_context::<ChatState>();
-    let groups = Memo::new(move |_| timeline_groups(&chat));
-
-    move || {
-        let data = groups.get();
-        if data.is_empty() {
-            view! { <WorkspaceEmptyHero /> }.into_any()
-        } else {
-            view! {
-                <div class="flex flex-col gap-3">
-                    {data
-                        .into_iter()
-                        .map(|g| view! { <StepCard group=g /> })
-                        .collect_view()}
-                </div>
-            }
-            .into_any()
-        }
-    }
-}
-
-/// One agent step: narration + its tool rows. The card highlights when focused
-/// from the chat side; the active turn is marked by a pulse dot.
-#[component]
-fn StepCard(group: StepGroup) -> impl IntoView {
+fn ToolDetailView() -> impl IntoView {
+    use crate::components::tool_card::{
+        render_body, tool_headline, tool_icon, ToolKind, ToolSurface,
+    };
     let workspace = expect_context::<WorkspaceState>();
+    let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
 
-    let run_id = group.run_id.clone();
-    let iteration = group.iteration;
-    let run_for_highlight = run_id.clone();
-    let run_for_active = run_id.clone();
-
-    let focused = Memo::new(move |_| workspace.is_step_focused(&run_for_highlight, iteration));
-    let active = Memo::new(move |_| {
-        workspace.current_iteration.with(|c| {
-            c.as_ref()
-                .is_some_and(|(r, i)| r == &run_for_active && *i == iteration)
-        })
-    });
-
-    let narration = group.narration.clone();
-    let fallback_title = summarize_tools(&group.tools)
-        .into_iter()
-        .map(|(k, n)| {
-            let label = match k {
-                ToolKind::FileEdit => t_string!(i18n, tool_card.cat_edit).to_string(),
-                ToolKind::FileWrite => t_string!(i18n, tool_card.cat_write).to_string(),
-                ToolKind::ApplyPatch => t_string!(i18n, tool_card.cat_patch).to_string(),
-                ToolKind::FileRead => t_string!(i18n, tool_card.cat_read).to_string(),
-                ToolKind::Bash => t_string!(i18n, tool_card.cat_run).to_string(),
-                ToolKind::Search => t_string!(i18n, tool_card.cat_search).to_string(),
-                ToolKind::Default => t_string!(i18n, tool_card.cat_tool).to_string(),
-            };
-            format!("{label}×{n}")
-        })
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let tools = group.tools;
-
-    view! {
-        <div
-            class=move || {
-                let base = "rounded-lg border p-2 flex flex-col gap-2 transition-colors";
-                if focused.get() {
-                    format!("{base} border-primary/60 bg-primary/5")
-                } else {
-                    format!("{base} border-border/50 bg-surface-sunken/40")
-                }
-            }
-        >
-            <Show when=move || active.get()>
-                <span class="inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
-            </Show>
-            {if !narration.is_empty() {
-                view! {
-                    <div class="text-sm text-text-primary leading-relaxed aleph-step-narration">
-                        <MarkdownRenderer content=narration />
-                    </div>
-                }.into_any()
-            } else if !fallback_title.is_empty() {
-                view! {
-                    <div class="text-xs text-text-tertiary font-mono">{fallback_title}</div>
-                }.into_any()
-            } else {
-                view! { <span /> }.into_any()
-            }}
-            <div class="flex flex-col gap-2">
-                {tools
-                    .into_iter()
-                    .map(|(tool_id, tool_name)| {
-                        view! {
-                            <ToolCard
-                                run_id=run_id.clone()
-                                tool_id=tool_id
-                                tool_name=tool_name
-                                surface=ToolSurface::Detail
-                                iteration=Some(iteration)
-                            />
-                        }
-                    })
-                    .collect_view()}
+    move || match workspace.selected_tool.get() {
+        None => view! {
+            <div class="h-full flex flex-col items-center justify-center
+                        text-center text-text-tertiary gap-3 py-12 px-6">
+                <p class="text-sm font-medium text-text-secondary">{t!(i18n, common.workspace_pane)}</p>
+                <p class="text-xs max-w-[28ch] leading-relaxed">
+                    {t!(i18n, common.workspace_detail_empty)}
+                </p>
             </div>
-        </div>
-    }
-}
-
-/// Idle placeholder — shown until the first tool call of the session.
-#[component]
-fn WorkspaceEmptyHero() -> impl IntoView {
-    let i18n = use_i18n();
-    view! {
-        <div class="h-full flex flex-col items-center justify-center
-                    text-center text-text-tertiary gap-3 py-12 px-6">
-            <svg xmlns="http://www.w3.org/2000/svg" class="w-10 h-10 opacity-50"
-                 viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2"/>
-                <line x1="9" y1="3" x2="9" y2="21"/>
-                <path d="M14 8h4"/>
-                <path d="M14 12h4"/>
-                <path d="M14 16h4"/>
-            </svg>
-            <p class="text-sm font-medium text-text-secondary">{t!(i18n, common.workspace_pane)}</p>
-            <p class="text-xs max-w-[24ch] leading-relaxed">
-                {t!(i18n, common.workspace_hint)}
-            </p>
-        </div>
+        }.into_any(),
+        Some((run_id, tool_id)) => {
+            // 名字/状态从 transcript 反查；payload 从捕获表取。
+            let entry = chat.messages.with(|msgs| {
+                msgs.iter()
+                    .flat_map(|m| m.tool_calls.iter())
+                    .find(|t| t.tool_id == tool_id)
+                    .cloned()
+            });
+            let tool_name = entry.as_ref().map(|t| t.tool_name.clone()).unwrap_or_default();
+            let status = entry.as_ref().map(|t| t.status.clone()).unwrap_or_default();
+            let duration = entry.as_ref().and_then(|t| t.duration_ms);
+            let kind = ToolKind::from_name(&tool_name);
+            let payload = workspace.get_tool_payload(&run_id, &tool_id);
+            let headline = tool_headline(kind, &payload).unwrap_or_else(|| tool_name.clone());
+            let icon = tool_icon(&tool_name, kind);
+            let status_view = match status.as_str() {
+                "running" => view! { <span class="inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span> }.into_any(),
+                "failed" => view! { <span class="text-danger text-xs">"✗"</span> }.into_any(),
+                _ => view! { <span class="text-success text-xs">"✓"</span> }.into_any(),
+            };
+            view! {
+                <div class="flex flex-col gap-2">
+                    <div class="flex items-center gap-2 pb-2 border-b border-border/60">
+                        <span class="text-base shrink-0">{icon}</span>
+                        <span class="flex-1 min-w-0 truncate text-sm text-text-primary font-medium">
+                            {headline}
+                        </span>
+                        {status_view}
+                        {duration.map(|d| view! {
+                            <span class="text-[10px] font-mono text-text-tertiary">
+                                {crate::state::run_clock::fmt_elapsed(d as i64)}
+                            </span>
+                        })}
+                    </div>
+                    {render_body(kind, &payload, ToolSurface::Detail, String::new(), || {})}
+                </div>
+            }.into_any()
+        }
     }
 }
 
@@ -576,93 +434,5 @@ fn TeamTasksView() -> impl IntoView {
                 }).collect::<Vec<_>>().into_any()
             }
         }}
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::views::chat::state::{ChatMessage, ToolCallEntry};
-
-    fn step_msg(
-        id: &str,
-        iteration: Option<usize>,
-        content: &str,
-        tools: Vec<ToolCallEntry>,
-    ) -> ChatMessage {
-        ChatMessage {
-            id: id.to_string(),
-            role: "assistant".into(),
-            content: content.to_string(),
-            tool_calls: tools,
-            is_streaming: false,
-            is_intermediate: false,
-            error: None,
-            model_info: None,
-            iteration,
-            timestamp: None,
-            is_final: false,
-            text_finalized: false,
-            agent_id: None,
-            plan_archive: None,
-        }
-    }
-
-    #[test]
-    fn timeline_groups_one_per_tagged_bubble() {
-        let owner = Owner::new();
-        owner.set();
-        let chat = ChatState::new();
-        chat.messages.set(vec![
-            step_msg(
-                "intermediate-r1-1",
-                Some(1),
-                "search images",
-                vec![ToolCallEntry {
-                    tool_id: "t1".into(),
-                    tool_name: "search".into(),
-                    status: "completed".into(),
-                    duration_ms: Some(5),
-                    started_at_ms: None,
-                }],
-            ),
-            step_msg(
-                "assistant-r1",
-                Some(2),
-                "write html",
-                vec![ToolCallEntry {
-                    tool_id: "t2".into(),
-                    tool_name: "write".into(),
-                    status: "running".into(),
-                    duration_ms: None,
-                    started_at_ms: None,
-                }],
-            ),
-        ]);
-
-        let groups = timeline_groups(&chat);
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].run_id, "r1");
-        assert_eq!(groups[0].iteration, 1);
-        assert_eq!(groups[0].narration, "search images");
-        assert_eq!(
-            groups[0].tools,
-            vec![("t1".to_string(), "search".to_string())]
-        );
-        assert_eq!(groups[1].iteration, 2);
-        assert_eq!(
-            groups[1].tools,
-            vec![("t2".to_string(), "write".to_string())]
-        );
-    }
-
-    #[test]
-    fn timeline_groups_skips_untagged_messages() {
-        let owner = Owner::new();
-        owner.set();
-        let chat = ChatState::new();
-        chat.messages
-            .set(vec![step_msg("assistant-r1", None, "no tag", vec![])]);
-        assert!(timeline_groups(&chat).is_empty());
     }
 }

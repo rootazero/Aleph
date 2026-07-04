@@ -356,7 +356,6 @@ pub fn ToolCard(
     tool_id: String,
     tool_name: String,
     #[prop(optional)] surface: ToolSurface,
-    #[prop(optional_no_strip)] iteration: Option<usize>,
 ) -> impl IntoView {
     let workspace = use_context::<WorkspaceState>();
     let chat = expect_context::<ChatState>();
@@ -416,13 +415,8 @@ pub fn ToolCard(
 
     let detail_label = t_string!(i18n, tool_card.to_detail).to_string();
     let on_overflow = move || {
-        if let (Some(ws), Some(it)) = (workspace, iteration) {
-            ws.reveal_tool(
-                run_for_overflow.clone(),
-                it,
-                &tid_for_overflow,
-                default_open,
-            );
+        if let Some(ws) = workspace {
+            ws.select_tool(run_for_overflow.clone(), tid_for_overflow.clone());
         }
     };
 
@@ -556,7 +550,7 @@ const MONO_BLOCK: &str = "font-mono text-xs whitespace-pre-wrap break-words lead
 /// 按工具大类渲染卡片体。`surface` 决定封顶：Inline 封顶 `MAX_INLINE_LINES`
 /// 并在溢出处显示「→ 详情栏」联动行；Detail 全量。`detail_label` 为已解析的
 /// 本地化「详情栏」文案。
-fn render_body(
+pub(crate) fn render_body(
     kind: ToolKind,
     payload: &Option<ToolPayload>,
     surface: ToolSurface,

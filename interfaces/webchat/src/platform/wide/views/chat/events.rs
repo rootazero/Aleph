@@ -53,6 +53,9 @@ pub(crate) fn apply_trace_event(
                 if let Some(args) = args {
                     workspace.record_tool_args(run_id, tool_id, args);
                 }
+                // Live-follow: keep the detail pane on the most recent tool
+                // call unless the user has pinned a different one.
+                workspace.follow_tool(run_id, tool_id);
             }
         }
         "tool_call_completed" => {
@@ -125,7 +128,6 @@ pub(crate) fn apply_trace_event(
                 return;
             };
             chat.begin_step(run_id, iteration);
-            workspace.set_current_iteration(run_id, iteration);
             // Turn boundary reached with prompts still queued → ask the composer
             // (which owns the send pipeline) to steer them into the live run.
             // Guarded so we only wake the flush Effect when there's something to
@@ -448,7 +450,7 @@ pub fn subscribe_run_events(
             }
             "run_complete" => {
                 chat.complete_run(run_id);
-                workspace.current_iteration.set(None);
+                workspace.end_follow();
                 // Promote the harness-authoritative final answer into the
                 // trailing bubble so it renders as the conversational reply —
                 // even when the terminating turn also issued a tool call (which
@@ -483,7 +485,7 @@ pub fn subscribe_run_events(
                     .and_then(|e| e.as_str())
                     .unwrap_or("Unknown error");
                 chat.fail_run(run_id, error);
-                workspace.current_iteration.set(None);
+                workspace.end_follow();
             }
             _ => {} // Ignore unknown event types
         }
