@@ -25,12 +25,17 @@ pub enum MouseButton {
 /// Arguments for the desktop tool.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct DesktopArgs {
-    /// The desktop operation to perform.
+    /// The desktop operation to perform. See the tool DESCRIPTION for the full
+    /// per-action reference; the complete verb set is:
     ///
-    /// Supported actions: "screenshot", "ocr", "click", "`double_click`", "drag",
-    /// "hover", "`cursor_position`", "`mouse_button`", "`type_text`", "`key_combo`",
-    /// "scroll", "`launch_app`", "`quit_app`", "`window_list`", "`focus_window`",
-    /// "`clipboard_read`", "`clipboard_write`", "`screen_record`".
+    /// Perception: "screenshot", "ocr", "screen_record", "wait_visual",
+    /// "`display_list`". Pointer: "click", "`double_click`", "drag", "hover",
+    /// "`cursor_position`", "`mouse_button`", "scroll". Keyboard/clipboard:
+    /// "`type_text`", "`key_combo`", "`key_button`", "paste", "`clipboard_read`",
+    /// "`clipboard_write`". Window/app: "`window_list`", "`focus_window`",
+    /// "`move_window`", "`resize_window`", "`launch_app`", "`quit_app`",
+    /// "`restart_app`". Semantic (macOS + Windows UIA): "`set_value`",
+    /// "`ax_action`". Meta: "batch", "script".
     pub action: String,
 
     /// Screen region for screenshot {"x":0,"y":0,"width":1920,"height":1080}. Optional.
