@@ -39,7 +39,7 @@ impl DreamStage for NoteLintStage {
         let mut format_fixed = 0u32;
         let mut broken_links_found = 0u32;
         let mut links_repaired = 0u32;
-        let mut links_purged = 0u32;
+        let links_purged = 0u32;
 
         // Snapshot note list so we can iterate without borrowing ctx
         let note_paths: Vec<String> = ctx.notes.iter().map(|n| n.path.clone()).collect();
