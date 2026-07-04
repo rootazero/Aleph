@@ -426,6 +426,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn backfill_inbound_links_dedupes_unique_collision_without_panic() {
+        // Regression: reviving a dangling/tombstone row's `to_note` can collide
+        // with another row already occupying the same UNIQUE(agent_id,
+        // from_note, to_note) key on the SAME from_note — e.g. the source note
+        // was manually re-linked to the target through a different raw
+        // wikilink text while the original link was still dangling. Mirrors
+        // `relink_unresolved_dedupes_colliding_dangling_variants`'s defense:
+        // `UPDATE OR IGNORE` + cleanup DELETE must not error out mid-pass.
+        let backend = make_backend();
+        const AGENT: &str = "agent1";
+
+        // Source links a not-yet-existing target by raw text "Target Note" ->
+        // dangles (to_note falls back to the raw text).
+        let mut source = make_note("source", "wiki");
+        source.links = vec!["Target Note".to_string()];
+        backend.index_note(&source, AGENT, "wiki").await.unwrap();
+
+        // Manually re-link the same source note to the target's eventual full
+        // path via a different raw form — an independent ACTIVE row.
+        backend
+            .add_link_with_relation(AGENT, "wiki/source", "wiki/Target Note", "related")
+            .await
+            .unwrap();
+
+        // Now the target is created — the dangling row's raw text "Target
+        // Note" resolves to the SAME to_note ("wiki/Target Note") as the
+        // active row above.
+        backend
+            .index_note(&make_note("Target Note", "wiki"), AGENT, "wiki")
+            .await
+            .unwrap();
+
+        let revived = backend
+            .backfill_inbound_links(AGENT, &["Target Note".to_string()])
+            .await
+            .expect("backfill must not error on a UNIQUE collision");
+        assert_eq!(
+            revived, 0,
+            "the pre-existing active row wins; OR IGNORE skips the revival"
+        );
+
+        // Exactly one row remains for the (from, to) pair — no duplicate, no
+        // leftover dangling remnant.
+        let conn = backend.conn().lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notes_links \
+                 WHERE agent_id = ?1 AND from_note = 'wiki/source' AND to_note = 'wiki/Target Note'",
+                rusqlite::params![AGENT],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "no duplicate/dangling remnant after the collision");
+    }
+
+    #[tokio::test]
     async fn get_incoming_links_finds_backlinks() {
         let backend = make_backend();
         let mut note1 = make_note("source", "backlinks");

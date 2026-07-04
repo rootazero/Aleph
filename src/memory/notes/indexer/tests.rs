@@ -430,6 +430,51 @@ async fn rename_note_cascades_wikilinks() {
     assert!(!out.contains(&"Old Name".to_string()));
 }
 
+#[tokio::test]
+async fn write_note_backfills_dangling_links_in_other_notes() {
+    // End-to-end: finalize_write's best-effort backfill trigger revives a
+    // dangling link in another note once the note it points at is written.
+    let dir = TempDir::new().unwrap();
+    let db = create_test_db();
+    let indexer = NoteIndexer::new(dir.path().to_path_buf(), db.clone());
+
+    // Linker links to "target", which doesn't exist yet -> dangles.
+    let linker = KnowledgeNote {
+        title: "Linker".to_string(),
+        category: "other".to_string(),
+        links: vec!["target".to_string()],
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    indexer.write_note(AGENT, "other", &linker).await.unwrap();
+    let rows = db
+        .get_outgoing_link_rows("other/Linker", AGENT)
+        .await
+        .unwrap();
+    let dangling = rows.iter().find(|r| r.to_raw == "target").unwrap();
+    assert_eq!(dangling.status, "dangling");
+
+    // Writing "target" triggers finalize_write's backfill, reviving Linker's
+    // dangling row end-to-end (no manual relink_unresolved call).
+    let target = KnowledgeNote {
+        title: "target".to_string(),
+        category: "reference".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    indexer.write_note(AGENT, "reference", &target).await.unwrap();
+
+    let rows = db
+        .get_outgoing_link_rows("other/Linker", AGENT)
+        .await
+        .unwrap();
+    let revived = rows.iter().find(|r| r.to_raw == "target").unwrap();
+    assert_eq!(revived.status, "active");
+    assert_eq!(revived.to_note, "reference/target");
+}
+
 #[cfg(test)]
 mod reference_hook_tests {
     use super::*;

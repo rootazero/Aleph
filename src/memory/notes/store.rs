@@ -280,6 +280,21 @@ pub trait NoteStore: Send + Sync {
         Ok(0)
     }
 
+    /// Re-resolve dangling/tombstone inbound rows whose `to_raw` matches any of
+    /// `keys` (the new/renamed note's filename, full path, and aliases).
+    /// Returns the number of rows revived. Targeted via `idx_notes_links_to_raw`
+    /// — NOT a full-table relink sweep (unlike [`relink_unresolved`](Self::relink_unresolved)).
+    /// Default impl returns `Ok(0)` so non-SQLite stores and test mocks compile
+    /// unchanged; the real body lives on `SqliteMemoryBackend`.
+    async fn backfill_inbound_links(
+        &self,
+        agent_id: &str,
+        keys: &[String],
+    ) -> Result<usize, AlephError> {
+        let _ = (agent_id, keys);
+        Ok(0)
+    }
+
     // -----------------------------------------------------------------
     // Knowledge-graph materialization (Phase 4). Default impls keep any
     // non-SQLite store compiling; the real bodies live on
@@ -827,5 +842,85 @@ mod tests {
         let (_, edges) = db.get_graph_data(AGENT, 50).await.unwrap();
         assert!(edges.iter().all(|e| e.to == "reference/rust"));
         assert_eq!(edges[0].label.as_deref(), Some("The Rust Note"));
+    }
+
+    /// Build a note with a verbatim body and no wikilinks (target of a link,
+    /// not a source). Mirrors the literal-struct style of
+    /// `seed_rust_and_ghost_links` above.
+    fn note_with_body(title: &str, category: &str, body: &str) -> KnowledgeNote {
+        KnowledgeNote {
+            title: title.into(),
+            category: category.into(),
+            body: Some(body.into()),
+            content_hash: format!("hash_{title}_{body}"),
+            ..Default::default()
+        }
+    }
+
+    /// Build a note with a verbatim body and explicit outgoing `[[links]]`.
+    fn note_with_body_links(
+        title: &str,
+        category: &str,
+        body: &str,
+        links: &[&str],
+    ) -> KnowledgeNote {
+        KnowledgeNote {
+            title: title.into(),
+            category: category.into(),
+            body: Some(body.into()),
+            links: links.iter().map(|s| s.to_string()).collect(),
+            content_hash: format!("hash_{title}_{body}"),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_tombstones_inbound_and_recreate_revives() {
+        let db = create_test_db();
+        // b links to a.
+        db.index_note(
+            &note_with_body("a", "reference", "target body"),
+            AGENT,
+            "reference",
+        )
+        .await
+        .unwrap();
+        db.index_note(
+            &note_with_body_links("b", "plan", "see [[a]]", &["a"]),
+            AGENT,
+            "plan",
+        )
+        .await
+        .unwrap();
+
+        // Delete a → inbound row survives as tombstone, outgoing rows of a gone.
+        db.remove_note_index("reference/a", AGENT).await.unwrap();
+        let rows = db.get_outgoing_link_rows("plan/b", AGENT).await.unwrap();
+        let t = rows
+            .iter()
+            .find(|r| r.to_raw == "a")
+            .expect("row must survive");
+        assert_eq!(t.status, "tombstone");
+        // Tombstone must NOT appear in graph feeds.
+        let snap = db.load_graph_snapshot(AGENT).await.unwrap();
+        assert!(snap.edges.is_empty());
+
+        // Recreate a (same filename) → backfill revives the edge.
+        db.index_note(
+            &note_with_body("a", "reference", "reborn"),
+            AGENT,
+            "reference",
+        )
+        .await
+        .unwrap();
+        let revived = db
+            .backfill_inbound_links(AGENT, &["a".into(), "reference/a".into()])
+            .await
+            .unwrap();
+        assert_eq!(revived, 1);
+        let rows = db.get_outgoing_link_rows("plan/b", AGENT).await.unwrap();
+        let r = rows.iter().find(|r| r.to_raw == "a").unwrap();
+        assert_eq!(r.status, "active");
+        assert_eq!(r.to_note, "reference/a");
     }
 }

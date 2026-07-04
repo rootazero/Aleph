@@ -342,10 +342,19 @@ impl NoteStore for SqliteMemoryBackend {
         .map_err(|e| AlephError::config(format!("remove_note_index index: {e}")))?;
 
         tx.execute(
-            "DELETE FROM notes_links WHERE (from_note = ?1 OR to_note = ?1) AND agent_id = ?2",
+            "DELETE FROM notes_links WHERE from_note = ?1 AND agent_id = ?2",
             params![path, agent_id],
         )
-        .map_err(|e| AlephError::config(format!("remove_note_index links: {e}")))?;
+        .map_err(|e| AlephError::config(format!("remove_note_index outgoing links: {e}")))?;
+
+        // D1 tombstone semantics: inbound rows are marked, never destroyed —
+        // the linking note's body keeps its [[link]] text and the row revives
+        // via backfill_inbound_links if a same-name note is recreated.
+        tx.execute(
+            "UPDATE notes_links SET status = 'tombstone' WHERE to_note = ?1 AND agent_id = ?2",
+            params![path, agent_id],
+        )
+        .map_err(|e| AlephError::config(format!("remove_note_index tombstone inbound: {e}")))?;
 
         tx.execute(
             "DELETE FROM notes_fts WHERE path = ?1 AND agent_id = ?2",
@@ -1261,6 +1270,81 @@ impl NoteStore for SqliteMemoryBackend {
             }
         }
         Ok(updated)
+    }
+
+    async fn backfill_inbound_links(
+        &self,
+        agent_id: &str,
+        keys: &[String],
+    ) -> Result<usize, AlephError> {
+        use crate::memory::notes::links;
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let conn = lock_conn!(self)?;
+        let placeholders: Vec<String> = (2..=keys.len() + 1).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT id, to_raw FROM notes_links \
+             WHERE agent_id = ?1 AND status IN ('dangling','tombstone') \
+               AND to_raw IN ({})",
+            placeholders.join(", ")
+        );
+        let mut params_v: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(agent_id.to_string())];
+        for k in keys {
+            params_v.push(Box::new(k.clone()));
+        }
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            params_v.iter().map(|p| p.as_ref()).collect();
+        let rows: Vec<(i64, String)> = {
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| AlephError::config(format!("backfill prep: {e}")))?;
+            stmt.query_map(params_ref.as_slice(), |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(|e| AlephError::config(format!("backfill scan: {e}")))?
+            .filter_map(|r| r.ok())
+            .collect()
+        };
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let ctx = super::helpers::build_resolve_context(&conn, agent_id)
+            .map_err(|e| AlephError::config(format!("backfill ctx: {e}")))?;
+        let mut revived = 0usize;
+        for (id, raw) in rows {
+            let r = links::resolve(&raw, &ctx);
+            if let Some(target) = r.target {
+                // UNIQUE(agent_id, from_note, to_note) defense, mirroring
+                // relink_unresolved above: reviving this row's to_note can
+                // collide with another row already occupying that (from, to)
+                // key on the same from_note (e.g. the source note was
+                // manually re-linked to the target through a different raw
+                // wikilink text while this row was still dangling/tombstone).
+                // `UPDATE OR IGNORE` skips the losing row instead of erroring
+                // out mid-pass; the follow-up DELETE clears the now-redundant
+                // loser so it doesn't linger as a permanent duplicate.
+                let changed = conn
+                    .execute(
+                        "UPDATE OR IGNORE notes_links SET to_note = ?1, confidence = ?2, \
+                                resolved_by = ?3, status = 'active' WHERE id = ?4",
+                        params![target, r.confidence, r.resolved_by.map(|s| s.as_str()), id],
+                    )
+                    .map_err(|e| AlephError::config(format!("backfill update: {e}")))?;
+
+                conn.execute(
+                    "DELETE FROM notes_links WHERE id = ?1 AND status IN ('dangling', 'tombstone')",
+                    params![id],
+                )
+                .map_err(|e| AlephError::config(format!("backfill cleanup: {e}")))?;
+
+                if changed > 0 {
+                    revived += 1;
+                }
+            }
+        }
+        Ok(revived)
     }
 
     // -----------------------------------------------------------------

@@ -197,6 +197,18 @@ impl<S: NoteStore> NoteIndexer<S> {
             AlephError::other(format!("reparse after write {category}/{safe_title}: {e}"))
         })?;
         self.store.index_note(&reparsed, agent_id, category).await?;
+
+        // Backfill: this write may resolve other notes' dangling links to this
+        // note (create / recreate-after-delete) — targeted by to_raw, P7 best-effort.
+        let mut keys: Vec<String> = vec![
+            safe_title.to_string(),
+            format!("{category}/{safe_title}"),
+        ];
+        keys.extend(reparsed.aliases.iter().cloned());
+        if let Err(e) = self.store.backfill_inbound_links(agent_id, &keys).await {
+            tracing::warn!(error = %e, "finalize_write: inbound backfill failed (non-fatal)");
+        }
+
         self.notify_orientation(agent_id, category, safe_title);
         self.refresh_embedding(agent_id, category, safe_title, content)
             .await;
@@ -721,6 +733,15 @@ impl<S: NoteStore> NoteIndexer<S> {
                 self.refresh_embedding(agent_id, &category, &safe_new, &content)
                     .await;
             }
+        }
+
+        // Backfill: the new name may resolve other notes' dangling links that
+        // pointed at it before it existed under this title (its own aliases
+        // are unchanged by a rename, and the link-rewrite cascade above
+        // already re-pointed every other note's body) — P7 best-effort.
+        let keys = vec![safe_new.clone(), format!("{category}/{safe_new}")];
+        if let Err(e) = self.store.backfill_inbound_links(agent_id, &keys).await {
+            tracing::warn!(error = %e, "rename_note: inbound backfill failed (non-fatal)");
         }
 
         self.notify_orientation(agent_id, &category, &safe_old);
