@@ -397,6 +397,8 @@ impl SessionManager {
             ("sessions", "derived_title", "TEXT"),
             ("messages", "input_tokens", "INTEGER DEFAULT 0"),
             ("messages", "output_tokens", "INTEGER DEFAULT 0"),
+            ("messages", "tool_call_id", "TEXT"),
+            ("messages", "tool_name", "TEXT"),
         ];
 
         fn is_safe_identifier(s: &str) -> bool {

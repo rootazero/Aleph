@@ -1144,6 +1144,8 @@ mod emit_tests {
             output_tokens: 0,
             model: None,
             model_provider: None,
+            tool_call_id: None,
+            tool_name: None,
         }
     }
 

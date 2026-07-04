@@ -151,10 +151,12 @@ impl SessionManager {
         if message_limit > 0 {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens FROM (
-                        SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens
-                        FROM messages WHERE session_key = ? ORDER BY timestamp DESC LIMIT ?
-                    ) ORDER BY timestamp ASC"
+                    "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
+                     tool_call_id, tool_name FROM ( \
+                        SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
+                        tool_call_id, tool_name \
+                        FROM messages WHERE session_key = ? ORDER BY timestamp DESC LIMIT ? \
+                    ) ORDER BY timestamp ASC",
                 )
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
             messages = stmt
@@ -171,6 +173,8 @@ impl SessionManager {
                         output_tokens: row.get(6)?,
                         model: None,
                         model_provider: None,
+                        tool_call_id: row.get(7)?,
+                        tool_name: row.get(8)?,
                     })
                 })
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?

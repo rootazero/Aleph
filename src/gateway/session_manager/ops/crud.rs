@@ -118,6 +118,39 @@ impl SessionManager {
         model: Option<&str>,
         model_provider: Option<&str>,
     ) -> Result<i64, SessionManagerError> {
+        self.add_message_full(
+            key,
+            role,
+            content,
+            metadata,
+            input_tokens,
+            output_tokens,
+            model,
+            model_provider,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Full insert — includes the two tool-tracking columns added in Task 1.
+    /// `add_message_with_meta` delegates here with `None, None`; the sqlite
+    /// `append_message` trait impl forwards the real values from the
+    /// `MessageRecord` so tool cards survive a Panel reload.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn add_message_full(
+        &self,
+        key: &SessionKey,
+        role: &str,
+        content: &str,
+        metadata: Option<&str>,
+        input_tokens: i64,
+        output_tokens: i64,
+        model: Option<&str>,
+        model_provider: Option<&str>,
+        tool_call_id: Option<&str>,
+        tool_name: Option<&str>,
+    ) -> Result<i64, SessionManagerError> {
         let key_str = key.to_key_string();
         let now = chrono::Utc::now().timestamp();
 
@@ -130,9 +163,20 @@ impl SessionManager {
 
             // Insert message
             conn.execute(
-                "INSERT INTO messages (session_key, role, content, timestamp, metadata, input_tokens, output_tokens)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
-                params![&key_str, role, content, now, metadata, input_tokens, output_tokens],
+                "INSERT INTO messages (session_key, role, content, timestamp, metadata, \
+                 input_tokens, output_tokens, tool_call_id, tool_name) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    &key_str,
+                    role,
+                    content,
+                    now,
+                    metadata,
+                    input_tokens,
+                    output_tokens,
+                    tool_call_id,
+                    tool_name
+                ],
             )
             .map_err(|e| {
                 SessionManagerError::DatabaseError(format!("Insert message failed: {e}"))
@@ -262,13 +306,16 @@ impl SessionManager {
 
         let query = match limit {
             Some(n) => format!(
-                "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens FROM (
-                    SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens
-                    FROM messages
-                    WHERE session_key = ? ORDER BY timestamp DESC LIMIT {n}
+                "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
+                 tool_call_id, tool_name FROM ( \
+                    SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
+                    tool_call_id, tool_name \
+                    FROM messages \
+                    WHERE session_key = ? ORDER BY timestamp DESC LIMIT {n} \
                 ) ORDER BY timestamp ASC"
             ),
-            None => "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens FROM messages
+            None => "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
+                     tool_call_id, tool_name FROM messages \
                      WHERE session_key = ? ORDER BY timestamp ASC"
                 .to_string(),
         };
@@ -291,6 +338,8 @@ impl SessionManager {
                     output_tokens: row.get(6)?,
                     model: None,
                     model_provider: None,
+                    tool_call_id: row.get(7)?,
+                    tool_name: row.get(8)?,
                 })
             })
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
@@ -332,13 +381,16 @@ impl SessionManager {
         // chronological display.
         let query = match limit {
             Some(n) => format!(
-                "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens FROM (
-                    SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens
-                    FROM messages
-                    WHERE session_key = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT {n}
+                "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
+                 tool_call_id, tool_name FROM ( \
+                    SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
+                    tool_call_id, tool_name \
+                    FROM messages \
+                    WHERE session_key = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT {n} \
                 ) ORDER BY timestamp ASC"
             ),
-            None => "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens FROM messages
+            None => "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
+                     tool_call_id, tool_name FROM messages \
                      WHERE session_key = ? AND timestamp < ? ORDER BY timestamp ASC"
                 .to_string(),
         };
@@ -361,6 +413,8 @@ impl SessionManager {
                     output_tokens: row.get(6)?,
                     model: None,
                     model_provider: None,
+                    tool_call_id: row.get(7)?,
+                    tool_name: row.get(8)?,
                 })
             })
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?

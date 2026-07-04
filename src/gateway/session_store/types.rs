@@ -16,6 +16,10 @@ pub struct MessageRecord {
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -133,6 +137,39 @@ impl SessionMetadata {
 /// is persisted. Written by `SessionManager::set_source_channel`, read by
 /// `SessionMetadata::origin_conversation`.
 pub const ORIGIN_CONVERSATION_KEY: &str = "origin_conversation";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_record_tool_fields_default_none_and_roundtrip() {
+        // Old JSON (no tool fields) deserializes → None
+        let legacy =
+            r#"{"id":"1","role":"assistant","content":"hi","timestamp":1,"metadata":null}"#;
+        let rec: MessageRecord = serde_json::from_str(legacy).unwrap();
+        assert!(rec.tool_call_id.is_none());
+        assert!(rec.tool_name.is_none());
+        // With tool fields round-trip
+        let tool = MessageRecord {
+            id: "2".into(),
+            role: "tool".into(),
+            content: "{}".into(),
+            timestamp: 2,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            model: None,
+            model_provider: None,
+            tool_call_id: Some("call_1".into()),
+            tool_name: Some("bash_exec".into()),
+        };
+        let back: MessageRecord =
+            serde_json::from_str(&serde_json::to_string(&tool).unwrap()).unwrap();
+        assert_eq!(back.tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(back.tool_name.as_deref(), Some("bash_exec"));
+    }
+}
 
 #[cfg(test)]
 mod origin_channel_tests {

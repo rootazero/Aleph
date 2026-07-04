@@ -136,7 +136,6 @@ impl SessionStore for SessionManager {
         self.reset_session(key).await.map_err(map_err)
     }
 
-    #[allow(deprecated)]
     async fn append_message(
         &self,
         key: &SessionKey,
@@ -146,7 +145,7 @@ impl SessionStore for SessionManager {
             .metadata
             .as_ref()
             .and_then(|v| serde_json::to_string(v).ok());
-        self.add_message_with_meta(
+        self.add_message_full(
             key,
             &msg.role,
             &msg.content,
@@ -155,6 +154,8 @@ impl SessionStore for SessionManager {
             msg.output_tokens,
             msg.model.as_deref(),
             msg.model_provider.as_deref(),
+            msg.tool_call_id.as_deref(),
+            msg.tool_name.as_deref(),
         )
         .await
         .map_err(map_err)?;

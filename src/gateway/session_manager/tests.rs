@@ -288,6 +288,46 @@ fn test_session_identity_meta_from_invalid_json() {
 }
 
 #[tokio::test]
+async fn test_tool_fields_persist_through_append_message_and_get_history() {
+    use crate::gateway::session_store::types::MessageRecord;
+    use crate::gateway::session_store::SessionStore;
+
+    let temp = tempdir().unwrap();
+    let config = test_config(temp.path().join("test.db"));
+    let manager = SessionManager::new(config).unwrap();
+
+    let key = SessionKey::main("test");
+    manager.get_or_create(&key).await.unwrap();
+
+    // Write a tool-result message through the SessionStore trait method — the
+    // exact forwarding path (append_message → add_message_full) whose
+    // correctness matters: it must forward tool_call_id/tool_name, not None.
+    let msg = MessageRecord {
+        id: "1".into(),
+        role: "tool".into(),
+        content: r#"{"result":"ok"}"#.into(),
+        timestamp: chrono::Utc::now().timestamp(),
+        metadata: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        model: None,
+        model_provider: None,
+        tool_call_id: Some("call_abc123".into()),
+        tool_name: Some("bash_exec".into()),
+    };
+    <SessionManager as SessionStore>::append_message(&manager, &key, msg)
+        .await
+        .unwrap();
+
+    let history = manager.get_history(&key, None).await.unwrap();
+    assert_eq!(history.len(), 1);
+    let msg: &MessageRecord = &history[0];
+    assert_eq!(msg.role, "tool");
+    assert_eq!(msg.tool_call_id.as_deref(), Some("call_abc123"));
+    assert_eq!(msg.tool_name.as_deref(), Some("bash_exec"));
+}
+
+#[tokio::test]
 async fn test_close_session_with_topic() {
     let temp = tempdir().unwrap();
     let config = test_config(temp.path().join("test.db"));

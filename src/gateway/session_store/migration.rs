@@ -258,6 +258,8 @@ pub async fn export_legacy_messages_from(
                     output_tokens: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                     model: None,
                     model_provider: None,
+                    tool_call_id: None,
+                    tool_name: None,
                 },
             ))
         })
