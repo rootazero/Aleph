@@ -26,6 +26,7 @@ pub struct InProcessActorSessionService {
     senders: RwLock<HashMap<SessionId, mpsc::Sender<ActorCommand>>>,
     broadcasters: RwLock<HashMap<SessionId, broadcast::Sender<SessionEventRecord>>>,
     idle_timeout: Duration,
+    observer: Option<Arc<dyn crate::session::observer::SessionEventObserver>>,
 }
 
 impl InProcessActorSessionService {
@@ -35,11 +36,20 @@ impl InProcessActorSessionService {
             senders: RwLock::new(HashMap::new()),
             broadcasters: RwLock::new(HashMap::new()),
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
+            observer: None,
         }
     }
 
     pub const fn with_idle_timeout(mut self, t: Duration) -> Self {
         self.idle_timeout = t;
+        self
+    }
+
+    pub fn with_observer(
+        mut self,
+        obs: Arc<dyn crate::session::observer::SessionEventObserver>,
+    ) -> Self {
+        self.observer = Some(obs);
         self
     }
 
@@ -77,6 +87,7 @@ impl InProcessActorSessionService {
             self.store.clone(),
             rx,
             bcast_tx.clone(),
+            self.observer.clone(),
             self.idle_timeout,
         );
         tokio::spawn(actor.run());
@@ -372,6 +383,47 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(matches!(record.event, SessionEvent::UserMessage { .. }));
+    }
+
+    #[tokio::test]
+    async fn observer_fires_on_new_append_not_on_replay() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Counter(Arc<AtomicUsize>);
+        impl crate::session::observer::SessionEventObserver for Counter {
+            fn on_appended(&self, _id: &SessionId, _rec: &SessionEventRecord) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let count = Arc::new(AtomicUsize::new(0));
+        let svc = InProcessActorSessionService::new(store)
+            .with_observer(Arc::new(Counter(count.clone())));
+        let id = sample_id("obs");
+        svc.emit_event(
+            &id,
+            SessionEvent::TurnStarted {
+                turn_id: uuid::Uuid::new_v4(),
+                trigger: TurnTrigger::UserMessage,
+                at: now_ms(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            1,
+            "one new append => one callback"
+        );
+        // wake() forces actor restart; replay must NOT re-fire observer;
+        // only the new SessionWoken append fires it once.
+        svc.wake(&id).await.unwrap();
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            2,
+            "replay must NOT re-fire; only the new SessionWoken append does"
+        );
     }
 
     #[tokio::test]

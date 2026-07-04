@@ -11,6 +11,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::{Duration, Instant};
 
 use crate::session::events::{now_ms, EventSeq, SessionEvent, SessionEventRecord};
+use crate::session::observer::SessionEventObserver;
 use crate::session::service::{SessionError, SessionId};
 use crate::session::state::SessionState;
 use crate::session::store::SessionEventStore;
@@ -43,6 +44,7 @@ pub struct SessionActor {
     head_seq: EventSeq,
     inbox: mpsc::Receiver<ActorCommand>,
     broadcaster: broadcast::Sender<SessionEventRecord>,
+    observer: Option<Arc<dyn SessionEventObserver>>,
     idle_timeout: Duration,
 }
 
@@ -52,6 +54,7 @@ impl SessionActor {
         store: Arc<dyn SessionEventStore>,
         inbox: mpsc::Receiver<ActorCommand>,
         broadcaster: broadcast::Sender<SessionEventRecord>,
+        observer: Option<Arc<dyn SessionEventObserver>>,
         idle_timeout: Duration,
     ) -> Self {
         Self {
@@ -61,6 +64,7 @@ impl SessionActor {
             head_seq: 0,
             inbox,
             broadcaster,
+            observer,
             idle_timeout,
         }
     }
@@ -98,6 +102,9 @@ impl SessionActor {
                                 };
                                 self.state.apply(&record.event);
                                 self.head_seq = seq;
+                                if let Some(obs) = &self.observer {
+                                    obs.on_appended(&self.id, &record);
+                                }
                                 let _ = self.broadcaster.send(record);
                                 let _ = reply.send(Ok(seq));
                                 idle_deadline = Instant::now() + self.idle_timeout;
@@ -156,7 +163,7 @@ mod tests {
         let id = sample_id();
         let (tx, rx) = mpsc::channel(8);
         let (bcast, _) = broadcast::channel(16);
-        let actor = SessionActor::new(id.clone(), store, rx, bcast, DEFAULT_IDLE_TIMEOUT);
+        let actor = SessionActor::new(id.clone(), store, rx, bcast, None, DEFAULT_IDLE_TIMEOUT);
         let handle = tokio::spawn(actor.run());
 
         let (rtx, rrx) = oneshot::channel();
@@ -198,7 +205,7 @@ mod tests {
         let id = sample_id();
         let (tx, rx) = mpsc::channel(8);
         let (bcast, _) = broadcast::channel(16);
-        let actor = SessionActor::new(id.clone(), store, rx, bcast, DEFAULT_IDLE_TIMEOUT);
+        let actor = SessionActor::new(id.clone(), store, rx, bcast, None, DEFAULT_IDLE_TIMEOUT);
         tokio::spawn(actor.run());
 
         let (stx, srx) = oneshot::channel();
@@ -253,7 +260,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel(8);
         let (bcast, _) = broadcast::channel(16);
-        let actor = SessionActor::new(id.clone(), store, rx, bcast, DEFAULT_IDLE_TIMEOUT);
+        let actor = SessionActor::new(id.clone(), store, rx, bcast, None, DEFAULT_IDLE_TIMEOUT);
         tokio::spawn(actor.run());
 
         // Emit one more event; it should land at seq=4

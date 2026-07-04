@@ -12,6 +12,7 @@ pub mod driver;
 pub mod epoch_registrar;
 pub mod events;
 pub mod in_process;
+pub mod observer;
 pub mod projection;
 pub mod service;
 pub mod shim;
