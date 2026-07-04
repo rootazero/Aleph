@@ -9,6 +9,7 @@ pub mod governance;
 pub mod graph;
 pub mod indexer;
 pub mod keyword_linker;
+pub mod links;
 mod note;
 pub mod orientation;
 pub mod retrieval;
