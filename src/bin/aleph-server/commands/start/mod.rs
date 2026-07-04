@@ -403,6 +403,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     if let Some(store) = session_event_store_for_resume.clone() {
         alephcore::session::store::set_global_session_event_store(store);
     }
+    // Install the session service process-wide so edge-path callers (simple
+    // execution engine, openai-compat completions) can emit events through
+    // the actor pipeline and thus through the MessageProjector.
+    if let Some(svc) = session_service_for_orchestrator.clone() {
+        alephcore::session::service::set_global_session_service(svc);
+    }
 
     // Security store + vault construction (early — vault needed for API key
     // resolution).

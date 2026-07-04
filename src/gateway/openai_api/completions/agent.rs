@@ -14,7 +14,6 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use tokio::sync::mpsc;
 
-use crate::gateway::agent_instance::MessageRole;
 use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::RunRequest;
@@ -299,16 +298,41 @@ pub async fn handle(
 
     // Seed the ephemeral session with the client-supplied prior history so
     // the agent sees the conversation the client intended.
+    // Task 7a: emit via SessionService instead of direct messages-table write.
     if req.messages.len() > 1 {
         agent.ensure_session(&session_key).await;
         for msg in &req.messages[..req.messages.len() - 1] {
-            let role = match msg.role.as_str() {
-                "user" => MessageRole::User,
-                "assistant" => MessageRole::Assistant,
-                _ => continue,
-            };
             if let Some(content) = &msg.content {
-                agent.add_message(&session_key, role, content).await;
+                let turn_id = uuid::Uuid::new_v4();
+                let at = crate::session::events::now_ms();
+                let mc = crate::session::events::MessageContent {
+                    text: content.clone(),
+                    blocks: Vec::new(),
+                    thinking: None,
+                    thinking_signature: None,
+                };
+                let event = match msg.role.as_str() {
+                    "user" => crate::session::events::SessionEvent::UserMessage {
+                        turn_id,
+                        content: mc,
+                        at,
+                        synthetic: false,
+                    },
+                    "assistant" => crate::session::events::SessionEvent::AssistantMessage {
+                        turn_id,
+                        content: mc,
+                        at,
+                    },
+                    "system" => crate::session::events::SessionEvent::SystemMessage {
+                        turn_id,
+                        content: content.clone(),
+                        at,
+                    },
+                    _ => continue,
+                };
+                if let Some(svc) = crate::session::service::global_session_service() {
+                    let _ = svc.emit_event(&session_key, event).await;
+                }
             }
         }
     }

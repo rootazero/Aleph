@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, RwLock};
 use tracing::{info, warn};
 
 use super::{ActiveRun, ExecutionEngineConfig, ExecutionError, RunRequest, RunState, RunStatus};
-use crate::gateway::agent_instance::{AgentInstance, AgentState, MessageRole};
+use crate::gateway::agent_instance::{AgentInstance, AgentState};
 use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter, RunSummary, StreamEvent};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 
@@ -116,10 +116,27 @@ impl SimpleExecutionEngine {
             .await
             .is_empty();
 
-        // Store user message in session
-        agent
-            .add_message(&request.session_key, MessageRole::User, &request.input)
-            .await;
+        // Emit user message via SessionService (Task 7a — replaces direct
+        // messages-table write so MessageProjector is the single writer).
+        let turn_id = uuid::Uuid::new_v4();
+        if let Some(svc) = crate::session::service::global_session_service() {
+            let _ = svc
+                .emit_event(
+                    &request.session_key,
+                    crate::session::events::SessionEvent::UserMessage {
+                        turn_id,
+                        content: crate::session::events::MessageContent {
+                            text: request.input.clone(),
+                            blocks: Vec::new(),
+                            thinking: None,
+                            thinking_signature: None,
+                        },
+                        at: crate::session::events::now_ms(),
+                        synthetic: false,
+                    },
+                )
+                .await;
+        }
 
         // Announce the session the moment it's created (first message). Mirrors
         // the full ExecutionEngine path so clients that refresh their session
@@ -177,16 +194,25 @@ impl SimpleExecutionEngine {
         let final_result = match result {
             Ok(response) => {
                 let response = &response;
-                agent
-                    .add_message_with_run_id(
-                        &request.session_key,
-                        MessageRole::Assistant,
-                        response,
-                        Some(&run_id),
-                        // Simple engine does not surface per-turn occupancy yet.
-                        None,
-                    )
-                    .await;
+                // Emit assistant message via SessionService (Task 7a — same
+                // turn_id as the UserMessage above, mirrors one logical turn).
+                if let Some(svc) = crate::session::service::global_session_service() {
+                    let _ = svc
+                        .emit_event(
+                            &request.session_key,
+                            crate::session::events::SessionEvent::AssistantMessage {
+                                turn_id,
+                                content: crate::session::events::MessageContent {
+                                    text: (*response).clone(),
+                                    blocks: Vec::new(),
+                                    thinking: None,
+                                    thinking_signature: None,
+                                },
+                                at: crate::session::events::now_ms(),
+                            },
+                        )
+                        .await;
+                }
 
                 let _ = emitter
                     .emit(StreamEvent::RunComplete {
