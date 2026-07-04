@@ -135,11 +135,12 @@ pub struct NoteManageArgs {
     #[serde(default)]
     pub relations: Option<Vec<NoteRelationArg>>,
 
-    /// Agent ID to scope the note operation to. If absent, defaults to the
-    /// system default agent (`"main"`) — the same partition the panel graph,
-    /// memory recall, dreaming, and orientation all read, so a note lands where
-    /// it is visible. When the calling system prompt declares a non-default
-    /// active agent id, pass it here to target that agent's per-agent vault.
+    /// Agent ID to scope the note operation to. If absent, the note is scoped
+    /// to the *active chat session's* agent (read from the turn context) so it
+    /// lands in that agent's own vault, falling back to the system default
+    /// agent (`"main"`) outside a gateway turn (cron / internal). Pass this
+    /// explicitly only to target a *different* agent's per-agent vault than the
+    /// one driving the current turn.
     #[serde(default)]
     pub agent_id: Option<String>,
 }
@@ -361,7 +362,9 @@ impl NoteManageTool {
     }
 
     /// Resolve the effective `agent_id` (storage partition key) for this
-    /// invocation: prefer `args.agent_id`, fall back to the tool's default.
+    /// invocation. Priority: explicit `args.agent_id` → the active chat
+    /// session's agent (turn context) → `DEFAULT_AGENT_ID` for non-gateway
+    /// paths (cron / internal / tests).
     ///
     /// When `project_scoped` is enabled and a project root is active for the
     /// run, the base id is composed with the project namespace so notes are
@@ -387,7 +390,28 @@ impl NoteManageTool {
                 )));
             }
         }
-        let base = args.agent_id.as_deref().unwrap_or_else(|| self.agent_id());
+        // Resolution priority:
+        //   1. explicit `args.agent_id` (validated above) — an intentional LLM
+        //      override to target another agent's vault.
+        //   2. the *active session's* agent — read from the per-tool-call turn
+        //      context, which the dispatch chokepoint (`ScopedToolService::
+        //      execute`) scopes around every tool execution, so a concurrent run
+        //      of another agent cannot race it. Without this a note saved while
+        //      chatting with a non-default agent lands in "main" and is invisible
+        //      in that agent's own graph.
+        //   3. `DEFAULT_AGENT_ID` — terminal fallback for non-gateway paths
+        //      (cron / internal / tests) where no turn is scoped.
+        //
+        // The turn-context id comes from a parsed `SessionKey` whose agent_id is
+        // always normalized (`[a-z0-9_-]`, ≤64 chars, no separators), so it is
+        // path-safe by construction and needs no re-validation — the same trust
+        // `memory_search` places in `current_agent_id()`.
+        let session_agent = crate::tools::turn_context::current_agent_id();
+        let base = args
+            .agent_id
+            .as_deref()
+            .or(session_agent.as_deref())
+            .unwrap_or_else(|| self.agent_id());
         Ok(crate::memory::project_scope::scoped_or_base(
             base,
             self.project_scoped,
@@ -1442,6 +1466,45 @@ mod tests {
         assert_eq!(resolved, crate::routing::DEFAULT_AGENT_ID);
         assert_eq!(resolved, "main");
         assert_ne!(resolved, "default");
+    }
+
+    /// Turn context for a chat session driven by `agent`. `sync_scope` sets the
+    /// task-local the dispatch chokepoint would set around a real tool call.
+    fn turn_ctx(agent: &str) -> crate::tools::turn_context::TurnContext {
+        crate::tools::turn_context::TurnContext {
+            session_key: crate::routing::session_key::SessionKey::main(agent),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+        }
+    }
+
+    #[test]
+    fn resolve_agent_id_follows_active_session_agent() {
+        // A note saved while chatting with a non-default agent must land in that
+        // agent's own vault — not the hardcoded default. Otherwise the note is
+        // invisible in the session agent's graph (the multi-agent split defect).
+        let (_dir, tool) = mk_tool();
+        let resolved = crate::tools::turn_context::TURN_CONTEXT
+            .sync_scope(turn_ctx("research"), || tool.resolve_agent_id(&blank_args()))
+            .unwrap();
+        assert_eq!(resolved, "research");
+    }
+
+    #[test]
+    fn resolve_agent_id_explicit_arg_overrides_session_agent() {
+        // An explicit `agent_id` is an intentional cross-vault target and must
+        // still win over the active session's agent.
+        let (_dir, tool) = mk_tool();
+        let args = NoteManageArgs {
+            agent_id: Some("archivist".into()),
+            ..blank_args()
+        };
+        let resolved = crate::tools::turn_context::TURN_CONTEXT
+            .sync_scope(turn_ctx("research"), || tool.resolve_agent_id(&args))
+            .unwrap();
+        assert_eq!(resolved, "archivist");
     }
 
     #[test]
