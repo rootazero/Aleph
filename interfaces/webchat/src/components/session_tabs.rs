@@ -74,12 +74,18 @@ fn Tab(conv: ConvId) -> impl IntoView {
                 }
             )
             on:click=move |_| {
+                // Only a real foreground switch invalidates the global detail
+                // pane — clicking the already-active tab (activate early-
+                // returns) must not drop the user's selection/pin.
+                let switched = sessions.active.get_untracked() != Some(conv);
                 sessions.activate(chat, conv);
                 // The detail pane is global, not per-conversation — drop the
                 // outgoing conversation's selection/pin so it doesn't leak
                 // into the tab we just switched to (final-review F1).
-                if let Some(ws) = workspace {
-                    ws.clear_selection();
+                if switched {
+                    if let Some(ws) = workspace {
+                        ws.clear_selection();
+                    }
                 }
             }
         >
@@ -98,7 +104,18 @@ fn Tab(conv: ConvId) -> impl IntoView {
                 title=move || t_string!(i18n, session_tabs.close_tab).to_string()
                 on:click=move |ev: web_sys::MouseEvent| {
                     ev.stop_propagation();
+                    // Closing the foreground tab promotes a neighbour: the
+                    // dead conversation's selection/pin would otherwise stay
+                    // on the pane forever (its ChatState is dropped, so no
+                    // run_complete will ever unpin). Closing a *background*
+                    // tab leaves the foreground untouched — don't clear then.
+                    let was_active = sessions.active.get_untracked() == Some(conv);
                     sessions.close(chat, conv);
+                    if was_active {
+                        if let Some(ws) = workspace {
+                            ws.clear_selection();
+                        }
+                    }
                 }
             >
                 "×"
@@ -124,17 +141,34 @@ fn install_tab_hotkeys(sessions: SessionMap, chat: ChatState, workspace: Option<
         if let Some(digit) = key.chars().next().and_then(|c| c.to_digit(10)) {
             if (1..=9).contains(&digit) && key.len() == 1 {
                 ev.prevent_default();
-                sessions.switch_by_index(chat, (digit - 1) as usize);
-                // See Tab's on:click — same global-pane leak (final-review F1).
-                if let Some(ws) = workspace {
-                    ws.clear_selection();
+                // See Tab's on:click — same global-pane leak (final-review
+                // F1), same was-active guard: ⌘N onto the current tab is a
+                // no-op switch and must not drop the selection/pin.
+                let idx = (digit - 1) as usize;
+                let target = sessions.order.with_untracked(|o| o.get(idx).copied());
+                let switched = target.is_some() && target != sessions.active.get_untracked();
+                sessions.switch_by_index(chat, idx);
+                if switched {
+                    if let Some(ws) = workspace {
+                        ws.clear_selection();
+                    }
                 }
                 return;
             }
         }
         if key.eq_ignore_ascii_case("w") {
             ev.prevent_default();
+            // ⌘W closes the *active* tab by definition — the promoted
+            // neighbour must not inherit the dead conversation's
+            // selection/pin (see the × button above). No-tab boot state
+            // (`active == None`) has nothing to clear.
+            let had_active = sessions.active.get_untracked().is_some();
             sessions.close_active(chat);
+            if had_active {
+                if let Some(ws) = workspace {
+                    ws.clear_selection();
+                }
+            }
         }
     });
 }
