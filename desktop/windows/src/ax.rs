@@ -182,6 +182,34 @@ pub fn rank_candidates(cands: &[RankCandidate], loc: &AxLocator) -> Option<usize
     best.map(|(i, _)| i)
 }
 
+/// UIA control patterns the AX write path can invoke, in fallback order.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AxPattern {
+    Invoke,
+    Toggle,
+    SelectionItem,
+    ExpandCollapse,
+    Legacy,
+}
+
+/// Map a macOS-style AX action name onto an ordered UIA-pattern fallback chain.
+/// Covers the actions the tool DESCRIPTION advertises; everything else is an
+/// honest `NotImplemented` the model can read and recover from.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+pub fn ax_action_to_patterns(action: &str) -> Result<Vec<AxPattern>> {
+    match action {
+        "AXPress" | "AXConfirm" => Ok(vec![
+            AxPattern::Invoke,
+            AxPattern::Toggle,
+            AxPattern::SelectionItem,
+            AxPattern::Legacy,
+        ]),
+        "AXShowMenu" => Ok(vec![AxPattern::ExpandCollapse]),
+        other => Err(DesktopError::NotImplemented(format!("ax.perform_action:{other}"))),
+    }
+}
+
 /// Depth guard for `query_by_role` (which carries no explicit `max_depth`).
 #[cfg_attr(not(windows), allow(dead_code))]
 const ROLE_SCAN_DEPTH: u32 = 12;
@@ -625,5 +653,29 @@ mod tests {
         let cands = [cand("AXButton", Some("Save"), 0.0, 0.0), cand("AXMenuItem", Some("Save"), 0.0, 0.0)];
         // role=None → first exact-title match wins.
         assert_eq!(rank_candidates(&cands, &loc(None, Some("Save"), None)), Some(0));
+    }
+
+    #[test]
+    fn axpress_maps_to_invoke_fallback_chain() {
+        assert_eq!(
+            ax_action_to_patterns("AXPress").unwrap(),
+            vec![AxPattern::Invoke, AxPattern::Toggle, AxPattern::SelectionItem, AxPattern::Legacy]
+        );
+    }
+
+    #[test]
+    fn axconfirm_same_as_axpress() {
+        assert_eq!(ax_action_to_patterns("AXConfirm").unwrap(), ax_action_to_patterns("AXPress").unwrap());
+    }
+
+    #[test]
+    fn axshowmenu_maps_to_expand_collapse() {
+        assert_eq!(ax_action_to_patterns("AXShowMenu").unwrap(), vec![AxPattern::ExpandCollapse]);
+    }
+
+    #[test]
+    fn unknown_action_is_not_implemented() {
+        let err = ax_action_to_patterns("AXFoo").unwrap_err();
+        assert!(matches!(err, aleph_desktop::DesktopError::NotImplemented(_)));
     }
 }
