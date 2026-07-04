@@ -87,6 +87,8 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
         .map_err(|e| AlephError::config(format!("migrate notes_links.relation: {e}")))?;
     migrations::migrate_notes_links_confidence(conn)
         .map_err(|e| AlephError::config(format!("migrate notes_links confidence: {e}")))?;
+    migrations::migrate_notes_links_lifecycle(conn)
+        .map_err(|e| AlephError::config(format!("migrate notes_links lifecycle: {e}")))?;
 
     conn.execute_batch(ddl::NOTES_SOURCES_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_sources table: {e}")))?;

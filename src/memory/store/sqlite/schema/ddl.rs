@@ -109,10 +109,14 @@ CREATE TABLE IF NOT EXISTS notes_links (
     to_raw      TEXT NOT NULL,
     relation    TEXT,
     confidence  REAL NOT NULL DEFAULT 1.0,
+    resolved_by TEXT,
+    status      TEXT NOT NULL DEFAULT 'active',
+    label       TEXT,
     UNIQUE(agent_id, from_note, to_note)
 );
 CREATE INDEX IF NOT EXISTS idx_notes_links_from ON notes_links(agent_id, from_note);
 CREATE INDEX IF NOT EXISTS idx_notes_links_to ON notes_links(agent_id, to_note);
+CREATE INDEX IF NOT EXISTS idx_notes_links_to_raw ON notes_links(agent_id, to_raw);
 "#;
 
 pub const NOTES_SOURCES_DDL: &str = r#"
