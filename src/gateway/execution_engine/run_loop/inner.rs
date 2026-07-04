@@ -895,6 +895,41 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 self.config.truncate_tool_descriptions,
             );
 
+            // Legacy backfill: a session with `messages` rows but no
+            // `session_events` (pre-event-log era) would have its history
+            // re-emitted by `seed_session` and re-materialized by the projector
+            // → duplicate `messages` rows. Populate the event log directly here
+            // (raw store append, bypassing the projector) so `seed_session`'s
+            // History guard sees a non-empty log and skips re-seeding. Idempotent
+            // and best-effort. The cheap `load_head_seq` gate keeps ongoing
+            // (events already present) runs off the message store's read path;
+            // only a first turn / legacy continuation reads `get_history`.
+            if let (Some(event_store), Some(svc)) = (
+                crate::session::store::global_session_event_store(),
+                crate::session::service::global_session_service(),
+            ) {
+                let events_empty = event_store
+                    .load_head_seq(&request.session_key)
+                    .await
+                    .map(|h| h == 0)
+                    .unwrap_or(false);
+                if events_empty {
+                    if let Ok(legacy_msgs) = agent
+                        .session_store()
+                        .get_history(&request.session_key, None)
+                        .await
+                    {
+                        let _ = crate::orchestrator::harness_bridge::backfill::backfill_events_from_messages(
+                            &request.session_key,
+                            svc.as_ref(),
+                            event_store.as_ref(),
+                            &legacy_msgs,
+                        )
+                        .await;
+                    }
+                }
+            }
+
             // Build FlowRequest. A resumed run carries no fresh input — the
             // session event log already holds the full trajectory. The
             // `ResumeCoordinator` sets `metadata["resume"] = "true"`; the

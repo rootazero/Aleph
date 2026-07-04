@@ -293,6 +293,15 @@ impl AgentInstance {
         &self.agent_dir
     }
 
+    /// Shared handle to this instance's session store.
+    ///
+    /// Exposes the raw `MessageRecord` store so the gateway run loop can
+    /// backfill `session_events` from legacy `messages` rows before dispatch.
+    #[must_use]
+    pub(crate) fn session_store(&self) -> Arc<dyn SessionStore> {
+        self.session_store.clone()
+    }
+
     /// Get the current agent state
     pub async fn state(&self) -> AgentState {
         self.state.read().await.clone()

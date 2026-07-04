@@ -30,6 +30,7 @@ mod callback;
 mod error;
 mod llm;
 mod session_seed;
+pub(crate) mod backfill;
 
 // New siblings carved out of the former single-file module.
 mod behavior_resolve;
