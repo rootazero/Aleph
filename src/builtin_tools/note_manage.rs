@@ -672,9 +672,10 @@ impl NoteManageTool {
         let new_facts = args.facts.clone().unwrap_or_default();
         let new_links = args.links.clone().unwrap_or_default();
 
-        if new_facts.is_empty() && new_links.is_empty() {
+        let has_relations = args.relations.as_ref().is_some_and(|r| !r.is_empty());
+        if new_facts.is_empty() && new_links.is_empty() && !has_relations {
             return Err(AlephError::tool(
-                "At least one fact or link is required for append",
+                "At least one fact, link, or relation is required for append",
             ));
         }
 
@@ -1617,5 +1618,38 @@ mod tests {
         assert!(body.contains("relations:"), "got:\n{body}");
         assert!(body.contains("to: learning/old-note"));
         assert!(body.contains("type: supersedes"));
+    }
+
+    #[tokio::test]
+    async fn append_with_relations_only_succeeds() {
+        // Regression: the append emptiness guard used to reject a
+        // relations-only append ("At least one fact or link is required")
+        // even though the schema advertises relations on append.
+        let (_d, tool) = mk_tool();
+        tool.call(create_args("rel-note", "- base fact"))
+            .await
+            .unwrap();
+
+        let r = tool
+            .call(NoteManageArgs {
+                action: NoteManageAction::Append,
+                category: Some("learning".into()),
+                filename: Some("rel-note".into()),
+                relations: Some(vec![NoteRelationArg {
+                    to: "learning/other-note".into(),
+                    rel_type: "refers".into(),
+                }]),
+                ..blank_args()
+            })
+            .await
+            .unwrap();
+        assert!(r.success);
+        let body = std::fs::read_to_string(
+            tool_memory_dir(&tool).join("default/learning/rel-note.md"),
+        )
+        .unwrap();
+        assert!(body.contains("relations:"), "got:\n{body}");
+        assert!(body.contains("to: learning/other-note"));
+        assert!(body.contains("type: refers"));
     }
 }
