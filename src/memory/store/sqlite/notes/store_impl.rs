@@ -1934,3 +1934,24 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(out)
     }
 }
+
+#[cfg(test)]
+impl SqliteMemoryBackend {
+    /// Test helper: directly update the status of a link row for testing.
+    /// Used to mark a link as tombstone without going through the full delete flow.
+    pub async fn set_link_status_for_test(
+        &self,
+        from_path: &str,
+        to_raw: &str,
+        new_status: &str,
+        agent_id: &str,
+    ) -> Result<(), AlephError> {
+        let conn = lock_conn!(self)?;
+        conn.execute(
+            "UPDATE notes_links SET status = ?1 WHERE agent_id = ?2 AND from_note = ?3 AND to_raw = ?4",
+            params![new_status, agent_id, from_path, to_raw],
+        )
+        .map_err(|e| AlephError::config(format!("set_link_status_for_test: {e}")))?;
+        Ok(())
+    }
+}

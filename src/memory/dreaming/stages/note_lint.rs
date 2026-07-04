@@ -15,7 +15,7 @@ use crate::error::AlephError;
 use crate::memory::dreaming::DreamContext;
 use crate::memory::notes::orientation::types::{LogAction, LogEntry};
 use crate::memory::notes::store::NoteStore;
-use crate::memory::notes::{remove_wikilink, rewrite_wikilinks};
+use crate::memory::notes::rewrite_wikilinks;
 
 use super::DreamStage;
 
@@ -110,37 +110,25 @@ impl DreamStage for NoteLintStage {
             let outgoing = match ctx
                 .indexer
                 .store()
-                .get_outgoing_links(path, &ctx.agent_id)
+                .get_outgoing_link_rows(path, &ctx.agent_id)
                 .await
             {
                 Ok(links) => links,
                 Err(e) => {
-                    tracing::warn!(path, error = %e, "NoteLint: failed to fetch outgoing links");
+                    tracing::warn!(path, error = %e, "NoteLint: failed to fetch outgoing link rows");
                     continue;
                 }
             };
 
-            for target in outgoing {
-                // Check if target already resolves to an existing index entry.
-                // Outgoing links store the raw wikilink text (filename without category).
-                // Try a direct filename lookup first.
-                let candidates = match ctx
-                    .indexer
-                    .store()
-                    .find_by_filename(&target, &ctx.agent_id)
-                    .await
-                {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::warn!(target, error = %e, "NoteLint: find_by_filename failed");
-                        continue;
-                    }
-                };
-
-                if !candidates.is_empty() {
-                    // Link resolves — no action needed
-                    continue;
+            for row in outgoing {
+                // Skip active links (resolve by construction) and tombstone links
+                // (deleted targets whose body text is preserved — D1). Only process dangling.
+                match crate::memory::notes::links::LinkStatus::parse(&row.status) {
+                    crate::memory::notes::links::LinkStatus::Active
+                    | crate::memory::notes::links::LinkStatus::Tombstone => continue,
+                    crate::memory::notes::links::LinkStatus::Dangling => {}
                 }
+                let target = row.to_raw.clone();
 
                 // Broken link detected
                 broken_links_found += 1;
@@ -154,59 +142,12 @@ impl DreamStage for NoteLintStage {
                     .collect();
 
                 if fuzzy_matches.is_empty() {
-                    // D4: snapshot says target is missing — about to purge the
-                    // wikilink. Re-check find_by_filename with a fresh query
-                    // first to close the TOCTOU window: another writer may
-                    // have created the target since our snapshot was taken,
-                    // in which case purging would erase a now-valid link.
-                    let recheck = ctx
-                        .indexer
-                        .store()
-                        .find_by_filename(&target, &ctx.agent_id)
-                        .await;
-                    if matches!(recheck, Ok(ref c) if !c.is_empty()) {
-                        tracing::info!(
-                            target,
-                            "NoteLint: target appeared during stage execution — skipping purge"
-                        );
-                        continue;
-                    }
-
-                    // tracing log preserves the original target for audit.
-                    let file_path = ctx
-                        .indexer
-                        .memory_dir()
-                        .join(&ctx.agent_id)
-                        .join(category)
-                        .join(format!("{filename}.md"));
-
-                    let content = match tokio::fs::read_to_string(&file_path).await {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    };
-
-                    let cleaned = remove_wikilink(&content, &target);
-                    if cleaned == content {
-                        // Link not present in body (already stripped or stored elsewhere) — skip
-                        continue;
-                    }
-
-                    if let Err(e) = tokio::fs::write(&file_path, &cleaned).await {
-                        tracing::warn!(path = %file_path.display(), error = %e, "NoteLint: failed to write purged content");
-                        continue;
-                    }
-
-                    let _ = ctx
-                        .indexer
-                        .index_file(&ctx.agent_id, category, &file_path)
-                        .await;
-
-                    ctx.note_contents.remove(path);
-                    links_purged += 1;
-                    tracing::info!(
+                    // No fuzzy match found — leave the dangling link as-is.
+                    // The relink_unresolved sweep at the end will retry resolution.
+                    tracing::debug!(
                         path,
-                        purged_target = target,
-                        "NoteLint: purged stale wikilink (D4)"
+                        target,
+                        "NoteLint: dangling link, no fuzzy match found — will retry in next cycle"
                     );
                     continue;
                 }
@@ -809,5 +750,45 @@ category: preference
             !log.contains("lint |"),
             "clean pass must not write a lint entry; got:\n{log}"
         );
+    }
+
+    #[tokio::test]
+    async fn lint_never_purges_tombstoned_links() {
+        let (ctx, store) = build_test_dream_ctx().await;
+        let agent = ctx.agent_id.clone();
+        // On-disk source note whose body carries [[gone]].
+        let dir = ctx.indexer.memory_dir().join(&agent).join("plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("keeper.md"),
+            "---\ncategory: plan\ntags: []\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\nsee [[gone]]\n",
+        )
+        .unwrap();
+        ctx.indexer
+            .index_file(&agent, "plan", &dir.join("keeper.md"))
+            .await
+            .unwrap();
+        // Simulate delete of the (never-indexed-here) target by hand-marking
+        // the row tombstone — the shape delete_note now produces.
+        // (Direct SQL via store helper: use remove-note flow instead when the
+        // target existed; here the row is dangling → flip it to tombstone.)
+        store
+            .set_link_status_for_test("plan/keeper", "gone", "tombstone", &agent)
+            .await
+            .unwrap();
+
+        let mut lint_ctx = ctx;
+        lint_ctx.notes = vec![NoteEntry {
+            path: "plan/keeper".into(),
+            category: "plan".into(),
+            tags: vec![],
+            created_at: 0,
+            updated_at: 0,
+            content_hash: "h".into(),
+        }];
+        NoteLintStage.execute(lint_ctx).await.unwrap();
+
+        let body = std::fs::read_to_string(dir.join("keeper.md")).unwrap();
+        assert!(body.contains("[[gone]]"), "tombstoned link text must survive lint");
     }
 }
