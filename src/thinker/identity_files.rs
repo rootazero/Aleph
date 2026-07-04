@@ -532,8 +532,10 @@ mod tests {
     #[test]
     fn for_context_window_scales_up_for_large_windows() {
         let big = IdentityFilesConfig::for_context_window(1_000_000);
-        assert_eq!(big.per_file_max_chars, 100_000);
-        assert_eq!(big.total_max_chars, 400_000);
+        // 1M × 0.025 × 3.5 chars/token (single-source prose ratio).
+        assert_eq!(big.per_file_max_chars, 87_500);
+        // 1M × 0.10 × 3.5 chars/token (single-source prose ratio).
+        assert_eq!(big.total_max_chars, 350_000);
     }
 
     #[test]
