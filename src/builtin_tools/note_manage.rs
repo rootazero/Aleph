@@ -135,10 +135,11 @@ pub struct NoteManageArgs {
     #[serde(default)]
     pub relations: Option<Vec<NoteRelationArg>>,
 
-    /// Agent ID to scope the note operation to. If absent, defaults to "default".
-    /// When the calling system prompt declares the active agent's id, prefer
-    /// passing it here so the note lands in the caller's per-agent vault rather
-    /// than the global "default" namespace.
+    /// Agent ID to scope the note operation to. If absent, defaults to the
+    /// system default agent (`"main"`) — the same partition the panel graph,
+    /// memory recall, dreaming, and orientation all read, so a note lands where
+    /// it is visible. When the calling system prompt declares a non-default
+    /// active agent id, pass it here to target that agent's per-agent vault.
     #[serde(default)]
     pub agent_id: Option<String>,
 }
@@ -342,9 +343,13 @@ impl NoteManageTool {
         }
     }
 
-    /// Default agent ID (used when `args.agent_id` is absent).
+    /// Default agent ID (used when `args.agent_id` is absent). Must match the
+    /// system-wide `DEFAULT_AGENT_ID` ("main") that every note reader falls back
+    /// to — panel graph, memory recall, dreaming, orientation. A stray literal
+    /// here (the old `"default"`) silently misfiled chat-created notes into a
+    /// namespace nothing reads, making them invisible everywhere.
     const fn agent_id(&self) -> &str {
-        "default"
+        crate::routing::DEFAULT_AGENT_ID
     }
 
     /// Test-only accessor for the underlying memory directory, so tests can
@@ -1426,6 +1431,20 @@ mod tests {
     }
 
     #[test]
+    fn default_agent_id_matches_system_default_not_stray_default() {
+        // Regression: when the LLM omits `agent_id`, the fallback must equal the
+        // system-wide DEFAULT_AGENT_ID ("main") — the partition every note
+        // reader keys off (panel graph, memory recall, dreaming, orientation).
+        // The old stray "default" misfiled chat notes into a namespace nothing
+        // reads, making them invisible everywhere.
+        let (_dir, tool) = mk_tool();
+        let resolved = tool.resolve_agent_id(&blank_args()).unwrap();
+        assert_eq!(resolved, crate::routing::DEFAULT_AGENT_ID);
+        assert_eq!(resolved, "main");
+        assert_ne!(resolved, "default");
+    }
+
+    #[test]
     fn scan_note_for_threats_passes_benign_content() {
         // Ordinary technical notes must not trip the Strict-scope scanner.
         assert!(scan_note_for_threats("- tokio runtime event loop basics").is_ok());
@@ -1594,7 +1613,9 @@ mod tests {
         assert_eq!(r.note_path.as_deref(), Some("learning/new-name"));
         // Inbound body text rewritten by the cascade.
         let linker_body = std::fs::read_to_string(
-            tool_memory_dir(&tool).join("default/learning/linker.md"),
+            tool_memory_dir(&tool)
+                .join(crate::routing::DEFAULT_AGENT_ID)
+                .join("learning/linker.md"),
         )
         .unwrap();
         assert!(linker_body.contains("[[new-name]]"));
@@ -1612,7 +1633,9 @@ mod tests {
         let r = tool.call(args).await.unwrap();
         assert!(r.success);
         let body = std::fs::read_to_string(
-            tool_memory_dir(&tool).join("default/learning/super-note.md"),
+            tool_memory_dir(&tool)
+                .join(crate::routing::DEFAULT_AGENT_ID)
+                .join("learning/super-note.md"),
         )
         .unwrap();
         assert!(body.contains("relations:"), "got:\n{body}");
@@ -1645,7 +1668,9 @@ mod tests {
             .unwrap();
         assert!(r.success);
         let body = std::fs::read_to_string(
-            tool_memory_dir(&tool).join("default/learning/rel-note.md"),
+            tool_memory_dir(&tool)
+                .join(crate::routing::DEFAULT_AGENT_ID)
+                .join("learning/rel-note.md"),
         )
         .unwrap();
         assert!(body.contains("relations:"), "got:\n{body}");
