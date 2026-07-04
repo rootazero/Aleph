@@ -46,10 +46,63 @@ pub fn project_messages(events: &[SessionEventRecord]) -> Vec<ProjectedMessage> 
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectedRow {
+    pub role: String,
+    pub text: String,
+    pub tool_call_id: Option<String>,
+    pub tool_name: Option<String>,
+}
+
+/// Pure map: one session event → at most one projected message row.
+/// Internal markers (turn/run/llm/budget/session lifecycle) yield None.
+#[must_use]
+pub fn project_row(event: &SessionEvent) -> Option<ProjectedRow> {
+    let plain = |role: &str, text: String| ProjectedRow {
+        role: role.into(),
+        text,
+        tool_call_id: None,
+        tool_name: None,
+    };
+    match event {
+        SessionEvent::UserMessage { content, .. } => Some(plain("user", content.text.clone())),
+        SessionEvent::AssistantMessage { content, .. } => {
+            Some(plain("assistant", content.text.clone()))
+        }
+        SessionEvent::SystemMessage { content, .. } => Some(plain("system", content.clone())),
+        SessionEvent::ToolCallRequested {
+            call_id,
+            name,
+            input,
+            ..
+        } => Some(ProjectedRow {
+            role: "tool".into(),
+            text: input.to_string(),
+            tool_call_id: Some(call_id.clone()),
+            tool_name: Some(name.clone()),
+        }),
+        SessionEvent::ToolResult {
+            call_id, output, ..
+        } => Some(ProjectedRow {
+            role: "tool".into(),
+            text: output.value.to_string(),
+            tool_call_id: Some(call_id.clone()),
+            tool_name: None,
+        }),
+        SessionEvent::ToolError { call_id, error, .. } => Some(ProjectedRow {
+            role: "tool".into(),
+            text: error.clone(),
+            tool_call_id: Some(call_id.clone()),
+            tool_name: None,
+        }),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::events::{now_ms, MessageContent};
+    use crate::session::events::{now_ms, MessageContent, TurnTrigger};
 
     fn rec(seq: u64, ev: SessionEvent) -> SessionEventRecord {
         SessionEventRecord {
@@ -57,6 +110,45 @@ mod tests {
             event: ev,
             created_at_ms: now_ms(),
         }
+    }
+
+    #[test]
+    fn project_row_maps_message_and_tool_events() {
+        let tid = uuid::Uuid::new_v4();
+        let user = SessionEvent::UserMessage {
+            turn_id: tid,
+            content: MessageContent {
+                text: "hi".into(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: 1,
+            synthetic: false,
+        };
+        let r = project_row(&user).unwrap();
+        assert_eq!(r.role, "user");
+        assert_eq!(r.text, "hi");
+
+        let call = SessionEvent::ToolCallRequested {
+            turn_id: tid,
+            call_id: "c1".into(),
+            name: "bash_exec".into(),
+            input: serde_json::json!({"cmd": "ls"}),
+            at: 2,
+        };
+        let r = project_row(&call).unwrap();
+        assert_eq!(r.role, "tool");
+        assert_eq!(r.tool_call_id.as_deref(), Some("c1"));
+        assert_eq!(r.tool_name.as_deref(), Some("bash_exec"));
+
+        // 内部标记不投影
+        assert!(project_row(&SessionEvent::TurnStarted {
+            turn_id: tid,
+            trigger: TurnTrigger::UserMessage,
+            at: 3
+        })
+        .is_none());
     }
 
     #[test]
