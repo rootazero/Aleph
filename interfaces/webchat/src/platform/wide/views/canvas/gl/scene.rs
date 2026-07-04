@@ -56,6 +56,10 @@ pub struct Scene {
     /// by `recompute_filtered_edges`). Consumed by `EdgeRenderer::upload_indexed`
     /// to tint edges by relation kind.
     filtered_edge_kinds: Vec<u8>,
+    /// Per-edge brightness scale aligned with `filtered_edges` (produced in
+    /// lockstep by `recompute_filtered_edges`). Consumed by
+    /// `EdgeRenderer::upload_indexed` to scale edge color by confidence.
+    filtered_edge_bright: Vec<f32>,
     /// id → node index, rebuilt on `set_graph`. Turns the per-frame label
     /// lookups (`node_name` / `screen_pos_of`) and `fly_to_node` from O(n)
     /// linear scans into O(1). Positions still come from `data.nodes[idx]`.
@@ -89,6 +93,7 @@ impl Scene {
             lod: 0.0,
             filtered_edges: Vec::new(),
             filtered_edge_kinds: Vec::new(),
+            filtered_edge_bright: Vec::new(),
             id_index: std::collections::HashMap::new(),
         })
     }
@@ -120,6 +125,7 @@ impl Scene {
             &self.data.nodes,
             &self.filtered_edges,
             &self.filtered_edge_kinds,
+            &self.filtered_edge_bright,
         );
         self.edges.set_highlight(
             &self.ctx.gl,
@@ -139,6 +145,7 @@ impl Scene {
             &self.data.nodes,
             &self.filtered_edges,
             &self.filtered_edge_kinds,
+            &self.filtered_edge_bright,
         );
         self.edges.set_highlight(
             &self.ctx.gl,
@@ -160,11 +167,17 @@ impl Scene {
         // Kind for edge `i`, defaulting to 0 (wikilink) if the parallel vec is
         // absent/short (keeps filtered kinds aligned even for legacy data).
         let kind_at = |data: &GraphData, i: usize| data.edge_kinds.get(i).copied().unwrap_or(0);
+        // Brightness for edge `i`, defaulting to 1.0 (full) if the parallel vec
+        // is absent/short — mirrors `kind_at` so both stay aligned with `edges`.
+        let bright_at = |data: &GraphData, i: usize| data.edge_bright.get(i).copied().unwrap_or(1.0);
 
         if self.lod <= 0.0 || self.data.nodes.is_empty() {
             self.filtered_edges = self.data.edges.clone();
             self.filtered_edge_kinds = (0..self.data.edges.len())
                 .map(|i| kind_at(&self.data, i))
+                .collect();
+            self.filtered_edge_bright = (0..self.data.edges.len())
+                .map(|i| bright_at(&self.data, i))
                 .collect();
             return;
         }
@@ -182,25 +195,33 @@ impl Scene {
             self.filtered_edge_kinds = (0..self.data.edges.len())
                 .map(|i| kind_at(&self.data, i))
                 .collect();
+            self.filtered_edge_bright = (0..self.data.edges.len())
+                .map(|i| bright_at(&self.data, i))
+                .collect();
             return;
         }
 
         // Retain only edges where at least one endpoint is above the floor
         // (weak spokes into strong hubs are still drawn; only weak-to-weak edges
-        // are culled, preserving cluster connectivity). Kinds filter in lockstep.
+        // are culled, preserving cluster connectivity). Kinds/brightness filter
+        // in lockstep.
         let mut fe = Vec::new();
         let mut fk = Vec::new();
+        let mut fb = Vec::new();
         for (i, &(a, b)) in self.data.edges.iter().enumerate() {
             let lc_a = self.data.nodes.get(a as usize).map_or(0, |n| n.link_count);
             let lc_b = self.data.nodes.get(b as usize).map_or(0, |n| n.link_count);
             if lc_a >= floor || lc_b >= floor {
                 fe.push((a, b));
                 fk.push(kind_at(&self.data, i));
+                fb.push(bright_at(&self.data, i));
             }
         }
         self.filtered_edges = fe;
         self.filtered_edge_kinds = fk;
+        self.filtered_edge_bright = fb;
         debug_assert_eq!(self.filtered_edges.len(), self.filtered_edge_kinds.len());
+        debug_assert_eq!(self.filtered_edges.len(), self.filtered_edge_bright.len());
     }
 
     /// Screen-space picking: project all nodes through the last-frame view-proj
@@ -336,6 +357,7 @@ impl Scene {
                     &self.data.nodes,
                     &self.filtered_edges,
                     &self.filtered_edge_kinds,
+                    &self.filtered_edge_bright,
                 );
                 self.edges.set_highlight(
                     &self.ctx.gl,

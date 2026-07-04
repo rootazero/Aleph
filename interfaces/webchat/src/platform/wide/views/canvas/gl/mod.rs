@@ -40,6 +40,10 @@ pub struct GraphData {
     /// Per-edge relation kind code (see `edges::edge_kind_code`), same order &
     /// length as `edges`. Empty when unknown (treated as all-wikilink).
     pub edge_kinds: Vec<u8>,
+    /// Per-edge brightness scale (see `galaxy_build::edge_brightness`), same
+    /// order & length as `edges`. Multiplied into the edge color; empty is
+    /// treated as full brightness (1.0) everywhere.
+    pub edge_bright: Vec<f32>,
 }
 
 /// Edges incident to the selected node, as normalized (min,max) index pairs.
@@ -84,6 +88,7 @@ mod highlight_tests {
             nodes: vec![node("a"), node("b"), node("c"), node("d")],
             edges: vec![(0, 1), (2, 0), (2, 3)], // a-b, c-a, c-d
             edge_kinds: vec![0; 3],
+            edge_bright: vec![1.0; 3],
         };
         let hl = compute_highlight_edges(&data, "a");
         assert!(hl.contains(&(0, 1))); // a-b
@@ -97,6 +102,7 @@ mod highlight_tests {
             nodes: vec![node("a")],
             edges: vec![],
             edge_kinds: vec![],
+            edge_bright: vec![],
         };
         assert!(compute_highlight_edges(&data, "zzz").is_empty());
     }

@@ -30,6 +30,11 @@ pub struct NoteLinkDto {
     pub label: Option<String>,
     #[serde(default)]
     pub kind: Option<String>,
+    /// Link-resolution confidence (0.0-1.0) for real edges; `None` for
+    /// similarity edges (`kind = "related_similarity"`). Drives edge
+    /// brightness in the galaxy renderer (see `galaxy_build::edge_brightness`).
+    #[serde(default)]
+    pub confidence: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -39,6 +44,14 @@ pub struct GraphQueryResponse {
     /// Total notes for the agent; `nodes` may be truncated to the query limit.
     #[serde(default)]
     pub total: Option<usize>,
+    /// Node paths materialized as graph-health "bridge" insights, filtered to
+    /// nodes visible in this response. Empty before the first dream recompute.
+    #[serde(default)]
+    pub bridge_nodes: Vec<String>,
+    /// `(from, to)` pairs materialized as graph-health "surprising" insights,
+    /// filtered to pairs whose endpoints are both visible in this response.
+    #[serde(default)]
+    pub surprising_edges: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
