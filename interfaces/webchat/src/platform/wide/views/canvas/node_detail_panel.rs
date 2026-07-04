@@ -135,11 +135,20 @@ fn DetailFor(
     let is_saving = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
 
+    // Rename state
+    let is_renaming = RwSignal::new(false);
+    let rename_draft = RwSignal::new(title.clone());
+
+    // Delete state
+    let confirm_delete = RwSignal::new(false);
+
     let start_edit = {
         let body_markdown = body_markdown;
         move |_| {
             draft.set(body_markdown.clone());
             error.set(None);
+            confirm_delete.set(false);
+            is_renaming.set(false);
             is_editing.set(true);
         }
     };
@@ -177,6 +186,70 @@ fn DetailFor(
                     }
                     Err(e) => {
                         is_saving.set(false);
+                        error.set(Some(e));
+                    }
+                }
+            });
+        }
+    };
+
+    let do_rename = {
+        let node_id = node_id.clone();
+        move |_| {
+            if is_saving.get_untracked() {
+                return;
+            }
+            let new_title = rename_draft.get_untracked();
+            if new_title.is_empty() {
+                error.set(Some("Title cannot be empty".to_string()));
+                return;
+            }
+            let id = node_id.clone();
+            let agent = mem.agent_id.get_untracked();
+            is_saving.set(true);
+            error.set(None);
+            spawn_local(async move {
+                match GraphApi::rename_note(&state, &agent, &id, &new_title).await {
+                    Ok(new_id) => {
+                        // Clear old excerpt cache, update selected node to new_id
+                        excerpts.update(|m| {
+                            m.remove(&id);
+                        });
+                        mem.selected_node.set(Some(new_id));
+                        is_saving.set(false);
+                        is_renaming.set(false);
+                    }
+                    Err(e) => {
+                        is_saving.set(false);
+                        error.set(Some(e));
+                    }
+                }
+            });
+        }
+    };
+
+    let do_delete = {
+        let node_id = node_id.clone();
+        move |_| {
+            if is_saving.get_untracked() || !confirm_delete.get_untracked() {
+                // First tap: arm the confirm
+                confirm_delete.set(true);
+                return;
+            }
+            // Second tap: execute delete
+            let id = node_id.clone();
+            let agent = mem.agent_id.get_untracked();
+            is_saving.set(true);
+            error.set(None);
+            spawn_local(async move {
+                match GraphApi::delete_note(&state, &agent, &id).await {
+                    Ok(()) => {
+                        mem.selected_node.set(None);
+                        is_saving.set(false);
+                    }
+                    Err(e) => {
+                        is_saving.set(false);
+                        confirm_delete.set(false); // reset on error
                         error.set(Some(e));
                     }
                 }
@@ -243,24 +316,85 @@ fn DetailFor(
             } else {
                 let html = body_html.clone();
                 let edit = start_edit.clone();
+                let rename = do_rename.clone();
+                let delete = do_delete.clone();
                 view! {
                     <div>
-                        <div
-                            class="node-card-full__excerpt"
-                            style="color:var(--text-body);font-size:12px;line-height:1.55"
-                            inner_html=html
-                            on:click=move |ev| {
-                                if let Some(t) = crate::canvas_engine::markdown_excerpt::wikilink_click_target(&ev) {
-                                    navigate_wl(&state, &mem, t);
-                                }
-                            }
-                        ></div>
-                        <button class="node-detail-btn" style="margin-top:8px" on:click=edit>
-                            {t!(i18n, memory.edit)}
-                        </button>
+                        {move || if is_renaming.get() {
+                            view! {
+                                <div>
+                                    <input
+                                        type="text"
+                                        style="width:100%;padding:6px;border:1px solid var(--border-subtle);border-radius:4px;background:var(--surface-sunken);color:var(--text-primary);font-size:12px;box-sizing:border-box"
+                                        prop:value=move || rename_draft.get()
+                                        on:input=move |ev| rename_draft.set(event_target_value(&ev))
+                                    />
+                                    <div style="display:flex;gap:6px;margin-top:6px">
+                                        <button
+                                            class="node-detail-btn node-detail-btn--save"
+                                            prop:disabled=move || is_saving.get()
+                                            on:click=rename
+                                        >
+                                            {move || if is_saving.get() {
+                                                view! { {t!(i18n, memory.saving)} }.into_any()
+                                            } else {
+                                                view! { "Confirm" }.into_any()
+                                            }}
+                                        </button>
+                                        <button
+                                            class="node-detail-btn"
+                                            prop:disabled=move || is_saving.get()
+                                            on:click=move |_| is_renaming.set(false)
+                                        >
+                                            {t!(i18n, memory.cancel)}
+                                        </button>
+                                    </div>
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! {
+                                <div>
+                                    <div
+                                        class="node-card-full__excerpt"
+                                        style="color:var(--text-body);font-size:12px;line-height:1.55"
+                                        inner_html=html
+                                        on:click=move |ev| {
+                                            if let Some(t) = crate::canvas_engine::markdown_excerpt::wikilink_click_target(&ev) {
+                                                navigate_wl(&state, &mem, t);
+                                            }
+                                        }
+                                    ></div>
+                                    <div style="display:flex;gap:6px;margin-top:8px">
+                                        <button class="node-detail-btn" on:click=edit>
+                                            {t!(i18n, memory.edit)}
+                                        </button>
+                                        <button class="node-detail-btn" on:click=move |_| is_renaming.set(true)>
+                                            "Rename"
+                                        </button>
+                                        <button
+                                            class="node-detail-btn"
+                                            style=move || {
+                                                if confirm_delete.get() {
+                                                    "color:white;background:var(--cat-error,#f44336)".to_string()
+                                                } else {
+                                                    String::new()
+                                                }
+                                            }
+                                            on:click=delete
+                                        >
+                                            {move || if confirm_delete.get() {
+                                                "Confirm delete?"
+                                            } else {
+                                                "Delete"
+                                            }}
+                                        </button>
+                                    </div>
+                                </div>
+                            }.into_any()
+                        }}
                     </div>
                 }.into_any()
-            }}
+            }
             {(!tags.is_empty()).then(|| {
                 let t = tags.clone();
                 view! {

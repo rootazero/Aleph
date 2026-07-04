@@ -81,6 +81,13 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
     let is_saving = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
 
+    // Rename state
+    let is_renaming = RwSignal::new(false);
+    let rename_draft = RwSignal::new(title.clone());
+
+    // Delete state
+    let confirm_delete = RwSignal::new(false);
+
     let path = fact.path.clone();
     let stripe = category_color(&fact.category);
     let title = fact.content.clone();
@@ -130,6 +137,70 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
         }
     };
 
+    let do_rename = {
+        let path = path.clone();
+        move |_| {
+            if is_saving.get_untracked() {
+                return;
+            }
+            let new_title = rename_draft.get_untracked();
+            if new_title.is_empty() {
+                error.set(Some("Title cannot be empty".to_string()));
+                return;
+            }
+            let path = path.clone();
+            let agent = mem.agent_id.get_untracked();
+            is_saving.set(true);
+            error.set(None);
+            spawn_local(async move {
+                match GraphApi::rename_note(&state, &agent, &path, &new_title).await {
+                    Ok(new_id) => {
+                        target.set(Some(DrawerTarget::Note(CompressedFact::stub_from_path(&new_id))));
+                        is_saving.set(false);
+                        is_renaming.set(false);
+                    }
+                    Err(e) => {
+                        is_saving.set(false);
+                        error.set(Some(e));
+                    }
+                }
+            });
+        }
+    };
+
+    let do_delete = {
+        let path = path.clone();
+        move |_| {
+            if is_saving.get_untracked() || !confirm_delete.get_untracked() {
+                // First tap: arm the confirm
+                confirm_delete.set(true);
+                return;
+            }
+            // Second tap: execute delete
+            let path = path.clone();
+            let agent = mem.agent_id.get_untracked();
+            is_saving.set(true);
+            error.set(None);
+            spawn_local(async move {
+                match GraphApi::delete_note(&state, &agent, &path).await {
+                    Ok(()) => {
+                        target.set(None);
+                        is_saving.set(false);
+                    }
+                    Err(e) => {
+                        is_saving.set(false);
+                        confirm_delete.set(false);
+                        error.set(Some(e));
+                    }
+                }
+            });
+        }
+    };
+
+    let save = save.clone();
+    let rename = do_rename.clone();
+    let delete = do_delete.clone();
+
     view! {
         <div>
             <div style=format!("height:3px;background:{stripe};border-radius:2px;margin-bottom:8px")></div>
@@ -137,7 +208,6 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
             <div class="text-xs text-text-tertiary font-mono mb-3 break-all">{path.clone()}</div>
 
             {move || if is_editing.get() {
-                let save = save.clone();
                 view! {
                     <div>
                         <textarea
@@ -170,31 +240,96 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
             } else {
                 view! {
                     <div>
-                        {move || match body.get() {
-                            Some(md) => view! {
-                                <div
-                                    class="node-card-full__excerpt text-xs leading-relaxed text-text-secondary"
-                                    inner_html=render_excerpt(&md)
-                                    on:click=move |ev| {
-                                        if let Some(t) = wikilink_click_target(&ev) {
-                                            navigate_drawer(&state, &mem, target, t);
-                                        }
-                                    }
-                                ></div>
-                            }.into_any(),
-                            None => view! {
-                                <div class="text-xs italic text-text-tertiary">{t!(i18n, common.loading)}</div>
-                            }.into_any(),
+                        {move || if is_renaming.get() {
+                            view! {
+                                <div>
+                                    <input
+                                        type="text"
+                                        class="w-full p-2 text-xs bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary/50 box-border"
+                                        prop:value=move || rename_draft.get()
+                                        on:input=move |ev| rename_draft.set(event_target_value(&ev))
+                                    />
+                                    <div class="flex gap-2 mt-2">
+                                        <button
+                                            class="px-3 py-1 text-xs rounded-lg bg-primary text-white disabled:opacity-50"
+                                            prop:disabled=move || is_saving.get()
+                                            on:click=do_rename.clone()
+                                        >
+                                            {move || if is_saving.get() {
+                                                view! { {t!(i18n, memory.saving)} }.into_any()
+                                            } else {
+                                                view! { "Confirm" }.into_any()
+                                            }}
+                                        </button>
+                                        <button
+                                            class="px-3 py-1 text-xs rounded-lg border border-border text-text-secondary hover:text-text-primary"
+                                            prop:disabled=move || is_saving.get()
+                                            on:click=move |_| is_renaming.set(false)
+                                        >
+                                            {t!(i18n, memory.cancel)}
+                                        </button>
+                                    </div>
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! {
+                                <div>
+                                    {move || match body.get() {
+                                        Some(md) => view! {
+                                            <div
+                                                class="node-card-full__excerpt text-xs leading-relaxed text-text-secondary"
+                                                inner_html=render_excerpt(&md)
+                                                on:click=move |ev| {
+                                                    if let Some(t) = wikilink_click_target(&ev) {
+                                                        navigate_drawer(&state, &mem, target, t);
+                                                    }
+                                                }
+                                            ></div>
+                                        }.into_any(),
+                                        None => view! {
+                                            <div class="text-xs italic text-text-tertiary">{t!(i18n, common.loading)}</div>
+                                        }.into_any(),
+                                    }}
+                                    <div class="flex gap-2 mt-3">
+                                        <button
+                                            class="px-3 py-1 text-xs rounded-lg border border-border text-text-secondary hover:text-text-primary"
+                                            on:click=move |_| {
+                                                draft.set(body.get_untracked().unwrap_or_default());
+                                                error.set(None);
+                                                confirm_delete.set(false);
+                                                is_renaming.set(false);
+                                                is_editing.set(true);
+                                            }
+                                        >
+                                            {t!(i18n, memory.edit)}
+                                        </button>
+                                        <button
+                                            class="px-3 py-1 text-xs rounded-lg border border-border text-text-secondary hover:text-text-primary"
+                                            on:click=move |_| is_renaming.set(true)
+                                        >
+                                            "Rename"
+                                        </button>
+                                        <button
+                                            class="px-3 py-1 text-xs rounded-lg border border-border text-text-secondary hover:text-text-primary"
+                                            style=move || {
+                                                if confirm_delete.get() {
+                                                    "border-color:var(--cat-error,#f44336);color:white;background:var(--cat-error,#f44336)".to_string()
+                                                } else {
+                                                    String::new()
+                                                }
+                                            }
+                                            on:click=do_delete.clone()
+                                        >
+                                            {move || if confirm_delete.get() {
+                                                "Confirm delete?"
+                                            } else {
+                                                "Delete"
+                                            }}
+                                        </button>
+                                    </div>
+                                </div>
+                            }.into_any()
                         }}
-                        <button
-                            class="mt-3 px-3 py-1 text-xs rounded-lg border border-border text-text-secondary hover:text-text-primary"
-                            on:click=move |_| {
-                                draft.set(body.get_untracked().unwrap_or_default());
-                                is_editing.set(true);
-                            }
-                        >
-                            {t!(i18n, memory.edit)}
-                        </button>
                     </div>
                 }.into_any()
             }}

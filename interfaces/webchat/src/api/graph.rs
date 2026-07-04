@@ -56,4 +56,31 @@ impl GraphApi {
         state.rpc_call("graph.update_note", params).await?;
         Ok(())
     }
+
+    /// Rename a note title. Returns the new canonical node id (store-canonical path).
+    pub async fn rename_note(
+        state: &DashboardState,
+        agent_id: &str,
+        node_id: &str,
+        new_title: &str,
+    ) -> Result<String, String> {
+        let params = json!({ "agent_id": agent_id, "node_id": node_id, "new_title": new_title });
+        let result = state.rpc_call("graph.rename_note", params).await?;
+        result
+            .get("new_id")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .ok_or_else(|| "rename_note: missing new_id in response".to_string())
+    }
+
+    /// Delete a note. Returns success after removal from the store.
+    pub async fn delete_note(
+        state: &DashboardState,
+        agent_id: &str,
+        node_id: &str,
+    ) -> Result<(), String> {
+        let params = json!({ "agent_id": agent_id, "node_id": node_id });
+        state.rpc_call("graph.delete_note", params).await?;
+        Ok(())
+    }
 }
