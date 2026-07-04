@@ -88,7 +88,7 @@ pub async fn apply_budget_directive(
     if matches!(directive, LoopDirective::CompactAndContinue) {
         if let Some(compactor) = compactor {
             // `fresh_tail = 0` lets the compactor fall back to its own
-            // config default (matches Task 6 spec). The session id enables
+            // config default for how much tail to keep verbatim. The session id enables
             // the compactor's zero-API-cost reuse of hierarchical session
             // summaries when a memory backend is wired.
             let session_key_str = session_id.to_key_string();
@@ -100,7 +100,8 @@ pub async fn apply_budget_directive(
                     // Re-arm the circuit breaker only when this compaction
                     // actually reduced pressure. An ineffective compaction
                     // leaves the breaker counting, so a thrashing run still
-                    // escalates to `FinalReply` (hermes anti-thrash).
+                    // escalates to `SplitSession` → `CompactToFit`'s
+                    // deterministic truncation floor (hermes anti-thrash).
                     if let Some(budget) = budget {
                         budget.lock().await.note_compaction_effect(
                             messages,

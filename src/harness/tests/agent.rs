@@ -1,8 +1,8 @@
-//! Tests for `AgentHarness` core behavior (Task 8/9/10): failure/clean-turn
+//! Tests for `AgentHarness` core behavior: failure/clean-turn
 //! streak helpers, `has_unanswered_user_message` follow-up detection, token
 //! accounting, and loop-cap termination (max iterations / turn timeout).
 //!
-//! Relocated (Task 7 of the R10 harness-diet workflow) from an inline
+//! Relocated (as part of the R10 harness-diet workflow) from an inline
 //! `#[cfg(test)] mod tests` at the bottom of `src/harness/agent.rs`. Logic and
 //! assertions are unchanged; only `super::X` references became
 //! `crate::harness::agent::X` since this file lives under `harness::tests`, a

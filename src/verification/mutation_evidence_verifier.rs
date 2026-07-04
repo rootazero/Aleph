@@ -21,6 +21,12 @@ use crate::thinker::nudges::MUTATION_EVIDENCE_NUDGE;
 use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
 
 /// Tools whose presence in the window means "files were mutated this run".
+///
+/// Known under-trigger envelope (deliberate, not a bug): a bash-mediated
+/// mutation (`sed -i`, `git apply`, etc.) is not counted as a mutation here,
+/// and a `bash` call made after an edit counts as evidence even if that bash
+/// call was itself a mutation. The trigger stays name-only mechanical (R7) —
+/// do not "fix" either case by inspecting tool arguments or output content.
 const MUTATION_TOOLS: &[&str] = &["file_write", "file_edit", "apply_patch"];
 /// Tools whose presence AFTER the last mutation counts as verification
 /// evidence (mechanical proxy: something was executed/observed post-edit).
@@ -63,16 +69,19 @@ impl TurnVerifier for MutationEvidenceVerifier {
             return VerifierVerdict::Continue;
         }
         // Once per session: a nudge repeated on every stop becomes a gate.
-        if let Some(sid) = ctx.session_id {
-            let mut nudged = self.nudged.lock().unwrap_or_else(|e| e.into_inner());
-            if nudged.contains(sid) {
-                return VerifierVerdict::Continue;
-            }
-            if nudged.len() >= NUDGED_SESSIONS_CAP {
-                nudged.clear();
-            }
-            nudged.insert(sid.to_string());
+        // No session attribution means we can't dedupe — stay silent rather
+        // than veto on every stop.
+        let Some(sid) = ctx.session_id else {
+            return VerifierVerdict::Continue;
+        };
+        let mut nudged = self.nudged.lock().unwrap_or_else(|e| e.into_inner());
+        if nudged.contains(sid) {
+            return VerifierVerdict::Continue;
         }
+        if nudged.len() >= NUDGED_SESSIONS_CAP {
+            nudged.clear();
+        }
+        nudged.insert(sid.to_string());
         VerifierVerdict::Veto {
             reason: MUTATION_EVIDENCE_NUDGE.to_string(),
             class: ErrorClass::Recoverable,

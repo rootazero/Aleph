@@ -1631,8 +1631,10 @@ impl AgentHarness {
     /// return so the caller can fall through to the normal LLM call. Shared by the
     /// `CompactToFit` directive and the `SplitSession` fail-soft path — both must
     /// reduce pressure and continue, never hard-stop (the never-break guarantee).
-    /// R10-safe: mechanical delegation to `context::compact::fit::compact_to_fit`
-    /// (lives outside the harness); no policy, no error-recovery strategy choice.
+    /// R10-safe: mechanical delegation to
+    /// `crate::context::compact::directive::compact_to_fit_and_note` (which
+    /// itself calls `context::compact::fit::compact_to_fit`; lives outside
+    /// the harness); no policy, no error-recovery strategy choice.
     async fn compact_to_fit_in_place(
         &self,
         session_id: &SessionId,

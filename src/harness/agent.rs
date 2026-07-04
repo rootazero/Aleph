@@ -91,9 +91,11 @@ pub struct AgentHarness {
     /// Tracks agent activity for stall detection. `None` when stall detection
     /// is disabled (no `stall_config` in deps).
     pub(super) stall_tracker: Option<crate::harness::deps::StallTracker>,
-    /// Set when `context_budget.before_turn` returns `FinalReply`. Surfaced
-    /// through [`AgentHarness::hit_limit`] so the orchestrator bridge can
-    /// populate `FlowOutcome::hit_limit`.
+    /// Historically set when `context_budget.before_turn` returned
+    /// `FinalReply`; that path now escalates through `SplitSession` →
+    /// `CompactToFit`'s deterministic truncation floor instead (never a hard
+    /// stop). Surfaced through [`AgentHarness::hit_limit`] so the
+    /// orchestrator bridge can populate `FlowOutcome::hit_limit`.
     hit_limit: AtomicBool,
     /// Cumulative provider-reported token usage across every LLM call in
     /// this run (`input + output + cache_read + cache_creation`). Read after
