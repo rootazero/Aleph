@@ -395,6 +395,22 @@ pub trait NoteStore: Send + Sync {
         Ok(vec![])
     }
 
+    /// Materialized 4-signal relatedness edges (`notes_graph_related`) whose
+    /// endpoints are both in `visible`, top `per_node` by score per
+    /// `node_path`. Batch/visibility-filtered counterpart to `related_peers`,
+    /// used by `graph.query` to surface similarity edges alongside real
+    /// links. Default impl returns empty so non-SQLite stores and test mocks
+    /// compile unchanged; the real body lives on `SqliteMemoryBackend`.
+    async fn related_edges_between(
+        &self,
+        agent_id: &str,
+        visible: &std::collections::HashSet<String>,
+        per_node: usize,
+    ) -> Result<Vec<(String, String, f32)>, AlephError> {
+        let _ = (agent_id, visible, per_node);
+        Ok(Vec::new())
+    }
+
     /// Replace the behavioral `co_recalled` edge set for `agent_id` with
     /// `rows` (`(note_a, note_b, confidence)`). Implementations must never
     /// overwrite an existing semantic link for the same note pair — the

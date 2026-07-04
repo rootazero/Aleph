@@ -1649,6 +1649,47 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(out)
     }
 
+    async fn related_edges_between(
+        &self,
+        agent_id: &str,
+        visible: &std::collections::HashSet<String>,
+        per_node: usize,
+    ) -> Result<Vec<(String, String, f32)>, AlephError> {
+        let conn = lock_conn!(self)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT node_path, related_path, score FROM notes_graph_related \
+                 WHERE agent_id = ?1 ORDER BY node_path, score DESC",
+            )
+            .map_err(|e| AlephError::config(format!("related_edges prep: {e}")))?;
+        let rows = stmt
+            .query_map(params![agent_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, f64>(2)? as f32,
+                ))
+            })
+            .map_err(|e| AlephError::config(format!("related_edges query: {e}")))?;
+        let mut out = Vec::new();
+        let mut count_for: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let (node, related, score) =
+                row.map_err(|e| AlephError::config(format!("related_edges row: {e}")))?;
+            if !visible.contains(&node) || !visible.contains(&related) {
+                continue;
+            }
+            let c = count_for.entry(node.clone()).or_insert(0);
+            if *c >= per_node {
+                continue; // rows are score-DESC within node_path → top-K kept
+            }
+            *c += 1;
+            out.push((node, related, score));
+        }
+        Ok(out)
+    }
+
     // -----------------------------------------------------------------
     // Phase C2.9.2 governance: per-fact provenance + async review queue.
     // -----------------------------------------------------------------

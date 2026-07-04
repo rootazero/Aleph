@@ -8,7 +8,7 @@ use super::graph_types::{
     GraphDeleteNoteParams, GraphNeighborsParams, GraphNeighborsResponse, GraphNodeDetailParams,
     GraphQueryParams, GraphQueryResponse, GraphRenameNoteParams, GraphSearchParams,
     GraphSearchResponse, GraphUpdateNoteParams, NoteDetailResponse, NoteLinkDto, NoteNodeDto,
-    SearchResultDto,
+    OutgoingLinkDto, SearchResultDto,
 };
 use crate::memory::notes::store::{NoteIndexEntry, NoteStore};
 use crate::memory::notes::NoteIndexer;
@@ -93,13 +93,73 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
             label: row.label,
             // NULL relation = plain body wikilink.
             kind: Some(row.relation.unwrap_or_else(|| "wikilink".to_string())),
+            confidence: Some(row.confidence),
         })
+        .collect();
+
+    // Similarity edges (5-signal + MinHash, materialized by GraphRecompute) —
+    // top-3 per node, deduped against real links by undirected pair.
+    let visible: std::collections::HashSet<String> =
+        entries.iter().map(|e| e.path.clone()).collect();
+    let mut seen: std::collections::HashSet<(String, String)> = edges
+        .iter()
+        .map(|e| undirected_key(&e.from, &e.to))
+        .collect();
+    let mut edges = edges;
+    if let Ok(related) = db.related_edges_between(agent_id, &visible, 3).await {
+        for (from, to, _score) in related {
+            let key = undirected_key(&from, &to);
+            if seen.insert(key) {
+                edges.push(NoteLinkDto {
+                    from,
+                    to,
+                    label: None,
+                    kind: Some("related_similarity".to_string()),
+                    confidence: None,
+                });
+            }
+        }
+    }
+
+    // Graph-health emphasis payloads (bridge nodes + surprising edges).
+    // `sparse` stays orientation-only by design (spec S3).
+    let bridge_nodes: Vec<String> = db
+        .read_graph_insights(agent_id, Some("bridge"))
+        .await
+        .ok()
+        .and_then(|rows| {
+            rows.into_iter()
+                .find_map(|(_, p)| serde_json::from_str::<Vec<String>>(&p).ok())
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| visible.contains(p))
+        .collect();
+    #[derive(serde::Deserialize)]
+    struct SurprisingRow {
+        from: String,
+        to: String,
+    }
+    let surprising_edges: Vec<(String, String)> = db
+        .read_graph_insights(agent_id, Some("surprising"))
+        .await
+        .ok()
+        .and_then(|rows| {
+            rows.into_iter()
+                .find_map(|(_, p)| serde_json::from_str::<Vec<SurprisingRow>>(&p).ok())
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| visible.contains(&r.from) && visible.contains(&r.to))
+        .map(|r| (r.from, r.to))
         .collect();
 
     let response = GraphQueryResponse {
         nodes,
         edges,
         total,
+        bridge_nodes,
+        surprising_edges,
     };
 
     match serde_json::to_value(response) {
@@ -172,6 +232,7 @@ pub async fn handle_neighbors_impl(req: JsonRpcRequest, db: MemoryBackend) -> Js
             to,
             label: None,
             kind: None,
+            confidence: None,
         })
         .collect();
 
@@ -249,11 +310,30 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
         .await
         .unwrap_or_default();
 
+    // Outgoing links with full lifecycle provenance (active/dangling/tombstone),
+    // unlike the graph feed which only surfaces active edges.
+    let outgoing: Vec<OutgoingLinkDto> = db
+        .get_outgoing_link_rows(&params.node_id, agent_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| OutgoingLinkDto {
+            to: r.to_note,
+            raw: r.to_raw,
+            relation: r.relation,
+            label: r.label,
+            confidence: r.confidence,
+            resolved_by: r.resolved_by,
+            status: r.status,
+        })
+        .collect();
+
     let node = entry_to_dto(&entry);
     let response = NoteDetailResponse {
         node,
         content,
         backlinks,
+        outgoing,
     };
 
     match serde_json::to_value(response) {
@@ -557,6 +637,17 @@ pub async fn handle_search_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonR
     }
 }
 
+/// Order-independent key for an edge pair, so a real link `A->B` and a
+/// materialized similarity edge `B->A` are recognized as the same pair for
+/// dedup purposes.
+fn undirected_key(a: &str, b: &str) -> (String, String) {
+    if a <= b {
+        (a.to_string(), b.to_string())
+    } else {
+        (b.to_string(), a.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -749,6 +840,7 @@ mod tests {
             to: "B".to_string(),
             label: None,
             kind: None,
+            confidence: None,
         }];
         assert_eq!(compute_hop_depth("A", "B", &edges), 1);
         assert_eq!(compute_hop_depth("B", "A", &edges), 1); // reverse edge
@@ -848,6 +940,45 @@ mod tests {
             !ids.iter().any(|id| id.contains("AlphaOnly")),
             "non-default agent's note must NOT appear when agent_id omitted: {ids:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn graph_query_carries_similarity_edges_and_insights() {
+        let db = make_db();
+        let agent = crate::routing::DEFAULT_AGENT_ID;
+        let a = make_note("A", "concept", vec![]);
+        let b = make_note("B", "concept", vec![]);
+        db.index_note(&a, agent, "concept").await.unwrap();
+        db.index_note(&b, agent, "concept").await.unwrap();
+        // Materialized artifacts (what GraphRecompute would write).
+        db.replace_graph_related(agent, &[("concept/A".into(), "concept/B".into(), 3.2)])
+            .await
+            .unwrap();
+        db.replace_graph_insights(
+            agent,
+            &[
+                ("bridge".into(), serde_json::json!(["concept/A"]).to_string()),
+                (
+                    "surprising".into(),
+                    serde_json::json!([{"from": "concept/A", "to": "concept/B", "score": 0.9}])
+                        .to_string(),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let resp = handle_query_impl(query_request(50, Some(agent)), db).await;
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+        let result: GraphQueryResponse =
+            serde_json::from_value(resp.result.unwrap()).unwrap();
+        assert!(
+            result.edges.iter().any(|e| e.kind.as_deref() == Some("related_similarity")),
+            "similarity edge must surface: {:?}",
+            result.edges
+        );
+        assert_eq!(result.bridge_nodes, vec!["concept/A"]);
+        assert_eq!(result.surprising_edges, vec![("concept/A".into(), "concept/B".into())]);
     }
 
     #[tokio::test]
@@ -1002,6 +1133,22 @@ mod tests {
             resp_alpha.error.is_some(),
             "alpha-only note must NOT be reachable when agent_id omitted"
         );
+    }
+
+    #[tokio::test]
+    async fn node_detail_lists_outgoing_with_provenance() {
+        let db = make_db();
+        let agent = crate::routing::DEFAULT_AGENT_ID;
+        db.index_note(&make_note("t", "concept", vec![]), agent, "concept").await.unwrap();
+        db.index_note(&make_note("s", "concept", vec!["concept/t", "ghost"]), agent, "concept")
+            .await
+            .unwrap();
+        let resp = handle_node_detail_impl(node_detail_request("concept/s", Some(agent)), db).await;
+        let v = resp.result.unwrap();
+        let outgoing = v.get("outgoing").unwrap().as_array().unwrap();
+        assert_eq!(outgoing.len(), 2);
+        let ghost = outgoing.iter().find(|o| o["raw"] == "ghost").unwrap();
+        assert_eq!(ghost["status"], "dangling");
     }
 
     fn search_request(query: &str, limit: usize, agent_id: Option<&str>) -> JsonRpcRequest {

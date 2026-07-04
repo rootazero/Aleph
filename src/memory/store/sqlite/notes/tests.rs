@@ -846,6 +846,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn related_edges_between_filters_visible_and_caps_per_node() {
+        use std::collections::HashSet;
+
+        const AGENT: &str = "agent1";
+        let backend = make_backend();
+
+        // cat/a has 3 related rows (b, c, d); only b and c are "visible".
+        // cat/x has 1 related row to an invisible node → must be dropped entirely.
+        backend
+            .replace_graph_related(
+                AGENT,
+                &[
+                    ("cat/a".to_string(), "cat/b".to_string(), 1.5),
+                    ("cat/a".to_string(), "cat/c".to_string(), 9.0),
+                    ("cat/a".to_string(), "cat/d".to_string(), 4.0),
+                    ("cat/x".to_string(), "cat/invisible".to_string(), 5.0),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let visible: HashSet<String> = ["cat/a", "cat/b", "cat/c", "cat/x"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+
+        // per_node=1 keeps only the top-scored visible row for cat/a (cat/c);
+        // cat/d is excluded because it is not in `visible`, regardless of the cap.
+        let rows = backend
+            .related_edges_between(AGENT, &visible, 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![("cat/a".to_string(), "cat/c".to_string(), 9.0)],
+            "only the top-1 visible-both-ends row for cat/a must survive: {rows:?}"
+        );
+
+        // cat/x's only related row points at an invisible node → dropped even
+        // though cat/x itself is visible (both ends must be visible).
+        assert!(
+            !rows.iter().any(|(n, _, _)| n == "cat/x"),
+            "row with an invisible endpoint must not surface: {rows:?}"
+        );
+
+        // per_node=2 lets cat/b back in (score-DESC: c then b; d stays excluded
+        // because it is not in `visible`).
+        let rows2 = backend
+            .related_edges_between(AGENT, &visible, 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            rows2,
+            vec![
+                ("cat/a".to_string(), "cat/c".to_string(), 9.0),
+                ("cat/a".to_string(), "cat/b".to_string(), 1.5),
+            ]
+        );
+
+        // A different agent has no related rows → empty (scoping holds).
+        let other = backend
+            .related_edges_between("agent2", &visible, 8)
+            .await
+            .unwrap();
+        assert!(other.is_empty());
+    }
+
+    #[tokio::test]
     async fn get_notes_with_content_returns_known_paths_skips_unknown() {
         let backend = make_backend();
 
