@@ -372,7 +372,7 @@ pub fn ToolCard(
             .flat_map(|m| m.tool_calls.iter())
             .find_map(|t| {
                 if t.tool_id == tid_for_status {
-                    Some((t.status.clone(), t.duration_ms))
+                    Some((t.status.clone(), t.duration_ms, t.started_at_ms))
                 } else {
                     None
                 }
@@ -465,11 +465,17 @@ pub fn ToolCard(
         }
     };
 
-    let running = move || matches!(status.get(), Some((s, _)) if s == "running");
-    let failed = move || matches!(status.get(), Some((s, _)) if s == "failed");
+    let running = move || matches!(status.get(), Some((s, _, _)) if s == "running");
+    let failed = move || matches!(status.get(), Some((s, _, _)) if s == "failed");
+    let succeeded = move || matches!(status.get(), Some((s, _, _)) if s == "completed");
+
+    // Shared 1s clock for the live elapsed timer on long-running rows. Only
+    // read inside the `running` branch below, so done/failed rows never
+    // subscribe to the tick (see run_clock.rs perf contract).
+    let tick = use_context::<crate::state::run_clock::SecondTick>();
 
     view! {
-        <div class="rounded-lg glass-inset hover:bg-surface-raised/30 transition-colors">
+        <div class="rounded-md hover:bg-surface-raised/40 transition-colors">
             <button
                 type="button"
                 class="w-full flex items-center gap-2 px-2 py-1 text-left"
@@ -488,6 +494,34 @@ pub fn ToolCard(
                 </span>
                 <Show when=running>
                     <span class="shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+                    {
+                        let status = status;
+                        move || {
+                            match (tick, status.get()) {
+                                (Some(t), Some((_, _, Some(start)))) => {
+                                    let elapsed = t.0.get() - start;
+                                    (elapsed >= crate::state::run_clock::LONG_RUN_THRESHOLD_MS)
+                                        .then(|| view! {
+                                            <span class="shrink-0 text-[10px] font-mono text-text-tertiary tabular-nums">
+                                                {crate::state::run_clock::fmt_elapsed(elapsed)}
+                                            </span>
+                                        })
+                                }
+                                _ => None,
+                            }
+                        }
+                    }
+                </Show>
+                <Show when=succeeded>
+                    <span class="shrink-0 text-[11px] text-success">"✓"</span>
+                    {move || status.get().and_then(|(_, d, _)| d).map(|d| view! {
+                        <span class="shrink-0 text-[10px] font-mono text-text-tertiary">
+                            {crate::state::run_clock::fmt_elapsed(d as i64)}
+                        </span>
+                    })}
+                </Show>
+                <Show when=failed>
+                    <span class="shrink-0 text-[11px] text-danger">"✗"</span>
                 </Show>
                 {move || match diff_stat() {
                     Some((a, r)) => view! {
