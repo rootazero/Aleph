@@ -159,7 +159,7 @@ fn DetailFor(
     };
 
     let save_edit = {
-        let node_id = node_id;
+        let node_id = node_id.clone();
         move |_| {
             if is_saving.get_untracked() {
                 return;
@@ -229,7 +229,7 @@ fn DetailFor(
     };
 
     let do_delete = {
-        let node_id = node_id.clone();
+        let node_id = node_id;
         move |_| {
             if is_saving.get_untracked() || !confirm_delete.get_untracked() {
                 // First tap: arm the confirm
@@ -244,6 +244,11 @@ fn DetailFor(
             spawn_local(async move {
                 match GraphApi::delete_note(&state, &agent, &id).await {
                     Ok(()) => {
+                        // Purge the stale cache entry so re-selecting this id
+                        // (recent-visited, backlinks) can't show deleted content.
+                        excerpts.update(|m| {
+                            m.remove(&id);
+                        });
                         mem.selected_node.set(None);
                         is_saving.set(false);
                     }
@@ -321,6 +326,7 @@ fn DetailFor(
                 view! {
                     <div>
                         {move || if is_renaming.get() {
+                            let rename = rename.clone();
                             view! {
                                 <div>
                                     <input
@@ -352,6 +358,9 @@ fn DetailFor(
                                 </div>
                             }.into_any()
                         } else {
+                            let html = html.clone();
+                            let edit = edit.clone();
+                            let delete = delete.clone();
                             view! {
                                 <div>
                                     <div

@@ -74,6 +74,10 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
     let state = expect_context::<DashboardState>();
     let mem = expect_context::<MemoryState>();
 
+    let path = fact.path.clone();
+    let stripe = category_color(&fact.category);
+    let title = fact.content.clone();
+
     let body = RwSignal::new(None::<String>);
     let backlinks = RwSignal::new(Vec::<String>::new());
     let is_editing = RwSignal::new(false);
@@ -87,10 +91,6 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
 
     // Delete state
     let confirm_delete = RwSignal::new(false);
-
-    let path = fact.path.clone();
-    let stripe = category_color(&fact.category);
-    let title = fact.content.clone();
 
     // Fetch full content + backlinks once on mount.
     {
@@ -197,10 +197,6 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
         }
     };
 
-    let save = save.clone();
-    let rename = do_rename.clone();
-    let delete = do_delete.clone();
-
     view! {
         <div>
             <div style=format!("height:3px;background:{stripe};border-radius:2px;margin-bottom:8px")></div>
@@ -208,6 +204,7 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
             <div class="text-xs text-text-tertiary font-mono mb-3 break-all">{path.clone()}</div>
 
             {move || if is_editing.get() {
+                let save = save.clone();
                 view! {
                     <div>
                         <textarea
@@ -238,9 +235,12 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
                     </div>
                 }.into_any()
             } else {
+                let rename = do_rename.clone();
+                let delete = do_delete.clone();
                 view! {
                     <div>
                         {move || if is_renaming.get() {
+                            let rename = rename.clone();
                             view! {
                                 <div>
                                     <input
@@ -253,7 +253,7 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
                                         <button
                                             class="px-3 py-1 text-xs rounded-lg bg-primary text-white disabled:opacity-50"
                                             prop:disabled=move || is_saving.get()
-                                            on:click=do_rename.clone()
+                                            on:click=rename
                                         >
                                             {move || if is_saving.get() {
                                                 view! { {t!(i18n, memory.saving)} }.into_any()
@@ -272,6 +272,7 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
                                 </div>
                             }.into_any()
                         } else {
+                            let delete = delete.clone();
                             view! {
                                 <div>
                                     {move || match body.get() {
@@ -318,7 +319,7 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
                                                     String::new()
                                                 }
                                             }
-                                            on:click=do_delete.clone()
+                                            on:click=delete
                                         >
                                             {move || if confirm_delete.get() {
                                                 "Confirm delete?"
