@@ -33,7 +33,8 @@ use async_trait::async_trait;
 use aleph_desktop::traits::AccessibilityCapability;
 use aleph_desktop::{DesktopError, Result};
 use aleph_protocol::desktop_bridge::methods::ax::{
-    AxActionResult, AxElement, AxLocator, QueryByRoleParams, QueryTreeParams, SetValueParams,
+    AxActionResult, AxElement, AxLocator, PerformActionParams, QueryByRoleParams, QueryTreeParams,
+    SetValueParams,
 };
 
 // ── UIA ControlType → macOS AX role mapping (pure, host-testable) ────────────
@@ -267,6 +268,14 @@ impl AccessibilityCapability for WindowsAccessibility {
         let (locator, value) = (params.locator, params.value);
         run_blocking(move || imp::set_value(locator, value)).await
     }
+
+    async fn perform_action(
+        &self,
+        params: PerformActionParams,
+    ) -> Result<AxActionResult> {
+        let (locator, action) = (params.locator, params.action);
+        run_blocking(move || imp::perform_action(locator, action)).await
+    }
 }
 
 /// Run COM work on a blocking thread, flattening join failures into a
@@ -289,7 +298,7 @@ where
 
 #[cfg(windows)]
 mod imp {
-    use super::{control_type_to_ax_role, rank_candidates, RankCandidate, MAX_NODES, RESOLVE_DEPTH, ROLE_SCAN_DEPTH};
+    use super::{ax_action_to_patterns, control_type_to_ax_role, rank_candidates, AxPattern, RankCandidate, MAX_NODES, RESOLVE_DEPTH, ROLE_SCAN_DEPTH};
     use aleph_desktop::{DesktopError, Result};
     use aleph_protocol::desktop_bridge::methods::ax::{
         AxActionResult, AxElement, AxLocator, AxVerification,
@@ -303,8 +312,11 @@ mod imp {
         COINIT_MULTITHREADED,
     };
     use windows::Win32::UI::Accessibility::{
-        CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern,
-        IUIAutomationTreeWalker, IUIAutomationValuePattern, UIA_LegacyIAccessiblePatternId,
+        CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationExpandCollapsePattern,
+        IUIAutomationInvokePattern, IUIAutomationLegacyIAccessiblePattern,
+        IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern, IUIAutomationTreeWalker,
+        IUIAutomationValuePattern, UIA_ExpandCollapsePatternId, UIA_InvokePatternId,
+        UIA_LegacyIAccessiblePatternId, UIA_SelectionItemPatternId, UIA_TogglePatternId,
         UIA_ValuePatternId,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -584,6 +596,74 @@ mod imp {
         })
     }
 
+    /// Try to invoke one UIA pattern on `el`. `Ok(true)` = performed;
+    /// `Ok(false)` = element does not expose this pattern (caller tries the
+    /// next); `Err` = the pattern's action call itself failed.
+    fn try_pattern(el: &IUIAutomationElement, pattern: AxPattern) -> Result<bool> {
+        // SAFETY: each arm gets a pattern (Err if unsupported → Ok(false)) then
+        // issues its documented action call.
+        unsafe {
+            match pattern {
+                AxPattern::Invoke => {
+                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId) {
+                        p.Invoke().map_err(|e| DesktopError::PlatformError(format!("Invoke: {e}")))?;
+                        return Ok(true);
+                    }
+                }
+                AxPattern::Toggle => {
+                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId) {
+                        p.Toggle().map_err(|e| DesktopError::PlatformError(format!("Toggle: {e}")))?;
+                        return Ok(true);
+                    }
+                }
+                AxPattern::SelectionItem => {
+                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId) {
+                        p.Select().map_err(|e| DesktopError::PlatformError(format!("Select: {e}")))?;
+                        return Ok(true);
+                    }
+                }
+                AxPattern::ExpandCollapse => {
+                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(UIA_ExpandCollapsePatternId) {
+                        p.Expand().map_err(|e| DesktopError::PlatformError(format!("Expand: {e}")))?;
+                        return Ok(true);
+                    }
+                }
+                AxPattern::Legacy => {
+                    if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(UIA_LegacyIAccessiblePatternId) {
+                        p.DoDefaultAction().map_err(|e| DesktopError::PlatformError(format!("DoDefaultAction: {e}")))?;
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// Perform a macOS-style AX action on the located element by trying its
+    /// UIA-pattern fallback chain. Unknown action → `NotImplemented` (from
+    /// `ax_action_to_patterns`); no pattern usable → `NotAvailable`.
+    pub(super) fn perform_action(loc: AxLocator, action: String) -> Result<AxActionResult> {
+        let patterns = ax_action_to_patterns(&action)?;
+        let _com = ComGuard::new();
+        let uia = automation()?;
+        let (el, summary) = resolve(&uia, &loc)?.ok_or_else(|| {
+            DesktopError::NotAvailable("no element matched role/title; try `ax_snapshot`".into())
+        })?;
+        for pattern in patterns {
+            if try_pattern(&el, pattern)? {
+                return Ok(AxActionResult {
+                    performed: true,
+                    path: "accessibility".into(),
+                    matched: Some(summary),
+                    verification: None,
+                });
+            }
+        }
+        Err(DesktopError::NotAvailable(
+            "element exposes no actionable pattern; try click at its center".into(),
+        ))
+    }
+
     /// Depth-first walk rooted at `el`, bounded by `depth_remaining` and the
     /// global `MAX_NODES` budget. `count` is the running node tally shared
     /// across the whole walk.
@@ -703,6 +783,12 @@ mod imp {
     pub(super) fn set_value(
         _loc: aleph_protocol::desktop_bridge::methods::ax::AxLocator,
         _value: String,
+    ) -> Result<aleph_protocol::desktop_bridge::methods::ax::AxActionResult> {
+        unavailable()
+    }
+    pub(super) fn perform_action(
+        _loc: aleph_protocol::desktop_bridge::methods::ax::AxLocator,
+        _action: String,
     ) -> Result<aleph_protocol::desktop_bridge::methods::ax::AxActionResult> {
         unavailable()
     }
