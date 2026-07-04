@@ -155,8 +155,8 @@ impl SessionManager {
                      tool_call_id, tool_name FROM ( \
                         SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
                         tool_call_id, tool_name \
-                        FROM messages WHERE session_key = ? ORDER BY timestamp DESC LIMIT ? \
-                    ) ORDER BY timestamp ASC",
+                        FROM messages WHERE session_key = ? ORDER BY timestamp DESC, id DESC LIMIT ? \
+                    ) ORDER BY timestamp ASC, id ASC",
                 )
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
             messages = stmt

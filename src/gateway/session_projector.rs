@@ -6,8 +6,19 @@
 //! assistant row with those accumulated values when `AssistantMessage` fires.
 //!
 //! The observer itself is **non-blocking**: `on_appended` enqueues the event
-//! onto an mpsc channel and returns immediately. On back-pressure the event is
-//! dropped (projection is best-effort and fully rebuildable from the event log).
+//! onto an mpsc channel and returns immediately. On back-pressure (or an
+//! unclean shutdown between an event's durable append to `session_events` and
+//! its drain to `messages`) the event is dropped from this projection.
+//!
+//! Consistency model: `session_events` is the single source of truth and is
+//! unaffected — the agent replays the event log in full, so **recovery of the
+//! agent's context is complete**. The `messages` table is an *eventually
+//! consistent* read projection for the Panel: a turn written to the log just
+//! before a crash may be absent from the Panel display until re-materialised.
+//! P1 has no events→messages reconciliation pass; a boot-time reconciler
+//! (project any event whose seq exceeds the last-materialised row per session,
+//! keyed off a per-row source-seq watermark) is a P2 follow-up. Panel display
+//! is therefore best-effort; the SSOT is not.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -162,12 +173,14 @@ impl SessionEventObserver for MessageProjector {
     fn on_appended(&self, id: &SessionId, record: &SessionEventRecord) {
         match self.tx.try_send((id.clone(), record.clone())) {
             Ok(()) => {}
-            // Expected back-pressure: the projection is rebuildable from the log.
+            // Expected back-pressure. The event stays in the SSOT log (agent
+            // recovery unaffected); the Panel projection is eventually
+            // consistent and may lag until a P2 reconciler catches it up.
             Err(mpsc::error::TrySendError::Full(_)) => {
                 tracing::warn!(
                     session = ?id,
                     seq = record.seq,
-                    "projector queue full; dropping (rebuildable)"
+                    "projector queue full; dropping (Panel eventually-consistent; SSOT intact)"
                 );
             }
             // The drain task has stopped/panicked — a real incident, not routine

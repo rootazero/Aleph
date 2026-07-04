@@ -303,12 +303,12 @@ impl SessionManager {
                     SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
                     tool_call_id, tool_name \
                     FROM messages \
-                    WHERE session_key = ? ORDER BY timestamp DESC LIMIT {n} \
-                ) ORDER BY timestamp ASC"
+                    WHERE session_key = ? ORDER BY timestamp DESC, id DESC LIMIT {n} \
+                ) ORDER BY timestamp ASC, id ASC"
             ),
             None => "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
                      tool_call_id, tool_name FROM messages \
-                     WHERE session_key = ? ORDER BY timestamp ASC"
+                     WHERE session_key = ? ORDER BY timestamp ASC, id ASC"
                 .to_string(),
         };
 
@@ -378,12 +378,12 @@ impl SessionManager {
                     SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
                     tool_call_id, tool_name \
                     FROM messages \
-                    WHERE session_key = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT {n} \
-                ) ORDER BY timestamp ASC"
+                    WHERE session_key = ? AND timestamp < ? ORDER BY timestamp DESC, id DESC LIMIT {n} \
+                ) ORDER BY timestamp ASC, id ASC"
             ),
             None => "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens, \
                      tool_call_id, tool_name FROM messages \
-                     WHERE session_key = ? AND timestamp < ? ORDER BY timestamp ASC"
+                     WHERE session_key = ? AND timestamp < ? ORDER BY timestamp ASC, id ASC"
                 .to_string(),
         };
 
