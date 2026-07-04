@@ -107,8 +107,8 @@ impl ProjectionReconciler {
     }
 
     /// Reconcile one interrupted session: derive the watermark from the
-    /// transcript, load the un-projected tail, replay it (writes suppressed for
-    /// already-materialised seqs).
+    /// transcript, replay the full event log, and materialise the rows above
+    /// the watermark (writes suppressed for `seq <= watermark`).
     async fn reconcile_session(&self, session_id: &SessionId, report: &mut ReconcileReport) {
         let session_key = session_id.to_key_string();
 

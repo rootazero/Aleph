@@ -150,6 +150,12 @@ pub(crate) async fn project_event(
             total_tokens,
             ..
         } => {
+            // A run-meta at/below the watermark already stamped its assistant
+            // row during the live drain; the reconciler's full-log replay must
+            // not re-stamp it (keeps suppression a complete no-op).
+            if suppress {
+                return;
+            }
             let occupancy = crate::gateway::execution_engine::helpers::RunContextOccupancy {
                 context_tokens: *context_tokens,
                 context_window: *context_window,
