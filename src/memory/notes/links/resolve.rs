@@ -145,10 +145,6 @@ impl LinkResolveContext {
         }
     }
 
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.paths.is_empty()
-    }
 }
 
 /// Lowercase + fold full-width ASCII (U+FF01..=U+FF5E and ideographic space
