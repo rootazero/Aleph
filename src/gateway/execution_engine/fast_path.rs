@@ -1,5 +1,5 @@
 use super::{ExecutionEngine, ExecutionError, RunRequest, RunState};
-use crate::gateway::agent_instance::{AgentInstance, AgentState, MessageRole};
+use crate::gateway::agent_instance::{AgentInstance, AgentState};
 use crate::gateway::event_emitter::{EventEmitter, RunSummary, StreamEvent};
 use crate::resilience::TaskStatus;
 use tracing::warn;
@@ -38,16 +38,43 @@ where
                 .await;
         }
 
-        agent
-            .add_message_with_run_id(
-                &request.session_key,
-                MessageRole::Assistant,
-                &response,
-                Some(run_id),
-                // Fast path runs no LLM call, so there is no occupancy to gauge.
-                None,
-            )
-            .await;
+        // Fast path bypasses seed_session (no SessionEvent::UserMessage from harness)
+        // and also bypasses the main-path direct add_message — emit both via events
+        // so the projector writes them to messages in the correct order.
+        if let Some(svc) = crate::session::service::global_session_service() {
+            let turn_id = uuid::Uuid::new_v4();
+            let _ = svc
+                .emit_event(
+                    &request.session_key,
+                    crate::session::events::SessionEvent::UserMessage {
+                        turn_id,
+                        content: crate::session::events::MessageContent {
+                            text: request.input.clone(),
+                            blocks: Vec::new(),
+                            thinking: None,
+                            thinking_signature: None,
+                        },
+                        at: crate::session::events::now_ms(),
+                        synthetic: false,
+                    },
+                )
+                .await;
+            let _ = svc
+                .emit_event(
+                    &request.session_key,
+                    crate::session::events::SessionEvent::AssistantMessage {
+                        turn_id,
+                        content: crate::session::events::MessageContent {
+                            text: response.clone(),
+                            blocks: Vec::new(),
+                            thinking: None,
+                            thinking_signature: None,
+                        },
+                        at: crate::session::events::now_ms(),
+                    },
+                )
+                .await;
+        }
         let _ = emitter
             .emit(StreamEvent::RunComplete {
                 run_id: run_id.to_string(),
@@ -117,16 +144,42 @@ where
         }
         let error_response = format!("❌ {error_msg}");
 
-        agent
-            .add_message_with_run_id(
-                &request.session_key,
-                MessageRole::Assistant,
-                &error_response,
-                Some(run_id),
-                // Fast path runs no LLM call, so there is no occupancy to gauge.
-                None,
-            )
-            .await;
+        // Fast path bypasses seed_session and main-path add_message — emit both
+        // user + assistant events so the projector writes them to messages.
+        if let Some(svc) = crate::session::service::global_session_service() {
+            let turn_id = uuid::Uuid::new_v4();
+            let _ = svc
+                .emit_event(
+                    &request.session_key,
+                    crate::session::events::SessionEvent::UserMessage {
+                        turn_id,
+                        content: crate::session::events::MessageContent {
+                            text: request.input.clone(),
+                            blocks: Vec::new(),
+                            thinking: None,
+                            thinking_signature: None,
+                        },
+                        at: crate::session::events::now_ms(),
+                        synthetic: false,
+                    },
+                )
+                .await;
+            let _ = svc
+                .emit_event(
+                    &request.session_key,
+                    crate::session::events::SessionEvent::AssistantMessage {
+                        turn_id,
+                        content: crate::session::events::MessageContent {
+                            text: error_response.clone(),
+                            blocks: Vec::new(),
+                            thinking: None,
+                            thinking_signature: None,
+                        },
+                        at: crate::session::events::now_ms(),
+                    },
+                )
+                .await;
+        }
         let _ = emitter
             .emit(StreamEvent::ResponseChunk {
                 run_id: run_id.to_string(),

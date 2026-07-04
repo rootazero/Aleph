@@ -1,5 +1,5 @@
 use super::{ActiveRun, ExecutionEngine, ExecutionError, RunRequest, RunState};
-use crate::gateway::agent_instance::{AgentInstance, AgentState, MessageRole};
+use crate::gateway::agent_instance::{AgentInstance, AgentState};
 use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
 use crate::resilience::TaskStatus;
@@ -299,20 +299,12 @@ where
             }
         }
 
-        // Store user message in session (with attachment markers for history).
-        // Shared with the mid-loop steering path so both render identically.
-        //
         // Resume-style runs (crash resume, post-run steering rescue) carry no
         // fresh input — the session log already holds the full trajectory —
-        // so storing their empty placeholder would only pollute channel
-        // history with blank user turns.
+        // so a resume-flag check is still needed for the memory write below.
+        // The user message is now SSOT via SessionEvent::UserMessage (seed_session
+        // path) — no direct add_message call here.
         let is_resume = request.metadata.get("resume").map(String::as_str) == Some("true");
-        if !is_resume {
-            let session_text = super::steering::render_user_session_text(&request);
-            agent
-                .add_message(&request.session_key, MessageRole::User, &session_text)
-                .await;
-        }
 
         // Announce the session the moment it's created (first message), not just
         // when the run completes. Without this, a brand-new session is silent for
@@ -615,20 +607,34 @@ where
                         .await;
                 }
 
-                // Store assistant response, stamping the run_id so the
-                // workspace panel can rehydrate this turn's persisted trace
-                // on session reload/switch, plus the last turn's context-window
-                // occupancy so the Panel gauge re-projects on reload.
                 let occupancy = occupancy_out.lock().ok().and_then(|g| *g);
-                agent
-                    .add_message_with_run_id(
-                        &request.session_key,
-                        MessageRole::Assistant,
-                        response,
-                        Some(&run_id),
-                        occupancy,
-                    )
-                    .await;
+                // SSOT: the harness already emitted SessionEvent::AssistantMessage for
+                // `response` (the projector writes that row). Emit run_id + occupancy so
+                // the projector stamps them onto that row — preserving the Panel context
+                // gauge + workspace trace across a session reload.
+                if let Some(svc) = crate::session::service::global_session_service() {
+                    let occ = match occupancy {
+                        Some(o) => o,
+                        None => super::helpers::RunContextOccupancy {
+                            context_tokens: 0,
+                            context_window: 0,
+                            total_tokens: 0,
+                        },
+                    };
+                    let _ = svc
+                        .emit_event(
+                            &request.session_key,
+                            crate::session::events::SessionEvent::AssistantRunMeta {
+                                turn_id: uuid::Uuid::new_v4(),
+                                run_id: run_id.clone(),
+                                context_tokens: occ.context_tokens,
+                                context_window: occ.context_window,
+                                total_tokens: occ.total_tokens,
+                                at: crate::session::events::now_ms(),
+                            },
+                        )
+                        .await;
+                }
 
                 // Notify UI that the session was updated (global bus, so
                 // channel-originated runs reach the Panel too). RunComplete
