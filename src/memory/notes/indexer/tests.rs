@@ -1025,3 +1025,117 @@ async fn delete_note_removes_file_index_and_is_idempotent() {
     // Second delete of the same note is a no-op, not an error.
     indexer.delete_note(AGENT, "plan", "old-plan").await.unwrap();
 }
+
+#[tokio::test]
+async fn append_relations_adds_typed_edge_and_indexes_it() {
+    use crate::memory::notes::Relation;
+
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+    let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
+
+    let note = KnowledgeNote {
+        title: "note-a".to_string(),
+        category: "reference".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    indexer.write_note(AGENT, "reference", &note).await.unwrap();
+
+    indexer
+        .append_relations(
+            AGENT,
+            "reference/note-a",
+            &[Relation {
+                to: "reference/note-b".to_string(),
+                rel_type: "supersedes".to_string(),
+                confidence: 1.0,
+            }],
+        )
+        .await
+        .unwrap();
+
+    let on_disk = fs::read_to_string(
+        memory_dir
+            .join(AGENT)
+            .join("reference")
+            .join("note-a.md"),
+    )
+    .await
+    .unwrap();
+    assert!(on_disk.contains("relations:"), "got:\n{on_disk}");
+    assert!(on_disk.contains("to: reference/note-b"));
+    assert!(on_disk.contains("type: supersedes"));
+
+    // The relation is mirrored into notes_links as a typed edge.
+    let typed = db
+        .get_typed_relations("reference/note-a", AGENT)
+        .await
+        .unwrap();
+    assert!(
+        typed
+            .iter()
+            .any(|(to, rel)| to == "reference/note-b" && rel == "supersedes"),
+        "expected typed edge in {typed:?}"
+    );
+}
+
+#[tokio::test]
+async fn append_relations_is_noop_when_all_already_present() {
+    use crate::memory::notes::Relation;
+
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+    let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
+
+    let note = KnowledgeNote {
+        title: "note-c".to_string(),
+        category: "reference".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+        ..Default::default()
+    };
+    indexer.write_note(AGENT, "reference", &note).await.unwrap();
+
+    let rel = Relation {
+        to: "reference/note-d".to_string(),
+        rel_type: "refers".to_string(),
+        confidence: 1.0,
+    };
+    indexer
+        .append_relations(AGENT, "reference/note-c", &[rel.clone()])
+        .await
+        .unwrap();
+    let after_first = fs::read_to_string(
+        memory_dir
+            .join(AGENT)
+            .join("reference")
+            .join("note-c.md"),
+    )
+    .await
+    .unwrap();
+
+    // Calling again with the same (to, rel_type) must not rewrite the file
+    // (no duplicate relation entries, no spurious updated_at bump).
+    indexer
+        .append_relations(AGENT, "reference/note-c", &[rel])
+        .await
+        .unwrap();
+    let after_second = fs::read_to_string(
+        memory_dir
+            .join(AGENT)
+            .join("reference")
+            .join("note-c.md"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(after_first, after_second, "no-op must not rewrite the file");
+    assert_eq!(
+        after_second.matches("to: reference/note-d").count(),
+        1,
+        "relation must not be duplicated"
+    );
+}

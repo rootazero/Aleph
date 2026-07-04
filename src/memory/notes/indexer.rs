@@ -598,6 +598,58 @@ impl<S: NoteStore> NoteIndexer<S> {
         Ok(())
     }
 
+    /// Merge typed relations into an existing note's frontmatter (deduped by
+    /// (to, rel_type)), bump updated_at, rewrite + re-index. No-op when every
+    /// relation already exists.
+    pub async fn append_relations(
+        &self,
+        agent_id: &str,
+        note_path: &str,
+        relations: &[crate::memory::notes::Relation],
+    ) -> Result<(), AlephError> {
+        let (category, filename) =
+            note_path
+                .split_once('/')
+                .ok_or_else(|| AlephError::ConfigError {
+                    message: format!(
+                        "Invalid note_path (expected 'category/filename'): {note_path}"
+                    ),
+                    suggestion: None,
+                })?;
+        let safe_cat = sanitize_title(category).unwrap_or_else(|_| "other".to_string());
+        let safe_title = sanitize_title(filename)?;
+        let file_path = self
+            .memory_dir
+            .join(agent_id)
+            .join(&safe_cat)
+            .join(format!("{safe_title}.md"));
+        let content = fs::read_to_string(&file_path)
+            .await
+            .map_err(|e| AlephError::config(format!("append_relations read: {e}")))?;
+        let mut note = KnowledgeNote::from_markdown(filename, &content)?;
+        let mut added = false;
+        for r in relations {
+            if !note
+                .relations
+                .iter()
+                .any(|x| x.to == r.to && x.rel_type == r.rel_type)
+            {
+                note.relations.push(r.clone().clamped());
+                added = true;
+            }
+        }
+        if !added {
+            return Ok(());
+        }
+        note.updated_at = chrono::Utc::now().timestamp();
+        let md = note.to_markdown();
+        note.content_hash = sha2_hash(&md);
+        atomic_write_file(&file_path, &md).await?;
+        self.store.index_note(&note, agent_id, &safe_cat).await?;
+        self.notify_orientation(agent_id, &safe_cat, &safe_title);
+        Ok(())
+    }
+
     /// Delete a note: remove its index rows (including any embedding) and the
     /// markdown file, then notify orientation. Sanitizes both path segments.
     ///
