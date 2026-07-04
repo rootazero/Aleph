@@ -15,7 +15,6 @@ use crate::components::team_task_strip::TeamTaskDrawer;
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
-use crate::state::layout::WorkspaceState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
@@ -29,7 +28,6 @@ pub fn ChatView() -> impl IntoView {
     // ChatState is provided once at the app root so the chat sidebar
     // (left column) and this view share one session / agent selection.
     let chat = expect_context::<ChatState>();
-    let workspace = expect_context::<WorkspaceState>();
 
     // Team chat: subscribe to team.<id>.* events alongside the single-agent stream.
     // Harmless when not in team mode (the handler short-circuits on topic prefix).
@@ -101,26 +99,6 @@ pub fn ChatView() -> impl IntoView {
             let _ = dash.unsubscribe_topic("stream.*").await;
             let _ = dash.unsubscribe_topic("team.*").await;
         });
-    });
-
-    // Cross-surface scroll-focus: when a timeline step becomes focused (the
-    // sole writer is the right-pane step button → `WorkspaceState::focus_step`),
-    // bring its chat-bubble counterpart (`#step-{run}-{iteration}`, the id set
-    // in `messages.rs`) into view. The bubble already renders a highlight ring
-    // via `is_step_focused`; this completes the documented scroll-focus that
-    // was previously highlight-only (an off-screen counterpart was never
-    // revealed). `scroll_into_view` walks ancestor scroll containers, so it
-    // works inside the messages list without forcing a full-window scroll.
-    Effect::new(move |_| {
-        let Some((run_id, iteration)) = workspace.focused_step.get() else {
-            return;
-        };
-        let Some(document) = web_sys::window().and_then(|w| w.document()) else {
-            return;
-        };
-        if let Some(el) = document.get_element_by_id(&format!("step-{run_id}-{iteration}")) {
-            el.scroll_into_view();
-        }
     });
 
     // Team task drawer open-state — provided at the chat-view level so both the

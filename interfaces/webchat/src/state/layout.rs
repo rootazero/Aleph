@@ -10,7 +10,8 @@
 //!   (`ChatOnly` keeps Aleph's existing single-column UX; `Split` splits
 //!   chat / workspace 1:2). Persists in `localStorage`.
 //! - [`WorkspaceState`] — activity-stream state: tool payloads, inline
-//!   expansions, unseen-activity badge, file drawer, and focus target.
+//!   expansions, unseen-activity badge, file drawer, and the selected-tool
+//!   pane (live-follow while streaming, pinned once the user picks one).
 //!
 //! State is provided once at the app root via `provide_context`; readers
 //! `expect_context::<WorkspaceState>()` from anywhere in the tree.
@@ -106,15 +107,11 @@ pub struct WorkspaceState {
     pub files_drawer_open: RwSignal<bool>,
     /// Currently previewed file (Phase 2).
     pub selected_file: RwSignal<Option<FilePreview>>,
-    /// Cross-highlight focus: the `(run_id, iteration)` step the user clicked
-    /// on either surface. Both the chat bubble and the timeline step card read
-    /// this to render a highlight ring. Cleared on reset.
-    pub focused_step: RwSignal<Option<(String, usize)>>,
-    /// `(run_id, iteration)` of the currently-active turn (set on
-    /// `agent_trace.turn_started`, cleared on run completion + reset). Lets the
-    /// timeline mark the live step without colliding across runs that reuse an
-    /// iteration number.
-    pub current_iteration: RwSignal<Option<(String, usize)>>,
+    /// 详情查看器当前选中的工具 `(run_id, tool_id)`。直播时由
+    /// `follow_tool` 跟随最新开始的工具；用户点选（`select_tool`）后钉住。
+    pub selected_tool: RwSignal<Option<(String, String)>>,
+    /// 用户是否钉住了选中（钉住时直播跟随不覆盖）。run 结束解除。
+    pub pinned: RwSignal<bool>,
 }
 
 impl Default for WorkspaceState {
@@ -135,8 +132,8 @@ impl WorkspaceState {
             unseen_activity: RwSignal::new(0),
             files_drawer_open: RwSignal::new(false),
             selected_file: RwSignal::new(None),
-            focused_step: RwSignal::new(None),
-            current_iteration: RwSignal::new(None),
+            selected_tool: RwSignal::new(None),
+            pinned: RwSignal::new(false),
         }
     }
 
@@ -195,7 +192,7 @@ impl WorkspaceState {
     }
 
     /// Reset the pane for a new / switched chat session. Drops inline
-    /// expansions, focus, badge, drawer selection, and every captured
+    /// expansions, selection, badge, drawer selection, and every captured
     /// payload. Layout mode (the user's pane preference) is preserved.
     pub fn reset(&self) {
         self.tool_payloads.update(std::collections::HashMap::clear);
@@ -204,8 +201,19 @@ impl WorkspaceState {
         self.unseen_activity.set(0);
         self.files_drawer_open.set(false);
         self.selected_file.set(None);
-        self.focused_step.set(None);
-        self.current_iteration.set(None);
+        self.clear_selection();
+    }
+
+    /// Clear the detail-pane selection + pin. `selected_tool`/`pinned` are
+    /// global (not per-conversation), so any conversation switch that keeps
+    /// the singleton's captured payloads intact (unlike [`Self::reset`],
+    /// which wipes them for a full session reload) must still drop the
+    /// pointer left over from the outgoing conversation — otherwise the
+    /// detail pane can show another conversation's tool, and a stale pin
+    /// blocks the new foreground's live-follow.
+    pub fn clear_selection(&self) {
+        self.selected_tool.set(None);
+        self.pinned.set(false);
     }
 
     /// Record the input/args of a tool call. Idempotent.
@@ -233,49 +241,26 @@ impl WorkspaceState {
         self.tool_payloads.with(|m| m.get(&key).cloned())
     }
 
-    /// Record the active turn `(run_id, iteration)` (`agent_trace.turn_started`).
-    pub fn set_current_iteration(&self, run_id: impl Into<String>, iteration: usize) {
-        self.current_iteration.set(Some((run_id.into(), iteration)));
+    /// 直播跟随：未钉住时把详情面切到最新开始的工具（R5 — 工作台感）。
+    pub fn follow_tool(&self, run_id: &str, tool_id: &str) {
+        if !self.pinned.get_untracked() {
+            self.selected_tool
+                .set(Some((run_id.to_string(), tool_id.to_string())));
+        }
     }
 
-    /// Focus a step for cross-highlight. Opens Split if not already (so a
-    /// chat-side click reveals the timeline group). A scroll-into-view effect
-    /// in `ChatView` reads `focused_step` and brings the chat-bubble
-    /// counterpart (`#step-{run}-{iteration}`) into view.
-    pub fn focus_step(&self, run_id: impl Into<String>, iteration: usize) {
-        self.focused_step.set(Some((run_id.into(), iteration)));
+    /// 用户点选：选中 + 钉住 + 确保 Split 打开（聊天侧任何"→ 详情"入口都走这里）。
+    pub fn select_tool(&self, run_id: impl Into<String>, tool_id: impl Into<String>) {
+        self.selected_tool.set(Some((run_id.into(), tool_id.into())));
+        self.pinned.set(true);
         if self.mode.get_untracked() != LayoutMode::Split {
             self.set_layout(LayoutMode::Split);
         }
     }
 
-    /// 打开右栏 + 聚焦该步 + 幂等确保该工具展开。
-    ///
-    /// `default_open` 由调用方按 `ToolKind` 传入（与卡片渲染同源），因为
-    /// `toggle_event` 存的是「相对 `default_open` **翻转过**的集合」，
-    /// 即 `expanded = default_open ^ is_event_toggled`。仅当前折叠时才
-    /// `toggle_event`，所以重复调用是幂等的，绝不误折叠已展开的卡。
-    pub fn reveal_tool(
-        &self,
-        run_id: impl Into<String>,
-        iteration: usize,
-        tool_id: &str,
-        default_open: bool,
-    ) {
-        self.focus_step(run_id, iteration); // 已会在非 Split 时自动 set_layout(Split)
-        let expanded_now = default_open ^ self.is_event_toggled(tool_id);
-        if !expanded_now {
-            self.toggle_event(tool_id);
-        }
-    }
-
-    /// True when `(run_id, iteration)` is the focused step.
-    #[must_use]
-    pub fn is_step_focused(&self, run_id: &str, iteration: usize) -> bool {
-        self.focused_step.with(|f| {
-            f.as_ref()
-                .is_some_and(|(r, i)| r == run_id && *i == iteration)
-        })
+    /// run 完成/出错：解除钉住（选中保留，详情面继续显示最后的工具）。
+    pub fn end_follow(&self) {
+        self.pinned.set(false);
     }
 }
 
@@ -316,8 +301,8 @@ mod tests {
             unseen_activity: RwSignal::new(0),
             files_drawer_open: RwSignal::new(false),
             selected_file: RwSignal::new(None),
-            focused_step: RwSignal::new(None),
-            current_iteration: RwSignal::new(None),
+            selected_tool: RwSignal::new(None),
+            pinned: RwSignal::new(false),
         }
     }
 
@@ -439,48 +424,76 @@ mod tests {
     }
 
     #[test]
-    fn focus_step_sets_focus_and_opens_split() {
-        let owner = Owner::new();
-        owner.set();
-        let ws = test_ws(LayoutMode::ChatOnly);
-        ws.focus_step("run-1", 2);
-        assert!(ws.is_step_focused("run-1", 2));
-        assert_eq!(ws.mode.get_untracked(), LayoutMode::Split);
-    }
-
-    #[test]
-    fn is_step_focused_discriminates_run_and_iteration() {
+    fn follow_tool_tracks_latest_unless_pinned() {
         let owner = Owner::new();
         owner.set();
         let ws = test_ws(LayoutMode::Split);
-        ws.focus_step("run-1", 2);
-        assert!(ws.is_step_focused("run-1", 2));
-        assert!(!ws.is_step_focused("run-1", 3));
-        assert!(!ws.is_step_focused("run-2", 2));
-    }
-
-    #[test]
-    fn set_current_iteration_tracks_active_turn() {
-        let owner = Owner::new();
-        owner.set();
-        let ws = test_ws(LayoutMode::Split);
-        ws.set_current_iteration("run-1", 3);
+        ws.follow_tool("r1", "t1");
         assert_eq!(
-            ws.current_iteration.get_untracked(),
-            Some(("run-1".to_string(), 3))
+            ws.selected_tool.get_untracked(),
+            Some(("r1".to_string(), "t1".to_string()))
+        );
+        // 用户点选 → 钉住
+        ws.select_tool("r1", "t2");
+        assert!(ws.pinned.get_untracked());
+        // 钉住后直播跟随不再覆盖
+        ws.follow_tool("r1", "t3");
+        assert_eq!(
+            ws.selected_tool.get_untracked(),
+            Some(("r1".to_string(), "t2".to_string()))
+        );
+        // run 结束解钉，选中保留
+        ws.end_follow();
+        assert!(!ws.pinned.get_untracked());
+        assert!(ws.selected_tool.get_untracked().is_some());
+        // 解钉后恢复跟随
+        ws.follow_tool("r2", "t9");
+        assert_eq!(
+            ws.selected_tool.get_untracked(),
+            Some(("r2".to_string(), "t9".to_string()))
         );
     }
 
     #[test]
-    fn reset_clears_focus_and_current_iteration() {
+    fn select_tool_opens_split() {
+        let owner = Owner::new();
+        owner.set();
+        let ws = test_ws(LayoutMode::ChatOnly);
+        ws.select_tool("r1", "t1");
+        assert_eq!(ws.mode.get_untracked(), LayoutMode::Split);
+    }
+
+    #[test]
+    fn reset_clears_selection_and_pin() {
         let owner = Owner::new();
         owner.set();
         let ws = test_ws(LayoutMode::Split);
-        ws.focus_step("run-1", 1);
-        ws.set_current_iteration("run-1", 5);
+        ws.select_tool("r1", "t1");
         ws.reset();
-        assert!(!ws.is_step_focused("run-1", 1));
-        assert_eq!(ws.current_iteration.get_untracked(), None);
+        assert!(ws.selected_tool.get_untracked().is_none());
+        assert!(!ws.pinned.get_untracked());
+    }
+
+    /// Regression for final-review F1: tab switch must clear the leftover
+    /// selection/pin without wiping captured payloads (unlike `reset()`,
+    /// which is only safe on a full session reload since payloads aren't
+    /// per-conversation).
+    #[test]
+    fn clear_selection_drops_selection_and_pin_but_keeps_payloads() {
+        let owner = Owner::new();
+        owner.set();
+        let ws = test_ws(LayoutMode::Split);
+        ws.select_tool("r1", "t1");
+        ws.record_tool_args("r1", "t1", serde_json::json!({"q": "x"}));
+        assert!(ws.pinned.get_untracked());
+
+        ws.clear_selection();
+
+        assert!(ws.selected_tool.get_untracked().is_none());
+        assert!(!ws.pinned.get_untracked());
+        // The other conversation's captured payload must survive — clearing
+        // selection on tab switch is not a full reset.
+        assert!(ws.get_tool_payload("r1", "t1").is_some());
     }
 
     #[test]
@@ -497,41 +510,5 @@ mod tests {
         // In Split, further activity does not accrue.
         ws.note_activity();
         assert_eq!(ws.unseen_activity.get_untracked(), 0);
-    }
-
-    #[test]
-    fn reveal_tool_expands_only_when_collapsed() {
-        let ws = test_ws(LayoutMode::Split);
-        // default_open=false, 未 toggle → 当前折叠 → reveal 应翻开（toggle_event 置位）
-        assert!(!ws.is_event_toggled("t1"));
-        ws.reveal_tool("r1", 2, "t1", false);
-        assert!(
-            ws.is_event_toggled("t1"),
-            "collapsed-by-default tool should be toggled open"
-        );
-        // 再次 reveal 幂等：已展开不再翻转（仍为 toggled）
-        ws.reveal_tool("r1", 2, "t1", false);
-        assert!(
-            ws.is_event_toggled("t1"),
-            "second reveal must not collapse an open tool"
-        );
-    }
-
-    #[test]
-    fn reveal_tool_default_open_stays_open() {
-        let ws = test_ws(LayoutMode::Split);
-        // default_open=true, 未 toggle → 当前已展开 → reveal 不应 toggle（保持未翻转）
-        ws.reveal_tool("r1", 1, "t2", true);
-        assert!(
-            !ws.is_event_toggled("t2"),
-            "default-open tool must stay open without toggling"
-        );
-    }
-
-    #[test]
-    fn reveal_tool_focuses_step() {
-        let ws = test_ws(LayoutMode::Split);
-        ws.reveal_tool("rX", 3, "t3", false);
-        assert!(ws.is_step_focused("rX", 3));
     }
 }

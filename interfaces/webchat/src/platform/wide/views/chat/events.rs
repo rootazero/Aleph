@@ -13,11 +13,18 @@ use std::sync::{Arc, Mutex};
 /// (tool args/result payloads, current iteration). The single projection
 /// shared by the live WS stream and `trace.by_runs` replay so the two paths
 /// can never drift.
+///
+/// `is_foreground` gates the live-follow side effect only (see
+/// `tool_call_started` below): `WorkspaceState` is a single global instance,
+/// so a background conversation's tool call must not steal the detail pane
+/// away from whatever the user is actually looking at. Replay always passes
+/// `true` — it reconstructs the conversation the caller is viewing.
 pub(crate) fn apply_trace_event(
     chat: ChatState,
     workspace: WorkspaceState,
     run_id: &str,
     trace_event: &serde_json::Value,
+    is_foreground: bool,
 ) {
     // The harness serializes `LoopTraceEvent` with `#[serde(tag =
     // "type")]`, so the discriminator arrives as `type`. The
@@ -52,6 +59,13 @@ pub(crate) fn apply_trace_event(
                     .cloned();
                 if let Some(args) = args {
                     workspace.record_tool_args(run_id, tool_id, args);
+                }
+                // Live-follow: keep the detail pane on the most recent tool
+                // call unless the user has pinned a different one. Gated to
+                // the foreground conversation — a background run must not
+                // hijack the pane the user is currently viewing.
+                if is_foreground {
+                    workspace.follow_tool(run_id, tool_id);
                 }
             }
         }
@@ -125,7 +139,6 @@ pub(crate) fn apply_trace_event(
                 return;
             };
             chat.begin_step(run_id, iteration);
-            workspace.set_current_iteration(run_id, iteration);
             // Turn boundary reached with prompts still queued → ask the composer
             // (which owns the send pipeline) to steer them into the live run.
             // Guarded so we only wake the flush Effect when there's something to
@@ -200,7 +213,9 @@ pub(crate) fn replay_run(
 ) {
     chat.start_assistant_message(run_id);
     for ev in events {
-        apply_trace_event(chat, workspace, run_id, ev);
+        // Replay always reconstructs the conversation being viewed — treat
+        // it as foreground so live-follow behaves the same as it did live.
+        apply_trace_event(chat, workspace, run_id, ev, true);
     }
     chat.complete_run(run_id);
     // Same authoritative promotion as the live `run_complete` path: overwrite
@@ -255,15 +270,19 @@ fn apply_context_gauge(chat: ChatState, summary: &serde_json::Value) {
 }
 
 /// Resolve which conversation's `ChatState` one run event should land on, and
-/// maintain running/route bookkeeping. Returns the target `ChatState` (`None`
-/// = drop). Extracted so it's unit-testable without a Leptos event dependency.
+/// maintain running/route bookkeeping. Returns the target `ChatState` plus
+/// whether the resolved conversation is the active (foreground) one — callers
+/// use that to gate `WorkspaceState` side effects (live-follow / unpin) that
+/// must not leak from a background conversation onto the singleton detail
+/// pane. `None` = drop. Extracted so it's unit-testable without a Leptos
+/// event dependency.
 fn resolve_target(
     sessions: &SessionMap,
     singleton: ChatState,
     event_type: &str,
     run_id: &str,
     session_key: Option<&str>,
-) -> Option<ChatState> {
+) -> Option<(ChatState, bool)> {
     let conv = match event_type {
         // New run: the send path binds run_id → the conversation active at
         // *send* time (authoritative when the user switches tabs before the
@@ -283,10 +302,11 @@ fn resolve_target(
         sessions.bind_run(run_id, conv, session_key);
     }
     let target = sessions.chat_for(conv, singleton);
+    let is_foreground = sessions.active_conv() == Some(conv);
     if matches!(event_type, "run_complete" | "run_error") {
         sessions.settle_run(run_id);
     }
-    target
+    target.map(|chat| (chat, is_foreground))
 }
 
 /// Subscribe to `run.*` events and dispatch to `ChatState`. Tool args/results
@@ -331,9 +351,11 @@ pub fn subscribe_run_events(
         }
 
         // Resolve the target conversation's ChatState (active = singleton
-        // projection / background = live[conv]).
+        // projection / background = live[conv]), plus whether it's the
+        // foreground conversation (gates WorkspaceState live-follow/unpin).
         let session_key = data.get("session_key").and_then(|s| s.as_str());
-        let Some(chat) = resolve_target(&sessions, singleton, event_type, run_id, session_key)
+        let Some((chat, is_foreground)) =
+            resolve_target(&sessions, singleton, event_type, run_id, session_key)
         else {
             return;
         };
@@ -358,7 +380,7 @@ pub fn subscribe_run_events(
                 let Some(trace_event) = data.get("event") else {
                     return;
                 };
-                apply_trace_event(chat, workspace, run_id, trace_event);
+                apply_trace_event(chat, workspace, run_id, trace_event, is_foreground);
             }
             "tool_start" => {
                 if trace_enabled {
@@ -448,7 +470,12 @@ pub fn subscribe_run_events(
             }
             "run_complete" => {
                 chat.complete_run(run_id);
-                workspace.current_iteration.set(None);
+                // Unpin only affects the foreground detail pane — a
+                // background run finishing must not clear the user's
+                // manual pin on whatever they're currently viewing.
+                if is_foreground {
+                    workspace.end_follow();
+                }
                 // Promote the harness-authoritative final answer into the
                 // trailing bubble so it renders as the conversational reply —
                 // even when the terminating turn also issued a tool call (which
@@ -483,7 +510,9 @@ pub fn subscribe_run_events(
                     .and_then(|e| e.as_str())
                     .unwrap_or("Unknown error");
                 chat.fail_run(run_id, error);
-                workspace.current_iteration.set(None);
+                if is_foreground {
+                    workspace.end_follow();
+                }
             }
             _ => {} // Ignore unknown event types
         }
@@ -557,7 +586,7 @@ mod projection_tests {
             json!({ "kind": "text_emitted", "iteration": 2, "stream": "final", "text": "done" }),
         ];
         for ev in &events {
-            apply_trace_event(chat, ws, "run-1", ev);
+            apply_trace_event(chat, ws, "run-1", ev, true);
         }
 
         let payload = ws.get_tool_payload("run-1", "t1").expect("payload");
@@ -570,6 +599,39 @@ mod projection_tests {
         assert!(msgs
             .iter()
             .any(|m| m.iteration == Some(2) && m.content.contains("done")));
+    }
+
+    /// Regression for the multi-conversation live-follow leak: a background
+    /// conversation's `tool_call_started` must not steal the (single, global)
+    /// `WorkspaceState` detail pane away from whatever the user is actually
+    /// viewing. `is_foreground = false` must leave `selected_tool` untouched;
+    /// `is_foreground = true` (the foreground conversation) must still follow.
+    #[test]
+    fn tool_call_started_follow_gated_to_foreground() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        let ws = WorkspaceState::new();
+        chat.start_assistant_message("run-1");
+
+        let started = json!({ "kind": "tool_call_started", "iteration": 1,
+                "call": { "tool_id": "t1", "tool_name": "search", "input": { "q": "x" } } });
+
+        // Background conversation: must not touch the shared detail pane.
+        apply_trace_event(chat, ws, "run-1", &started, false);
+        assert_eq!(
+            ws.selected_tool.get_untracked(),
+            None,
+            "background tool_call_started must not steal the detail pane"
+        );
+
+        // Foreground conversation: live-follow still applies.
+        apply_trace_event(chat, ws, "run-1", &started, true);
+        assert_eq!(
+            ws.selected_tool.get_untracked(),
+            Some(("run-1".to_string(), "t1".to_string())),
+            "foreground tool_call_started still live-follows"
+        );
     }
 
     #[test]
@@ -597,7 +659,7 @@ mod projection_tests {
                       "input": { "action": "set_plan" } },
             "result": { "Success": { "output": output_str } }
         });
-        apply_trace_event(chat, ws, "run-1", &ev);
+        apply_trace_event(chat, ws, "run-1", &ev, true);
 
         let plan = chat
             .plan
@@ -647,12 +709,14 @@ mod projection_tests {
             ws,
             "r1",
             &scratchpad_event("set_plan", &[("in_progress", "a")]),
+            true,
         );
         apply_trace_event(
             chat,
             ws,
             "r1",
             &scratchpad_event("set_plan", &[("pending", "b")]),
+            true,
         );
         assert_eq!(archive_count(&chat), 1, "worked prior plan A sinks");
         let plan = chat.plan.get_untracked().expect("new plan B shown");
@@ -672,12 +736,14 @@ mod projection_tests {
             ws,
             "r1",
             &scratchpad_event("set_plan", &[("pending", "a")]),
+            true,
         );
         apply_trace_event(
             chat,
             ws,
             "r1",
             &scratchpad_event("set_plan", &[("pending", "b")]),
+            true,
         );
         assert_eq!(
             archive_count(&chat),
@@ -699,8 +765,9 @@ mod projection_tests {
             ws,
             "r1",
             &scratchpad_event("set_plan", &[("completed", "a")]),
+            true,
         );
-        apply_trace_event(chat, ws, "r1", &scratchpad_event("clear", &[]));
+        apply_trace_event(chat, ws, "r1", &scratchpad_event("clear", &[]), true);
         assert_eq!(archive_count(&chat), 1, "completed plan sinks on clear");
         assert!(
             chat.plan.get_untracked().is_none(),
@@ -720,6 +787,7 @@ mod projection_tests {
             ws,
             "r1",
             &scratchpad_event("set_plan", &[("pending", "a"), ("pending", "b")]),
+            true,
         );
         // a same-plan update (start_item) must NOT sink a capsule
         apply_trace_event(
@@ -727,6 +795,7 @@ mod projection_tests {
             ws,
             "r1",
             &scratchpad_event("start_item", &[("in_progress", "a"), ("pending", "b")]),
+            true,
         );
         assert_eq!(
             archive_count(&chat),
@@ -748,6 +817,7 @@ mod projection_tests {
             ws1,
             "r1",
             &scratchpad_event("set_plan", &[("completed", "a")]),
+            true,
         );
         live.start_assistant_message("r2"); // next-turn sink of completed A
         let live_caps = live.messages.with(|m| {
@@ -815,14 +885,16 @@ mod projection_tests {
         sessions.activate(singleton, a);
         let t = resolve_target(&sessions, singleton, "run_accepted", "run-a", Some("sk-a"));
         assert_eq!(
-            t.map(|c| c.agent_id.get_untracked()),
+            t.as_ref().map(|(c, _)| c.agent_id.get_untracked()),
             Some(singleton.agent_id.get_untracked())
         );
+        assert_eq!(t.map(|(_, is_fg)| is_fg), Some(true), "A is foreground at send time");
         sessions.activate(singleton, b);
 
         // Background chunk should route to A's live state, not the singleton (B).
-        let bg = resolve_target(&sessions, singleton, "response_chunk", "run-a", None)
+        let (bg, is_fg) = resolve_target(&sessions, singleton, "response_chunk", "run-a", None)
             .expect("routed to background A");
+        assert!(!is_fg, "A is backgrounded once B is active");
         let a_bg = sessions.chat_for(a, singleton).expect("A background");
         // Same background A instance (Copy makes signal identity comparison
         // awkward — compare append effects instead).
@@ -853,8 +925,9 @@ mod projection_tests {
 
         // run_accepted must resolve to A (send-time truth), not B (foreground),
         // and must NOT double-count A's running refcount.
-        let t = resolve_target(&sessions, singleton, "run_accepted", "run-a", Some("sk-a"))
+        let (t, is_fg) = resolve_target(&sessions, singleton, "run_accepted", "run-a", Some("sk-a"))
             .expect("resolved to A's background state");
+        assert!(!is_fg, "A is not foreground — B is active");
         let a_bg = sessions.chat_for(a, singleton).expect("A background");
         t.start_assistant_message("run-a");
         t.append_chunk("run-a", "hi");

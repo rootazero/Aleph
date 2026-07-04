@@ -252,6 +252,10 @@ pub struct ToolCallEntry {
     pub status: String, // "running" | "completed" | "failed"
     #[serde(default)]
     pub duration_ms: Option<u64>,
+    /// Epoch-ms when the tool first went "running" — drives the live
+    /// elapsed timer on long-running tool rows. Stamped panel-side.
+    #[serde(default)]
+    pub started_at_ms: Option<i64>,
 }
 
 /// Panel-side team member view (roster rail rendering + attribution coloring).
@@ -402,12 +406,12 @@ pub struct ChatState {
     /// task strip + drawer). Empty when not in team mode. Fetched from
     /// `teams.list_tasks` and upserted by `team.<id>.task.<verb>` events.
     pub team_tasks: RwSignal<Vec<CoordTaskDto>>,
-    /// Per-run step-strip expand/collapse override, keyed by `run_id`.
-    /// Absent = use the default (running strips open, completed collapsed);
-    /// present = the user's explicit toggle. Lives here — not as a strip-local
-    /// signal — because `timeline::row_key` folds in content length, so the
-    /// strip row remounts on every streamed token and a component-local `open`
-    /// would reset each time (re-opening a strip the user just collapsed mid-run).
+    /// Per explore-group expand override, keyed by group key. Absent = use the
+    /// default (running groups open, completed collapsed); present = the
+    /// user's explicit toggle. Lives here — not as a group-local signal —
+    /// because `timeline::row_key` folds in content length, so the group row
+    /// remounts on every streamed token and a component-local `open` would
+    /// reset each time (re-opening a group the user just collapsed mid-run).
     /// Ephemeral, like `retry_pulse` — excluded from [`SessionSnapshot`].
     pub strip_open: RwSignal<std::collections::HashMap<String, bool>>,
     /// Active single-chat task plan (scratchpad-driven Todo widget). `None`
@@ -455,23 +459,23 @@ impl ChatState {
         }
     }
 
-    /// Whether run `run_id`'s step strip is expanded. `default_open` is the
-    /// state to use when the user hasn't toggled it (running strips default
-    /// open, completed strips default collapsed).
+    /// Whether explore group `key` is expanded. `default_open` is the state
+    /// to use when the user hasn't toggled it (running groups default open,
+    /// completed groups default collapsed).
     #[must_use]
-    pub fn strip_is_open(&self, run_id: &str, default_open: bool) -> bool {
+    pub fn strip_is_open(&self, key: &str, default_open: bool) -> bool {
         self.strip_open
-            .with(|m| m.get(run_id).copied())
+            .with(|m| m.get(key).copied())
             .unwrap_or(default_open)
     }
 
-    /// Toggle run `run_id`'s step-strip expand state, seeding from
+    /// Toggle explore group `key`'s expand state, seeding from
     /// `default_open` when the user hasn't toggled it before. The stored
-    /// override survives the strip row's per-token remount.
-    pub fn toggle_strip(&self, run_id: &str, default_open: bool) {
-        let next = !self.strip_is_open(run_id, default_open);
+    /// override survives the group row's per-token remount.
+    pub fn toggle_strip(&self, key: &str, default_open: bool) {
+        let next = !self.strip_is_open(key, default_open);
         self.strip_open.update(|m| {
-            m.insert(run_id.to_string(), next);
+            m.insert(key.to_string(), next);
         });
     }
 
@@ -819,6 +823,7 @@ impl ChatState {
                         tool_name: tool_name.to_string(),
                         status: status.to_string(),
                         duration_ms,
+                        started_at_ms: (status == "running").then(super::timeline::now_millis),
                     });
                 }
             }
@@ -1504,5 +1509,36 @@ mod queue_tests {
         let texts: Vec<_> = drained.iter().map(|p| p.text.clone()).collect();
         assert_eq!(texts, vec!["a", "b"]);
         assert!(chat.prompt_queue.get_untracked().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tool_timestamp_tests {
+    use super::*;
+
+    #[test]
+    fn update_tool_stamps_started_at_on_first_running() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1"); // 建 assistant-r1 容器
+        chat.update_tool("r1", "t1", "bash", "running", None);
+        let started = chat.messages.with_untracked(|m| {
+            m.iter()
+                .flat_map(|m| m.tool_calls.iter())
+                .find(|t| t.tool_id == "t1")
+                .and_then(|t| t.started_at_ms)
+        });
+        assert!(started.is_some(), "first running must stamp started_at_ms");
+
+        // 完成时不覆盖时间戳
+        chat.update_tool("r1", "t1", "bash", "completed", Some(30));
+        let after = chat.messages.with_untracked(|m| {
+            m.iter()
+                .flat_map(|m| m.tool_calls.iter())
+                .find(|t| t.tool_id == "t1")
+                .map(|t| (t.started_at_ms, t.status.clone()))
+        });
+        assert_eq!(after.map(|(s, _)| s), Some(started));
     }
 }

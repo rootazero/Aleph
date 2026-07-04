@@ -209,6 +209,45 @@ pub fn summarize_tools(tools: &[(String, String)]) -> Vec<(ToolKind, usize)> {
     order.into_iter().map(|k| (k, counts[&k])).collect()
 }
 
+/// 探索块展开体的一行：连续 FileRead 合并成一条（文件名去重连接），
+/// Search 等其余只读工具各自一条。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExploreEntry {
+    pub kind: ToolKind,
+    /// 已合成的展示文案（如 "a.rs, b.rs" 或搜索词）。
+    pub label: String,
+    /// 该条覆盖的 tool_id（合并行含多个；点击取 first 进详情栏）。
+    pub tool_ids: Vec<String>,
+}
+
+/// 连续 FileRead 合并去重：将连续的同类文件读取合并为一条，
+/// 文件名去重后以逗号连接；其他工具各占一行。
+#[must_use]
+pub fn explore_entries(items: &[(String, String, Option<String>)]) -> Vec<ExploreEntry> {
+    let mut out: Vec<ExploreEntry> = Vec::new();
+    for (tool_id, name, headline) in items {
+        let kind = ToolKind::from_name(name);
+        let label = headline.clone().unwrap_or_else(|| name.clone());
+        // 连续 FileRead 合并到上一条（label 去重后逗号连接）。
+        if kind == ToolKind::FileRead {
+            if let Some(last) = out.last_mut().filter(|e| e.kind == ToolKind::FileRead) {
+                last.tool_ids.push(tool_id.clone());
+                if !last.label.split(", ").any(|s| s == label) {
+                    last.label.push_str(", ");
+                    last.label.push_str(&label);
+                }
+                continue;
+            }
+        }
+        out.push(ExploreEntry {
+            kind,
+            label,
+            tool_ids: vec![tool_id.clone()],
+        });
+    }
+    out
+}
+
 /// 文件类工具的路径，用于头部 `📄 path`。非文件工具返回 None。
 #[must_use]
 pub fn file_path_of(payload: &Option<ToolPayload>) -> Option<String> {
@@ -317,7 +356,6 @@ pub fn ToolCard(
     tool_id: String,
     tool_name: String,
     #[prop(optional)] surface: ToolSurface,
-    #[prop(optional_no_strip)] iteration: Option<usize>,
 ) -> impl IntoView {
     let workspace = use_context::<WorkspaceState>();
     let chat = expect_context::<ChatState>();
@@ -333,7 +371,7 @@ pub fn ToolCard(
             .flat_map(|m| m.tool_calls.iter())
             .find_map(|t| {
                 if t.tool_id == tid_for_status {
-                    Some((t.status.clone(), t.duration_ms))
+                    Some((t.status.clone(), t.duration_ms, t.started_at_ms))
                 } else {
                     None
                 }
@@ -377,13 +415,8 @@ pub fn ToolCard(
 
     let detail_label = t_string!(i18n, tool_card.to_detail).to_string();
     let on_overflow = move || {
-        if let (Some(ws), Some(it)) = (workspace, iteration) {
-            ws.reveal_tool(
-                run_for_overflow.clone(),
-                it,
-                &tid_for_overflow,
-                default_open,
-            );
+        if let Some(ws) = workspace {
+            ws.select_tool(run_for_overflow.clone(), tid_for_overflow.clone());
         }
     };
 
@@ -426,11 +459,17 @@ pub fn ToolCard(
         }
     };
 
-    let running = move || matches!(status.get(), Some((s, _)) if s == "running");
-    let failed = move || matches!(status.get(), Some((s, _)) if s == "failed");
+    let running = move || matches!(status.get(), Some((s, _, _)) if s == "running");
+    let failed = move || matches!(status.get(), Some((s, _, _)) if s == "failed");
+    let succeeded = move || matches!(status.get(), Some((s, _, _)) if s == "completed");
+
+    // Shared 1s clock for the live elapsed timer on long-running rows. Only
+    // read inside the `running` branch below, so done/failed rows never
+    // subscribe to the tick (see run_clock.rs perf contract).
+    let tick = use_context::<crate::state::run_clock::SecondTick>();
 
     view! {
-        <div class="rounded-lg glass-inset hover:bg-surface-raised/30 transition-colors">
+        <div class="rounded-md hover:bg-surface-raised/40 transition-colors">
             <button
                 type="button"
                 class="w-full flex items-center gap-2 px-2 py-1 text-left"
@@ -449,6 +488,36 @@ pub fn ToolCard(
                 </span>
                 <Show when=running>
                     <span class="shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+                    {
+                        let status = status;
+                        move || {
+                            match (tick, status.get()) {
+                                (Some(t), Some((_, _, Some(start)))) => {
+                                    let elapsed = t.0.get() - start;
+                                    (elapsed >= crate::state::run_clock::LONG_RUN_THRESHOLD_MS)
+                                        .then(|| view! {
+                                            <span class="shrink-0 text-[10px] font-mono text-text-tertiary tabular-nums">
+                                                {crate::state::run_clock::fmt_elapsed(elapsed)}
+                                            </span>
+                                        })
+                                }
+                                _ => None,
+                            }
+                        }
+                    }
+                </Show>
+                <Show when=succeeded>
+                    <span class="shrink-0 text-[11px] text-success">"✓"</span>
+                    // Sub-second completions just show the ✓ — a "0s" label reads as
+                    // broken, not fast (final-review F4).
+                    {move || status.get().and_then(|(_, d, _)| d).filter(|d| *d >= 1000).map(|d| view! {
+                        <span class="shrink-0 text-[10px] font-mono text-text-tertiary">
+                            {crate::state::run_clock::fmt_elapsed(d as i64)}
+                        </span>
+                    })}
+                </Show>
+                <Show when=failed>
+                    <span class="shrink-0 text-[11px] text-danger">"✗"</span>
                 </Show>
                 {move || match diff_stat() {
                     Some((a, r)) => view! {
@@ -483,7 +552,7 @@ const MONO_BLOCK: &str = "font-mono text-xs whitespace-pre-wrap break-words lead
 /// 按工具大类渲染卡片体。`surface` 决定封顶：Inline 封顶 `MAX_INLINE_LINES`
 /// 并在溢出处显示「→ 详情栏」联动行；Detail 全量。`detail_label` 为已解析的
 /// 本地化「详情栏」文案。
-fn render_body(
+pub(crate) fn render_body(
     kind: ToolKind,
     payload: &Option<ToolPayload>,
     surface: ToolSurface,
@@ -1029,5 +1098,30 @@ mod tests {
     #[test]
     fn tool_surface_defaults_inline() {
         assert_eq!(ToolSurface::default(), ToolSurface::Inline);
+    }
+
+    #[test]
+    fn explore_entries_merges_consecutive_reads_dedup() {
+        let items = vec![
+            ("t1".into(), "file_read".into(), Some("a.rs".to_string())),
+            ("t2".into(), "file_read".into(), Some("b.rs".to_string())),
+            ("t3".into(), "file_read".into(), Some("a.rs".to_string())), // dup 去重
+            ("t4".into(), "web_search".into(), Some("panel bug".to_string())),
+            ("t5".into(), "file_read".into(), Some("c.rs".to_string())), // search 打断后新起一条
+        ];
+        let entries = explore_entries(&items);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].label, "a.rs, b.rs");
+        assert_eq!(entries[0].tool_ids, vec!["t1".to_string(), "t2".to_string(), "t3".to_string()]);
+        assert_eq!(entries[1].kind, ToolKind::Search);
+        assert_eq!(entries[1].label, "panel bug");
+        assert_eq!(entries[2].label, "c.rs");
+    }
+
+    #[test]
+    fn explore_entries_headline_fallback_is_tool_name() {
+        let items = vec![("t1".into(), "file_read".into(), None)];
+        let entries = explore_entries(&items);
+        assert_eq!(entries[0].label, "file_read");
     }
 }

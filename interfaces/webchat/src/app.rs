@@ -140,6 +140,16 @@ fn AppContent() -> impl IntoView {
         std::time::Duration::from_millis(33),
     );
 
+    // Shared 1s clock — drives the live elapsed timer on long-running tool
+    // rows (ToolCard). Only running rows subscribe to it, so idle history
+    // never re-renders on this tick.
+    let sec_tick = RwSignal::new(crate::views::chat::timeline::now_millis());
+    provide_context(crate::state::run_clock::SecondTick(sec_tick));
+    set_interval(
+        move || sec_tick.set(crate::views::chat::timeline::now_millis()),
+        std::time::Duration::from_secs(1),
+    );
+
     // Hotkey state — owns the ⌘K command-palette open signal and carries the
     // VoiceMode switch for the ⌘⇧V / Esc bindings. Installed *before* the
     // keydown listener below so the listener can read it.
