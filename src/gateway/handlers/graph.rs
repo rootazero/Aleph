@@ -5,9 +5,10 @@
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::graph_types::{
-    GraphNeighborsParams, GraphNeighborsResponse, GraphNodeDetailParams, GraphQueryParams,
-    GraphQueryResponse, GraphSearchParams, GraphSearchResponse, GraphUpdateNoteParams,
-    NoteDetailResponse, NoteLinkDto, NoteNodeDto, SearchResultDto,
+    GraphDeleteNoteParams, GraphNeighborsParams, GraphNeighborsResponse, GraphNodeDetailParams,
+    GraphQueryParams, GraphQueryResponse, GraphRenameNoteParams, GraphSearchParams,
+    GraphSearchResponse, GraphUpdateNoteParams, NoteDetailResponse, NoteLinkDto, NoteNodeDto,
+    SearchResultDto,
 };
 use crate::memory::notes::store::{NoteIndexEntry, NoteStore};
 use crate::memory::notes::NoteIndexer;
@@ -39,61 +40,6 @@ fn notes_dir() -> std::path::PathBuf {
             .join("memory")
             .join("note")
     })
-}
-
-/// Handle graph.query — returns nodes and edges for visualization.
-///
-/// Requires `NoteStore` wired at Gateway startup.
-pub async fn handle_query(req: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        req.id,
-        INTERNAL_ERROR,
-        "graph.query requires NoteStore — wire in Gateway startup".to_string(),
-    )
-}
-
-/// Handle graph.neighbors — returns neighbors of a node up to a given depth.
-///
-/// Requires `NoteStore` wired at Gateway startup.
-pub async fn handle_neighbors(req: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        req.id,
-        INTERNAL_ERROR,
-        "graph.neighbors requires NoteStore — wire in Gateway startup".to_string(),
-    )
-}
-
-/// Handle `graph.node_detail` — returns full detail for a single note.
-///
-/// Requires `NoteStore` wired at Gateway startup.
-pub async fn handle_node_detail(req: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        req.id,
-        INTERNAL_ERROR,
-        "graph.node_detail requires NoteStore — wire in Gateway startup".to_string(),
-    )
-}
-
-/// Handle graph.search — full-text search over notes.
-///
-/// Requires `NoteStore` wired at Gateway startup.
-pub async fn handle_search(req: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        req.id,
-        INTERNAL_ERROR,
-        "graph.search requires NoteStore — wire in Gateway startup".to_string(),
-    )
-}
-
-/// Handle `graph.update_note` — persist an edited note body.
-///
-/// Requires a `NoteIndexer` wired at Gateway startup.
-pub async fn handle_update_note(req: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        req.id,
-        INTERNAL_ERROR,
-        "graph.update_note requires NoteIndexer — wire in Gateway startup".to_string(),
-    )
 }
 
 // ============================================================================
@@ -386,6 +332,118 @@ pub async fn handle_update_note_impl(
         ),
         Err(e) => {
             JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("update_note failed: {e}"))
+        }
+    }
+}
+
+/// Real implementation of `graph.rename_note`: renames the file, rewrites
+/// every inbound `[[old]]` wikilink, re-indexes, and backfills.
+pub async fn handle_rename_note_impl(
+    req: JsonRpcRequest,
+    indexer: Arc<NoteIndexer<SqliteMemoryBackend>>,
+) -> JsonRpcResponse {
+    let params: GraphRenameNoteParams = match req
+        .params
+        .as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+    {
+        Some(p) => p,
+        None => {
+            return JsonRpcResponse::error(
+                req.id,
+                INVALID_PARAMS,
+                "Missing required params: node_id, new_title".to_string(),
+            )
+        }
+    };
+    let agent_id = params
+        .agent_id
+        .as_deref()
+        .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+    let Some((category, title)) = params.node_id.split_once('/') else {
+        return JsonRpcResponse::error(
+            req.id,
+            INVALID_PARAMS,
+            format!("Invalid node_id (expected \"category/title\"): {}", params.node_id),
+        );
+    };
+    if category.contains("..")
+        || category.contains('\\')
+        || agent_id.contains("..")
+        || agent_id.contains('/')
+        || agent_id.contains('\\')
+    {
+        return JsonRpcResponse::error(
+            req.id,
+            INVALID_PARAMS,
+            "node_id / agent_id must not contain path traversal components".to_string(),
+        );
+    }
+    match indexer.rename_note(agent_id, title, &params.new_title).await {
+        Ok(()) => JsonRpcResponse::success(
+            req.id,
+            serde_json::json!({
+                "node_id": params.node_id,
+                "new_id": format!("{category}/{}", params.new_title),
+                "renamed": true
+            }),
+        ),
+        Err(e) => {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("rename_note failed: {e}"))
+        }
+    }
+}
+
+/// Real implementation of `graph.delete_note`: removes file + index; inbound
+/// links become tombstones (D1 — source bodies untouched, revivable).
+pub async fn handle_delete_note_impl(
+    req: JsonRpcRequest,
+    indexer: Arc<NoteIndexer<SqliteMemoryBackend>>,
+) -> JsonRpcResponse {
+    let params: GraphDeleteNoteParams = match req
+        .params
+        .as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+    {
+        Some(p) => p,
+        None => {
+            return JsonRpcResponse::error(
+                req.id,
+                INVALID_PARAMS,
+                "Missing required param: node_id".to_string(),
+            )
+        }
+    };
+    let agent_id = params
+        .agent_id
+        .as_deref()
+        .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+    let Some((category, title)) = params.node_id.split_once('/') else {
+        return JsonRpcResponse::error(
+            req.id,
+            INVALID_PARAMS,
+            format!("Invalid node_id (expected \"category/title\"): {}", params.node_id),
+        );
+    };
+    if category.contains("..")
+        || category.contains('\\')
+        || agent_id.contains("..")
+        || agent_id.contains('/')
+        || agent_id.contains('\\')
+    {
+        return JsonRpcResponse::error(
+            req.id,
+            INVALID_PARAMS,
+            "node_id / agent_id must not contain path traversal components".to_string(),
+        );
+    }
+    match indexer.delete_note(agent_id, category, title).await {
+        Ok(()) => JsonRpcResponse::success(
+            req.id,
+            serde_json::json!({ "node_id": params.node_id, "deleted": true }),
+        ),
+        Err(e) => {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("delete_note failed: {e}"))
         }
     }
 }
@@ -1002,5 +1060,55 @@ mod tests {
             !names.iter().any(|n| n.contains("AlphaNote")),
             "non-default agent's hit must NOT appear: {names:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn rename_note_moves_file_and_reindexes() {
+        let memory_dir = std::env::temp_dir().join(format!("rename_rpc_{}", Uuid::new_v4()));
+        let db = make_db();
+        let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db.clone()));
+        let agent = crate::routing::DEFAULT_AGENT_ID;
+        // Seed a real on-disk note through the indexer write path.
+        indexer
+            .write_note_raw(agent, "reference", "OldTitle",
+                "---\ncategory: reference\ntags: []\ncreated: \"2024-01-01\"\nupdated: \"2024-01-01\"\n---\n\n- fact\n")
+            .await
+            .unwrap();
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "graph.rename_note".into(),
+            params: Some(serde_json::json!({
+                "node_id": "reference/OldTitle", "new_title": "NewTitle", "agent_id": agent })),
+            id: Some(serde_json::json!(1)),
+        };
+        let resp = handle_rename_note_impl(req, indexer).await;
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+        assert!(memory_dir.join(agent).join("reference/NewTitle.md").exists());
+        assert!(!memory_dir.join(agent).join("reference/OldTitle.md").exists());
+        assert!(db.get_note_index("reference/NewTitle", agent).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn delete_note_removes_file_and_index() {
+        let memory_dir = std::env::temp_dir().join(format!("delete_rpc_{}", Uuid::new_v4()));
+        let db = make_db();
+        let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db.clone()));
+        let agent = crate::routing::DEFAULT_AGENT_ID;
+        indexer
+            .write_note_raw(agent, "plan", "Doomed",
+                "---\ncategory: plan\ntags: []\ncreated: \"2024-01-01\"\nupdated: \"2024-01-01\"\n---\n\n- x\n")
+            .await
+            .unwrap();
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "graph.delete_note".into(),
+            params: Some(serde_json::json!({ "node_id": "plan/Doomed", "agent_id": agent })),
+            id: Some(serde_json::json!(1)),
+        };
+        let resp = handle_delete_note_impl(req, indexer).await;
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+        assert!(!memory_dir.join(agent).join("plan/Doomed.md").exists());
+        assert!(db.get_note_index("plan/Doomed", agent).await.unwrap().is_none());
     }
 }

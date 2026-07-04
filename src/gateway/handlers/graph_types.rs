@@ -49,6 +49,25 @@ pub struct GraphUpdateNoteParams {
     pub agent_id: Option<String>,
 }
 
+// === graph.rename_note ===
+#[derive(Debug, Deserialize)]
+pub struct GraphRenameNoteParams {
+    /// Note path `"category/title"` (same id as `graph.node_detail`).
+    pub node_id: String,
+    /// New filename (without `.md`); sanitized server-side.
+    pub new_title: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+}
+
+// === graph.delete_note ===
+#[derive(Debug, Deserialize)]
+pub struct GraphDeleteNoteParams {
+    pub node_id: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+}
+
 // === graph.search ===
 #[derive(Debug, Deserialize)]
 pub struct GraphSearchParams {
