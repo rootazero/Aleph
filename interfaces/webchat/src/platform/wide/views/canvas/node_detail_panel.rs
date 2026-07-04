@@ -403,7 +403,7 @@ fn DetailFor(
                         }}
                     </div>
                 }.into_any()
-            }
+            }}
             {(!tags.is_empty()).then(|| {
                 let t = tags.clone();
                 view! {
@@ -455,7 +455,15 @@ fn DetailFor(
                                 let meta = match l.status.as_str() {
                                     "dangling" => " · dangling".to_string(),
                                     "tombstone" => " · 🪦 deleted".to_string(),
-                                    _ => format!(" · {:.0}%", l.confidence * 100.0),
+                                    // Provenance badge: which resolver tier made
+                                    // this edge (exact_path / exact_filename /
+                                    // alias / normalized).
+                                    _ => match l.resolved_by.as_deref() {
+                                        Some(tier) => {
+                                            format!(" · {:.0}% · {tier}", l.confidence * 100.0)
+                                        }
+                                        None => format!(" · {:.0}%", l.confidence * 100.0),
+                                    },
                                 };
                                 let style = match l.status.as_str() {
                                     "dangling" => "font-size:11px;color:var(--text-meta);font-style:italic;padding:3px 6px",

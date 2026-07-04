@@ -17,10 +17,18 @@ pub fn render_excerpt(src: &str) -> String {
     let parser = Parser::new(src);
     let mut out = String::with_capacity(src.len().min(MAX_LEN * 2));
     let mut chars_used = 0_usize;
+    // pulldown splits "[[x]]" into several Text events at the bracket
+    // boundaries (failed reference-link candidates), so wikilink scanning
+    // must run over CONSECUTIVE Text events joined together, not per event.
+    // Code spans arrive as Event::Code (never Text) and thus flush first,
+    // keeping `[[..]]` inside backticks literal.
+    let mut pending = String::new();
 
     for event in parser {
         if chars_used >= MAX_LEN {
+            flush_wikilinks(&mut pending, &mut out);
             out.push('\u{2026}');
+            pending.clear();
             break;
         }
         match event {
@@ -28,21 +36,13 @@ pub fn render_excerpt(src: &str) -> String {
                 let remaining = MAX_LEN.saturating_sub(chars_used);
                 let take = t.chars().take(remaining).collect::<String>();
                 chars_used += take.chars().count();
-                for segment in split_wikilinks(&take) {
-                    match segment {
-                        WikiSegment::Text(text) => {
-                            out.push_str(&html_escape(text));
-                        }
-                        WikiSegment::Link { target, label } => {
-                            out.push_str("<a class=\"wl\" data-wl=\"");
-                            out.push_str(&html_escape(target));
-                            out.push_str("\">");
-                            out.push_str(&html_escape(label.unwrap_or(target)));
-                            out.push_str("</a>");
-                        }
-                    }
-                }
+                pending.push_str(&take);
+                continue;
             }
+            _ => flush_wikilinks(&mut pending, &mut out),
+        }
+        match event {
+            Event::Text(_) => unreachable!("handled above"),
             Event::Code(t) => {
                 out.push_str("<code>");
                 out.push_str(&html_escape(&t));
@@ -84,7 +84,31 @@ pub fn render_excerpt(src: &str) -> String {
             _ => {}
         }
     }
+    flush_wikilinks(&mut pending, &mut out);
     out
+}
+
+/// Run the wikilink scanner over the joined pending text and emit
+/// escaped text / `<a class="wl">` anchors into `out`.
+fn flush_wikilinks(pending: &mut String, out: &mut String) {
+    if pending.is_empty() {
+        return;
+    }
+    for segment in split_wikilinks(pending) {
+        match segment {
+            WikiSegment::Text(text) => {
+                out.push_str(&html_escape(text));
+            }
+            WikiSegment::Link { target, label } => {
+                out.push_str("<a class=\"wl\" data-wl=\"");
+                out.push_str(&html_escape(target));
+                out.push_str("\">");
+                out.push_str(&html_escape(label.unwrap_or(target)));
+                out.push_str("</a>");
+            }
+        }
+    }
+    pending.clear();
 }
 
 fn html_escape(s: &str) -> String {

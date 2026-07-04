@@ -114,7 +114,7 @@ mod tests {
 
     #[test]
     fn note_detail_response_deserializes_without_outgoing() {
-        let json = r#"{
+        let json = r##"{
             "node": {
                 "id": "wiki/test",
                 "name": "test",
@@ -124,7 +124,7 @@ mod tests {
             },
             "content": "# Test",
             "backlinks": ["wiki/other"]
-        }"#;
+        }"##;
         let response: NoteDetailResponse = serde_json::from_str(json).expect("Failed to deserialize");
         assert_eq!(response.node.id, "wiki/test");
         assert_eq!(response.content, "# Test");
@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn note_detail_response_deserializes_with_outgoing() {
-        let json = r#"{
+        let json = r##"{
             "node": {
                 "id": "wiki/test",
                 "name": "test",
@@ -154,7 +154,7 @@ mod tests {
                     "status": "active"
                 }
             ]
-        }"#;
+        }"##;
         let response: NoteDetailResponse = serde_json::from_str(json).expect("Failed to deserialize");
         assert_eq!(response.outgoing.len(), 1);
         assert_eq!(response.outgoing[0].to, "wiki/rust");
