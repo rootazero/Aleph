@@ -6,3 +6,4 @@
 //! Spec: docs/superpowers/specs/2026-07-05-moa-continuous-advisory-port-design.md
 
 pub(crate) mod advisory_view;
+pub(crate) mod prompts;
