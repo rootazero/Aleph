@@ -460,6 +460,40 @@ sees one ordinary provider (R10); none of this touches `src/harness/`.
   events inline as reasoning blocks (◇ 顾问 / ◆ 聚合 / ▫ 开销,
   `interfaces/webchat/src/platform/wide/views/chat/events.rs`).
 
+**Round 2** (spec `docs/superpowers/specs/2026-07-05-moa-round2-optimization-design.md`)
+added four pieces on top of the port above:
+
+- **Selector integration**: `select_model` accepts `"moa:<preset>"` (or bare
+  `"moa"` for the default preset) as a peer slot to normal model picks —
+  `apply_moa_selector_semantics` (`src/gateway/handlers/agent.rs`) arms MoA
+  sticky and clears `session_model_handle`, while picking a normal model
+  clears MoA sticky; the two slots are mutually exclusive. The synthesized
+  `[voice]` low-TTFT pin is exempt from this exclusion (config-derived, not
+  user intent — it must never clear an armed MoA session). The same presets
+  ride `providers.catalog` as a synthetic `"moa"` provider row
+  (`src/gateway/handlers/providers/handlers.rs`) and `list_models`'s
+  `moa_presets` field (`src/builtin_tools/list_models.rs`), so Panel/CLI
+  pickers see MoA presets without a new RPC.
+- **Advisor prompt-cache + multimodal**: `mark_cache_breakpoints`
+  (`src/providers/moa/advisory_view.rs`) marks an Anthropic ephemeral
+  `cache_control` on the last text block of each of the last three
+  advisory-view messages, so `per_iteration` fanout replays the cached
+  prefix instead of re-billing it every tool step (hermes measured 0/1227
+  cache reads without this). Image content renders as a `"[image: <mime>]"`
+  placeholder in the advisor view instead of being silently dropped.
+- **Audit replay**: when `save_traces = true`, the persisted `MoaTurnTrace`
+  event now carries the aggregator's own output/status
+  (`aggregator_output`/`aggregator_status`, emitted only after the
+  aggregator returns) alongside the full advisor I/O. `trace.by_runs` REPLAY
+  surfaces a one-line summary (`shared/protocol/src/trace_presentation.rs`)
+  and the panel's `moa_turn_trace` reasoning block (`events.rs`) renders the
+  full advisor-by-advisor transcript plus the aggregator's answer; none of
+  this reaches the live wire.
+- **Overhead bucket**: advisor spend across all sessions aggregates into a
+  single `"moa-advisors"` bucket (`aggregate_moa_advisor_usage`,
+  `src/resilience/database/traces.rs`) instead of one synthetic "agent" per
+  advisor slot, keeping team/session usage views honest.
+
 ### One-Shot Task Fan-Out (existing, previously undocumented)
 
 Independent of the port above, the `subagent` tool has always supported a

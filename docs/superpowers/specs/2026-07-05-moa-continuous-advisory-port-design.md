@@ -2,6 +2,7 @@
 
 - **日期**: 2026-07-05
 - **状态**: 设计已确认（brainstorming 三节逐节确认）
+- **第二轮修订**: [2026-07-05-moa-round2-optimization-design.md](2026-07-05-moa-round2-optimization-design.md)（8 修复 / 3 连线 / 3 增强 / 重构与测试补齐）
 - **参考实现**: hermes-agent (`/Volumes/TBU4/Github/hermes-agent`) — `agent/moa_loop.py` (1058L), `agent/moa_trace.py`, `hermes_cli/moa_config.py`, `hermes_cli/moa_cmd.py` + 14 个测试文件钉死的行为契约
 - **任务目标**: 完整移植 hermes MoA（Mixture of Agents）模块——架构映射而非照抄，利用 Rust/Tokio 在类型安全与并发上对齐并超越参考实现
 

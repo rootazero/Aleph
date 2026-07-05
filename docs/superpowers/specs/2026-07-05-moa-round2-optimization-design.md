@@ -106,6 +106,8 @@
 ### R2 热路径单遍化
 `view_signature` 复用 `build_advisory_view` 已算出的文本（不再二次 `text_of` 全扫）；`truncate_tool_result` 从 3 次 `chars()` 扫描并为单遍。
 
+> **修订注记（2026-07-05 实施）**: 实际交付为消除 2 次堆分配（String → 借用切片），保留 1 次全量 count + 2 次部分边界扫描。真·单遍需 ~TOOL_RESULT_BUDGET/2 的 ring buffer（≈16KB）反而引入分配，属更差工程。代码注释已如实声明。
+
 ### R3 缓存不变量守卫
 签名缓存的「per-run 顺序调用」不变量写成模块级文档注释 + `debug_assert` 守卫（TOCTOU 显式化：若未来并发驱动同一实例，两个 MISS 会重复扇出）。
 
