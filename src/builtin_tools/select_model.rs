@@ -206,21 +206,42 @@ mod tests {
         assert!(!out.ok);
     }
 
-    /// Serializes tests that mutate the process-global `[moa]` config handle.
-    /// Mirrors the identical helper in `moa_manage.rs` tests — that one is
-    /// private to its own module, so this is a same-purpose copy rather than a
-    /// shared import (minimal-footprint per the task brief).
-    fn moa_config_test_lock() -> &'static std::sync::Mutex<()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    // Tests that mutate the process-global `[moa]` config slot serialize on
+    // the crate-wide lock in `config_handle` — shared with `moa_manage.rs`
+    // tests, which touch the same slot.
+    use crate::providers::moa::config_handle::moa_config_test_lock;
+
+    /// A `[moa]` config holding a single resolvable preset named "deep"
+    /// (mirrors `moa_manage.rs`'s `solo_preset()` setup style). As the sole
+    /// preset it also resolves for bare `"moa"` — no `default_preset` needed.
+    fn deep_preset_config() -> crate::config::MoaToml {
+        let mut cfg = crate::config::MoaToml::default();
+        cfg.presets.insert(
+            "deep".to_string(),
+            crate::config::MoaPreset {
+                enabled: true,
+                advisors: vec![crate::config::MoaSlot {
+                    provider: "openai".into(),
+                    model: "gpt-5".into(),
+                }],
+                aggregator: crate::config::MoaSlot {
+                    provider: "anthropic".into(),
+                    model: "claude-opus-4".into(),
+                },
+                fanout: crate::config::MoaFanout::default(),
+                advisor_timeout_secs: 120,
+                advisor_max_tokens: None,
+                advisor_temperature: None,
+                aggregator_temperature: None,
+            },
+        );
+        cfg
     }
 
     #[tokio::test]
     async fn moa_prefix_activates_preset_and_clears_model_pick() {
         use crate::providers::{session_model_handle, session_moa_handle};
-        let _guard = moa_config_test_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = moa_config_test_lock();
         let sk = SessionKey::Ephemeral {
             agent_id: "main".to_string(),
             ephemeral_id: "select-moa-test".to_string(),
@@ -228,29 +249,7 @@ mod tests {
         let key = sk.to_key_string();
         // Prime a model pick + a resolvable preset.
         session_model_handle::set_session_model(&key, None, "gpt-5".to_string());
-        crate::providers::moa::store_moa_config(Some({
-            let mut cfg = crate::config::MoaToml::default();
-            cfg.presets.insert(
-                "deep".to_string(),
-                crate::config::MoaPreset {
-                    enabled: true,
-                    advisors: vec![crate::config::MoaSlot {
-                        provider: "openai".into(),
-                        model: "gpt-5".into(),
-                    }],
-                    aggregator: crate::config::MoaSlot {
-                        provider: "anthropic".into(),
-                        model: "claude-opus-4".into(),
-                    },
-                    fanout: crate::config::MoaFanout::default(),
-                    advisor_timeout_secs: 120,
-                    advisor_max_tokens: None,
-                    advisor_temperature: None,
-                    aggregator_temperature: None,
-                },
-            );
-            cfg
-        }));
+        crate::providers::moa::store_moa_config(Some(deep_preset_config()));
 
         let ctx = TurnContext {
             session_key: sk.clone(),
@@ -314,10 +313,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bare_moa_activates_default_preset_and_clears_model_pick() {
+        use crate::providers::{session_model_handle, session_moa_handle};
+        let _guard = moa_config_test_lock();
+        let sk = SessionKey::Ephemeral {
+            agent_id: "main".to_string(),
+            ephemeral_id: "select-moa-bare".to_string(),
+        };
+        let key = sk.to_key_string();
+        // Prime a model pick + a config whose sole preset resolves as default.
+        session_model_handle::set_session_model(&key, None, "gpt-5".to_string());
+        crate::providers::moa::store_moa_config(Some(deep_preset_config()));
+
+        let ctx = TurnContext {
+            session_key: sk.clone(),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+        };
+        let out = TURN_CONTEXT
+            .scope(ctx, async {
+                SelectModelTool
+                    .call(SelectModelArgs {
+                        model: "moa".to_string(),
+                        provider: None,
+                    })
+                    .await
+            })
+            .await
+            .unwrap();
+
+        assert!(out.ok, "{}", out.message);
+        // Bare "moa" arms the handle with preset=None ("follow the config
+        // default", late-bound at run construction); the resolved name only
+        // gates validation and names the confirmation message.
+        let moa = session_moa_handle::get_session_moa(&key).unwrap();
+        assert_eq!(moa.preset, None);
+        assert!(!moa.one_shot);
+        assert!(out.message.contains("deep"), "{}", out.message);
+        // Selector slot is exclusive: the primed model pick is cleared.
+        assert!(session_model_handle::get_session_model(&key).is_none());
+        session_moa_handle::clear_session_moa(&key);
+        crate::providers::moa::store_moa_config(None);
+    }
+
+    #[tokio::test]
     async fn moa_prefix_with_unknown_preset_fails_gracefully() {
-        let _guard = moa_config_test_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = moa_config_test_lock();
         crate::providers::moa::store_moa_config(None);
         let sk = SessionKey::Ephemeral {
             agent_id: "main".to_string(),

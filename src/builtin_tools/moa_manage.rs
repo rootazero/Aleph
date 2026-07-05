@@ -576,14 +576,10 @@ mod tests {
     use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
     use crate::tools::AlephTool;
 
-    /// Serializes tests that mutate the process-global `[moa]` config handle.
-    /// Unlike `session_moa_handle` (keyed per session), `get_moa_config`/
-    /// `store_moa_config` hold a single unkeyed slot, so concurrent test
-    /// threads touching it would otherwise race.
-    fn moa_config_test_lock() -> &'static std::sync::Mutex<()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-    }
+    // Tests that mutate the process-global `[moa]` config slot serialize on
+    // the crate-wide lock in `config_handle` — shared with `select_model.rs`
+    // tests, which touch the same slot.
+    use crate::providers::moa::config_handle::moa_config_test_lock;
 
     fn test_ctx(ephemeral_id: &str) -> TurnContext {
         TurnContext {
@@ -619,9 +615,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_with_no_presets_configured_gives_guidance() {
-        let _guard = moa_config_test_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = moa_config_test_lock();
         store_moa_config(None);
 
         let ctx = test_ctx("moa-test-no-presets");
@@ -646,9 +640,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_with_resolvable_preset_writes_sticky_session_handle() {
-        let _guard = moa_config_test_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = moa_config_test_lock();
         let mut moa = MoaToml::default();
         moa.presets.insert("solo".to_string(), solo_preset());
         store_moa_config(Some(moa));
@@ -684,9 +676,7 @@ mod tests {
 
     #[tokio::test]
     async fn once_writes_one_shot_session_handle() {
-        let _guard = moa_config_test_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = moa_config_test_lock();
         let mut moa = MoaToml::default();
         moa.presets.insert("solo".to_string(), solo_preset());
         store_moa_config(Some(moa));

@@ -258,11 +258,11 @@ where
                 // leaks into the user's next turn. Still strip the `/moa ` prefix
                 // so the inner command resolves exactly as if typed directly.
                 if !prompt.trim_start().starts_with('/') {
-                    crate::providers::session_moa_handle::set_session_moa(
-                        &request.session_key.to_key_string(),
-                        None,
-                        true,
-                    );
+                    let key = request.session_key.to_key_string();
+                    crate::providers::session_moa_handle::set_session_moa(&key, None, true);
+                    // Selector slots are mutually exclusive; mirror
+                    // moa_manage::activate() (set-then-clear ordering).
+                    crate::providers::session_model_handle::clear_session_model(&key);
                 }
                 request.input = prompt.to_string();
             }

@@ -152,11 +152,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     // construction, so `take_for_run` never consumes the pref and
                     // it leaks into the user's next turn.
                     if !args.is_empty() && !args.trim_start().starts_with('/') {
-                        crate::providers::session_moa_handle::set_session_moa(
-                            &request.session_key.to_key_string(),
-                            None,
-                            true,
-                        );
+                        let key = request.session_key.to_key_string();
+                        crate::providers::session_moa_handle::set_session_moa(&key, None, true);
+                        // Selector slots are mutually exclusive; mirror
+                        // moa_manage::activate() (set-then-clear ordering).
+                        crate::providers::session_model_handle::clear_session_model(&key);
                     }
                     return Err(ExecutionError::Fallthrough {
                         reason: "moa one-shot".to_string(),
