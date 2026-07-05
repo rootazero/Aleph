@@ -44,9 +44,10 @@ impl SessionRunRegistry {
         (seq, map.keys().cloned().collect())
     }
 
-    /// Bump seq (under the caller-held lock's happens-before) and broadcast the
-    /// fresh running set. Call AFTER dropping the map lock to avoid holding it
-    /// across serialization/broadcast.
+    /// Broadcast the current running snapshot to the injected event bus. The
+    /// caller (`try_claim`/`release`) has already bumped `seq` and dropped the
+    /// map lock; this only reads a fresh `(seq, keys)` snapshot and publishes it,
+    /// so the map lock is never held across serialization/broadcast.
     fn broadcast_change(&self) {
         if let Some(bus) = self.event_bus.get() {
             let (seq, running) = self.running_snapshot();

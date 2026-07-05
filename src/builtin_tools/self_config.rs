@@ -433,8 +433,8 @@ impl SelfConfigTool {
                 // Classify when this change actually takes effect so the agent
                 // gets a deterministic "what happens next" signal instead of
                 // having to recall the prose rules scattered through the /self
-                // SKILL.md. (route is the one Live section — its hot-apply above
-                // is exactly what makes the Live verdict true.)
+                // SKILL.md. (route and execution are the Live sections — their
+                // hot-applies above are exactly what make the Live verdict true.)
                 let impact = crate::config::ReloadImpact::classify(config_path);
 
                 let mode = if dry_run { "dry-run" } else { "applied" };
