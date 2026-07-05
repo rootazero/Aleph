@@ -538,10 +538,6 @@ impl SessionStore for SessionManager {
         self.set_idle(key).await.map_err(map_err)
     }
 
-    async fn set_running(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
-        self.set_running(key).await.map_err(map_err)
-    }
-
     async fn stamp_last_assistant_metadata(
         &self,
         key: &SessionKey,

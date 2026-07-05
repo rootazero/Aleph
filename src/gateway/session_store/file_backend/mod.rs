@@ -1061,10 +1061,6 @@ impl SessionStore for FileSessionStore {
     async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
         self.set_state(key, SessionState::Idle).await
     }
-
-    async fn set_running(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
-        self.set_state(key, SessionState::Running).await
-    }
 }
 
 use tokio::io::AsyncWriteExt;

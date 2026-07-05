@@ -461,4 +461,16 @@ impl ExecutionAdapter for SimpleExecutionEngine {
     async fn active_run_count(&self) -> usize {
         Self::active_run_count(self).await
     }
+
+    fn concurrency_snapshot(&self) -> super::ConcurrencySnapshot {
+        // SimpleExecutionEngine uses a per-agent try_start_run gate, not the
+        // run-lifetime ConcurrencyLimiter. Return an explicit zeroed snapshot so
+        // metrics don't read as a plausible "0 of N slots" from a real limiter.
+        super::ConcurrencySnapshot::default()
+    }
+
+    fn running_sessions(&self) -> Vec<String> {
+        // SimpleExecutionEngine has no per-session run registry; honest empty.
+        Vec::new()
+    }
 }

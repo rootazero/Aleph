@@ -390,9 +390,6 @@ pub(crate) mod test_support {
         async fn set_idle(&self, _key: &SessionKey) -> Result<(), SessionStoreError> {
             Err(SessionStoreError::DatabaseError("stub".into()))
         }
-        async fn set_running(&self, _key: &SessionKey) -> Result<(), SessionStoreError> {
-            Err(SessionStoreError::DatabaseError("stub".into()))
-        }
 
         // Override load_window: look up by (agent_id, session_id) directly.
         async fn load_window(

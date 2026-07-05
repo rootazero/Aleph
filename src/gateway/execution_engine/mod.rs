@@ -263,12 +263,8 @@ impl std::fmt::Debug for RunRequest {
 /// Run state
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunState {
-    /// Run is queued
-    Queued,
     /// Run is executing
     Running,
-    /// Run is paused (waiting for user input)
-    Paused { reason: String },
     /// Run completed successfully
     Completed,
     /// Run was cancelled
