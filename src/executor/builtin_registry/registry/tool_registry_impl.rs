@@ -222,6 +222,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             "self_config" => {
                 Box::pin(async move { self.self_config_tool.call_json(arguments).await })
             }
+            "moa" => Box::pin(async move { self.moa_manage_tool.call_json(arguments).await }),
             "list_models" => {
                 Box::pin(async move { self.list_models_tool.call_json(arguments).await })
             }

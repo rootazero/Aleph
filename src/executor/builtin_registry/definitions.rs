@@ -237,6 +237,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires per-agent agent_id (injected at construction)
     },
     BuiltinToolDefinition {
+        name: "moa",
+        description: "Mixture-of-Agents advisory mode: parallel advisor models consult on the live conversation and feed private guidance to the acting aggregator; manage per-session activation and presets",
+        requires_config: true, // needs injected config + patcher handles
+    },
+    BuiltinToolDefinition {
         name: "vault_store",
         description: "Manage encrypted secret vault (store/delete/list API keys)",
         requires_config: true, // Requires SharedTokenManager
@@ -960,6 +965,9 @@ pub fn create_tool_boxed(
         // self_config requires the per-agent agent_id, injected at construction time
         // in BuiltinToolRegistry — cannot be created standalone here.
         "self_config" => None,
+        // moa requires the shared Config handle + ConfigPatcher, injected at
+        // boot — constructed in the builder, same pattern as self_config.
+        "moa" => None,
         // list_models needs the injected config + vault handles (provider/credential
         // state), bound at BuiltinToolRegistry construction — not standalone here.
         "list_models" => None,

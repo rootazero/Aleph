@@ -146,6 +146,12 @@ impl BuiltinToolRegistry {
         );
         reg(
             tools,
+            "moa",
+            crate::builtin_tools::moa_manage::MoaManageTool::DESCRIPTION,
+            schema::<crate::builtin_tools::moa_manage::MoaManageArgs>("moa"),
+        );
+        reg(
+            tools,
             "desktop",
             DesktopTool::DESCRIPTION,
             schema::<crate::builtin_tools::desktop::DesktopArgs>("desktop"),

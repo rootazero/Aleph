@@ -74,6 +74,7 @@ pub mod memory_search;
 pub mod memory_timeline;
 pub mod memory_trace;
 pub mod meta_tools;
+pub mod moa_manage;
 pub mod node_file;
 pub mod node_invoke;
 pub mod node_invoke_many;
@@ -200,6 +201,7 @@ pub use meta_tools::{
     GetToolSchemaArgs, GetToolSchemaOutput, GetToolSchemaTool, ListToolsArgs, ListToolsOutput,
     ListToolsTool, SearchToolHit, SearchToolsArgs, SearchToolsOutput, SearchToolsTool,
 };
+pub use moa_manage::{MoaManageArgs, MoaManageOutput, MoaManageTool};
 pub use node_file::{NodeFileArgs, NodeFileTool};
 pub use node_invoke::{NodeInvokeArgs, NodeInvokeTool};
 pub use node_invoke_many::{NodeInvokeManyArgs, NodeInvokeManyTool};
