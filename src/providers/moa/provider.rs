@@ -149,6 +149,19 @@ impl MoaProvider {
         }
     }
 
+    /// `(provider, model)` of the aggregator slot — run-level attribution
+    /// (VESR must record the ACTING model, not the pre-MoA directive; the
+    /// gauge fold at runner_impl.rs already does the equivalent via
+    /// serving_model_hint). Split at the FIRST ':' — provider keys never
+    /// contain one; model ids may.
+    #[must_use]
+    pub fn aggregator_identity(&self) -> (String, String) {
+        match self.aggregator_label.split_once(':') {
+            Some((p, m)) => (p.to_string(), m.to_string()),
+            None => (String::new(), self.aggregator_label.clone()),
+        }
+    }
+
     /// Sum advisor usages + per-advisor own-rate pricing for the spend event.
     /// `consulted` = advisors fanned out; `usages` = those that returned usage.
     fn spend_event(&self, consulted: usize, usages: &[(usize, TokenUsage)]) -> LoopTraceEvent {
@@ -660,6 +673,17 @@ mod tests {
         assert_eq!(p.serving_model_hint().unwrap(), "agg-model");
         assert_eq!(p.name(), "moa:test");
         assert!(p.as_http_provider().is_none());
+    }
+
+    #[test]
+    fn aggregator_identity_splits_label() {
+        let agg = Arc::new(CountingProvider::new("x"));
+        let p = make_provider(vec![], agg, MoaFanout::PerIteration, 5);
+        // make_provider sets aggregator_label = "mock:agg".
+        assert_eq!(
+            p.aggregator_identity(),
+            ("mock".to_string(), "agg".to_string())
+        );
     }
 
     #[test]

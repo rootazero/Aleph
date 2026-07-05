@@ -128,6 +128,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // falls back to the normal chain — the conversation never breaks.
         // Spec: docs/superpowers/specs/2026-07-05-moa-continuous-advisory-port-design.md
         let mut moa_active = false;
+        let mut moa_aggregator_identity: Option<(String, String)> = None;
         let llm: Arc<dyn crate::providers::AiProvider> =
             match crate::providers::session_moa_handle::take_for_run(&session_pref_key) {
                 Some(pref) => {
@@ -140,6 +141,7 @@ impl HarnessRunner for AgentHarnessRunner {
                     ) {
                         Ok(moa) => {
                             moa_active = true;
+                            moa_aggregator_identity = Some(moa.aggregator_identity());
                             Arc::new(moa)
                         }
                         Err(reason) => {
@@ -397,14 +399,25 @@ impl HarnessRunner for AgentHarnessRunner {
         // observer. v1.1 (b) captures them via their OWN OutcomeObserver wrapped
         // at the spawn seam (subagent_spawner::spawn) — each run records under
         // its own agent_id; no cross-agent leakage.
+        // Round-2 B8: when MoA is active the run's acting model is the
+        // preset's aggregator — record THAT into routing experience, not the
+        // pre-MoA directive/pin (which never served a token this run).
+        let (vesr_model_id, vesr_provider_id): (String, String) =
+            match &moa_aggregator_identity {
+                Some((p, m)) => (m.clone(), p.clone()),
+                None => (
+                    routing_model_id.clone(),
+                    routing_provider_id.clone().unwrap_or_default(),
+                ),
+            };
         let trace_sink = match (trace_sink, self.routing_store.as_ref()) {
             (Some(parent), Some(store)) => {
                 Some(std::sync::Arc::new(crate::routing::OutcomeObserver::new(
                     parent,
                     store.clone(),
                     routing_attribution.clone(),
-                    routing_model_id.clone(),
-                    routing_provider_id.unwrap_or_default(),
+                    vesr_model_id,
+                    vesr_provider_id,
                     spec.agent.clone(),
                 ))
                     as std::sync::Arc<dyn crate::harness::TraceSink>)
