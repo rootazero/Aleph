@@ -456,6 +456,31 @@ mod tests {
     }
 
     #[test]
+    fn dot_clears_on_server_release_even_while_client_bound() {
+        use std::collections::HashSet;
+        with_owner(|| {
+            let map = SessionMap::new();
+            let c = map.open_conversation("agent-a", "A");
+            // Client binds a run for sess-x and never calls settle_run.
+            map.bind_run("run-x", c, Some("sess-x"));
+            // Server reports sess-x running → dot on.
+            map.set_server_running(1, HashSet::from(["sess-x".to_string()]));
+            assert!(
+                map.is_running_session_key("sess-x"),
+                "server running → dot on"
+            );
+            // Server RELEASES sess-x (higher seq, empty set) while the client run
+            // is STILL bound (no settle_run). The dot MUST clear — this is the exact
+            // stuck-dot false-positive the pure-server design eliminates.
+            map.set_server_running(2, HashSet::new());
+            assert!(
+                !map.is_running_session_key("sess-x"),
+                "server release clears the dot even though the client run is still bound"
+            );
+        });
+    }
+
+    #[test]
     fn seed_applies_only_before_first_event() {
         use std::collections::HashSet;
         with_owner(|| {

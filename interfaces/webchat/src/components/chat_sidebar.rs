@@ -1345,10 +1345,9 @@ pub fn ChatSidebar() -> impl IntoView {
                                         }
                                     };
                                     let sk_for_dot = session.key.clone();
-                                    // Dot = client-tracked run OR the server's
-                                    // authoritative running set (fresh load /
-                                    // runs started by any interface). See
-                                    // `SessionMap::is_running_session_key`.
+                                    // Dot = pure server-authoritative: reads server_running only
+                                    // (fed by RunningSetChanged; runs from any interface included).
+                                    // See `SessionMap::is_running_session_key`.
                                     let is_running_row =
                                         move || session_map.is_running_session_key(&sk_for_dot);
                                     let label = session
