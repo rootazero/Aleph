@@ -143,6 +143,32 @@ impl HarnessRunner for AgentHarnessRunner {
                             Arc::new(moa)
                         }
                         Err(reason) => {
+                            // Round-2 B5: a one-shot consumed by a build that
+                            // never engaged MoA is refilled (empty-slot-only),
+                            // and the failure is surfaced to the panel via the
+                            // activation-failure advisor event (count == 0).
+                            if pref.one_shot {
+                                crate::providers::session_moa_handle::restore_one_shot(
+                                    &session_pref_key,
+                                    pref.clone(),
+                                );
+                            }
+                            if let Some(sink) = trace_sink.as_ref() {
+                                sink.on_trace(
+                                    &crate::harness::trace::LoopTraceEvent::MoaAdvisor {
+                                        index: 0,
+                                        count: 0,
+                                        label: format!(
+                                            "moa:{}",
+                                            pref.preset.as_deref().unwrap_or("<default>")
+                                        ),
+                                        text: String::new(),
+                                        error: Some(format!(
+                                            "MoA not activated: {reason}; run continues on the normal model"
+                                        )),
+                                    },
+                                );
+                            }
                             tracing::warn!(
                                 reason = %reason,
                                 "MoA activation unusable; run proceeds on the normal provider chain"
