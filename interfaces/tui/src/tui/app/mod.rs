@@ -637,11 +637,15 @@ impl AppState {
             | AgentTraceEvent::McpScopeCleaned { .. }
             | AgentTraceEvent::ProviderUsage { .. }
             | AgentTraceEvent::ReactiveCompactionAttempted { .. }
-            // MoA fan-out moments — no TUI rendering yet (panel-only, Task 9).
-            | AgentTraceEvent::MoaAdvisor { .. }
-            | AgentTraceEvent::MoaAggregating { .. }
-            | AgentTraceEvent::MoaAdvisorSpend { .. }
+            // MoaTurnTrace is persisted-only (no live wire, no TUI replay).
             | AgentTraceEvent::MoaTurnTrace { .. } => {}
+            // MoA fan-out moments render as reasoning entries — presentation
+            // already carries the error/cached/billed forms (round-2 W2).
+            AgentTraceEvent::MoaAdvisor { .. }
+            | AgentTraceEvent::MoaAggregating { .. }
+            | AgentTraceEvent::MoaAdvisorSpend { .. } => {
+                self.append_reasoning_entry(presentation.content.clone());
+            }
         }
     }
 
