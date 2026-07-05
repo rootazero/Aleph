@@ -150,7 +150,8 @@ impl MoaProvider {
     }
 
     /// Sum advisor usages + per-advisor own-rate pricing for the spend event.
-    fn spend_event(&self, usages: &[(usize, TokenUsage)]) -> LoopTraceEvent {
+    /// `consulted` = advisors fanned out; `usages` = those that returned usage.
+    fn spend_event(&self, consulted: usize, usages: &[(usize, TokenUsage)]) -> LoopTraceEvent {
         let mut input = 0u32;
         let mut output = 0u32;
         let mut cost: Option<f64> = None;
@@ -176,7 +177,8 @@ impl MoaProvider {
             }
         }
         LoopTraceEvent::MoaAdvisorSpend {
-            advisor_count: usages.len(),
+            advisor_count: consulted,
+            billed_count: usages.len(),
             input_tokens: input,
             output_tokens: output,
             cost_usd: cost,
@@ -220,6 +222,16 @@ impl AiProvider for MoaProvider {
             };
 
             let outcomes: Vec<AdvisorOutcome> = if let Some(hit) = cached {
+                // Cache HIT: the aggregator still runs on the reused advice —
+                // emit the lightweight aggregating moment so multi-iteration
+                // user_turn runs don't go dark on the panel (round-2 B4).
+                if !hit.is_empty() {
+                    self.emit(LoopTraceEvent::MoaAggregating {
+                        aggregator: self.aggregator_label.clone(),
+                        advisor_count: hit.len(),
+                        cached: true,
+                    });
+                }
                 hit
             } else if self.advisors.is_empty() {
                 Vec::new()
@@ -251,7 +263,7 @@ impl AiProvider for MoaProvider {
                     &self.aggregator_label,
                 );
                 if !usages.is_empty() {
-                    let spend = self.spend_event(&usages);
+                    let spend = self.spend_event(results.len(), &usages);
                     self.emit(spend);
                 }
                 if self.save_traces {
@@ -369,6 +381,16 @@ mod tests {
         delay: Option<Duration>,
         calls: Arc<AtomicUsize>,
     }
+    impl CountingProvider {
+        /// Fixed text, no delay, fresh call counter.
+        fn new(text: impl Into<String>) -> Self {
+            Self {
+                text: text.into(),
+                delay: None,
+                calls: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+    }
     impl AiProvider for CountingProvider {
         fn process<'a>(
             &'a self,
@@ -381,7 +403,13 @@ mod tests {
                 if let Some(d) = delay {
                     tokio::time::sleep(d).await;
                 }
-                Ok(ProviderResponse::text_only(text))
+                // Carries a (zeroed) usage so spend/billed_count tests can
+                // distinguish "returned usage" from "errored, no usage" —
+                // real advisor providers always populate `usage` on success.
+                Ok(ProviderResponse {
+                    usage: Some(TokenUsage::default()),
+                    ..ProviderResponse::text_only(text)
+                })
             })
         }
         fn name(&self) -> &str { "counting" }
@@ -418,6 +446,38 @@ mod tests {
             sink: None,
             cache: Mutex::new(None),
         }
+    }
+
+    /// Captures every emitted `LoopTraceEvent` for wire-shape/lock assertions
+    /// (round-2 B1/B2/B4 tests).
+    struct RecordingSink(std::sync::Mutex<Vec<LoopTraceEvent>>);
+    impl RecordingSink {
+        fn new() -> Arc<Self> {
+            Arc::new(Self(std::sync::Mutex::new(Vec::new())))
+        }
+        fn events(&self) -> Vec<LoopTraceEvent> {
+            self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+    }
+    impl crate::harness::TraceSink for RecordingSink {
+        fn on_trace(&self, event: &LoopTraceEvent) {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(event.clone());
+        }
+        fn flush(&self) {}
+    }
+
+    fn make_provider_sinked(
+        advisors: Vec<(Arc<dyn AiProvider>, &str)>,
+        aggregator: Arc<dyn AiProvider>,
+        fanout: MoaFanout,
+        sink: Arc<RecordingSink>,
+    ) -> MoaProvider {
+        let mut p = make_provider(advisors, aggregator, fanout, 5);
+        p.sink = Some(sink);
+        p
     }
 
     fn user_msgs(text: &str) -> Vec<UnifiedMessage> {
@@ -617,5 +677,111 @@ aggregator = { provider = "ghost", model = "n" }
         )
         .err().unwrap();
         assert!(err.contains("ghost"));
+    }
+
+    #[tokio::test]
+    async fn events_carry_error_cached_and_billed_count() {
+        let sink = RecordingSink::new();
+        let ok = Arc::new(CountingProvider::new("advice"));
+        let bad: Arc<dyn AiProvider> = Arc::new(
+            MockProvider::new("bad")
+                .with_error(crate::providers::mock::MockError::Network("boom".into())),
+        );
+        let agg = Arc::new(CountingProvider::new("final"));
+        let p = make_provider_sinked(
+            vec![(ok, "mock:ok"), (bad, "mock:bad")],
+            agg,
+            MoaFanout::PerIteration,
+            sink.clone(),
+        );
+        p.process(RequestPayload::new(&user_msgs("go"))).await.unwrap();
+
+        let events = sink.events();
+        let advisors: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, LoopTraceEvent::MoaAdvisor { .. }))
+            .collect();
+        assert_eq!(advisors.len(), 2);
+        // B2: success carries error=None, failure carries the structural reason.
+        let LoopTraceEvent::MoaAdvisor { error: e0, .. } = advisors[0] else { panic!() };
+        let LoopTraceEvent::MoaAdvisor { error: e1, .. } = advisors[1] else { panic!() };
+        assert!(e0.is_none());
+        assert!(e1.as_deref().is_some_and(|e| e.contains("boom")));
+        // B4: MISS aggregating is cached=false.
+        assert!(events.iter().any(|e| matches!(
+            e,
+            LoopTraceEvent::MoaAggregating { cached: false, .. }
+        )));
+        // B1: spend advisor_count = consulted (2), billed_count = with-usage (1).
+        let spend = events
+            .iter()
+            .find(|e| matches!(e, LoopTraceEvent::MoaAdvisorSpend { .. }))
+            .expect("spend event");
+        let LoopTraceEvent::MoaAdvisorSpend { advisor_count, billed_count, .. } = spend else {
+            panic!()
+        };
+        assert_eq!(*advisor_count, 2);
+        assert_eq!(*billed_count, 1);
+    }
+
+    #[tokio::test]
+    async fn cache_hit_emits_cached_aggregating_only() {
+        let sink = RecordingSink::new();
+        let adv = Arc::new(CountingProvider::new("advice"));
+        let agg = Arc::new(CountingProvider::new("final"));
+        let p = make_provider_sinked(
+            vec![(adv, "mock:a")],
+            agg,
+            MoaFanout::UserTurn,
+            sink.clone(),
+        );
+        let msgs = user_msgs("go");
+        p.process(RequestPayload::new(&msgs)).await.unwrap();
+        let miss_events = sink.events().len();
+        p.process(RequestPayload::new(&msgs)).await.unwrap();
+        let all = sink.events();
+        let hit_events = &all[miss_events..];
+        // HIT: exactly one new event — MoaAggregating { cached: true }; no
+        // advisor re-emission, no spend re-emission.
+        assert_eq!(hit_events.len(), 1);
+        assert!(matches!(
+            hit_events[0],
+            LoopTraceEvent::MoaAggregating { cached: true, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn save_traces_gate_controls_turn_trace() {
+        let sink = RecordingSink::new();
+        let adv = Arc::new(CountingProvider::new("advice"));
+        let agg = Arc::new(CountingProvider::new("final"));
+        let mut p = make_provider_sinked(
+            vec![(adv, "mock:a")],
+            agg,
+            MoaFanout::PerIteration,
+            sink.clone(),
+        );
+        p.save_traces = false;
+        p.process(RequestPayload::new(&user_msgs("go"))).await.unwrap();
+        assert!(!sink
+            .events()
+            .iter()
+            .any(|e| matches!(e, LoopTraceEvent::MoaTurnTrace { .. })));
+        // Flip the gate on a fresh provider: trace fires.
+        let sink2 = RecordingSink::new();
+        let adv2 = Arc::new(CountingProvider::new("advice"));
+        let agg2 = Arc::new(CountingProvider::new("final"));
+        let mut p2 = make_provider_sinked(
+            vec![(adv2, "mock:a")],
+            agg2,
+            MoaFanout::PerIteration,
+            sink2.clone(),
+        );
+        p2.save_traces = true;
+        p2.process(RequestPayload::new(&user_msgs("go"))).await.unwrap();
+        assert!(sink2
+            .events()
+            .iter()
+            .any(|e| matches!(e, LoopTraceEvent::MoaTurnTrace { .. })));
     }
 }

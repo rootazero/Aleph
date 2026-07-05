@@ -72,10 +72,11 @@ pub(crate) async fn run_fan_out(
 }
 
 /// Emit the per-advisor trace events + aggregating marker for a completed
-/// fan-out (MISS-only display path), called from `process()`. Byte-identical
-/// to the pre-extraction inline emission. Task 3 (B1/B2/B4) will change this
-/// signature/internals to also carry `AdvisorResult.error` and a `cached`
-/// flag.
+/// fan-out (MISS-only display path), called from `process()`. Advisor events
+/// carry `AdvisorResult.error` (round-2 B2); the aggregating event is always
+/// `cached: false` here — a HIT reusing the previous fan-out's advice emits
+/// its own lightweight `MoaAggregating { cached: true }` from `process()`
+/// directly (round-2 B4), never through this MISS-only path.
 pub(crate) fn emit_fanout_events(
     sink: &Option<Arc<dyn TraceSink>>,
     _advisors: &[AdvisorSlot],
@@ -90,6 +91,7 @@ pub(crate) fn emit_fanout_events(
                 count,
                 label: r.outcome.label.clone(),
                 text: r.outcome.text.clone(),
+                error: r.error.clone(),
             });
         }
     }
@@ -97,6 +99,7 @@ pub(crate) fn emit_fanout_events(
         s.on_trace(&LoopTraceEvent::MoaAggregating {
             aggregator: aggregator_label.to_string(),
             advisor_count: count,
+            cached: false,
         });
     }
 }
