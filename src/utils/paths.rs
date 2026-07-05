@@ -16,6 +16,12 @@
 use crate::error::{AlephError, Result};
 use std::path::PathBuf;
 
+/// Process-global environment guard for tests that mutate `ALEPH_HOME`.
+/// Acquiring this mutex serialises tests so they don't observe each other's
+/// temporary directories or leave stale values behind.
+#[cfg(test)]
+pub(crate) static ALEPH_HOME_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Get the user's home directory in a cross-platform way
 ///
 /// Tries in order:

@@ -81,7 +81,7 @@ async fn compound_ingest_creates_and_links_pages() {
         RawMemorySource::Transcript,
     );
     let report = ing
-        .ingest_batch("default", vec![raw])
+        .ingest_batch("default", vec![raw], None)
         .await
         .expect("ingest ok");
 

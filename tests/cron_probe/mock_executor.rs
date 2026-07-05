@@ -8,10 +8,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use alephcore::cron::config::{
+use alephcore::tasks::cron::config::{
     DeliveryStatus, ErrorReason, ExecutionResult, JobSnapshot, RunStatus, TriggerSource,
 };
-use alephcore::cron::service::timer::JobExecutorFn;
+use alephcore::tasks::cron::service::timer::JobExecutorFn;
+use alephcore::tasks::shared::retry_hint::{RetryCategory, RetryHint};
 
 /// Record of a single job execution.
 #[derive(Debug, Clone)]
@@ -127,6 +128,8 @@ impl MockExecutor {
                             error_reason: None,
                             delivery_status: Some(DeliveryStatus::NotRequested),
                             agent_used_messaging_tool: false,
+                            trigger_source: snapshot.trigger_source,
+                            retry_hint: None,
                         },
                         MockBehavior::Error { message, reason } => ExecutionResult {
                             started_at: snapshot.marked_at,
@@ -135,9 +138,18 @@ impl MockExecutor {
                             status: RunStatus::Error,
                             output: None,
                             error: Some(message),
-                            error_reason: Some(reason),
+                            error_reason: Some(reason.clone()),
                             delivery_status: None,
                             agent_used_messaging_tool: false,
+                            trigger_source: snapshot.trigger_source,
+                            // Preserve the test intent of ErrorReason::Transient/Permanent
+                            // rather than re-classifying the message text.
+                            retry_hint: Some(match reason {
+                                ErrorReason::Transient(_) => {
+                                    RetryHint::transient(RetryCategory::Network)
+                                }
+                                ErrorReason::Permanent(_) => RetryHint::permanent(),
+                            }),
                         },
                         MockBehavior::Delayed { delay_ms, output } => {
                             // Simulate delay (we don't actually sleep — just report duration)
@@ -151,6 +163,8 @@ impl MockExecutor {
                                 error_reason: None,
                                 delivery_status: Some(DeliveryStatus::NotRequested),
                                 agent_used_messaging_tool: false,
+                                trigger_source: snapshot.trigger_source,
+                                retry_hint: None,
                             }
                         }
                     }

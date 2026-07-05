@@ -1,9 +1,12 @@
 //! P2 Concurrency Safety Probes — 6 scenarios verifying safe behavior
 //! when jobs are listed, updated, deleted, or added during execution.
 
-use alephcore::cron::service::concurrency::{phase1_mark_due_jobs, phase3_writeback};
+use alephcore::tasks::cron::config::TriggerSource;
+use alephcore::tasks::cron::service::concurrency::{phase1_mark_due_jobs, phase3_writeback};
 
 use super::harness::CronTestHarness;
+
+const TEST_TIMEOUT_MS: i64 = 300_000;
 
 // ── 1. concurrent_list_during_execution ─────────────────────────────
 
@@ -18,7 +21,7 @@ async fn concurrent_list_during_execution() {
     h.advance(interval);
 
     // Phase 1: mark due jobs
-    let snapshots = phase1_mark_due_jobs(&h.state.store, h.clock.as_ref())
+    let snapshots = phase1_mark_due_jobs(&h.state.store, h.clock.as_ref(), TEST_TIMEOUT_MS)
         .await
         .expect("phase1 failed");
     assert_eq!(snapshots.len(), 1);
@@ -33,23 +36,30 @@ async fn concurrent_list_during_execution() {
     );
 
     // Simulate execution result
-    let result = alephcore::cron::config::ExecutionResult {
+    let result = alephcore::tasks::cron::config::ExecutionResult {
         started_at: h.now(),
         ended_at: h.now() + 100,
         duration_ms: 100,
-        status: alephcore::cron::config::RunStatus::Ok,
+        status: alephcore::tasks::cron::config::RunStatus::Ok,
         output: Some("ok".to_string()),
         error: None,
         error_reason: None,
-        delivery_status: Some(alephcore::cron::config::DeliveryStatus::NotRequested),
+        delivery_status: Some(alephcore::tasks::cron::config::DeliveryStatus::NotRequested),
         agent_used_messaging_tool: false,
+        trigger_source: TriggerSource::Schedule,
+        retry_hint: None,
     };
 
     // Phase 3: writeback
     let results = vec![("list-during-exec".to_string(), result)];
-    phase3_writeback(&h.state.store, h.clock.as_ref(), &results)
-        .await
-        .expect("phase3 failed");
+    phase3_writeback(
+        &h.state.store,
+        h.clock.as_ref(),
+        &results,
+        h.state.config.notify_on_failure_default,
+    )
+    .await
+    .expect("phase3 failed");
 
     // After writeback: running_at_ms should be cleared
     h.assert_running("list-during-exec", false).await;
@@ -68,7 +78,7 @@ async fn update_during_execution() {
     h.advance(interval);
 
     // Phase 1: mark due
-    let snapshots = phase1_mark_due_jobs(&h.state.store, h.clock.as_ref())
+    let snapshots = phase1_mark_due_jobs(&h.state.store, h.clock.as_ref(), TEST_TIMEOUT_MS)
         .await
         .expect("phase1 failed");
     assert_eq!(snapshots.len(), 1);
@@ -82,23 +92,30 @@ async fn update_during_execution() {
     }
 
     // Simulate execution result
-    let result = alephcore::cron::config::ExecutionResult {
+    let result = alephcore::tasks::cron::config::ExecutionResult {
         started_at: h.now(),
         ended_at: h.now() + 100,
         duration_ms: 100,
-        status: alephcore::cron::config::RunStatus::Ok,
+        status: alephcore::tasks::cron::config::RunStatus::Ok,
         output: Some("ok".to_string()),
         error: None,
         error_reason: None,
-        delivery_status: Some(alephcore::cron::config::DeliveryStatus::NotRequested),
+        delivery_status: Some(alephcore::tasks::cron::config::DeliveryStatus::NotRequested),
         agent_used_messaging_tool: false,
+        trigger_source: TriggerSource::Schedule,
+        retry_hint: None,
     };
 
     // Phase 3: writeback (force_reload merges concurrent edits)
     let results = vec![("update-during".to_string(), result)];
-    phase3_writeback(&h.state.store, h.clock.as_ref(), &results)
-        .await
-        .expect("phase3 failed");
+    phase3_writeback(
+        &h.state.store,
+        h.clock.as_ref(),
+        &results,
+        h.state.config.notify_on_failure_default,
+    )
+    .await
+    .expect("phase3 failed");
 
     // Verify: new name preserved AND execution result written
     let store = h.state.store.lock().await;
@@ -109,7 +126,7 @@ async fn update_during_execution() {
     );
     assert_eq!(
         job.state.last_run_status,
-        Some(alephcore::cron::config::RunStatus::Ok),
+        Some(alephcore::tasks::cron::config::RunStatus::Ok),
         "execution result should be written"
     );
     assert!(
@@ -131,7 +148,7 @@ async fn delete_during_execution() {
     h.advance(interval);
 
     // Phase 1: mark due
-    let snapshots = phase1_mark_due_jobs(&h.state.store, h.clock.as_ref())
+    let snapshots = phase1_mark_due_jobs(&h.state.store, h.clock.as_ref(), TEST_TIMEOUT_MS)
         .await
         .expect("phase1 failed");
     assert_eq!(snapshots.len(), 1);
@@ -144,21 +161,29 @@ async fn delete_during_execution() {
     );
 
     // Simulate execution result
-    let result = alephcore::cron::config::ExecutionResult {
+    let result = alephcore::tasks::cron::config::ExecutionResult {
         started_at: h.now(),
         ended_at: h.now() + 100,
         duration_ms: 100,
-        status: alephcore::cron::config::RunStatus::Ok,
+        status: alephcore::tasks::cron::config::RunStatus::Ok,
         output: Some("ok".to_string()),
         error: None,
         error_reason: None,
-        delivery_status: Some(alephcore::cron::config::DeliveryStatus::NotRequested),
+        delivery_status: Some(alephcore::tasks::cron::config::DeliveryStatus::NotRequested),
         agent_used_messaging_tool: false,
+        trigger_source: TriggerSource::Schedule,
+        retry_hint: None,
     };
 
     // Phase 3: writeback — should NOT panic, just warn and skip
     let results = vec![("delete-during".to_string(), result)];
-    let outcome = phase3_writeback(&h.state.store, h.clock.as_ref(), &results).await;
+    let outcome = phase3_writeback(
+        &h.state.store,
+        h.clock.as_ref(),
+        &results,
+        h.state.config.notify_on_failure_default,
+    )
+    .await;
     assert!(
         outcome.is_ok(),
         "phase3 should gracefully handle deleted job"

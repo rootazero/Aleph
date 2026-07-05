@@ -78,6 +78,7 @@ fn test_assembler_config() -> AssemblerConfig {
         project_scoped: false,
         retrieval_scoring: Default::default(),
         rerank: Default::default(),
+        expansion: Default::default(),
     }
 }
 
@@ -140,6 +141,9 @@ async fn build_pipeline(
     let reranker =
         Arc::new(NoopReranker) as Arc<dyn alephcore::memory::assembler::hybrid::LlmReranker>;
 
+    // Feedback-floor loader.
+    let feedback_floor = alephcore::memory::assembler::FeedbackFloorLoader::new(memory_dir.clone());
+
     // HybridAssembler.
     let assembler: Arc<dyn alephcore::memory::assembler::WorkingMemoryAssembler> =
         Arc::new(HybridAssembler::new(
@@ -147,6 +151,7 @@ async fn build_pipeline(
             snapshots,
             backend_arc.clone() as MemoryBackend,
             profile,
+            feedback_floor,
             reranker,
             test_assembler_config(),
         ));
@@ -161,6 +166,7 @@ async fn build_pipeline(
         created_at: 1_700_000_000,
         updated_at: 1_700_000_000,
         content_hash: String::new(),
+        ..Default::default()
     };
     indexer
         .write_note("agent-test", "wiki", &note)
@@ -180,7 +186,8 @@ async fn build_pipeline(
         embedder: Some(Arc::clone(&embedder)),
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("builtin tool registry");
 
     (provider, registry, tmp)
 }
@@ -223,7 +230,7 @@ async fn context_mode_injects_fenced_message_and_hides_memory_tools() {
     //  will short-circuit to None — that is acceptable here, but if it IS present
     //  the XML fence must be correct.)
     let msg = provider
-        .build_memory_user_message("agent-test", "integration test question")
+        .build_memory_user_message("agent-test", "integration test question", None)
         .await
         .unwrap();
 
@@ -271,7 +278,7 @@ async fn tools_mode_skips_injection_and_registers_memory_tools() {
 
     // Provider: Tools mode must always return None.
     let msg = provider
-        .build_memory_user_message("agent-test", "integration test question")
+        .build_memory_user_message("agent-test", "integration test question", None)
         .await
         .unwrap();
     assert!(msg.is_none(), "Tools mode must not auto-inject");
@@ -323,7 +330,7 @@ async fn hybrid_mode_does_both() {
     // Provider: Hybrid mode auto-injects (same as Context).
     // If the envelope is non-empty after assembly, a fenced message is returned.
     let msg = provider
-        .build_memory_user_message("agent-test", "integration test question")
+        .build_memory_user_message("agent-test", "integration test question", None)
         .await
         .unwrap();
 

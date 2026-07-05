@@ -8,6 +8,8 @@ use crate::sync_primitives::Arc;
 use serde_json::json;
 use tokio::sync::RwLock;
 
+
+
 fn test_vault() -> Arc<SharedTokenManager> {
     let store = Arc::new(SecurityStore::in_memory().unwrap());
     let tmp = std::env::temp_dir().join(format!(
@@ -418,6 +420,25 @@ async fn test_handle_update_hot_reloads_runtime_provider_protocol() {
     use crate::providers::create_provider;
     use crate::thinker::{MultiProviderRegistry, ProviderRegistry};
 
+    // Isolate on-disk config writes to a temp dir; ALEPH_HOME is process-global
+    // and other tests may leave it pointing at a dropped temp directory.
+    let _guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let prev_aleph_home = std::env::var_os("ALEPH_HOME");
+    let tmp = std::env::temp_dir()
+        .join(".aleph")
+        .join(format!(
+            "providers_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+    std::fs::create_dir_all(&tmp).expect("create test aleph home");
+    std::env::set_var("ALEPH_HOME", &tmp);
+
     let mut config = Config::default();
     let initial_cfg = ProviderConfig::test_config("gpt-4o");
     config
@@ -468,4 +489,10 @@ async fn test_handle_update_hot_reloads_runtime_provider_protocol() {
         "anthropic",
         "providers.update must hot-reload the runtime provider with the new protocol"
     );
+
+    match prev_aleph_home {
+        Some(v) => std::env::set_var("ALEPH_HOME", v),
+        None => std::env::remove_var("ALEPH_HOME"),
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
 }

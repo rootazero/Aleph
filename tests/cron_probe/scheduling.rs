@@ -1,8 +1,8 @@
 //! P3 Scheduling Precision Probes — 6 scenarios verifying anchor alignment,
 //! stagger spread, backoff, maintenance safety, one-shot semantics, and refire gap.
 
-use alephcore::cron::config::{CronJob, ErrorReason, ScheduleKind};
-use alephcore::cron::schedule::MIN_REFIRE_GAP_MS;
+use alephcore::tasks::cron::config::{CronJob, ErrorReason, ScheduleKind};
+use alephcore::tasks::cron::schedule::MIN_REFIRE_GAP_MS;
 
 use super::harness::CronTestHarness;
 use super::mock_executor::MockBehavior;
@@ -141,7 +141,7 @@ async fn backoff_after_errors() {
     h.assert_consecutive_errors("backoff-1", 3).await;
 
     // Verify that compute_backoff_ms returns increasing delays
-    use alephcore::cron::schedule::compute_backoff_ms;
+    use alephcore::tasks::cron::schedule::compute_backoff_ms;
     let d1 = compute_backoff_ms(1);
     let d2 = compute_backoff_ms(2);
     let d3 = compute_backoff_ms(3);

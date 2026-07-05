@@ -1,8 +1,8 @@
 //! P1 Lifecycle Probes — 8 end-to-end scenarios covering the full
 //! cron job lifecycle: create, schedule, execute, update, disable, delete, persist.
 
-use alephcore::cron::config::{ScheduleKind, TriggerSource};
-use alephcore::cron::service::ops::CronJobUpdates;
+use alephcore::tasks::cron::config::{ScheduleKind, TriggerSource};
+use alephcore::tasks::cron::service::ops::CronJobUpdates;
 
 use super::harness::CronTestHarness;
 

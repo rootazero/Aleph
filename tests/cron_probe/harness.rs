@@ -6,15 +6,15 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use alephcore::cron::clock::testing::FakeClock;
-use alephcore::cron::clock::Clock;
-use alephcore::cron::config::{CronConfig, CronJob, CronJobView, JobStateV2, ScheduleKind};
-use alephcore::cron::service::catchup::run_startup_catchup;
-use alephcore::cron::service::concurrency::phase1_mark_manual;
-use alephcore::cron::service::ops::{self, CronJobUpdates};
-use alephcore::cron::service::state::ServiceState;
-use alephcore::cron::service::timer::{on_timer_tick, JobExecutorFn};
-use alephcore::cron::store::CronStore;
+use alephcore::tasks::cron::clock::testing::FakeClock;
+use alephcore::tasks::cron::clock::Clock;
+use alephcore::tasks::cron::config::{CronConfig, CronJob, CronJobView, JobStateV2, ScheduleKind};
+use alephcore::tasks::cron::service::catchup::run_startup_catchup;
+use alephcore::tasks::cron::service::concurrency::phase1_mark_manual;
+use alephcore::tasks::cron::service::ops::{self, CronJobUpdates};
+use alephcore::tasks::cron::service::state::ServiceState;
+use alephcore::tasks::cron::service::timer::{on_timer_tick, JobExecutorFn};
+use alephcore::tasks::cron::store::CronStore;
 
 use super::mock_executor::MockExecutor;
 
@@ -158,7 +158,7 @@ impl CronTestHarness {
 
     /// Run a single timer tick (mark due + execute + writeback).
     pub async fn tick(&self) {
-        on_timer_tick(&self.state, &self.executor_fn)
+        on_timer_tick(&self.state, &self.executor_fn, None)
             .await
             .expect("tick failed");
     }
@@ -184,16 +184,27 @@ impl CronTestHarness {
 
     /// Manually trigger a job.
     pub async fn manual_run(&self, id: &str) {
-        let snapshot = phase1_mark_manual(&self.state.store, self.clock.as_ref(), id)
-            .await
-            .expect("manual_run failed");
+        let default_timeout_ms = self
+            .state
+            .config
+            .job_timeout_secs
+            .saturating_mul(1000) as i64;
+        let snapshot = phase1_mark_manual(
+            &self.state.store,
+            self.clock.as_ref(),
+            id,
+            default_timeout_ms,
+        )
+        .await
+        .expect("manual_run failed");
 
         if let Some(snap) = snapshot {
             let result = (self.executor_fn)(snap.clone()).await;
-            alephcore::cron::service::concurrency::phase3_writeback(
+            alephcore::tasks::cron::service::concurrency::phase3_writeback(
                 &self.state.store,
                 self.clock.as_ref(),
                 &[(snap.id, result)],
+                self.state.config.notify_on_failure_default,
             )
             .await
             .expect("manual_run writeback failed");

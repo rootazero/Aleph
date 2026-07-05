@@ -38,6 +38,7 @@ async fn ingest_low_confidence_lands_in_queue_not_markdown() {
         action: NoteWriteAction::Create,
         bypass_review: false,
         contradicts_existing: false,
+        replay_op: None,
     };
 
     let out = gate.evaluate(&cand).await.unwrap();

@@ -12,7 +12,7 @@ use alephcore::memory::assembler::{AiProviderReranker, HybridAssembler, UserProf
 use alephcore::memory::note_retrieval::NoteFactRetrieval;
 use alephcore::memory::notes::{KnowledgeNote, NoteIndexer};
 use alephcore::memory::reflector::{
-    recall_signals::SignalRow, reflector::RecallWriter, MemoryReflector, ReflectOpts,
+    fs_reflector::RecallWriter, recall_signals::SignalRow, MemoryReflector, ReflectOpts,
 };
 use alephcore::memory::session_resume::reader::SnapshotReader;
 use alephcore::memory::store::{MemoryBackend, SqliteMemoryBackend};
@@ -72,6 +72,7 @@ fn test_assembler_config() -> AssemblerConfig {
         project_scoped: false,
         retrieval_scoring: Default::default(),
         rerank: Default::default(),
+        expansion: Default::default(),
     }
 }
 
@@ -131,6 +132,9 @@ async fn build_reflector(
     // Reranker wrapping the same provider (never called due to force_fallback).
     let reranker = AiProviderReranker::new(provider_arc.clone());
 
+    // Feedback-floor loader.
+    let feedback_floor = alephcore::memory::assembler::FeedbackFloorLoader::new(memory_dir.clone());
+
     // HybridAssembler.
     let assembler_arc: Arc<dyn alephcore::memory::assembler::WorkingMemoryAssembler> =
         Arc::new(HybridAssembler::new(
@@ -138,6 +142,7 @@ async fn build_reflector(
             snapshots,
             backend_arc.clone() as MemoryBackend,
             profile,
+            feedback_floor,
             reranker,
             test_assembler_config(),
         ));
@@ -201,6 +206,7 @@ async fn reflect_full_pipeline_against_fixture_notes() {
         created_at: 1_700_000_000,
         updated_at: 1_700_000_000,
         content_hash: String::new(),
+        ..Default::default()
     };
     indexer.write_note("agent-1", "wiki", &note).await.unwrap();
     // Full-rebuild so the note enters the SQLite index (FTS + vec).

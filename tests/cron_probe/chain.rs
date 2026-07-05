@@ -1,9 +1,9 @@
 //! P6 Chain Probes — 4 scenarios covering job chaining (on_success triggers)
 //! and cycle detection.
 
-use alephcore::cron::chain::{detect_cycle, trigger_chain_job};
-use alephcore::cron::config::{CronJob, ScheduleKind};
-use alephcore::cron::store::CronStore;
+use alephcore::tasks::cron::chain::{detect_cycle, trigger_chain_job};
+use alephcore::tasks::cron::config::{CronJob, ScheduleKind};
+use alephcore::tasks::cron::store::CronStore;
 use tempfile::TempDir;
 
 // ── Helpers ─────────────────────────────────────────────────────────────

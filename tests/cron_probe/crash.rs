@@ -4,13 +4,15 @@
 
 use std::sync::Arc;
 
-use alephcore::cron::clock::testing::FakeClock;
-use alephcore::cron::config::{CronJob, ScheduleKind};
-use alephcore::cron::service::catchup::run_startup_catchup;
-use alephcore::cron::service::concurrency::phase1_mark_due_jobs;
-use alephcore::cron::service::ops;
-use alephcore::cron::store::CronStore;
+use alephcore::tasks::cron::clock::testing::FakeClock;
+use alephcore::tasks::cron::config::{CronJob, ScheduleKind};
+use alephcore::tasks::cron::service::catchup::run_startup_catchup;
+use alephcore::tasks::cron::service::concurrency::phase1_mark_due_jobs;
+use alephcore::tasks::cron::service::ops;
+use alephcore::tasks::cron::store::CronStore;
 use tempfile::TempDir;
+
+const TEST_TIMEOUT_MS: i64 = 300_000;
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -59,7 +61,7 @@ async fn crash_mid_execution_recovers() {
         clock.advance(interval);
 
         // Phase 1: mark due jobs as running (persists running_at_ms)
-        let snapshots = phase1_mark_due_jobs(&store, clock.as_ref())
+        let snapshots = phase1_mark_due_jobs(&store, clock.as_ref(), TEST_TIMEOUT_MS)
             .await
             .expect("phase1 should succeed");
         assert!(
@@ -140,7 +142,7 @@ async fn crash_after_phase1_before_phase2() {
 
         clock.advance(interval);
 
-        let _snapshots = phase1_mark_due_jobs(&store, clock.as_ref())
+        let _snapshots = phase1_mark_due_jobs(&store, clock.as_ref(), TEST_TIMEOUT_MS)
             .await
             .expect("phase1 should succeed");
 
