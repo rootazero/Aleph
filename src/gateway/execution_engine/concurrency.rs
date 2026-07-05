@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::sync_primitives::Mutex;
@@ -75,12 +76,16 @@ impl Drop for WaitGuard<'_> {
 }
 
 pub(super) struct ConcurrencyLimiter {
-    global: Arc<Semaphore>,
-    global_total: usize,
-    per_agent_cap: usize,
+    /// Hot-swappable so `reconfigure` can resize (tokio 1.35 `Semaphore` grows
+    /// via `add_permits` but cannot shrink; a whole-semaphore swap is the
+    /// version-safe resize). In-flight permits held against the previous
+    /// `Arc<Semaphore>` keep it alive until they drop, so a shrink overshoots
+    /// transiently by at most the old in-flight count, then converges.
+    global: ArcSwap<Semaphore>,
+    global_total: AtomicUsize,
+    per_agent_cap: AtomicUsize,
     per_agent: Mutex<HashMap<String, Arc<Semaphore>>>,
-    /// Live count of runs blocked in `acquire().await` (queue depth). Interior
-    /// atomic so `snapshot()` stays `&self` and lock-free.
+    /// Live count of runs blocked in `acquire().await` (queue depth).
     waiting: AtomicUsize,
 }
 
@@ -91,18 +96,35 @@ impl ConcurrencyLimiter {
         let global_cap = global_cap.max(1);
         let per_agent_cap = per_agent_cap.max(1);
         Self {
-            global: Arc::new(Semaphore::new(global_cap)),
-            global_total: global_cap,
-            per_agent_cap,
+            global: ArcSwap::from_pointee(Semaphore::new(global_cap)),
+            global_total: AtomicUsize::new(global_cap),
+            per_agent_cap: AtomicUsize::new(per_agent_cap),
             per_agent: Mutex::new(HashMap::new()),
             waiting: AtomicUsize::new(0),
         }
     }
 
+    /// Live-resize both caps (hot-reload of `[execution] max_runs_*`). The
+    /// global semaphore is swapped wholesale; the per-agent map is cleared so
+    /// each agent's sub-semaphore rebuilds lazily at the new cap. In-flight
+    /// permits against the old semaphores stay valid until dropped.
+    pub(super) fn reconfigure(&self, global_cap: usize, per_agent_cap: usize) {
+        let global_cap = global_cap.max(1);
+        let per_agent_cap = per_agent_cap.max(1);
+        self.global.store(Arc::new(Semaphore::new(global_cap)));
+        self.global_total.store(global_cap, Ordering::Release);
+        self.per_agent_cap.store(per_agent_cap, Ordering::Release);
+        self.per_agent
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+
     fn agent_sem(&self, agent_id: &str) -> Arc<Semaphore> {
+        let cap = self.per_agent_cap.load(Ordering::Acquire);
         let mut map = self.per_agent.lock().unwrap_or_else(|e| e.into_inner());
         map.entry(agent_id.to_string())
-            .or_insert_with(|| Arc::new(Semaphore::new(self.per_agent_cap)))
+            .or_insert_with(|| Arc::new(Semaphore::new(cap)))
             .clone()
     }
 
@@ -117,9 +139,11 @@ impl ConcurrencyLimiter {
             .acquire_owned()
             .await
             .expect("agent sem never closed");
-        let global = self
-            .global
-            .clone()
+        // Clone the current global semaphore Arc, then await on it — never hold
+        // the ArcSwap guard across the await (a concurrent reconfigure must not
+        // be blocked, and the permit binds to whichever semaphore was live).
+        let global_sem = self.global.load_full();
+        let global = global_sem
             .acquire_owned()
             .await
             .expect("global sem never closed");
@@ -134,7 +158,8 @@ impl ConcurrencyLimiter {
     pub(super) fn try_acquire(&self, agent_id: &str) -> Option<RunPermit> {
         let agent_sem = self.agent_sem(agent_id);
         let agent = Arc::clone(&agent_sem).try_acquire_owned().ok()?;
-        let global = self.global.clone().try_acquire_owned().ok()?;
+        let global_sem = self.global.load_full();
+        let global = global_sem.try_acquire_owned().ok()?;
         Some(RunPermit {
             _global: global,
             _agent: agent,
@@ -143,16 +168,15 @@ impl ConcurrencyLimiter {
 
     #[must_use]
     pub(super) fn snapshot(&self) -> ConcurrencySnapshot {
-        // Per-agent rows for agents holding ≥1 slot, deterministically ordered
-        // (usage desc, then id) so the gauge and its tests are stable. Idle
-        // agents are omitted — the map only grows with distinct agents ever
-        // seen, so this keeps the surfaced view bounded to what's actually live.
+        let per_agent_cap = self.per_agent_cap.load(Ordering::Acquire);
+        let global_sem = self.global.load_full();
+        let global_total = self.global_total.load(Ordering::Acquire);
         let per_agent = {
             let map = self.per_agent.lock().unwrap_or_else(|e| e.into_inner());
             let mut rows: Vec<AgentSlotUsage> = map
                 .iter()
                 .filter_map(|(id, sem)| {
-                    let in_use = self.per_agent_cap.saturating_sub(sem.available_permits());
+                    let in_use = per_agent_cap.saturating_sub(sem.available_permits());
                     (in_use > 0).then(|| AgentSlotUsage {
                         agent_id: id.clone(),
                         in_use,
@@ -167,9 +191,9 @@ impl ConcurrencyLimiter {
             rows
         };
         ConcurrencySnapshot {
-            global_in_use: self.global_total - self.global.available_permits(),
-            global_total: self.global_total,
-            per_agent_cap: self.per_agent_cap,
+            global_in_use: global_total.saturating_sub(global_sem.available_permits()),
+            global_total,
+            per_agent_cap,
             waiting: self.waiting.load(Ordering::Acquire),
             per_agent,
         }
@@ -222,6 +246,36 @@ mod tests {
         assert_eq!(snap.per_agent[0].in_use, 2);
         assert_eq!(snap.per_agent[1].agent_id, "other");
         assert_eq!(snap.per_agent[1].in_use, 1);
+    }
+
+    #[tokio::test]
+    async fn reconfigure_grows_and_shrinks_caps() {
+        let lim = ConcurrencyLimiter::new(1, 1);
+        let _p1 = lim.try_acquire("main").expect("slot 1");
+        assert!(lim.try_acquire("other").is_none(), "global cap=1 已满");
+
+        // Grow global to 3 → a new agent can now acquire.
+        lim.reconfigure(3, 2);
+        assert_eq!(lim.snapshot().global_total, 3);
+        assert_eq!(lim.snapshot().per_agent_cap, 2);
+        let _p2 = lim.try_acquire("other").expect("grown global slot");
+        // Old in-flight permit still valid (held against the pre-swap semaphore).
+        drop(_p1);
+
+        // Shrink global to 1: new acquires bounded by the new semaphore.
+        lim.reconfigure(1, 1);
+        assert_eq!(lim.snapshot().global_total, 1);
+    }
+
+    #[tokio::test]
+    async fn reconfigure_rebuilds_per_agent_caps() {
+        let lim = ConcurrencyLimiter::new(10, 1);
+        let _a1 = lim.try_acquire("main").unwrap();
+        assert!(lim.try_acquire("main").is_none(), "per-agent cap=1 已满");
+        // Raise per-agent cap → the same agent gets a fresh semaphore at cap 3.
+        lim.reconfigure(10, 3);
+        let _a2 = lim.try_acquire("main").expect("re-capped agent slot");
+        let _a3 = lim.try_acquire("main").expect("re-capped agent slot");
     }
 
     #[tokio::test]
