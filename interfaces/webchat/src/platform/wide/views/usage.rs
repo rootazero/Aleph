@@ -8,7 +8,7 @@
 //! (lane gauge is eventually consistent so a slow tick is safe and avoids
 //! event-bus chatter for a low-priority dashboard).
 
-use crate::api::system::{LaneOccupancy, SystemApi};
+use crate::api::system::{LaneOccupancy, RunConcurrency, SystemApi};
 use crate::api::teams::{TeamSummary, TeamUsageDto, TeamsApi};
 use crate::components::ui::Card;
 use crate::context::DashboardState;
@@ -39,6 +39,8 @@ pub fn UsageView() -> impl IntoView {
 
     // Lane gauge state — `None` until the first poll completes.
     let lanes = RwSignal::new(None::<Vec<LaneOccupancy>>);
+    // Run-slot concurrency gauge — global N/M + per-agent + queue depth.
+    let run_slots = RwSignal::new(None::<RunConcurrency>);
 
     // Teams list + selected team + that team's usage rollup.
     let teams = RwSignal::new(Vec::<TeamSummary>::new());
@@ -50,6 +52,7 @@ pub fn UsageView() -> impl IntoView {
     Effect::new(move || {
         if !state.is_connected.get() {
             lanes.set(None);
+            run_slots.set(None);
             teams.set(Vec::new());
             team_usage.set(None);
             usage_error.set(None);
@@ -59,6 +62,9 @@ pub fn UsageView() -> impl IntoView {
         leptos::task::spawn_local(async move {
             if let Ok(v) = SystemApi::lane_metrics(&state).await {
                 lanes.set(Some(v));
+            }
+            if let Ok(m) = SystemApi::run_concurrency(&state).await {
+                run_slots.set(Some(m.run_concurrency));
             }
             if let Ok(list) = TeamsApi::list(&state).await {
                 // Default-select the first team so the per-team panel has
@@ -128,6 +134,28 @@ pub fn UsageView() -> impl IntoView {
                                 </div>
                             }.into_any()
                         }
+                    } else {
+                        view! {
+                            <Card class="p-6">
+                                <p class="text-sm text-text-tertiary">{t!(i18n, usage.loading_lane_metrics)}</p>
+                            </Card>
+                        }.into_any()
+                    }
+                }}
+            </section>
+
+            // ── Run-slot concurrency ──────────────────────────────────────────
+            <section class="space-y-4">
+                <h3 class="text-xl font-semibold text-text-secondary px-1">{t!(i18n, usage.run_slot_concurrency)}</h3>
+                {move || {
+                    if !state.is_connected.get() {
+                        view! {
+                            <Card class="p-6">
+                                <p class="text-sm text-text-tertiary">{t!(i18n, usage.connect_to_view_run_slots)}</p>
+                            </Card>
+                        }.into_any()
+                    } else if let Some(rc) = run_slots.get() {
+                        view! { <RunSlotsCard rc=rc /> }.into_any()
                     } else {
                         view! {
                             <Card class="p-6">
@@ -219,6 +247,80 @@ fn LaneCard(row: LaneOccupancy) -> impl IntoView {
                     </div>
                 }.into_any(),
                 None => view! { <div></div> }.into_any(),
+            }}
+        </Card>
+    }
+}
+
+#[component]
+fn RunSlotsCard(rc: RunConcurrency) -> impl IntoView {
+    let i18n = use_i18n();
+    let used = rc.global_in_use;
+    let total_label = rc.global_total;
+    let total = rc.global_total.max(1);
+    let pct = (used * 100).checked_div(total).unwrap_or(0).min(100);
+    let band_color = if pct >= 90 {
+        "bg-danger"
+    } else if pct >= 70 {
+        "bg-warning"
+    } else {
+        "bg-success"
+    };
+    let waiting = rc.waiting;
+    let per_agent = rc.per_agent.clone();
+    let per_agent_cap = rc.per_agent_cap.max(1);
+    view! {
+        <Card class="p-5 space-y-4">
+            // Global run-slot gauge.
+            <div class="space-y-2">
+                <div class="flex items-center justify-between">
+                    <span class="font-semibold text-text-primary text-sm">{t!(i18n, usage.run_slots_global)}</span>
+                    <span class="text-xs font-mono text-text-tertiary">{format!("{}/{}", used, total_label)}</span>
+                </div>
+                <div class="w-full h-2 bg-border rounded-full overflow-hidden">
+                    <div class=format!("h-full {} transition-all duration-500", band_color) style=format!("width: {}%", pct)></div>
+                </div>
+                {if waiting > 0 {
+                    view! {
+                        <div class="text-[10px] text-warning uppercase font-bold tracking-wider">
+                            {format!("{} {}", t_string!(i18n, usage.run_slots_waiting), waiting)}
+                        </div>
+                    }.into_any()
+                } else {
+                    view! { <div></div> }.into_any()
+                }}
+            </div>
+
+            // Per-agent breakdown (the memory/storage isolation boundary).
+            {if per_agent.is_empty() {
+                view! {
+                    <div class="text-xs text-text-tertiary border-t border-border pt-3">
+                        {t!(i18n, usage.run_slots_idle)}
+                    </div>
+                }.into_any()
+            } else {
+                view! {
+                    <div class="border-t border-border pt-3 space-y-2">
+                        <div class="text-[10px] uppercase tracking-wider text-text-tertiary font-bold">
+                            {t!(i18n, usage.run_slots_per_agent)}
+                        </div>
+                        {per_agent.into_iter().map(|a| {
+                            let a_used = a.in_use;
+                            let a_pct = (a_used * 100).checked_div(per_agent_cap).unwrap_or(0).min(100);
+                            view! {
+                                <div class="space-y-1">
+                                    <div class="flex items-center justify-between text-xs">
+                                        <span class="font-mono text-text-primary truncate mr-2">{a.agent_id}</span>
+                                        <span class="text-text-tertiary font-mono">{format!("{}/{}", a_used, per_agent_cap)}</span>
+                                    </div>
+                                    <div class="w-full h-1.5 bg-border rounded-full overflow-hidden">
+                                        <div class="h-full bg-primary transition-all" style=format!("width: {}%", a_pct)></div>
+                                    </div>
+                                </div>
+                            }
+                        }).collect_view()}
+                    </div>
+                }.into_any()
             }}
         </Card>
     }

@@ -9,6 +9,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::api::chat::ChatApi;
+use crate::api::system::SystemApi;
 use crate::api::team_chat::{TeamChatApi, TeamMessageItem};
 use crate::api::teams::{TeamSummary, TeamsApi};
 use crate::context::DashboardState;
@@ -353,6 +354,16 @@ pub fn ChatSidebar() -> impl IntoView {
                 }
             }
 
+            // Seed the sidebar's server-authoritative running set from the same
+            // refresh tick, so running dots are correct on a fresh load and for
+            // runs started by any interface (daemon / Telegram / another Panel)
+            // — not just Panel-initiated runs tracked via client run events.
+            // `SessionMap` is an app-root context (signals outlive this
+            // component), so no disposal guard is needed here.
+            if let Ok(metrics) = SystemApi::run_concurrency(&dash).await {
+                session_map.set_server_running(metrics.running_sessions.into_iter().collect());
+            }
+
             // Fetch teams for the selected agent (drives the 群聊 section).
             // `try_get_untracked`: outer `None` = component disposed, inner
             // `None` = no agent selected — either way skip.
@@ -600,7 +611,8 @@ pub fn ChatSidebar() -> impl IntoView {
     // 不清空/顶掉当前正在跑的会话。session_key=None → 首次 send 触发新 epoch。
     let on_new_chat = move |_: web_sys::MouseEvent| {
         if let Some(agent_id) = selected_agent.get_untracked() {
-            let conv = session_map.open_conversation(&agent_id, t_string!(i18n, chat.new_chat).to_string());
+            let conv = session_map
+                .open_conversation(&agent_id, t_string!(i18n, chat.new_chat).to_string());
             session_map.activate(chat, conv);
             if let Some(ws) = workspace {
                 ws.reset();
@@ -1313,11 +1325,12 @@ pub fn ChatSidebar() -> impl IntoView {
                                         }
                                     };
                                     let sk_for_dot = session.key.clone();
-                                    let is_running_row = move || {
-                                        session_map
-                                            .conv_for_session_key(&sk_for_dot)
-                                            .is_some_and(|c| session_map.is_running(c))
-                                    };
+                                    // Dot = client-tracked run OR the server's
+                                    // authoritative running set (fresh load /
+                                    // runs started by any interface). See
+                                    // `SessionMap::is_running_session_key`.
+                                    let is_running_row =
+                                        move || session_map.is_running_session_key(&sk_for_dot);
                                     let label = session
                                         .topic
                                         .clone()

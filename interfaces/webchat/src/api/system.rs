@@ -40,6 +40,53 @@ impl SystemApi {
         let lanes = result.get("lanes").cloned().unwrap_or(Value::Array(vec![]));
         serde_json::from_value(lanes).map_err(|e| format!("Failed to parse lanes: {e}"))
     }
+
+    /// `gateway.metrics.run_concurrency` — run-slot occupancy (global N/M,
+    /// per-agent breakdown, queue depth) plus the authoritative set of backend
+    /// session keys with a run currently in flight. Cheap, eventually
+    /// consistent; the `running_sessions` half lets the sidebar paint
+    /// per-session running indicators on a fresh load / for runs started by
+    /// any interface, which client-side run-event refcounting alone can't see.
+    pub async fn run_concurrency(state: &DashboardState) -> Result<RunConcurrencyMetrics, String> {
+        let result = state
+            .rpc_call("gateway.metrics.run_concurrency", Value::Null)
+            .await?;
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse run concurrency: {e}"))
+    }
+}
+
+/// Combined payload of `gateway.metrics.run_concurrency`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RunConcurrencyMetrics {
+    #[serde(default)]
+    pub run_concurrency: RunConcurrency,
+    /// Backend session keys with a run currently in flight.
+    #[serde(default)]
+    pub running_sessions: Vec<String>,
+}
+
+/// Mirror of server-side `ConcurrencySnapshot` (`execution_engine/concurrency.rs`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RunConcurrency {
+    #[serde(default)]
+    pub global_in_use: usize,
+    #[serde(default)]
+    pub global_total: usize,
+    #[serde(default)]
+    pub per_agent_cap: usize,
+    #[serde(default)]
+    pub waiting: usize,
+    #[serde(default)]
+    pub per_agent: Vec<AgentSlotUsage>,
+}
+
+/// Mirror of server-side `AgentSlotUsage` — one agent's live run-slot usage.
+/// The agent id is the memory/storage isolation boundary (distinct from the
+/// per-session parallelism unit).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSlotUsage {
+    pub agent_id: String,
+    pub in_use: usize,
 }
 
 /// Mirror of server-side `LaneOccupancy`.
