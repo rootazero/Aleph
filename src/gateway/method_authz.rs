@@ -34,6 +34,7 @@ const OPERATOR_TOOLS: &[&str] = &[
     "channel_pairing",
     "clawhub",
     "hub_install_run",
+    "moa",
 ];
 
 /// True when `tool` mutates Aleph's own configuration and therefore requires an
@@ -66,6 +67,7 @@ mod tests {
             "channel_pairing",
             "clawhub",
             "hub_install_run",
+            "moa",
         ] {
             assert!(tool_requires_operator(t), "{t} must require operator");
         }

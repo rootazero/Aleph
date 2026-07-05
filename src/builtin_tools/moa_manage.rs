@@ -19,7 +19,7 @@ use tokio::sync::RwLock;
 
 use super::{notify_tool_result, notify_tool_start};
 use crate::config::patcher::{ConfigPatcher, PatchRequest};
-use crate::config::{Config, MoaFanout, MoaPreset, MoaSlot, MoaToml};
+use crate::config::{default_advisor_timeout_secs, Config, MoaFanout, MoaPreset, MoaSlot, MoaToml};
 use crate::error::Result;
 use crate::providers::moa::{get_moa_config, store_moa_config};
 use crate::providers::session_moa_handle::{clear_session_moa, get_session_moa, set_session_moa};
@@ -28,11 +28,6 @@ use crate::tools::turn_context::current_turn_context;
 use crate::tools::AlephTool;
 
 use super::error::ToolError;
-
-/// Mirrors `config::types::moa::default_advisor_timeout_secs()` (private to
-/// that module) — the advisor wall-clock budget applied when `set_preset`
-/// omits `advisor_timeout_secs`.
-const DEFAULT_ADVISOR_TIMEOUT_SECS: u64 = 120;
 
 /// Guidance shown when `on`/`once` can't resolve a preset to activate (no
 /// `[moa]` section, no presets, or the named/`default_preset` preset is
@@ -314,7 +309,7 @@ impl MoaManageTool {
             advisors,
             aggregator,
             fanout: fanout.unwrap_or_default(),
-            advisor_timeout_secs: advisor_timeout_secs.unwrap_or(DEFAULT_ADVISOR_TIMEOUT_SECS),
+            advisor_timeout_secs: advisor_timeout_secs.unwrap_or_else(default_advisor_timeout_secs),
             advisor_max_tokens,
             advisor_temperature,
             aggregator_temperature,

@@ -75,7 +75,7 @@ const fn default_true() -> bool {
     true
 }
 
-const fn default_advisor_timeout_secs() -> u64 {
+pub(crate) const fn default_advisor_timeout_secs() -> u64 {
     120
 }
 
