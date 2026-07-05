@@ -40,7 +40,7 @@ const NO_PRESET_GUIDANCE: &str = "no [moa] presets configured — use action='se
 // Args
 // =============================================================================
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum MoaManageArgs {
     /// Activate a MoA preset for this session, sticky until turned off.
@@ -95,6 +95,83 @@ pub enum MoaManageArgs {
         /// Preset name to delete.
         name: String,
     },
+}
+
+/// Hand-written FLAT schema instead of `#[derive(JsonSchema)]`.
+///
+/// The derived schema for an internally-tagged enum is a root `oneOf` with
+/// `$defs`/`$ref`s. Round-2 runtime QA proved that shape unusable end to end:
+/// the Anthropic protocol adapter deliberately strips root union keywords
+/// (`strip_anthropic_tool_schema_unions` — the real Anthropic API rejects
+/// them with HTTP 400), leaving `properties: {}`, so every model faithfully
+/// emits empty `{}` arguments and the tool can never be called. A flat
+/// object schema (`action` enum + per-action fields documented in
+/// descriptions — the same shape battle-tested tools like `note_manage`
+/// use) survives every adapter untouched. Serde parsing is unchanged: the
+/// internally-tagged enum accepts exactly these flat shapes and reports
+/// precise per-action missing-field errors.
+///
+/// This impl is the single source of truth for every declaration path
+/// (builtin registry `schema_for!`, `AlephTool::definition()`, the
+/// progressive-disclosure `get_tool_schema` snapshot).
+impl JsonSchema for MoaManageArgs {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "MoaManageArgs".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "title": "MoaManageArgs",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["on", "off", "once", "status", "list", "set_preset", "delete_preset"],
+                    "description": "Operation: on (activate preset for this session, sticky) / off (deactivate) / once (next turn only) / status / list / set_preset (create or overwrite a preset) / delete_preset."
+                },
+                "preset": {
+                    "type": "string",
+                    "description": "on/once only: preset name; omit to use the default preset."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "set_preset/delete_preset: preset name. REQUIRED for those actions."
+                },
+                "advisors": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "provider": { "type": "string", "description": "A [providers.<key>] entry; \"moa\" is rejected (recursion guard)." },
+                            "model": { "type": "string" }
+                        },
+                        "required": ["provider", "model"]
+                    },
+                    "description": "set_preset: advisor (provider, model) slots consulted in parallel. REQUIRED for set_preset."
+                },
+                "aggregator": {
+                    "type": "object",
+                    "properties": {
+                        "provider": { "type": "string", "description": "A [providers.<key>] entry; \"moa\" is rejected (recursion guard)." },
+                        "model": { "type": "string" }
+                    },
+                    "required": ["provider", "model"],
+                    "description": "set_preset: the acting model slot (receives the payload plus advisor guidance). REQUIRED for set_preset."
+                },
+                "fanout": {
+                    "type": "string",
+                    "enum": ["per_iteration", "user_turn"],
+                    "description": "set_preset: advisor fan-out cadence. Default per_iteration."
+                },
+                "advisor_timeout_secs": { "type": "integer", "description": "set_preset: per-advisor wall-clock budget in seconds. Default 120." },
+                "advisor_max_tokens": { "type": "integer", "description": "set_preset: cap advisor output tokens. Omit for no cap." },
+                "advisor_temperature": { "type": "number", "description": "set_preset: advisor sampling temperature. Omit for provider default." },
+                "aggregator_temperature": { "type": "number", "description": "set_preset: aggregator sampling temperature. Omit for provider default." },
+                "set_default": { "type": "boolean", "description": "set_preset: also make this preset [moa].default_preset." }
+            },
+            "required": ["action"]
+        })
+    }
 }
 
 // =============================================================================
@@ -502,73 +579,11 @@ impl AlephTool for MoaManageTool {
     type Args = MoaManageArgs;
     type Output = MoaManageOutput;
 
-    /// `MoaManageArgs` is an internally-tagged enum whose schema is a root
-    /// `oneOf` — strictification (additionalProperties: false + all
-    /// properties required) mangles it into a contradiction that forces
-    /// models to emit empty `{}` arguments. Same opt-out as `self_config`.
+    /// The flat schema's non-`action` fields are all optional (per-action
+    /// requirements live in serde parsing) — strictification would force
+    /// every field required. Same opt-out as `self_config`.
     fn strict_schema(&self) -> bool {
         false
-    }
-
-    /// Declare a FLAT schema instead of the schemars-derived root `oneOf`.
-    ///
-    /// Runtime QA (round 2) showed that gateway endpoints doing server-side
-    /// grammar-constrained tool decoding cannot compile a root-`oneOf` +
-    /// `$ref` schema and emit tool calls with EMPTY arguments — across two
-    /// independent providers/protocols. The flat surface (single object,
-    /// `action` enum + per-action optional fields documented in
-    /// descriptions) is what battle-tested tools like `note_manage` use.
-    /// Serde parsing is unchanged: the internally-tagged `MoaManageArgs`
-    /// accepts exactly these flat shapes and reports precise per-action
-    /// missing-field errors.
-    fn definition(&self) -> crate::tool_metadata::ToolDefinition {
-        let slot_schema = serde_json::json!({
-            "type": "object",
-            "properties": {
-                "provider": { "type": "string", "description": "A [providers.<key>] entry; \"moa\" is rejected (recursion guard)." },
-                "model": { "type": "string" }
-            },
-            "required": ["provider", "model"]
-        });
-        let parameters = serde_json::json!({
-            "type": "object",
-            "title": "MoaManageArgs",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["on", "off", "once", "status", "list", "set_preset", "delete_preset"],
-                    "description": "Operation: on (activate preset for this session, sticky) / off (deactivate) / once (next turn only) / status / list / set_preset (create or overwrite a preset) / delete_preset."
-                },
-                "preset": { "type": "string", "description": "on/once only: preset name; omit to use the default preset." },
-                "name": { "type": "string", "description": "set_preset/delete_preset: preset name. REQUIRED for those actions." },
-                "advisors": {
-                    "type": "array",
-                    "items": slot_schema.clone(),
-                    "description": "set_preset: advisor (provider, model) slots consulted in parallel. REQUIRED for set_preset."
-                },
-                "aggregator": {
-                    "type": "object",
-                    "properties": slot_schema["properties"].clone(),
-                    "required": ["provider", "model"],
-                    "description": "set_preset: the acting model slot (receives the payload plus advisor guidance). REQUIRED for set_preset."
-                },
-                "fanout": { "type": "string", "enum": ["per_iteration", "user_turn"], "description": "set_preset: advisor fan-out cadence. Default per_iteration." },
-                "advisor_timeout_secs": { "type": "integer", "description": "set_preset: per-advisor wall-clock budget in seconds. Default 120." },
-                "advisor_max_tokens": { "type": "integer", "description": "set_preset: cap advisor output tokens. Omit for no cap." },
-                "advisor_temperature": { "type": "number", "description": "set_preset: advisor sampling temperature. Omit for provider default." },
-                "aggregator_temperature": { "type": "number", "description": "set_preset: aggregator sampling temperature. Omit for provider default." },
-                "set_default": { "type": "boolean", "description": "set_preset: also make this preset [moa].default_preset." }
-            },
-            "required": ["action"]
-        });
-        crate::tool_metadata::ToolDefinition::new(
-            Self::NAME,
-            Self::DESCRIPTION,
-            parameters,
-            self.category(),
-        )
-        .with_confirmation(self.requires_confirmation())
-        .with_strict(self.strict_schema())
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
