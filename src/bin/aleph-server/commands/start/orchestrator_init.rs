@@ -239,6 +239,17 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         std::sync::Arc::new(alephcore::routing::RoutingRecall::new(store, availability))
     });
 
+    // MoA: publish the [moa] section to the process-global handle so run
+    // construction (runner_impl Step 3-MoA) and the `moa` tool read live
+    // presets. The tool re-stores after successful config patches (hot
+    // reload, mirroring route_handle).
+    alephcore::providers::moa::store_moa_config(config.moa.clone());
+    if let Some(moa) = &config.moa {
+        for err in moa.validation_errors() {
+            tracing::warn!(error = %err, "[moa] config validation");
+        }
+    }
+
     let (stall_cfg, failure_cap, turn_to) = build_stability_triple(config);
     let harness = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),

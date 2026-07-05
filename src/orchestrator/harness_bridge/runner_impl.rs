@@ -120,6 +120,39 @@ impl HarnessRunner for AgentHarnessRunner {
             }
             None => llm::pick_llm(&spec.brain, &self.default_provider, &self.named_providers)?,
         };
+        // Step 3-MoA: a session MoA activation supersedes the directive/brain
+        // pick — the MoaProvider facade fans advisors out and lets the
+        // preset's aggregator act. `take_for_run` consumes a one-shot pref
+        // atomically (the single restore point: success, error and cancel
+        // paths all leave no state). Fail-soft: an unusable preset logs and
+        // falls back to the normal chain — the conversation never breaks.
+        // Spec: docs/superpowers/specs/2026-07-05-moa-continuous-advisory-port-design.md
+        let mut moa_active = false;
+        let llm: Arc<dyn crate::providers::AiProvider> =
+            match crate::providers::session_moa_handle::take_for_run(&session_pref_key) {
+                Some(pref) => {
+                    let moa_cfg = crate::providers::moa::get_moa_config();
+                    match crate::providers::moa::try_build_for_run(
+                        &pref,
+                        moa_cfg.as_ref(),
+                        &self.named_providers,
+                        trace_sink.clone(),
+                    ) {
+                        Ok(moa) => {
+                            moa_active = true;
+                            Arc::new(moa)
+                        }
+                        Err(reason) => {
+                            tracing::warn!(
+                                reason = %reason,
+                                "MoA activation unusable; run proceeds on the normal provider chain"
+                            );
+                            llm
+                        }
+                    }
+                }
+                None => llm,
+            };
         // Stage J-pre: wrap the root provider with MeteringProvider so every
         // LLM call emits a LoopTraceEvent::ProviderUsage event labelled "root".
         // The trace_sink is available here (per-run, passed in from the gateway)
@@ -193,7 +226,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // only when even that is unknown. Resolved ONCE here — pre-loop — so
         // the same window rides on both per-turn gauge events and the final
         // `FlowOutcome`.
-        let gauge_model: String = if routing_model_id == "(dynamic)" {
+        let gauge_model: String = if moa_active || routing_model_id == "(dynamic)" {
             llm.serving_model_hint()
                 .map_or_else(|| provider_name.clone(), std::borrow::Cow::into_owned)
         } else {
