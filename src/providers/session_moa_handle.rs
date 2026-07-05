@@ -134,4 +134,34 @@ mod tests {
         assert_eq!(get_session_moa(key).unwrap().preset.as_deref(), Some("newer"));
         clear_session_moa(key);
     }
+
+    #[test]
+    fn restore_after_sticky_take_is_a_noop() {
+        let key = "test:moa:sticky-restore";
+        // Sticky pref: take_for_run reads WITHOUT consuming — the slot stays
+        // occupied for the next run.
+        set_session_moa(key, Some("deep".to_string()), false);
+        let pref = take_for_run(key).unwrap();
+        assert!(!pref.one_shot);
+        assert!(get_session_moa(key).is_some());
+        // A build-failure path that wrongly skipped the `one_shot` gate and
+        // called restore anyway must be a no-op on the occupied slot.
+        restore_one_shot(key, pref);
+        let stored = get_session_moa(key).unwrap();
+        assert_eq!(stored.preset.as_deref(), Some("deep"));
+        assert!(!stored.one_shot);
+        // Same call with a TAMPERED pref: proves the no-op is real (an
+        // identical refill above would also pass under a buggy overwrite).
+        restore_one_shot(
+            key,
+            SessionMoaPref {
+                preset: Some("tampered".to_string()),
+                one_shot: true,
+            },
+        );
+        let stored = get_session_moa(key).unwrap();
+        assert_eq!(stored.preset.as_deref(), Some("deep"));
+        assert!(!stored.one_shot);
+        clear_session_moa(key);
+    }
 }
