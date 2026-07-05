@@ -202,7 +202,21 @@ pub(crate) fn apply_trace_event(
             let count = trace_event.get("count").and_then(serde_json::Value::as_u64).unwrap_or(0);
             let label = trace_event.get("label").and_then(|v| v.as_str()).unwrap_or("");
             let text = trace_event.get("text").and_then(|v| v.as_str()).unwrap_or("");
-            append_reasoning(chat, &format!("◇ 顾问 {index}/{count} — {label}\n{text}"));
+            let error = trace_event.get("error").and_then(|v| v.as_str());
+            if count == 0 {
+                // Activation failure (runner build error): MoA didn't engage.
+                append_reasoning(
+                    chat,
+                    &format!("⚠ MoA 未生效：{}", error.unwrap_or("unknown")),
+                );
+            } else if let Some(err) = error {
+                append_reasoning(
+                    chat,
+                    &format!("◇ 顾问 {index}/{count} — {label}\n⚠ {err}"),
+                );
+            } else {
+                append_reasoning(chat, &format!("◇ 顾问 {index}/{count} — {label}\n{text}"));
+            }
             workspace.note_activity();
         }
         // Fan-out complete; the aggregator (acting model) is being called.
@@ -212,7 +226,15 @@ pub(crate) fn apply_trace_event(
                 .get("advisor_count")
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0);
-            append_reasoning(chat, &format!("◆ MoA 聚合中（{aggregator}，{n} 位顾问）"));
+            let cached = trace_event
+                .get("cached")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if cached {
+                append_reasoning(chat, &format!("◆ MoA 聚合中（{aggregator}，沿用缓存顾问意见）"));
+            } else {
+                append_reasoning(chat, &format!("◆ MoA 聚合中（{aggregator}，{n} 位顾问）"));
+            }
         }
         // Summed advisor spend for one fan-out (priced separately from the
         // aggregator's own usage — see LoopTraceEvent::MoaAdvisorSpend).
@@ -225,9 +247,43 @@ pub(crate) fn apply_trace_event(
                 .get("output_tokens")
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0);
+            let billed = trace_event
+                .get("billed_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let n = trace_event
+                .get("advisor_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
             let cost = trace_event.get("cost_usd").and_then(serde_json::Value::as_f64);
             let cost_str = cost.map_or(String::new(), |c| format!("，约 ${c:.4}"));
-            append_reasoning(chat, &format!("▫ 顾问开销：{input}+{output} tokens{cost_str}"));
+            append_reasoning(
+                chat,
+                &format!("▫ 顾问开销：{input}+{output} tokens（{billed}/{n} 位计费）{cost_str}"),
+            );
+        }
+        // Heavy audit record — arrives only via trace.by_runs REPLAY (never
+        // wire-whitelisted). Renders the full "why did MoA advise this" view
+        // into the reasoning panel (round-2 W3b).
+        "moa_turn_trace" => {
+            let preset = trace_event.get("preset").and_then(|v| v.as_str()).unwrap_or("");
+            let payload = trace_event.get("payload").cloned().unwrap_or_default();
+            let mut block = format!("📋 MoA turn trace — preset {preset}");
+            if let Some(advisors) = payload.get("advisors").and_then(serde_json::Value::as_array) {
+                for (i, a) in advisors.iter().enumerate() {
+                    let label = a.get("label").and_then(|v| v.as_str()).unwrap_or("");
+                    let output = a.get("output").and_then(|v| v.as_str()).unwrap_or("");
+                    block.push_str(&format!("\n─── 顾问 {} — {label} ───\n{output}", i + 1));
+                }
+            }
+            if let Some(out) = payload.get("aggregator_output").and_then(|v| v.as_str()) {
+                let status = payload
+                    .get("aggregator_status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("ok");
+                block.push_str(&format!("\n─── 聚合器（{status}）───\n{out}"));
+            }
+            append_reasoning(chat, &block);
         }
         _ => {}
     }
