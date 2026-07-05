@@ -22,14 +22,14 @@ use crate::providers::{AiProvider, MeteringProvider, ModelOverrideProvider};
 use crate::sync_primitives::{Arc, Mutex};
 
 use super::advisory_view::{build_advisory_view, view_signature};
-use super::prompts::{attach_guidance, build_guidance, AdvisorOutcome, ADVISOR_SYSTEM_PROMPT};
+use super::prompts::{attach_guidance, build_guidance, AdvisorOutcome};
 
 /// One resolved advisor: label + provider chain + identity for pricing.
 pub(crate) struct AdvisorSlot {
-    label: String,
-    provider_key: String,
-    model: String,
-    chain: Arc<dyn AiProvider>,
+    pub(crate) label: String,
+    pub(crate) provider_key: String,
+    pub(crate) model: String,
+    pub(crate) chain: Arc<dyn AiProvider>,
 }
 
 struct AdvisorCache {
@@ -38,6 +38,10 @@ struct AdvisorCache {
 }
 
 pub struct MoaProvider {
+    // Kept (not removed): `AiProvider::name(&self) -> &str` must return a
+    // borrow, and a computed/derived form (e.g. `format!` on every call)
+    // cannot satisfy that signature. Spec §7's cleanup item for this field
+    // was evaluated during round-2 planning and rejected (R1).
     display_name: String,
     preset_name: String,
     advisors: Vec<AdvisorSlot>,
@@ -214,63 +218,32 @@ impl AiProvider for MoaProvider {
             } else if self.advisors.is_empty() {
                 Vec::new()
             } else {
-                // 3. Parallel fan-out, per-advisor timeout, fail-soft.
-                let timeout = self.advisor_timeout;
-                let futures = self.advisors.iter().map(|slot| {
-                    let view = &view;
-                    async move {
-                        let advisor_payload = RequestPayload::new(view)
-                            .with_system(Some(ADVISOR_SYSTEM_PROMPT))
-                            .with_temperature(self.advisor_temperature)
-                            .with_max_tokens(self.advisor_max_tokens);
-                        match tokio::time::timeout(timeout, slot.chain.process(advisor_payload))
-                            .await
-                        {
-                            Ok(Ok(resp)) => {
-                                let text = resp
-                                    .text
-                                    .clone()
-                                    .filter(|t| !t.trim().is_empty())
-                                    .unwrap_or_else(|| "(empty response)".to_string());
-                                (text, resp.usage, None::<String>)
-                            }
-                            Ok(Err(e)) => (format!("[failed: {e}]"), None, Some(e.to_string())),
-                            Err(_) => (
-                                format!("[timeout after {}s]", timeout.as_secs()),
-                                None,
-                                Some("timeout".to_string()),
-                            ),
-                        }
-                    }
-                });
-                let results = futures::future::join_all(futures).await;
+                // 3. Parallel fan-out (extracted: fan_out.rs).
+                let results = super::fan_out::run_fan_out(
+                    &self.advisors,
+                    &view,
+                    self.advisor_timeout,
+                    self.advisor_temperature,
+                    self.advisor_max_tokens,
+                )
+                .await;
 
-                let mut outcomes = Vec::with_capacity(results.len());
-                let mut usages: Vec<(usize, TokenUsage)> = Vec::new();
-                for (idx, (text, usage, _err)) in results.into_iter().enumerate() {
-                    if let Some(u) = usage {
-                        usages.push((idx, u));
-                    }
-                    outcomes.push(AdvisorOutcome {
-                        label: self.advisors[idx].label.clone(),
-                        text,
-                    });
-                }
+                let usages: Vec<(usize, TokenUsage)> = results
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, r)| r.usage.clone().map(|u| (idx, u)))
+                    .collect();
+                let outcomes: Vec<AdvisorOutcome> =
+                    results.iter().map(|r| r.outcome.clone()).collect();
 
-                // 4. Display + accounting + heavy trace events (MISS only).
-                let count = outcomes.len();
-                for (idx, o) in outcomes.iter().enumerate() {
-                    self.emit(LoopTraceEvent::MoaAdvisor {
-                        index: idx + 1,
-                        count,
-                        label: o.label.clone(),
-                        text: o.text.clone(),
-                    });
-                }
-                self.emit(LoopTraceEvent::MoaAggregating {
-                    aggregator: self.aggregator_label.clone(),
-                    advisor_count: count,
-                });
+                // 4. Display + accounting + heavy trace events (MISS only;
+                //    per-advisor + aggregating emission lives in fan_out.rs).
+                super::fan_out::emit_fanout_events(
+                    &self.sink,
+                    &self.advisors,
+                    &results,
+                    &self.aggregator_label,
+                );
                 if !usages.is_empty() {
                     let spend = self.spend_event(&usages);
                     self.emit(spend);
