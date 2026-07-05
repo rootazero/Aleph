@@ -1,8 +1,8 @@
-//! Per-agent FIFO wait queue for busy-input message delivery.
+//! Per-session FIFO wait queue for busy-input message delivery.
 //!
 //! # Why this exists
 //!
-//! When a message arrives while its agent's loop is busy and mid-loop steering
+//! When a message arrives while its session's loop is busy and mid-loop steering
 //! cannot deliver it (cross-session busy, steering burst at cap, `Queue` /
 //! `Interrupt` busy-input modes), the inbound executor used to retry with a
 //! fixed exponential back-off capped at 6 attempts (~76 s total) and then
@@ -21,13 +21,13 @@
 //! siblings); only the front ticket attempts delivery while the rest poll
 //! cheaply behind it, so bursts deliver in arrival order. Overflow is
 //! `REJECT_NEWEST` (`OpenSquilla`
-//! parity): past [`MAX_QUEUED_PER_AGENT`] new messages are refused up front —
+//! parity): past [`MAX_QUEUED_PER_SESSION`] new messages are refused up front —
 //! the sender is told immediately instead of waiting half an hour to fail.
 //!
 //! # R10 compliance
 //!
 //! Pure scaffolding — mechanical arrival-order bookkeeping. No routing,
-//! intent, or completion judgement; the engine's per-agent `try_start_run`
+//! intent, or completion judgement; the engine's per-session `SessionRunRegistry`
 //! gate stays the single authority on whether a run may start. A missing or
 //! stale ticket fails open (delivery is attempted), never closed.
 
@@ -37,10 +37,10 @@ use std::sync::OnceLock;
 
 use crate::sync_primitives::Mutex;
 
-/// Upper bound on messages waiting in one agent's FIFO lane. Past this the
+/// Upper bound on messages waiting in one session's FIFO lane. Past this the
 /// newest message is rejected immediately (`OpenSquilla` `REJECT_NEWEST`) so a
 /// flooding channel gets prompt feedback instead of a deep silent backlog.
-pub(super) const MAX_QUEUED_PER_AGENT: usize = 32;
+pub(super) const MAX_QUEUED_PER_SESSION: usize = 32;
 
 fn queues() -> &'static Mutex<HashMap<String, VecDeque<u64>>> {
     static QUEUES: OnceLock<Mutex<HashMap<String, VecDeque<u64>>>> = OnceLock::new();
@@ -56,12 +56,12 @@ fn lock() -> crate::sync_primitives::MutexGuard<'static, HashMap<String, VecDequ
     queues().lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Join the back of `agent_id`'s FIFO lane. Returns the ticket to poll
+/// Join the back of the session key's FIFO lane. Returns the ticket to poll
 /// [`is_front`] with, or `None` when the lane is full (`REJECT_NEWEST`).
 pub(super) fn register(agent_id: &str) -> Option<u64> {
     let mut map = lock();
     let queue = map.entry(agent_id.to_string()).or_default();
-    if queue.len() >= MAX_QUEUED_PER_AGENT {
+    if queue.len() >= MAX_QUEUED_PER_SESSION {
         return None;
     }
     let ticket = next_ticket();
@@ -69,7 +69,7 @@ pub(super) fn register(agent_id: &str) -> Option<u64> {
     Some(ticket)
 }
 
-/// Whether `ticket` is at the front of `agent_id`'s lane and may attempt
+/// Whether `ticket` is at the front of the session key's lane and may attempt
 /// delivery. A lane or ticket that no longer exists fails **open** (`true`):
 /// the engine's busy gate is the real authority, so the worst case of a stale
 /// ticket is one redundant delivery attempt, never a stuck message.
@@ -81,8 +81,8 @@ pub(super) fn is_front(agent_id: &str, ticket: u64) -> bool {
     }
 }
 
-/// Drop `ticket` from `agent_id`'s lane (delivered, failed, or gave up).
-/// Removes the lane entirely once empty so idle agents leak nothing.
+/// Drop `ticket` from the session key's lane (delivered, failed, or gave up).
+/// Removes the lane entirely once empty so idle sessions leak nothing.
 pub(super) fn remove(agent_id: &str, ticket: u64) {
     let mut map = lock();
     if let Some(queue) = map.get_mut(agent_id) {
@@ -98,7 +98,7 @@ mod tests {
     use super::*;
 
     // Tests share one process-global queue map, so each test uses a unique
-    // agent id to stay isolated under the parallel test runner.
+    // session key to stay isolated under the parallel test runner.
 
     #[test]
     fn tickets_deliver_in_fifo_order() {
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn full_lane_rejects_newest() {
         let agent = "bq-test-overflow";
-        let tickets: Vec<u64> = (0..MAX_QUEUED_PER_AGENT)
+        let tickets: Vec<u64> = (0..MAX_QUEUED_PER_SESSION)
             .map(|_| register(agent).unwrap())
             .collect();
         assert!(register(agent).is_none(), "lane at cap must reject newest");
@@ -177,5 +177,22 @@ mod tests {
             !lock().contains_key(agent),
             "empty lane must be removed from the map"
         );
+    }
+
+    #[test]
+    fn distinct_session_keys_do_not_block_each_other() {
+        // Two different sessions (same agent in production) get independent
+        // lanes → both are immediately front (true cross-session parallelism).
+        let s1 = "bq-test-agentX|conv-1";
+        let s2 = "bq-test-agentX|conv-2";
+        let t1 = register(s1).unwrap();
+        let t2 = register(s2).unwrap();
+        assert!(is_front(s1, t1), "session-1 lane is its own front");
+        assert!(
+            is_front(s2, t2),
+            "session-2 lane is its own front — not blocked by session-1"
+        );
+        remove(s1, t1);
+        remove(s2, t2);
     }
 }
