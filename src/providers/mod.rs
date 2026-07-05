@@ -96,6 +96,7 @@ pub mod retry;
 pub mod route_handle;
 pub mod route_observe;
 pub mod route_policy;
+pub mod session_moa_handle;
 pub mod session_model_handle;
 pub mod shared;
 
