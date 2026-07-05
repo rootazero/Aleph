@@ -509,7 +509,21 @@ impl AgentRunManager {
 /// BEFORE any synthesized fallback (e.g. the `[voice]` low-TTFT pin) is
 /// merged in. A synthesized override is config-derived, not user intent —
 /// it must never clear an armed MoA session.
-fn apply_moa_selector_semantics(
+///
+/// Two call sites, both on the `chat.send`/`agent.run` picker-override path
+/// (the `select_model` tool's own `"moa:<preset>"` pick is a SEPARATE, inline
+/// arm/clear in `select_model.rs` — this function does not back it):
+/// - [`AgentRunManager::start_run`] above — the Simulated-fallback engine
+///   (registered when no provider is configured).
+/// - `handle_chat_send_with_engine` (`src/bin/aleph-server/server_init.rs`)
+///   — the real `ExecutionEngine` path used by any real deployment (Task 18
+///   fix; previously this path never called this function, so a Panel "moa"
+///   pick silently did nothing whenever a provider was configured).
+///
+/// `pub` (not `pub(crate)`): the second call site lives in the `aleph-server`
+/// binary crate, a separate compilation unit from this `alephcore` lib
+/// crate, so crate-private visibility would not reach it.
+pub fn apply_moa_selector_semantics(
     session_key: &str,
     model_override: Option<crate::gateway::model_override::ModelOverride>,
 ) -> Option<crate::gateway::model_override::ModelOverride> {

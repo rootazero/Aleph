@@ -1010,9 +1010,15 @@ pub async fn handle_catalog(
 
     // Round-2 E3: MoA presets ride the picker as a pseudo-provider row.
     // Selecting one sends model_override {provider:"moa", model:<preset>},
-    // which the chat.send handler converts into a session MoA activation.
-    // Appended AFTER the view retain: this synthetic row is always shown
-    // when presets exist (it has no credential of its own).
+    // which chat.send's `apply_moa_selector_semantics` intercept
+    // (`src/gateway/handlers/agent.rs`) converts into a session MoA
+    // activation — wired into both the Simulated-fallback path
+    // (`AgentRunManager::start_run`) and the real-`ExecutionEngine` path
+    // (`handle_chat_send_with_engine`, `src/bin/aleph-server/server_init.rs`,
+    // since the Task 18 fix that closed the gap where a real deployment
+    // silently ignored this pick). Appended AFTER the view retain: this
+    // synthetic row is always shown when presets exist (it has no
+    // credential of its own).
     if let Some(moa_cfg) = crate::providers::moa::get_moa_config() {
         let mut names: Vec<String> = moa_cfg
             .presets
