@@ -502,6 +502,14 @@ impl AlephTool for MoaManageTool {
     type Args = MoaManageArgs;
     type Output = MoaManageOutput;
 
+    /// `MoaManageArgs` is an internally-tagged enum whose schema is a root
+    /// `oneOf` — strictification (additionalProperties: false + all
+    /// properties required) mangles it into a contradiction that forces
+    /// models to emit empty `{}` arguments. Same opt-out as `self_config`.
+    fn strict_schema(&self) -> bool {
+        false
+    }
+
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         match &args {
             MoaManageArgs::On { preset } => notify_tool_start(
@@ -726,6 +734,21 @@ mod tests {
             .await
             .unwrap();
         assert!(!out.success);
+    }
+
+    #[test]
+    fn definition_opts_out_of_strict_schema() {
+        // Regression lock: the tagged-union args schema (root oneOf) must
+        // never be strictified — strictification rewrites it into a
+        // contradiction (additionalProperties: false with zero root
+        // properties) that forces providers to emit empty `{}` arguments.
+        // Found in round-2 runtime QA; same opt-out as self_config.
+        let def = MoaManageTool::default().definition();
+        assert!(!def.strict, "moa tool must opt out of strict schema mode");
+        assert!(
+            def.parameters.get("oneOf").is_some(),
+            "tagged-union schema should keep its oneOf root un-mangled"
+        );
     }
 
     #[tokio::test]
