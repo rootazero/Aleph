@@ -361,7 +361,7 @@ pub fn ChatSidebar() -> impl IntoView {
             // `SessionMap` is an app-root context (signals outlive this
             // component), so no disposal guard is needed here.
             if let Ok(metrics) = SystemApi::run_concurrency(&dash).await {
-                session_map.set_server_running(metrics.running_sessions.into_iter().collect());
+                session_map.seed_server_running(metrics.running_sessions.into_iter().collect());
             }
 
             // Fetch teams for the selected agent (drives the 群聊 section).
@@ -416,6 +416,25 @@ pub fn ChatSidebar() -> impl IntoView {
     let reload_for_event = reload_data.clone();
     let sub_dash = dashboard;
     let subscription_id = dashboard.subscribe_events(move |event| {
+        if event.topic == "run.running_set_changed" {
+            let seq = event
+                .data
+                .get("seq")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let running: std::collections::HashSet<String> = event
+                .data
+                .get("running")
+                .and_then(serde_json::Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|s| s.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            session_map.set_server_running(seq, running);
+            return;
+        }
         if event.topic == "team.changed" {
             reload_for_event(sub_dash);
             return;
@@ -479,6 +498,7 @@ pub fn ChatSidebar() -> impl IntoView {
             "stream.run_accepted",
             "stream.run_complete",
             "stream.run_error",
+            "stream.running_set_changed",
             "team.changed",
         ] {
             if let Err(e) = dash_for_topic.subscribe_topic(topic).await {
@@ -1325,10 +1345,9 @@ pub fn ChatSidebar() -> impl IntoView {
                                         }
                                     };
                                     let sk_for_dot = session.key.clone();
-                                    // Dot = client-tracked run OR the server's
-                                    // authoritative running set (fresh load /
-                                    // runs started by any interface). See
-                                    // `SessionMap::is_running_session_key`.
+                                    // Dot = pure server-authoritative: reads server_running only
+                                    // (fed by RunningSetChanged; runs from any interface included).
+                                    // See `SessionMap::is_running_session_key`.
                                     let is_running_row =
                                         move || session_map.is_running_session_key(&sk_for_dot);
                                     let label = session

@@ -7,7 +7,11 @@
 //! contend — they run in parallel (bounded by `ConcurrencyLimiter`).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
+use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::events::GatewayEventFrame;
 use crate::routing::session_key::SessionKey;
 use crate::sync_primitives::Mutex;
 
@@ -15,20 +19,57 @@ use crate::sync_primitives::Mutex;
 #[derive(Default)]
 pub(super) struct SessionRunRegistry {
     running: Mutex<HashMap<String, String>>,
+    /// Monotonic version stamped under the `running` lock on every effective
+    /// claim/release, so a `(seq, keys)` snapshot is internally consistent and
+    /// consumers can drop reordered/stale broadcasts.
+    seq: AtomicU64,
+    /// Optional broadcast sink (injected post-construction, mirrors the
+    /// engine's own `event_bus: Option`). When present, every state change
+    /// publishes `RunningSetChanged` so the Panel red-dot stays authoritative.
+    event_bus: OnceLock<Arc<GatewayEventBus>>,
 }
 
 impl SessionRunRegistry {
+    /// Inject the broadcast sink once (idempotent no-op if already set). Called
+    /// by the engine when its own `event_bus` is wired.
+    pub(super) fn set_event_bus(&self, bus: Arc<GatewayEventBus>) {
+        let _ = self.event_bus.set(bus);
+    }
+
+    /// Internally-consistent `(seq, running_keys)` read under the map lock.
+    #[must_use]
+    pub(super) fn running_snapshot(&self) -> (u64, Vec<String>) {
+        let map = self.running.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = self.seq.load(Ordering::Acquire);
+        (seq, map.keys().cloned().collect())
+    }
+
+    /// Broadcast the current running snapshot to the injected event bus. The
+    /// caller (`try_claim`/`release`) has already bumped `seq` and dropped the
+    /// map lock; this only reads a fresh `(seq, keys)` snapshot and publishes it,
+    /// so the map lock is never held across serialization/broadcast.
+    fn broadcast_change(&self) {
+        if let Some(bus) = self.event_bus.get() {
+            let (seq, running) = self.running_snapshot();
+            let _ = bus.publish_frame(&GatewayEventFrame::RunningSetChanged { seq, running });
+        }
+    }
+
     /// Atomically claim this session's single run slot. `true` = claimed,
     /// `false` = a run is already active on this session (caller routes the
     /// message to the per-session `BusyInputMode` steer/interrupt/queue path).
     #[must_use]
     pub(super) fn try_claim(&self, session_key: &SessionKey, run_id: &str) -> bool {
         let key = session_key.to_key_string();
-        let mut map = self.running.lock().unwrap_or_else(|e| e.into_inner());
-        if map.contains_key(&key) {
-            return false;
+        {
+            let mut map = self.running.lock().unwrap_or_else(|e| e.into_inner());
+            if map.contains_key(&key) {
+                return false;
+            }
+            map.insert(key, run_id.to_string());
+            self.seq.fetch_add(1, Ordering::AcqRel);
         }
-        map.insert(key, run_id.to_string());
+        self.broadcast_change();
         true
     }
 
@@ -37,9 +78,18 @@ impl SessionRunRegistry {
     /// newer run's claim.
     pub(super) fn release(&self, session_key: &SessionKey, run_id: &str) {
         let key = session_key.to_key_string();
-        let mut map = self.running.lock().unwrap_or_else(|e| e.into_inner());
-        if map.get(&key).map(String::as_str) == Some(run_id) {
-            map.remove(&key);
+        let changed = {
+            let mut map = self.running.lock().unwrap_or_else(|e| e.into_inner());
+            if map.get(&key).map(String::as_str) == Some(run_id) {
+                map.remove(&key);
+                self.seq.fetch_add(1, Ordering::AcqRel);
+                true
+            } else {
+                false
+            }
+        };
+        if changed {
+            self.broadcast_change();
         }
     }
 
@@ -133,5 +183,27 @@ mod tests {
         let mut want = vec![a.to_key_string(), b.to_key_string()];
         want.sort();
         assert_eq!(keys, want);
+    }
+
+    #[test]
+    fn seq_is_monotonic_across_claim_and_release() {
+        let reg = SessionRunRegistry::default();
+        let s = sk("main", "conv-1");
+        let (seq0, keys0) = reg.running_snapshot();
+        assert!(keys0.is_empty());
+        assert!(reg.try_claim(&s, "run-1"));
+        let (seq1, keys1) = reg.running_snapshot();
+        assert!(seq1 > seq0, "claim bumps seq");
+        assert_eq!(keys1, vec![s.to_key_string()]);
+        reg.release(&s, "run-1");
+        let (seq2, keys2) = reg.running_snapshot();
+        assert!(seq2 > seq1, "release bumps seq");
+        assert!(keys2.is_empty());
+        // A no-op release (mismatched run id) must NOT bump seq.
+        assert!(reg.try_claim(&s, "run-2"));
+        let (seq3, _) = reg.running_snapshot();
+        reg.release(&s, "STALE");
+        let (seq4, _) = reg.running_snapshot();
+        assert_eq!(seq3, seq4, "no-op release does not bump seq");
     }
 }

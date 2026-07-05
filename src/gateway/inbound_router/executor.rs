@@ -403,26 +403,31 @@ impl InboundMessageRouter {
 
             use crate::gateway::execution_engine::ExecutionError;
 
-            let agent_key = request.session_key.agent_id().to_string();
+            // Busy lane is keyed by SESSION (matches the engine's per-session
+            // SessionRunRegistry gate). Two sessions of the same agent get
+            // independent lanes and run in parallel; only same-session messages
+            // serialize FIFO. The AgentBusy error still reports the agent id.
+            let session_key = request.session_key.to_key_string();
+            let agent_id = request.session_key.agent_id().to_string();
             let deadline = tokio::time::Instant::now()
                 + tokio::time::Duration::from_secs(BUSY_QUEUE_MAX_WAIT_SECS);
 
-            // Join the per-agent FIFO lane *before* the first attempt — not on
+            // Join the per-session FIFO lane *before* the first attempt — not on
             // first busy — so a brand-new message can never jump ahead of
             // already-waiting siblings in the window between the slot freeing
             // and the front waiter's next poll. With no contention the lane is
             // just [self] and the first attempt runs immediately.
-            let final_err = match super::busy_queue::register(&agent_key) {
+            let final_err = match super::busy_queue::register(&session_key) {
                 // Lane full — reject newest immediately so the sender hears
                 // back now, not after the 30-minute deadline.
-                None => Some(ExecutionError::AgentBusy(agent_key.clone())),
+                None => Some(ExecutionError::AgentBusy(agent_id.clone())),
                 Some(ticket) => {
                     let mut last_busy: Option<ExecutionError> = None;
                     let outcome = loop {
                         // FIFO gate: only the front ticket attempts delivery;
                         // the rest poll cheaply behind it so arrival order is
                         // preserved when the slot frees.
-                        if super::busy_queue::is_front(&agent_key, ticket) {
+                        if super::busy_queue::is_front(&session_key, ticket) {
                             match execution_adapter
                                 .execute(request.clone(), agent.clone(), emitter.clone())
                                 .await
@@ -432,7 +437,7 @@ impl InboundMessageRouter {
                                     if last_busy.is_none() {
                                         tracing::info!(
                                             run_id = %run_id,
-                                            agent = %agent_key,
+                                            session = %session_key,
                                             ticket,
                                             "Agent busy; message queued for FIFO delivery"
                                         );
@@ -449,14 +454,13 @@ impl InboundMessageRouter {
                             // gated waiter may never have executed at all, so
                             // synthesize the busy error in that case.
                             break Some(
-                                last_busy.unwrap_or_else(|| {
-                                    ExecutionError::AgentBusy(agent_key.clone())
-                                }),
+                                last_busy
+                                    .unwrap_or_else(|| ExecutionError::AgentBusy(agent_id.clone())),
                             );
                         }
                         tokio::time::sleep(tokio::time::Duration::from_millis(BUSY_POLL_MS)).await;
                     };
-                    super::busy_queue::remove(&agent_key, ticket);
+                    super::busy_queue::remove(&session_key, ticket);
                     outcome
                 }
             };

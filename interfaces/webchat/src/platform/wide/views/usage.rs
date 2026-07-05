@@ -101,6 +101,21 @@ pub fn UsageView() -> impl IntoView {
         });
     });
 
+    // Keep the gauge live: on every running-set change, re-fetch the slot
+    // snapshot (the event carries only `running`, not the N/M gauge fields).
+    let sub_id = state.subscribe_events(move |event: crate::context::GatewayEvent| {
+        if event.topic != "run.running_set_changed" {
+            return;
+        }
+        let state_inner = state;
+        leptos::task::spawn_local(async move {
+            if let Ok(m) = SystemApi::run_concurrency(&state_inner).await {
+                run_slots.set(Some(m.run_concurrency));
+            }
+        });
+    });
+    on_cleanup(move || state.unsubscribe_events(sub_id));
+
     view! {
         <div class="px-8 pb-8 aleph-content-top max-w-7xl mx-auto space-y-10">
             <header>

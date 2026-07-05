@@ -132,6 +132,19 @@ pub enum GatewayEventFrame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         origin_channel: Option<String>,
     },
+    /// Authoritative running-session set changed (a run was claimed or
+    /// released). `seq` is a monotonic version stamped by the
+    /// `SessionRunRegistry` under its map lock; consumers keep the highest seq
+    /// and ignore any older-or-equal frame so a reordered delivery self-heals.
+    /// `running` is the full set of backend session keys with an in-flight run
+    /// — the sidebar red-dot reads this directly (server-authoritative, no
+    /// client refcount). Payload is intentionally the registry's own data only
+    /// (no `ConcurrencySnapshot`) so the registry can emit it without reaching
+    /// the limiter; gauge consumers re-fetch `run_concurrency` on receipt.
+    RunningSetChanged {
+        seq: u64,
+        running: Vec<String>,
+    },
     ChannelMessage {
         channel_id: ChannelId,
         conversation_id: crate::gateway::channel::ConversationId,
@@ -450,6 +463,7 @@ impl GatewayEventFrame {
             Self::ModelResolved { .. } => "agent.model.resolved",
             Self::RunRetrying { .. } => "agent.run.retrying",
             Self::SessionUpdated { .. } => "session.updated",
+            Self::RunningSetChanged { .. } => "running.set.changed",
             Self::ChannelMessage { .. } => "channel.message",
             Self::ChannelTyping { .. } => "channel.typing",
             Self::ChannelStatusChanged { .. } => "channel.status",
@@ -499,6 +513,7 @@ impl GatewayEventFrame {
             Self::ModelResolved { .. } => Some("stream.model_resolved"),
             Self::RunRetrying { .. } => Some("stream.run_retrying"),
             Self::SessionUpdated { .. } => Some("stream.session_updated"),
+            Self::RunningSetChanged { .. } => Some("stream.running_set_changed"),
             _ => None,
         }
     }
@@ -550,6 +565,22 @@ mod tests {
         assert_eq!(v["context_tokens"], 42_000);
         assert_eq!(v["context_window"], 200_000);
         assert_eq!(v["total_tokens"], 55_000);
+    }
+
+    #[test]
+    fn running_set_changed_wire_shape() {
+        let f = GatewayEventFrame::RunningSetChanged {
+            seq: 42,
+            running: vec!["agent:main|conv-1".into(), "agent:main|conv-2".into()],
+        };
+        // Streaming path so it rides the same stream.* delivery as session_updated.
+        assert_eq!(f.stream_method(), Some("stream.running_set_changed"));
+        assert_eq!(f.topic_name(), "running.set.changed");
+        let v = serde_json::to_value(&f).unwrap();
+        assert_eq!(v["type"], "running_set_changed");
+        assert_eq!(v["seq"], 42);
+        assert_eq!(v["running"][0], "agent:main|conv-1");
+        assert_eq!(v["running"][1], "agent:main|conv-2");
     }
 }
 

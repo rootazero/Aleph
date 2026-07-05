@@ -474,9 +474,4 @@ impl SessionManager {
     pub async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionManagerError> {
         self.set_state(key, SessionState::Idle).await
     }
-
-    /// Transition session to running state (agent loop active)
-    pub async fn set_running(&self, key: &SessionKey) -> Result<(), SessionManagerError> {
-        self.set_state(key, SessionState::Running).await
-    }
 }

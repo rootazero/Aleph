@@ -244,7 +244,6 @@ pub trait SessionStore: Send + Sync {
     ) -> Result<(), SessionStoreError>;
     async fn stop(&self, key: &SessionKey) -> Result<(), SessionStoreError>;
     async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionStoreError>;
-    async fn set_running(&self, key: &SessionKey) -> Result<(), SessionStoreError>;
 
     /// Load a windowed slice of the transcript for a session.
     ///

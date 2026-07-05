@@ -12,6 +12,7 @@ mod adapter;
 mod agent_trace_emit_sink;
 mod callback;
 mod concurrency;
+pub(crate) mod concurrency_handle;
 mod deadline;
 mod engine;
 pub(crate) mod event_drain;
@@ -262,12 +263,8 @@ impl std::fmt::Debug for RunRequest {
 /// Run state
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunState {
-    /// Run is queued
-    Queued,
     /// Run is executing
     Running,
-    /// Run is paused (waiting for user input)
-    Paused { reason: String },
     /// Run completed successfully
     Completed,
     /// Run was cancelled
