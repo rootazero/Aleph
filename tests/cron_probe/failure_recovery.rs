@@ -1,8 +1,8 @@
 //! P4 Fault Recovery Probes — 7 scenarios verifying error handling,
 //! retry behavior, stale marker cleanup, and catchup recovery.
 
-use alephcore::cron::config::ErrorReason;
-use alephcore::cron::service::catchup::run_startup_catchup;
+use alephcore::tasks::cron::config::ErrorReason;
+use alephcore::tasks::cron::service::catchup::run_startup_catchup;
 
 use super::harness::CronTestHarness;
 use super::mock_executor::MockBehavior;
@@ -97,9 +97,15 @@ async fn consecutive_errors_increment_on_failure() {
         },
     );
 
-    // Run 4 ticks, each advancing past the interval
+    // Run 4 times, advancing to just past the current next_run each iteration
+    // so the error backoff does not block the next execution.
     for i in 1..=4u32 {
-        h.advance(interval);
+        let next = h
+            .job_state("max-retry-1")
+            .await
+            .next_run_at_ms
+            .expect("job should be scheduled");
+        h.advance_to(next + 1);
         h.tick().await;
         h.assert_consecutive_errors("max-retry-1", i).await;
     }
@@ -131,20 +137,30 @@ async fn success_resets_errors() {
         },
     );
 
-    // Fail 3 times
+    // Fail 3 times, advancing to just past the current next_run each iteration.
     for i in 1..=3u32 {
-        h.advance(interval);
+        let next = h
+            .job_state("reset-errors-1")
+            .await
+            .next_run_at_ms
+            .expect("job should be scheduled");
+        h.advance_to(next + 1);
         h.tick().await;
         h.assert_consecutive_errors("reset-errors-1", i).await;
     }
 
     assert_eq!(h.executor.call_count("reset-errors-1"), 3);
 
-    // Switch to success
+    // Switch to success and advance to the next scheduled run.
     h.executor
         .on_job("reset-errors-1", MockBehavior::Ok("recovered".to_string()));
 
-    h.advance(interval);
+    let next = h
+        .job_state("reset-errors-1")
+        .await
+        .next_run_at_ms
+        .expect("job should be scheduled");
+    h.advance_to(next + 1);
     h.tick().await;
 
     // consecutive_errors should reset to 0

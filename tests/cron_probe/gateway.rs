@@ -3,8 +3,8 @@
 //! Tests CronService operations (list, get, manual_run) through the harness,
 //! exercising the same code paths the gateway handlers use.
 
-use alephcore::cron::config::{ScheduleKind, TriggerSource};
-use alephcore::cron::service::ops;
+use alephcore::tasks::cron::config::{ScheduleKind, TriggerSource};
+use alephcore::tasks::cron::service::ops;
 
 use super::harness::CronTestHarness;
 

@@ -4,7 +4,7 @@
 
 use rusqlite::Connection;
 
-use alephcore::cron::history::{
+use alephcore::tasks::cron::history::{
     cleanup_old_cron_runs, get_cron_runs, init_schema, insert_cron_run, CronRunRecord,
 };
 
@@ -30,6 +30,8 @@ fn make_record(id: &str, job_id: &str, created_at: i64) -> CronRunRecord {
         output_summary: Some("done".to_string()),
         delivery_status: None,
         created_at,
+        retry_category: None,
+        retryable: None,
     }
 }
 
@@ -50,6 +52,8 @@ fn execution_produces_history_record() {
         output_summary: Some("all good".to_string()),
         delivery_status: Some("delivered".to_string()),
         created_at: 2_000_000,
+        retry_category: None,
+        retryable: None,
     };
     insert_cron_run(&conn, &record).unwrap();
 

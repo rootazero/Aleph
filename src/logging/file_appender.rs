@@ -37,9 +37,24 @@ mod tests {
 
     #[test]
     fn test_get_log_directory() {
+        // ALEPH_HOME is process-global; lock so other tests don't point it at a
+        // temp directory without "aleph" in the path while we read it.
+        let _guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("ALEPH_HOME");
+        let tmp = std::env::temp_dir().join(".aleph").join("log_dir_test");
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("ALEPH_HOME", &tmp);
+
         let log_dir = get_log_directory().unwrap();
         assert!(log_dir.to_string_lossy().contains("aleph"));
         assert!(log_dir.to_string_lossy().contains("logs"));
+
+        match prev {
+            Some(v) => std::env::set_var("ALEPH_HOME", v),
+            None => std::env::remove_var("ALEPH_HOME"),
+        }
     }
 
     #[test]

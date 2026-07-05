@@ -891,17 +891,17 @@ impl AlephTool for WorkflowTool {
 mod tests {
     use super::*;
     use crate::agents::swarm::tasks::{store::SqliteCoordTaskStore, CoordTaskStatus};
-    use crate::sync_primitives::Mutex;
+
     use crate::workflow::def::WorkflowStepDef;
     use rusqlite::Connection;
     use tempfile::TempDir;
 
     // `ALEPH_HOME` is process-global; the file-backed actions (save/list/
     // describe/delete/run-load) resolve their directory from it via
-    // `workflow::store::*`. Serialise every test that touches it through this
-    // guard so parallel `cargo test` threads can't read/write each other's
+    // `workflow::store::*`. Serialise every test that touches it through the
+    // shared guard so parallel `cargo test` threads can't read/write each other's
     // workflows dir. Pure serde/notify tests below need no env and skip it.
-    static ENV_GUARD: Mutex<()> = Mutex::new(());
+    use crate::utils::paths::ALEPH_HOME_TEST_GUARD as ENV_GUARD;
 
     async fn setup_store() -> SqliteCoordTaskStore {
         let conn = Connection::open_in_memory().expect("open in-memory db");

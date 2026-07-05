@@ -30,9 +30,6 @@ impl FailureReceipt {
                 "任务超时未完成。请重试，或把任务拆小一些再发给我。",
             ),
             ExecutionError::Cancelled => Self::new("CANCELLED", "任务已取消。"),
-            ExecutionError::TooManyRuns(_) => {
-                Self::new("TOO_MANY_RUNS", "当前并发任务过多，请稍后再试。")
-            }
             ExecutionError::AgentBusy(_) => {
                 Self::new("AGENT_BUSY", "当前 Agent 正忙，请稍后再试。")
             }

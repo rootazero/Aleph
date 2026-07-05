@@ -1,11 +1,11 @@
 //! P5 Delivery & Alert Probes — 6 scenarios covering delivery skip logic
 //! and failure alert threshold/cooldown behavior.
 
-use alephcore::cron::alert::should_send_alert;
-use alephcore::cron::config::{
+use alephcore::tasks::cron::alert::should_send_alert;
+use alephcore::tasks::cron::config::{
     CronJob, DeliveryMode, DeliveryStatus, DeliveryTargetConfig, FailureAlertConfig, ScheduleKind,
 };
-use alephcore::cron::delivery::should_skip_delivery;
+use alephcore::tasks::cron::delivery::should_skip_delivery;
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 

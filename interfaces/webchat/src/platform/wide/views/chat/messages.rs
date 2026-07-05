@@ -203,7 +203,7 @@ pub(crate) fn MessageList() -> impl IntoView {
                                 "pt-6".to_string()
                             };
                             format!(
-                                "max-w-5xl mx-auto px-4 {top} \
+                                "w-full min-w-0 max-w-5xl mx-auto px-4 {top} \
                                  pb-[calc(var(--composer-clearance,150px)+1rem)] space-y-2"
                             )
                         }>

@@ -8,7 +8,7 @@
 //! `agent_id` 保留在 [`ConvMeta`] 内作分组/归类键（利于记忆管理）。
 
 use leptos::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::views::chat::agent_identity::agent_color_for_id;
 use crate::views::chat::state::ChatState;
@@ -42,6 +42,12 @@ pub struct SessionMap {
     route: RwSignal<HashMap<String, ConvId>>,
     /// 每会话进行中 run 引用计数；红点 = >0（Task 2 使用）。
     running: RwSignal<HashMap<ConvId, usize>>,
+    /// 服务端权威运行态：`gateway.metrics.run_concurrency` 回报的、当前有在跑 run
+    /// 的 backend `session_key` 集。补齐事件驱动 `running` 引用计数覆盖不到的场景
+    /// ——刷新页 / 其它接口（daemon / Telegram / 另一个 Panel）发起的 run。仅对
+    /// **未被本 Panel 追踪**的会话生效（见 [`SessionMap::is_running_session_key`]），
+    /// 以免过期快照把已完成 run 的红点钉住。
+    server_running: RwSignal<HashSet<String>>,
     /// 捕获 app-root Owner，用于在稳定 arena 下创建后台 `ChatState`。
     owner: StoredValue<Owner>,
     /// 每个后台会话的子 Owner，用于 close 时回收其 signals（防止按切换次数泄漏）。
@@ -67,6 +73,7 @@ impl SessionMap {
             active: RwSignal::new(None),
             route: RwSignal::new(HashMap::new()),
             running: RwSignal::new(HashMap::new()),
+            server_running: RwSignal::new(HashSet::new()),
             owner: StoredValue::new(owner),
             owners: RwSignal::new(HashMap::new()),
             next_id: RwSignal::new(0),
@@ -277,8 +284,41 @@ impl SessionMap {
     /// 侧栏行按 backend session_key 反查 ConvId（用于红点）。
     #[must_use]
     pub fn conv_for_session_key(&self, sk: &str) -> Option<ConvId> {
-        self.meta
-            .with_untracked(|m| m.iter().find(|(_, v)| v.session_key.as_deref() == Some(sk)).map(|(k, _)| *k))
+        self.meta.with_untracked(|m| {
+            m.iter()
+                .find(|(_, v)| v.session_key.as_deref() == Some(sk))
+                .map(|(k, _)| *k)
+        })
+    }
+
+    /// 用服务端快照覆盖 `server_running`（仅在变化时写，避免无谓刷新）。
+    /// 由侧栏在拉取 `sessions.list` 的同一节拍拉 `gateway.metrics.run_concurrency`
+    /// 后调用，使红点与真实运行态一致。
+    pub fn set_server_running(&self, keys: HashSet<String>) {
+        if self.server_running.with_untracked(|cur| *cur != keys) {
+            self.server_running.set(keys);
+        }
+    }
+
+    /// 响应式读：某 backend `session_key` 是否在跑（侧栏行红点唯一入口）。
+    ///
+    /// - **本 Panel 已追踪**该会话（存在绑定 conv）→ 以事件驱动的 `running` 引用计数
+    ///   为准，绝不被过期服务端快照钉住已完成的红点。
+    /// - **未追踪**（刚刷新页 / 其它接口发起）→ 回退到服务端 `server_running` 快照。
+    ///
+    /// 两条路径都用 tracked 读（`meta` + `running` 或 `server_running`），故行随
+    /// run 绑定/结束或快照刷新自动重渲。
+    #[must_use]
+    pub fn is_running_session_key(&self, sk: &str) -> bool {
+        let conv = self.meta.with(|m| {
+            m.iter()
+                .find(|(_, v)| v.session_key.as_deref() == Some(sk))
+                .map(|(k, _)| *k)
+        });
+        match conv {
+            Some(c) => self.running.with(|m| m.get(&c).is_some_and(|n| *n > 0)),
+            None => self.server_running.with(|s| s.contains(sk)),
+        }
     }
 }
 
@@ -323,10 +363,16 @@ mod tests {
 
             // A is now background (present in live), B is active (absent from live).
             assert_eq!(map.active.get_untracked(), Some(b));
-            assert!(map.chat_for(a, singleton).is_some(), "A has a live background state");
+            assert!(
+                map.chat_for(a, singleton).is_some(),
+                "A has a live background state"
+            );
             // chat_for(active) returns the singleton itself.
             let active_chat = map.chat_for(b, singleton).expect("active chat");
-            assert_eq!(active_chat.agent_id.get_untracked(), singleton.agent_id.get_untracked());
+            assert_eq!(
+                active_chat.agent_id.get_untracked(),
+                singleton.agent_id.get_untracked()
+            );
 
             // Switch back to A restores its stamped agent_id into the singleton.
             map.activate(singleton, a);
@@ -354,6 +400,41 @@ mod tests {
 
             map.settle_run("run-2");
             assert!(!map.is_running(c), "all runs settled");
+        });
+    }
+
+    #[test]
+    fn server_running_lights_untracked_sessions_but_client_wins_when_tracked() {
+        use std::collections::HashSet;
+        with_owner(|| {
+            let map = SessionMap::new();
+
+            // Untracked session (no bound conv) → server snapshot governs the dot.
+            map.set_server_running(HashSet::from(["sess-remote".to_string()]));
+            assert!(
+                map.is_running_session_key("sess-remote"),
+                "server snapshot lights an untracked (fresh-load / external) session"
+            );
+            assert!(!map.is_running_session_key("sess-idle"));
+
+            // Panel-tracked session: the live client refcount is authoritative
+            // even when the server snapshot goes stale (still lists it after the
+            // run completes) — the dot must not stay pinned on.
+            let c = map.open_conversation("agent-a", "A");
+            map.bind_run("run-1", c, Some("sess-local"));
+            map.set_server_running(HashSet::from([
+                "sess-remote".to_string(),
+                "sess-local".to_string(),
+            ]));
+            assert!(
+                map.is_running_session_key("sess-local"),
+                "tracked + running"
+            );
+            map.settle_run("run-1");
+            assert!(
+                !map.is_running_session_key("sess-local"),
+                "client refcount wins over a stale server snapshot"
+            );
         });
     }
 

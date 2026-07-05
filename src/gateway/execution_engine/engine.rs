@@ -119,8 +119,7 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// `None` (tests / simple engine / no memory extensions) leaves subagent
     /// delegation capture dormant — `dispatch_on_delegation` no-ops on an empty
     /// registry, so this is a fail-soft default (P7).
-    pub(super) capture_registry:
-        Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
+    pub(super) capture_registry: Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -358,12 +357,22 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         self.active_runs.read().await.len()
     }
 
-    /// Snapshot of the run-lifetime `ConcurrencyLimiter`'s global slot usage
-    /// (`global_in_use` / `global_total`), surfaced via
-    /// `gateway.metrics.run_concurrency` (Task 8, audit 3.4).
+    /// Snapshot of the run-lifetime `ConcurrencyLimiter`'s slot usage
+    /// (`global_in_use` / `global_total`, per-agent rows, and queue depth),
+    /// surfaced via `gateway.metrics.run_concurrency` (Task 8, audit 3.4).
     #[must_use]
     pub fn concurrency_snapshot(&self) -> super::ConcurrencySnapshot {
         self.concurrency.snapshot()
+    }
+
+    /// Session keys with a run currently in flight — the authoritative
+    /// in-memory admission gate (`SessionRunRegistry`), not the cosmetic
+    /// persisted store marker. Surfaced beside `concurrency_snapshot` in
+    /// `gateway.metrics.run_concurrency` so a Panel can render per-session
+    /// running indicators independent of which interface started the run.
+    #[must_use]
+    pub fn running_sessions(&self) -> Vec<String> {
+        self.session_run_registry.running_keys()
     }
 
     /// Get the status of a run

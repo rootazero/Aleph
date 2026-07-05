@@ -57,7 +57,14 @@ pub(super) struct RunSlot {
     registry: Arc<super::session_run_registry::SessionRunRegistry>,
     session_key: SessionKey,
     run_id: String,
-    _permit: RunPermit,
+    /// The run-lifetime concurrency permit. `Option` only so the `RunSlot` can
+    /// be constructed the instant the session claim is taken — guarding the
+    /// claim across the `ConcurrencyLimiter::acquire().await` below — and have
+    /// the permit slotted in once acquired. It is always `Some` by the time
+    /// `admit_run` returns [`GateOutcome::Admitted`]. Dropping the slot drops
+    /// the permit (freeing the global + per-agent semaphore slots) and releases
+    /// the session claim.
+    _permit: Option<RunPermit>,
 }
 
 impl Drop for RunSlot {
@@ -181,19 +188,31 @@ where
             }
         }
 
-        // Session slot claimed. Acquire a run-lifetime concurrency permit —
-        // try non-blocking first; if both caps (global + per-agent) are
-        // currently full, queue (await) rather than fail the run (audit 1.2).
-        let agent_id = request.session_key.agent_id().to_string();
-        let permit = match self.concurrency.try_acquire(&agent_id) {
-            Some(p) => p,
-            None => {
-                // TODO(P2): emit a typed RunQueued{position} event to the UI
-                // here. P1 scope is only "queue (await) instead of Fail" —
-                // this await IS the correct behavior (spec §3.4, audit 1.2).
-                self.concurrency.acquire(&agent_id).await
-            }
+        // Session slot claimed. Build the RAII `RunSlot` NOW — before acquiring
+        // the concurrency permit — so the claim is released on EVERY exit path,
+        // including a mid-`await` future drop. Previously the claim was a bare
+        // `try_claim` insert until the `RunSlot` was constructed *after*
+        // `concurrency.acquire().await`; a future dropped in that window (e.g.
+        // runtime shutdown) leaked the claim and left the session permanently
+        // busy — every later message on it hit the busy-input path forever.
+        // The permit is slotted in once acquired.
+        let mut slot = RunSlot {
+            registry: Arc::clone(&self.session_run_registry),
+            session_key: request.session_key.clone(),
+            run_id: run_id.to_string(),
+            _permit: None,
         };
+
+        // Acquire a run-lifetime concurrency permit — try non-blocking first;
+        // if both caps (global + per-agent) are currently full, queue (await)
+        // rather than fail the run (audit 1.2). The wait is now visible via
+        // `ConcurrencySnapshot::waiting`; if this future is dropped while
+        // parked here, `slot` drops → the session claim is released (no leak).
+        let agent_id = request.session_key.agent_id().to_string();
+        slot._permit = Some(match self.concurrency.try_acquire(&agent_id) {
+            Some(p) => p,
+            None => self.concurrency.acquire(&agent_id).await,
+        });
 
         // Register the run.
         {
@@ -214,11 +233,41 @@ where
             );
         }
 
-        Ok(GateOutcome::Admitted(RunSlot {
-            registry: Arc::clone(&self.session_run_registry),
-            session_key: request.session_key.clone(),
-            run_id: run_id.to_string(),
-            _permit: permit,
-        }))
+        Ok(GateOutcome::Admitted(slot))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::session_run_registry::SessionRunRegistry;
+    use super::*;
+
+    /// Regression: a `RunSlot` holding a session claim but **no permit yet**
+    /// (`_permit: None`) — the exact state `admit_run` is in while parked on
+    /// `ConcurrencyLimiter::acquire().await` — must still release the claim on
+    /// drop. This is what turns a mid-await future drop from a permanent-busy
+    /// leak into a clean release.
+    #[test]
+    fn run_slot_releases_session_claim_on_drop_without_permit() {
+        let registry = Arc::new(SessionRunRegistry::default());
+        let sk = SessionKey::peer("main", "conv-1");
+        assert!(registry.try_claim(&sk, "run-1"));
+
+        let slot = RunSlot {
+            registry: Arc::clone(&registry),
+            session_key: sk.clone(),
+            run_id: "run-1".to_string(),
+            _permit: None,
+        };
+        assert!(
+            !registry.try_claim(&sk, "run-2"),
+            "claim is held while the slot is alive"
+        );
+
+        drop(slot);
+        assert!(
+            registry.try_claim(&sk, "run-3"),
+            "dropping the permit-less slot releases the session claim"
+        );
     }
 }

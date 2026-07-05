@@ -313,9 +313,6 @@ impl ActiveRun {
 /// Execution errors
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionError {
-    #[error("Too many concurrent runs: {0}")]
-    TooManyRuns(String),
-
     #[error("Agent is busy: {0}")]
     AgentBusy(String),
 

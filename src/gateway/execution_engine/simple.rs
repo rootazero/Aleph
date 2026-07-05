@@ -72,6 +72,10 @@ impl SimpleExecutionEngine {
     ) -> Result<(), ExecutionError> {
         let run_id = request.run_id.clone();
 
+        // Ensure the session row exists before any state transitions; tests and
+        // fallback paths may run without the global SessionService initialized.
+        agent.ensure_session(&request.session_key).await;
+
         // Atomically check Idle and transition to Running to close the TOCTOU
         // window between an is_idle() probe and the later set_state(Running).
         if !agent.try_start_run(&run_id).await {

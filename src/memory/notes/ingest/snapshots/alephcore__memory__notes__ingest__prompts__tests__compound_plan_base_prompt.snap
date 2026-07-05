@@ -61,7 +61,11 @@ to them, emit an IngestPlan that updates the wiki.
 
 - `create` — new page. Fields: `note_path` (category/filename),
   `title`, `summary` (≤120 chars), `facts[]`, `links[]` (use `[P<n>]`
-  tokens), `tags[]`, `source_ids[]` (raw UUIDs this page came from).
+  tokens), `tags[]`, `source_ids[]` (raw UUIDs this page came from),
+  `confidence` (0..1 — how sure you are these facts are true and durable;
+  be honest, low-confidence pages are held for review not discarded), and
+  `severity` (`low`|`med`|`high`|`critical` — how important/risky it is to
+  get this page right; `high`/`critical` must earn higher confidence).
 - `append` — add facts to an existing page. Fields: `note_path`,
   `new_facts[]`, `new_links[]`, `source_ids[]`.
 - `update` — replace facts on an existing page. Fields: `note_path`,
@@ -105,7 +109,7 @@ use only the token numbers that actually appear in your input's "Related
 existing pages" section (e.g. if only `[P0]` is shown, never write `[P1]`):
 
 ```json
-{"kind": "create", "note_path": "preference/typescript.md", "title": "TypeScript", "summary": "User prefers TypeScript", "facts": ["The user prefers TypeScript. <!-- src: 7f3a..., origin: raw_source, inferred: false -->"], "links": ["[P3]"], "tags": ["preference"], "source_ids": ["7f3a..."]}
+{"kind": "create", "note_path": "preference/typescript.md", "title": "TypeScript", "summary": "User prefers TypeScript", "facts": ["The user prefers TypeScript. <!-- src: 7f3a..., origin: raw_source, inferred: false -->"], "links": ["[P3]"], "tags": ["preference"], "source_ids": ["7f3a..."], "confidence": 0.9, "severity": "low"}
 {"kind": "append", "note_path": "[P1]", "new_facts": ["Comments must be in English."], "new_links": [], "source_ids": ["9b2c..."]}
 {"kind": "update", "note_path": "[P0]", "expected_content_hash": "<copy hash from input>", "new_facts": ["Current focus is the memory subsystem."], "reason": "User clarified the focus area."}
 {"kind": "link", "from": "[P3]", "to": "[P0]"}

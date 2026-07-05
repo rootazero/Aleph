@@ -6,13 +6,14 @@
 //! sub-cap so one busy agent can't monopolize all global slots (audit C4).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::sync_primitives::Mutex;
 
-/// Snapshot of the limiter's global slot usage, surfaced via
+/// Snapshot of the limiter's slot usage, surfaced via
 /// `gateway.metrics.run_concurrency` (Task 8, audit 3.4) — "N/M run slots in
 /// use" for ops dashboards / Panel UIs. `pub` (not module-local): reached
 /// through the public `ExecutionAdapter` trait and `ExecutionEngine` (both
@@ -23,6 +24,30 @@ use crate::sync_primitives::Mutex;
 pub struct ConcurrencySnapshot {
     pub global_in_use: usize,
     pub global_total: usize,
+    /// The per-agent sub-cap (audit C4): the max concurrent runs one agent may
+    /// hold across its sessions. The agent id is the memory/storage
+    /// physical-isolation boundary (a session runs under exactly one agent), so
+    /// this cap bounds contention on that boundary — distinct from the
+    /// per-session parallelism the `SessionRunRegistry` governs.
+    pub per_agent_cap: usize,
+    /// Runs currently blocked in `acquire().await` because both caps were full
+    /// when they were admitted — the queue depth behind the semaphores. `0` in
+    /// the common unsaturated case; a rising value is the early-warning signal
+    /// that surfaced the previously-untyped `RunQueued` TODO (audit 1.2 keeps
+    /// the run queued rather than rejected).
+    pub waiting: usize,
+    /// Per-agent in-use slot counts, only for agents holding ≥1 run, sorted by
+    /// usage desc then agent id. Lets the dashboard see *which* isolation
+    /// boundary is saturating, not just the global total.
+    pub per_agent: Vec<AgentSlotUsage>,
+}
+
+/// One agent's live run-slot usage within the limiter (a row of
+/// [`ConcurrencySnapshot::per_agent`]).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentSlotUsage {
+    pub agent_id: String,
+    pub in_use: usize,
 }
 
 pub(super) struct RunPermit {
@@ -30,11 +55,33 @@ pub(super) struct RunPermit {
     _agent: OwnedSemaphorePermit,
 }
 
+/// Increments `waiting` on construction and decrements on drop, so a run
+/// blocked in [`ConcurrencyLimiter::acquire`] is counted for exactly its wait
+/// duration — and a caller future dropped mid-await can't leak a phantom
+/// waiter (Drop runs on unwind too).
+struct WaitGuard<'a>(&'a AtomicUsize);
+
+impl<'a> WaitGuard<'a> {
+    fn enter(counter: &'a AtomicUsize) -> Self {
+        counter.fetch_add(1, Ordering::AcqRel);
+        Self(counter)
+    }
+}
+
+impl Drop for WaitGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 pub(super) struct ConcurrencyLimiter {
     global: Arc<Semaphore>,
     global_total: usize,
     per_agent_cap: usize,
     per_agent: Mutex<HashMap<String, Arc<Semaphore>>>,
+    /// Live count of runs blocked in `acquire().await` (queue depth). Interior
+    /// atomic so `snapshot()` stays `&self` and lock-free.
+    waiting: AtomicUsize,
 }
 
 impl ConcurrencyLimiter {
@@ -48,6 +95,7 @@ impl ConcurrencyLimiter {
             global_total: global_cap,
             per_agent_cap,
             per_agent: Mutex::new(HashMap::new()),
+            waiting: AtomicUsize::new(0),
         }
     }
 
@@ -60,12 +108,25 @@ impl ConcurrencyLimiter {
 
     /// Acquire both a global and a per-agent permit, awaiting if either cap is
     /// full. The per-agent permit is taken first so a saturated agent waits on
-    /// its own sub-cap without consuming a scarce global slot.
+    /// its own sub-cap without consuming a scarce global slot. Time spent
+    /// blocked here is reflected in `snapshot().waiting`.
     pub(super) async fn acquire(&self, agent_id: &str) -> RunPermit {
+        let _wait = WaitGuard::enter(&self.waiting);
         let agent_sem = self.agent_sem(agent_id);
-        let agent = agent_sem.acquire_owned().await.expect("agent sem never closed");
-        let global = self.global.clone().acquire_owned().await.expect("global sem never closed");
-        RunPermit { _global: global, _agent: agent }
+        let agent = agent_sem
+            .acquire_owned()
+            .await
+            .expect("agent sem never closed");
+        let global = self
+            .global
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("global sem never closed");
+        RunPermit {
+            _global: global,
+            _agent: agent,
+        }
     }
 
     /// Non-blocking variant. Returns `None` if either cap is currently full.
@@ -74,14 +135,43 @@ impl ConcurrencyLimiter {
         let agent_sem = self.agent_sem(agent_id);
         let agent = Arc::clone(&agent_sem).try_acquire_owned().ok()?;
         let global = self.global.clone().try_acquire_owned().ok()?;
-        Some(RunPermit { _global: global, _agent: agent })
+        Some(RunPermit {
+            _global: global,
+            _agent: agent,
+        })
     }
 
     #[must_use]
     pub(super) fn snapshot(&self) -> ConcurrencySnapshot {
+        // Per-agent rows for agents holding ≥1 slot, deterministically ordered
+        // (usage desc, then id) so the gauge and its tests are stable. Idle
+        // agents are omitted — the map only grows with distinct agents ever
+        // seen, so this keeps the surfaced view bounded to what's actually live.
+        let per_agent = {
+            let map = self.per_agent.lock().unwrap_or_else(|e| e.into_inner());
+            let mut rows: Vec<AgentSlotUsage> = map
+                .iter()
+                .filter_map(|(id, sem)| {
+                    let in_use = self.per_agent_cap.saturating_sub(sem.available_permits());
+                    (in_use > 0).then(|| AgentSlotUsage {
+                        agent_id: id.clone(),
+                        in_use,
+                    })
+                })
+                .collect();
+            rows.sort_by(|a, b| {
+                b.in_use
+                    .cmp(&a.in_use)
+                    .then_with(|| a.agent_id.cmp(&b.agent_id))
+            });
+            rows
+        };
         ConcurrencySnapshot {
             global_in_use: self.global_total - self.global.available_permits(),
             global_total: self.global_total,
+            per_agent_cap: self.per_agent_cap,
+            waiting: self.waiting.load(Ordering::Acquire),
+            per_agent,
         }
     }
 }
@@ -108,6 +198,56 @@ mod tests {
         let _a1 = lim.try_acquire("main").unwrap();
         let _a2 = lim.try_acquire("main").unwrap();
         assert!(lim.try_acquire("main").is_none(), "per-agent cap=2 已满");
-        assert!(lim.try_acquire("other").is_some(), "别的 agent 不受 main 影响");
+        assert!(
+            lim.try_acquire("other").is_some(),
+            "别的 agent 不受 main 影响"
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_reports_per_agent_usage_sorted_and_idle_omitted() {
+        let lim = ConcurrencyLimiter::new(10, 3);
+        let _m1 = lim.try_acquire("main").unwrap();
+        let _m2 = lim.try_acquire("main").unwrap();
+        let _o1 = lim.try_acquire("other").unwrap();
+        // Touch a third agent then release, so its semaphore is resident but idle.
+        drop(lim.try_acquire("idle").unwrap());
+
+        let snap = lim.snapshot();
+        assert_eq!(snap.per_agent_cap, 3);
+        assert_eq!(snap.global_in_use, 3);
+        // Idle agent omitted; busiest first, ties broken by id.
+        assert_eq!(snap.per_agent.len(), 2, "只列有活跃 run 的 agent");
+        assert_eq!(snap.per_agent[0].agent_id, "main");
+        assert_eq!(snap.per_agent[0].in_use, 2);
+        assert_eq!(snap.per_agent[1].agent_id, "other");
+        assert_eq!(snap.per_agent[1].in_use, 1);
+    }
+
+    #[tokio::test]
+    async fn waiting_counts_blocked_acquires_and_clears_on_acquire() {
+        let lim = Arc::new(ConcurrencyLimiter::new(1, 5));
+        let held = lim.try_acquire("main").expect("slot 1");
+        assert_eq!(lim.snapshot().waiting, 0);
+
+        let lim2 = Arc::clone(&lim);
+        let blocked = tokio::spawn(async move { lim2.acquire("other").await });
+
+        // Poll until the spawned task parks on the full global semaphore.
+        let mut saw_wait = false;
+        for _ in 0..100 {
+            if lim.snapshot().waiting == 1 {
+                saw_wait = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(saw_wait, "blocked acquire must register as one waiter");
+
+        drop(held);
+        let _permit = blocked
+            .await
+            .expect("blocked acquire completes after release");
+        assert_eq!(lim.snapshot().waiting, 0, "waiter cleared once it acquires");
     }
 }

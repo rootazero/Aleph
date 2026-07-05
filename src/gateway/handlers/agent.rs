@@ -479,6 +479,15 @@ impl AgentRunManager {
     pub fn concurrency_snapshot(&self) -> crate::gateway::execution_engine::ConcurrencySnapshot {
         self.execution_adapter.concurrency_snapshot()
     }
+
+    /// Session keys with a run currently in flight (authoritative in-memory
+    /// admission gate), for `gateway.metrics.run_concurrency` — lets the Panel
+    /// paint per-session running indicators regardless of which interface
+    /// started the run.
+    #[must_use]
+    pub fn running_sessions(&self) -> Vec<String> {
+        self.execution_adapter.running_sessions()
+    }
 }
 
 /// Handle agent.run RPC request
