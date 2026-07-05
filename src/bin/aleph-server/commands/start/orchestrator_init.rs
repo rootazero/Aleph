@@ -223,7 +223,23 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // still degrades gracefully. (Realizes the prior "PHASE-6: populate
     // named_providers" TODO by reusing the chain `build_failover_chain` already
     // built for subagent routing — no second construction.)
-    let named_providers = provider_chain.agent_overrides.clone();
+    let mut named_providers = provider_chain.agent_overrides.clone();
+    // `agent_overrides` deliberately omits the primary provider (it is the head
+    // of the default chain, not a separate pin). But consumers that resolve a
+    // provider BY KEY — `select_model(provider=…)`, `BrainRef::Strict`, and
+    // MoA preset slots (`try_build_for_run` resolves each advisor/aggregator
+    // against this map) — must be able to name the primary too. Without this
+    // entry, a MoA preset whose slots use the default provider (the most common
+    // shape) fails activation with "provider '<primary>' is not configured/
+    // keyed" and silently falls back to the plain chain. Map the primary key to
+    // the default chain (whose head IS the primary); other consumers already
+    // fell through to the same chain when the key missed, so this only closes
+    // the MoA gap without changing their behavior. Found in round-2 runtime QA.
+    if !primary_provider_key.is_empty() {
+        named_providers
+            .entry(primary_provider_key.to_string())
+            .or_insert_with(|| default_provider.current());
+    }
 
     let routing_store = match (embedder.clone(), memory_backend.clone()) {
         (Some(embedder), Some(backend)) => Some(std::sync::Arc::new(
