@@ -221,6 +221,11 @@ impl AiProvider for MoaProvider {
                 })
             };
 
+            // Round-2 B3: pending turn-trace payload, filled in on a MISS
+            // (below) and emitted only after the aggregator returns — see
+            // the comment at the aggregator call site.
+            let mut pending_trace: Option<serde_json::Value> = None;
+
             let outcomes: Vec<AdvisorOutcome> = if let Some(hit) = cached {
                 // Cache HIT: the aggregator still runs on the reused advice —
                 // emit the lightweight aggregating moment so multi-iteration
@@ -267,17 +272,14 @@ impl AiProvider for MoaProvider {
                     self.emit(spend);
                 }
                 if self.save_traces {
-                    self.emit(LoopTraceEvent::MoaTurnTrace {
-                        preset: self.preset_name.clone(),
-                        payload: json!({
-                            "aggregator": self.aggregator_label,
-                            "view_signature": sig,
-                            "advisors": outcomes
-                                .iter()
-                                .map(|o| json!({ "label": o.label, "output": o.text }))
-                                .collect::<Vec<_>>(),
-                        }),
-                    });
+                    pending_trace = Some(json!({
+                        "aggregator": self.aggregator_label,
+                        "view_signature": sig,
+                        "advisors": outcomes
+                            .iter()
+                            .map(|o| json!({ "label": o.label, "output": o.text }))
+                            .collect::<Vec<_>>(),
+                    }));
                 }
 
                 {
@@ -330,7 +332,30 @@ impl AiProvider for MoaProvider {
                 .with_max_tokens(max_tokens)
                 .with_tool_choice(tool_choice)
                 .with_metadata(metadata);
-            self.aggregator.process(agg_payload).await
+            let agg_result = self.aggregator.process(agg_payload).await;
+
+            // Round-2 B3: the heavy turn trace fires AFTER the aggregator so
+            // it records the full turn (hermes parity: advisor I/O + the
+            // aggregator's actual output). Fires on error too — advisors ran
+            // and were billed, the audit record must say so. A cancelled
+            // future drops the pending trace (advisor spend is already on the
+            // per-advisor MeteringProvider events).
+            if let Some(mut payload) = pending_trace {
+                let (output, status) = match &agg_result {
+                    Ok(resp) => (
+                        resp.text.clone().unwrap_or_default(),
+                        "ok".to_string(),
+                    ),
+                    Err(e) => (String::new(), format!("error: {e}")),
+                };
+                payload["aggregator_output"] = json!(output);
+                payload["aggregator_status"] = json!(status);
+                self.emit(LoopTraceEvent::MoaTurnTrace {
+                    preset: self.preset_name.clone(),
+                    payload,
+                });
+            }
+            agg_result
         })
     }
 
@@ -783,5 +808,66 @@ aggregator = { provider = "ghost", model = "n" }
             .events()
             .iter()
             .any(|e| matches!(e, LoopTraceEvent::MoaTurnTrace { .. })));
+    }
+
+    #[tokio::test]
+    async fn turn_trace_carries_aggregator_output_and_fires_after_it() {
+        let sink = RecordingSink::new();
+        let adv = Arc::new(CountingProvider::new("advice"));
+        let agg = Arc::new(CountingProvider::new("final answer"));
+        let mut p = make_provider_sinked(
+            vec![(adv, "mock:a")],
+            agg,
+            MoaFanout::PerIteration,
+            sink.clone(),
+        );
+        p.save_traces = true;
+        p.process(RequestPayload::new(&user_msgs("go"))).await.unwrap();
+        let events = sink.events();
+        let trace = events
+            .iter()
+            .find_map(|e| match e {
+                LoopTraceEvent::MoaTurnTrace { payload, .. } => Some(payload.clone()),
+                _ => None,
+            })
+            .expect("turn trace");
+        assert_eq!(trace["aggregator_status"], "ok");
+        assert_eq!(trace["aggregator_output"], "final answer");
+        // Ordering: the turn trace must be the LAST event (after aggregating).
+        assert!(matches!(
+            events.last().unwrap(),
+            LoopTraceEvent::MoaTurnTrace { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn turn_trace_fires_with_error_status_when_aggregator_fails() {
+        let sink = RecordingSink::new();
+        let adv = Arc::new(CountingProvider::new("advice"));
+        let agg: Arc<dyn AiProvider> = Arc::new(
+            crate::providers::mock::MockProvider::new("unused")
+                .with_error(crate::providers::mock::MockError::Network("agg down".into())),
+        );
+        let mut p = make_provider_sinked(
+            vec![(adv, "mock:a")],
+            agg,
+            MoaFanout::PerIteration,
+            sink.clone(),
+        );
+        p.save_traces = true;
+        let result = p.process(RequestPayload::new(&user_msgs("go"))).await;
+        assert!(result.is_err());
+        let events = sink.events();
+        let trace = events
+            .iter()
+            .find_map(|e| match e {
+                LoopTraceEvent::MoaTurnTrace { payload, .. } => Some(payload.clone()),
+                _ => None,
+            })
+            .expect("turn trace fires even on aggregator error — advisors were billed");
+        assert!(trace["aggregator_status"]
+            .as_str()
+            .unwrap()
+            .starts_with("error:"));
     }
 }
