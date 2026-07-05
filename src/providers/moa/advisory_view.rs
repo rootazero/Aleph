@@ -60,8 +60,15 @@ fn text_of(blocks: &[ContentBlock]) -> String {
                 }
             }
             ContentBlock::Json { value } => parts.push(value.to_string()),
+            // Advisors can't see pixels, but they must know an image exists —
+            // hermes drops multimodal content silently (its #51 gap); the
+            // placeholder keeps them from being blindsided by "the screenshot
+            // above" (round-2 E4).
+            ContentBlock::Image { mime_type, .. } => {
+                parts.push(format!("[image: {mime_type}]"));
+            }
             // Thinking is the acting model's private reasoning; ToolCall is
-            // rendered separately; images carry no advisory text.
+            // rendered separately.
             _ => {}
         }
     }
@@ -174,6 +181,10 @@ pub(crate) fn view_signature(view: &[UnifiedMessage]) -> u64 {
                     }
                 }
                 ContentBlock::Json { value } => value.to_string().hash(&mut hasher),
+                ContentBlock::Image { mime_type, .. } => {
+                    "image".hash(&mut hasher);
+                    mime_type.hash(&mut hasher);
+                }
                 _ => {}
             }
         }
@@ -369,5 +380,37 @@ mod tests {
             content.last(),
             Some(ContentBlock::Text { cache_control: Some(_), .. })
         ));
+    }
+
+    #[test]
+    fn image_blocks_render_placeholder_and_json_stringifies() {
+        let msgs = vec![UnifiedMessage::User {
+            content: vec![
+                ContentBlock::Text { text: "look at this".into(), cache_control: None },
+                ContentBlock::Image { data: "base64...".into(), mime_type: "image/png".into() },
+                ContentBlock::Json { value: json!({"k": 1}) },
+            ],
+        }];
+        let view = build_advisory_view(&msgs);
+        let texts = view_texts(&view);
+        assert!(texts[0].1.contains("look at this"));
+        // E4: advisors learn an image exists (hermes drops it silently).
+        assert!(texts[0].1.contains("[image: image/png]"));
+        assert!(texts[0].1.contains("{\"k\":1}"));
+    }
+
+    #[test]
+    fn signature_changes_when_image_added() {
+        let base = vec![UnifiedMessage::user("go")];
+        let with_image = vec![UnifiedMessage::User {
+            content: vec![
+                ContentBlock::Text { text: "go".into(), cache_control: None },
+                ContentBlock::Image { data: "d".into(), mime_type: "image/png".into() },
+            ],
+        }];
+        assert_ne!(
+            view_signature(&build_advisory_view(&base)),
+            view_signature(&build_advisory_view(&with_image))
+        );
     }
 }
