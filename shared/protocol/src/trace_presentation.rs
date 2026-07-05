@@ -452,35 +452,83 @@ pub fn present_agent_trace_event(
             index,
             count,
             label,
+            error,
             ..
-        } => Some(AgentTracePresentation {
-            kind: event.kind().into(),
-            status: AgentTracePresentationStatus::Info,
-            content: format!("Advisor {index}/{count} — {label}"),
-            duration_ms: None,
+        } => Some(if *count == 0 {
+            // Activation-failure form (runner Step 3-MoA build failure).
+            AgentTracePresentation {
+                kind: event.kind().into(),
+                status: AgentTracePresentationStatus::Failed,
+                content: format!(
+                    "MoA not activated — {}",
+                    truncate(error.as_deref().unwrap_or("unknown"), options.content_limit)
+                ),
+                duration_ms: None,
+            }
+        } else if let Some(err) = error {
+            AgentTracePresentation {
+                kind: event.kind().into(),
+                status: AgentTracePresentationStatus::Failed,
+                content: format!(
+                    "Advisor {index}/{count} — {label} [failed: {}]",
+                    truncate(err, options.content_limit)
+                ),
+                duration_ms: None,
+            }
+        } else {
+            AgentTracePresentation {
+                kind: event.kind().into(),
+                status: AgentTracePresentationStatus::Info,
+                content: format!("Advisor {index}/{count} — {label}"),
+                duration_ms: None,
+            }
         }),
 
-        AgentTraceEvent::MoaAggregating { aggregator, .. } => Some(AgentTracePresentation {
+        AgentTraceEvent::MoaAggregating {
+            aggregator, cached, ..
+        } => Some(AgentTracePresentation {
             kind: event.kind().into(),
             status: AgentTracePresentationStatus::InProgress,
-            content: format!("MoA aggregating ({aggregator})"),
+            content: if *cached {
+                format!("MoA aggregating ({aggregator}, cached advice)")
+            } else {
+                format!("MoA aggregating ({aggregator})")
+            },
             duration_ms: None,
         }),
 
         AgentTraceEvent::MoaAdvisorSpend {
             input_tokens,
             output_tokens,
+            billed_count,
+            advisor_count,
             ..
         } => Some(AgentTracePresentation {
             kind: event.kind().into(),
             status: AgentTracePresentationStatus::Info,
-            content: format!("MoA advisors spent {input_tokens}+{output_tokens} tok"),
+            content: format!(
+                "MoA advisors spent {input_tokens}+{output_tokens} tok ({billed_count}/{advisor_count} billed)"
+            ),
             duration_ms: None,
         }),
 
-        AgentTraceEvent::MoaTurnTrace { .. } => {
-            /* persisted-only; no wire presentation */
-            None
+        AgentTraceEvent::MoaTurnTrace { preset, payload } => {
+            // Persisted-only on the wire; in REPLAY the one-line summary makes
+            // the audit record discoverable (round-2 W3). Full advisor I/O
+            // renders panel-side (events.rs "moa_turn_trace" arm).
+            let n = payload
+                .get("advisors")
+                .and_then(serde_json::Value::as_array)
+                .map_or(0, Vec::len);
+            Some(AgentTracePresentation {
+                kind: event.kind().into(),
+                status: AgentTracePresentationStatus::Info,
+                content: format!(
+                    "MoA turn trace — preset {preset} ({n} advisor{})",
+                    if n == 1 { "" } else { "s" }
+                ),
+                duration_ms: None,
+            })
         }
     }
 }
@@ -818,5 +866,60 @@ mod tests {
         )
         .unwrap();
         assert!(p.content.contains("Runde gestartet"));
+    }
+
+    // -- MoA presentation (round-2 W3a) --------------------------------------
+
+    #[test]
+    fn moa_presentation_reflects_error_cached_and_turn_trace() {
+        let opts = AgentTracePresentationPreset::PanelTrace.options();
+        let labels = AgentTracePresentationLabels::english();
+
+        let failed = AgentTraceEvent::MoaAdvisor {
+            index: 2,
+            count: 3,
+            label: "p:m".into(),
+            text: String::new(),
+            error: Some("timeout after 120s".into()),
+        };
+        let p = present_agent_trace_event(&failed, &opts, &labels).unwrap();
+        assert!(matches!(p.status, AgentTracePresentationStatus::Failed));
+        assert!(p.content.contains("failed"));
+
+        let not_activated = AgentTraceEvent::MoaAdvisor {
+            index: 0,
+            count: 0,
+            label: "moa:deep".into(),
+            text: String::new(),
+            error: Some("preset not found".into()),
+        };
+        let p = present_agent_trace_event(&not_activated, &opts, &labels).unwrap();
+        assert!(p.content.contains("not activated"));
+
+        let cached = AgentTraceEvent::MoaAggregating {
+            aggregator: "p:m".into(),
+            advisor_count: 2,
+            cached: true,
+        };
+        let p = present_agent_trace_event(&cached, &opts, &labels).unwrap();
+        assert!(p.content.contains("cached"));
+
+        let spend = AgentTraceEvent::MoaAdvisorSpend {
+            advisor_count: 3,
+            billed_count: 2,
+            input_tokens: 100,
+            output_tokens: 50,
+            cost_usd: None,
+        };
+        let p = present_agent_trace_event(&spend, &opts, &labels).unwrap();
+        assert!(p.content.contains("2/3 billed"));
+
+        let trace = AgentTraceEvent::MoaTurnTrace {
+            preset: "deep".into(),
+            payload: json!({ "advisors": [{"label": "a", "output": "x"}] }),
+        };
+        let p = present_agent_trace_event(&trace, &opts, &labels).unwrap();
+        assert!(p.content.contains("deep"));
+        assert!(p.content.contains("1 advisor"));
     }
 }
