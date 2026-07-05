@@ -131,7 +131,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         tools: Vec<UnifiedTool>,
         memory_backend: Option<crate::memory::store::MemoryBackend>,
     ) -> Self {
-        Self {
+        let engine = Self {
             session_run_registry: Arc::new(Default::default()),
             concurrency: Arc::new(super::concurrency::ConcurrencyLimiter::new(
                 config.max_runs_global,
@@ -163,7 +163,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             channel_registry: Arc::new(tokio::sync::OnceCell::new()),
             planner_provider: None,
             capture_registry: None,
-        }
+        };
+        super::concurrency_handle::install_global(&engine.concurrency);
+        engine
     }
 
     /// Inject the deferred channel-registry cell so the R5 progress sink can
@@ -267,6 +269,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
     ) -> Self {
         self.session_manager = Some(session_manager);
+        self.session_run_registry.set_event_bus(event_bus.clone());
         self.event_bus = Some(event_bus);
         self
     }

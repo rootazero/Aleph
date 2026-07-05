@@ -12,6 +12,7 @@ mod adapter;
 mod agent_trace_emit_sink;
 mod callback;
 mod concurrency;
+pub(crate) mod concurrency_handle;
 mod deadline;
 mod engine;
 pub(crate) mod event_drain;
