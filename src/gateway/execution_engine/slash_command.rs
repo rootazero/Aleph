@@ -72,7 +72,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // agent run's completion. Falling through also lets the LLM map the
         // free-text args onto the tool's structured schema, which the fast
         // path's generic arg mapping cannot deserialize for these tools.
-        if cmd_name == "loop" || cmd_name == "goal" {
+        //
+        // `moa` is excluded for a different reason: its one-shot form
+        // (`/moa <prompt>`) is intercepted earlier and never reaches here
+        // (the input is rewritten to a plain prompt before this function
+        // runs). A bare `/moa` (no prompt) falls through so the LLM maps it
+        // onto the tool's structured action schema instead of the fast
+        // path's generic arg mapping.
+        if cmd_name == "loop" || cmd_name == "goal" || cmd_name == "moa" {
             return None;
         }
 
@@ -126,6 +133,30 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         match mode_type {
             "direct_tool" => {
+                // `/moa <prompt>` arriving through a channel: the inbound
+                // router's command parser already classified this as
+                // tool_id "moa" with the prompt as `args`, before this run
+                // was constructed. Unlike the Panel/CLI path (handled at the
+                // `try_resolve_slash_command` call site), `request` here is
+                // an immutable borrow — the raw "/moa ..." text still
+                // reaches the agent loop as `request.input` on fallthrough.
+                // What matters for the one-shot semantics is that MoA is
+                // armed BEFORE the run is constructed, which holds either
+                // way: Fallthrough always routes to the full agent loop,
+                // constructed further down the same `execute()` call.
+                if mode["tool_id"].as_str() == Some("moa") {
+                    let args = mode["args"].as_str().unwrap_or("");
+                    if !args.is_empty() {
+                        crate::providers::session_moa_handle::set_session_moa(
+                            &request.session_key.to_key_string(),
+                            None,
+                            true,
+                        );
+                    }
+                    return Err(ExecutionError::Fallthrough {
+                        reason: "moa one-shot".to_string(),
+                    });
+                }
                 self.execute_direct_tool(run_id, &mode, request, emitter)
                     .await
             }

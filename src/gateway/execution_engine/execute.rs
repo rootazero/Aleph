@@ -229,6 +229,22 @@ where
         if request.input.trim().starts_with('/')
             && !request.metadata.contains_key(SLASH_COMMAND_MODE_KEY)
         {
+            // `/moa <prompt>` one-shot (hermes semantics): arm MoA for THIS run
+            // and let the prompt run as a normal turn. The argument is ALWAYS a
+            // prompt, never a preset name. Bare `/moa` falls through to the LLM
+            // (parse_one_shot_command returns None; `moa` stays fast-path-excluded
+            // below so the LLM maps it onto the tool's structured schema). State
+            // is written here, before `try_resolve_slash_command` and well before
+            // the run is constructed further down this function.
+            if let Some(prompt) = crate::providers::moa::parse_one_shot_command(&request.input) {
+                crate::providers::session_moa_handle::set_session_moa(
+                    &request.session_key.to_key_string(),
+                    None,
+                    true,
+                );
+                request.input = prompt.to_string();
+            }
+
             if let Some(mode_json) = self.try_resolve_slash_command(&request.input) {
                 request
                     .metadata
