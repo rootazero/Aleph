@@ -358,6 +358,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         self.active_runs.read().await.len()
     }
 
+    /// Snapshot of the run-lifetime `ConcurrencyLimiter`'s global slot usage
+    /// (`global_in_use` / `global_total`), surfaced via
+    /// `gateway.metrics.run_concurrency` (Task 8, audit 3.4).
+    #[must_use]
+    pub fn concurrency_snapshot(&self) -> super::ConcurrencySnapshot {
+        self.concurrency.snapshot()
+    }
+
     /// Get the status of a run
     pub async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
         let runs = self.active_runs.read().await;

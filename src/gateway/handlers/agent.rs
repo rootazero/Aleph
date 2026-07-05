@@ -473,6 +473,12 @@ impl AgentRunManager {
     pub async fn list_runs(&self) -> Vec<RunState> {
         self.active_runs.read().await.values().cloned().collect()
     }
+
+    /// Snapshot of the execution engine's run-concurrency slot usage, for
+    /// `gateway.metrics.run_concurrency` (Task 8, audit 3.4).
+    pub fn concurrency_snapshot(&self) -> crate::gateway::execution_engine::ConcurrencySnapshot {
+        self.execution_adapter.concurrency_snapshot()
+    }
 }
 
 /// Handle agent.run RPC request

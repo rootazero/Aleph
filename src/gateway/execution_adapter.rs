@@ -106,6 +106,17 @@ pub trait ExecutionAdapter: Send + Sync {
 
     /// Get number of currently active runs
     async fn active_run_count(&self) -> usize;
+
+    /// Snapshot of the run-lifetime `ConcurrencyLimiter`'s global slot usage,
+    /// surfaced via `gateway.metrics.run_concurrency` (Task 8, audit 3.4) —
+    /// "N/M run slots in use" for ops dashboards / Panel UIs.
+    ///
+    /// Default implementation returns an all-zero snapshot for adapters that
+    /// have no `ConcurrencyLimiter` concept (mocks, `SimpleExecutionEngine`):
+    /// a harmless "0 of 0 slots" reading rather than a mandatory override.
+    fn concurrency_snapshot(&self) -> super::execution_engine::ConcurrencySnapshot {
+        super::execution_engine::ConcurrencySnapshot::default()
+    }
 }
 
 #[cfg(test)]

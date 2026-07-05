@@ -12,13 +12,17 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::sync_primitives::Mutex;
 
-// `snapshot()` (below) has no production caller yet — wired in Task 8
-// (concurrency snapshot surfaced in status/metrics). Keep the allow scoped to
-// that one method + its return type until then.
-#[allow(dead_code)]
-pub(super) struct ConcurrencySnapshot {
-    pub(super) global_in_use: usize,
-    pub(super) global_total: usize,
+/// Snapshot of the limiter's global slot usage, surfaced via
+/// `gateway.metrics.run_concurrency` (Task 8, audit 3.4) — "N/M run slots in
+/// use" for ops dashboards / Panel UIs. `pub` (not module-local): reached
+/// through the public `ExecutionAdapter` trait and `ExecutionEngine` (both
+/// externally-reachable types), so the return type must be at least as
+/// visible — mirrors `LaneOccupancy` (`lane.rs`), the sibling diagnostics
+/// snapshot for `gateway.metrics.lanes`.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ConcurrencySnapshot {
+    pub global_in_use: usize,
+    pub global_total: usize,
 }
 
 pub(super) struct RunPermit {
@@ -74,7 +78,6 @@ impl ConcurrencyLimiter {
     }
 
     #[must_use]
-    #[allow(dead_code)] // wired in Task 8
     pub(super) fn snapshot(&self) -> ConcurrencySnapshot {
         ConcurrencySnapshot {
             global_in_use: self.global_total - self.global.available_permits(),

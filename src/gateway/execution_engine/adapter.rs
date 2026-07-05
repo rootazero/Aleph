@@ -50,4 +50,8 @@ where
     async fn active_run_count(&self) -> usize {
         Self::active_run_count(self).await
     }
+
+    fn concurrency_snapshot(&self) -> super::ConcurrencySnapshot {
+        Self::concurrency_snapshot(self)
+    }
 }
