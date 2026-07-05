@@ -318,6 +318,10 @@ async fn recording_sink_captures_full_lifecycle() {
             LoopTraceEvent::ProviderUsage { .. } => "ProviderUsage",
             LoopTraceEvent::ReactiveCompactionAttempted { .. } => "ReactiveCompactionAttempted",
             LoopTraceEvent::VerifierVeto { .. } => "VerifierVeto",
+            LoopTraceEvent::MoaAdvisor { .. } => "MoaAdvisor",
+            LoopTraceEvent::MoaAggregating { .. } => "MoaAggregating",
+            LoopTraceEvent::MoaAdvisorSpend { .. } => "MoaAdvisorSpend",
+            LoopTraceEvent::MoaTurnTrace { .. } => "MoaTurnTrace",
         })
         .collect();
     // 2 turns: tool turn + final text turn. Then SessionCompleted.

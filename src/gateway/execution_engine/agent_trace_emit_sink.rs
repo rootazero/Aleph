@@ -41,6 +41,9 @@ use crate::harness::TraceSink;
 /// the loop changed course — reactive context compaction (problem: context
 /// overflow → handled: history compacted → next: retried) and a structural
 /// goal-loop veto (problem: checklist incomplete → next: forced continue).
+/// Also the three lightweight MoA fan-out moments (advisor answer, aggregator
+/// hand-off, advisor spend) — `MoaTurnTrace` is deliberately excluded: it
+/// carries the full advisor I/O payload and is persisted-only, never wire.
 /// Everything else is dropped — it carries no user-facing meaning.
 pub(crate) const fn is_step_event(event: &LoopTraceEvent) -> bool {
     matches!(
@@ -51,6 +54,9 @@ pub(crate) const fn is_step_event(event: &LoopTraceEvent) -> bool {
             | LoopTraceEvent::ToolCallCompleted { .. }
             | LoopTraceEvent::ReactiveCompactionAttempted { .. }
             | LoopTraceEvent::VerifierVeto { .. }
+            | LoopTraceEvent::MoaAdvisor { .. }
+            | LoopTraceEvent::MoaAggregating { .. }
+            | LoopTraceEvent::MoaAdvisorSpend { .. }
     )
 }
 

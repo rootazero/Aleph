@@ -447,6 +447,41 @@ pub fn present_agent_trace_event(
             ),
             duration_ms: None,
         }),
+
+        AgentTraceEvent::MoaAdvisor {
+            index,
+            count,
+            label,
+            ..
+        } => Some(AgentTracePresentation {
+            kind: event.kind().into(),
+            status: AgentTracePresentationStatus::Info,
+            content: format!("Advisor {index}/{count} — {label}"),
+            duration_ms: None,
+        }),
+
+        AgentTraceEvent::MoaAggregating { aggregator, .. } => Some(AgentTracePresentation {
+            kind: event.kind().into(),
+            status: AgentTracePresentationStatus::InProgress,
+            content: format!("MoA aggregating ({aggregator})"),
+            duration_ms: None,
+        }),
+
+        AgentTraceEvent::MoaAdvisorSpend {
+            input_tokens,
+            output_tokens,
+            ..
+        } => Some(AgentTracePresentation {
+            kind: event.kind().into(),
+            status: AgentTracePresentationStatus::Info,
+            content: format!("MoA advisors spent {input_tokens}+{output_tokens} tok"),
+            duration_ms: None,
+        }),
+
+        AgentTraceEvent::MoaTurnTrace { .. } => {
+            /* persisted-only; no wire presentation */
+            None
+        }
     }
 }
 

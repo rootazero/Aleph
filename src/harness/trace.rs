@@ -122,6 +122,35 @@ pub enum LoopTraceEvent {
     /// `[verifier veto]` message injected for the model, but surfaced to the
     /// user stream so the interception reason is not a black box.
     VerifierVeto { iteration: usize, reason: String },
+    /// MoA advisor consultation result — one per advisor per fan-out
+    /// (cache-MISS iterations only). Emitted by the `MoaProvider` facade
+    /// through the run's TraceSink (MeteringProvider pattern — zero harness
+    /// logic; this enum is the carrier, not the brain).
+    MoaAdvisor {
+        index: usize,
+        count: usize,
+        /// `provider:model` of the advisor slot.
+        label: String,
+        text: String,
+    },
+    /// MoA fan-out complete; the aggregator (acting model) is being called.
+    MoaAggregating {
+        aggregator: String,
+        advisor_count: usize,
+    },
+    /// Summed advisor spend for one fan-out. Priced per-advisor at each
+    /// advisor's OWN model rate; kept out of `ProviderResponse.usage` so the
+    /// context gauge stays honest (spec §8).
+    MoaAdvisorSpend {
+        advisor_count: usize,
+        input_tokens: u32,
+        output_tokens: u32,
+        cost_usd: Option<f64>,
+    },
+    /// Full advisor I/O snapshot for one fan-out. Heavy; emitted only when
+    /// `[moa] save_traces = true`; persisted-only (never whitelisted onto
+    /// the wire). Opaque JSON keeps the payload shape free to evolve.
+    MoaTurnTrace { preset: String, payload: Value },
 }
 
 /// Kind of text stream. Live incremental text travels through the
@@ -330,6 +359,38 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
             },
             LoopTraceEvent::VerifierVeto { iteration, reason } => {
                 Self::VerifierVeto { iteration, reason }
+            }
+            LoopTraceEvent::MoaAdvisor {
+                index,
+                count,
+                label,
+                text,
+            } => Self::MoaAdvisor {
+                index,
+                count,
+                label,
+                text,
+            },
+            LoopTraceEvent::MoaAggregating {
+                aggregator,
+                advisor_count,
+            } => Self::MoaAggregating {
+                aggregator,
+                advisor_count,
+            },
+            LoopTraceEvent::MoaAdvisorSpend {
+                advisor_count,
+                input_tokens,
+                output_tokens,
+                cost_usd,
+            } => Self::MoaAdvisorSpend {
+                advisor_count,
+                input_tokens,
+                output_tokens,
+                cost_usd,
+            },
+            LoopTraceEvent::MoaTurnTrace { preset, payload } => {
+                Self::MoaTurnTrace { preset, payload }
             }
         }
     }

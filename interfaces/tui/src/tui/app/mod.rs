@@ -636,7 +636,12 @@ impl AppState {
             | AgentTraceEvent::McpScopeAttached { .. }
             | AgentTraceEvent::McpScopeCleaned { .. }
             | AgentTraceEvent::ProviderUsage { .. }
-            | AgentTraceEvent::ReactiveCompactionAttempted { .. } => {}
+            | AgentTraceEvent::ReactiveCompactionAttempted { .. }
+            // MoA fan-out moments — no TUI rendering yet (panel-only, Task 9).
+            | AgentTraceEvent::MoaAdvisor { .. }
+            | AgentTraceEvent::MoaAggregating { .. }
+            | AgentTraceEvent::MoaAdvisorSpend { .. }
+            | AgentTraceEvent::MoaTurnTrace { .. } => {}
         }
     }
 

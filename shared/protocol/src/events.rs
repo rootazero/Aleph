@@ -279,7 +279,10 @@ impl AgentTraceToolResult {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// `Eq` dropped: `MoaAdvisorSpend.cost_usd` is `Option<f64>`, and `f64` has no
+// `Eq` impl (NaN). `PartialEq` alone covers every actual use (`assert_eq!` in
+// tests); nothing in the codebase requires `AgentTraceEvent: Eq`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentTraceEvent {
     TurnStarted {
@@ -382,6 +385,36 @@ pub enum AgentTraceEvent {
         iteration: usize,
         reason: String,
     },
+    /// MoA advisor consultation result — one per advisor per fan-out
+    /// (cache-MISS iterations only). Mirrors `harness::trace::LoopTraceEvent::MoaAdvisor`.
+    MoaAdvisor {
+        index: usize,
+        count: usize,
+        /// `provider:model` of the advisor slot.
+        label: String,
+        text: String,
+    },
+    /// MoA fan-out complete; the aggregator (acting model) is being called.
+    MoaAggregating {
+        aggregator: String,
+        advisor_count: usize,
+    },
+    /// Summed advisor spend for one fan-out, priced per-advisor at each
+    /// advisor's OWN model rate (kept out of `ProviderResponse.usage` so the
+    /// context gauge stays honest, spec §8).
+    MoaAdvisorSpend {
+        advisor_count: usize,
+        input_tokens: u32,
+        output_tokens: u32,
+        cost_usd: Option<f64>,
+    },
+    /// Full advisor I/O snapshot for one fan-out. Heavy; persisted-only
+    /// (never whitelisted onto the wire). Opaque JSON keeps the payload
+    /// shape free to evolve.
+    MoaTurnTrace {
+        preset: String,
+        payload: Value,
+    },
 }
 
 impl AgentTraceEvent {
@@ -403,6 +436,10 @@ impl AgentTraceEvent {
             Self::ProviderUsage { .. } => "provider_usage",
             Self::ReactiveCompactionAttempted { .. } => "reactive_compaction_attempted",
             Self::VerifierVeto { .. } => "verifier_veto",
+            Self::MoaAdvisor { .. } => "moa_advisor",
+            Self::MoaAggregating { .. } => "moa_aggregating",
+            Self::MoaAdvisorSpend { .. } => "moa_advisor_spend",
+            Self::MoaTurnTrace { .. } => "moa_turn_trace",
         }
     }
 }
