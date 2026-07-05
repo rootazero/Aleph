@@ -28,7 +28,7 @@ MoA = 每个 Think 迭代前，把当前对话状态的「顾问视图」并行�
 3. **激活面 = 工具为主，选择器后置**：v1 不做 Panel 模型选择器 / `select_model` 的 "moa" 虚拟 provider 集成。
 4. **架构 = 方案 A 虚拟 Provider 门面**（备选 B 执行引擎注入、C 扩展 subagent 工具均被否：B 做不了 per-iteration 节奏且永久污染转写；C 不是移植，撞模型自我表扬问题）。
 5. **advisor 用量不混入 `ProviderResponse.usage`**（保 context gauge 诚实，防误触发压缩），另发汇总事件补可见性。
-6. **每回合显式模型覆盖（panel model_override）优先于 MoA**：用户显式选模型的回合跳过 MoA。
+6. **每回合显式模型覆盖（panel model_override）优先于 MoA**：用户显式选模型的回合跳过 MoA。**实施期修订（2026-07-05 验证）**：gateway 每回合 `model_override` 在 harness 路径上只进 `ModelResolved` 事件与健康上报，从不到达 runner Step 3（`FlowRequest` 无模型字段）——该覆盖今天对线上模型本就无效。故优先级实现为 MoA > select_model > agent pin > brain；model_override 交互留待其管道补通时挂钩。
 7. **默认 `fanout = "per_iteration"`** 对齐 hermes；`"user_turn"` 同步移植。
 8. **不硬编码默认 preset 模型**（hermes 内置 gpt-5.5/deepseek/opus 默认，Aleph 各安装 provider 不同）：无 preset 时报带指引的错误，工具对话式建 preset。
 9. **`/moa` 排除出 L0 fast path**（照 `/loop` 先例，`slash_command.rs:75-77`）：one-shot 要把余下文本当提示词发起完整 run。

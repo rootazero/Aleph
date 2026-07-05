@@ -410,6 +410,81 @@ A one-shot background task at server startup fetches each agent's real Agent
 Card (skills, description, version) and replaces the placeholder, so smart
 routing and `a2a_agents list` see real skill data.
 
+## MoA (Mixture of Agents)
+
+Aleph has two independent MoA surfaces. They are complementary, not
+overlapping — see the distinction at the end.
+
+### Continuous Advisory (this port)
+
+Ported from hermes-agent's `MoAClient` (spec:
+`docs/superpowers/specs/2026-07-05-moa-continuous-advisory-port-design.md`).
+`MoaProvider` (`src/providers/moa/provider.rs`) is a virtual `AiProvider`
+facade that sits in front of the acting model: each Think iteration it
+flattens the live conversation into a tool-free advisory view
+(`advisory_view.rs`, UTF-8-safe head+tail truncation, always ends on a user
+turn), fans it out in parallel to the preset's advisor models with a
+per-advisor timeout (fail-soft — a timed-out/erroring advisor degrades to a
+`[timeout after Ns]` / `[failed: ...]` note, never breaks the turn), attaches
+the combined guidance at the **end** of the aggregator's prompt
+(`prompts.rs::attach_guidance` — appending, not inserting mid-transcript,
+keeps the `[system][task][tool-history]` prefix byte-stable and KV-cache
+reusable), then calls the aggregator, which IS the acting model. The harness
+sees one ordinary provider (R10); none of this touches `src/harness/`.
+
+- **Config**: `[moa]` (`src/config/types/moa.rs`) — named presets
+  (`advisors: Vec<MoaSlot>` + `aggregator: MoaSlot`), `fanout` cadence
+  (`per_iteration` re-runs advisors every tool iteration, hermes default;
+  `user_turn` runs once per run and reuses the advice),
+  `advisor_timeout_secs`, `advisor_max_tokens`/temperatures,
+  `default_preset`, `save_traces`.
+- **Activation**: `moa` builtin tool (`src/builtin_tools/moa_manage.rs`,
+  operator-tier gated via `method_authz`) — `on`/`off`/`once`/`status`/
+  `list`/`set_preset`/`delete_preset`. Per-session state lives in
+  `src/providers/session_moa_handle.rs` (sticky vs one-shot; `take_for_run`
+  consumes a one-shot pref atomically — the single restore point, so
+  success, error and cancel paths all leave no state behind). `/moa
+  <prompt>` is a one-shot intercept on both the panel and channel dispatch
+  paths (excluded from the L0 fast path, like `/loop`).
+- **Precedence** (`runner_impl.rs` Step 3-MoA, run construction): MoA >
+  `select_model` session pick > agent `model_hint` pin > flow `BrainRef`
+  brain. An unusable preset (no `[moa]` section, unresolvable provider) fails
+  soft — the run falls back to the normal provider chain and logs a warning.
+- **Accounting**: advisor usage is metered per-slot (`MeteringProvider`
+  labelled `moa:<idx>:<provider>:<model>`) and kept OUT of
+  `ProviderResponse.usage` so the context gauge stays honest; a summed
+  `MoaAdvisorSpend` event restores visibility. Four `LoopTraceEvent`
+  variants — `MoaAdvisor`, `MoaAggregating`, `MoaAdvisorSpend` (live) and
+  `MoaTurnTrace` (persist-only, gated by `save_traces`) — are the harness's
+  only touchpoint (`src/harness/trace.rs`). The panel renders the three live
+  events inline as reasoning blocks (◇ 顾问 / ◆ 聚合 / ▫ 开销,
+  `interfaces/webchat/src/platform/wide/views/chat/events.rs`).
+
+### One-Shot Task Fan-Out (existing, previously undocumented)
+
+Independent of the port above, the `subagent` tool has always supported a
+Mixture-of-Agents shorthand: `proposer_models` (replicate the top-level
+`task` across models as parallel proposers) + `synthesize` (run ONE
+aggregator sub-agent that folds the proposals into a single answer) +
+`aggregator_model` (`src/agents/subagent_tool/` — see `parse.rs` /
+`loop_tool.rs`; Wang et al., "Mixture-of-Agents Enhances Large Language Model
+Capabilities", 2406.04692). `synthesize` requires a foreground batch
+(`run_in_background=false`) and returns `status: "moa_completed"` with a
+`synthesis` field plus the raw `results`.
+
+### The distinction
+
+The continuous port watches the *live conversation* and advises the acting
+model turn-by-turn via a raw provider call (no tool registry, no harness
+loop) — user-controlled (`/moa`, the `moa` tool) and cache-friendly by
+design. The `subagent` shorthand fans a *fresh, self-contained task* out to
+several full sub-agent harnesses and reduces once at the end — model-
+initiated (the LLM decides to call `subagent`), each proposer gets its own
+isolated context. Use the port for a standing second opinion on the
+conversation Aleph is already having; use `subagent`
+`proposer_models`+`synthesize` for several independent takes on a one-off
+task.
+
 ## Infrastructure: Autonomous Dispatcher
 
 The **`TeamDispatcher`** (`src/teams/dispatcher/`) drives a team's
