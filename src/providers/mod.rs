@@ -75,6 +75,7 @@ pub mod load_stats;
 pub mod message;
 pub mod metadata;
 pub mod metering;
+pub mod moa;
 pub mod mock;
 pub mod model_behaviors;
 pub mod model_catalog;
