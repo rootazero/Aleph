@@ -23,7 +23,7 @@ use crate::views::settings::{
 };
 use crate::views::subagent_tree::SubagentTree;
 use crate::views::tasks::TasksView;
-use crate::views::teams::TeamsView;
+use crate::views::teams::{TeamsTabState, TeamsView};
 use crate::views::usage::UsageView;
 // Layout components
 use crate::api::BehaviorConfigApi;
@@ -168,6 +168,18 @@ fn AppContent() -> impl IntoView {
     // (BrowsePane) share one `category` selection. Mirrors ChatState's
     // split-column sharing (see above).
     provide_context(StoreState::new());
+
+    // Teams tab state — lifted above both columns so the left-column
+    // `TeamsSidebar` and the main-area `TeamsView` share the same sub-tab
+    // and selected-team signals. Previously `TeamsView` provided this
+    // context itself, but `TeamsSidebar` is rendered in `ModeSidebar` (a
+    // sibling owner), so switching to Teams panicked with a missing context.
+    let teams_tab_state = TeamsTabState {
+        sub_tab: RwSignal::new(crate::views::teams::TeamsSubTab::Overview),
+        teams: RwSignal::new(Vec::new()),
+        selected_team_id: RwSignal::new(None),
+    };
+    provide_context(teams_tab_state);
 
     // Esc key: uncollapse sidebar when collapsed. Coexists with the
     // hotkey-installed Esc handler that closes the palette; both only act

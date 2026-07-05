@@ -51,12 +51,7 @@ pub struct TeamsTabState {
 #[must_use]
 pub fn TeamsView() -> impl IntoView {
     let dash = expect_context::<DashboardState>();
-    let tab_state = TeamsTabState {
-        sub_tab: RwSignal::new(TeamsSubTab::Overview),
-        teams: RwSignal::new(Vec::new()),
-        selected_team_id: RwSignal::new(None),
-    };
-    provide_context(tab_state);
+    let tab_state = expect_context::<TeamsTabState>();
 
     // Initial + reconnect load of the team list. Each successful load keeps the
     // active selection if still present, otherwise falls back to the first team.
