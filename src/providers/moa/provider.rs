@@ -585,6 +585,10 @@ mod tests {
         assert_eq!(parse_one_shot_command("/moa   "), None);
         assert_eq!(parse_one_shot_command("hello"), None);
         assert_eq!(parse_one_shot_command("/moab x"), None);
+        // Nested slash command as the remainder: still returned as the prompt
+        // (the caller decides not to arm MoA for it — see the guard in
+        // execute.rs / slash_command.rs that checks `starts_with('/')`).
+        assert_eq!(parse_one_shot_command("/moa /help"), Some("/help"));
     }
 
     #[test]

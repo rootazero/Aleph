@@ -146,7 +146,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // constructed further down the same `execute()` call.
                 if mode["tool_id"].as_str() == Some("moa") {
                     let args = mode["args"].as_str().unwrap_or("");
-                    if !args.is_empty() {
+                    // Mirrors the guard in `execute.rs`'s Panel/CLI intercept: if
+                    // `args` is itself a slash command, do not arm MoA — a nested
+                    // command can resolve as its own fast path before run
+                    // construction, so `take_for_run` never consumes the pref and
+                    // it leaks into the user's next turn.
+                    if !args.is_empty() && !args.trim_start().starts_with('/') {
                         crate::providers::session_moa_handle::set_session_moa(
                             &request.session_key.to_key_string(),
                             None,

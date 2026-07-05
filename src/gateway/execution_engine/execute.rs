@@ -237,11 +237,19 @@ where
             // is written here, before `try_resolve_slash_command` and well before
             // the run is constructed further down this function.
             if let Some(prompt) = crate::providers::moa::parse_one_shot_command(&request.input) {
-                crate::providers::session_moa_handle::set_session_moa(
-                    &request.session_key.to_key_string(),
-                    None,
-                    true,
-                );
+                // If the remainder is ITSELF a slash command (e.g. `/moa /help`),
+                // do not arm MoA: after the rewrite below, `try_resolve_slash_command`
+                // can resolve it as its own fast path that returns before run
+                // construction, so `take_for_run` never consumes the pref and it
+                // leaks into the user's next turn. Still strip the `/moa ` prefix
+                // so the inner command resolves exactly as if typed directly.
+                if !prompt.trim_start().starts_with('/') {
+                    crate::providers::session_moa_handle::set_session_moa(
+                        &request.session_key.to_key_string(),
+                        None,
+                        true,
+                    );
+                }
                 request.input = prompt.to_string();
             }
 
