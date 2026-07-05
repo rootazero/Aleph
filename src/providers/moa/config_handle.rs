@@ -5,7 +5,7 @@
 //! run construction. Avoids threading a Config handle through
 //! `AgentHarnessRunner` (which holds only boot-time snapshots by design).
 
-use crate::config::types::moa::MoaToml;
+use crate::config::MoaToml;
 use crate::sync_primitives::RwLock;
 use std::sync::OnceLock;
 

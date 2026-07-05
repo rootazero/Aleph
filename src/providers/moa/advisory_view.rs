@@ -125,7 +125,6 @@ pub(crate) fn build_advisory_view(messages: &[UnifiedMessage]) -> Vec<UnifiedMes
             }
             // #[non_exhaustive]: future variants carry no advisory meaning
             // until explicitly handled.
-            _ => {}
         }
     }
 
@@ -152,7 +151,6 @@ pub(crate) fn view_signature(view: &[UnifiedMessage]) -> u64 {
             UnifiedMessage::User { content } => ("user", content),
             UnifiedMessage::Assistant { content } => ("assistant", content),
             UnifiedMessage::ToolResult { content, .. } => ("tool", content),
-            _ => continue,
         };
         role.hash(&mut hasher);
         text_of(content).hash(&mut hasher);

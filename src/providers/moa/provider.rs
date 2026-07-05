@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::config::types::moa::{MoaFanout, MoaToml};
+use crate::config::{MoaFanout, MoaToml};
 use crate::error::Result;
 use crate::harness::trace::LoopTraceEvent;
 use crate::harness::TraceSink;
@@ -609,7 +609,7 @@ aggregator = { provider = "ghost", model = "n" }
             &named,
             None,
         )
-        .unwrap_err();
+        .err().unwrap();
         assert!(err.contains("ghost"));
     }
 }
