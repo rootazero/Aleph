@@ -274,6 +274,18 @@ pub async fn handle_usage(
     }
     .cache_hit_ratio();
 
+    // Step 4 — MoA advisor spend (round-2 B6). Advisors are metered under
+    // synthetic `moa:<idx>:<provider>:<model>` agent ids that never appear in
+    // a team's member list, so `aggregate_usage_by_agents` above can't see
+    // them. Roll them into one dedicated bucket instead of leaving advisor
+    // spend invisible. Errors are treated the same as "no advisor usage" —
+    // this is a supplementary field, not load-bearing for the response.
+    let moa_advisors = state_db
+        .aggregate_moa_advisor_usage(params.since, params.until)
+        .await
+        .ok()
+        .flatten();
+
     JsonRpcResponse::success(
         request.id,
         json!({
@@ -291,6 +303,7 @@ pub async fn handle_usage(
                 "cache_hit_ratio": cache_hit_ratio,
             },
             "per_agent": per_agent,
+            "moa_advisors": moa_advisors,
         }),
     )
 }
