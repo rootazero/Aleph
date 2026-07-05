@@ -1008,5 +1008,59 @@ pub async fn handle_catalog(
         _ => true, // "all" or unrecognised — return everything chat-capable
     });
 
+    // Round-2 E3: MoA presets ride the picker as a pseudo-provider row.
+    // Selecting one sends model_override {provider:"moa", model:<preset>},
+    // which the chat.send handler converts into a session MoA activation.
+    // Appended AFTER the view retain: this synthetic row is always shown
+    // when presets exist (it has no credential of its own).
+    if let Some(moa_cfg) = crate::providers::moa::get_moa_config() {
+        let mut names: Vec<String> = moa_cfg
+            .presets
+            .iter()
+            .filter(|(_, p)| p.enabled)
+            .map(|(n, _)| n.clone())
+            .collect();
+        names.sort();
+        if !names.is_empty() {
+            let default_model = moa_cfg
+                .default_preset
+                .clone()
+                .filter(|d| names.contains(d))
+                .unwrap_or_else(|| names[0].clone());
+            items.push(CatalogEntryView {
+                id: "moa".to_string(),
+                display_name: "Mixture of Agents".to_string(),
+                default_model,
+                base_url: "moa://virtual".to_string(),
+                protocol: "moa".to_string(),
+                color: "#8b5cf6".to_string(),
+                homepage: None,
+                notes: Some(
+                    "MoA advisory presets — selecting one activates advisor fan-out \
+                     for this session"
+                        .to_string(),
+                ),
+                signup_url: None,
+                fallback_models: Vec::new(),
+                default_aux_model: None,
+                aliases: Vec::new(),
+                modalities: vec!["chat".to_string()],
+                models: names,
+                has_api_key: true,
+                verified: true,
+                enabled: true,
+                is_default: false,
+                // No single capability/cost profile applies across a preset's
+                // mixed advisors + aggregator; leave both absent rather than
+                // guess from one slot.
+                capabilities: None,
+                cost: None,
+                // Virtual multiplexer, not a reachable host — conservatively
+                // "cloud" like any other absent/unparseable base_url.
+                endpoint: "cloud".to_string(),
+            });
+        }
+    }
+
     JsonRpcResponse::success(request.id, json!({ "items": items }))
 }

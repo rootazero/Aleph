@@ -413,6 +413,73 @@ async fn catalog_unknown_view_treats_as_all() {
     assert!(items.len() >= 20);
 }
 
+// ============================================================================
+// Round-2 E3: MoA presets ride providers.catalog as a "moa" pseudo-provider
+// row. `[moa]` config lives in a process-global slot (`config_handle`), so
+// these tests take `moa_config_test_lock()` — the same guard
+// `builtin_tools::moa_manage`'s tests use — to serialize against other tests
+// that mutate it.
+// ============================================================================
+
+fn solo_moa_preset() -> crate::config::MoaPreset {
+    crate::config::MoaPreset {
+        enabled: true,
+        advisors: vec![crate::config::MoaSlot {
+            provider: "openai".to_string(),
+            model: "gpt-5".to_string(),
+        }],
+        aggregator: crate::config::MoaSlot {
+            provider: "anthropic".to_string(),
+            model: "claude-opus-4".to_string(),
+        },
+        fanout: crate::config::MoaFanout::default(),
+        advisor_timeout_secs: 120,
+        advisor_max_tokens: None,
+        advisor_temperature: None,
+        aggregator_temperature: None,
+    }
+}
+
+#[tokio::test]
+async fn catalog_includes_moa_pseudo_entry_when_presets_enabled() {
+    let _guard = crate::providers::moa::config_handle::moa_config_test_lock();
+    let mut moa = crate::config::MoaToml::default();
+    moa.presets.insert("deep".to_string(), solo_moa_preset());
+    moa.default_preset = Some("deep".to_string());
+    crate::providers::moa::store_moa_config(Some(moa));
+
+    let config = Arc::new(RwLock::new(Config::default()));
+    let vault = test_vault();
+    let response = handle_catalog(catalog_request(Some("all")), config, vault).await;
+    let items = items_array(&response);
+    let entry = items
+        .iter()
+        .find(|e| e["id"] == "moa")
+        .expect("moa pseudo-entry must appear when an enabled preset exists");
+    assert_eq!(entry["display_name"], "Mixture of Agents");
+    assert_eq!(entry["default_model"], "deep");
+    assert_eq!(entry["models"], json!(["deep"]));
+    assert_eq!(entry["has_api_key"], true);
+    assert_eq!(entry["protocol"], "moa");
+
+    crate::providers::moa::store_moa_config(None);
+}
+
+#[tokio::test]
+async fn catalog_omits_moa_entry_without_moa_config() {
+    let _guard = crate::providers::moa::config_handle::moa_config_test_lock();
+    crate::providers::moa::store_moa_config(None);
+
+    let config = Arc::new(RwLock::new(Config::default()));
+    let vault = test_vault();
+    let response = handle_catalog(catalog_request(Some("all")), config, vault).await;
+    let items = items_array(&response);
+    assert!(
+        !items.iter().any(|e| e["id"] == "moa"),
+        "no moa entry expected when [moa] config is absent"
+    );
+}
+
 // Regression: providers.update must hot-reload the runtime provider instance
 // so protocol/base_url/model changes take effect without a daemon restart.
 #[tokio::test]

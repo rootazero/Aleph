@@ -366,6 +366,11 @@ impl AgentRunManager {
             (None, _, _) => None,
         };
 
+        // Round-2 E3: a picker selection of the "moa" pseudo-provider (from
+        // `providers.catalog`) arms session MoA instead of riding as a
+        // per-turn override — see `apply_moa_selector_semantics`.
+        let model_override = apply_moa_selector_semantics(&session_key_str, model_override);
+
         let request = RunRequest {
             run_id: run_id.clone(),
             input: params.input.clone(),
@@ -487,6 +492,35 @@ impl AgentRunManager {
     #[must_use]
     pub fn running_sessions(&self) -> Vec<String> {
         self.execution_adapter.running_sessions()
+    }
+}
+
+/// Round-2 E3: a picker selection of the "moa" pseudo-provider arms session
+/// MoA (sticky) instead of riding as a per-turn model override. Returns the
+/// override that should continue down the run path (None when consumed).
+/// An explicit NON-moa override clears any MoA sticky — the selector is one
+/// exclusive slot. No override touches nothing (bare sends must not disturb
+/// an armed MoA session).
+fn apply_moa_selector_semantics(
+    session_key: &str,
+    model_override: Option<crate::gateway::model_override::ModelOverride>,
+) -> Option<crate::gateway::model_override::ModelOverride> {
+    use crate::gateway::model_override::ModelOverride;
+    match model_override {
+        Some(ModelOverride::Qualified { provider, model }) if provider == "moa" => {
+            crate::providers::session_moa_handle::set_session_moa(
+                session_key,
+                Some(model),
+                false,
+            );
+            crate::providers::session_model_handle::clear_session_model(session_key);
+            None
+        }
+        Some(other) => {
+            crate::providers::session_moa_handle::clear_session_moa(session_key);
+            Some(other)
+        }
+        None => None,
     }
 }
 
@@ -1146,5 +1180,43 @@ mod tests {
             &["run-under-test".to_string()],
             "cancel_run must forward the run_id to ExecutionAdapter::cancel"
         );
+    }
+
+    /// Round-2 E3: selecting the "moa" pseudo-provider row in the picker
+    /// arms sticky session MoA and is consumed (no override rides the run
+    /// path); an explicit non-moa override clears the sticky instead; a bare
+    /// send (no override) leaves an armed session alone.
+    #[test]
+    fn moa_override_arms_session_and_is_consumed() {
+        use crate::gateway::model_override::ModelOverride;
+        let key = "test:moa:selector";
+        let out = apply_moa_selector_semantics(
+            key,
+            Some(ModelOverride::Qualified {
+                provider: "moa".into(),
+                model: "deep".into(),
+            }),
+        );
+        assert!(out.is_none());
+        let pref = crate::providers::session_moa_handle::get_session_moa(key).unwrap();
+        assert_eq!(pref.preset.as_deref(), Some("deep"));
+        assert!(!pref.one_shot);
+
+        // Non-moa override clears the sticky.
+        let out = apply_moa_selector_semantics(
+            key,
+            Some(ModelOverride::Qualified {
+                provider: "openai".into(),
+                model: "gpt-5".into(),
+            }),
+        );
+        assert!(out.is_some());
+        assert!(crate::providers::session_moa_handle::get_session_moa(key).is_none());
+
+        // No override leaves state alone.
+        crate::providers::session_moa_handle::set_session_moa(key, None, false);
+        assert!(apply_moa_selector_semantics(key, None).is_none());
+        assert!(crate::providers::session_moa_handle::get_session_moa(key).is_some());
+        crate::providers::session_moa_handle::clear_session_moa(key);
     }
 }
