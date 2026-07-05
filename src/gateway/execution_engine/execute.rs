@@ -411,6 +411,21 @@ where
                     if let Some(run) = runs.get_mut(&run_id) {
                         run.state = RunState::Running;
                     }
+                    // Round-2 B7: a `/moa <prompt>` arriving through a channel
+                    // reaches this fallthrough with the RAW "/moa ..." text
+                    // still in request.input (the channel-path intercept can't
+                    // mutate its borrow). Strip the prefix here — mirroring
+                    // the Panel/CLI intercept — so the LLM sees the prompt,
+                    // not the command. The nested-slash guard stays aligned
+                    // with the arming site: a slash remainder was never armed,
+                    // strip only the "/moa " wrapper and let it resolve.
+                    if reason == "moa one-shot" {
+                        if let Some(prompt) =
+                            crate::providers::moa::parse_one_shot_command(&request.input)
+                        {
+                            request.input = prompt.to_string();
+                        }
+                    }
                     warn!(
                         run_id = %run_id,
                         reason = %reason,
