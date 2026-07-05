@@ -193,6 +193,42 @@ pub(crate) fn apply_trace_event(
             );
             workspace.note_activity();
         }
+        // MoA (Mixture-of-Agents) advisor fan-out — one event per advisor per
+        // consultation. Rendered as a reasoning block so it appears inline
+        // with tool_summary/verifier_veto narration (same sink, live +
+        // replay both covered).
+        "moa_advisor" => {
+            let index = trace_event.get("index").and_then(serde_json::Value::as_u64).unwrap_or(0);
+            let count = trace_event.get("count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+            let label = trace_event.get("label").and_then(|v| v.as_str()).unwrap_or("");
+            let text = trace_event.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            append_reasoning(chat, &format!("◇ 顾问 {index}/{count} — {label}\n{text}"));
+            workspace.note_activity();
+        }
+        // Fan-out complete; the aggregator (acting model) is being called.
+        "moa_aggregating" => {
+            let aggregator = trace_event.get("aggregator").and_then(|v| v.as_str()).unwrap_or("");
+            let n = trace_event
+                .get("advisor_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            append_reasoning(chat, &format!("◆ MoA 聚合中（{aggregator}，{n} 位顾问）"));
+        }
+        // Summed advisor spend for one fan-out (priced separately from the
+        // aggregator's own usage — see LoopTraceEvent::MoaAdvisorSpend).
+        "moa_advisor_spend" => {
+            let input = trace_event
+                .get("input_tokens")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let output = trace_event
+                .get("output_tokens")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let cost = trace_event.get("cost_usd").and_then(serde_json::Value::as_f64);
+            let cost_str = cost.map_or(String::new(), |c| format!("，约 ${c:.4}"));
+            append_reasoning(chat, &format!("▫ 顾问开销：{input}+{output} tokens{cost_str}"));
+        }
         _ => {}
     }
 }
