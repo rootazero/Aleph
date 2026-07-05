@@ -372,6 +372,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     } else {
         session_store
     };
+    // Keep a clone reachable at the boot-scan wiring site below for the
+    // ProjectionReconciler; `session_store` itself is moved into downstream
+    // subsystems below.
+    let session_store_for_reconcile = session_store.clone();
     // Phase 5 Task 9: build the SessionService unconditionally so the
     // Orchestrator (`initialize_orchestrator` below) gets wired even when
     // the chosen SessionStore backend is `file`. The `session_events`
@@ -2175,42 +2179,61 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    // Spawn the boot-scan ResumeCoordinator (after cron + heartbeat, so the
-    // execution subsystems exist). Detached — boot is NOT blocked on it.
+    // Boot-scan: ProjectionReconciler (display back-fill) THEN ResumeCoordinator
+    // (agent re-execution), in one ordered detached task so back-filled old
+    // rows are appended before re-trigger appends new ones (the file backend's
+    // get_history returns append order). The reconciler runs unconditionally;
+    // only re-trigger is gated by [resume] enabled. Detached — boot is NOT
+    // blocked on it.
     {
         let app_cfg = app_config_for_channels.read().await;
         let resume_cfg = app_cfg.resume.clone();
         drop(app_cfg);
-        if !resume_cfg.enabled {
-            if !args.daemon {
-                println!("Resume coordinator: disabled ([resume] enabled = false)");
-            }
-        } else if let (Some(event_store), Some(exec_adapter), Some(registry)) = (
-            session_event_store_for_resume.clone(),
-            agent_result.execution_adapter.clone(),
-            agent_result.agent_registry.clone(),
-        ) {
-            let coordinator = alephcore::gateway::ResumeCoordinator::new(
-                event_store,
-                resume_cfg,
-                exec_adapter,
-                registry,
+        if let Some(event_store) = session_event_store_for_resume.clone() {
+            let reconciler = alephcore::gateway::ProjectionReconciler::new(
+                event_store.clone(),
+                session_store_for_reconcile.clone(),
+            );
+            let resume_collaborators = (
+                agent_result.execution_adapter.clone(),
+                agent_result.agent_registry.clone(),
             );
             tokio::spawn(async move {
-                let report = coordinator.resume_interrupted_runs().await;
+                let rr = reconciler.reconcile_interrupted().await;
                 tracing::info!(
-                    scanned = report.scanned,
-                    resumed = report.resumed,
-                    abandoned = report.abandoned,
-                    skipped = report.skipped,
-                    "ResumeCoordinator boot scan finished"
+                    scanned = rr.scanned,
+                    reconciled = rr.reconciled,
+                    rows_filled = rr.rows_filled,
+                    skipped_clean = rr.skipped_clean,
+                    skipped_legacy = rr.skipped_legacy,
+                    "ProjectionReconciler boot scan finished"
                 );
+                if resume_cfg.enabled {
+                    if let (Some(exec_adapter), Some(registry)) = resume_collaborators {
+                        let coordinator = alephcore::gateway::ResumeCoordinator::new(
+                            event_store,
+                            resume_cfg,
+                            exec_adapter,
+                            registry,
+                        );
+                        let report = coordinator.resume_interrupted_runs().await;
+                        tracing::info!(
+                            scanned = report.scanned,
+                            resumed = report.resumed,
+                            abandoned = report.abandoned,
+                            skipped = report.skipped,
+                            "ResumeCoordinator boot scan finished"
+                        );
+                    }
+                } else {
+                    tracing::debug!("Resume coordinator: disabled ([resume] enabled = false)");
+                }
             });
             if !args.daemon {
-                println!("Resume coordinator: boot scan spawned");
+                println!("Projection reconciler + resume: boot scan spawned");
             }
         } else if !args.daemon {
-            println!("Resume coordinator: skipped (no session event store / execution adapter)");
+            println!("Projection reconciler + resume: skipped (no session event store)");
         }
     }
 

@@ -101,6 +101,7 @@ pub mod lane;
 pub mod media;
 pub mod method_authz;
 pub mod openai_api;
+pub mod projection_reconciler;
 pub mod rate_limiter;
 pub mod restart_backoff;
 pub mod resume_coordinator;
@@ -172,6 +173,7 @@ pub use agent_env::{
 };
 pub use context::GatewayContext;
 pub use inter_agent_policy::AgentToAgentPolicy;
+pub use projection_reconciler::{ProjectionReconciler, ReconcileReport};
 pub use resume_coordinator::{ResumeCoordinator, ResumeReport};
 pub use run_event_bus::{
     wait_for_run_end, ActiveRunHandle, QueueError, RunEndResult, RunEvent,

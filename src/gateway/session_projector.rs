@@ -37,12 +37,16 @@ const QUEUE_CAP: usize = 4096;
 
 /// Per-turn accumulator for token counts and model identity.
 #[derive(Default)]
-struct TurnAccum {
+pub(crate) struct TurnAccum {
     model: Option<String>,
     provider: Option<String>,
     tin: i64,
     tout: i64,
 }
+
+/// Per-turn token/model accumulator map, keyed by `(session_key, turn_id)`.
+/// Shared by the live drain and the boot-time `ProjectionReconciler`.
+pub(crate) type TurnAccums = HashMap<(String, TurnId), TurnAccum>;
 
 /// Materialises a session event stream into the `messages` store.
 pub struct MessageProjector {
@@ -57,112 +61,140 @@ impl MessageProjector {
     pub fn new(store: Arc<dyn SessionStore>) -> Arc<Self> {
         let (tx, mut rx) = mpsc::channel::<(SessionId, SessionEventRecord)>(QUEUE_CAP);
         tokio::spawn(async move {
-            let mut accums: HashMap<(String, TurnId), TurnAccum> = HashMap::new();
+            let mut accums: TurnAccums = TurnAccums::new();
             while let Some((id, rec)) = rx.recv().await {
-                Self::project_one(&store, &mut accums, &id, &rec).await;
+                project_event(&store, &mut accums, &id, &rec, None).await;
             }
         });
         Arc::new(Self { tx })
     }
+}
 
-    async fn project_one(
-        store: &Arc<dyn SessionStore>,
-        accums: &mut HashMap<(String, TurnId), TurnAccum>,
-        id: &SessionId,
-        rec: &SessionEventRecord,
-    ) {
-        let key = id.to_key_string();
-        match &rec.event {
-            SessionEvent::LlmCallStarted {
-                turn_id,
-                provider,
-                model,
-                ..
-            } => {
-                let a = accums.entry((key, *turn_id)).or_default();
-                a.model = Some(model.clone());
-                a.provider = Some(provider.clone());
+/// Project one session event into `store` — the single source of projection
+/// truth shared by the live drain (`materialized_through = None`) and the
+/// boot-time `ProjectionReconciler` (`materialized_through = Some(watermark)`).
+///
+/// When `rec.seq <= materialized_through`, a row-producing event still advances
+/// the accumulator but its WRITE is suppressed: that row is already in the
+/// projection, so re-projecting it is a no-op (reconcile idempotency, and
+/// dup-avoidance for mixed/legacy rows below the watermark). The reconciler
+/// replays the *full* event log with the watermark set to the last materialised
+/// source seq, so a turn's token accumulator sees every `LlmCall*` event even
+/// when the turn straddles the watermark, while its earlier rows stay
+/// suppressed.
+pub(crate) async fn project_event(
+    store: &Arc<dyn SessionStore>,
+    accums: &mut TurnAccums,
+    id: &SessionId,
+    rec: &SessionEventRecord,
+    materialized_through: Option<u64>,
+) {
+    let key = id.to_key_string();
+    let suppress = materialized_through.is_some_and(|w| rec.seq <= w);
+    match &rec.event {
+        SessionEvent::LlmCallStarted {
+            turn_id,
+            provider,
+            model,
+            ..
+        } => {
+            let a = accums.entry((key, *turn_id)).or_default();
+            a.model = Some(model.clone());
+            a.provider = Some(provider.clone());
+        }
+        SessionEvent::LlmCallEnded {
+            turn_id,
+            tokens_in,
+            tokens_out,
+            ..
+        } => {
+            let a = accums.entry((key, *turn_id)).or_default();
+            a.tin += *tokens_in as i64;
+            a.tout += *tokens_out as i64;
+        }
+        SessionEvent::AssistantMessage {
+            turn_id, content, ..
+        } => {
+            // Consume the turn's accumulator regardless of suppression so
+            // accumulator state advances identically to the live drain.
+            let a = accums.remove(&(key.clone(), *turn_id)).unwrap_or_default();
+            if suppress {
+                return;
             }
-            SessionEvent::LlmCallEnded {
-                turn_id,
-                tokens_in,
-                tokens_out,
-                ..
-            } => {
-                let a = accums.entry((key, *turn_id)).or_default();
-                a.tin += *tokens_in as i64;
-                a.tout += *tokens_out as i64;
+            if let Err(e) = store
+                .append_message(
+                    id,
+                    MessageRecord {
+                        id: format!("{key}:{}", rec.seq),
+                        role: "assistant".into(),
+                        content: content.text.clone(),
+                        timestamp: rec.created_at_ms,
+                        metadata: None,
+                        input_tokens: a.tin,
+                        output_tokens: a.tout,
+                        model: a.model,
+                        model_provider: a.provider,
+                        tool_call_id: None,
+                        tool_name: None,
+                    },
+                )
+                .await
+            {
+                tracing::warn!(error = %e, "projector assistant append failed");
             }
-            SessionEvent::AssistantMessage {
-                turn_id, content, ..
-            } => {
-                let a = accums.remove(&(key.clone(), *turn_id)).unwrap_or_default();
+        }
+        SessionEvent::AssistantRunMeta {
+            run_id,
+            context_tokens,
+            context_window,
+            total_tokens,
+            ..
+        } => {
+            // A run-meta at/below the watermark already stamped its assistant
+            // row during the live drain; the reconciler's full-log replay must
+            // not re-stamp it (keeps suppression a complete no-op).
+            if suppress {
+                return;
+            }
+            let occupancy = crate::gateway::execution_engine::helpers::RunContextOccupancy {
+                context_tokens: *context_tokens,
+                context_window: *context_window,
+                total_tokens: *total_tokens,
+            };
+            if let Some(meta) = crate::gateway::agent_instance::build_message_metadata(
+                Some(run_id),
+                Some(occupancy),
+            ) {
+                if let Err(e) = store.stamp_last_assistant_metadata(id, &meta).await {
+                    tracing::warn!(error = %e, "projector: stamp run-meta failed");
+                }
+            }
+        }
+        other => {
+            if suppress {
+                return;
+            }
+            if let Some(row) = project_row(other) {
                 if let Err(e) = store
                     .append_message(
                         id,
                         MessageRecord {
                             id: format!("{key}:{}", rec.seq),
-                            role: "assistant".into(),
-                            content: content.text.clone(),
+                            role: row.role,
+                            content: row.text,
                             timestamp: rec.created_at_ms,
                             metadata: None,
-                            input_tokens: a.tin,
-                            output_tokens: a.tout,
-                            model: a.model,
-                            model_provider: a.provider,
-                            tool_call_id: None,
-                            tool_name: None,
+                            input_tokens: 0,
+                            output_tokens: 0,
+                            model: None,
+                            model_provider: None,
+                            tool_call_id: row.tool_call_id,
+                            tool_name: row.tool_name,
                         },
                     )
                     .await
                 {
-                    tracing::warn!(error = %e, "projector assistant append failed");
-                }
-            }
-            SessionEvent::AssistantRunMeta {
-                run_id,
-                context_tokens,
-                context_window,
-                total_tokens,
-                ..
-            } => {
-                let occupancy = crate::gateway::execution_engine::helpers::RunContextOccupancy {
-                    context_tokens: *context_tokens,
-                    context_window: *context_window,
-                    total_tokens: *total_tokens,
-                };
-                if let Some(meta) = crate::gateway::agent_instance::build_message_metadata(
-                    Some(run_id),
-                    Some(occupancy),
-                ) {
-                    if let Err(e) = store.stamp_last_assistant_metadata(id, &meta).await {
-                        tracing::warn!(error = %e, "projector: stamp run-meta failed");
-                    }
-                }
-            }
-            other => {
-                if let Some(row) = project_row(other) {
-                    if let Err(e) = store
-                        .append_message(
-                            id,
-                            MessageRecord {
-                                id: format!("{key}:{}", rec.seq),
-                                role: row.role,
-                                content: row.text,
-                                timestamp: rec.created_at_ms,
-                                metadata: None,
-                                input_tokens: 0,
-                                output_tokens: 0,
-                                model: None,
-                                model_provider: None,
-                                tool_call_id: row.tool_call_id,
-                                tool_name: row.tool_name,
-                            },
-                        )
-                        .await
-                    {
-                        tracing::warn!(error = %e, "projector append failed");
-                    }
+                    tracing::warn!(error = %e, "projector append failed");
                 }
             }
         }
@@ -463,5 +495,38 @@ mod tests {
                 .any(|m| m.role == "tool" && m.tool_name.as_deref() == Some("bash_exec")),
             "missing tool row with tool_name=bash_exec"
         );
+    }
+
+    #[tokio::test]
+    async fn project_event_suppresses_already_materialised_seq() {
+        let temp = tempdir().unwrap();
+        let config = SessionManagerConfig {
+            db_path: temp.path().join("suppress.db"),
+            max_messages: 10_000,
+            compaction_keep: 5_000,
+            ..Default::default()
+        };
+        let manager = SessionManager::new(config).unwrap();
+        let id = SessionId::ephemeral("suppress");
+        manager.get_or_create(&id).await.unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(manager);
+
+        let tid = uuid::Uuid::new_v4();
+        let mut accums = TurnAccums::new();
+        // Everything at or below seq 1 is already materialised.
+        let watermark = Some(1u64);
+
+        // seq 1 is at the watermark → its write is suppressed.
+        project_event(&store, &mut accums, &id, &rec(1, user_msg(tid)), watermark).await;
+        assert!(
+            store.get_history(&id, None).await.unwrap().is_empty(),
+            "a materialised seq must not be re-written"
+        );
+
+        // seq 2 is above the watermark → written.
+        project_event(&store, &mut accums, &id, &rec(2, user_msg(tid)), watermark).await;
+        let rows = store.get_history(&id, None).await.unwrap();
+        assert_eq!(rows.len(), 1, "an unseen seq must be written");
+        assert_eq!(rows[0].role, "user");
     }
 }
