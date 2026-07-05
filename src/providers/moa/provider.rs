@@ -54,6 +54,12 @@ pub struct MoaProvider {
     aggregator_temperature: Option<f32>,
     save_traces: bool,
     sink: Option<Arc<dyn TraceSink>>,
+    /// Fan-out cache. INVARIANT: a MoaProvider is run-scoped and the Think
+    /// loop drives `process()` strictly sequentially, so the read (cache
+    /// decision) and write (post-fan-out) never race. If an instance were
+    /// ever shared across concurrent calls, two MISSes could both fan out
+    /// (duplicate advisor spend, last-writer-wins) — the check-then-act gap
+    /// is deliberate, not an oversight (round-2 R3).
     cache: Mutex<Option<AdvisorCache>>,
 }
 
@@ -262,10 +268,33 @@ impl AiProvider for MoaProvider {
                     });
                 }
 
-                *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(AdvisorCache {
-                    signature: sig,
-                    outcomes: outcomes.clone(),
-                });
+                {
+                    let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+                    // R3 cache invariant guard: this branch only runs after a
+                    // MISS was decided above without holding this lock across
+                    // the fan-out `.await` (see invariant doc on `cache`).
+                    // A MISS means, for `PerIteration`, the prior entry's
+                    // signature (if any) differed from `sig`; for
+                    // `UserTurn`, that no entry existed yet. Finding either
+                    // condition broken here means another `process()` call
+                    // wrote the cache while this one was fanning out — the
+                    // run-scoped, strictly sequential invariant was violated.
+                    debug_assert!(
+                        match self.fanout {
+                            MoaFanout::PerIteration => {
+                                guard.as_ref().is_none_or(|c| c.signature != sig)
+                            }
+                            MoaFanout::UserTurn => guard.is_none(),
+                        },
+                        "MoaProvider cache invariant violated: a concurrent \
+                         process() call raced this fan-out and wrote the \
+                         cache before this write-back"
+                    );
+                    *guard = Some(AdvisorCache {
+                        signature: sig,
+                        outcomes: outcomes.clone(),
+                    });
+                }
                 outcomes
             };
 

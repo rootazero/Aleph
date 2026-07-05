@@ -23,20 +23,31 @@ pub(crate) const ADVISORY_INSTRUCTION: &str =
      what risks or mistakes you see, and how the acting agent should \
      proceed.]";
 
-/// Head+tail preview with a `[... N chars omitted ...]` marker. UTF-8 safe.
+/// Head+tail preview with a `[... N chars omitted ...]` marker. UTF-8 safe:
+/// slices at char boundaries found via char_indices (no per-char String
+/// collection; one full count pass + two partial boundary scans).
 pub(crate) fn truncate_tool_result(text: &str, budget: usize) -> String {
     let total = text.chars().count();
     if total <= budget {
         return text.to_string();
     }
     let half = budget / 2;
-    let head: String = text.chars().take(half).collect();
-    let tail: String = {
-        let skip = total - half;
-        text.chars().skip(skip).collect()
-    };
+    // Byte offset AFTER the half-th char (head end boundary).
+    let head_end = text
+        .char_indices()
+        .nth(half)
+        .map_or(text.len(), |(i, _)| i);
+    // Byte offset of the (total-half)-th char (tail start boundary).
+    let tail_start = text
+        .char_indices()
+        .nth(total - half)
+        .map_or(text.len(), |(i, _)| i);
     let omitted = total - 2 * half;
-    format!("{head}\n[... {omitted} chars omitted ...]\n{tail}")
+    format!(
+        "{}\n[... {omitted} chars omitted ...]\n{}",
+        &text[..head_end],
+        &text[tail_start..]
+    )
 }
 
 fn text_of(blocks: &[ContentBlock]) -> String {
@@ -143,7 +154,9 @@ pub(crate) fn build_advisory_view(messages: &[UnifiedMessage]) -> Vec<UnifiedMes
 }
 
 /// Stable signature of the advisory view — the fan-out cache key. Uses the
-/// std hasher (cache dedup only, not security).
+/// std hasher (cache dedup only, not security). Hashes text parts directly
+/// (no intermediate join allocation); deliberately ignores cache_control
+/// marks so E1's in-place breakpoint marking never perturbs the cache key.
 pub(crate) fn view_signature(view: &[UnifiedMessage]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for msg in view {
@@ -153,7 +166,17 @@ pub(crate) fn view_signature(view: &[UnifiedMessage]) -> u64 {
             UnifiedMessage::ToolResult { content, .. } => ("tool", content),
         };
         role.hash(&mut hasher);
-        text_of(content).hash(&mut hasher);
+        for block in content {
+            match block {
+                ContentBlock::Text { text, .. } => {
+                    if !text.is_empty() {
+                        text.hash(&mut hasher);
+                    }
+                }
+                ContentBlock::Json { value } => value.to_string().hash(&mut hasher),
+                _ => {}
+            }
+        }
     }
     hasher.finish()
 }
@@ -266,5 +289,20 @@ mod tests {
         ];
         let view = build_advisory_view(&msgs);
         assert_eq!(view_texts(&view).len(), 1);
+    }
+
+    #[test]
+    fn signature_ignores_cache_control_marks() {
+        let mut a = vec![UnifiedMessage::user("hello")];
+        let sig_before = view_signature(&a);
+        // Simulate a cache_control mark on the text block (E1 will do this
+        // in place) — the signature must not change.
+        if let Some(UnifiedMessage::User { content }) = a.last_mut() {
+            if let Some(ContentBlock::Text { cache_control, .. }) = content.last_mut() {
+                *cache_control =
+                    Some(crate::providers::message::CacheControl::Ephemeral { ttl: None });
+            }
+        }
+        assert_eq!(sig_before, view_signature(&a));
     }
 }
