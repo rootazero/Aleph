@@ -756,4 +756,86 @@ mod tests {
         assert!(!out.success);
         assert!(out.message.contains("recursive"), "{}", out.message);
     }
+
+    #[tokio::test]
+    async fn set_preset_then_delete_roundtrip_via_real_patcher() {
+        use crate::config::backup::ConfigBackup;
+
+        let _guard = moa_config_test_lock();
+
+        // Real patcher over a temp config.toml (sibling pattern: see
+        // config::patcher::tests::setup_patcher /
+        // gateway::handlers::config::tests::create_test_patcher).
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(&config_path, "").unwrap();
+        let config = Arc::new(RwLock::new(Config::default()));
+        let backup = ConfigBackup::new(dir.path().join("backups"), 10);
+        let patcher = Arc::new(ConfigPatcher::new(config.clone(), config_path.clone(), backup));
+        let tool = MoaManageTool::new()
+            .with_config(config.clone())
+            .with_patcher(patcher);
+
+        // set_preset: writes config + hot-reloads the process-global handle.
+        let out = tool
+            .call(MoaManageArgs::SetPreset {
+                name: "roundtrip".to_string(),
+                advisors: vec![MoaSlot {
+                    provider: "openai".into(),
+                    model: "gpt-5".into(),
+                }],
+                aggregator: MoaSlot {
+                    provider: "anthropic".into(),
+                    model: "opus".into(),
+                },
+                fanout: None,
+                advisor_timeout_secs: None,
+                advisor_max_tokens: None,
+                advisor_temperature: None,
+                aggregator_temperature: None,
+                set_default: Some(true),
+            })
+            .await
+            .unwrap();
+        assert!(out.success, "{}", out.message);
+        let live = get_moa_config().expect("hot-reloaded");
+        assert!(live.presets.contains_key("roundtrip"));
+        assert_eq!(live.default_preset.as_deref(), Some("roundtrip"));
+
+        // Second preset so delete has a survivor; then delete the default —
+        // default_preset must reassign to the survivor.
+        let out = tool
+            .call(MoaManageArgs::SetPreset {
+                name: "survivor".to_string(),
+                advisors: vec![MoaSlot {
+                    provider: "openai".into(),
+                    model: "gpt-5".into(),
+                }],
+                aggregator: MoaSlot {
+                    provider: "anthropic".into(),
+                    model: "opus".into(),
+                },
+                fanout: None,
+                advisor_timeout_secs: None,
+                advisor_max_tokens: None,
+                advisor_temperature: None,
+                aggregator_temperature: None,
+                set_default: None,
+            })
+            .await
+            .unwrap();
+        assert!(out.success);
+        let out = tool
+            .call(MoaManageArgs::DeletePreset {
+                name: "roundtrip".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(out.success, "{}", out.message);
+        let live = get_moa_config().expect("hot-reloaded after delete");
+        assert!(!live.presets.contains_key("roundtrip"));
+        assert_eq!(live.default_preset.as_deref(), Some("survivor"));
+
+        store_moa_config(None);
+    }
 }
