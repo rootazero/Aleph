@@ -171,6 +171,9 @@ impl MoaManageTool {
 
         let key = ctx.session_key.to_key_string();
         set_session_moa(&key, preset, one_shot);
+        // Selector-slot exclusivity (round-2 E3): arming MoA supersedes any
+        // per-session model pick — one slot, no precedence confusion.
+        crate::providers::session_model_handle::clear_session_model(&key);
 
         let message = if one_shot {
             format!("MoA '{name}' active for this session for the next turn only")
@@ -652,6 +655,14 @@ mod tests {
 
         let ctx = test_ctx("moa-test-on-sticky");
         let key = ctx.session_key.to_key_string();
+        // Prime a model pick — activating MoA must clear it (round-2 E3
+        // selector-slot exclusivity, symmetric with select_model's "moa:"
+        // branch clearing any sticky MoA preset).
+        crate::providers::session_model_handle::set_session_model(
+            &key,
+            None,
+            "gpt-5".to_string(),
+        );
         let out = TURN_CONTEXT
             .scope(ctx, async {
                 MoaManageTool::default()
@@ -665,6 +676,7 @@ mod tests {
         let pref = get_session_moa(&key).unwrap();
         assert_eq!(pref.preset, None);
         assert!(!pref.one_shot);
+        assert!(crate::providers::session_model_handle::get_session_model(&key).is_none());
 
         clear_session_moa(&key);
         store_moa_config(None);
