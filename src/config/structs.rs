@@ -244,6 +244,12 @@ pub struct Config {
     /// off-switch. Fully fail-soft: any failure leaves prompts byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategy: Option<crate::config::types::phase6_wiring::StrategyToml>,
+    /// MoA (Mixture of Agents) continuous-advisory presets (`[moa]`). When
+    /// present and a session activates MoA, run construction wraps the brain
+    /// in a `MoaProvider` facade (advisors consult in parallel; the preset's
+    /// aggregator acts). Absent ⇒ feature dormant, zero cost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moa: Option<crate::config::types::moa::MoaToml>,
     /// Team `TeamDispatcher` tunables (`[team_dispatcher]`): retry budget,
     /// backoff, zombie TTL, concurrency, per-owner fairness cap. Absent ⇒
     /// `teams::dispatcher::DispatcherConfig::default()` at the boot site
@@ -471,6 +477,7 @@ impl Default for Config {
             fallback_provider: None,
             context_budget: None,
             strategy: None,
+            moa: None,
             team_dispatcher: None,
             team_broadcast: None,
             resume: crate::config::types::ResumeConfig::default(),
