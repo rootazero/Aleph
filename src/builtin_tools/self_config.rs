@@ -414,6 +414,22 @@ impl SelfConfigTool {
                     }
                 }
 
+                // Hot-apply an [execution] cap change to the live
+                // ConcurrencyLimiter so new run caps bind on the next admission
+                // (mirrors the route hot-apply above; makes the Live verdict true).
+                if !dry_run
+                    && result.success
+                    && (config_path == "execution" || config_path.starts_with("execution."))
+                {
+                    if let Some(cfg) = self.config.as_ref() {
+                        let ex = &cfg.read().await.execution;
+                        crate::gateway::execution_engine::concurrency_handle::reconfigure_global(
+                            ex.max_runs_global,
+                            ex.max_runs_per_agent,
+                        );
+                    }
+                }
+
                 // Classify when this change actually takes effect so the agent
                 // gets a deterministic "what happens next" signal instead of
                 // having to recall the prose rules scattered through the /self

@@ -53,7 +53,11 @@ pub enum ReloadImpact {
 ///   executor, and the `agent` handler's `resolved_output_mode`), so the
 ///   typewriter/instant switch takes effect on the next turn. No restart is
 ///   needed despite no explicit hot-swap call.
-const LIVE_SECTIONS: &[&str] = &["route", "behavior"];
+/// - `execution` — `[execution] max_runs_*` are hot-applied to the live
+///   `ConcurrencyLimiter` by `self_config` via
+///   `execution_engine::concurrency_handle::reconfigure_global`, mirroring the
+///   `route` hot-apply. New caps bind on the next admission — no restart.
+const LIVE_SECTIONS: &[&str] = &["route", "behavior", "execution"];
 
 /// Legacy top-level sections that are parsed but inert (no runtime consumer).
 ///
@@ -116,6 +120,15 @@ impl ReloadImpact {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn execution_is_live() {
+        assert_eq!(ReloadImpact::classify("execution"), ReloadImpact::Live);
+        assert_eq!(
+            ReloadImpact::classify("execution.max_runs_global"),
+            ReloadImpact::Live
+        );
+    }
 
     #[test]
     fn route_is_live() {
