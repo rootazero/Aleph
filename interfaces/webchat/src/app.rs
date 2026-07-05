@@ -306,7 +306,7 @@ fn AppContent() -> impl IntoView {
                 // Main content area — `relative` is the positioning
                 // ancestor for the absolutely-floating drag band below.
                 // Transparent, so the light-field shows through.
-                <main class="flex-1 relative min-h-0 overflow-y-auto">
+                <main class="flex-1 relative min-h-0 overflow-y-auto overflow-x-hidden">
                     // Window-drag band — floats over the top of `<main>`
                     // WITHOUT taking layout space (CSS `position:
                     // absolute`, `background: transparent`). On macOS

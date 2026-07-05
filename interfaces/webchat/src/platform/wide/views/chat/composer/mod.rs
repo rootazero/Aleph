@@ -793,7 +793,7 @@ pub(super) fn InputArea() -> impl IntoView {
 
     view! {
         <div class="absolute inset-x-0 bottom-0 z-10 px-4 pb-4 pt-2 pointer-events-none">
-            <div class="max-w-5xl mx-auto pointer-events-auto" node_ref=stack_ref>
+            <div class="w-full min-w-0 max-w-5xl mx-auto pointer-events-auto" node_ref=stack_ref>
                 // Single-chat sticky Todo panel — top of the bottom input
                 // stack (below the message flow, above the input box).
                 // Hidden when no active plan. Living inside `stack_ref` lets
@@ -910,7 +910,7 @@ pub(super) fn InputArea() -> impl IntoView {
                     // right cluster: export + conditional clear / queue / abort / send.
                     // (The old standalone project-row was folded into this
                     // row so its controls sit level with the attach paperclip.)
-                    <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2 flex-wrap min-w-0">
                         <button
                             class="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary
                                    hover:bg-surface-sunken transition-colors flex-shrink-0"
@@ -937,7 +937,7 @@ pub(super) fn InputArea() -> impl IntoView {
                         // Live context-window gauge (self-hides until first usage).
                         <super::context_gauge::ContextGauge />
 
-                        <div class="ml-auto flex items-center gap-2">
+                        <div class="ml-auto flex items-center gap-2 flex-wrap min-w-0">
                             // Export conversation → Markdown (far right of the
                             // cluster). Only once the thread has content.
                             <Show when=move || !chat.messages.get().is_empty()>
