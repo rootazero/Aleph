@@ -294,6 +294,12 @@ async fn catalog_all_view_lists_every_chat_preset() {
 
 #[tokio::test]
 async fn catalog_configured_view_filters_empty_config_to_empty() {
+    // [moa] config is process-global; pin it to None under the shared lock so
+    // a concurrent moa-catalog test can't inject a stray "moa" row while this
+    // test asserts strict emptiness (same pattern as moa_manage.rs tests).
+    let _guard = crate::providers::moa::config_handle::moa_config_test_lock();
+    crate::providers::moa::store_moa_config(None);
+
     let config = Arc::new(RwLock::new(Config::default()));
     let vault = test_vault();
     let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
@@ -307,6 +313,10 @@ async fn catalog_configured_view_filters_empty_config_to_empty() {
 
 #[tokio::test]
 async fn catalog_default_view_is_configured() {
+    // Emptiness assertion → pin the process-global [moa] slot (see above).
+    let _guard = crate::providers::moa::config_handle::moa_config_test_lock();
+    crate::providers::moa::store_moa_config(None);
+
     let config = Arc::new(RwLock::new(Config::default()));
     let vault = test_vault();
     let response = handle_catalog(catalog_request(None), config, vault).await;
@@ -319,6 +329,10 @@ async fn catalog_default_view_is_configured() {
 
 #[tokio::test]
 async fn catalog_configured_view_returns_verified_enabled_entry() {
+    // Strict `len == 1` assertion → pin the process-global [moa] slot.
+    let _guard = crate::providers::moa::config_handle::moa_config_test_lock();
+    crate::providers::moa::store_moa_config(None);
+
     let mut config = Config::default();
     let mut cfg = ProviderConfig::test_config("gpt-4o");
     cfg.enabled = true;
@@ -405,6 +419,11 @@ async fn catalog_entries_carry_modalities_default_model() {
 
 #[tokio::test]
 async fn catalog_unknown_view_treats_as_all() {
+    // Row-set assertion → pin the process-global [moa] slot so the fall-
+    // through view is exactly the preset catalog, no synthetic moa row.
+    let _guard = crate::providers::moa::config_handle::moa_config_test_lock();
+    crate::providers::moa::store_moa_config(None);
+
     let config = Arc::new(RwLock::new(Config::default()));
     let vault = test_vault();
     let response = handle_catalog(catalog_request(Some("nonsense")), config, vault).await;
