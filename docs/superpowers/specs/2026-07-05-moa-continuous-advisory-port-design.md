@@ -151,7 +151,7 @@ advisor_timeout_secs = 120
 
 ### 优先级（run 构建时）
 
-`RunRequest.model_override`（panel 每回合显式选模型）> **MoA session 状态** > `select_model` session pick > agent pin > flow BrainRef。
+**MoA session 状态** > `select_model` session pick > agent pin > flow BrainRef。（model_override 今日不达 runner Step 3，见决定 #6 修订；其挂钩留待管道补通。）
 
 ## 7. 错误处理
 
@@ -180,7 +180,7 @@ advisor_timeout_secs = 120
 2. **顾问视图**（纯函数重点）：system 丢弃、工具调用/结果扁平化、head+tail 截断、必以 user 收尾（尾 assistant → 合成轮；新鲜 user → 原样）、空退化、零 tool-role 输出。
 3. **fan-out**：并行、顺序稳定、单失败不中断、超时注记、全失败仍注入、disabled 跳过、签名缓存（hit 不重跑不重发/新工具结果 miss/user_turn run 内一次）。
 4. **身份/核算**：`serving_model_hint`/`supports_native_tools` = 聚合器；`usage` 只含聚合器；工具调用透传；每顾问独立 Metering 标签。
-5. **one-shot**：consume-and-clear 原子性、异常路径不泄漏、sticky on/off/status、优先级（model_override > MoA）。
+5. **one-shot**：consume-and-clear 原子性、异常路径不泄漏、sticky on/off/status、优先级（MoA > select_model）。
 6. **注入位置**：尾 user 并入 / 否则追加。
 7. **工具**：action 解析、set_preset 校验、delete 守护（拒删最后一个/default 顺延）。
 
