@@ -510,6 +510,67 @@ impl AlephTool for MoaManageTool {
         false
     }
 
+    /// Declare a FLAT schema instead of the schemars-derived root `oneOf`.
+    ///
+    /// Runtime QA (round 2) showed that gateway endpoints doing server-side
+    /// grammar-constrained tool decoding cannot compile a root-`oneOf` +
+    /// `$ref` schema and emit tool calls with EMPTY arguments — across two
+    /// independent providers/protocols. The flat surface (single object,
+    /// `action` enum + per-action optional fields documented in
+    /// descriptions) is what battle-tested tools like `note_manage` use.
+    /// Serde parsing is unchanged: the internally-tagged `MoaManageArgs`
+    /// accepts exactly these flat shapes and reports precise per-action
+    /// missing-field errors.
+    fn definition(&self) -> crate::tool_metadata::ToolDefinition {
+        let slot_schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "provider": { "type": "string", "description": "A [providers.<key>] entry; \"moa\" is rejected (recursion guard)." },
+                "model": { "type": "string" }
+            },
+            "required": ["provider", "model"]
+        });
+        let parameters = serde_json::json!({
+            "type": "object",
+            "title": "MoaManageArgs",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["on", "off", "once", "status", "list", "set_preset", "delete_preset"],
+                    "description": "Operation: on (activate preset for this session, sticky) / off (deactivate) / once (next turn only) / status / list / set_preset (create or overwrite a preset) / delete_preset."
+                },
+                "preset": { "type": "string", "description": "on/once only: preset name; omit to use the default preset." },
+                "name": { "type": "string", "description": "set_preset/delete_preset: preset name. REQUIRED for those actions." },
+                "advisors": {
+                    "type": "array",
+                    "items": slot_schema.clone(),
+                    "description": "set_preset: advisor (provider, model) slots consulted in parallel. REQUIRED for set_preset."
+                },
+                "aggregator": {
+                    "type": "object",
+                    "properties": slot_schema["properties"].clone(),
+                    "required": ["provider", "model"],
+                    "description": "set_preset: the acting model slot (receives the payload plus advisor guidance). REQUIRED for set_preset."
+                },
+                "fanout": { "type": "string", "enum": ["per_iteration", "user_turn"], "description": "set_preset: advisor fan-out cadence. Default per_iteration." },
+                "advisor_timeout_secs": { "type": "integer", "description": "set_preset: per-advisor wall-clock budget in seconds. Default 120." },
+                "advisor_max_tokens": { "type": "integer", "description": "set_preset: cap advisor output tokens. Omit for no cap." },
+                "advisor_temperature": { "type": "number", "description": "set_preset: advisor sampling temperature. Omit for provider default." },
+                "aggregator_temperature": { "type": "number", "description": "set_preset: aggregator sampling temperature. Omit for provider default." },
+                "set_default": { "type": "boolean", "description": "set_preset: also make this preset [moa].default_preset." }
+            },
+            "required": ["action"]
+        });
+        crate::tool_metadata::ToolDefinition::new(
+            Self::NAME,
+            Self::DESCRIPTION,
+            parameters,
+            self.category(),
+        )
+        .with_confirmation(self.requires_confirmation())
+        .with_strict(self.strict_schema())
+    }
+
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         match &args {
             MoaManageArgs::On { preset } => notify_tool_start(
@@ -737,18 +798,69 @@ mod tests {
     }
 
     #[test]
-    fn definition_opts_out_of_strict_schema() {
-        // Regression lock: the tagged-union args schema (root oneOf) must
-        // never be strictified — strictification rewrites it into a
-        // contradiction (additionalProperties: false with zero root
-        // properties) that forces providers to emit empty `{}` arguments.
-        // Found in round-2 runtime QA; same opt-out as self_config.
+    fn definition_declares_flat_non_strict_schema() {
+        // Regression lock (round-2 runtime QA): grammar-constrained provider
+        // endpoints cannot compile a root-oneOf/$ref schema and emit tool
+        // calls with EMPTY arguments. The declared schema must stay a flat
+        // object (action enum + optional fields) and opt out of strict mode.
         let def = MoaManageTool::default().definition();
         assert!(!def.strict, "moa tool must opt out of strict schema mode");
         assert!(
-            def.parameters.get("oneOf").is_some(),
-            "tagged-union schema should keep its oneOf root un-mangled"
+            def.parameters.get("oneOf").is_none() && def.parameters.get("$defs").is_none(),
+            "declared schema must be flat — no root oneOf/$defs"
         );
+        let actions: Vec<&str> = def.parameters["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum present")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        for a in [
+            "on", "off", "once", "status", "list", "set_preset", "delete_preset",
+        ] {
+            assert!(actions.contains(&a), "action enum missing {a}");
+        }
+        assert_eq!(
+            def.parameters["required"],
+            serde_json::json!(["action"]),
+            "only `action` is unconditionally required"
+        );
+    }
+
+    #[test]
+    fn flat_shaped_json_parses_into_tagged_args() {
+        // The flat declared schema and the serde tagged-enum parse layer must
+        // accept the same shapes — lock the two most complex actions.
+        let set: MoaManageArgs = serde_json::from_value(serde_json::json!({
+            "action": "set_preset",
+            "name": "deep",
+            "advisors": [
+                { "provider": "p", "model": "m" },
+                { "provider": "p", "model": "m" }
+            ],
+            "aggregator": { "provider": "p", "model": "m" },
+            "fanout": "per_iteration",
+            "set_default": true
+        }))
+        .expect("flat set_preset JSON parses");
+        match set {
+            MoaManageArgs::SetPreset {
+                name,
+                advisors,
+                fanout,
+                set_default,
+                ..
+            } => {
+                assert_eq!(name, "deep");
+                assert_eq!(advisors.len(), 2);
+                assert_eq!(fanout, Some(MoaFanout::PerIteration));
+                assert_eq!(set_default, Some(true));
+            }
+            other => panic!("expected SetPreset, got {other:?}"),
+        }
+        let on: MoaManageArgs =
+            serde_json::from_value(serde_json::json!({ "action": "on" })).expect("bare on parses");
+        assert!(matches!(on, MoaManageArgs::On { preset: None }));
     }
 
     #[tokio::test]
