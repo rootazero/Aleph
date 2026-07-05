@@ -21,7 +21,7 @@ use crate::providers::session_moa_handle::SessionMoaPref;
 use crate::providers::{AiProvider, MeteringProvider, ModelOverrideProvider};
 use crate::sync_primitives::{Arc, Mutex};
 
-use super::advisory_view::{build_advisory_view, view_signature};
+use super::advisory_view::{build_advisory_view, mark_cache_breakpoints, view_signature};
 use super::prompts::{attach_guidance, build_guidance, AdvisorOutcome};
 
 /// One resolved advisor: label + provider chain + identity for pricing.
@@ -218,8 +218,12 @@ impl AiProvider for MoaProvider {
 
         Box::pin(async move {
             // 1. Advisory view + signature.
-            let view = build_advisory_view(&messages);
+            let mut view = build_advisory_view(&messages);
             let sig = view_signature(&view);
+
+            // 1b. Prompt-cache breakpoints (round-2 E1) — AFTER the signature
+            //     (which ignores marks) so the cache key is never perturbed.
+            mark_cache_breakpoints(&mut view);
 
             // 2. Cache decision (per_iteration: same-signature repeat calls
             //    — harness internal retries — are HITs; user_turn: any

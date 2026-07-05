@@ -181,6 +181,34 @@ pub(crate) fn view_signature(view: &[UnifiedMessage]) -> u64 {
     hasher.finish()
 }
 
+/// Mark Anthropic prompt-cache breakpoints on the advisory view: the last
+/// Text block of each of the LAST THREE messages gets an ephemeral
+/// cache_control (hermes `system_and_3` layout). The view is append-only
+/// across iterations, so iteration N+1's prefix replays N's cached segment —
+/// without this, per_iteration advisors re-bill the whole prefix every tool
+/// step (hermes measured 0/1227 cache reads, 11.5M re-billed tokens).
+/// Marking is unconditional: the Anthropic protocol adapter maps the mark to
+/// `ephemeral`; every other adapter ignores it (zero per-provider branching).
+/// Call AFTER view_signature — the signature deliberately ignores marks.
+pub(crate) fn mark_cache_breakpoints(view: &mut [UnifiedMessage]) {
+    let len = view.len();
+    for msg in view.iter_mut().skip(len.saturating_sub(3)) {
+        let content = match msg {
+            UnifiedMessage::User { content } | UnifiedMessage::Assistant { content } => content,
+            UnifiedMessage::ToolResult { content, .. } => content,
+        };
+        if let Some(ContentBlock::Text { cache_control, .. }) = content
+            .iter_mut()
+            .rev()
+            .find(|b| matches!(b, ContentBlock::Text { .. }))
+        {
+            *cache_control = Some(crate::providers::message::CacheControl::Ephemeral {
+                ttl: None,
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,5 +332,42 @@ mod tests {
             }
         }
         assert_eq!(sig_before, view_signature(&a));
+    }
+
+    #[test]
+    fn cache_breakpoints_mark_last_three_messages() {
+        let mut view = vec![
+            UnifiedMessage::user("one"),
+            UnifiedMessage::assistant("two"),
+            UnifiedMessage::user("three"),
+            UnifiedMessage::assistant("four"),
+            UnifiedMessage::user("five"),
+        ];
+        mark_cache_breakpoints(&mut view);
+        let marked: Vec<bool> = view
+            .iter()
+            .map(|m| {
+                let content = match m {
+                    UnifiedMessage::User { content }
+                    | UnifiedMessage::Assistant { content } => content,
+                    UnifiedMessage::ToolResult { content, .. } => content,
+                };
+                content.iter().any(|b| {
+                    matches!(b, ContentBlock::Text { cache_control: Some(_), .. })
+                })
+            })
+            .collect();
+        assert_eq!(marked, vec![false, false, true, true, true]);
+    }
+
+    #[test]
+    fn cache_breakpoints_short_view_marks_all() {
+        let mut view = vec![UnifiedMessage::user("only")];
+        mark_cache_breakpoints(&mut view);
+        let UnifiedMessage::User { content } = &view[0] else { panic!() };
+        assert!(matches!(
+            content.last(),
+            Some(ContentBlock::Text { cache_control: Some(_), .. })
+        ));
     }
 }
