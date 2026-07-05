@@ -581,6 +581,12 @@ impl HandlerRegistry {
                 "gateway.metrics.lanes requires LaneManager (boot phase 2)",
             )
         });
+        registry.register("gateway.metrics.run_concurrency", |req| async move {
+            service_unavailable(
+                req,
+                "gateway.metrics.run_concurrency requires AgentRunManager (boot phase 2)",
+            )
+        });
         registry.register("gateway.credentials", |req| async move {
             service_unavailable(
                 req,

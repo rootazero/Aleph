@@ -91,9 +91,27 @@ impl SessionActor {
                 biased;
                 cmd = self.inbox.recv() => match cmd {
                     Some(ActorCommand::EmitEvent { event, reply }) => {
-                        let seq = self.head_seq + 1;
+                        let mut seq = self.head_seq + 1;
                         let at = now_ms();
-                        match self.store.append(&self.id, seq, &event, at).await {
+                        let mut append_result = self.store.append(&self.id, seq, &event, at).await;
+
+                        // Self-heal: an append failure (typically a `(session_id, seq)`
+                        // UNIQUE collision from a direct-store writer racing the actor —
+                        // audit 4.1) must not permanently wedge this session's writes.
+                        // Resync `head_seq` from the store and retry ONCE. Bounded: no
+                        // loop, propagate on second failure. `append` is a single atomic
+                        // INSERT, so a failed attempt wrote nothing and the retry cannot
+                        // double-write.
+                        if append_result.is_err() {
+                            if let Ok(stored_head) = self.store.load_head_seq(&self.id).await {
+                                self.head_seq = stored_head;
+                                seq = self.head_seq + 1;
+                                append_result =
+                                    self.store.append(&self.id, seq, &event, at).await;
+                            }
+                        }
+
+                        match append_result {
                             Ok(()) => {
                                 let record = SessionEventRecord {
                                     seq,
@@ -277,5 +295,103 @@ mod tests {
         .unwrap();
         let seq = rrx.await.unwrap().unwrap();
         assert_eq!(seq, 4);
+    }
+
+    /// Regression test for audit 4.1: a direct-store writer racing the actor
+    /// can take the seq the actor was about to use, causing a `(session_id,
+    /// seq)` UNIQUE collision on `append`. Before the fix, the `Err` arm just
+    /// replied `Err` without resyncing `head_seq`, so the actor would recompute
+    /// the same colliding seq on every subsequent emit — permanently wedging
+    /// that session's writes. The fix resyncs `head_seq` from the store and
+    /// retries once. This controlled store makes the first `append` (seq=1)
+    /// collide, then reports the direct writer's seq via `load_head_seq`, so
+    /// the retried `append` (seq=2) should succeed.
+    #[tokio::test]
+    async fn actor_self_heals_seq_after_append_collision() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CollideOnceStore {
+            appends: AtomicUsize,
+            head: AtomicUsize,
+        }
+
+        #[async_trait::async_trait]
+        impl SessionEventStore for CollideOnceStore {
+            async fn append(
+                &self,
+                _id: &SessionId,
+                seq: EventSeq,
+                _e: &SessionEvent,
+                _at: i64,
+            ) -> Result<(), SessionError> {
+                let n = self.appends.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    // First attempt: seq=1 collides with a direct-store writer
+                    // that already landed seq=1.
+                    assert_eq!(seq, 1);
+                    self.head.store(1, Ordering::SeqCst);
+                    Err(SessionError::Storage("UNIQUE constraint failed".into()))
+                } else {
+                    // Retry after resync: head_seq is now 1, so this should be seq=2.
+                    assert_eq!(seq, 2);
+                    self.head.store(2, Ordering::SeqCst);
+                    Ok(())
+                }
+            }
+
+            async fn load_all_events(
+                &self,
+                _id: &SessionId,
+            ) -> Result<Vec<SessionEventRecord>, SessionError> {
+                Ok(vec![])
+            }
+
+            async fn load_events_range(
+                &self,
+                _id: &SessionId,
+                _from: Option<EventSeq>,
+                _to: Option<EventSeq>,
+            ) -> Result<Vec<SessionEventRecord>, SessionError> {
+                Ok(vec![])
+            }
+
+            async fn load_head_seq(&self, _id: &SessionId) -> Result<EventSeq, SessionError> {
+                Ok(self.head.load(Ordering::SeqCst) as EventSeq)
+            }
+
+            async fn load_run_markers(
+                &self,
+            ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError> {
+                Ok(vec![])
+            }
+        }
+
+        let store: Arc<dyn SessionEventStore> = Arc::new(CollideOnceStore {
+            appends: AtomicUsize::new(0),
+            head: AtomicUsize::new(0),
+        });
+        let id = sample_id();
+        let (tx, rx) = mpsc::channel(8);
+        let (bcast, _) = broadcast::channel(16);
+        let actor = SessionActor::new(id.clone(), store, rx, bcast, None, DEFAULT_IDLE_TIMEOUT);
+        tokio::spawn(actor.run());
+
+        let (rtx, rrx) = oneshot::channel();
+        tx.send(ActorCommand::EmitEvent {
+            event: SessionEvent::TurnStarted {
+                turn_id: uuid::Uuid::new_v4(),
+                trigger: TurnTrigger::UserMessage,
+                at: now_ms(),
+            },
+            reply: rtx,
+        })
+        .await
+        .unwrap();
+
+        let seq = rrx.await.unwrap().unwrap();
+        assert_eq!(
+            seq, 2,
+            "actor should self-heal past the seq=1 collision and land at seq=2"
+        );
     }
 }

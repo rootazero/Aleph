@@ -1,6 +1,7 @@
 //! Tests for the execution engine module.
 
 use super::deadline::wait_for_deadline;
+use super::gate::GateOutcome;
 use super::*;
 use crate::sync_primitives::{AtomicUsize, Ordering};
 
@@ -279,6 +280,220 @@ async fn test_simple_execution_engine_run() {
 }
 
 // =============================================================================
+// Task 6: per-session admission gate (production `ExecutionEngine<P, R>`)
+// =============================================================================
+//
+// These exercise `ExecutionEngine::admit_run` directly rather than the full
+// `execute()` (which needs a live orchestrator/harness to actually run a
+// turn). `admit_run` IS the wired gate under test — Task 3's own unit tests
+// already cover `SessionRunRegistry` in isolation; these prove it's correctly
+// threaded through the production engine's admission path.
+
+/// Minimal `ToolRegistry` double: `admit_run` never looks up or executes a
+/// tool, so an empty registry satisfies `ExecutionEngine<P, R>`'s generic
+/// bound without pulling in the real (heavy) `BuiltinToolRegistry`.
+struct EmptyToolRegistry;
+
+impl crate::executor::ToolRegistry for EmptyToolRegistry {
+    fn get_tool(&self, _name: &str) -> Option<&crate::tool_metadata::UnifiedTool> {
+        None
+    }
+
+    fn execute_tool(
+        &self,
+        _tool_name: &str,
+        _arguments: serde_json::Value,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = crate::error::Result<serde_json::Value>> + Send + '_>,
+    > {
+        Box::pin(async { Err(crate::error::AlephError::tool("no tools in test registry")) })
+    }
+}
+
+/// A production `ExecutionEngine<P, R>` with the lightest real `P`/`R` the
+/// generic bounds allow, using an explicit config. `admit_run` never calls
+/// into either registry, so these stand in for the real provider/tool stacks
+/// without any network or filesystem setup — this is the smallest real unit
+/// that exercises the wired gate.
+fn test_engine_with_config(
+    config: ExecutionEngineConfig,
+) -> ExecutionEngine<crate::thinker::SingleProviderRegistry, EmptyToolRegistry> {
+    ExecutionEngine::new(
+        config,
+        Arc::new(crate::thinker::SingleProviderRegistry::new(
+            crate::providers::create_mock_provider(),
+        )),
+        Arc::new(EmptyToolRegistry),
+        Vec::new(),
+        None,
+    )
+}
+
+/// Default-config engine for tests that hold at most one permit at a time.
+fn test_engine() -> ExecutionEngine<crate::thinker::SingleProviderRegistry, EmptyToolRegistry> {
+    test_engine_with_config(ExecutionEngineConfig::default())
+}
+
+fn gate_test_request(session_key: &SessionKey, run_id: &str) -> RunRequest {
+    RunRequest {
+        run_id: run_id.to_string(),
+        input: "hello".to_string(),
+        session_key: session_key.clone(),
+        timeout_secs: None,
+        metadata: HashMap::new(),
+        attachments: Vec::new(),
+        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        sandbox_override: None,
+        workspace_override: None,
+        max_iterations_override: None,
+        model_override: None,
+    }
+}
+
+async fn gate_test_agent(temp: &tempfile::TempDir, agent_id: &str) -> Arc<AgentInstance> {
+    let sm = test_session_manager(temp);
+    let config = AgentInstanceConfig {
+        agent_id: agent_id.to_string(),
+        workspace: temp.path().join("workspace"),
+        agent_dir: temp.path().join(format!("agents/{agent_id}")),
+        ..Default::default()
+    };
+    Arc::new(AgentInstance::new(config, sm).unwrap())
+}
+
+/// Task 6 regression: the OLD gate (`agent.try_start_run`, flipping a single
+/// `AgentState` flag shared by the whole `AgentInstance`) rejected a second
+/// run of the SAME agent even on a completely different session — the two
+/// sessions serialized through one agent-wide Idle/Running flag. The NEW gate
+/// claims per-`SessionKey` (`SessionRunRegistry`), so two sessions of the
+/// SAME agent must now both be admitted (true parallelism).
+#[tokio::test]
+async fn two_sessions_same_agent_run_in_parallel() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "parallel-agent").await;
+    // This test holds TWO concurrent same-agent permits (run A's `RunSlot` is
+    // alive while run B acquires). It therefore needs per-agent cap >= 2 (and
+    // global cap >= 2) — set explicitly so the assertion never depends on the
+    // default: if the default per-agent cap were ever lowered to 1, run B's
+    // `admit_run` would block forever on `acquire().await` and this test would
+    // HANG instead of failing cleanly.
+    let engine = test_engine_with_config(ExecutionEngineConfig {
+        max_runs_global: 8,
+        max_runs_per_agent: 3,
+        ..Default::default()
+    });
+
+    let session_a = SessionKey::peer("parallel-agent", "conv-a");
+    let session_b = SessionKey::peer("parallel-agent", "conv-b");
+    // Sanity: genuinely the same agent, genuinely different sessions —
+    // otherwise this test would prove nothing.
+    assert_eq!(session_a.agent_id(), session_b.agent_id());
+    assert_ne!(session_a, session_b);
+
+    let req_a = gate_test_request(&session_a, "run-a");
+    let (tx_a, _rx_a) = mpsc::channel::<()>(1);
+    let outcome_a = engine
+        .admit_run(&req_a, "run-a", &agent, tx_a)
+        .await
+        .expect("run A must be admitted");
+    assert!(
+        matches!(outcome_a, GateOutcome::Admitted(_)),
+        "first run must be admitted"
+    );
+
+    // Same `agent` instance held across both calls — its per-agent
+    // `AgentState` is still "Running" from run A (the new gate never touches
+    // it), so the OLD gate would have rejected this second call outright.
+    // The new per-session gate must admit it: it's a DIFFERENT session.
+    let req_b = gate_test_request(&session_b, "run-b");
+    let (tx_b, _rx_b) = mpsc::channel::<()>(1);
+    let outcome_b = engine
+        .admit_run(&req_b, "run-b", &agent, tx_b)
+        .await
+        .expect("run B on a different session of the SAME agent must be admitted");
+    assert!(
+        matches!(outcome_b, GateOutcome::Admitted(_)),
+        "second run on a DIFFERENT session of the SAME agent must also be admitted"
+    );
+}
+
+/// Task 6 regression: a second message on the SAME session while a run is
+/// still active must still take the busy-input path (`try_claim` returns
+/// `false`) — the session-scoped claim must not accidentally admit two runs
+/// on one session (which would let two runs interleave writes into the same
+/// `session_events` transcript — INV-SEQ / audit 4.2). No orchestrator is
+/// wired in this harness, so `Steer`'s mid-loop injection cannot succeed and
+/// the busy path surfaces as `AgentBusy` — proof `try_claim` rejected the
+/// second run (which busy sub-mode fires is steering.rs's own concern, unit
+/// tested separately).
+#[tokio::test]
+async fn second_message_same_session_takes_busy_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "busy-agent").await;
+    let engine = test_engine();
+
+    let session = SessionKey::peer("busy-agent", "conv-1");
+
+    let req1 = gate_test_request(&session, "run-1");
+    let (tx1, _rx1) = mpsc::channel::<()>(1);
+    let outcome1 = engine
+        .admit_run(&req1, "run-1", &agent, tx1)
+        .await
+        .expect("first run must be admitted");
+    assert!(matches!(outcome1, GateOutcome::Admitted(_)));
+
+    // `outcome1` (and the `RunSlot` it carries) is still alive here — the
+    // session claim from run 1 is still held, so this second call on the
+    // SAME session must be rejected by `try_claim`.
+    let req2 = gate_test_request(&session, "run-2");
+    let (tx2, _rx2) = mpsc::channel::<()>(1);
+    let outcome2 = engine.admit_run(&req2, "run-2", &agent, tx2).await;
+    match outcome2 {
+        Err(ExecutionError::AgentBusy(_)) => {}
+        Ok(_) => panic!(
+            "second run on the SAME session must be rejected by try_claim (busy path), \
+             but was Admitted/HandledInline"
+        ),
+        Err(e) => panic!("expected AgentBusy from the busy path, got a different error: {e}"),
+    }
+
+    drop(outcome1);
+}
+
+/// Task 6: `RunSlot::drop` must release the session claim (alongside the
+/// concurrency permit) — otherwise a completed run would wedge its session
+/// forever. Task 3 already covers `SessionRunRegistry::release` in isolation;
+/// this proves the RAII wiring end-to-end through the actual `admit_run`
+/// gate, catching a regression where `RunSlot` forgot to release on drop or
+/// `execute()` forgot to bind/hold it.
+#[tokio::test]
+async fn run_slot_drop_releases_session_for_reclaim() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "release-agent").await;
+    let engine = test_engine();
+    let session = SessionKey::peer("release-agent", "conv-1");
+
+    let req1 = gate_test_request(&session, "run-1");
+    let (tx1, _rx1) = mpsc::channel::<()>(1);
+    let outcome1 = engine
+        .admit_run(&req1, "run-1", &agent, tx1)
+        .await
+        .expect("first run must be admitted");
+
+    // Release the slot the way `execute()` does on run completion.
+    drop(outcome1);
+
+    // A fresh run on the SAME session must now be admitted again.
+    let req2 = gate_test_request(&session, "run-2");
+    let (tx2, _rx2) = mpsc::channel::<()>(1);
+    let outcome2 = engine
+        .admit_run(&req2, "run-2", &agent, tx2)
+        .await
+        .expect("run after release must be admitted");
+    assert!(matches!(outcome2, GateOutcome::Admitted(_)));
+}
+
+// =============================================================================
 // Cascade timeout resolution
 // =============================================================================
 
@@ -318,6 +533,15 @@ fn test_cascade_matches_engine_default() {
         resolve_timeout(None, None, engine_config.default_timeout_secs),
         172_800
     );
+}
+
+/// Task 5 (audit 1.3): `max_concurrent_runs` is retired in favor of two
+/// explicit concurrency caps consumed by `ConcurrencyLimiter` (Task 6).
+#[test]
+fn engine_config_default_concurrency_caps() {
+    let c = ExecutionEngineConfig::default();
+    assert_eq!(c.max_runs_global, 8);
+    assert_eq!(c.max_runs_per_agent, 3);
 }
 
 // =============================================================================
@@ -461,5 +685,406 @@ async fn stream_callback_persists_agent_trace_events() {
     assert_eq!(
         traces[0].event,
         aleph_protocol::AgentTraceEvent::TurnStarted { iteration: 1 }
+    );
+}
+
+// =============================================================================
+// Task 7 (INV-ISO): concurrent runs preserve agent memory isolation +
+// non-interleaved transcripts
+// =============================================================================
+//
+// Task 6 moved run admission from a single per-agent flag to a per-session
+// claim, so two sessions of the SAME agent can now execute concurrently (see
+// `two_sessions_same_agent_run_in_parallel` above). INV-ISO is the redline
+// that parallelism must not violate: one run must never see another run's
+// identity or memory. The isolation mechanism itself was NOT touched by
+// Task 6:
+//   - `TURN_CONTEXT` (`src/tools/turn_context.rs`) — a tokio `task_local!`
+//     carrying each run's `SessionKey` — is scoped fresh per task by
+//     `ScopedToolService::execute_with_cancel`, the single production
+//     tool-dispatch chokepoint.
+//   - `NoteManageTool::resolve_agent_id` (`src/builtin_tools/note_manage.rs`)
+//     resolves the storage partition from that task-local (falling back to
+//     `DEFAULT_AGENT_ID` outside a scoped turn), and both the on-disk layout
+//     (`memory_dir/{agent_id}/{category}/{file}.md`) and the SQLite index
+//     (`notes_index` PRIMARY KEY `(agent_id, path)`) key off it.
+//
+// The two tests below drive REAL concurrent `tokio::spawn` tasks through
+// that exact production mechanism — the same `TURN_CONTEXT.scope(...)` idiom
+// the dispatch chokepoint uses — to prove it holds. They are expected to
+// PASS today; a FAIL means a real isolation regression (not a test bug) —
+// see `.superpowers/sdd/task-7-brief.md`.
+
+/// The `TurnContext` a real tool dispatch would scope around a call
+/// originating from `session_key` — mirrors the value
+/// `ScopedToolService::execute_with_cancel` sets in production
+/// (`src/tools/scoped/mod.rs`).
+fn inv_iso_turn(session_key: SessionKey) -> crate::tools::turn_context::TurnContext {
+    crate::tools::turn_context::TurnContext {
+        session_key,
+        run_id: String::new(),
+        channel_id: String::new(),
+        conversation_id: String::new(),
+        caller_role: None,
+    }
+}
+
+/// `NoteManageArgs` for a `create` call. `agent_id` is deliberately left
+/// `None` so the partition is resolved purely from the active
+/// `TURN_CONTEXT` — the exact path under test.
+fn inv_iso_create_args(
+    filename: &str,
+    content: &str,
+) -> crate::builtin_tools::note_manage::NoteManageArgs {
+    use crate::builtin_tools::note_manage::{NoteManageAction, NoteManageArgs};
+    NoteManageArgs {
+        action: NoteManageAction::Create,
+        category: Some("learning".to_string()),
+        filename: Some(filename.to_string()),
+        title: Some(filename.to_string()),
+        content: Some(content.to_string()),
+        facts: None,
+        links: None,
+        tags: None,
+        query: None,
+        limit: None,
+        new_title: None,
+        relations: None,
+        agent_id: None,
+    }
+}
+
+/// `NoteManageArgs` for a `list` call scoped to `category`, `agent_id` again
+/// left to `TURN_CONTEXT` resolution — used to read a partition's contents
+/// back black-box, through the same `resolve_agent_id` path the write used.
+fn inv_iso_list_args(category: &str) -> crate::builtin_tools::note_manage::NoteManageArgs {
+    use crate::builtin_tools::note_manage::{NoteManageAction, NoteManageArgs};
+    NoteManageArgs {
+        action: NoteManageAction::List,
+        category: Some(category.to_string()),
+        filename: None,
+        title: None,
+        content: None,
+        facts: None,
+        links: None,
+        tags: None,
+        query: None,
+        limit: None,
+        new_title: None,
+        relations: None,
+        agent_id: None,
+    }
+}
+
+/// `NoteManageArgs` for a `query` call (FTS fallback, no embedder wired).
+fn inv_iso_query_args(query_text: &str) -> crate::builtin_tools::note_manage::NoteManageArgs {
+    use crate::builtin_tools::note_manage::{NoteManageAction, NoteManageArgs};
+    NoteManageArgs {
+        action: NoteManageAction::Query,
+        category: None,
+        filename: None,
+        title: None,
+        content: None,
+        facts: None,
+        links: None,
+        tags: None,
+        query: Some(query_text.to_string()),
+        limit: None,
+        new_title: None,
+        relations: None,
+        agent_id: None,
+    }
+}
+
+/// INV-ISO: two concurrent runs on DIFFERENT agents ("agent-a" / "agent-b")
+/// must not cross-write memory. Both writes deliberately target the SAME
+/// category+filename — if isolation ever broke (e.g. `resolve_agent_id`
+/// started reading a shared/global "current agent" instead of the
+/// per-task `TURN_CONTEXT`), the two concurrent writes would race for the
+/// SAME file/index row, surfacing as a lost write or corrupted content
+/// instead of hiding behind distinct names.
+#[tokio::test]
+async fn concurrent_runs_different_agents_do_not_cross_write_memory() {
+    use crate::builtin_tools::note_manage::NoteManageTool;
+    use crate::memory::store::SqliteMemoryBackend;
+    use crate::tools::turn_context::TURN_CONTEXT;
+    use crate::tools::AlephTool;
+
+    let dir = tempfile::tempdir().unwrap();
+    let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+    // One shared `NoteManageTool` instance (`Clone` is cheap — it wraps only
+    // `Arc`s) — mirrors how the real tool registry hands the SAME tool
+    // instance to every concurrent run; only `TURN_CONTEXT` differs per run.
+    let tool = NoteManageTool::new(dir.path().join("note"), backend);
+    let tool_a = tool.clone();
+    let tool_b = tool.clone();
+
+    let handle_a = tokio::spawn(async move {
+        TURN_CONTEXT
+            .scope(inv_iso_turn(SessionKey::main("agent-a")), async move {
+                AlephTool::call(
+                    &tool_a,
+                    inv_iso_create_args("shared-name", "agent A's private content"),
+                )
+                .await
+            })
+            .await
+    });
+    let handle_b = tokio::spawn(async move {
+        TURN_CONTEXT
+            .scope(inv_iso_turn(SessionKey::main("agent-b")), async move {
+                AlephTool::call(
+                    &tool_b,
+                    inv_iso_create_args("shared-name", "agent B's private content"),
+                )
+                .await
+            })
+            .await
+    });
+
+    let (result_a, result_b) = tokio::join!(handle_a, handle_b);
+    let result_a = result_a
+        .expect("agent-a task must not panic")
+        .expect("agent-a create must succeed");
+    let result_b = result_b
+        .expect("agent-b task must not panic")
+        .expect("agent-b create must succeed");
+    assert!(result_a.success);
+    assert!(result_b.success);
+
+    // Black-box partition proof #1 (metadata): each agent's own `list` —
+    // which resolves its `agent_id` from `TURN_CONTEXT` exactly like the
+    // write did — must see EXACTLY its own note.
+    let list_a = TURN_CONTEXT
+        .scope(inv_iso_turn(SessionKey::main("agent-a")), async {
+            AlephTool::call(&tool, inv_iso_list_args("learning")).await
+        })
+        .await
+        .expect("agent-a list must succeed");
+    let list_b = TURN_CONTEXT
+        .scope(inv_iso_turn(SessionKey::main("agent-b")), async {
+            AlephTool::call(&tool, inv_iso_list_args("learning")).await
+        })
+        .await
+        .expect("agent-b list must succeed");
+    let notes_a = list_a.notes.expect("agent-a list must return entries");
+    let notes_b = list_b.notes.expect("agent-b list must return entries");
+    assert_eq!(
+        notes_a.len(),
+        1,
+        "agent-a partition must contain exactly its own note, got {notes_a:?}"
+    );
+    assert_eq!(
+        notes_b.len(),
+        1,
+        "agent-b partition must contain exactly its own note, got {notes_b:?}"
+    );
+
+    // Black-box partition proof #2 (content): both notes' bodies share the
+    // word "private" by design, so a search that ignored (or misresolved)
+    // the agent partition would surface the OTHER agent's body too.
+    let found_a = TURN_CONTEXT
+        .scope(inv_iso_turn(SessionKey::main("agent-a")), async {
+            AlephTool::call(&tool, inv_iso_query_args("private")).await
+        })
+        .await
+        .expect("agent-a query must succeed");
+    let body_a = found_a.content.expect("agent-a query must return content");
+    assert!(body_a.contains("agent A's private content"));
+    assert!(
+        !body_a.contains("agent B's private content"),
+        "agent A's query result must not contain agent B's content — cross-write, got:\n{body_a}"
+    );
+}
+
+/// INV-ISO: two concurrent runs of the SAME agent ("agent-a"), different
+/// conversations (conv-1 / conv-2), must not interleave each other's
+/// `session_events` transcript, and both must land their memory write in
+/// the shared agent-a partition without loss or deadlock.
+///
+/// Drives `InProcessActorSessionService` (`src/session/in_process.rs`) — the
+/// production `SessionService` impl, which spawns one tokio actor task per
+/// distinct `SessionKey` — concurrently for two sessions of one agent,
+/// interleaved with real `note_manage` writes under each session's own
+/// `TURN_CONTEXT`. See `second_message_same_session_takes_busy_path` above
+/// for the exact hazard this guards against (INV-SEQ / audit 4.2): two runs
+/// interleaving writes into the same transcript.
+#[tokio::test]
+async fn concurrent_runs_same_agent_do_not_interleave_transcript() {
+    use crate::builtin_tools::note_manage::NoteManageTool;
+    use crate::memory::store::SqliteMemoryBackend;
+    use crate::session::events::{now_ms, SessionEvent};
+    use crate::session::store::{migrate_add_session_events, SqliteEventStore};
+    use crate::session::{InProcessActorSessionService, SessionEventStore, SessionService};
+    use crate::tools::turn_context::TURN_CONTEXT;
+    use crate::tools::AlephTool;
+
+    // Real per-session actor backend — spawns ONE tokio task per distinct
+    // `SessionKey` and persists to SQLite, the actual production transcript
+    // path (not a stub).
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    migrate_add_session_events(&conn).unwrap();
+    let event_store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+    let session_svc = Arc::new(InProcessActorSessionService::new(event_store));
+
+    // Real shared note backend for agent "A"'s single vault.
+    let dir = tempfile::tempdir().unwrap();
+    let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+    let tool = NoteManageTool::new(dir.path().join("note"), backend);
+
+    let sid_1 = SessionKey::peer("agent-a", "conv-1");
+    let sid_2 = SessionKey::peer("agent-a", "conv-2");
+    assert_eq!(sid_1.agent_id(), "agent-a");
+    assert_eq!(sid_2.agent_id(), "agent-a");
+    assert_ne!(
+        sid_1, sid_2,
+        "the two conversations must be genuinely distinct sessions"
+    );
+
+    const EVENTS_PER_CONV: usize = 25;
+
+    let svc_1 = session_svc.clone();
+    let sid_1_task = sid_1.clone();
+    let tool_1 = tool.clone();
+    let handle_1 = tokio::spawn(async move {
+        let turn = inv_iso_turn(sid_1_task.clone());
+        TURN_CONTEXT
+            .scope(turn, async move {
+                for i in 0..EVENTS_PER_CONV {
+                    svc_1
+                        .emit_event(
+                            &sid_1_task,
+                            SessionEvent::SystemMessage {
+                                turn_id: uuid::Uuid::new_v4(),
+                                content: format!("conv1-{i}"),
+                                at: now_ms(),
+                            },
+                        )
+                        .await
+                        .expect("conv-1 emit_event must succeed");
+                    tokio::task::yield_now().await;
+                }
+                AlephTool::call(
+                    &tool_1,
+                    inv_iso_create_args("conv1-note", "written by conv-1"),
+                )
+                .await
+            })
+            .await
+    });
+
+    let svc_2 = session_svc.clone();
+    let sid_2_task = sid_2.clone();
+    let tool_2 = tool.clone();
+    let handle_2 = tokio::spawn(async move {
+        let turn = inv_iso_turn(sid_2_task.clone());
+        TURN_CONTEXT
+            .scope(turn, async move {
+                for i in 0..EVENTS_PER_CONV {
+                    svc_2
+                        .emit_event(
+                            &sid_2_task,
+                            SessionEvent::SystemMessage {
+                                turn_id: uuid::Uuid::new_v4(),
+                                content: format!("conv2-{i}"),
+                                at: now_ms(),
+                            },
+                        )
+                        .await
+                        .expect("conv-2 emit_event must succeed");
+                    tokio::task::yield_now().await;
+                }
+                AlephTool::call(
+                    &tool_2,
+                    inv_iso_create_args("conv2-note", "written by conv-2"),
+                )
+                .await
+            })
+            .await
+    });
+
+    let (result_1, result_2) = tokio::join!(handle_1, handle_2);
+    let result_1 = result_1
+        .expect("conv-1 task must not panic")
+        .expect("conv-1 note write must succeed — no loss, no deadlock");
+    let result_2 = result_2
+        .expect("conv-2 task must not panic")
+        .expect("conv-2 note write must succeed — no loss, no deadlock");
+    assert!(result_1.success);
+    assert!(result_2.success);
+
+    // --- Transcript non-interleave: each conversation's read-back must
+    //     contain EXACTLY its own events, monotonic, none of the other's. ---
+    let events_1 = session_svc.get_events(&sid_1, None, None).await.unwrap();
+    let events_2 = session_svc.get_events(&sid_2, None, None).await.unwrap();
+
+    assert_eq!(
+        events_1.len(),
+        EVENTS_PER_CONV,
+        "conv-1 must not lose or gain events"
+    );
+    assert_eq!(
+        events_2.len(),
+        EVENTS_PER_CONV,
+        "conv-2 must not lose or gain events"
+    );
+
+    for (i, rec) in events_1.iter().enumerate() {
+        assert_eq!(
+            rec.seq,
+            (i + 1) as u64,
+            "conv-1 seq must be monotonic starting at 1"
+        );
+        match &rec.event {
+            SessionEvent::SystemMessage { content, .. } => {
+                assert_eq!(
+                    content,
+                    &format!("conv1-{i}"),
+                    "conv-1's transcript must contain ONLY conv-1's own events, in order — a \
+                     mismatch here means conv-2's events leaked in (interleave regression)"
+                );
+            }
+            other => panic!("unexpected event kind in conv-1 transcript: {other:?}"),
+        }
+    }
+    for (i, rec) in events_2.iter().enumerate() {
+        assert_eq!(
+            rec.seq,
+            (i + 1) as u64,
+            "conv-2 seq must be monotonic starting at 1"
+        );
+        match &rec.event {
+            SessionEvent::SystemMessage { content, .. } => {
+                assert_eq!(
+                    content,
+                    &format!("conv2-{i}"),
+                    "conv-2's transcript must contain ONLY conv-2's own events, in order"
+                );
+            }
+            other => panic!("unexpected event kind in conv-2 transcript: {other:?}"),
+        }
+    }
+
+    // --- Both notes land in the SHARED agent-a partition: no loss, no
+    //     deadlock (both spawned tasks above already completed). ---
+    let list_agent_a = TURN_CONTEXT
+        .scope(inv_iso_turn(SessionKey::main("agent-a")), async {
+            AlephTool::call(&tool, inv_iso_list_args("learning")).await
+        })
+        .await
+        .expect("agent-a list must succeed");
+    let filenames: Vec<String> = list_agent_a
+        .notes
+        .expect("agent-a list must return entries")
+        .into_iter()
+        .map(|n| n.filename)
+        .collect();
+    assert!(
+        filenames.contains(&"conv1-note".to_string()),
+        "conv-1's note must be present in agent-a's partition, got {filenames:?}"
+    );
+    assert!(
+        filenames.contains(&"conv2-note".to_string()),
+        "conv-2's note must be present in agent-a's partition, got {filenames:?}"
     );
 }

@@ -1,10 +1,13 @@
-//! `gateway.metrics.lanes` — live per-lane occupancy gauge for diagnostics.
+//! `gateway.metrics.lanes` / `gateway.metrics.run_concurrency` — live
+//! occupancy gauges for diagnostics.
 //!
-//! Returns the snapshot produced by [`LaneManager::snapshot`] as a JSON
-//! array, suitable for ops dashboards / panel UIs to detect saturation
-//! before it manifests as user-visible timeouts.
+//! `lanes` returns the snapshot produced by [`LaneManager::snapshot`] as a
+//! JSON array, and `run_concurrency` returns the engine's run-lifetime
+//! `ConcurrencyLimiter` snapshot (Task 4/8, audit 3.4) — "N/M run slots in
+//! use". Both are suitable for ops dashboards / panel UIs to detect
+//! saturation before it manifests as user-visible timeouts.
 //!
-//! Lives on the Query lane (registered in `Lane::override_for`).
+//! Both live on the Query lane (registered in `Lane::override_for`).
 
 use crate::sync_primitives::Arc;
 
@@ -12,6 +15,7 @@ use serde_json::json;
 
 use super::super::lane::LaneManager;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
+use super::agent::AgentRunManager;
 
 /// Handle `gateway.metrics.lanes`. Returns the live occupancy snapshot of
 /// every lane in a fixed order (Query / Execute / Mutate / System).
@@ -21,6 +25,17 @@ pub async fn handle_gateway_metrics_lanes(
 ) -> JsonRpcResponse {
     let lanes = lane_manager.snapshot();
     JsonRpcResponse::success(request.id, json!({ "lanes": lanes }))
+}
+
+/// Handle `gateway.metrics.run_concurrency`. Returns the live global
+/// run-slot occupancy snapshot from the execution engine's
+/// `ConcurrencyLimiter` (Task 4) — "N/M run slots in use".
+pub async fn handle_gateway_metrics_run_concurrency(
+    request: JsonRpcRequest,
+    run_manager: Arc<AgentRunManager>,
+) -> JsonRpcResponse {
+    let run_concurrency = run_manager.concurrency_snapshot();
+    JsonRpcResponse::success(request.id, json!({ "run_concurrency": run_concurrency }))
 }
 
 #[cfg(test)]
@@ -51,5 +66,65 @@ mod tests {
         // Channel-class-split lanes carry both pool sizes.
         assert!(lanes[1]["desktop_total"].as_u64().is_some());
         assert!(lanes[1]["shared_total"].as_u64().is_some());
+    }
+
+    /// Minimal `ToolRegistry` double: this test never looks up or executes a
+    /// tool, so an empty registry satisfies `ExecutionEngine<P, R>`'s generic
+    /// bound without pulling in the real (heavy) `BuiltinToolRegistry`.
+    /// Mirrors `execution_engine::tests::EmptyToolRegistry`.
+    struct EmptyToolRegistry;
+
+    impl crate::executor::ToolRegistry for EmptyToolRegistry {
+        fn get_tool(&self, _name: &str) -> Option<&crate::tool_metadata::UnifiedTool> {
+            None
+        }
+
+        fn execute_tool(
+            &self,
+            _tool_name: &str,
+            _arguments: serde_json::Value,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = crate::error::Result<serde_json::Value>> + Send + '_>,
+        > {
+            Box::pin(async { Err(crate::error::AlephError::tool("no tools in test registry")) })
+        }
+    }
+
+    /// Wires a real `ExecutionEngine` (default config: `max_runs_global = 8`)
+    /// through the exact same `Arc<dyn ExecutionAdapter>` → `AgentRunManager`
+    /// path production boot uses, so this proves the whole access chain —
+    /// not just a hand-built double — reports the true configured default.
+    #[tokio::test]
+    async fn run_concurrency_reports_default_global_total() {
+        use crate::gateway::agent_instance::AgentRegistry;
+        use crate::gateway::event_bus::GatewayEventBus;
+        use crate::gateway::execution_adapter::ExecutionAdapter;
+        use crate::gateway::execution_engine::{ExecutionEngine, ExecutionEngineConfig};
+        use crate::gateway::router::AgentRouter;
+
+        let engine = ExecutionEngine::new(
+            ExecutionEngineConfig::default(),
+            Arc::new(crate::thinker::SingleProviderRegistry::new(
+                crate::providers::create_mock_provider(),
+            )),
+            Arc::new(EmptyToolRegistry),
+            Vec::new(),
+            None,
+        );
+        let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(engine);
+        let run_manager = Arc::new(AgentRunManager::new(
+            Arc::new(AgentRouter::new()),
+            Arc::new(GatewayEventBus::new()),
+            Arc::new(AgentRegistry::new()),
+            execution_adapter,
+        ));
+
+        let req = JsonRpcRequest::with_id("gateway.metrics.run_concurrency", None, json!(1));
+        let resp = handle_gateway_metrics_run_concurrency(req, run_manager).await;
+
+        assert!(resp.is_success());
+        let result = resp.result.unwrap();
+        assert_eq!(result["run_concurrency"]["global_total"], 8);
+        assert_eq!(result["run_concurrency"]["global_in_use"], 0);
     }
 }

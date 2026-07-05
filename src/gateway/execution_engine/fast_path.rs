@@ -1,5 +1,5 @@
 use super::{ExecutionEngine, ExecutionError, RunRequest, RunState};
-use crate::gateway::agent_instance::{AgentInstance, AgentState};
+use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::{EventEmitter, RunSummary, StreamEvent};
 use crate::resilience::TaskStatus;
 use tracing::warn;
@@ -31,7 +31,9 @@ where
             }
         };
 
-        agent.set_state(AgentState::Idle).await;
+        // Session claim + concurrency permit release: handled by `_run_slot`'s
+        // `Drop` when `execute()` returns right after this call (Task 6 — the
+        // per-agent `AgentState::Idle` reset that used to sit here is gone).
         let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
         if task_persisted {
             self.persist_run_task_status(run_id, TaskStatus::Completed)
@@ -136,7 +138,9 @@ where
             }
         };
 
-        agent.set_state(AgentState::Idle).await;
+        // Session claim + concurrency permit release: handled by `_run_slot`'s
+        // `Drop` when `execute()` returns right after this call (Task 6 — the
+        // per-agent `AgentState::Idle` reset that used to sit here is gone).
         let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
         if task_persisted {
             self.persist_run_task_status(run_id, TaskStatus::Failed)

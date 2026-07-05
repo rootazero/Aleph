@@ -213,6 +213,25 @@ pub(super) fn register_common_handlers(
         }
     }
 
+    // G4d: register gateway.metrics.run_concurrency with the live
+    // AgentRunManager (Task 8, audit 3.4). Reaches the execution engine's
+    // `ConcurrencyLimiter` snapshot through the same `Arc<dyn
+    // ExecutionAdapter>` indirection `agent.status`/`agent.cancel` already
+    // use — `run_manager` is `Some` in both real and simulated boot modes.
+    if let Some(ref rm) = run_manager {
+        use alephcore::gateway::handlers::gateway_metrics::handle_gateway_metrics_run_concurrency;
+        let rm_concurrency = rm.clone();
+        server
+            .handlers_mut()
+            .register("gateway.metrics.run_concurrency", move |req| {
+                let manager = rm_concurrency.clone();
+                async move { handle_gateway_metrics_run_concurrency(req, manager).await }
+            });
+        if !daemon {
+            println!("  gateway.metrics.run_concurrency: wired");
+        }
+    }
+
     // G2: signal readiness. /ready returns 200 from this point onward;
     // before this, it returns 503 so proxies don't route to a gateway
     // whose handler tree is still being wired.

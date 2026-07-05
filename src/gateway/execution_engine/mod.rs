@@ -11,12 +11,14 @@
 mod adapter;
 mod agent_trace_emit_sink;
 mod callback;
+mod concurrency;
 mod deadline;
 mod engine;
 pub(crate) mod event_drain;
 mod execute;
 mod failure_receipt;
 mod fast_path;
+mod gate;
 pub mod helpers;
 mod history;
 pub mod markdown_skill_refresh;
@@ -24,6 +26,7 @@ mod orchestrator;
 mod persistence;
 mod run_loop;
 mod scratchpad_progress_sink;
+mod session_run_registry;
 mod simple;
 mod slash_command;
 mod steering;
@@ -38,6 +41,7 @@ mod tests;
 
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use agent_trace_emit_sink::AgentTraceEmitSink;
+pub use concurrency::ConcurrencySnapshot;
 pub use engine::{ContinuationDeps, ExecutionEngine};
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use scratchpad_progress_sink::ScratchpadProgressSink;
@@ -65,15 +69,12 @@ use super::router::SessionKey;
 /// Configuration for the execution engine
 #[derive(Debug, Clone)]
 pub struct ExecutionEngineConfig {
-    /// Maximum concurrent runs per agent.
-    ///
-    /// Defensive backstop only: in practice unreachable on the normal dispatch
-    /// path because `AgentInstance::try_start_run` flips the agent's single
-    /// `AgentState` Idle→Running before this count is taken, so a same-agent run
-    /// is never `Running` in `active_runs` when a new run reaches the
-    /// `TooManyRuns` guard. It would fire only for a hypothetical dispatch path
-    /// that registers `Running` rows while bypassing `try_start_run`.
-    pub max_concurrent_runs: usize,
+    /// Global cap on concurrently-executing runs across all sessions/agents.
+    /// Held for the run's lifetime by `ConcurrencyLimiter` (audit 1.4).
+    pub max_runs_global: usize,
+    /// Per-agent sub-cap so one busy agent can't monopolize all global slots
+    /// (audit C4). per-session is hard-capped at 1 by `SessionRunRegistry`.
+    pub max_runs_per_agent: usize,
     /// Default timeout for runs (seconds)
     pub default_timeout_secs: u64,
     /// Enable detailed tracing
@@ -99,7 +100,8 @@ pub struct ExecutionEngineConfig {
 impl Default for ExecutionEngineConfig {
     fn default() -> Self {
         Self {
-            max_concurrent_runs: 5,
+            max_runs_global: 8,
+            max_runs_per_agent: 3,
             default_timeout_secs: 172_800,
             enable_tracing: true,
             mid_turn_steering: true,

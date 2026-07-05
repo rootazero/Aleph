@@ -357,6 +357,13 @@ impl AgentInstance {
     /// Closes the TOCTOU window between `is_idle()` and `set_state(Running)`:
     /// two concurrent executions can no longer both observe Idle before either
     /// flips the state. Returns true on success, false if the agent is not idle.
+    ///
+    /// Retired as the production `ExecutionEngine`'s admission gate (Task 6):
+    /// that path now claims per-*session* via
+    /// `execution_engine::session_run_registry::SessionRunRegistry`, so two
+    /// sessions of the same agent can run in parallel — a guarantee this
+    /// per-*agent* flag cannot express. Kept only for
+    /// `SimpleExecutionEngine`'s own (unchanged) fallback gate.
     pub async fn try_start_run(&self, run_id: &str) -> bool {
         let mut state = self.state.write().await;
         if matches!(*state, AgentState::Idle) {

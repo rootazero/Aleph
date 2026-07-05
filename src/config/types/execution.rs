@@ -53,6 +53,17 @@ pub struct ExecutionConfig {
     /// the engine previously hardcoded this on with no operator override.
     #[serde(default = "default_mid_turn_steering")]
     pub mid_turn_steering: bool,
+
+    /// Global cap on concurrently-executing runs across all sessions/agents
+    /// (default: 8). Enforced by `ConcurrencyLimiter` (audit 1.4).
+    #[serde(default = "default_max_runs_global")]
+    pub max_runs_global: usize,
+
+    /// Per-agent sub-cap so one busy agent can't monopolize all global slots
+    /// (default: 3, audit C4). Per-session is hard-capped at 1 by
+    /// `SessionRunRegistry`.
+    #[serde(default = "default_max_runs_per_agent")]
+    pub max_runs_per_agent: usize,
 }
 
 const fn default_timeout_secs() -> u64 {
@@ -67,6 +78,14 @@ const fn default_mid_turn_steering() -> bool {
     true
 }
 
+const fn default_max_runs_global() -> usize {
+    8
+}
+
+const fn default_max_runs_per_agent() -> usize {
+    3
+}
+
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
@@ -75,6 +94,8 @@ impl Default for ExecutionConfig {
             prompt_mode: PromptMode::default(),
             progress_push: false,
             mid_turn_steering: default_mid_turn_steering(),
+            max_runs_global: default_max_runs_global(),
+            max_runs_per_agent: default_max_runs_per_agent(),
         }
     }
 }
@@ -109,6 +130,10 @@ mod tests {
         // Absent `mid_turn_steering` defaults to true — the engine's prior
         // hardcoded behaviour, now operator-overridable.
         assert!(parsed.mid_turn_steering);
+        // Absent concurrency caps default to 8 (global) / 3 (per-agent) —
+        // backward-compatible with TOML files predating these knobs.
+        assert_eq!(parsed.max_runs_global, 8);
+        assert_eq!(parsed.max_runs_per_agent, 3);
     }
 
     #[test]
