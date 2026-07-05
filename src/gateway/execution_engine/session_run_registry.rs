@@ -43,20 +43,23 @@ impl SessionRunRegistry {
         }
     }
 
-    /// Is a run currently active on this session?
+    /// Snapshot of every session with a run currently claimed — the live,
+    /// authoritative "which sessions are running" set (the in-memory gate, not
+    /// the cosmetic persisted store marker, which can go stale on crash).
     ///
-    /// Not yet called from production code (`try_claim`'s return value already
-    /// covers the gate's own need); kept for diagnostics / a future status RPC.
-    /// `#[allow(dead_code)]` stays until it gets a non-test caller (mirrors
-    /// `concurrency::ConcurrencyLimiter::snapshot`).
+    /// Surfaced beside the `ConcurrencyLimiter` snapshot via
+    /// `gateway.metrics.run_concurrency` so a Panel can paint per-session
+    /// running indicators on a fresh load, and for runs started by another
+    /// interface (daemon / Telegram / another Panel) — cases client-side
+    /// run-event refcounting alone can't see.
     #[must_use]
-    #[allow(dead_code)]
-    pub(super) fn is_running(&self, session_key: &SessionKey) -> bool {
-        let key = session_key.to_key_string();
+    pub(super) fn running_keys(&self) -> Vec<String> {
         self.running
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .contains_key(&key)
+            .keys()
+            .cloned()
+            .collect()
     }
 }
 
@@ -106,10 +109,29 @@ mod tests {
     fn release_only_matching_run_id() {
         let reg = SessionRunRegistry::default();
         let s = sk("main", "conv-1");
+        let key = s.to_key_string();
         assert!(reg.try_claim(&s, "run-A"));
         reg.release(&s, "run-STALE"); // late release from a stale run must not free the current claim
-        assert!(reg.is_running(&s), "mismatched release must not take effect");
+        assert!(
+            reg.running_keys().contains(&key),
+            "mismatched release must not take effect"
+        );
         reg.release(&s, "run-A");
-        assert!(!reg.is_running(&s));
+        assert!(!reg.running_keys().contains(&key));
+    }
+
+    #[test]
+    fn running_keys_lists_every_claimed_session() {
+        let reg = SessionRunRegistry::default();
+        let a = sk("main", "conv-1");
+        let b = sk("other", "conv-2");
+        assert!(reg.running_keys().is_empty());
+        assert!(reg.try_claim(&a, "run-a"));
+        assert!(reg.try_claim(&b, "run-b"));
+        let mut keys = reg.running_keys();
+        keys.sort();
+        let mut want = vec![a.to_key_string(), b.to_key_string()];
+        want.sort();
+        assert_eq!(keys, want);
     }
 }

@@ -54,4 +54,8 @@ where
     fn concurrency_snapshot(&self) -> super::ConcurrencySnapshot {
         Self::concurrency_snapshot(self)
     }
+
+    fn running_sessions(&self) -> Vec<String> {
+        Self::running_sessions(self)
+    }
 }

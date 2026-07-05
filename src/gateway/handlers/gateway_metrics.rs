@@ -27,15 +27,26 @@ pub async fn handle_gateway_metrics_lanes(
     JsonRpcResponse::success(request.id, json!({ "lanes": lanes }))
 }
 
-/// Handle `gateway.metrics.run_concurrency`. Returns the live global
-/// run-slot occupancy snapshot from the execution engine's
-/// `ConcurrencyLimiter` (Task 4) — "N/M run slots in use".
+/// Handle `gateway.metrics.run_concurrency`. Returns the live run-slot
+/// occupancy snapshot from the execution engine's `ConcurrencyLimiter` (Task
+/// 4) — "N/M run slots in use", per-agent breakdown, and queue depth — plus
+/// `running_sessions`, the authoritative set of session keys with an in-flight
+/// run (from the `SessionRunRegistry`). The latter lets a Panel paint
+/// per-session running indicators on a fresh load and for runs started by any
+/// interface, independent of client-side run-event refcounting.
 pub async fn handle_gateway_metrics_run_concurrency(
     request: JsonRpcRequest,
     run_manager: Arc<AgentRunManager>,
 ) -> JsonRpcResponse {
     let run_concurrency = run_manager.concurrency_snapshot();
-    JsonRpcResponse::success(request.id, json!({ "run_concurrency": run_concurrency }))
+    let running_sessions = run_manager.running_sessions();
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "run_concurrency": run_concurrency,
+            "running_sessions": running_sessions,
+        }),
+    )
 }
 
 #[cfg(test)]
@@ -84,7 +95,11 @@ mod tests {
             _tool_name: &str,
             _arguments: serde_json::Value,
         ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = crate::error::Result<serde_json::Value>> + Send + '_>,
+            Box<
+                dyn std::future::Future<Output = crate::error::Result<serde_json::Value>>
+                    + Send
+                    + '_,
+            >,
         > {
             Box::pin(async { Err(crate::error::AlephError::tool("no tools in test registry")) })
         }
@@ -126,5 +141,18 @@ mod tests {
         let result = resp.result.unwrap();
         assert_eq!(result["run_concurrency"]["global_total"], 8);
         assert_eq!(result["run_concurrency"]["global_in_use"], 0);
+        // Second-optimization fields: per-agent sub-cap, idle queue depth, and
+        // an empty per-agent breakdown when nothing is running.
+        assert_eq!(result["run_concurrency"]["per_agent_cap"], 3);
+        assert_eq!(result["run_concurrency"]["waiting"], 0);
+        assert!(result["run_concurrency"]["per_agent"]
+            .as_array()
+            .expect("per_agent is an array")
+            .is_empty());
+        // Sibling field sourced from the SessionRunRegistry — empty at rest.
+        assert!(result["running_sessions"]
+            .as_array()
+            .expect("running_sessions is an array")
+            .is_empty());
     }
 }

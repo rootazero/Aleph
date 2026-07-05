@@ -51,7 +51,6 @@ pub trait ExecutionAdapter: Send + Sync {
     ///
     /// Returns `ExecutionError` if:
     /// - Agent is busy (`AgentBusy`)
-    /// - Too many concurrent runs (`TooManyRuns`)
     /// - Execution fails (`Failed`)
     /// - Run times out (`Timeout`)
     /// - Run is cancelled (`Cancelled`)
@@ -116,6 +115,17 @@ pub trait ExecutionAdapter: Send + Sync {
     /// a harmless "0 of 0 slots" reading rather than a mandatory override.
     fn concurrency_snapshot(&self) -> super::execution_engine::ConcurrencySnapshot {
         super::execution_engine::ConcurrencySnapshot::default()
+    }
+
+    /// Session keys with a run currently in flight (authoritative in-memory
+    /// admission gate). Surfaced beside `concurrency_snapshot` via
+    /// `gateway.metrics.run_concurrency` so Panels can paint per-session
+    /// running indicators.
+    ///
+    /// Default implementation returns an empty set for adapters that have no
+    /// per-session run registry (mocks, `SimpleExecutionEngine`).
+    fn running_sessions(&self) -> Vec<String> {
+        Vec::new()
     }
 }
 

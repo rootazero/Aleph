@@ -183,7 +183,7 @@ async fn announce_one(
                 );
                 return;
             }
-            Err(ExecutionError::AgentBusy(_)) | Err(ExecutionError::TooManyRuns(_)) => {
+            Err(ExecutionError::AgentBusy(_)) => {
                 continue;
             }
             Err(e) => {
