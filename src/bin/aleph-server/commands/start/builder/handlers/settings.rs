@@ -193,6 +193,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     use alephcore::gateway::handlers::generation_config;
     use alephcore::gateway::handlers::generation_providers;
     use alephcore::gateway::handlers::memory_config;
+    use alephcore::gateway::handlers::moa;
     use alephcore::gateway::handlers::providers;
     use alephcore::gateway::handlers::rerank_config;
     use alephcore::gateway::handlers::route_config;
@@ -378,6 +379,37 @@ pub(in crate::commands::start) fn register_config_handlers(
         providers::handle_healthcheck,
         config,
         shared_token_mgr
+    );
+
+    // MoA presets (visual config; shares MoaPresetStore with the `moa` tool)
+    register_handler!(server, "moa.listPresets", moa::handle_list_presets, config);
+    register_handler!(
+        server,
+        "moa.savePreset",
+        moa::handle_save_preset,
+        config,
+        config_patcher
+    );
+    register_handler!(
+        server,
+        "moa.deletePreset",
+        moa::handle_delete_preset,
+        config,
+        config_patcher
+    );
+    register_handler!(
+        server,
+        "moa.setDefault",
+        moa::handle_set_default,
+        config,
+        config_patcher
+    );
+    register_handler!(
+        server,
+        "moa.setSaveTraces",
+        moa::handle_set_save_traces,
+        config,
+        config_patcher
     );
 
     // Routing rules
