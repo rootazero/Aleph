@@ -90,7 +90,13 @@ impl Bm25 {
         }
         let total: usize = doc_tokens.iter().map(Vec::len).sum();
         let avgdl = if n == 0 { 0.0 } else { total as f64 / n as f64 };
-        Self { docs, doc_tokens, df, avgdl, n }
+        Self {
+            docs,
+            doc_tokens,
+            df,
+            avgdl,
+            n,
+        }
     }
 
     fn score(&self, q_tokens: &[String], doc_idx: usize) -> f64 {
@@ -146,9 +152,10 @@ impl ToolSearchTool {
 
     #[must_use]
     pub fn new(docs: Vec<ToolDoc>) -> Self {
-        Self { index: Arc::new(Bm25::build(docs)) }
+        Self {
+            index: Arc::new(Bm25::build(docs)),
+        }
     }
-
 }
 
 #[async_trait]
@@ -184,7 +191,10 @@ impl LoopTool for ToolSearchTool {
     }
 
     async fn execute(&self, input: Value, _cancel: CancellationToken) -> ToolResult {
-        let query = input.get("query").and_then(Value::as_str).unwrap_or_default();
+        let query = input
+            .get("query")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if query.trim().is_empty() {
             return ToolResult::Error {
                 error: "tool_search requires a non-empty `query`.".to_string(),
@@ -221,9 +231,21 @@ mod tests {
 
     fn corpus() -> Vec<ToolDoc> {
         vec![
-            ToolDoc { name: "slack_post_message".into(), description: "Send a message to a Slack channel".into(), schema: json!({"type":"object","properties":{"channel":{"type":"string"}}}) },
-            ToolDoc { name: "github_create_issue".into(), description: "Open a new GitHub issue in a repository".into(), schema: json!({"type":"object"}) },
-            ToolDoc { name: "browser_navigate".into(), description: "Navigate the browser to a URL".into(), schema: json!({"type":"object"}) },
+            ToolDoc {
+                name: "slack_post_message".into(),
+                description: "Send a message to a Slack channel".into(),
+                schema: json!({"type":"object","properties":{"channel":{"type":"string"}}}),
+            },
+            ToolDoc {
+                name: "github_create_issue".into(),
+                description: "Open a new GitHub issue in a repository".into(),
+                schema: json!({"type":"object"}),
+            },
+            ToolDoc {
+                name: "browser_navigate".into(),
+                description: "Navigate the browser to a URL".into(),
+                schema: json!({"type":"object"}),
+            },
         ]
     }
 
@@ -237,7 +259,12 @@ mod tests {
     #[tokio::test]
     async fn ranks_relevant_tool_first_with_schema() {
         let t = ToolSearchTool::new(corpus());
-        let out = t.execute(json!({"query":"send slack message"}), CancellationToken::new()).await;
+        let out = t
+            .execute(
+                json!({"query":"send slack message"}),
+                CancellationToken::new(),
+            )
+            .await;
         match out {
             ToolResult::Success { output } => {
                 let results = output["results"].as_array().unwrap();
@@ -253,7 +280,12 @@ mod tests {
     #[tokio::test]
     async fn limit_is_respected() {
         let t = ToolSearchTool::new(corpus());
-        let out = t.execute(json!({"query":"a e i o u the to in","limit":2}), CancellationToken::new()).await;
+        let out = t
+            .execute(
+                json!({"query":"a e i o u the to in","limit":2}),
+                CancellationToken::new(),
+            )
+            .await;
         if let ToolResult::Success { output } = out {
             assert_eq!(output["results"].as_array().unwrap().len(), 2);
         } else {
@@ -264,14 +296,21 @@ mod tests {
     #[tokio::test]
     async fn empty_query_errors() {
         let t = ToolSearchTool::new(corpus());
-        let out = t.execute(json!({"query":"   "}), CancellationToken::new()).await;
+        let out = t
+            .execute(json!({"query":"   "}), CancellationToken::new())
+            .await;
         assert!(matches!(out, ToolResult::Error { .. }));
     }
 
     #[tokio::test]
     async fn no_match_returns_empty_not_error() {
         let t = ToolSearchTool::new(corpus());
-        let out = t.execute(json!({"query":"zzzqqq_nonexistent_capability"}), CancellationToken::new()).await;
+        let out = t
+            .execute(
+                json!({"query":"zzzqqq_nonexistent_capability"}),
+                CancellationToken::new(),
+            )
+            .await;
         if let ToolResult::Success { output } = out {
             assert_eq!(output["count"], 0);
         } else {

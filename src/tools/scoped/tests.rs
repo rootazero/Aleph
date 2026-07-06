@@ -36,9 +36,7 @@ impl LoopTool for NamedStub {
         json!({ "type": "object" })
     }
     async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
-        LoopToolResult::Success {
-            output: json!({}),
-        }
+        LoopToolResult::Success { output: json!({}) }
     }
 }
 
@@ -1703,7 +1701,11 @@ async fn deferred_tools_dropped_from_list_but_still_describable_and_executable()
         !names.contains(&"beta".to_string()),
         "deferred tool must not be listed"
     );
-    let meta_names: Vec<String> = svc.metadata_schema().iter().map(|d| d.name.clone()).collect();
+    let meta_names: Vec<String> = svc
+        .metadata_schema()
+        .iter()
+        .map(|d| d.name.clone())
+        .collect();
     assert!(!meta_names.contains(&"beta".to_string()));
 
     // describe() and execute() still reach it (searched → callable).
