@@ -152,9 +152,6 @@ pub trait ToolService: Send + Sync + 'static {
         _name: &str,
         _input: &serde_json::Value,
     ) -> crate::tools::concurrency::ConcurrencyClaim {
-        // Conservative default: whole-world exclusive. Every production impl
-        // (ScopedToolService / AllowlistToolService / McpScopedToolService)
-        // overrides this with real registry-visible path scopes.
         crate::tools::concurrency::ConcurrencyClaim::global()
     }
 

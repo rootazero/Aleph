@@ -397,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn migrated_builtins_flow_through_explicit() {
+    fn explicit_budget_overrides_name_table() {
         // Explicit budget always wins over the name table.
         assert_eq!(
             resolve_result_budget("web_fetch", Some(10_000)),
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn fallback_table_keeps_grep() {
         // `search_files`/`Grep` has no in-crate tool to declare the trait
-        // method, so it remains the single legacy name-table entry.
+        // method, so it stays in the name table (alongside `web_fetch`).
         assert_eq!(resolve_result_budget("Grep", None), Some(6_000));
         assert_eq!(resolve_result_budget("search_files", None), Some(6_000));
     }
