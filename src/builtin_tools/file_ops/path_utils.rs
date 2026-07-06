@@ -92,11 +92,25 @@ pub fn get_denied_paths() -> Vec<String> {
 /// Uses `has_root()` instead of `is_absolute()` so that root-anchored-but-
 /// drive-relative patterns (e.g. `/etc/*` on Windows, which has a root but no
 /// drive prefix) are also rejected — they still escape the base via `join`.
+///
+/// Additionally rejects any pattern containing a drive or UNC prefix
+/// (`Component::Prefix`) — e.g. `C:foo` on Windows. Such patterns are not
+/// root-anchored (`has_root()` returns false) yet `Path::join(base, "C:foo")`
+/// discards the base entirely and resolves relative to drive C's current
+/// directory, bypassing the deny-checked base. On Unix `Component::Prefix`
+/// never occurs, so this check is a safe no-op there.
 pub(crate) fn reject_unsafe_glob_pattern(pattern: &str) -> Result<(), ToolError> {
     let p = std::path::Path::new(pattern);
     if p.has_root() {
         return Err(ToolError::InvalidArgs(format!(
             "Glob pattern must be relative to the search directory: {pattern}"
+        )));
+    }
+    if p.components()
+        .any(|c| matches!(c, std::path::Component::Prefix(_)))
+    {
+        return Err(ToolError::InvalidArgs(format!(
+            "Glob pattern must not contain a drive/UNC prefix: {pattern}"
         )));
     }
     if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
@@ -313,6 +327,60 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    // --- reject_unsafe_glob_pattern ---
+
+    #[test]
+    fn glob_guard_allows_relative_patterns() {
+        assert!(
+            reject_unsafe_glob_pattern("*.txt").is_ok(),
+            "bare wildcard must be accepted"
+        );
+        assert!(
+            reject_unsafe_glob_pattern("images/photo.jpg").is_ok(),
+            "relative sub-path must be accepted"
+        );
+        assert!(
+            reject_unsafe_glob_pattern("**/foo").is_ok(),
+            "recursive glob must be accepted"
+        );
+    }
+
+    #[test]
+    fn glob_guard_rejects_root_anchored() {
+        assert!(
+            matches!(
+                reject_unsafe_glob_pattern("/etc/*"),
+                Err(ToolError::InvalidArgs(_))
+            ),
+            "/etc/* is root-anchored and must be rejected"
+        );
+    }
+
+    #[test]
+    fn glob_guard_rejects_parent_dir() {
+        assert!(
+            matches!(
+                reject_unsafe_glob_pattern("../secrets"),
+                Err(ToolError::InvalidArgs(_))
+            ),
+            "../secrets contains `..` and must be rejected"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn glob_guard_rejects_drive_relative_prefix() {
+        // On Windows, `C:foo` has a Prefix component but no root — Path::join
+        // with any base replaces the base entirely, so it must be rejected.
+        assert!(
+            matches!(
+                reject_unsafe_glob_pattern("C:foo"),
+                Err(ToolError::InvalidArgs(_))
+            ),
+            "C:foo is a drive-relative pattern and must be rejected on Windows"
+        );
+    }
 
     /// The denylist must include Aleph's own encrypted vault and the `data/`
     /// auth directory. Asserted by path *suffix* so the test stays hermetic and
