@@ -111,7 +111,9 @@ pub struct SessionMoaPref {
 - 边界：
   - `moa off` / `disarm` → `clear_session_moa` 清整槽（连 stash 一起清）= 显式 off 胜，正确。
   - one-shot 叠 one-shot → 第二个覆盖第一个，`restore` 不继承（第一个 one-shot 本就该消失）。
-  - run 构建失败的 `restore_one_shot` 回填路径不变（empty-slot-only 语义）；回填的是**带 restore 的完整 pref**，下一轮真跑时仍能正确 reinstate。
+  - run 构建失败的 `restore_one_shot` 回填路径不变（empty-slot-only 语义），但与 F2 的交互按覆盖对象分两种终态（均 benign）：
+    - **覆盖空槽**的 one-shot（常见 `/moa` 路径）：`take_for_run` `remove` 后槽空 → `restore_one_shot` 回填该 one-shot → 下一轮重试，同今日。
+    - **覆盖 sticky** 的 one-shot：`take_for_run` 已即时 reinstate sticky（槽非空）→ `restore_one_shot`（`entry().or_insert` 仅填空槽）成 **no-op** → one-shot **不**回填、**sticky 保留**。终态无害且更符合心智模型：MoA 保持激活、build 失败经 `count==0` 顾问事件呈现（非静默）、下一轮用 sticky preset 而非重试 one-shot 的默认 preset。要让 one-shot 在此情形也重试需 `take_for_run` 延后 reinstate（两阶段协议）＝破坏「单一原子 restore 点」核心设计，收益边际，故不做（KISS/YAGNI）。
 
 ### F3 — `/moa` slash 路径查 caller role
 
