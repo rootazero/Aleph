@@ -277,6 +277,33 @@ mod tests {
             "read_file is not in allowed set so must be filtered"
         );
     }
+
+    #[tokio::test]
+    async fn off_vs_on_deferral_surface() {
+        let make = || {
+            let mut reg = LoopToolRegistry::new();
+            reg.register(Box::new(StubTool));   // read_file
+            reg.register(Box::new(OtherStub));  // web_fetch (stands in for an MCP tool)
+            Arc::new(reg)
+        };
+        // OFF: empty deferred set → both listed.
+        let off = build_request_tool_service(
+            make(), BTreeSet::new(), None, None, None, None, "",
+            None, false, &[], false, BTreeSet::new(),
+        );
+        let off_names: Vec<String> = off.list().await.into_iter().map(|d| d.name).collect();
+        assert!(off_names.contains(&"web_fetch".to_string()));
+
+        // ON: web_fetch deferred → absent from list, still describable/executable.
+        let on = build_request_tool_service(
+            make(), BTreeSet::new(), None, None, None, None, "",
+            None, false, &[], false, ["web_fetch".to_string()].into_iter().collect(),
+        );
+        let on_names: Vec<String> = on.list().await.into_iter().map(|d| d.name).collect();
+        assert!(!on_names.contains(&"web_fetch".to_string()));
+        assert!(on.describe("web_fetch").await.is_some());
+        assert!(on.execute("web_fetch", json!({})).await.is_ok());
+    }
 }
 
 #[cfg(test)]
