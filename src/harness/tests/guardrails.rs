@@ -895,9 +895,6 @@ impl ToolService for ConcurrentRecordingTools {
     fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
-    async fn is_call_concurrent_safe(&self, _name: &str, _input: &serde_json::Value) -> bool {
-        true
-    }
 }
 
 /// Same shape as `make_deps_with_tools` but with the parallel fast path armed

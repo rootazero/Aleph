@@ -251,7 +251,7 @@ impl ScopedToolService {
     /// [`crate::tools::runtime::ToolDefinition::concurrent_safe`] so the
     /// harness can advertise / inspect parallel-safety per tool. The
     /// authoritative per-call dispatch decision still goes through
-    /// [`crate::tools::service::ToolService::is_call_concurrent_safe`].
+    /// [`crate::tools::service::ToolService::call_concurrency_claim`].
     pub(super) fn builtin_metadata(
         name: &str,
         concurrent_safe: bool,

@@ -275,47 +275,16 @@ impl ToolService for ScopedToolService {
         fut.instrument(span).await
     }
 
-    async fn is_call_concurrent_safe(&self, name: &str, input: &Value) -> bool {
-        // Subagent dispatch spawns nested LLM turns and shares the workspace —
-        // never parallel-safe with anything else in the batch.
-        if let Some(ref st) = self.subagent_tool {
-            if st.name() == name {
-                return false;
-            }
-        }
-        // Allowed-set filter gates this just like execute(); an opaque "not
-        // allowed" tool is conservatively unsafe.
-        if !self.is_allowed(name) {
-            return false;
-        }
-        // Confirmation-gated tools require user approval — they must be
-        // routed through the serial path so the prompt is visible in input
-        // order; never run them in parallel. Honors the static
-        // `confirm_tools` set, per-tool `requires_confirmation()`
-        // declarations, and permission-policy `Ask` so a confirmation-bound
-        // tool is never silently parallelized past its approval prompt.
-        if self.confirm_tools.contains(name)
-            || self.inner.requires_confirmation(name)
-            || self.is_permission_ask(name)
-        {
-            return false;
-        }
-        self.inner
-            .is_call_concurrent_safe(name, input)
-            .unwrap_or(false)
-    }
-
     async fn call_concurrency_claim(
         &self,
         name: &str,
         input: &Value,
     ) -> crate::tools::concurrency::ConcurrencyClaim {
         use crate::tools::concurrency::ConcurrencyClaim;
-        // Same gating as `is_call_concurrent_safe`: subagent dispatch,
-        // disallowed tools, and confirmation-gated tools are all whole-world
-        // exclusive (the serial-path equivalent of the old `false`), so they
-        // can never join a parallel batch. Only when none of those fire do we
-        // surface the inner tool's bounded scope.
+        // Subagent dispatch, disallowed tools, and confirmation-gated tools are
+        // all whole-world exclusive so they can never join a parallel batch.
+        // Only when none of those fire do we surface the inner tool's bounded
+        // scope.
         if let Some(ref st) = self.subagent_tool {
             if st.name() == name {
                 return ConcurrencyClaim::global();

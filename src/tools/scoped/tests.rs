@@ -854,7 +854,7 @@ async fn describe_leaves_metadata_default_for_unbudgeted_tool() {
 }
 
 // -------------------------------------------------------------------------
-// is_call_concurrent_safe — opencode-parity dispatch query
+// call_concurrency_claim — dispatch parallelism query
 // -------------------------------------------------------------------------
 
 /// A LoopTool that always reports false for parallel safety, for tests
@@ -883,37 +883,46 @@ impl LoopTool for UnsafeStubTool {
 }
 
 #[tokio::test]
-async fn is_call_concurrent_safe_defaults_true_for_safe_stub_tool() {
+async fn call_concurrency_claim_shared_for_safe_stub_tool() {
     // `StubTool` doesn't override `is_concurrent_safe`, so the trait
     // default (true) flows through the registry → ScopedToolService
-    // chain.
+    // chain as a Shared claim.
     let registry = make_registry(&["safe_tool"]);
     let svc = ScopedToolService::new(registry, BTreeSet::new());
-    assert!(svc.is_call_concurrent_safe("safe_tool", &json!({})).await);
+    assert!(matches!(
+        svc.call_concurrency_claim("safe_tool", &json!({})).await,
+        crate::tools::concurrency::ConcurrencyClaim::Shared
+    ));
 }
 
 #[tokio::test]
-async fn is_call_concurrent_safe_honors_unsafe_tool_override() {
-    // Hand-rolled unsafe tool — propagates `false` through the same
-    // chain.
+async fn call_concurrency_claim_exclusive_for_unsafe_tool_override() {
+    // Hand-rolled unsafe tool — propagates non-Shared claim through the
+    // same chain.
     let mut r = LoopToolRegistry::new();
     r.register(Box::new(UnsafeStubTool));
     let registry = Arc::new(r);
     let svc = ScopedToolService::new(registry, BTreeSet::new());
-    assert!(!svc.is_call_concurrent_safe("unsafe_tool", &json!({})).await);
+    assert!(!matches!(
+        svc.call_concurrency_claim("unsafe_tool", &json!({})).await,
+        crate::tools::concurrency::ConcurrencyClaim::Shared
+    ));
 }
 
 #[tokio::test]
-async fn is_call_concurrent_safe_returns_false_for_unknown_tool() {
+async fn call_concurrency_claim_exclusive_for_unknown_tool() {
     // Conservative default — the harness must not parallel-dispatch a
     // tool it cannot find a definition for.
     let registry = make_registry(&[]);
     let svc = ScopedToolService::new(registry, BTreeSet::new());
-    assert!(!svc.is_call_concurrent_safe("nope", &json!({})).await);
+    assert!(!matches!(
+        svc.call_concurrency_claim("nope", &json!({})).await,
+        crate::tools::concurrency::ConcurrencyClaim::Shared
+    ));
 }
 
 #[tokio::test]
-async fn is_call_concurrent_safe_returns_false_for_disallowed_tool() {
+async fn call_concurrency_claim_exclusive_for_disallowed_tool() {
     // Tools outside the allow list are conservatively unsafe — the
     // harness's parallel fast-path scan should never see them as
     // candidates.
@@ -921,8 +930,14 @@ async fn is_call_concurrent_safe_returns_false_for_disallowed_tool() {
     let mut allowed = BTreeSet::new();
     allowed.insert("other".to_string());
     let svc = ScopedToolService::new(registry, allowed);
-    assert!(!svc.is_call_concurrent_safe("safe_tool", &json!({})).await);
-    assert!(svc.is_call_concurrent_safe("other", &json!({})).await);
+    assert!(!matches!(
+        svc.call_concurrency_claim("safe_tool", &json!({})).await,
+        crate::tools::concurrency::ConcurrencyClaim::Shared
+    ));
+    assert!(matches!(
+        svc.call_concurrency_claim("other", &json!({})).await,
+        crate::tools::concurrency::ConcurrencyClaim::Shared
+    ));
 }
 
 #[tokio::test]
@@ -1265,11 +1280,17 @@ async fn plain_tool_unaffected_by_confirmation_gate() {
 async fn declared_confirmation_tool_never_parallel() {
     let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new());
     assert!(
-        !svc.is_call_concurrent_safe("danger", &json!({})).await,
+        !matches!(
+            svc.call_concurrency_claim("danger", &json!({})).await,
+            crate::tools::concurrency::ConcurrencyClaim::Shared
+        ),
         "confirm-required tool must be forced onto the serial path"
     );
     assert!(
-        svc.is_call_concurrent_safe("plain", &json!({})).await,
+        matches!(
+            svc.call_concurrency_claim("plain", &json!({})).await,
+            crate::tools::concurrency::ConcurrencyClaim::Shared
+        ),
         "plain concurrent-safe tool stays parallelizable"
     );
 }
@@ -1617,7 +1638,10 @@ async fn ask_policy_tool_is_never_parallelized() {
             perms(PermissionAction::Allow, &[("alpha", PermissionAction::Ask)]),
         );
     assert!(
-        !svc.is_call_concurrent_safe("alpha", &json!({})).await,
+        !matches!(
+            svc.call_concurrency_claim("alpha", &json!({})).await,
+            crate::tools::concurrency::ConcurrencyClaim::Shared
+        ),
         "Ask-gated tool must route through the serial path"
     );
 }

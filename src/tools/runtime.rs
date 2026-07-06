@@ -36,7 +36,7 @@ pub struct ToolDefinition {
     /// Static "this tool is safe under parallel dispatch" hint, derived
     /// from `LoopTool::is_concurrent_safe(&Value::Null)` at definition build
     /// time. Informational only — the harness queries
-    /// `ToolService::is_call_concurrent_safe(name, &actual_input)` at
+    /// `ToolService::call_concurrency_claim(name, &actual_input)` at
     /// dispatch time for the authoritative answer, since input-dependent
     /// tools (e.g. `file_ops`) may flip per call.
     #[serde(default)]
@@ -260,14 +260,6 @@ impl LoopToolRegistry {
             .collect();
         defs.sort_by(|a, b| a.name.cmp(&b.name));
         defs
-    }
-
-    /// Check whether the named tool reports itself concurrent-safe for the
-    /// given input. Returns `None` if the tool is unknown to this registry
-    /// (callers should treat unknown as conservative `false`).
-    #[must_use]
-    pub fn is_call_concurrent_safe(&self, name: &str, input: &Value) -> Option<bool> {
-        self.resolve(name).map(|t| t.is_concurrent_safe(input))
     }
 
     /// Resolve the named tool's resource-scope-aware concurrency claim for the

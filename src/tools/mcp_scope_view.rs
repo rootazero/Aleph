@@ -80,21 +80,14 @@ impl ToolService for McpScopedToolService {
             })
     }
 
-    async fn is_call_concurrent_safe(&self, name: &str, input: &serde_json::Value) -> bool {
-        // Parent (typically AllowlistToolService → ScopedToolService) owns
-        // the authoritative answer for any tool it exposes. Extras-only
-        // entries currently route execute() through the parent too (Stage I
-        // MVP), so deferring is correct here as well.
-        self.parent.is_call_concurrent_safe(name, input).await
-    }
-
     async fn call_concurrency_claim(
         &self,
         name: &str,
         input: &serde_json::Value,
     ) -> crate::tools::concurrency::ConcurrencyClaim {
-        // Defer to the parent for the same reason as `is_call_concurrent_safe`:
-        // it owns the authoritative bounded scope for every tool it exposes.
+        // Defer to the parent: it owns the authoritative bounded scope for
+        // every tool it exposes. Extras-only entries currently route execute()
+        // through the parent too (Stage I MVP), so deferring is correct here.
         self.parent.call_concurrency_claim(name, input).await
     }
 

@@ -196,8 +196,16 @@ impl ToolService for ScriptedTools {
         std::sync::Arc::from([])
     }
 
-    async fn is_call_concurrent_safe(&self, _name: &str, _input: &serde_json::Value) -> bool {
-        self.concurrent_safe
+    async fn call_concurrency_claim(
+        &self,
+        _name: &str,
+        _input: &serde_json::Value,
+    ) -> crate::tools::concurrency::ConcurrencyClaim {
+        if self.concurrent_safe {
+            crate::tools::concurrency::ConcurrencyClaim::Shared
+        } else {
+            crate::tools::concurrency::ConcurrencyClaim::global()
+        }
     }
 }
 

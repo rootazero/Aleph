@@ -102,7 +102,7 @@ pub struct ToolDefinitionMetadata {
     /// inner [`crate::tools::runtime::ToolDefinition::concurrent_safe`].
     /// Tools that mutate shared state (`file_write`, bash, `code_exec`,
     /// send_*) leave this `false`; pure read-only queries set it `true`.
-    /// The harness uses [`ToolService::is_call_concurrent_safe`] for the
+    /// The harness uses [`ToolService::call_concurrency_claim`] for the
     /// authoritative per-call answer at dispatch time, since some tools
     /// (e.g. `file_ops`) flip based on the operation in their input.
     #[serde(default)]
@@ -137,19 +137,6 @@ pub trait ToolService: Send + Sync + 'static {
     /// also implement, typically returning `Arc::from([])`.
     fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]>;
 
-    /// Whether the named tool reports itself safe to dispatch in parallel
-    /// with other concurrent-safe tools in the same Act batch, given the
-    /// concrete input the LLM emitted.
-    ///
-    /// Default conservative answer is `false` — only implementations with
-    /// real registry visibility (e.g., [`crate::tools::scoped::ScopedToolService`])
-    /// should override. The harness's parallel-dispatch fast path
-    /// considers a batch parallelizable only when EVERY call in the batch
-    /// returns `true` from this query.
-    async fn is_call_concurrent_safe(&self, _name: &str, _input: &serde_json::Value) -> bool {
-        false
-    }
-
     /// Resource-scope-aware concurrency claim for the named call, given the
     /// concrete input the LLM emitted. The harness parallel fast path admits a
     /// batch only when [`crate::tools::concurrency::batch_parallelizable`]
@@ -157,23 +144,18 @@ pub trait ToolService: Send + Sync + 'static {
     /// mutations (e.g. writes to different files) run concurrently while
     /// same-path or whole-world mutations fall back to serial.
     ///
-    /// The default delegates to [`Self::is_call_concurrent_safe`] so every
-    /// existing implementation keeps byte-identical scheduling: `true` →
-    /// `Shared`, `false` → `Exclusive { Global }`. Only implementations with
-    /// real registry visibility (e.g.
-    /// [`crate::tools::scoped::ScopedToolService`]) override this to surface a
-    /// tool's bounded path scope.
+    /// Conservative default: whole-world exclusive. Every production impl
+    /// (`ScopedToolService` / `AllowlistToolService` / `McpScopedToolService`)
+    /// overrides this with real registry-visible path scopes.
     async fn call_concurrency_claim(
         &self,
-        name: &str,
-        input: &serde_json::Value,
+        _name: &str,
+        _input: &serde_json::Value,
     ) -> crate::tools::concurrency::ConcurrencyClaim {
-        use crate::tools::concurrency::ConcurrencyClaim;
-        if self.is_call_concurrent_safe(name, input).await {
-            ConcurrencyClaim::Shared
-        } else {
-            ConcurrencyClaim::global()
-        }
+        // Conservative default: whole-world exclusive. Every production impl
+        // (ScopedToolService / AllowlistToolService / McpScopedToolService)
+        // overrides this with real registry-visible path scopes.
+        crate::tools::concurrency::ConcurrencyClaim::global()
     }
 
     /// Execute a tool call with an opencode-parity `AbortSignal` token.
