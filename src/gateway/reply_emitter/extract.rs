@@ -21,18 +21,25 @@ use crate::gateway::event_emitter::StreamEvent;
 /// and returns `None` when nothing visible survives (a pure-thinking or
 /// completion-only turn). Every final-answer **delivery** path routes through
 /// this: [`extract_final_response`] (group-chat transcript, cron), the
-/// cross-surface `OriginFanoutEmitter`, and the team `TeamFanoutEmitter`. That
-/// is what stops a live Panel bubble, an origin-channel message, and the
-/// persisted transcript from ever disagreeing on the text — or leaking raw
-/// reasoning tags that the inbound `ReplyEmitter` path already strips.
+/// cross-surface `OriginFanoutEmitter`, the team `TeamFanoutEmitter`, and the
+/// message assembler's `finalize()`. That is what stops a live Panel bubble, an
+/// origin-channel message, and the persisted transcript from ever disagreeing
+/// on the text — or leaking raw reasoning tags that the inbound `ReplyEmitter`
+/// path already strips.
 #[must_use]
-pub(crate) fn sanitize_final_response(text: &str) -> Option<String> {
+pub(crate) fn sanitize_final_text(text: &str) -> Option<String> {
     let sanitized = sanitize_llm_output(text);
-    if sanitized.is_empty() {
+    if sanitized.trim().is_empty() {
         None
     } else {
         Some(sanitized.into_owned())
     }
+}
+
+/// Back-compat name used by fanout/telegram/cron/broadcast.
+#[must_use]
+pub(crate) fn sanitize_final_response(text: &str) -> Option<String> {
+    sanitize_final_text(text)
 }
 
 /// Recover the deliverable final text from a completed run's event log.

@@ -107,13 +107,9 @@ impl MessageAssembler {
     }
 }
 
-/// Final sanitize pass. Inlined in Task 2; Task 4 replaces this body with a
-/// delegation to `crate::gateway::reply_emitter::sanitize_final_text`.
+/// Final sanitize pass — delegates to the shared final-answer sanitize atom
+/// so `finalize()` and every other delivery path (cron/broadcast/fanout/
+/// telegram) can never disagree on what counts as deliverable text.
 fn finalize_sanitize(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
+    crate::gateway::reply_emitter::sanitize_final_text(text)
 }

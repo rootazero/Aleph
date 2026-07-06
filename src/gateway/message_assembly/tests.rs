@@ -62,3 +62,12 @@ fn reset_iteration_clears_visible_but_keeps_chunk_index() {
         "chunk index stays monotonic across reset_iteration"
     );
 }
+
+#[test]
+fn finalize_uses_shared_sanitizer_for_task_complete_marker() {
+    let mut a = MessageAssembler::new();
+    a.push_text_delta("done <task-complete/>");
+    // The self-closing marker is caught by the shared final sanitizer,
+    // not the streaming scrubber.
+    assert_eq!(a.finalize().answer.as_deref(), Some("done"));
+}
