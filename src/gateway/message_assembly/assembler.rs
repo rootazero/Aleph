@@ -1,43 +1,28 @@
-//! The single owner of a run's assembled agent message.
+//! The single owner of a run's live visible message stream.
 //!
-//! Ports the kosong `merge_in_place` / pi `partial` pattern: one reducer per
-//! run/consumer that accumulates the deliverable answer and the reasoning,
+//! Ports the kosong `merge_in_place` / pi `partial` pattern to Aleph's Rust
+//! core: one reducer that accumulates the deliverable answer as it streams,
 //! stripping reasoning/completion/memory framing from the *live* visible
-//! stream across delta boundaries (G4). `snapshot()` (the live `full_text`)
-//! and `finalize().answer` draw from the same `visible` accumulator — the
-//! anti-drift invariant: one source, with `finalize()` adding only an
-//! idempotent final-sanitize pass on top (so they agree up to that clean pass,
-//! e.g. a trailing `<task-complete/>` present in `snapshot()` is stripped in
-//! `finalize().answer`).
+//! stream across delta boundaries (G4). `snapshot()` is the running visible
+//! text that populates `ResponseChunk.full_text`.
 //!
 //! # Consumers
 //!
-//! The event drain (`execution_engine::event_drain`) consumes the *streaming*
-//! surface — `push_text_delta` / `snapshot` / `next_chunk_index` /
-//! `flush_boundary` / `reset_iteration` — as a live scrubbing accumulator; it
-//! never calls `finalize` (the terminal answer there comes from `FlowOutcome`).
-//! The *terminal* surface — `finalize`, `AssembledMessage`,
-//! `push_reasoning_delta`, and the `reasoning` accumulator — is the API for the
-//! deferred `ReplyEmitter` adoption (single-owner finalize on the channel
-//! path). It is exercised by this module's tests until that consumer lands; if
-//! that adoption is dropped rather than deferred, trim this surface per R10.
+//! The event drain (`execution_engine::event_drain`) is the sole consumer: it
+//! feeds raw deltas through `push_text_delta`, streams the cleaned slice, reads
+//! `snapshot` / `next_chunk_index` for each `ResponseChunk`, and calls
+//! `flush_boundary` / `reset_iteration` at tool-call boundaries. The terminal
+//! answer there comes from `FlowOutcome`, not this reducer — so this type owns
+//! only the *streaming* surface. The shared final-answer sanitize atom lives in
+//! `reply_emitter::sanitize_final_text` (used by every delivery path); it is
+//! deliberately not duplicated here.
 
 use crate::memory::streaming_scrubber::{StreamingContextScrubber, DISCARD_TAG_PAIRS};
 
-/// The terminal, deliverable form of a run's assembled message.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AssembledMessage {
-    /// Sanitized visible answer; `None` when nothing deliverable survives.
-    pub answer: Option<String>,
-    /// Accumulated reasoning; `None` when empty.
-    pub reasoning: Option<String>,
-}
-
-/// Reducer over a run's streamed text + reasoning.
+/// Reducer over a run's streamed visible text.
 #[derive(Debug)]
 pub struct MessageAssembler {
     visible: String,
-    reasoning: String,
     chunk_index: u32,
     scrubber: StreamingContextScrubber,
 }
@@ -53,7 +38,6 @@ impl MessageAssembler {
     pub fn new() -> Self {
         Self {
             visible: String::new(),
-            reasoning: String::new(),
             chunk_index: 0,
             scrubber: StreamingContextScrubber::with_tag_set(DISCARD_TAG_PAIRS),
         }
@@ -67,11 +51,6 @@ impl MessageAssembler {
             self.visible.push_str(&visible);
         }
         visible
-    }
-
-    /// Feed a reasoning delta (from `FlowStreamEvent::Reasoning`).
-    pub fn push_reasoning_delta(&mut self, raw: &str) {
-        self.reasoning.push_str(raw);
     }
 
     /// Drain any held-back tag tail at a tool-call / run boundary.
@@ -97,39 +76,12 @@ impl MessageAssembler {
     }
 
     /// Clear the visible accumulator at a think-iteration boundary while
-    /// preserving the monotonic `chunk_index` and the reasoning accumulator.
-    /// The drain calls this at each tool-call boundary so every iteration's
-    /// `full_text` starts fresh (matching the prior per-iteration semantics),
-    /// while the chunk counter stays monotonic across the whole run.
-    /// Precondition: the scrubber was just drained via `flush_boundary`, so no
-    /// partial-tag tail is stranded.
+    /// preserving the monotonic `chunk_index`. The drain calls this at each
+    /// tool-call boundary so every iteration's `full_text` starts fresh
+    /// (matching the prior per-iteration semantics), while the chunk counter
+    /// stays monotonic across the whole run. Precondition: the scrubber was
+    /// just drained via `flush_boundary`, so no partial-tag tail is stranded.
     pub fn reset_iteration(&mut self) {
         self.visible.clear();
     }
-
-    /// Terminal answer + reasoning. Flushes any held tail first, then applies
-    /// the idempotent final sanitizer (catches self-closing `<task-complete/>`
-    /// and trailing incomplete directives the streaming scrubber leaves).
-    ///
-    /// Reads the current `visible` accumulator: a consumer that calls
-    /// `reset_iteration` per tool boundary (as the drain does) would see only
-    /// the last iteration's text here, so such a consumer must not rely on
-    /// `finalize` for the whole-run answer.
-    pub fn finalize(&mut self) -> AssembledMessage {
-        let _ = self.flush_boundary();
-        let answer = finalize_sanitize(&self.visible);
-        let reasoning = if self.reasoning.trim().is_empty() {
-            None
-        } else {
-            Some(self.reasoning.clone())
-        };
-        AssembledMessage { answer, reasoning }
-    }
-}
-
-/// Final sanitize pass — delegates to the shared final-answer sanitize atom
-/// so `finalize()` and every other delivery path (cron/broadcast/fanout/
-/// telegram) can never disagree on what counts as deliverable text.
-fn finalize_sanitize(text: &str) -> Option<String> {
-    crate::gateway::reply_emitter::sanitize_final_text(text)
 }

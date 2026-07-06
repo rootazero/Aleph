@@ -21,13 +21,13 @@ use crate::gateway::event_emitter::StreamEvent;
 /// and returns `None` when nothing visible survives (a pure-thinking or
 /// completion-only turn). Every final-answer **delivery** path routes through
 /// this: [`extract_final_response`] (group-chat transcript, cron), the
-/// cross-surface `OriginFanoutEmitter`, the team `TeamFanoutEmitter`, and the
-/// message assembler's `finalize()`. That is what stops a live Panel bubble, an
-/// origin-channel message, and the persisted transcript from ever disagreeing
+/// cross-surface `OriginFanoutEmitter`, and the team `TeamFanoutEmitter`. That
+/// is what stops a live Panel bubble, an origin-channel message, and the
+/// persisted transcript from ever disagreeing
 /// on the text — or leaking raw reasoning tags that the inbound `ReplyEmitter`
 /// path already strips.
 #[must_use]
-pub(crate) fn sanitize_final_text(text: &str) -> Option<String> {
+fn sanitize_final_text(text: &str) -> Option<String> {
     let sanitized = sanitize_llm_output(text);
     if sanitized.trim().is_empty() {
         None
