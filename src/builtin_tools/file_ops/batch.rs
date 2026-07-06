@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use tracing::{debug, info};
 
-use super::path_utils::check_and_resolve_path;
+use super::path_utils::{check_and_resolve_path, reject_unsafe_glob_pattern};
 use super::types::{FileInfo, FileOpsOutput};
 use crate::builtin_tools::error::ToolError;
 
@@ -45,6 +45,8 @@ pub async fn execute_batch_move(
         )));
     }
 
+    reject_unsafe_glob_pattern(pattern)?;
+
     let full_pattern = canonical.join(pattern);
     let pattern_str = full_pattern.to_string_lossy();
 
@@ -57,6 +59,10 @@ pub async fn execute_batch_move(
         match entry {
             Ok(path) => {
                 if path.is_file() {
+                    if check_and_resolve_path(&path, denied_paths, output_dir_override).is_err() {
+                        errors.push(format!("{}: denied by policy", path.display()));
+                        continue;
+                    }
                     let file_name = path.file_name().unwrap_or_default();
                     // Sanitize filename to prevent path traversal via "../" in names
                     let safe_name = file_name.to_string_lossy().replace(['/', '\\'], "_");
@@ -331,5 +337,14 @@ mod tests {
         let files = out.files.unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].size, 9, "size must be the real byte count");
+    }
+
+    #[tokio::test]
+    async fn batch_move_absolute_pattern_is_rejected() {
+        let dir = std::env::temp_dir();
+        let dest = std::env::temp_dir().join("aleph_batch_dest");
+        let out = execute_batch_move(&dir, "/etc/*", &dest, true, &[], None).await;
+        assert!(matches!(out, Err(ToolError::InvalidArgs(_))),
+            "absolute glob pattern must be rejected, got {out:?}");
     }
 }

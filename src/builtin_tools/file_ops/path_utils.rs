@@ -84,6 +84,29 @@ pub fn get_denied_paths() -> Vec<String> {
     denied_paths
 }
 
+/// Reject glob patterns that would escape the (already deny-checked) base
+/// directory: absolute patterns replace the base via `Path::join`, and any
+/// `..` component climbs out of it. Relative, non-climbing patterns are safe
+/// because every match still lands under `canonical`.
+///
+/// Uses `has_root()` instead of `is_absolute()` so that root-anchored-but-
+/// drive-relative patterns (e.g. `/etc/*` on Windows, which has a root but no
+/// drive prefix) are also rejected — they still escape the base via `join`.
+pub(crate) fn reject_unsafe_glob_pattern(pattern: &str) -> Result<(), ToolError> {
+    let p = std::path::Path::new(pattern);
+    if p.has_root() {
+        return Err(ToolError::InvalidArgs(format!(
+            "Glob pattern must be relative to the search directory: {pattern}"
+        )));
+    }
+    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(ToolError::InvalidArgs(format!(
+            "Glob pattern must not contain `..`: {pattern}"
+        )));
+    }
+    Ok(())
+}
+
 /// Check if path is allowed and resolve it
 ///
 /// Path resolution rules:

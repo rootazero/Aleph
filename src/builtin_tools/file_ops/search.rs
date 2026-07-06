@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use tracing::{debug, info};
 
-use super::path_utils::check_and_resolve_path;
+use super::path_utils::{check_and_resolve_path, reject_unsafe_glob_pattern};
 use super::types::{FileInfo, FileOpsOutput};
 use crate::builtin_tools::error::ToolError;
 
@@ -31,6 +31,8 @@ pub async fn execute_search(
         )));
     }
 
+    reject_unsafe_glob_pattern(pattern)?;
+
     let full_pattern = canonical.join(pattern);
     let pattern_str = full_pattern.to_string_lossy();
 
@@ -41,6 +43,12 @@ pub async fn execute_search(
     {
         match entry {
             Ok(path) => {
+                // Defense in depth: even a relative pattern can match a symlink
+                // pointing outside the base. Re-check each match against the
+                // deny list; silently skip denied matches.
+                if check_and_resolve_path(&path, denied_paths, output_dir_override).is_err() {
+                    continue;
+                }
                 if let Ok(metadata) = fs::metadata(&path) {
                     files.push(FileInfo {
                         name: path
@@ -78,4 +86,25 @@ pub async fn execute_search(
         items_affected: Some(count),
         summary: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn absolute_pattern_is_rejected() {
+        let dir = std::env::temp_dir();
+        let out = execute_search(&dir, "/etc/*", &[], None).await;
+        assert!(matches!(out, Err(ToolError::InvalidArgs(_))),
+            "absolute glob pattern must be rejected, got {out:?}");
+    }
+
+    #[tokio::test]
+    async fn parent_escape_pattern_is_rejected() {
+        let dir = std::env::temp_dir();
+        let out = execute_search(&dir, "../*", &[], None).await;
+        assert!(matches!(out, Err(ToolError::InvalidArgs(_))),
+            "`..` glob pattern must be rejected, got {out:?}");
+    }
 }
