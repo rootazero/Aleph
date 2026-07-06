@@ -53,13 +53,14 @@ pub fn resolve_result_budget(name: &str, explicit: Option<usize>) -> Option<usiz
         return Some(n);
     }
     match name {
-        // Last legacy entry: `search_files`/`Grep` has no in-crate `AlephTool`
-        // to hang `max_result_tokens()` on (external / MCP-provided search), so
-        // its budget stays here until that owner exists. `bash` (8k) and
-        // `web_fetch` (10k) now declare their budget via the trait and arrive
-        // through the `explicit` branch above; their old name-table arms (and
-        // dead aliases like `terminal` / capitalised `WebFetch`) were removed.
+        // Tools whose `AlephTool::max_result_tokens()` never reaches this
+        // function because they are registered through the executor
+        // `ToolRegistry` → `RegistryToolAdapter` (which does not carry the
+        // trait value). Their budget stays here until that adapter forwards
+        // declared budgets. `bash` (8k) == the default, so only the
+        // non-default ones need arms.
         "Grep" | "search_files" => Some(6_000),
+        "web_fetch" => Some(10_000),
         _ => Some(DEFAULT_RESULT_BUDGET_TOKENS),
     }
 }
@@ -397,20 +398,12 @@ mod tests {
 
     #[test]
     fn migrated_builtins_flow_through_explicit() {
-        // bash/web_fetch no longer carry a name-table budget — they declare it
-        // via `AlephTool::max_result_tokens`, which reaches this fn as the
-        // `explicit` argument (verified end-to-end by the adapter test).
+        // Explicit budget always wins over the name table.
         assert_eq!(
             resolve_result_budget("web_fetch", Some(10_000)),
             Some(10_000)
         );
         assert_eq!(resolve_result_budget("bash", Some(8_000)), Some(8_000));
-        // With no explicit budget they now fall to the global default rather
-        // than the removed name-table arms.
-        assert_eq!(
-            resolve_result_budget("web_fetch", None),
-            Some(DEFAULT_RESULT_BUDGET_TOKENS)
-        );
     }
 
     #[test]
@@ -427,6 +420,19 @@ mod tests {
             resolve_result_budget("some_other_tool", None),
             Some(DEFAULT_RESULT_BUDGET_TOKENS)
         );
+    }
+
+    #[test]
+    fn web_fetch_budget_is_10k_via_name_table() {
+        // Production path: web_fetch is executor-registered, so its
+        // AlephTool-declared 10k never arrives as `explicit`. The name table
+        // must carry it (mirrors the search_files arm).
+        assert_eq!(resolve_result_budget("web_fetch", None), Some(10_000));
+    }
+
+    #[test]
+    fn explicit_budget_still_wins_over_name_table() {
+        assert_eq!(resolve_result_budget("web_fetch", Some(4_000)), Some(4_000));
     }
 
     // ---------------------------------------------------------------
