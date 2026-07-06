@@ -87,6 +87,9 @@ pub(super) fn mcp_tool_registry() -> Option<&'static Arc<crate::tools::ToolHandl
 ///   disclosure). Empty or `["*"]` disables collapsing (escape hatch).
 /// * `truncate_tool_descriptions` — also truncate non-core tool descriptions
 ///   when collapsing their schema.
+/// * `deferred_tool_names` — tool names hidden from the model's initial list
+///   (populated by the deferred MCP tier when `defer_mcp_tools` is on).
+///   Empty set (flag off) is a no-op — byte-identical surface.
 pub fn build_request_tool_service(
     tool_registry: Arc<LoopToolRegistry>,
     allowed_tools: BTreeSet<String>,
@@ -99,6 +102,7 @@ pub fn build_request_tool_service(
     unattended: bool,
     core_tools: &[String],
     truncate_tool_descriptions: bool,
+    deferred_tool_names: BTreeSet<String>,
 ) -> Arc<dyn ToolService> {
     let mut svc = ScopedToolService::new(tool_registry, allowed_tools);
     if let Some(st) = subagent_tool {
@@ -148,6 +152,9 @@ pub fn build_request_tool_service(
     ) {
         svc = svc.with_definition_rewriter(rewriter);
     }
+    // Deferred exposure tier: drop these names from the LLM-visible lists.
+    // Empty set (defer_mcp_tools off) is a no-op — byte-identical surface.
+    svc = svc.with_deferred(deferred_tool_names);
     Arc::new(svc)
 }
 
@@ -195,9 +202,52 @@ mod tests {
             false,
             &[],
             false,
+            BTreeSet::new(),
         );
         let defs = svc.list().await;
         assert!(defs.iter().any(|d| d.name == "read_file"));
+    }
+
+    struct OtherStub;
+    #[async_trait]
+    impl LoopTool for OtherStub {
+        fn name(&self) -> &str {
+            "web_fetch"
+        }
+        fn description(&self) -> &str {
+            "stub2"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object" })
+        }
+        async fn execute(&self, _i: Value, _c: CancellationToken) -> ToolResult {
+            ToolResult::Success { output: json!({}) }
+        }
+    }
+
+    #[tokio::test]
+    async fn builder_defers_named_tools() {
+        let mut reg = LoopToolRegistry::new();
+        reg.register(Box::new(StubTool)); // read_file
+        reg.register(Box::new(OtherStub)); // web_fetch
+        let deferred: BTreeSet<String> = ["web_fetch".to_string()].into_iter().collect();
+        let svc = build_request_tool_service(
+            Arc::new(reg),
+            BTreeSet::new(),
+            None,
+            None,
+            None,
+            None,
+            "",
+            None,
+            false,
+            &[],
+            false,
+            deferred,
+        );
+        let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
+        assert!(names.contains(&"read_file".to_string()));
+        assert!(!names.contains(&"web_fetch".to_string()), "deferred tool must be dropped");
     }
 
     #[tokio::test]
@@ -219,6 +269,7 @@ mod tests {
             false,
             &[],
             false,
+            BTreeSet::new(),
         );
         let defs = svc.list().await;
         assert!(
@@ -271,6 +322,7 @@ mod progressive_tests {
             false,
             &["bash".to_string()],
             false, // core, truncate
+            BTreeSet::new(),
         );
         let schema = svc.metadata_schema();
         let bash = schema.iter().find(|d| d.name == "bash").unwrap();
@@ -296,6 +348,7 @@ mod progressive_tests {
             false,
             &["*".to_string()],
             false,
+            BTreeSet::new(),
         );
         let nav = svc
             .metadata_schema()

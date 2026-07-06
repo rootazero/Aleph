@@ -547,6 +547,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             let unattended = request.metadata.get("unattended").map(String::as_str) == Some("true");
 
+            // Collector for MCP tool names joined this request — used below to
+            // build the deferred exposure tier when `defer_mcp_tools` is on.
+            let mut mcp_tool_names: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
+
             // External MCP tools: snapshot the bridge-maintained registry
             // (boot installs it via `set_mcp_tool_registry`) and join each
             // entry into this request's LoopToolRegistry. This is the
@@ -587,6 +592,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                             Arc::clone(handler),
                         ),
                     ));
+                    mcp_tool_names.insert(name.clone());
                     // Only widen a non-empty allow-set; an empty set already
                     // means allow-all in ScopedToolService and inserting
                     // names would flip it to restrictive.
@@ -633,6 +639,36 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 }
             }
 
+            // Deferred exposure tier (opt-in): when `[tools] defer_mcp_tools`
+            // is on, MCP tools are dropped from the model's initial list and
+            // surfaced only via `tool_search`. Build the search corpus from the
+            // pre-collapse registry snapshot (name + description + full schema)
+            // and register the meta-tool. Empty when off ⇒ byte-identical.
+            let deferred_tool_names: std::collections::BTreeSet<String> =
+                if self.config.defer_mcp_tools {
+                    mcp_tool_names
+                } else {
+                    std::collections::BTreeSet::new()
+                };
+            if !deferred_tool_names.is_empty() {
+                let docs: Vec<crate::tools::tool_search::ToolDoc> = loop_registry_inner
+                    .tool_definitions()
+                    .into_iter()
+                    .map(|d| crate::tools::tool_search::ToolDoc {
+                        name: d.name,
+                        description: d.description,
+                        schema: d.parameters,
+                    })
+                    .collect();
+                loop_registry_inner.register(Box::new(
+                    crate::tools::tool_search::ToolSearchTool::new(docs),
+                ));
+                if !allowed_names.is_empty() {
+                    allowed_names
+                        .insert(crate::tools::tool_search::ToolSearchTool::NAME.to_string());
+                }
+            }
+
             let loop_registry = Arc::new(loop_registry_inner);
 
             // Compose refresh sources: plugin tools (when an extension manager
@@ -674,6 +710,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     unattended,
                     &self.config.core_tools,
                     self.config.truncate_tool_descriptions,
+                    deferred_tool_names.clone(),
                 );
 
             // Trace sink — built before SubagentTool so it can be inherited by
@@ -900,6 +937,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 unattended,
                 &self.config.core_tools,
                 self.config.truncate_tool_descriptions,
+                deferred_tool_names.clone(),
             );
 
             // Legacy backfill: a session with `messages` rows but no
