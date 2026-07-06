@@ -295,6 +295,7 @@ where
     P: alephcore::thinker::ProviderRegistry + 'static,
     R: alephcore::executor::ToolRegistry + 'static,
 {
+    use alephcore::gateway::handlers::agent::apply_moa_selector_semantics;
     use alephcore::gateway::handlers::chat::SendParams;
     use alephcore::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS};
     use alephcore::gateway::RunRequest;
@@ -450,6 +451,19 @@ where
             }
         }
     }
+
+    // Round-2 Task 18 fix (E3): this real-`ExecutionEngine` path previously
+    // never intercepted the panel model picker's explicit "moa" pick — only
+    // the Simulated-fallback `AgentRunManager::start_run` did (see the
+    // sibling call site + doc comment on `apply_moa_selector_semantics`), so
+    // picking "moa" from the Panel silently did nothing in any real
+    // deployment (any provider configured). Apply the same interception here
+    // on the raw explicit override, discarding the returned value: this path
+    // has no voice-pin merge (never reads `params.voice_input`) and has never
+    // honored `model_override` for ordinary model picks (pre-existing,
+    // round-1 finding — `model_override: None` below is unchanged); only the
+    // MoA arm/clear side effect on the session is wired up by this fix.
+    let _ = apply_moa_selector_semantics(&session_key_str, params.model_override);
 
     let run_request = RunRequest {
         run_id: run_id.clone(),

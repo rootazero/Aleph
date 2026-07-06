@@ -21,15 +21,15 @@ use crate::providers::session_moa_handle::SessionMoaPref;
 use crate::providers::{AiProvider, MeteringProvider, ModelOverrideProvider};
 use crate::sync_primitives::{Arc, Mutex};
 
-use super::advisory_view::{build_advisory_view, view_signature};
-use super::prompts::{attach_guidance, build_guidance, AdvisorOutcome, ADVISOR_SYSTEM_PROMPT};
+use super::advisory_view::{build_advisory_view, mark_cache_breakpoints, view_signature};
+use super::prompts::{attach_guidance, build_guidance, AdvisorOutcome};
 
 /// One resolved advisor: label + provider chain + identity for pricing.
 pub(crate) struct AdvisorSlot {
-    label: String,
-    provider_key: String,
-    model: String,
-    chain: Arc<dyn AiProvider>,
+    pub(crate) label: String,
+    pub(crate) provider_key: String,
+    pub(crate) model: String,
+    pub(crate) chain: Arc<dyn AiProvider>,
 }
 
 struct AdvisorCache {
@@ -38,6 +38,10 @@ struct AdvisorCache {
 }
 
 pub struct MoaProvider {
+    // Kept (not removed): `AiProvider::name(&self) -> &str` must return a
+    // borrow, and a computed/derived form (e.g. `format!` on every call)
+    // cannot satisfy that signature. Spec §7's cleanup item for this field
+    // was evaluated during round-2 planning and rejected (R1).
     display_name: String,
     preset_name: String,
     advisors: Vec<AdvisorSlot>,
@@ -50,6 +54,12 @@ pub struct MoaProvider {
     aggregator_temperature: Option<f32>,
     save_traces: bool,
     sink: Option<Arc<dyn TraceSink>>,
+    /// Fan-out cache. INVARIANT: a MoaProvider is run-scoped and the Think
+    /// loop drives `process()` strictly sequentially, so the read (cache
+    /// decision) and write (post-fan-out) never race. If an instance were
+    /// ever shared across concurrent calls, two MISSes could both fan out
+    /// (duplicate advisor spend, last-writer-wins) — the check-then-act gap
+    /// is deliberate, not an oversight (round-2 R3).
     cache: Mutex<Option<AdvisorCache>>,
 }
 
@@ -139,8 +149,22 @@ impl MoaProvider {
         }
     }
 
+    /// `(provider, model)` of the aggregator slot — run-level attribution
+    /// (VESR must record the ACTING model, not the pre-MoA directive; the
+    /// gauge fold at runner_impl.rs already does the equivalent via
+    /// serving_model_hint). Split at the FIRST ':' — provider keys never
+    /// contain one; model ids may.
+    #[must_use]
+    pub fn aggregator_identity(&self) -> (String, String) {
+        match self.aggregator_label.split_once(':') {
+            Some((p, m)) => (p.to_string(), m.to_string()),
+            None => (String::new(), self.aggregator_label.clone()),
+        }
+    }
+
     /// Sum advisor usages + per-advisor own-rate pricing for the spend event.
-    fn spend_event(&self, usages: &[(usize, TokenUsage)]) -> LoopTraceEvent {
+    /// `consulted` = advisors fanned out; `usages` = those that returned usage.
+    fn spend_event(&self, consulted: usize, usages: &[(usize, TokenUsage)]) -> LoopTraceEvent {
         let mut input = 0u32;
         let mut output = 0u32;
         let mut cost: Option<f64> = None;
@@ -166,7 +190,8 @@ impl MoaProvider {
             }
         }
         LoopTraceEvent::MoaAdvisorSpend {
-            advisor_count: usages.len(),
+            advisor_count: consulted,
+            billed_count: usages.len(),
             input_tokens: input,
             output_tokens: output,
             cost_usd: cost,
@@ -193,8 +218,12 @@ impl AiProvider for MoaProvider {
 
         Box::pin(async move {
             // 1. Advisory view + signature.
-            let view = build_advisory_view(&messages);
+            let mut view = build_advisory_view(&messages);
             let sig = view_signature(&view);
+
+            // 1b. Prompt-cache breakpoints (round-2 E1) — AFTER the signature
+            //     (which ignores marks) so the cache key is never perturbed.
+            mark_cache_breakpoints(&mut view);
 
             // 2. Cache decision (per_iteration: same-signature repeat calls
             //    — harness internal retries — are HITs; user_turn: any
@@ -209,90 +238,94 @@ impl AiProvider for MoaProvider {
                 })
             };
 
+            // Round-2 B3: pending turn-trace payload, filled in on a MISS
+            // (below) and emitted only after the aggregator returns — see
+            // the comment at the aggregator call site.
+            let mut pending_trace: Option<serde_json::Value> = None;
+
             let outcomes: Vec<AdvisorOutcome> = if let Some(hit) = cached {
+                // Cache HIT: the aggregator still runs on the reused advice —
+                // emit the lightweight aggregating moment so multi-iteration
+                // user_turn runs don't go dark on the panel (round-2 B4).
+                if !hit.is_empty() {
+                    self.emit(LoopTraceEvent::MoaAggregating {
+                        aggregator: self.aggregator_label.clone(),
+                        advisor_count: hit.len(),
+                        cached: true,
+                    });
+                }
                 hit
             } else if self.advisors.is_empty() {
                 Vec::new()
             } else {
-                // 3. Parallel fan-out, per-advisor timeout, fail-soft.
-                let timeout = self.advisor_timeout;
-                let futures = self.advisors.iter().map(|slot| {
-                    let view = &view;
-                    async move {
-                        let advisor_payload = RequestPayload::new(view)
-                            .with_system(Some(ADVISOR_SYSTEM_PROMPT))
-                            .with_temperature(self.advisor_temperature)
-                            .with_max_tokens(self.advisor_max_tokens);
-                        match tokio::time::timeout(timeout, slot.chain.process(advisor_payload))
-                            .await
-                        {
-                            Ok(Ok(resp)) => {
-                                let text = resp
-                                    .text
-                                    .clone()
-                                    .filter(|t| !t.trim().is_empty())
-                                    .unwrap_or_else(|| "(empty response)".to_string());
-                                (text, resp.usage, None::<String>)
-                            }
-                            Ok(Err(e)) => (format!("[failed: {e}]"), None, Some(e.to_string())),
-                            Err(_) => (
-                                format!("[timeout after {}s]", timeout.as_secs()),
-                                None,
-                                Some("timeout".to_string()),
-                            ),
-                        }
-                    }
-                });
-                let results = futures::future::join_all(futures).await;
+                // 3. Parallel fan-out (extracted: fan_out.rs).
+                let results = super::fan_out::run_fan_out(
+                    &self.advisors,
+                    &view,
+                    self.advisor_timeout,
+                    self.advisor_temperature,
+                    self.advisor_max_tokens,
+                )
+                .await;
 
-                let mut outcomes = Vec::with_capacity(results.len());
-                let mut usages: Vec<(usize, TokenUsage)> = Vec::new();
-                for (idx, (text, usage, _err)) in results.into_iter().enumerate() {
-                    if let Some(u) = usage {
-                        usages.push((idx, u));
-                    }
-                    outcomes.push(AdvisorOutcome {
-                        label: self.advisors[idx].label.clone(),
-                        text,
-                    });
-                }
+                let usages: Vec<(usize, TokenUsage)> = results
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, r)| r.usage.clone().map(|u| (idx, u)))
+                    .collect();
+                let outcomes: Vec<AdvisorOutcome> =
+                    results.iter().map(|r| r.outcome.clone()).collect();
 
-                // 4. Display + accounting + heavy trace events (MISS only).
-                let count = outcomes.len();
-                for (idx, o) in outcomes.iter().enumerate() {
-                    self.emit(LoopTraceEvent::MoaAdvisor {
-                        index: idx + 1,
-                        count,
-                        label: o.label.clone(),
-                        text: o.text.clone(),
-                    });
-                }
-                self.emit(LoopTraceEvent::MoaAggregating {
-                    aggregator: self.aggregator_label.clone(),
-                    advisor_count: count,
-                });
+                // 4. Display + accounting + heavy trace events (MISS only;
+                //    per-advisor + aggregating emission lives in fan_out.rs).
+                super::fan_out::emit_fanout_events(
+                    &self.sink,
+                    &self.advisors,
+                    &results,
+                    &self.aggregator_label,
+                );
                 if !usages.is_empty() {
-                    let spend = self.spend_event(&usages);
+                    let spend = self.spend_event(results.len(), &usages);
                     self.emit(spend);
                 }
                 if self.save_traces {
-                    self.emit(LoopTraceEvent::MoaTurnTrace {
-                        preset: self.preset_name.clone(),
-                        payload: json!({
-                            "aggregator": self.aggregator_label,
-                            "view_signature": sig,
-                            "advisors": outcomes
-                                .iter()
-                                .map(|o| json!({ "label": o.label, "output": o.text }))
-                                .collect::<Vec<_>>(),
-                        }),
-                    });
+                    pending_trace = Some(json!({
+                        "aggregator": self.aggregator_label,
+                        "view_signature": sig,
+                        "advisors": outcomes
+                            .iter()
+                            .map(|o| json!({ "label": o.label, "output": o.text }))
+                            .collect::<Vec<_>>(),
+                    }));
                 }
 
-                *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(AdvisorCache {
-                    signature: sig,
-                    outcomes: outcomes.clone(),
-                });
+                {
+                    let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+                    // R3 cache invariant guard: this branch only runs after a
+                    // MISS was decided above without holding this lock across
+                    // the fan-out `.await` (see invariant doc on `cache`).
+                    // A MISS means, for `PerIteration`, the prior entry's
+                    // signature (if any) differed from `sig`; for
+                    // `UserTurn`, that no entry existed yet. Finding either
+                    // condition broken here means another `process()` call
+                    // wrote the cache while this one was fanning out — the
+                    // run-scoped, strictly sequential invariant was violated.
+                    debug_assert!(
+                        match self.fanout {
+                            MoaFanout::PerIteration => {
+                                guard.as_ref().is_none_or(|c| c.signature != sig)
+                            }
+                            MoaFanout::UserTurn => guard.is_none(),
+                        },
+                        "MoaProvider cache invariant violated: a concurrent \
+                         process() call raced this fan-out and wrote the \
+                         cache before this write-back"
+                    );
+                    *guard = Some(AdvisorCache {
+                        signature: sig,
+                        outcomes: outcomes.clone(),
+                    });
+                }
                 outcomes
             };
 
@@ -316,7 +349,30 @@ impl AiProvider for MoaProvider {
                 .with_max_tokens(max_tokens)
                 .with_tool_choice(tool_choice)
                 .with_metadata(metadata);
-            self.aggregator.process(agg_payload).await
+            let agg_result = self.aggregator.process(agg_payload).await;
+
+            // Round-2 B3: the heavy turn trace fires AFTER the aggregator so
+            // it records the full turn (hermes parity: advisor I/O + the
+            // aggregator's actual output). Fires on error too — advisors ran
+            // and were billed, the audit record must say so. A cancelled
+            // future drops the pending trace (advisor spend is already on the
+            // per-advisor MeteringProvider events).
+            if let Some(mut payload) = pending_trace {
+                let (output, status) = match &agg_result {
+                    Ok(resp) => (
+                        resp.text.clone().unwrap_or_default(),
+                        "ok".to_string(),
+                    ),
+                    Err(e) => (String::new(), format!("error: {e}")),
+                };
+                payload["aggregator_output"] = json!(output);
+                payload["aggregator_status"] = json!(status);
+                self.emit(LoopTraceEvent::MoaTurnTrace {
+                    preset: self.preset_name.clone(),
+                    payload,
+                });
+            }
+            agg_result
         })
     }
 
@@ -367,6 +423,16 @@ mod tests {
         delay: Option<Duration>,
         calls: Arc<AtomicUsize>,
     }
+    impl CountingProvider {
+        /// Fixed text, no delay, fresh call counter.
+        fn new(text: impl Into<String>) -> Self {
+            Self {
+                text: text.into(),
+                delay: None,
+                calls: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+    }
     impl AiProvider for CountingProvider {
         fn process<'a>(
             &'a self,
@@ -379,7 +445,13 @@ mod tests {
                 if let Some(d) = delay {
                     tokio::time::sleep(d).await;
                 }
-                Ok(ProviderResponse::text_only(text))
+                // Carries a (zeroed) usage so spend/billed_count tests can
+                // distinguish "returned usage" from "errored, no usage" —
+                // real advisor providers always populate `usage` on success.
+                Ok(ProviderResponse {
+                    usage: Some(TokenUsage::default()),
+                    ..ProviderResponse::text_only(text)
+                })
             })
         }
         fn name(&self) -> &str { "counting" }
@@ -416,6 +488,38 @@ mod tests {
             sink: None,
             cache: Mutex::new(None),
         }
+    }
+
+    /// Captures every emitted `LoopTraceEvent` for wire-shape/lock assertions
+    /// (round-2 B1/B2/B4 tests).
+    struct RecordingSink(std::sync::Mutex<Vec<LoopTraceEvent>>);
+    impl RecordingSink {
+        fn new() -> Arc<Self> {
+            Arc::new(Self(std::sync::Mutex::new(Vec::new())))
+        }
+        fn events(&self) -> Vec<LoopTraceEvent> {
+            self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+    }
+    impl crate::harness::TraceSink for RecordingSink {
+        fn on_trace(&self, event: &LoopTraceEvent) {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(event.clone());
+        }
+        fn flush(&self) {}
+    }
+
+    fn make_provider_sinked(
+        advisors: Vec<(Arc<dyn AiProvider>, &str)>,
+        aggregator: Arc<dyn AiProvider>,
+        fanout: MoaFanout,
+        sink: Arc<RecordingSink>,
+    ) -> MoaProvider {
+        let mut p = make_provider(advisors, aggregator, fanout, 5);
+        p.sink = Some(sink);
+        p
     }
 
     fn user_msgs(text: &str) -> Vec<UnifiedMessage> {
@@ -576,6 +680,17 @@ mod tests {
     }
 
     #[test]
+    fn aggregator_identity_splits_label() {
+        let agg = Arc::new(CountingProvider::new("x"));
+        let p = make_provider(vec![], agg, MoaFanout::PerIteration, 5);
+        // make_provider sets aggregator_label = "mock:agg".
+        assert_eq!(
+            p.aggregator_identity(),
+            ("mock".to_string(), "agg".to_string())
+        );
+    }
+
+    #[test]
     fn parse_one_shot_command_semantics() {
         use super::super::parse_one_shot_command;
         assert_eq!(parse_one_shot_command("/moa write a poem"), Some("write a poem"));
@@ -615,5 +730,172 @@ aggregator = { provider = "ghost", model = "n" }
         )
         .err().unwrap();
         assert!(err.contains("ghost"));
+    }
+
+    #[tokio::test]
+    async fn events_carry_error_cached_and_billed_count() {
+        let sink = RecordingSink::new();
+        let ok = Arc::new(CountingProvider::new("advice"));
+        let bad: Arc<dyn AiProvider> = Arc::new(
+            MockProvider::new("bad")
+                .with_error(crate::providers::mock::MockError::Network("boom".into())),
+        );
+        let agg = Arc::new(CountingProvider::new("final"));
+        let p = make_provider_sinked(
+            vec![(ok, "mock:ok"), (bad, "mock:bad")],
+            agg,
+            MoaFanout::PerIteration,
+            sink.clone(),
+        );
+        p.process(RequestPayload::new(&user_msgs("go"))).await.unwrap();
+
+        let events = sink.events();
+        let advisors: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, LoopTraceEvent::MoaAdvisor { .. }))
+            .collect();
+        assert_eq!(advisors.len(), 2);
+        // B2: success carries error=None, failure carries the structural reason.
+        let LoopTraceEvent::MoaAdvisor { error: e0, .. } = advisors[0] else { panic!() };
+        let LoopTraceEvent::MoaAdvisor { error: e1, .. } = advisors[1] else { panic!() };
+        assert!(e0.is_none());
+        assert!(e1.as_deref().is_some_and(|e| e.contains("boom")));
+        // B4: MISS aggregating is cached=false.
+        assert!(events.iter().any(|e| matches!(
+            e,
+            LoopTraceEvent::MoaAggregating { cached: false, .. }
+        )));
+        // B1: spend advisor_count = consulted (2), billed_count = with-usage (1).
+        let spend = events
+            .iter()
+            .find(|e| matches!(e, LoopTraceEvent::MoaAdvisorSpend { .. }))
+            .expect("spend event");
+        let LoopTraceEvent::MoaAdvisorSpend { advisor_count, billed_count, .. } = spend else {
+            panic!()
+        };
+        assert_eq!(*advisor_count, 2);
+        assert_eq!(*billed_count, 1);
+    }
+
+    #[tokio::test]
+    async fn cache_hit_emits_cached_aggregating_only() {
+        let sink = RecordingSink::new();
+        let adv = Arc::new(CountingProvider::new("advice"));
+        let agg = Arc::new(CountingProvider::new("final"));
+        let p = make_provider_sinked(
+            vec![(adv, "mock:a")],
+            agg,
+            MoaFanout::UserTurn,
+            sink.clone(),
+        );
+        let msgs = user_msgs("go");
+        p.process(RequestPayload::new(&msgs)).await.unwrap();
+        let miss_events = sink.events().len();
+        p.process(RequestPayload::new(&msgs)).await.unwrap();
+        let all = sink.events();
+        let hit_events = &all[miss_events..];
+        // HIT: exactly one new event — MoaAggregating { cached: true }; no
+        // advisor re-emission, no spend re-emission.
+        assert_eq!(hit_events.len(), 1);
+        assert!(matches!(
+            hit_events[0],
+            LoopTraceEvent::MoaAggregating { cached: true, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn save_traces_gate_controls_turn_trace() {
+        let sink = RecordingSink::new();
+        let adv = Arc::new(CountingProvider::new("advice"));
+        let agg = Arc::new(CountingProvider::new("final"));
+        let mut p = make_provider_sinked(
+            vec![(adv, "mock:a")],
+            agg,
+            MoaFanout::PerIteration,
+            sink.clone(),
+        );
+        p.save_traces = false;
+        p.process(RequestPayload::new(&user_msgs("go"))).await.unwrap();
+        assert!(!sink
+            .events()
+            .iter()
+            .any(|e| matches!(e, LoopTraceEvent::MoaTurnTrace { .. })));
+        // Flip the gate on a fresh provider: trace fires.
+        let sink2 = RecordingSink::new();
+        let adv2 = Arc::new(CountingProvider::new("advice"));
+        let agg2 = Arc::new(CountingProvider::new("final"));
+        let mut p2 = make_provider_sinked(
+            vec![(adv2, "mock:a")],
+            agg2,
+            MoaFanout::PerIteration,
+            sink2.clone(),
+        );
+        p2.save_traces = true;
+        p2.process(RequestPayload::new(&user_msgs("go"))).await.unwrap();
+        assert!(sink2
+            .events()
+            .iter()
+            .any(|e| matches!(e, LoopTraceEvent::MoaTurnTrace { .. })));
+    }
+
+    #[tokio::test]
+    async fn turn_trace_carries_aggregator_output_and_fires_after_it() {
+        let sink = RecordingSink::new();
+        let adv = Arc::new(CountingProvider::new("advice"));
+        let agg = Arc::new(CountingProvider::new("final answer"));
+        let mut p = make_provider_sinked(
+            vec![(adv, "mock:a")],
+            agg,
+            MoaFanout::PerIteration,
+            sink.clone(),
+        );
+        p.save_traces = true;
+        p.process(RequestPayload::new(&user_msgs("go"))).await.unwrap();
+        let events = sink.events();
+        let trace = events
+            .iter()
+            .find_map(|e| match e {
+                LoopTraceEvent::MoaTurnTrace { payload, .. } => Some(payload.clone()),
+                _ => None,
+            })
+            .expect("turn trace");
+        assert_eq!(trace["aggregator_status"], "ok");
+        assert_eq!(trace["aggregator_output"], "final answer");
+        // Ordering: the turn trace must be the LAST event (after aggregating).
+        assert!(matches!(
+            events.last().unwrap(),
+            LoopTraceEvent::MoaTurnTrace { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn turn_trace_fires_with_error_status_when_aggregator_fails() {
+        let sink = RecordingSink::new();
+        let adv = Arc::new(CountingProvider::new("advice"));
+        let agg: Arc<dyn AiProvider> = Arc::new(
+            crate::providers::mock::MockProvider::new("unused")
+                .with_error(crate::providers::mock::MockError::Network("agg down".into())),
+        );
+        let mut p = make_provider_sinked(
+            vec![(adv, "mock:a")],
+            agg,
+            MoaFanout::PerIteration,
+            sink.clone(),
+        );
+        p.save_traces = true;
+        let result = p.process(RequestPayload::new(&user_msgs("go"))).await;
+        assert!(result.is_err());
+        let events = sink.events();
+        let trace = events
+            .iter()
+            .find_map(|e| match e {
+                LoopTraceEvent::MoaTurnTrace { payload, .. } => Some(payload.clone()),
+                _ => None,
+            })
+            .expect("turn trace fires even on aggregator error — advisors were billed");
+        assert!(trace["aggregator_status"]
+            .as_str()
+            .unwrap()
+            .starts_with("error:"));
     }
 }

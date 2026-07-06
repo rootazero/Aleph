@@ -97,6 +97,23 @@ pub struct ListModelsOutput {
     pub models: Vec<ModelEntry>,
     /// Human-readable summary (counts + current default + the `all` hint).
     pub message: String,
+    /// MoA advisory presets selectable via `select_model` with model
+    /// "moa:<name>" (enabled presets only).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub moa_presets: Vec<MoaPresetSummary>,
+}
+
+/// A `[moa]` preset surfaced on the same discovery pass as models — the model
+/// can choose "switch to MoA preset X" via `select_model { model: "moa:X" }`
+/// exactly as it would choose a plain model id.
+#[derive(Debug, Clone, Serialize)]
+pub struct MoaPresetSummary {
+    pub name: String,
+    /// Advisor slots as "provider:model" labels.
+    pub advisors: Vec<String>,
+    /// Aggregator (acting model) as "provider:model".
+    pub aggregator: String,
+    pub is_default: bool,
 }
 
 /// LLM-facing model catalog. Holds optional handles injected at registry
@@ -191,6 +208,7 @@ impl crate::tools::AlephTool for ListModelsTool {
                 ok: false,
                 models: Vec::new(),
                 message: "Model catalog unavailable: no config handle.".to_string(),
+                moa_presets: Vec::new(),
             });
         };
 
@@ -279,11 +297,44 @@ impl crate::tools::AlephTool for ListModelsTool {
                 .then_with(|| a.model.cmp(&b.model))
         });
 
+        // MoA presets ride the same discovery surface (round-2 E3): the model
+        // can offer "switch to MoA preset X" with select_model "moa:X".
+        let moa_presets: Vec<MoaPresetSummary> = crate::providers::moa::get_moa_config()
+            .map(|cfg| {
+                let mut names: Vec<&String> = cfg
+                    .presets
+                    .iter()
+                    .filter(|(_, p)| p.enabled)
+                    .map(|(n, _)| n)
+                    .collect();
+                names.sort();
+                names
+                    .into_iter()
+                    .map(|name| {
+                        let p = &cfg.presets[name];
+                        MoaPresetSummary {
+                            name: name.clone(),
+                            advisors: p
+                                .advisors
+                                .iter()
+                                .map(|s| format!("{}:{}", s.provider, s.model))
+                                .collect(),
+                            aggregator: format!(
+                                "{}:{}",
+                                p.aggregator.provider, p.aggregator.model
+                            ),
+                            is_default: cfg.default_preset.as_deref() == Some(name.as_str()),
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let default_label = match &default_provider {
             Some(p) => format!("current default provider: '{p}'"),
             None => "no default provider set".to_string(),
         };
-        let message = format!(
+        let mut message = format!(
             "{} model(s) across {} configured provider(s); {}. {}",
             models.len(),
             configured_providers.len(),
@@ -294,11 +345,18 @@ impl crate::tools::AlephTool for ListModelsTool {
                 "Pass all=true to also see unconfigured presets."
             }
         );
+        if !moa_presets.is_empty() {
+            message.push_str(&format!(
+                " {} MoA preset(s) available — select with model \"moa:<name>\".",
+                moa_presets.len()
+            ));
+        }
 
         Ok(ListModelsOutput {
             ok: true,
             models,
             message,
+            moa_presets,
         })
     }
 }

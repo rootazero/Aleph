@@ -490,6 +490,75 @@ impl StateDatabase {
 
         Ok(rows)
     }
+
+    /// Roll every per-advisor MoA `ProviderUsage` row (synthetic agent_id
+    /// `moa:<idx>:<provider>:<model>`, written by the per-advisor
+    /// MeteringProvider) into ONE `"moa-advisors"` bucket. Keeps advisor
+    /// spend visible in usage rollups without materializing phantom agents
+    /// (round-2 B6). `None` when no advisor usage exists in the window.
+    pub async fn aggregate_moa_advisor_usage(
+        &self,
+        since: Option<i64>,
+        until: Option<i64>,
+    ) -> Result<Option<AgentUsageTotal>, AlephError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut where_extras = String::new();
+        let mut binds: Vec<rusqlite::types::Value> = Vec::new();
+        if let Some(ts) = since {
+            where_extras.push_str(" AND timestamp >= ?1");
+            binds.push(rusqlite::types::Value::Integer(ts));
+        }
+        if let Some(ts) = until {
+            where_extras.push_str(&format!(" AND timestamp <= ?{}", binds.len() + 1));
+            binds.push(rusqlite::types::Value::Integer(ts));
+        }
+        // Every SUM is double-COALESCE'd: the inner one substitutes 0 for a
+        // row whose field is absent from event_json, the outer one substitutes
+        // 0 for the whole aggregate when zero rows match the WHERE clause (a
+        // no-GROUP-BY SUM over an empty set is SQL NULL, not 0).
+        let sql = format!(
+            r#"
+            SELECT
+                COUNT(*),
+                COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.input_tokens') AS INTEGER), 0)), 0),
+                COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.output_tokens') AS INTEGER), 0)), 0),
+                COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.cache_read_tokens') AS INTEGER), 0)), 0),
+                COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.cache_creation_tokens') AS INTEGER), 0)), 0),
+                COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.thinking_tokens') AS INTEGER), 0)), 0)
+            FROM task_traces
+            WHERE event_kind = 'provider_usage'
+              AND json_extract(event_json, '$.agent_id') LIKE 'moa:%'{where_extras}
+            "#
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| AlephError::config(format!("Failed to prepare moa usage query: {e}")))?;
+        let row = stmt
+            .query_row(rusqlite::params_from_iter(binds), |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            })
+            .map_err(|e| AlephError::config(format!("Failed to query moa usage: {e}")))?;
+        if row.0 == 0 {
+            return Ok(None);
+        }
+        let to_u64 = |v: i64| u64::try_from(v).unwrap_or(0);
+        Ok(Some(AgentUsageTotal {
+            agent_id: "moa-advisors".to_string(),
+            call_count: to_u64(row.0),
+            input_tokens: to_u64(row.1),
+            output_tokens: to_u64(row.2),
+            cache_read_tokens: to_u64(row.3),
+            cache_creation_tokens: to_u64(row.4),
+            reasoning_tokens: to_u64(row.5),
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -761,6 +830,62 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].call_count, 1);
         assert_eq!(rows[0].input_tokens, 100);
+    }
+
+    // -------------------------------------------------------------------------
+    // MoA advisor usage bucket (round-2 B6)
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn moa_advisor_usage_rolls_into_single_bucket() {
+        let db = StateDatabase::in_memory().unwrap();
+        // Two advisor usage rows + one real-agent row, all in the same window.
+        seed_usage(
+            &db,
+            "t1",
+            0,
+            "moa:0:openai:gpt-5",
+            100,
+            10,
+            None,
+            None,
+            None,
+            1000,
+        )
+        .await;
+        seed_usage(
+            &db,
+            "t1",
+            1,
+            "moa:1:deepseek:v4",
+            200,
+            20,
+            None,
+            None,
+            None,
+            1000,
+        )
+        .await;
+        seed_usage(&db, "t1", 2, "main", 999, 99, None, None, None, 1000).await;
+
+        let bucket = db
+            .aggregate_moa_advisor_usage(None, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(bucket.agent_id, "moa-advisors");
+        assert_eq!(bucket.call_count, 2);
+        assert_eq!(bucket.input_tokens, 300);
+        assert_eq!(bucket.output_tokens, 30);
+
+        // Real agents are untouched by the bucket query, and an out-of-range
+        // window with zero matching rows must yield None, not a NULL-coercion
+        // error from the bare SUM aggregate.
+        let empty = db
+            .aggregate_moa_advisor_usage(Some(i64::MAX - 1), None)
+            .await
+            .unwrap();
+        assert!(empty.is_none());
     }
 
     /// Rollup ratio matches the per-call formula across both protocol shapes.

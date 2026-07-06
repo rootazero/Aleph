@@ -350,11 +350,19 @@ impl AgentRunManager {
             })
             .collect();
 
+        // Round-2 E3: intercept the EXPLICIT picker override BEFORE the
+        // voice-pin merge below. Only a deliberate user pick may arm or
+        // clear session MoA; the voice fallback synthesizes an override
+        // from config (not user intent) and must not disturb an armed MoA
+        // session — see `apply_moa_selector_semantics`.
+        let explicit_override =
+            apply_moa_selector_semantics(&session_key_str, params.model_override);
+
         // Voice turns may pin a low-TTFT model (config `[voice]
         // llm_provider/llm_model`) so the spoken reply starts faster — the
         // same pin the channel voice path applies. An explicit per-turn
         // override from the model picker always wins.
-        let model_override = match (params.model_override, params.voice_input, &self.app_config) {
+        let model_override = match (explicit_override, params.voice_input, &self.app_config) {
             (Some(o), _, _) => Some(o),
             (None, true, Some(cfg)) => {
                 let cfg = cfg.read().await;
@@ -487,6 +495,54 @@ impl AgentRunManager {
     #[must_use]
     pub fn running_sessions(&self) -> Vec<String> {
         self.execution_adapter.running_sessions()
+    }
+}
+
+/// Round-2 E3: a picker selection of the "moa" pseudo-provider arms session
+/// MoA (sticky) instead of riding as a per-turn model override. Returns the
+/// override that should continue down the run path (None when consumed).
+/// An explicit NON-moa override clears any MoA sticky — the selector is one
+/// exclusive slot. No override touches nothing (bare sends must not disturb
+/// an armed MoA session).
+///
+/// Contract: call this with the RAW explicit `params.model_override` only,
+/// BEFORE any synthesized fallback (e.g. the `[voice]` low-TTFT pin) is
+/// merged in. A synthesized override is config-derived, not user intent —
+/// it must never clear an armed MoA session.
+///
+/// Two call sites, both on the `chat.send`/`agent.run` picker-override path
+/// (the `select_model` tool's own `"moa:<preset>"` pick is a SEPARATE, inline
+/// arm/clear in `select_model.rs` — this function does not back it):
+/// - [`AgentRunManager::start_run`] above — the Simulated-fallback engine
+///   (registered when no provider is configured).
+/// - `handle_chat_send_with_engine` (`src/bin/aleph-server/server_init.rs`)
+///   — the real `ExecutionEngine` path used by any real deployment (Task 18
+///   fix; previously this path never called this function, so a Panel "moa"
+///   pick silently did nothing whenever a provider was configured).
+///
+/// `pub` (not `pub(crate)`): the second call site lives in the `aleph-server`
+/// binary crate, a separate compilation unit from this `alephcore` lib
+/// crate, so crate-private visibility would not reach it.
+pub fn apply_moa_selector_semantics(
+    session_key: &str,
+    model_override: Option<crate::gateway::model_override::ModelOverride>,
+) -> Option<crate::gateway::model_override::ModelOverride> {
+    use crate::gateway::model_override::ModelOverride;
+    match model_override {
+        Some(ModelOverride::Qualified { provider, model }) if provider == "moa" => {
+            crate::providers::session_moa_handle::set_session_moa(
+                session_key,
+                Some(model),
+                false,
+            );
+            crate::providers::session_model_handle::clear_session_model(session_key);
+            None
+        }
+        Some(other) => {
+            crate::providers::session_moa_handle::clear_session_moa(session_key);
+            Some(other)
+        }
+        None => None,
     }
 }
 
@@ -1146,5 +1202,179 @@ mod tests {
             &["run-under-test".to_string()],
             "cancel_run must forward the run_id to ExecutionAdapter::cancel"
         );
+    }
+
+    /// Round-2 E3: selecting the "moa" pseudo-provider row in the picker
+    /// arms sticky session MoA and is consumed (no override rides the run
+    /// path); an explicit non-moa override clears the sticky instead; a bare
+    /// send (no override) leaves an armed session alone.
+    #[test]
+    fn moa_override_arms_session_and_is_consumed() {
+        use crate::gateway::model_override::ModelOverride;
+        let key = "test:moa:selector";
+        // Prime a session model pick — arming MoA must clear it (Task 15
+        // selector-slot exclusivity, set-then-clear ordering).
+        crate::providers::session_model_handle::set_session_model(
+            key,
+            None,
+            "gpt-5".to_string(),
+        );
+        let out = apply_moa_selector_semantics(
+            key,
+            Some(ModelOverride::Qualified {
+                provider: "moa".into(),
+                model: "deep".into(),
+            }),
+        );
+        assert!(out.is_none());
+        let pref = crate::providers::session_moa_handle::get_session_moa(key).unwrap();
+        assert_eq!(pref.preset.as_deref(), Some("deep"));
+        assert!(!pref.one_shot);
+        assert!(
+            crate::providers::session_model_handle::get_session_model(key).is_none(),
+            "arming MoA must clear the session model slot (mutual exclusion)"
+        );
+
+        // Non-moa override clears the sticky.
+        let out = apply_moa_selector_semantics(
+            key,
+            Some(ModelOverride::Qualified {
+                provider: "openai".into(),
+                model: "gpt-5".into(),
+            }),
+        );
+        assert!(out.is_some());
+        assert!(crate::providers::session_moa_handle::get_session_moa(key).is_none());
+
+        // No override leaves state alone.
+        crate::providers::session_moa_handle::set_session_moa(key, None, false);
+        assert!(apply_moa_selector_semantics(key, None).is_none());
+        assert!(crate::providers::session_moa_handle::get_session_moa(key).is_some());
+        crate::providers::session_moa_handle::clear_session_moa(key);
+    }
+
+    // Round-2 E3 regression: a voice turn's synthesized `[voice]` low-TTFT
+    // pin is config-derived, not a user picker action — it must NOT clear an
+    // armed MoA sticky. Guards the intercept ordering in `start_run`
+    // (explicit param first, voice-pin merge after): with the merge-first
+    // ordering the synthesized pin reads as an explicit non-moa pick and
+    // wipes the session's MoA activation.
+    #[tokio::test]
+    async fn moa_sticky_survives_voice_pin_turn() {
+        use crate::gateway::model_override::ModelOverride;
+        type Captured = Arc<std::sync::Mutex<Vec<Option<ModelOverride>>>>;
+
+        struct OverrideCapturingAdapter {
+            overrides: Captured,
+        }
+        #[async_trait]
+        impl ExecutionAdapter for OverrideCapturingAdapter {
+            async fn execute(
+                &self,
+                request: RunRequest,
+                _agent: Arc<AgentInstance>,
+                _emitter: Arc<dyn EventEmitter + Send + Sync>,
+            ) -> Result<(), ExecutionError> {
+                self.overrides
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(request.model_override.clone());
+                Ok(())
+            }
+            async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+                Err(ExecutionError::RunNotFound(run_id.to_string()))
+            }
+            async fn get_status(&self, _run_id: &str) -> Option<EngineRunStatus> {
+                None
+            }
+            async fn active_run_count(&self) -> usize {
+                0
+            }
+        }
+
+        // Execution is spawned (`tokio::spawn`); poll until the adapter has
+        // recorded `n` RunRequests — same pattern as the platform-tag test.
+        async fn wait_for_captures(captured: &Captured, n: usize) {
+            for _ in 0..200 {
+                if captured.lock().unwrap_or_else(|e| e.into_inner()).len() >= n {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            panic!("execution adapter did not record {n} run(s) in time");
+        }
+
+        // Distinct peer_id → a peer session key private to this test, so the
+        // voice-mode registry writes here can't race the shared main-session
+        // assertions in `voice_input_round_trips_through_session_mode_registry`.
+        fn params(input: &str, session_key: Option<String>, voice_input: bool) -> AgentRunParams {
+            AgentRunParams {
+                input: input.to_string(),
+                session_key,
+                channel: None,
+                peer_id: Some("moa-voice-test".to_string()),
+                stream: false,
+                thinking: None,
+                attachments: vec![],
+                agent_id: None,
+                project_root: None,
+                model_override: None,
+                voice_input,
+            }
+        }
+
+        let captured: Captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let adapter = Arc::new(OverrideCapturingAdapter {
+            overrides: captured.clone(),
+        });
+        let (agent_registry, _tmp) = registry_with_main_agent().await;
+        let mut config = crate::Config::default();
+        config.voice_local.llm_provider = "siliconflow".to_string();
+        config.voice_local.llm_model = "fast-voice-model".to_string();
+        let manager = AgentRunManager::new(
+            Arc::new(AgentRouter::new()),
+            Arc::new(GatewayEventBus::new()),
+            agent_registry,
+            adapter,
+        )
+        .with_app_config(Arc::new(RwLock::new(config)));
+
+        // Typed discovery run resolves the session key (no override → the
+        // MoA intercept is a no-op).
+        let result = manager
+            .start_run(params("hello", None, false))
+            .await
+            .expect("typed run");
+        let key = result.session_key.clone();
+        wait_for_captures(&captured, 1).await;
+
+        // Arm a sticky MoA, then send a voice turn with NO explicit override.
+        crate::providers::session_moa_handle::set_session_moa(
+            &key,
+            Some("deep".to_string()),
+            false,
+        );
+        manager
+            .start_run(params("拉上窗帘", Some(key.clone()), true))
+            .await
+            .expect("voice run");
+        wait_for_captures(&captured, 2).await;
+
+        // The synthesized voice pin still rode downstream unchanged...
+        let overrides = captured.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert_eq!(
+            overrides[1],
+            Some(ModelOverride::Qualified {
+                provider: "siliconflow".to_string(),
+                model: "fast-voice-model".to_string(),
+            }),
+            "voice turn must still synthesize the [voice] pin"
+        );
+        // ...and the armed MoA sticky survived it.
+        let pref = crate::providers::session_moa_handle::get_session_moa(&key)
+            .expect("MoA sticky must survive a voice-pin turn");
+        assert_eq!(pref.preset.as_deref(), Some("deep"));
+        assert!(!pref.one_shot);
+        crate::providers::session_moa_handle::clear_session_moa(&key);
     }
 }

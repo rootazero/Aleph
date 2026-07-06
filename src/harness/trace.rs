@@ -126,23 +126,34 @@ pub enum LoopTraceEvent {
     /// (cache-MISS iterations only). Emitted by the `MoaProvider` facade
     /// through the run's TraceSink (MeteringProvider pattern — zero harness
     /// logic; this enum is the carrier, not the brain).
+    /// `count == 0` is the activation-failure form: MoA could not engage for
+    /// this run (preset missing / slot unresolvable) and `error` says why.
     MoaAdvisor {
         index: usize,
         count: usize,
         /// `provider:model` of the advisor slot.
         label: String,
         text: String,
+        /// Structural failure reason (timeout / provider error); `None` on
+        /// success. The guidance-block `[failed:]` note is the display twin.
+        error: Option<String>,
     },
-    /// MoA fan-out complete; the aggregator (acting model) is being called.
+    /// MoA fan-out complete (or reused); the aggregator (acting model) is
+    /// being called. `cached: true` = this iteration reuses the previous
+    /// fan-out's advice (no advisor re-run, no new spend).
     MoaAggregating {
         aggregator: String,
         advisor_count: usize,
+        cached: bool,
     },
     /// Summed advisor spend for one fan-out. Priced per-advisor at each
     /// advisor's OWN model rate; kept out of `ProviderResponse.usage` so the
-    /// context gauge stays honest (spec §8).
+    /// context gauge stays honest (spec §8). `advisor_count` = advisors
+    /// consulted this fan-out; `billed_count` = advisors that returned usage
+    /// (denominator for cost-per-advisor math).
     MoaAdvisorSpend {
         advisor_count: usize,
+        billed_count: usize,
         input_tokens: u32,
         output_tokens: u32,
         cost_usd: Option<f64>,
@@ -365,26 +376,32 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                 count,
                 label,
                 text,
+                error,
             } => Self::MoaAdvisor {
                 index,
                 count,
                 label,
                 text,
+                error,
             },
             LoopTraceEvent::MoaAggregating {
                 aggregator,
                 advisor_count,
+                cached,
             } => Self::MoaAggregating {
                 aggregator,
                 advisor_count,
+                cached,
             },
             LoopTraceEvent::MoaAdvisorSpend {
                 advisor_count,
+                billed_count,
                 input_tokens,
                 output_tokens,
                 cost_usd,
             } => Self::MoaAdvisorSpend {
                 advisor_count,
+                billed_count,
                 input_tokens,
                 output_tokens,
                 cost_usd,

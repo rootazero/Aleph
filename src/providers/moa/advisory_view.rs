@@ -23,20 +23,31 @@ pub(crate) const ADVISORY_INSTRUCTION: &str =
      what risks or mistakes you see, and how the acting agent should \
      proceed.]";
 
-/// Head+tail preview with a `[... N chars omitted ...]` marker. UTF-8 safe.
+/// Head+tail preview with a `[... N chars omitted ...]` marker. UTF-8 safe:
+/// slices at char boundaries found via char_indices (no per-char String
+/// collection; one full count pass + two partial boundary scans).
 pub(crate) fn truncate_tool_result(text: &str, budget: usize) -> String {
     let total = text.chars().count();
     if total <= budget {
         return text.to_string();
     }
     let half = budget / 2;
-    let head: String = text.chars().take(half).collect();
-    let tail: String = {
-        let skip = total - half;
-        text.chars().skip(skip).collect()
-    };
+    // Byte offset AFTER the half-th char (head end boundary).
+    let head_end = text
+        .char_indices()
+        .nth(half)
+        .map_or(text.len(), |(i, _)| i);
+    // Byte offset of the (total-half)-th char (tail start boundary).
+    let tail_start = text
+        .char_indices()
+        .nth(total - half)
+        .map_or(text.len(), |(i, _)| i);
     let omitted = total - 2 * half;
-    format!("{head}\n[... {omitted} chars omitted ...]\n{tail}")
+    format!(
+        "{}\n[... {omitted} chars omitted ...]\n{}",
+        &text[..head_end],
+        &text[tail_start..]
+    )
 }
 
 fn text_of(blocks: &[ContentBlock]) -> String {
@@ -49,8 +60,15 @@ fn text_of(blocks: &[ContentBlock]) -> String {
                 }
             }
             ContentBlock::Json { value } => parts.push(value.to_string()),
+            // Advisors can't see pixels, but they must know an image exists —
+            // hermes drops multimodal content silently (its #51 gap); the
+            // placeholder keeps them from being blindsided by "the screenshot
+            // above" (round-2 E4).
+            ContentBlock::Image { mime_type, .. } => {
+                parts.push(format!("[image: {mime_type}]"));
+            }
             // Thinking is the acting model's private reasoning; ToolCall is
-            // rendered separately; images carry no advisory text.
+            // rendered separately.
             _ => {}
         }
     }
@@ -143,7 +161,9 @@ pub(crate) fn build_advisory_view(messages: &[UnifiedMessage]) -> Vec<UnifiedMes
 }
 
 /// Stable signature of the advisory view — the fan-out cache key. Uses the
-/// std hasher (cache dedup only, not security).
+/// std hasher (cache dedup only, not security). Hashes text parts directly
+/// (no intermediate join allocation); deliberately ignores cache_control
+/// marks so E1's in-place breakpoint marking never perturbs the cache key.
 pub(crate) fn view_signature(view: &[UnifiedMessage]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for msg in view {
@@ -153,9 +173,51 @@ pub(crate) fn view_signature(view: &[UnifiedMessage]) -> u64 {
             UnifiedMessage::ToolResult { content, .. } => ("tool", content),
         };
         role.hash(&mut hasher);
-        text_of(content).hash(&mut hasher);
+        for block in content {
+            match block {
+                ContentBlock::Text { text, .. } => {
+                    if !text.is_empty() {
+                        text.hash(&mut hasher);
+                    }
+                }
+                ContentBlock::Json { value } => value.to_string().hash(&mut hasher),
+                ContentBlock::Image { mime_type, .. } => {
+                    "image".hash(&mut hasher);
+                    mime_type.hash(&mut hasher);
+                }
+                _ => {}
+            }
+        }
     }
     hasher.finish()
+}
+
+/// Mark Anthropic prompt-cache breakpoints on the advisory view: the last
+/// Text block of each of the LAST THREE messages gets an ephemeral
+/// cache_control (hermes `system_and_3` layout). The view is append-only
+/// across iterations, so iteration N+1's prefix replays N's cached segment —
+/// without this, per_iteration advisors re-bill the whole prefix every tool
+/// step (hermes measured 0/1227 cache reads, 11.5M re-billed tokens).
+/// Marking is unconditional: the Anthropic protocol adapter maps the mark to
+/// `ephemeral`; every other adapter ignores it (zero per-provider branching).
+/// Call AFTER view_signature — the signature deliberately ignores marks.
+pub(crate) fn mark_cache_breakpoints(view: &mut [UnifiedMessage]) {
+    let len = view.len();
+    for msg in view.iter_mut().skip(len.saturating_sub(3)) {
+        let content = match msg {
+            UnifiedMessage::User { content } | UnifiedMessage::Assistant { content } => content,
+            UnifiedMessage::ToolResult { content, .. } => content,
+        };
+        if let Some(ContentBlock::Text { cache_control, .. }) = content
+            .iter_mut()
+            .rev()
+            .find(|b| matches!(b, ContentBlock::Text { .. }))
+        {
+            *cache_control = Some(crate::providers::message::CacheControl::Ephemeral {
+                ttl: None,
+            });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -266,5 +328,89 @@ mod tests {
         ];
         let view = build_advisory_view(&msgs);
         assert_eq!(view_texts(&view).len(), 1);
+    }
+
+    #[test]
+    fn signature_ignores_cache_control_marks() {
+        let mut a = vec![UnifiedMessage::user("hello")];
+        let sig_before = view_signature(&a);
+        // Simulate a cache_control mark on the text block (E1 will do this
+        // in place) — the signature must not change.
+        if let Some(UnifiedMessage::User { content }) = a.last_mut() {
+            if let Some(ContentBlock::Text { cache_control, .. }) = content.last_mut() {
+                *cache_control =
+                    Some(crate::providers::message::CacheControl::Ephemeral { ttl: None });
+            }
+        }
+        assert_eq!(sig_before, view_signature(&a));
+    }
+
+    #[test]
+    fn cache_breakpoints_mark_last_three_messages() {
+        let mut view = vec![
+            UnifiedMessage::user("one"),
+            UnifiedMessage::assistant("two"),
+            UnifiedMessage::user("three"),
+            UnifiedMessage::assistant("four"),
+            UnifiedMessage::user("five"),
+        ];
+        mark_cache_breakpoints(&mut view);
+        let marked: Vec<bool> = view
+            .iter()
+            .map(|m| {
+                let content = match m {
+                    UnifiedMessage::User { content }
+                    | UnifiedMessage::Assistant { content } => content,
+                    UnifiedMessage::ToolResult { content, .. } => content,
+                };
+                content.iter().any(|b| {
+                    matches!(b, ContentBlock::Text { cache_control: Some(_), .. })
+                })
+            })
+            .collect();
+        assert_eq!(marked, vec![false, false, true, true, true]);
+    }
+
+    #[test]
+    fn cache_breakpoints_short_view_marks_all() {
+        let mut view = vec![UnifiedMessage::user("only")];
+        mark_cache_breakpoints(&mut view);
+        let UnifiedMessage::User { content } = &view[0] else { panic!() };
+        assert!(matches!(
+            content.last(),
+            Some(ContentBlock::Text { cache_control: Some(_), .. })
+        ));
+    }
+
+    #[test]
+    fn image_blocks_render_placeholder_and_json_stringifies() {
+        let msgs = vec![UnifiedMessage::User {
+            content: vec![
+                ContentBlock::Text { text: "look at this".into(), cache_control: None },
+                ContentBlock::Image { data: "base64...".into(), mime_type: "image/png".into() },
+                ContentBlock::Json { value: json!({"k": 1}) },
+            ],
+        }];
+        let view = build_advisory_view(&msgs);
+        let texts = view_texts(&view);
+        assert!(texts[0].1.contains("look at this"));
+        // E4: advisors learn an image exists (hermes drops it silently).
+        assert!(texts[0].1.contains("[image: image/png]"));
+        assert!(texts[0].1.contains("{\"k\":1}"));
+    }
+
+    #[test]
+    fn signature_changes_when_image_added() {
+        let base = vec![UnifiedMessage::user("go")];
+        let with_image = vec![UnifiedMessage::User {
+            content: vec![
+                ContentBlock::Text { text: "go".into(), cache_control: None },
+                ContentBlock::Image { data: "d".into(), mime_type: "image/png".into() },
+            ],
+        }];
+        assert_ne!(
+            view_signature(&build_advisory_view(&base)),
+            view_signature(&build_advisory_view(&with_image))
+        );
     }
 }

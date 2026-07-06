@@ -159,13 +159,17 @@ pub const fn default_shell_timeout() -> u64 {
 /// on a headline capability. Keeping them core means they are never collapsed,
 /// which is what closes the "collapsed-but-unsnapshotted" bug class. Guarded
 /// by `snapshot_exempt_tools_must_stay_core`.
+///
+/// `moa` is core so a user's "turn on MoA for this session" engages in one
+/// step — the activation toggle must not hide behind a get_tool_schema
+/// round-trip (R8 conversational management; round-2 W1).
 pub fn default_core_tools() -> Vec<String> {
     [
         "ask_user", "subagent", "bash", "code_exec", "code_check",
         "file_read", "file_write", "file_edit", "file_ops",
         "search", "web_fetch", "memory_search", "remember",
         "skill_read", "skill_list", "scratchpad", "note_manage",
-        "system", "get_tool_schema",
+        "system", "get_tool_schema", "moa",
     ]
     .iter()
     .map(|s| (*s).to_string())
@@ -717,7 +721,8 @@ mod core_tools_tests {
         assert!(c.core.iter().any(|t| t == "bash"));
         assert!(c.core.iter().any(|t| t == "get_tool_schema"));
         assert!(c.core.iter().any(|t| t == "subagent"));
-        assert_eq!(c.core.len(), 19);
+        assert!(c.core.iter().any(|t| t == "moa"));
+        assert_eq!(c.core.len(), 20);
         assert!(!c.truncate_tool_descriptions);
     }
 

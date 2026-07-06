@@ -7,6 +7,7 @@
 
 pub(crate) mod advisory_view;
 pub mod config_handle;
+pub(crate) mod fan_out;
 pub(crate) mod prompts;
 pub mod provider;
 

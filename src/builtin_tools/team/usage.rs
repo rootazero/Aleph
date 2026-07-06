@@ -64,6 +64,12 @@ pub struct TeamUsageOutput {
     pub member_count: usize,
     pub total: UsageTotal,
     pub per_agent: Vec<AgentUsageTotal>,
+    /// Rolled-up spend from MoA advisor calls (synthetic `moa:<idx>:...`
+    /// agent ids), which never appear in `per_agent` since advisors aren't
+    /// team members. `None` when no advisor usage exists in the window
+    /// (round-2 B6).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub moa_advisors: Option<AgentUsageTotal>,
 }
 
 // =============================================================================
@@ -176,6 +182,18 @@ impl AlephTool for TeamUsageTool {
         }
         .cache_hit_ratio();
 
+        // MoA advisor spend (round-2 B6) — advisors are metered under
+        // synthetic agent ids that never appear in `agent_ids`, so they're
+        // invisible to the per-agent aggregation above. Roll them into one
+        // dedicated bucket instead. Supplementary field: failure degrades to
+        // "no advisor usage" rather than failing the whole tool call.
+        let moa_advisors = self
+            .state_db
+            .aggregate_moa_advisor_usage(args.since, args.until)
+            .await
+            .ok()
+            .flatten();
+
         Ok(TeamUsageOutput {
             team_id: args.team_id,
             since: args.since,
@@ -183,6 +201,7 @@ impl AlephTool for TeamUsageTool {
             member_count: agent_ids.len(),
             total,
             per_agent,
+            moa_advisors,
         })
     }
 }

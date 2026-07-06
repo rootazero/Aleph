@@ -387,23 +387,33 @@ pub enum AgentTraceEvent {
     },
     /// MoA advisor consultation result — one per advisor per fan-out
     /// (cache-MISS iterations only). Mirrors `harness::trace::LoopTraceEvent::MoaAdvisor`.
+    /// `count == 0` is the activation-failure form: MoA could not engage for
+    /// this run (preset missing / slot unresolvable) and `error` says why.
     MoaAdvisor {
         index: usize,
         count: usize,
         /// `provider:model` of the advisor slot.
         label: String,
         text: String,
+        /// Structural failure reason (timeout / provider error); `None` on
+        /// success.
+        error: Option<String>,
     },
-    /// MoA fan-out complete; the aggregator (acting model) is being called.
+    /// MoA fan-out complete (or reused); the aggregator (acting model) is
+    /// being called. `cached: true` = this iteration reuses the previous
+    /// fan-out's advice (no advisor re-run, no new spend).
     MoaAggregating {
         aggregator: String,
         advisor_count: usize,
+        cached: bool,
     },
     /// Summed advisor spend for one fan-out, priced per-advisor at each
     /// advisor's OWN model rate (kept out of `ProviderResponse.usage` so the
-    /// context gauge stays honest, spec §8).
+    /// context gauge stays honest, spec §8). `advisor_count` = advisors
+    /// consulted this fan-out; `billed_count` = advisors that returned usage.
     MoaAdvisorSpend {
         advisor_count: usize,
+        billed_count: usize,
         input_tokens: u32,
         output_tokens: u32,
         cost_usd: Option<f64>,
@@ -862,5 +872,45 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let parsed: ConfigChangedEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.section, Some("ui.theme".to_string()));
+    }
+
+    #[test]
+    fn moa_event_wire_field_names_locked() {
+        let advisor = AgentTraceEvent::MoaAdvisor {
+            index: 1,
+            count: 2,
+            label: "p:m".into(),
+            text: "t".into(),
+            error: Some("boom".into()),
+        };
+        let v = serde_json::to_value(&advisor).unwrap();
+        assert_eq!(v["kind"], "moa_advisor");
+        for k in ["index", "count", "label", "text", "error"] {
+            assert!(v.get(k).is_some(), "missing {k}");
+        }
+
+        let agg = AgentTraceEvent::MoaAggregating {
+            aggregator: "p:m".into(),
+            advisor_count: 2,
+            cached: true,
+        };
+        let v = serde_json::to_value(&agg).unwrap();
+        assert_eq!(v["kind"], "moa_aggregating");
+        for k in ["aggregator", "advisor_count", "cached"] {
+            assert!(v.get(k).is_some(), "missing {k}");
+        }
+
+        let spend = AgentTraceEvent::MoaAdvisorSpend {
+            advisor_count: 2,
+            billed_count: 1,
+            input_tokens: 10,
+            output_tokens: 5,
+            cost_usd: Some(0.01),
+        };
+        let v = serde_json::to_value(&spend).unwrap();
+        assert_eq!(v["kind"], "moa_advisor_spend");
+        for k in ["advisor_count", "billed_count", "input_tokens", "output_tokens", "cost_usd"] {
+            assert!(v.get(k).is_some(), "missing {k}");
+        }
     }
 }

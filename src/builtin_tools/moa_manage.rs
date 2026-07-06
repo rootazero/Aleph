@@ -40,7 +40,7 @@ const NO_PRESET_GUIDANCE: &str = "no [moa] presets configured — use action='se
 // Args
 // =============================================================================
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum MoaManageArgs {
     /// Activate a MoA preset for this session, sticky until turned off.
@@ -95,6 +95,83 @@ pub enum MoaManageArgs {
         /// Preset name to delete.
         name: String,
     },
+}
+
+/// Hand-written FLAT schema instead of `#[derive(JsonSchema)]`.
+///
+/// The derived schema for an internally-tagged enum is a root `oneOf` with
+/// `$defs`/`$ref`s. Round-2 runtime QA proved that shape unusable end to end:
+/// the Anthropic protocol adapter deliberately strips root union keywords
+/// (`strip_anthropic_tool_schema_unions` — the real Anthropic API rejects
+/// them with HTTP 400), leaving `properties: {}`, so every model faithfully
+/// emits empty `{}` arguments and the tool can never be called. A flat
+/// object schema (`action` enum + per-action fields documented in
+/// descriptions — the same shape battle-tested tools like `note_manage`
+/// use) survives every adapter untouched. Serde parsing is unchanged: the
+/// internally-tagged enum accepts exactly these flat shapes and reports
+/// precise per-action missing-field errors.
+///
+/// This impl is the single source of truth for every declaration path
+/// (builtin registry `schema_for!`, `AlephTool::definition()`, the
+/// progressive-disclosure `get_tool_schema` snapshot).
+impl JsonSchema for MoaManageArgs {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "MoaManageArgs".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "title": "MoaManageArgs",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["on", "off", "once", "status", "list", "set_preset", "delete_preset"],
+                    "description": "Operation: on (activate preset for this session, sticky) / off (deactivate) / once (next turn only) / status / list / set_preset (create or overwrite a preset) / delete_preset."
+                },
+                "preset": {
+                    "type": "string",
+                    "description": "on/once only: preset name; omit to use the default preset."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "set_preset/delete_preset: preset name. REQUIRED for those actions."
+                },
+                "advisors": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "provider": { "type": "string", "description": "A [providers.<key>] entry; \"moa\" is rejected (recursion guard)." },
+                            "model": { "type": "string" }
+                        },
+                        "required": ["provider", "model"]
+                    },
+                    "description": "set_preset: advisor (provider, model) slots consulted in parallel. REQUIRED for set_preset."
+                },
+                "aggregator": {
+                    "type": "object",
+                    "properties": {
+                        "provider": { "type": "string", "description": "A [providers.<key>] entry; \"moa\" is rejected (recursion guard)." },
+                        "model": { "type": "string" }
+                    },
+                    "required": ["provider", "model"],
+                    "description": "set_preset: the acting model slot (receives the payload plus advisor guidance). REQUIRED for set_preset."
+                },
+                "fanout": {
+                    "type": "string",
+                    "enum": ["per_iteration", "user_turn"],
+                    "description": "set_preset: advisor fan-out cadence. Default per_iteration."
+                },
+                "advisor_timeout_secs": { "type": "integer", "description": "set_preset: per-advisor wall-clock budget in seconds. Default 120." },
+                "advisor_max_tokens": { "type": "integer", "description": "set_preset: cap advisor output tokens. Omit for no cap." },
+                "advisor_temperature": { "type": "number", "description": "set_preset: advisor sampling temperature. Omit for provider default." },
+                "aggregator_temperature": { "type": "number", "description": "set_preset: aggregator sampling temperature. Omit for provider default." },
+                "set_default": { "type": "boolean", "description": "set_preset: also make this preset [moa].default_preset." }
+            },
+            "required": ["action"]
+        })
+    }
 }
 
 // =============================================================================
@@ -171,6 +248,9 @@ impl MoaManageTool {
 
         let key = ctx.session_key.to_key_string();
         set_session_moa(&key, preset, one_shot);
+        // Selector-slot exclusivity (round-2 E3): arming MoA supersedes any
+        // per-session model pick — one slot, no precedence confusion.
+        crate::providers::session_model_handle::clear_session_model(&key);
 
         let message = if one_shot {
             format!("MoA '{name}' active for this session for the next turn only")
@@ -499,6 +579,13 @@ impl AlephTool for MoaManageTool {
     type Args = MoaManageArgs;
     type Output = MoaManageOutput;
 
+    /// The flat schema's non-`action` fields are all optional (per-action
+    /// requirements live in serde parsing) — strictification would force
+    /// every field required. Same opt-out as `self_config`.
+    fn strict_schema(&self) -> bool {
+        false
+    }
+
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         match &args {
             MoaManageArgs::On { preset } => notify_tool_start(
@@ -573,14 +660,10 @@ mod tests {
     use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
     use crate::tools::AlephTool;
 
-    /// Serializes tests that mutate the process-global `[moa]` config handle.
-    /// Unlike `session_moa_handle` (keyed per session), `get_moa_config`/
-    /// `store_moa_config` hold a single unkeyed slot, so concurrent test
-    /// threads touching it would otherwise race.
-    fn moa_config_test_lock() -> &'static std::sync::Mutex<()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-    }
+    // Tests that mutate the process-global `[moa]` config slot serialize on
+    // the crate-wide lock in `config_handle` — shared with `select_model.rs`
+    // tests, which touch the same slot.
+    use crate::providers::moa::config_handle::moa_config_test_lock;
 
     fn test_ctx(ephemeral_id: &str) -> TurnContext {
         TurnContext {
@@ -616,9 +699,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_with_no_presets_configured_gives_guidance() {
-        let _guard = moa_config_test_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = moa_config_test_lock();
         store_moa_config(None);
 
         let ctx = test_ctx("moa-test-no-presets");
@@ -643,15 +724,21 @@ mod tests {
 
     #[tokio::test]
     async fn on_with_resolvable_preset_writes_sticky_session_handle() {
-        let _guard = moa_config_test_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = moa_config_test_lock();
         let mut moa = MoaToml::default();
         moa.presets.insert("solo".to_string(), solo_preset());
         store_moa_config(Some(moa));
 
         let ctx = test_ctx("moa-test-on-sticky");
         let key = ctx.session_key.to_key_string();
+        // Prime a model pick — activating MoA must clear it (round-2 E3
+        // selector-slot exclusivity, symmetric with select_model's "moa:"
+        // branch clearing any sticky MoA preset).
+        crate::providers::session_model_handle::set_session_model(
+            &key,
+            None,
+            "gpt-5".to_string(),
+        );
         let out = TURN_CONTEXT
             .scope(ctx, async {
                 MoaManageTool::default()
@@ -665,6 +752,7 @@ mod tests {
         let pref = get_session_moa(&key).unwrap();
         assert_eq!(pref.preset, None);
         assert!(!pref.one_shot);
+        assert!(crate::providers::session_model_handle::get_session_model(&key).is_none());
 
         clear_session_moa(&key);
         store_moa_config(None);
@@ -672,9 +760,7 @@ mod tests {
 
     #[tokio::test]
     async fn once_writes_one_shot_session_handle() {
-        let _guard = moa_config_test_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = moa_config_test_lock();
         let mut moa = MoaToml::default();
         moa.presets.insert("solo".to_string(), solo_preset());
         store_moa_config(Some(moa));
@@ -726,6 +812,72 @@ mod tests {
         assert!(!out.success);
     }
 
+    #[test]
+    fn definition_declares_flat_non_strict_schema() {
+        // Regression lock (round-2 runtime QA): grammar-constrained provider
+        // endpoints cannot compile a root-oneOf/$ref schema and emit tool
+        // calls with EMPTY arguments. The declared schema must stay a flat
+        // object (action enum + optional fields) and opt out of strict mode.
+        let def = MoaManageTool::default().definition();
+        assert!(!def.strict, "moa tool must opt out of strict schema mode");
+        assert!(
+            def.parameters.get("oneOf").is_none() && def.parameters.get("$defs").is_none(),
+            "declared schema must be flat — no root oneOf/$defs"
+        );
+        let actions: Vec<&str> = def.parameters["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum present")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        for a in [
+            "on", "off", "once", "status", "list", "set_preset", "delete_preset",
+        ] {
+            assert!(actions.contains(&a), "action enum missing {a}");
+        }
+        assert_eq!(
+            def.parameters["required"],
+            serde_json::json!(["action"]),
+            "only `action` is unconditionally required"
+        );
+    }
+
+    #[test]
+    fn flat_shaped_json_parses_into_tagged_args() {
+        // The flat declared schema and the serde tagged-enum parse layer must
+        // accept the same shapes — lock the two most complex actions.
+        let set: MoaManageArgs = serde_json::from_value(serde_json::json!({
+            "action": "set_preset",
+            "name": "deep",
+            "advisors": [
+                { "provider": "p", "model": "m" },
+                { "provider": "p", "model": "m" }
+            ],
+            "aggregator": { "provider": "p", "model": "m" },
+            "fanout": "per_iteration",
+            "set_default": true
+        }))
+        .expect("flat set_preset JSON parses");
+        match set {
+            MoaManageArgs::SetPreset {
+                name,
+                advisors,
+                fanout,
+                set_default,
+                ..
+            } => {
+                assert_eq!(name, "deep");
+                assert_eq!(advisors.len(), 2);
+                assert_eq!(fanout, Some(MoaFanout::PerIteration));
+                assert_eq!(set_default, Some(true));
+            }
+            other => panic!("expected SetPreset, got {other:?}"),
+        }
+        let on: MoaManageArgs =
+            serde_json::from_value(serde_json::json!({ "action": "on" })).expect("bare on parses");
+        assert!(matches!(on, MoaManageArgs::On { preset: None }));
+    }
+
     #[tokio::test]
     async fn set_preset_rejects_recursive_advisor_slot() {
         // No patcher wired — this only exercises the pre-patch validation
@@ -753,5 +905,87 @@ mod tests {
 
         assert!(!out.success);
         assert!(out.message.contains("recursive"), "{}", out.message);
+    }
+
+    #[tokio::test]
+    async fn set_preset_then_delete_roundtrip_via_real_patcher() {
+        use crate::config::backup::ConfigBackup;
+
+        let _guard = moa_config_test_lock();
+
+        // Real patcher over a temp config.toml (sibling pattern: see
+        // config::patcher::tests::setup_patcher /
+        // gateway::handlers::config::tests::create_test_patcher).
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(&config_path, "").unwrap();
+        let config = Arc::new(RwLock::new(Config::default()));
+        let backup = ConfigBackup::new(dir.path().join("backups"), 10);
+        let patcher = Arc::new(ConfigPatcher::new(config.clone(), config_path.clone(), backup));
+        let tool = MoaManageTool::new()
+            .with_config(config.clone())
+            .with_patcher(patcher);
+
+        // set_preset: writes config + hot-reloads the process-global handle.
+        let out = tool
+            .call(MoaManageArgs::SetPreset {
+                name: "roundtrip".to_string(),
+                advisors: vec![MoaSlot {
+                    provider: "openai".into(),
+                    model: "gpt-5".into(),
+                }],
+                aggregator: MoaSlot {
+                    provider: "anthropic".into(),
+                    model: "opus".into(),
+                },
+                fanout: None,
+                advisor_timeout_secs: None,
+                advisor_max_tokens: None,
+                advisor_temperature: None,
+                aggregator_temperature: None,
+                set_default: Some(true),
+            })
+            .await
+            .unwrap();
+        assert!(out.success, "{}", out.message);
+        let live = get_moa_config().expect("hot-reloaded");
+        assert!(live.presets.contains_key("roundtrip"));
+        assert_eq!(live.default_preset.as_deref(), Some("roundtrip"));
+
+        // Second preset so delete has a survivor; then delete the default —
+        // default_preset must reassign to the survivor.
+        let out = tool
+            .call(MoaManageArgs::SetPreset {
+                name: "survivor".to_string(),
+                advisors: vec![MoaSlot {
+                    provider: "openai".into(),
+                    model: "gpt-5".into(),
+                }],
+                aggregator: MoaSlot {
+                    provider: "anthropic".into(),
+                    model: "opus".into(),
+                },
+                fanout: None,
+                advisor_timeout_secs: None,
+                advisor_max_tokens: None,
+                advisor_temperature: None,
+                aggregator_temperature: None,
+                set_default: None,
+            })
+            .await
+            .unwrap();
+        assert!(out.success);
+        let out = tool
+            .call(MoaManageArgs::DeletePreset {
+                name: "roundtrip".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(out.success, "{}", out.message);
+        let live = get_moa_config().expect("hot-reloaded after delete");
+        assert!(!live.presets.contains_key("roundtrip"));
+        assert_eq!(live.default_preset.as_deref(), Some("survivor"));
+
+        store_moa_config(None);
     }
 }
