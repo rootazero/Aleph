@@ -98,6 +98,11 @@ impl Lane {
             // The `.usage` suffix isn't in the Query heuristic; keep it out of
             // Mutate so it isn't idempotency-guarded for nothing.
             "teams.usage" => Some(Self::Query),
+            // moa.listPresets returns a read-only `[moa]` config snapshot. The
+            // `.listPresets` suffix doesn't match the Query heuristic's `.list`,
+            // so classify it explicitly — keeps this hot read off the Mutate
+            // lane and out of idempotency guarding.
+            "moa.listPresets" => Some(Self::Query),
             // connect.challenge issues a nonce — read-only, idempotent.
             // The `.challenge` suffix doesn't match the Query heuristic;
             // putting it on Query keeps it out of the Mutate lane that
