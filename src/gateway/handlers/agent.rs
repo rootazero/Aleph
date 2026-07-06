@@ -530,16 +530,19 @@ pub fn apply_moa_selector_semantics(
     use crate::gateway::model_override::ModelOverride;
     match model_override {
         Some(ModelOverride::Qualified { provider, model }) if provider == "moa" => {
-            crate::providers::session_moa_handle::set_session_moa(
-                session_key,
-                Some(model),
-                false,
-            );
-            crate::providers::session_model_handle::clear_session_model(session_key);
+            // Round-3 F1: validate via the single arm source. An unknown preset
+            // is NOT silently armed — notify the user and leave the session
+            // unarmed (the override is still consumed, not passed through, so a
+            // "moa" provider never rides the run path).
+            if let Err(msg) =
+                crate::providers::moa::activation::arm_sticky(session_key, Some(model))
+            {
+                crate::builtin_tools::notify_tool_result("moa", &msg, false);
+            }
             None
         }
         Some(other) => {
-            crate::providers::session_moa_handle::clear_session_moa(session_key);
+            crate::providers::moa::activation::disarm(session_key);
             Some(other)
         }
         None => None,
@@ -1211,6 +1214,31 @@ mod tests {
     #[test]
     fn moa_override_arms_session_and_is_consumed() {
         use crate::gateway::model_override::ModelOverride;
+        use crate::providers::moa::config_handle::moa_config_test_lock;
+        let _guard = moa_config_test_lock();
+        crate::providers::moa::store_moa_config(Some({
+            let mut cfg = crate::config::MoaToml::default();
+            cfg.presets.insert(
+                "deep".to_string(),
+                crate::config::MoaPreset {
+                    enabled: true,
+                    advisors: vec![crate::config::MoaSlot {
+                        provider: "openai".to_string(),
+                        model: "gpt-5".to_string(),
+                    }],
+                    aggregator: crate::config::MoaSlot {
+                        provider: "anthropic".to_string(),
+                        model: "claude-opus-4-8".to_string(),
+                    },
+                    fanout: crate::config::MoaFanout::default(),
+                    advisor_timeout_secs: 120,
+                    advisor_max_tokens: None,
+                    advisor_temperature: None,
+                    aggregator_temperature: None,
+                },
+            );
+            cfg
+        }));
         let key = "test:moa:selector";
         // Prime a session model pick — arming MoA must clear it (Task 15
         // selector-slot exclusivity, set-then-clear ordering).
@@ -1251,6 +1279,56 @@ mod tests {
         assert!(apply_moa_selector_semantics(key, None).is_none());
         assert!(crate::providers::session_moa_handle::get_session_moa(key).is_some());
         crate::providers::session_moa_handle::clear_session_moa(key);
+
+        crate::providers::moa::store_moa_config(None);
+    }
+
+    /// Round-3 F1: a `provider:"moa"` override naming an UNKNOWN preset must not
+    /// silently arm — it validates, notifies, and leaves the session unarmed.
+    #[test]
+    fn moa_override_unknown_preset_does_not_arm() {
+        use crate::gateway::model_override::ModelOverride;
+        use crate::providers::moa::config_handle::moa_config_test_lock;
+        let _guard = moa_config_test_lock();
+        let key = "test:moa:selector:ghost";
+        crate::providers::moa::store_moa_config(Some({
+            let mut cfg = crate::config::MoaToml::default();
+            cfg.presets.insert(
+                "deep".to_string(),
+                crate::config::MoaPreset {
+                    enabled: true,
+                    advisors: vec![crate::config::MoaSlot {
+                        provider: "openai".to_string(),
+                        model: "gpt-5".to_string(),
+                    }],
+                    aggregator: crate::config::MoaSlot {
+                        provider: "anthropic".to_string(),
+                        model: "claude-opus-4-8".to_string(),
+                    },
+                    fanout: crate::config::MoaFanout::default(),
+                    advisor_timeout_secs: 120,
+                    advisor_max_tokens: None,
+                    advisor_temperature: None,
+                    aggregator_temperature: None,
+                },
+            );
+            cfg
+        }));
+
+        let out = apply_moa_selector_semantics(
+            key,
+            Some(ModelOverride::Qualified {
+                provider: "moa".into(),
+                model: "ghost".into(),
+            }),
+        );
+        assert!(out.is_none(), "override is still consumed (not passed through)");
+        assert!(
+            crate::providers::session_moa_handle::get_session_moa(key).is_none(),
+            "unknown preset must not arm the session"
+        );
+
+        crate::providers::moa::store_moa_config(None);
     }
 
     // Round-2 E3 regression: a voice turn's synthesized `[voice]` low-TTFT
