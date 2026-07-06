@@ -188,7 +188,11 @@ pub(crate) async fn hydrate_session_history(
                 // Fall back to a plain bubble whenever replay did NOT
                 // run — including the unreachable "traced but no
                 // workspace" case, so a row is never silently dropped.
-                if !replayed {
+                // Skip the empty assistant placeholder a tool-call turn leaves
+                // behind (text-less turn) so a trace-less reload doesn't render
+                // blank bubbles. `role="tool"` rows keep their content and
+                // render compactly via the timeline's tool-fallback row.
+                if !replayed && !m.content.trim().is_empty() {
                     chat.messages.update(|msgs| {
                         msgs.push(crate::views::chat::state::ChatMessage {
                             timestamp: ts,
@@ -449,7 +453,15 @@ pub fn ChatSidebar() -> impl IntoView {
             .get("origin_channel")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if origin.is_empty() {
+        // The Panel's own `chat.send` runs publish `origin_channel: "gui:chat"`
+        // (see api/chat.rs) — NOT an empty origin, contrary to what this guard
+        // originally assumed. Treat `gui:chat` as "our own update" and skip the
+        // re-hydrate: the live `run.*` stream already built the correct
+        // transcript, and reloading from `chat.history` here would clobber those
+        // clean tool/step rows with raw fallback bubbles the instant the run
+        // completes. Genuine external surfaces (Telegram, Slack, …) carry their
+        // real channel id and still trigger the mirror refresh.
+        if origin.is_empty() || origin == "gui:chat" {
             return;
         }
         let Some(sk) = event.data.get("session_key").and_then(|v| v.as_str()) else {

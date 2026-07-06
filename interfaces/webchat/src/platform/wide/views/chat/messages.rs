@@ -220,6 +220,14 @@ pub(crate) fn MessageList() -> impl IntoView {
                                     TimelineRow::Message { message, clock } => {
                                         if let Some(p) = message.plan_archive.clone() {
                                             view! { <PlanArchiveCell plan=p /> }.into_any()
+                                        } else if message.role == "tool" {
+                                            // Trace-less history fallback: a run with no
+                                            // replayable trace persists its tool call/result
+                                            // as standalone `role="tool"` rows. Render them
+                                            // as a compact muted line, not a raw-JSON bubble.
+                                            // (Live runs never reach here — their tool calls
+                                            // flow through ToolCard / ToolLine.)
+                                            view! { <ToolFallbackRow message=message /> }.into_any()
                                         } else {
                                             view! { <MessageBubble message=message clock=clock /> }.into_any()
                                         }
@@ -797,6 +805,27 @@ fn NarrationRow(message: ChatMessage) -> impl IntoView {
     view! {
         <div class="px-1 py-0.5 text-sm text-text-secondary leading-relaxed aleph-step-narration">
             <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming />
+        </div>
+    }
+}
+
+/// 无 trace 历史兜底：一次无法回放 trace 的 run 会把工具调用/结果各自持久化成
+/// 独立的 `role="tool"` 行。这里把它渲染成一行紧凑的灰字（图标 + 压平的载荷），
+/// 而不是撑满整行的原始 JSON 气泡——让重新打开的老对话读起来干净。完整载荷通过
+/// `title` 悬浮查看。实时 run 永不走这里（其工具调用走 ToolCard / ToolLine）。
+#[component]
+fn ToolFallbackRow(message: ChatMessage) -> impl IntoView {
+    let full = message.content.clone();
+    // Collapse newlines/runs of whitespace into one line for the preview.
+    // `split_whitespace` is UTF-8 safe, so CJK payloads aren't cut mid-char.
+    let preview = full.split_whitespace().collect::<Vec<_>>().join(" ");
+    view! {
+        <div
+            class="flex items-center gap-2 px-1 py-0.5 text-xs text-text-tertiary font-mono"
+            title=full
+        >
+            <span class="shrink-0">"🔧"</span>
+            <span class="min-w-0 truncate">{preview}</span>
         </div>
     }
 }

@@ -1288,6 +1288,17 @@ html.theme-switching::view-transition-new(root) {
 .markdown-body ul { list-style-type: disc; padding-left: 1.25rem; margin: 0.375rem 0; }
 .markdown-body ol { list-style-type: decimal; padding-left: 1.25rem; margin: 0.375rem 0; }
 .markdown-body li { margin: 0.125rem 0; }
+/* Loose lists: pulldown-cmark wraps each <li>'s text in a <p> when the source
+   has blank lines between items. That <p>'s own top/bottom margin then stacks
+   on the <li> margin, spreading bullets far apart and reading as "cluttered".
+   Collapse the wrapping paragraph's margins so a loose list renders as tightly
+   as a tight one; keep separation only between multiple paragraphs in one item. */
+.markdown-body li > p { margin: 0; }
+.markdown-body li > p + p { margin-top: 0.375rem; }
+/* Trim the leading/trailing block margins so text sits flush to the bubble's
+   own padding instead of adding a second layer of vertical gap. */
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
 .markdown-body a {
   color: var(--color-primary);
   text-decoration: underline;
