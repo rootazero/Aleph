@@ -20,6 +20,7 @@ pub enum SettingsTab {
     RerankingProviders,
     GenerationProviders,
     ModelRoute,
+    Moa,
     Memory,
 
     // Extensions
@@ -59,6 +60,7 @@ impl SettingsTab {
             Self::RerankingProviders => "/settings/reranking-providers",
             Self::GenerationProviders => "/settings/generation-providers",
             Self::ModelRoute => "/settings/model-route",
+            Self::Moa => "/settings/moa",
             Self::Memory => "/settings/memory",
             Self::Mcp => "/settings/mcp",
             Self::Plugins => "/settings/plugins",
@@ -90,6 +92,7 @@ impl SettingsTab {
             Self::RerankingProviders => t_string!(i18n, settings.tabs.reranking).to_string(),
             Self::GenerationProviders => t_string!(i18n, settings.tabs.generation).to_string(),
             Self::ModelRoute => t_string!(i18n, settings.tabs.model_route).to_string(),
+            Self::Moa => "MoA".to_string(),
             Self::Memory => t_string!(i18n, settings.tabs.memory).to_string(),
             Self::Mcp => t_string!(i18n, settings.tabs.mcp).to_string(),
             Self::Plugins => t_string!(i18n, settings.tabs.plugins).to_string(),
@@ -136,6 +139,9 @@ impl SettingsTab {
             }
             Self::ModelRoute => {
                 r#"<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="12" r="3"/><path d="M9 6h3a3 3 0 0 1 3 3v0M9 18h3a3 3 0 0 0 3-3v0"/>"#
+            }
+            Self::Moa => {
+                r#"<circle cx="7" cy="7" r="3"/><circle cx="17" cy="7" r="3"/><circle cx="12" cy="18" r="3"/><path d="M9 9l3 6.5M15 9l-3 6.5"/>"#
             }
             Self::Memory => {
                 r#"<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>"#
@@ -224,6 +230,7 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
             SettingsTab::RerankingProviders,
             SettingsTab::GenerationProviders,
             SettingsTab::ModelRoute,
+            SettingsTab::Moa,
             SettingsTab::RoutingRules,
             SettingsTab::Search,
             SettingsTab::Memory,
