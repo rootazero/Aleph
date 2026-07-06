@@ -1,6 +1,6 @@
 use super::helpers::now_epoch;
 use super::*;
-use crate::agents::swarm::tasks::Priority;
+use crate::agents::swarm::tasks::{CoordTaskStatus, Priority};
 use rusqlite::params;
 use serde_json::json;
 
