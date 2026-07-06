@@ -29,6 +29,7 @@ pub mod logs;
 pub mod mcp;
 pub mod memory;
 pub mod memory_config;
+pub mod moa;
 pub mod projects;
 pub mod providers;
 pub mod routing;

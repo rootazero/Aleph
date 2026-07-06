@@ -11,6 +11,7 @@ pub mod general;
 pub mod generation_providers;
 pub mod mcp;
 pub mod memory;
+pub mod moa;
 pub mod network;
 pub mod plugins;
 pub mod policies;
@@ -34,6 +35,7 @@ pub use general::GeneralView;
 pub use generation_providers::GenerationProvidersView;
 pub use mcp::McpView;
 pub use memory::MemoryView;
+pub use moa::MoaView;
 pub use network::NetworkView;
 pub use plugins::PluginsView;
 pub use policies::PoliciesView;
@@ -71,12 +73,14 @@ pub fn Settings() -> impl IntoView {
     let providers_ready = RwSignal::new(None::<bool>);
     let generation_ready = RwSignal::new(None::<bool>);
     let memory_ready = RwSignal::new(None::<bool>);
+    let moa_ready = RwSignal::new(None::<bool>);
 
     Effect::new(move || {
         if !state.is_connected.get() {
             providers_ready.set(None);
             generation_ready.set(None);
             memory_ready.set(None);
+            moa_ready.set(None);
             return;
         }
         leptos::task::spawn_local(async move {
@@ -96,6 +100,12 @@ pub fn Settings() -> impl IntoView {
             match MemoryApi::stats(&state).await {
                 Ok(_) => memory_ready.set(Some(true)),
                 Err(_) => memory_ready.set(Some(false)),
+            }
+
+            // Step 4 — at least one MoA preset configured (optional).
+            match crate::api::moa::MoaApi::list_presets(&state).await {
+                Ok(cfg) => moa_ready.set(Some(!cfg.presets.is_empty())),
+                Err(_) => moa_ready.set(Some(false)),
             }
         });
     });
@@ -119,6 +129,12 @@ pub fn Settings() -> impl IntoView {
             href: "/settings/memory",
             cta: "Open Memory",
         },
+        SetupStep {
+            title: "Configure MoA presets (optional)",
+            body: "Mixture-of-Agents: multiple advisor models consult before one aggregator model responds.",
+            href: "/settings/moa",
+            cta: "Open MoA",
+        },
     ];
 
     view! {
@@ -140,11 +156,11 @@ pub fn Settings() -> impl IntoView {
                         {t!(i18n, settings.quick_start.title)}
                     </h2>
                     {move || {
-                        let done = [providers_ready.get(), generation_ready.get(), memory_ready.get()]
+                        let done = [providers_ready.get(), generation_ready.get(), memory_ready.get(), moa_ready.get()]
                             .iter()
                             .filter(|s| **s == Some(true))
                             .count();
-                        let total = 3usize;
+                        let total = 4usize;
                         view! {
                             <span class="text-xs font-mono text-text-tertiary">
                                 {format!("{done}/{total} ready")}
@@ -155,7 +171,7 @@ pub fn Settings() -> impl IntoView {
 
                 <div class="space-y-3">
                     {move || {
-                        let statuses = [providers_ready.get(), generation_ready.get(), memory_ready.get()];
+                        let statuses = [providers_ready.get(), generation_ready.get(), memory_ready.get(), moa_ready.get()];
                         steps.iter().zip(statuses.iter()).map(|(step, status)| {
                             view! { <SetupRow step=step.clone() status=*status /> }
                         }).collect_view()
