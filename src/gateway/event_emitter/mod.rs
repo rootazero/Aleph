@@ -139,7 +139,6 @@ pub trait EventEmitter: Send + Sync {
                 seq,
                 delta: delta.to_string(),
                 full_text: full_text.to_string(),
-                content: delta.to_string(), // backward compat
                 chunk_index,
                 is_final,
                 is_intermediate,

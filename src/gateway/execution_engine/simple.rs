@@ -331,8 +331,7 @@ impl SimpleExecutionEngine {
                 .emit(StreamEvent::ResponseChunk {
                     run_id: run_id.to_string(),
                     seq: get_seq().await,
-                    delta: chunk_str.clone(),
-                    content: chunk_str,
+                    delta: chunk_str,
                     full_text: String::new(),
                     chunk_index: get_chunk().await,
                     is_final: false,
@@ -347,7 +346,6 @@ impl SimpleExecutionEngine {
                 run_id: run_id.to_string(),
                 seq: get_seq().await,
                 delta: String::new(),
-                content: String::new(),
                 full_text: String::new(),
                 chunk_index: get_chunk().await,
                 is_final: true,

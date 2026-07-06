@@ -109,8 +109,6 @@ pub enum StreamEvent {
         /// Accumulated full text within the current iteration
         #[serde(default)]
         full_text: String,
-        /// Backward-compatible alias for delta (DEPRECATED — use delta instead)
-        content: String,
         chunk_index: u32,
         is_final: bool,
         /// When true, send to user immediately as standalone message (intermediate progress).
