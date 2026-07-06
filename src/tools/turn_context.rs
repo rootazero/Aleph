@@ -38,6 +38,14 @@ pub struct TurnContext {
     pub caller_role: Option<String>,
 }
 
+/// Canonical operator-role predicate for a raw `caller_role` string. `None`
+/// (absent = loopback/local) and `"operator"` are operator; everything else
+/// (chat-tier channels default to `"guest"`) is not.
+#[must_use]
+pub fn role_is_operator(role: Option<&str>) -> bool {
+    matches!(role, None | Some("operator"))
+}
+
 impl TurnContext {
     /// True when the turn has a reachable channel to deliver a prompt to.
     /// HITL tools must deny / fail gracefully when this is false.
@@ -51,10 +59,7 @@ impl TurnContext {
     /// any other value (e.g. `"guest"`) = chat tier (gated).
     #[must_use]
     pub fn caller_is_operator(&self) -> bool {
-        match self.caller_role.as_deref() {
-            None | Some("operator") => true,
-            Some(_) => false,
-        }
+        role_is_operator(self.caller_role.as_deref())
     }
 }
 
@@ -126,5 +131,13 @@ mod caller_tier_tests {
     #[test]
     fn chat_tier_is_not_operator() {
         assert!(!ctx(Some("guest")).caller_is_operator());
+    }
+
+    #[test]
+    fn role_is_operator_table() {
+        assert!(role_is_operator(None), "absent role = local/operator");
+        assert!(role_is_operator(Some("operator")));
+        assert!(!role_is_operator(Some("guest")));
+        assert!(!role_is_operator(Some("chat")));
     }
 }

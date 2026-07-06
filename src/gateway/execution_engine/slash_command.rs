@@ -153,10 +153,23 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     // it leaks into the user's next turn.
                     if !args.is_empty() && !args.trim_start().starts_with('/') {
                         let key = request.session_key.to_key_string();
-                        crate::providers::session_moa_handle::set_session_moa(&key, None, true);
-                        // Selector slots are mutually exclusive; mirror
-                        // moa_manage::activate() (set-then-clear ordering).
-                        crate::providers::session_model_handle::clear_session_model(&key);
+                        // Round-3 F3: operator gate (mirror the `moa` tool).
+                        if crate::tools::turn_context::role_is_operator(
+                            request.metadata.get("caller_role").map(String::as_str),
+                        ) {
+                            // Round-3 F1: single arm source (one-shot).
+                            if let Err(msg) =
+                                crate::providers::moa::activation::arm_one_shot(&key, None)
+                            {
+                                crate::builtin_tools::notify_tool_result("moa", &msg, false);
+                            }
+                        } else {
+                            crate::builtin_tools::notify_tool_result(
+                                "moa",
+                                "MoA advisory requires operator; running normally.",
+                                false,
+                            );
+                        }
                     }
                     return Err(ExecutionError::Fallthrough {
                         reason: "moa one-shot".to_string(),

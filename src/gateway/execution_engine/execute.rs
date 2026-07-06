@@ -259,10 +259,27 @@ where
                 // so the inner command resolves exactly as if typed directly.
                 if !prompt.trim_start().starts_with('/') {
                     let key = request.session_key.to_key_string();
-                    crate::providers::session_moa_handle::set_session_moa(&key, None, true);
-                    // Selector slots are mutually exclusive; mirror
-                    // moa_manage::activate() (set-then-clear ordering).
-                    crate::providers::session_model_handle::clear_session_model(&key);
+                    // Round-3 F3: mirror the operator gate on the `moa` tool
+                    // (method_authz). A non-operator (chat-tier channel) may
+                    // not arm advisory via `/moa`; the prompt still runs as a
+                    // normal turn (prefix stripped below).
+                    if crate::tools::turn_context::role_is_operator(
+                        request.metadata.get("caller_role").map(String::as_str),
+                    ) {
+                        // Round-3 F1: single arm source (one-shot). `None`
+                        // preset = the config default; clears the model slot.
+                        if let Err(msg) =
+                            crate::providers::moa::activation::arm_one_shot(&key, None)
+                        {
+                            crate::builtin_tools::notify_tool_result("moa", &msg, false);
+                        }
+                    } else {
+                        crate::builtin_tools::notify_tool_result(
+                            "moa",
+                            "MoA advisory requires operator; running normally.",
+                            false,
+                        );
+                    }
                 }
                 request.input = prompt.to_string();
             }
