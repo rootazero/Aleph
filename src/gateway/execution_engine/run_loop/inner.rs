@@ -289,7 +289,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // `<system-reminder>` blocks. This is Claude Code's seam for
         // project-scoped prompt augmentation (sprint context, env reminders,
         // policy nudges) without touching the agent loop's logic.
-        let mut effective_user_input: String = request.input.clone();
+        // The user's message is persisted verbatim as the session's user turn;
+        // the per-turn `<system-reminder>` augmentations below are collected
+        // separately into `transient_blocks` and delivered to the model as the
+        // non-persisted transient trailing recall message (via
+        // `FlowRequest.transient_context` → `HarnessDeps::recall_context`). This
+        // keeps the stored user message — and the session title derived from its
+        // first-user-message content — equal to the raw input.
+        let effective_user_input: String = request.input.clone();
+        let mut transient_blocks: Vec<String> = Vec::new();
         if let Some(executor) = hook_executor.as_ref() {
             let mut ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
             ctx = ctx.with_tool_input(request.input.clone());
@@ -332,14 +340,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         );
                         return Ok(stop_msg);
                     }
-                    if !hr.additional_contexts.is_empty() {
-                        let reminders = hr
-                            .additional_contexts
-                            .iter()
-                            .map(|c| format!("<system-reminder>\n{}\n</system-reminder>", c.trim()))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        effective_user_input = format!("{reminders}\n\n{effective_user_input}");
+                    for c in &hr.additional_contexts {
+                        transient_blocks
+                            .push(format!("<system-reminder>\n{}\n</system-reminder>", c.trim()));
                     }
                 }
                 Err(e) => warn!(run_id = run_id, error = %e, "UserPromptSubmit hook failed"),
@@ -349,7 +352,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // Project-mode context: when the run is scoped to a user-picked
         // project folder, surface its `AGENTS.md` and `CLAUDE.md` (Claude
         // Code parity) to the model the same way UserPromptSubmit hooks do
-        // — as `<system-reminder>` blocks prefixed to the user's prompt.
+        // — as `<system-reminder>` blocks in the transient trailing context.
         // This is intentionally a one-shot inline read rather than a new
         // PromptLayer: project files vary per run, so they cannot live in
         // the cached stable prefix anyway, and the read cost is dwarfed by
@@ -361,13 +364,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             if let Some(skills_block) = collect_project_skill_block(&effective_workspace) {
                 blocks.push(skills_block);
             }
-            if !blocks.is_empty() {
-                let joined = blocks
-                    .into_iter()
-                    .map(|b| format!("<system-reminder>\n{}\n</system-reminder>", b.trim()))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                effective_user_input = format!("{joined}\n\n{effective_user_input}");
+            for b in blocks {
+                transient_blocks
+                    .push(format!("<system-reminder>\n{}\n</system-reminder>", b.trim()));
             }
         }
 
@@ -377,12 +376,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // directory; this is the missing half (R7/R9): without it the model
         // has no way to know where it is and, when asked to save a file,
         // invents an arbitrary absolute path under the user's home instead of
-        // writing into its workspace. Prepended last so it sits outermost.
-        effective_user_input = format!(
-            "<system-reminder>\n{}\n</system-reminder>\n\n{}",
-            workspace_directive(&effective_workspace),
-            effective_user_input
-        );
+        // writing into its workspace. Delivered as a transient trailing
+        // reminder (never baked into the persisted user message) so the stored
+        // message and its derived session title stay equal to the raw input.
+        transient_blocks.push(format!(
+            "<system-reminder>\n{}\n</system-reminder>",
+            workspace_directive(&effective_workspace)
+        ));
+
+        // Join the per-turn reminders into the ephemeral trailing context the
+        // harness bridge appends to the LLM prompt (merged into
+        // `HarnessDeps::recall_context`) and never persists. `None` when no
+        // reminder applies keeps the pre-feature prompt byte-identical.
+        let transient_context =
+            (!transient_blocks.is_empty()).then(|| transient_blocks.join("\n\n"));
 
         // Pre-process multimodal attachments (constant across retries)
         let multimodal_messages: Option<Vec<crate::providers::message::UnifiedMessage>> =
@@ -979,6 +986,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // harness bridge can apply it as the highest-priority layer
                 // in `resolve_max_iterations`.
                 max_iterations_override: request.max_iterations_override,
+                // Ephemeral per-turn reminders (working directory, project
+                // CLAUDE.md/AGENTS.md, UserPromptSubmit hook additions).
+                // Delivered to the model as the transient trailing recall
+                // message and never persisted — see the assembly above.
+                // Cloned because this FlowRequest is rebuilt each retry
+                // iteration of the enclosing `loop` (mirrors
+                // `effective_user_input.clone()`).
+                transient_context: transient_context.clone(),
             };
 
             // Dispatch via the orchestrator

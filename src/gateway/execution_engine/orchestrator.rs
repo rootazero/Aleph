@@ -48,6 +48,8 @@ where
             sandbox_override: None,
             workspace_override: None,
             max_iterations_override: None,
+            // Legacy `run_flow` helper assembles no per-turn reminders.
+            transient_context: None,
         };
 
         let handle = orchestrator

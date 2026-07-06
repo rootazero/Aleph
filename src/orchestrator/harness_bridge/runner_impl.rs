@@ -58,6 +58,7 @@ impl HarnessRunner for AgentHarnessRunner {
         interaction_manifest: Option<crate::thinker::InteractionManifest>,
         workspace_override: Option<std::path::PathBuf>,
         max_iterations_override: Option<u32>,
+        transient_context: Option<String>,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
         // before provider lookup / LLM construction). The same token is also
@@ -305,6 +306,23 @@ impl HarnessRunner for AgentHarnessRunner {
         {
             Some((s, parts, recall)) => (Some(s), Some(parts), recall),
             None => (None, None, None),
+        };
+
+        // Merge the gateway's ephemeral per-turn reminders (working directory,
+        // project CLAUDE.md/AGENTS.md, UserPromptSubmit hook additions) into the
+        // transient trailing recall message. `think` appends the combined
+        // `recall_context` as a transient user message each Think — delivered to
+        // the model but NEVER persisted, so the stored user turn (and the session
+        // title derived from it) stays equal to the raw input. This is where the
+        // reminders used to live inline on the persisted user message.
+        let recall_context = match (recall_context, transient_context) {
+            (Some(mut recall), Some(reminders)) => {
+                recall.push_str("\n\n");
+                recall.push_str(&reminders);
+                Some(recall)
+            }
+            (Some(recall), None) => Some(recall),
+            (None, reminders) => reminders,
         };
 
         // Step 6: assemble HarnessDeps and run the inner Think→Act loop.

@@ -10,6 +10,16 @@ use crate::gateway::session_store::SessionStore;
 
 use super::types::{HistoryMessage, SessionInfo};
 
+/// A session's `derived_title` is computed from the first user message's raw
+/// content. Sessions seeded before the raw-input persistence fix leaked the
+/// ephemeral per-turn `<system-reminder>` working-directory block into that
+/// content, so their stored title is a truncated reminder fragment rather than
+/// the user's text. Treat such a leaked title as absent so the clean
+/// LLM-generated `topic` (or the "New chat" fallback) is shown instead.
+fn clean_derived_title(title: Option<String>) -> Option<String> {
+    title.filter(|t| !t.trim_start().starts_with("<system-reminder>"))
+}
+
 /// Handle sessions.list RPC request with database backend
 pub async fn handle_list_db(
     request: JsonRpcRequest,
@@ -33,7 +43,7 @@ pub async fn handle_list_db(
                 // that should not appear in user-facing session lists
                 .filter(|m| m.session_type != "task" && m.session_type != "ephemeral")
                 .map(|m| {
-                    let topic = m.derived_title.clone().or_else(|| {
+                    let topic = clean_derived_title(m.derived_title.clone()).or_else(|| {
                         m.topic.clone().or_else(|| {
                             m.identity_meta.as_ref().and_then(|im| {
                                 im.custom
@@ -331,5 +341,35 @@ pub async fn handle_preview_db(
             INTERNAL_ERROR,
             format!("Failed to get session preview: {e}"),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clean_derived_title;
+
+    #[test]
+    fn leaked_system_reminder_title_is_dropped() {
+        // The pre-fix leak: title truncated mid-reminder, no user text survives.
+        let leaked =
+            Some("<system-reminder>\nWorking directory: `/Users/x/.aleph/workspaces".to_string());
+        assert_eq!(clean_derived_title(leaked), None);
+    }
+
+    #[test]
+    fn leaked_title_with_leading_whitespace_is_dropped() {
+        let leaked = Some("  \n<system-reminder>\nWorking directory: `/tmp`".to_string());
+        assert_eq!(clean_derived_title(leaked), None);
+    }
+
+    #[test]
+    fn clean_user_title_passes_through() {
+        let ok = Some("帮我做一个发布会 PPT".to_string());
+        assert_eq!(clean_derived_title(ok.clone()), ok);
+    }
+
+    #[test]
+    fn none_stays_none() {
+        assert_eq!(clean_derived_title(None), None);
     }
 }

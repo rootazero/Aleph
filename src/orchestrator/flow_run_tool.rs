@@ -89,6 +89,8 @@ impl FlowRunTool {
             // surrounding RunRequest path (see send_tool / teams dispatcher).
             workspace_override: None,
             max_iterations_override: None,
+            // Subagent sub-flows carry no gateway per-turn reminders.
+            transient_context: None,
         };
         let handle = self.orchestrator.dispatch(req).await?;
         let outcome = handle

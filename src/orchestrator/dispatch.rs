@@ -406,6 +406,16 @@ pub struct FlowRequest {
     /// by `Orchestrator::dispatch` into `HarnessRunner::run` so cron-driven
     /// flows can cap themselves tightly without lowering the global default.
     pub max_iterations_override: Option<u32>,
+    /// Ephemeral per-turn prompt context assembled by the gateway run_loop:
+    /// the effective working-directory reminder, project `CLAUDE.md`/`AGENTS.md`
+    /// blocks, and any `UserPromptSubmit` hook additions — each fenced in
+    /// `<system-reminder>`. Forwarded by `Orchestrator::dispatch` into
+    /// `HarnessRunner::run`, which merges it into the transient trailing recall
+    /// message (`HarnessDeps::recall_context`). It is delivered to the model
+    /// each Think but NEVER persisted, so the stored user message — and the
+    /// session title derived from it — stays equal to the raw user input.
+    /// `None` keeps the pre-feature prompt byte-identical.
+    pub transient_context: Option<String>,
 }
 
 impl std::fmt::Debug for FlowRequest {
@@ -500,6 +510,10 @@ pub trait HarnessRunner: Send + Sync {
         // preset and the boot-time default; `None` or `Some(0)` is "unset"
         // and falls through to the legacy resolution chain.
         max_iterations_override: Option<u32>,
+        // Ephemeral per-turn prompt context (working-directory reminder,
+        // project files, hook additions) merged into the transient trailing
+        // recall message and never persisted. `None` = no reminder this turn.
+        transient_context: Option<String>,
     ) -> Result<FlowOutcome, FlowError>;
 
     /// The guardrail registry this runner installs on its own harness, if
@@ -706,6 +720,7 @@ impl Orchestrator {
         let interaction_manifest = req.interaction_manifest.clone();
         let workspace_override = req.workspace_override.clone();
         let max_iterations_override = req.max_iterations_override;
+        let transient_context = req.transient_context.clone();
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -742,6 +757,7 @@ impl Orchestrator {
                         interaction_manifest,
                         workspace_override,
                         max_iterations_override,
+                        transient_context,
                     ),
                 ),
             )
