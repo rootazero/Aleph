@@ -1,0 +1,375 @@
+//! Scheduling logic for the [`TeamDispatcher`](super::TeamDispatcher).
+//!
+//! `dispatch_once` is the single tick of the dumb loop: reconcile stale state,
+//! select schedulable tasks, claim and launch them. It contains **no
+//! reasoning** — task decomposition and routing are the leader LLM's job
+//! (done via `task_create`); this only drives the DAG mechanically.
+
+mod failure;
+mod reclaim;
+mod select;
+
+pub use select::{
+    is_dispatcher_managed, is_zombie, select_schedulable, MANAGED_BY_DISPATCHER, MANAGED_BY_KEY,
+};
+
+use std::collections::HashMap;
+
+use tokio::sync::OwnedSemaphorePermit;
+
+use super::handoff::build_handoff_context;
+use super::runner::{execute_member_task, MemberDispatchTarget, MemberRunStatus};
+use super::TeamDispatcher;
+use crate::agents::swarm::tasks::retry::is_retry_eligible;
+use crate::agents::swarm::tasks::timeout::effective_timeout_secs;
+use crate::agents::swarm::tasks::{
+    CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate, TaskRunStatus,
+};
+use crate::sync_primitives::Arc;
+use crate::teams::artifacts::{ArtifactType, NewArtifact, TaskStatus};
+use crate::teams::context::InboxContextProvider;
+use crate::teams::types::TeamMemberKind;
+
+impl TeamDispatcher {
+    /// One scheduling tick: reconcile, select, claim, launch.
+    pub(crate) async fn dispatch_once(self: &Arc<Self>) {
+        // 1. Release locks held longer than the TTL (crashed-runner safety net).
+        if let Err(e) = self
+            .coord_store
+            .release_stale_locks(self.config.lock_ttl_secs)
+            .await
+        {
+            tracing::warn!(error = %e, "dispatcher: release_stale_locks failed");
+        }
+
+        // 2a. Force-fail zombie tasks first — they've already exhausted their
+        //     budget and would otherwise be looped back to Pending below.
+        //     Order matters: zombie detection inspects `started_at` directly,
+        //     so it must run before reclaim_orphaned resets it.
+        self.reclaim_zombies().await;
+
+        // 2b. Reclaim orphaned in-progress tasks (restart reconciliation).
+        self.reclaim_orphaned().await;
+
+        // 3. List schedulable pending tasks. `derive_status` already excludes
+        //    tasks with unsatisfied dependencies (those report as Blocked).
+        let available = self.semaphore.available_permits();
+        if available == 0 {
+            return;
+        }
+        let pending = match self
+            .coord_store
+            .list_tasks(CoordTaskFilter {
+                status: Some(CoordTaskStatus::Pending),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(error = %e, "dispatcher: list_tasks failed");
+                return;
+            }
+        };
+
+        // Retry-backoff gate (orthogonal to the fairness selection below): a task
+        // re-dispatched after a failure carries a `retry_not_before` deadline in
+        // its metadata; skip it until that deadline elapses so a transient
+        // failure can clear before the next attempt. Tasks that never failed have
+        // no deadline and pass through untouched.
+        let now = Self::now_epoch();
+        let eligible: Vec<CoordTask> = pending
+            .into_iter()
+            .filter(|t| is_retry_eligible(&t.metadata, now))
+            .collect();
+
+        let running_snapshot: HashMap<String, String> = self.running.lock().await.clone();
+        let selected = select_schedulable(
+            &eligible,
+            &running_snapshot,
+            available,
+            self.config.max_per_owner,
+        );
+
+        // 4. Claim + launch each selected task.
+        for task in selected {
+            // Clarify steps are not agent runs: deliver the question to the
+            // user's channel and park the task awaiting their reply. They take
+            // no worker slot and skip owner resolution (the owner is a sentinel,
+            // not a team member). See [`super::clarify`].
+            if crate::workflow::clarify::is_clarify_task(&task) {
+                self.handle_clarify_task(&task).await;
+                continue;
+            }
+
+            let permit = match Arc::clone(&self.semaphore).try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => break, // concurrency cap reached
+            };
+
+            let owner = match &task.owner {
+                Some(o) => o.clone(),
+                None => continue, // unreachable: select_schedulable requires an owner
+            };
+
+            // Resolve the owner against the team's member roster so we
+            // know whether to route in-process (Agent) or via ACP. A
+            // task with no team_id or an unknown owner is a configuration
+            // error and force-fails the task — never silently stalls.
+            let dispatch_target = match self.resolve_dispatch_target(&task, &owner).await {
+                Ok(t) => t,
+                Err(reason) => {
+                    self.fail_task(&task, &reason).await;
+                    continue;
+                }
+            };
+
+            // Atomic claim — loses harmlessly to a racing claimer.
+            if let Err(e) = self.coord_store.acquire_lock(&task.id, &owner).await {
+                tracing::debug!(task_id = %task.id, error = %e, "dispatcher: task already claimed");
+                continue;
+            }
+
+            if let Err(e) = self
+                .coord_store
+                .update_task(
+                    &task.id,
+                    CoordTaskUpdate {
+                        status: Some(CoordTaskStatus::InProgress),
+                        ..Default::default()
+                    },
+                )
+                .await
+            {
+                tracing::warn!(task_id = %task.id, error = %e, "dispatcher: mark in-progress failed");
+                let _ = self.coord_store.release_lock(&task.id, &owner).await;
+                continue;
+            }
+
+            self.running
+                .lock()
+                .await
+                .insert(task.id.clone(), owner.clone());
+            let dispatcher = Arc::clone(self);
+            tokio::spawn(async move {
+                dispatcher
+                    .run_task(task, owner, dispatch_target, permit)
+                    .await;
+            });
+        }
+    }
+
+    /// Resolve a task's `owner` string to a [`MemberDispatchTarget`].
+    ///
+    /// - For an `Agent` kind we re-check the registry so missing in-process
+    ///   agents still fail fast (preserving the pre-A2 behaviour).
+    /// - For an `AcpSession` kind we trust the `team_members` row and skip
+    ///   the registry check entirely — the ACP runner validates the
+    ///   harness id when it tries to spawn.
+    /// - Missing team or member rows surface as a fail-task reason so the
+    ///   task does not loop forever.
+    async fn resolve_dispatch_target(
+        &self,
+        task: &CoordTask,
+        owner: &str,
+    ) -> Result<MemberDispatchTarget, String> {
+        let team_id = task
+            .team_id
+            .as_deref()
+            .ok_or_else(|| format!("task '{}' has no team_id", task.id))?;
+
+        let members = self
+            .team_store
+            .get_members(team_id)
+            .await
+            .map_err(|e| format!("team_store.get_members failed: {e}"))?;
+        let member = members
+            .iter()
+            .find(|m| m.agent_id == owner)
+            .ok_or_else(|| format!("owner '{owner}' is not a member of team '{team_id}'"))?;
+
+        match member.kind {
+            TeamMemberKind::Agent => {
+                if self.context.agent_registry().get(owner).await.is_none() {
+                    return Err(format!("Owner agent '{owner}' not found in registry"));
+                }
+                Ok(MemberDispatchTarget::Agent {
+                    agent_id: owner.to_string(),
+                })
+            }
+            TeamMemberKind::AcpSession => {
+                MemberDispatchTarget::from_member(member).ok_or_else(|| {
+                    format!(
+                        "ACP member '{owner}' is missing required routing fields (harness_id/cwd)"
+                    )
+                })
+            }
+        }
+    }
+
+    /// Wall-clock helper — extracted so tests can substitute a fixed value
+    /// instead of `chrono::Utc::now()` if ever needed.
+    pub(super) fn now_epoch() -> u64 {
+        chrono::Utc::now().timestamp().max(0) as u64
+    }
+
+    /// Run one claimed task end-to-end, then signal the next tick.
+    pub(crate) async fn run_task(
+        self: Arc<Self>,
+        task: CoordTask,
+        owner: String,
+        target: MemberDispatchTarget,
+        _permit: OwnedSemaphorePermit,
+    ) {
+        let task_id = task.id.clone();
+        let team_id = task.team_id.clone().unwrap_or_default();
+
+        // Assemble the deterministic handoff context for the member.
+        let inbox: Option<&dyn InboxContextProvider> = self
+            .inbox_provider
+            .as_deref()
+            .map(|p| p as &dyn InboxContextProvider);
+        let input = build_handoff_context(&self.coord_store, &self.team_store, inbox, &task).await;
+
+        // Start a per-attempt run record so the drawer can show this
+        // execution alongside any prior retries. Failure to record is
+        // non-fatal — the task itself still runs and finalises normally.
+        let run_id = self
+            .coord_store
+            .start_task_run(&task_id, &owner)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(task_id = %task_id, error = %e, "dispatcher: start_task_run failed; run history will be incomplete");
+                String::new()
+            });
+
+        // ACP members never get a per-task worktree — the external CLI
+        // process owns its own cwd. Only in-process agents benefit from
+        // git worktree isolation.
+        let isolate = matches!(target, MemberDispatchTarget::Agent { .. });
+        // A workflow step may pin its member run to a specific model; plain team
+        // tasks carry no such key, so this is `None` and the run keeps its
+        // default model.
+        let model_override = crate::workflow::workflow_model_override(&task.metadata);
+        // A task may override the global single-attempt timeout via its metadata
+        // (`timeout_secs`), so a deep research subtask and a quick formatting step
+        // no longer share one budget. Absent → the configured global default.
+        let timeout_secs = effective_timeout_secs(&task.metadata, self.config.task_timeout_secs);
+        let outcome = execute_member_task(
+            &self.context,
+            &target,
+            &team_id,
+            &task_id,
+            input,
+            timeout_secs,
+            isolate,
+            model_override,
+        )
+        .await;
+
+        // Capture run outcome BEFORE we mutate the outer task — this row
+        // survives any future retries and is the source of truth for the
+        // attempt-by-attempt UI.
+        let (run_status, run_summary, run_error) = match &outcome.status {
+            MemberRunStatus::Completed => (TaskRunStatus::Completed, outcome.reply.clone(), None),
+            MemberRunStatus::Failed => (TaskRunStatus::Failed, None, outcome.error.clone()),
+            MemberRunStatus::Timeout => (TaskRunStatus::Timeout, None, outcome.error.clone()),
+        };
+        if let Err(e) = self
+            .coord_store
+            .finish_task_run(&run_id, run_status, run_summary, run_error)
+            .await
+        {
+            tracing::warn!(task_id = %task_id, run_id = %run_id, error = %e, "dispatcher: finish_task_run failed");
+        }
+
+        // Cancelled-while-in-flight guard: `task` is the snapshot claimed at
+        // dispatch time, so a cancel issued during the member run (workflow
+        // `cancel` / `team_task_control.cancel`) would otherwise be silently
+        // overwritten here and resurrect the task. The attempt itself is
+        // already recorded in coord_task_runs above; only the task's terminal
+        // status is preserved. A re-fetch failure proceeds normally (P7
+        // graceful degradation — same behaviour as before the guard).
+        let cancelled_mid_flight = matches!(
+            self.coord_store.get_task(&task_id).await,
+            Ok(Some(t)) if t.status == CoordTaskStatus::Cancelled
+        );
+        if cancelled_mid_flight {
+            tracing::info!(task_id = %task_id, "dispatcher: task was cancelled mid-flight; keeping it cancelled");
+        }
+
+        match outcome.status {
+            _ if cancelled_mid_flight => {}
+            MemberRunStatus::Completed => {
+                let reply = outcome.reply.unwrap_or_default();
+                // Review-gated tasks park in WaitingReview for the lead to
+                // resolve via workflow_step_review; dependents stay blocked
+                // until the verdict. Everything else completes directly.
+                let final_status = select::completion_status(&task);
+                if let Err(e) = self
+                    .coord_store
+                    .update_task(
+                        &task_id,
+                        CoordTaskUpdate {
+                            status: Some(final_status),
+                            result: Some(reply.clone()),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                {
+                    tracing::warn!(task_id = %task_id, error = %e, "dispatcher: failed to persist task completion state; skipping artifact persistence");
+                } else {
+                    // The work product exists regardless of the verdict, so
+                    // the artifact persists on both paths — reviewers read it.
+                    self.persist_artifact(&task_id, &owner, &task.subject, &reply)
+                        .await;
+                    // AlephEvent::TeamTaskCompleted (or TeamTaskUpdated with
+                    // status "waiting_review") broadcast happens inside
+                    // CoordTaskStore::emit_task_topic — the panel-driven
+                    // completion path gets the same downstream wiring without
+                    // any caller-side fan-out.
+                    if final_status == CoordTaskStatus::WaitingReview {
+                        tracing::info!(task_id = %task_id, "dispatcher: task awaiting lead review");
+                    } else {
+                        tracing::info!(task_id = %task_id, "dispatcher: task completed");
+                    }
+                }
+            }
+            MemberRunStatus::Failed | MemberRunStatus::Timeout => {
+                let err = outcome.error.unwrap_or_else(|| "unknown error".to_string());
+                // Bounded automatic retry: a transient attempt failure is
+                // re-dispatched (resuming with recovery context) until the
+                // task's retry ceiling is hit, then it becomes FailedFinal.
+                self.fail_or_retry(&task, &err).await;
+                tracing::warn!(task_id = %task_id, error = %err, "dispatcher: task attempt failed");
+            }
+        }
+
+        let _ = self.coord_store.release_lock(&task_id, &owner).await;
+        self.running.lock().await.remove(&task_id);
+        // Wake the loop so newly-unblocked dependents are picked up immediately.
+        self.signal();
+    }
+
+    /// Persist the task result as a report artifact (best-effort).
+    async fn persist_artifact(&self, task_id: &str, agent_id: &str, subject: &str, content: &str) {
+        let Some(store) = &self.artifact_store else {
+            return;
+        };
+        let _ = store
+            .create_artifact(NewArtifact {
+                task_id: task_id.to_string(),
+                agent_id: agent_id.to_string(),
+                artifact_type: ArtifactType::Report,
+                title: format!("Task result: {subject}"),
+                content: content.to_string(),
+                metadata: serde_json::Value::Null,
+                status: TaskStatus::Completed,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
+            })
+            .await;
+    }
+}
