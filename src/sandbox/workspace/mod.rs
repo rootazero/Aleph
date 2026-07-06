@@ -16,19 +16,30 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
-use crate::sandbox::capabilities::SandboxCapabilities;
+use crate::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
 use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
 use crate::sandbox::dns;
 use crate::sandbox::driver::OsSandboxDriverTrait;
 use crate::sandbox::exec_approval::denial_ledger;
 use crate::sandbox::exec_approval::gate::{ApprovalGate, ApprovalOutcome};
 use crate::sandbox::hooks::{SandboxHookContext, SandboxHookResult, SandboxHooks};
-use crate::sandbox::proxy::{self, ProxyHandle};
 use crate::sandbox::Sandbox;
 use crate::session::service::SessionId;
+
+mod approval;
+mod env;
+mod path;
+mod proxy;
+
+pub use path::session_workspace_dir;
+
+pub(crate) use approval::format_capability_request;
+pub(crate) use env::sandbox_env_tag;
+pub(crate) use path::{normalize_path, session_key_to_filename};
+use proxy::maybe_spawn_proxy;
+pub(crate) use proxy::ActiveProxy;
 
 /// Lazy per-session workspace + capability-aware sandbox implementation.
 pub struct WorkspaceSandbox {
@@ -117,56 +128,6 @@ impl WorkspaceSandbox {
         sessions.insert(sid.clone(), ws.clone());
         Ok(ws)
     }
-}
-
-/// Normalize a path, resolving `..` and `.` segments, then check if it stays
-/// within the workspace root.
-fn normalize_path(path: &std::path::Path, workspace_root: &std::path::Path) -> std::path::PathBuf {
-    use std::path::Component;
-    let base = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        workspace_root.join(path)
-    };
-    let mut normalized = std::path::PathBuf::new();
-    for component in base.components() {
-        match component {
-            Component::Normal(c) => normalized.push(c),
-            Component::RootDir => normalized.push("/"),
-            Component::CurDir => {} // skip .
-            Component::ParentDir => {
-                // pop the last component for ..
-                normalized.pop();
-            }
-            Component::Prefix(p) => {
-                // Preserve Windows drive/UNC prefix so the path remains
-                // valid for canonicalize and stays on the intended volume.
-                normalized.push(p.as_os_str());
-            }
-        }
-    }
-    normalized
-}
-
-/// Compute the per-session workspace directory the same way `WorkspaceSandbox`
-/// does, without instantiating one. Lets out-of-band consumers (cluster node
-/// file commands) jail to the exact dir the node's bash sandbox uses.
-#[must_use]
-pub fn session_workspace_dir(workspace_root: &std::path::Path, sid: &SessionId) -> PathBuf {
-    workspace_root.join(session_key_to_filename(sid))
-}
-
-/// Deterministic filesystem-safe directory name derived from a `SessionId`.
-///
-/// Uses SHA-256 of the JSON-serialised key, truncated to 16 bytes (32 hex
-/// chars). Keeps the path short and avoids slashes / special chars that the
-/// various `SessionKey` variants may carry.
-fn session_key_to_filename(sid: &SessionId) -> String {
-    let json = serde_json::to_string(sid).unwrap_or_else(|_| format!("{sid:?}"));
-    let mut hasher = Sha256::new();
-    hasher.update(json.as_bytes());
-    let digest = hasher.finalize();
-    hex::encode(&digest[..16])
 }
 
 #[async_trait]
@@ -316,7 +277,8 @@ impl Sandbox for WorkspaceSandbox {
         // bridge: `maybe_spawn_proxy` additionally spawns a host bridge and
         // injects a route spec env var that the driver + `sandbox-init`
         // consume. The returned guard keeps the proxy (and bridge) alive.
-        let active_proxy: Option<ActiveProxy> = self.maybe_spawn_proxy(&mut cmd).await?;
+        let active_proxy: Option<ActiveProxy> =
+            maybe_spawn_proxy(&self.os_driver, &mut cmd).await?;
 
         // SP-4: pre-resolve any hostnames in AllowHosts to IPs before the
         // driver builds its profile. After the proxy rewrite above this
@@ -339,10 +301,7 @@ impl Sandbox for WorkspaceSandbox {
         cmd.env
             .entry("ALEPH_SANDBOX".to_string())
             .or_insert_with(|| env_tag.to_string());
-        if matches!(
-            cmd.capabilities.network,
-            crate::sandbox::capabilities::NetworkPolicy::None
-        ) {
+        if matches!(cmd.capabilities.network, NetworkPolicy::None) {
             cmd.env
                 .entry("ALEPH_SANDBOX_NETWORK_DISABLED".to_string())
                 .or_insert_with(|| "1".to_string());
@@ -456,204 +415,6 @@ impl Sandbox for WorkspaceSandbox {
 
         output
     }
-}
-
-/// Standard proxy env vars injected for `AllowHosts`. Shared between the env
-/// injection and the Linux route spec so the two never drift (the netns-side
-/// `sandbox-init` rewrites exactly these keys to the local bridge port).
-const PROXY_ENV_KEYS: [&str; 6] = [
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-];
-
-/// Holds the managed proxy — and, on Linux, the netns host bridge — alive for
-/// the duration of one sandboxed run. Drop shuts the proxy accept loop down
-/// and removes the host bridge's UDS directory.
-pub(crate) struct ActiveProxy {
-    _proxy: ProxyHandle,
-    _bridge: Option<crate::sandbox::proxy::HostBridgeHandle>,
-}
-
-impl WorkspaceSandbox {
-    /// Spawn a managed proxy if the current capabilities request `AllowHosts`
-    /// *and* the platform can reach it. Returns:
-    ///
-    /// - `Ok(Some(active))` — proxy is live, `cmd.capabilities.network` has
-    ///   been collapsed to `AllowHosts(["127.0.0.1"])`, and the standard proxy
-    ///   env vars have been injected into `cmd.env`. On Linux a host bridge is
-    ///   also live and `ALEPH_SANDBOX_PROXY_ROUTE_SPEC` is injected so the
-    ///   driver bind-mounts the UDS and `sandbox-init` runs the local bridge.
-    /// - `Ok(None)` — policy is not `AllowHosts`, allowlist is empty, or the
-    ///   platform cannot reach the proxy (Windows `AppContainer`; see Phase D).
-    /// - `Err(_)` — bind/spawn failure surfaces as `SandboxError::Other`.
-    ///
-    /// The caller holds the returned guard alive across the OS driver `run`.
-    /// Drop = shutdown.
-    async fn maybe_spawn_proxy(
-        &self,
-        cmd: &mut SandboxCommand,
-    ) -> Result<Option<ActiveProxy>, SandboxError> {
-        use crate::sandbox::capabilities::NetworkPolicy;
-        let hosts = match &cmd.capabilities.network {
-            NetworkPolicy::AllowHosts { hosts } if !hosts.is_empty() => hosts.clone(),
-            _ => return Ok(None),
-        };
-
-        // Only macOS Seatbelt and Linux bwrap can reach the host managed
-        // proxy. `windows/token` runs the target inside an AppContainer whose
-        // default isolation blocks loopback (the `CheckNetIsolationEnable-
-        // Loopback` API requires admin); Phase D will use WFP. On unsupported
-        // platforms we leave capabilities untouched so the existing
-        // platform-level hard-fail surfaces the documented gap — spawning a
-        // proxy the sandbox cannot reach would turn a clean refusal into an
-        // opaque "connection refused" at runtime.
-        let platform = self.os_driver.platform();
-        if platform != "macos/seatbelt" && platform != "linux/bwrap" {
-            return Ok(None);
-        }
-
-        let allowlist = proxy::AllowList::new(&hosts);
-        let handle = proxy::spawn(allowlist)
-            .await
-            .map_err(|e| SandboxError::Other(format!("managed proxy spawn: {e}")))?;
-        let proxy_url = handle.http_url();
-
-        // Linux: `--unshare-net` isolates the sandbox in its own netns, so the
-        // host loopback proxy is unreachable directly. Spawn a host bridge
-        // (UDS ↔ host proxy) and hand `sandbox-init` a route spec so it can run
-        // the netns-side local bridge and rewrite the proxy port to the bridge.
-        // The host proxy address is what the bridge forwards to.
-        let bridge = if platform == "linux/bwrap" {
-            let socket_dir = proxy::create_proxy_socket_dir()
-                .map_err(|e| SandboxError::Other(format!("proxy socket dir: {e}")))?;
-            let uds_path = socket_dir.join("proxy-route-0.sock");
-            let bridge = proxy::spawn_host_bridge(&uds_path, socket_dir, handle.local_addr())
-                .await
-                .map_err(|e| SandboxError::Other(format!("host bridge spawn: {e}")))?;
-            let spec = proxy::ProxyRouteSpec {
-                uds_path,
-                env_keys: PROXY_ENV_KEYS.iter().map(|s| s.to_string()).collect(),
-            };
-            let spec_json = spec
-                .to_env_json()
-                .map_err(|e| SandboxError::Other(format!("serialize proxy route spec: {e}")))?;
-            // Insert (not or_insert): this is internal routing state the driver
-            // and sandbox-init must see, never caller-overridable.
-            cmd.env
-                .insert(proxy::PROXY_ROUTE_SPEC_ENV.to_string(), spec_json);
-            Some(bridge)
-        } else {
-            None
-        };
-
-        // Collapse the OS-level allowlist to the proxy's loopback address.
-        // The proxy itself enforces the hostname allowlist; the OS just
-        // ensures nothing escapes loopback.
-        cmd.capabilities.network = NetworkPolicy::AllowHosts {
-            hosts: vec!["127.0.0.1".into()],
-        };
-
-        // Inject standard proxy env vars. `or_insert` lets caller-supplied
-        // env override our defaults — handy for tests that pin the URL
-        // shape, and matches the existing `ALEPH_SANDBOX` env contract. On
-        // Linux `sandbox-init` rewrites the port of these to the local bridge.
-        for k in PROXY_ENV_KEYS {
-            cmd.env
-                .entry(k.to_string())
-                .or_insert_with(|| proxy_url.clone());
-        }
-        // NO_PROXY exempts the loopback itself so curl/python clients
-        // don't loop back through the proxy when talking to it.
-        cmd.env
-            .entry("NO_PROXY".to_string())
-            .or_insert_with(|| "127.0.0.1,localhost,::1".to_string());
-        cmd.env
-            .entry("no_proxy".to_string())
-            .or_insert_with(|| "127.0.0.1,localhost,::1".to_string());
-
-        tracing::debug!(
-            target: "sandbox.proxy",
-            allowlist = ?hosts,
-            proxy = %proxy_url,
-            platform = %platform,
-            bridged = bridge.is_some(),
-            "spawned managed proxy for AllowHosts"
-        );
-
-        Ok(Some(ActiveProxy {
-            _proxy: handle,
-            _bridge: bridge,
-        }))
-    }
-}
-
-/// Codex-inspired env-friendly mechanism tag derived from a driver's
-/// `os/mechanism` platform string. We strip the OS prefix so child
-/// processes can branch on `ALEPH_SANDBOX=seatbelt|landlock|bwrap|token`
-/// without parsing slashes. Falls back to the full string when no slash
-/// is present.
-pub(crate) fn sandbox_env_tag(platform: &'static str) -> &'static str {
-    platform.rsplit('/').next().unwrap_or(platform)
-}
-
-/// Format a user-facing capability elevation request string. Used as the
-/// `reason` argument to `ApprovalGate::request_approval_for_tool`.
-///
-/// The capability portion is unchanged (WHAT is requested). When the model
-/// supplied a `justification` for this exec call (carried via the
-/// [`EXEC_JUSTIFICATION`](crate::sandbox::context::EXEC_JUSTIFICATION)
-/// task-local), we append a `— justification: …` clause so the human approver
-/// also sees WHY — codex `justification` / hermes reason parity. Absent a
-/// justification the string is byte-identical to its pre-feature form.
-fn format_capability_request(program: &str, caps: &SandboxCapabilities) -> String {
-    let mut parts = Vec::new();
-    if !caps.fs_read.is_empty() {
-        parts.push(format!("fs_read={:?}", caps.fs_read));
-    }
-    if !caps.fs_write.is_empty() {
-        parts.push(format!("fs_write={:?}", caps.fs_write));
-    }
-    if caps.network != crate::sandbox::capabilities::NetworkPolicy::None {
-        parts.push(format!("network={:?}", caps.network));
-    }
-    if caps.spawn_subprocess {
-        parts.push("spawn=true".into());
-    }
-    let base = format!(
-        "{program} requests elevated capabilities: {}",
-        parts.join(", ")
-    );
-    match crate::sandbox::context::current_justification().and_then(sanitize_justification) {
-        Some(why) => format!("{base}\n— justification: {why}"),
-        None => base,
-    }
-}
-
-/// Longest model justification we surface in an approval prompt. The reason is
-/// a hint for the human, not a contract — a runaway string is clamped.
-const JUSTIFICATION_MAX_CHARS: usize = 240;
-
-/// Clean a model-supplied justification for display in the approval prompt.
-/// The text is untrusted model output, so collapse control characters /
-/// newlines to single spaces (keep the prompt one logical line) and clamp the
-/// length. Returns `None` when nothing meaningful remains, so the caller falls
-/// back to the byte-identical capabilities-only string.
-fn sanitize_justification(raw: String) -> Option<String> {
-    let cleaned: String = raw
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.is_empty() {
-        return None;
-    }
-    // UTF-8-safe clamp (P7): take whole chars, never split a codepoint.
-    let clamped: String = collapsed.chars().take(JUSTIFICATION_MAX_CHARS).collect();
-    Some(clamped)
 }
 
 #[cfg(test)]
@@ -1544,6 +1305,7 @@ mod tests {
 
 #[cfg(test)]
 mod scrub_integration_tests {
+    use super::approval::{sanitize_justification, JUSTIFICATION_MAX_CHARS};
     use super::*;
     use crate::sandbox::driver::OsSandboxProfile;
     use crate::sandbox::exec_approval::gate::ApprovalGate;
