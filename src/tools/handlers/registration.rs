@@ -117,7 +117,9 @@ pub async fn register_mcp_tools(
                         format!("mcp:{server_id}:{qualified}"),
                         qualified.clone(),
                         tool.description.clone(),
-                        CatalogToolSource::Mcp { server: server_id.to_string() },
+                        CatalogToolSource::Mcp {
+                            server: server_id.to_string(),
+                        },
                     );
                     disp.register_with_conflict_resolution(unified).await;
                 }
@@ -199,7 +201,8 @@ mod tests {
             client,
             "github",
             &[tool("github:create_issue", "d")],
-        ).await;
+        )
+        .await;
         assert_eq!(names, vec!["github__create_issue"]);
         assert!(reg.snapshot().contains_key("github__create_issue"));
     }
@@ -306,7 +309,8 @@ mod tests {
             client,
             "srv",
             &[tool("a", "d"), tool("b", "d")],
-        ).await;
+        )
+        .await;
         // No public introspection of registered probes; instead, force a
         // refresh and observe that an entry materialises (since fresh
         // McpClient reports no live servers, the probe returns Unhealthy).
@@ -353,7 +357,14 @@ mod tests {
         let reg = ToolHandlerRegistry::new();
         let catalog = Arc::new(ToolCatalog::new());
         let client = Arc::new(McpClient::new());
-        register_mcp_tools(&reg, Some(&catalog), Arc::clone(&client), "srv", &[tool("t", "d")]).await;
+        register_mcp_tools(
+            &reg,
+            Some(&catalog),
+            Arc::clone(&client),
+            "srv",
+            &[tool("t", "d")],
+        )
+        .await;
         let removed = unregister_mcp_tools(&reg, Some(&catalog), "srv").await;
         assert_eq!(removed.len(), 1);
         assert!(catalog.list_by_mcp_server("srv").await.is_empty());

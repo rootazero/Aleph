@@ -344,7 +344,9 @@ mod tests {
         let dir = std::env::temp_dir();
         let dest = std::env::temp_dir().join("aleph_batch_dest");
         let out = execute_batch_move(&dir, "/etc/*", &dest, true, &[], None).await;
-        assert!(matches!(out, Err(ToolError::InvalidArgs(_))),
-            "absolute glob pattern must be rejected, got {out:?}");
+        assert!(
+            matches!(out, Err(ToolError::InvalidArgs(_))),
+            "absolute glob pattern must be rejected, got {out:?}"
+        );
     }
 }

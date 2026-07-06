@@ -104,5 +104,4 @@ impl ToolState {
         );
         removed
     }
-
 }

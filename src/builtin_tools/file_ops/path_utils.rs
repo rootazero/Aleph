@@ -113,7 +113,9 @@ pub(crate) fn reject_unsafe_glob_pattern(pattern: &str) -> Result<(), ToolError>
             "Glob pattern must not contain a drive/UNC prefix: {pattern}"
         )));
     }
-    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if p.components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         return Err(ToolError::InvalidArgs(format!(
             "Glob pattern must not contain `..`: {pattern}"
         )));

@@ -96,15 +96,19 @@ mod tests {
     async fn absolute_pattern_is_rejected() {
         let dir = std::env::temp_dir();
         let out = execute_search(&dir, "/etc/*", &[], None).await;
-        assert!(matches!(out, Err(ToolError::InvalidArgs(_))),
-            "absolute glob pattern must be rejected, got {out:?}");
+        assert!(
+            matches!(out, Err(ToolError::InvalidArgs(_))),
+            "absolute glob pattern must be rejected, got {out:?}"
+        );
     }
 
     #[tokio::test]
     async fn parent_escape_pattern_is_rejected() {
         let dir = std::env::temp_dir();
         let out = execute_search(&dir, "../*", &[], None).await;
-        assert!(matches!(out, Err(ToolError::InvalidArgs(_))),
-            "`..` glob pattern must be rejected, got {out:?}");
+        assert!(
+            matches!(out, Err(ToolError::InvalidArgs(_))),
+            "`..` glob pattern must be rejected, got {out:?}"
+        );
     }
 }
