@@ -396,7 +396,7 @@ impl MoaManageTool {
             _ => {
                 return Ok(MoaManageOutput {
                     success: false,
-                    message: "Config patcher not available".to_string(),
+                    message: "MoA config or patcher not available".to_string(),
                     data: None,
                 })
             }
@@ -433,7 +433,7 @@ impl MoaManageTool {
             _ => {
                 return Ok(MoaManageOutput {
                     success: false,
-                    message: "Config patcher not available".to_string(),
+                    message: "MoA config or patcher not available".to_string(),
                     data: None,
                 })
             }
