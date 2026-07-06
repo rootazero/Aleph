@@ -106,7 +106,7 @@ async fn apply_event(
         McpManagerEvent::ServerStopped { server_id, .. }
         | McpManagerEvent::ServerCrashed { server_id, .. }
         | McpManagerEvent::ServerRemoved { server_id, .. } => {
-            let removed = unregister_mcp_tools(registry, tool_catalog, &server_id);
+            let removed = unregister_mcp_tools(registry, tool_catalog, &server_id).await;
             if !removed.is_empty() {
                 tracing::info!(
                     server_id = %server_id,
@@ -146,8 +146,8 @@ async fn sync_server(
         }
     };
     let tools = client.list_tools().await;
-    let _ = unregister_mcp_tools(registry, tool_catalog, server_id);
-    let registered = register_mcp_tools(registry, tool_catalog, client, server_id, &tools);
+    let _ = unregister_mcp_tools(registry, tool_catalog, server_id).await;
+    let registered = register_mcp_tools(registry, tool_catalog, client, server_id, &tools).await;
     tracing::info!(
         server_id,
         count = registered.len(),

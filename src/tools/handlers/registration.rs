@@ -9,6 +9,7 @@ use crate::sync_primitives::Arc;
 
 use crate::mcp::{McpClient, McpTool};
 use crate::tool_metadata::ToolCatalog;
+use crate::tool_metadata::{ToolSource as CatalogToolSource, UnifiedTool};
 use crate::tools::handlers::mcp::McpHandler;
 use crate::tools::handlers::ToolHandler;
 use crate::tools::probes::mcp::McpServerProbe;
@@ -59,7 +60,7 @@ fn unusable_tool_schema_reason(schema: &Value) -> Option<&'static str> {
 /// repeatedly — collisions log a warning and are skipped. Returns the list of
 /// qualified names that were newly registered so the caller can tear them down
 /// in a matching `unregister_mcp_tools` on disconnect.
-pub fn register_mcp_tools(
+pub async fn register_mcp_tools(
     registry: &ToolHandlerRegistry,
     tool_catalog: Option<&Arc<ToolCatalog>>,
     client: Arc<McpClient>,
@@ -107,6 +108,18 @@ pub fn register_mcp_tools(
                         qualified.clone(),
                         Arc::new(McpServerProbe::new(Arc::clone(&client), server_id)),
                     );
+                    // R8 same-source catalog registration: makes the MCP tool
+                    // visible to commands.list / tools.catalog and resolvable as
+                    // a slash command. Uses the CATALOG-side ToolSource::Mcp
+                    // { server }, id = mcp:{server}:{qualified}, command name =
+                    // the provider-safe qualified name.
+                    let unified = UnifiedTool::new(
+                        format!("mcp:{server_id}:{qualified}"),
+                        qualified.clone(),
+                        tool.description.clone(),
+                        CatalogToolSource::Mcp { server: server_id.to_string() },
+                    );
+                    disp.register_with_conflict_resolution(unified).await;
                 }
                 registered.push(qualified);
             }
@@ -127,7 +140,7 @@ pub fn register_mcp_tools(
 /// supplied, also tears down the matching health probes. Returns the set of
 /// qualified names that were removed.
 #[must_use]
-pub fn unregister_mcp_tools(
+pub async fn unregister_mcp_tools(
     registry: &ToolHandlerRegistry,
     tool_catalog: Option<&Arc<ToolCatalog>>,
     server_id: &str,
@@ -146,6 +159,9 @@ pub fn unregister_mcp_tools(
         if let Some(disp) = tool_catalog {
             disp.health().unregister_probe(name);
         }
+    }
+    if let Some(disp) = tool_catalog {
+        let _ = disp.remove_by_mcp_server(server_id).await;
     }
     victims
 }
@@ -170,8 +186,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn register_mcp_tools_strips_namespaced_prefix_from_registry_key() {
+    #[tokio::test]
+    async fn register_mcp_tools_strips_namespaced_prefix_from_registry_key() {
         // The manager hands the bridge namespaced names ("server:tool");
         // the registry key must be the provider-safe `server__tool`, not
         // the colon-bearing double prefix `server__server:tool`.
@@ -183,13 +199,13 @@ mod tests {
             client,
             "github",
             &[tool("github:create_issue", "d")],
-        );
+        ).await;
         assert_eq!(names, vec!["github__create_issue"]);
         assert!(reg.snapshot().contains_key("github__create_issue"));
     }
 
-    #[test]
-    fn register_mcp_tools_carries_annotation_flags_into_definition() {
+    #[tokio::test]
+    async fn register_mcp_tools_carries_annotation_flags_into_definition() {
         let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
         let mut ro = tool("list_items", "d");
@@ -197,7 +213,7 @@ mod tests {
         ro.idempotent = true;
         let mut boom = tool("delete_item", "d");
         boom.requires_confirmation = true;
-        register_mcp_tools(&reg, None, client, "srv", &[ro, boom]);
+        register_mcp_tools(&reg, None, client, "srv", &[ro, boom]).await;
         let snap = reg.snapshot();
         let ro_def = snap.get("srv__list_items").unwrap().definition();
         assert!(ro_def.metadata.concurrent_safe);
@@ -224,8 +240,8 @@ mod tests {
         assert!(unusable_tool_schema_reason(&json!({"type": 7})).is_some());
     }
 
-    #[test]
-    fn register_mcp_tools_quarantines_unusable_schema() {
+    #[tokio::test]
+    async fn register_mcp_tools_quarantines_unusable_schema() {
         let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
         let mut bad = tool("broken", "d");
@@ -233,7 +249,7 @@ mod tests {
         let mut bad2 = tool("scalar", "d");
         bad2.input_schema = json!("nope");
         let good = tool("ok", "d");
-        let names = register_mcp_tools(&reg, None, client, "srv", &[bad, bad2, good]);
+        let names = register_mcp_tools(&reg, None, client, "srv", &[bad, bad2, good]).await;
         // Only the valid tool is registered; the two broken ones are skipped.
         assert_eq!(names, vec!["srv__ok"]);
         let snap = reg.snapshot();
@@ -242,45 +258,45 @@ mod tests {
         assert!(!snap.contains_key("srv__scalar"));
     }
 
-    #[test]
-    fn register_mcp_tools_applies_double_underscore_naming() {
+    #[tokio::test]
+    async fn register_mcp_tools_applies_double_underscore_naming() {
         let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
         let tools = [tool("get_time", "a"), tool("set_tz", "b")];
-        let names = register_mcp_tools(&reg, None, client, "clock", &tools);
+        let names = register_mcp_tools(&reg, None, client, "clock", &tools).await;
         assert_eq!(names, vec!["clock__get_time", "clock__set_tz"]);
         let snap = reg.snapshot();
         assert!(snap.contains_key("clock__get_time"));
         assert!(snap.contains_key("clock__set_tz"));
     }
 
-    #[test]
-    fn unregister_mcp_tools_removes_only_matching_server() {
+    #[tokio::test]
+    async fn unregister_mcp_tools_removes_only_matching_server() {
         let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
-        register_mcp_tools(&reg, None, Arc::clone(&client), "alpha", &[tool("x", "d")]);
-        register_mcp_tools(&reg, None, Arc::clone(&client), "beta", &[tool("y", "d")]);
+        register_mcp_tools(&reg, None, Arc::clone(&client), "alpha", &[tool("x", "d")]).await;
+        register_mcp_tools(&reg, None, Arc::clone(&client), "beta", &[tool("y", "d")]).await;
         assert_eq!(reg.snapshot().len(), 2);
-        let removed = unregister_mcp_tools(&reg, None, "alpha");
+        let removed = unregister_mcp_tools(&reg, None, "alpha").await;
         assert_eq!(removed, vec!["alpha__x"]);
         let remaining: Vec<String> = reg.snapshot().keys().cloned().collect();
         assert_eq!(remaining, vec!["beta__y"]);
     }
 
-    #[test]
-    fn register_mcp_tools_duplicate_is_skipped_with_warning() {
+    #[tokio::test]
+    async fn register_mcp_tools_duplicate_is_skipped_with_warning() {
         let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
         let t = [tool("dup", "d")];
-        let first = register_mcp_tools(&reg, None, Arc::clone(&client), "s", &t);
-        let second = register_mcp_tools(&reg, None, client, "s", &t);
+        let first = register_mcp_tools(&reg, None, Arc::clone(&client), "s", &t).await;
+        let second = register_mcp_tools(&reg, None, client, "s", &t).await;
         assert_eq!(first, vec!["s__dup"]);
         assert!(second.is_empty());
         assert_eq!(reg.snapshot().len(), 1);
     }
 
-    #[test]
-    fn register_with_tool_catalog_attaches_probe() {
+    #[tokio::test]
+    async fn register_with_tool_catalog_attaches_probe() {
         let reg = ToolHandlerRegistry::new();
         let disp = Arc::new(ToolCatalog::new());
         let client = Arc::new(McpClient::new());
@@ -290,33 +306,56 @@ mod tests {
             client,
             "srv",
             &[tool("a", "d"), tool("b", "d")],
-        );
+        ).await;
         // No public introspection of registered probes; instead, force a
         // refresh and observe that an entry materialises (since fresh
         // McpClient reports no live servers, the probe returns Unhealthy).
         let cache = disp.health();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let _ = cache.refresh("srv__a").await;
-        });
+        let _ = cache.refresh("srv__a").await;
         let snap = cache.snapshot();
         // `is_healthy` returns true for empty entries; an entry now exists
         // and reports unhealthy, so the snapshot's `reason` is Some.
         assert!(snap.reason("srv__a").is_some());
     }
 
-    #[test]
-    fn unregister_with_tool_catalog_drops_probe() {
+    #[tokio::test]
+    async fn unregister_with_tool_catalog_drops_probe() {
         let reg = ToolHandlerRegistry::new();
         let disp = Arc::new(ToolCatalog::new());
         let client = Arc::new(McpClient::new());
-        register_mcp_tools(&reg, Some(&disp), client, "srv", &[tool("a", "d")]);
-        let removed = unregister_mcp_tools(&reg, Some(&disp), "srv");
+        register_mcp_tools(&reg, Some(&disp), client, "srv", &[tool("a", "d")]).await;
+        let removed = unregister_mcp_tools(&reg, Some(&disp), "srv").await;
         assert_eq!(removed, vec!["srv__a"]);
         // Re-registering immediately should not collide with a leftover probe
         // (no public assertion on probe count exists, but unregister_probe
         // returns true only when a probe was actually removed; a second
         // unregister returns false).
         assert!(!disp.health().unregister_probe("srv__a"));
+    }
+
+    #[tokio::test]
+    async fn register_mcp_tools_populates_tool_catalog() {
+        use crate::tool_metadata::ToolCatalog;
+        let reg = ToolHandlerRegistry::new();
+        let catalog = Arc::new(ToolCatalog::new());
+        let client = Arc::new(McpClient::new());
+        let t = tool("do_thing", "does a thing");
+        let names = register_mcp_tools(&reg, Some(&catalog), client, "srv", &[t]).await;
+        assert_eq!(names.len(), 1);
+        let in_catalog = catalog.list_by_mcp_server("srv").await;
+        assert_eq!(in_catalog.len(), 1, "MCP tool must appear in ToolCatalog");
+        assert_eq!(in_catalog[0].name, names[0]);
+    }
+
+    #[tokio::test]
+    async fn unregister_mcp_tools_clears_tool_catalog() {
+        use crate::tool_metadata::ToolCatalog;
+        let reg = ToolHandlerRegistry::new();
+        let catalog = Arc::new(ToolCatalog::new());
+        let client = Arc::new(McpClient::new());
+        register_mcp_tools(&reg, Some(&catalog), Arc::clone(&client), "srv", &[tool("t", "d")]).await;
+        let removed = unregister_mcp_tools(&reg, Some(&catalog), "srv").await;
+        assert_eq!(removed.len(), 1);
+        assert!(catalog.list_by_mcp_server("srv").await.is_empty());
     }
 }
