@@ -859,8 +859,8 @@ async fn tool_call_allow_passes_through_unchanged() {
 // ===========================================================================
 
 /// Like `RecordingTools` but reports every call as concurrent-safe, so the
-/// harness takes the `act_parallel` fast path (the default trait impl returns
-/// `false`, which would force the serial loop).
+/// harness takes the `act_parallel` fast path (the default `call_concurrency_claim`
+/// returns `global()` (Exclusive), which would force the serial path).
 struct ConcurrentRecordingTools {
     seen: Mutex<Vec<(String, serde_json::Value)>>,
 }
@@ -894,6 +894,16 @@ impl ToolService for ConcurrentRecordingTools {
     }
     fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
+    }
+    async fn call_concurrency_claim(
+        &self,
+        _name: &str,
+        _input: &serde_json::Value,
+    ) -> crate::tools::concurrency::ConcurrencyClaim {
+        // ConcurrentRecordingTools models parallel-safe tools so the two
+        // guardrail tests exercise the act_parallel fast path (not the serial
+        // fallback). Falling to the default global() claim would serialize them.
+        crate::tools::concurrency::ConcurrencyClaim::Shared
     }
 }
 
@@ -1055,4 +1065,19 @@ async fn tool_call_guardrail_sanitize_applies_on_parallel_fast_path() {
         "Sanitize must not fire on_safety_block, got {:?}",
         cb.safety_blocks
     );
+}
+
+#[tokio::test]
+async fn concurrent_recording_tools_reports_shared_claim() {
+    // Tripwire: the two *_on_parallel_fast_path guardrail tests only exercise
+    // act_parallel while this stub claims Shared. If a refactor drops the
+    // override, the claim falls to global() (Exclusive) and those tests
+    // silently downgrade to the serial path — this assertion catches that.
+    let tools = ConcurrentRecordingTools::new();
+    assert!(matches!(
+        tools
+            .call_concurrency_claim("any", &serde_json::json!({}))
+            .await,
+        crate::tools::concurrency::ConcurrencyClaim::Shared
+    ));
 }
