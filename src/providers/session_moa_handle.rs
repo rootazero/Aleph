@@ -6,10 +6,12 @@
 //! (and for one-shots, consumed) at run construction in `harness_bridge`.
 //! In-memory by design — soft UX state that resets on restart.
 //!
-//! One-shot restore is a single mechanism: [`take_for_run`] removes a
-//! `one_shot` pref atomically under the write lock, so success, error and
-//! cancel paths all leave no state behind (hermes needed three divergent
-//! restore implementations; this is surpass item ④ in the spec).
+//! One-shot restore is a single mechanism: [`take_for_run`] consumes a
+//! `one_shot` pref atomically under the write lock — removing it when the
+//! slot carries no stash, or reinstating the stashed sticky when one-shot
+//! displaced one — so success, error and cancel paths all resolve through
+//! this one path (hermes needed three divergent restore implementations;
+//! this is surpass item ④ in the spec).
 
 use crate::sync_primitives::RwLock;
 use std::collections::HashMap;

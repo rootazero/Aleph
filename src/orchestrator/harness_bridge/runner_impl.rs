@@ -402,6 +402,10 @@ impl HarnessRunner for AgentHarnessRunner {
         // Round-2 B8: when MoA is active the run's acting model is the
         // preset's aggregator — record THAT into routing experience, not the
         // pre-MoA directive/pin (which never served a token this run).
+        // Round-3 F4: attributing a MoA-assisted success to the SOLO aggregator
+        // model is deliberate — the aggregator is this run's actual executor;
+        // the advisor-guidance uplift is not modeled separately in routing
+        // experience (known, accepted attribution choice — metering is exact).
         let (vesr_model_id, vesr_provider_id): (String, String) =
             match &moa_aggregator_identity {
                 Some((p, m)) => (m.clone(), p.clone()),
