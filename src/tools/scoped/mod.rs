@@ -101,6 +101,11 @@ pub struct ScopedToolService {
     /// attachment order from `list()` and (on cache miss) from
     /// `metadata_schema()`. See [`ToolDefinitionRewriter`].
     pub(super) definition_rewriters: Vec<Arc<dyn ToolDefinitionRewriter>>,
+    /// Tool names dropped from `list()` / `metadata_schema()` (the "deferred"
+    /// exposure tier) but kept executable + describable. Empty = no-op.
+    /// Populated at the request seam from the MCP tool set when
+    /// `[tools] defer_mcp_tools` is on. See [`ScopedToolService::with_deferred`].
+    pub(super) deferred: BTreeSet<String>,
     /// Merged tool permission policy (global → agent → channel, most
     /// restrictive wins; see `ToolPermissionsConfig::merge`). `Deny` tools are
     /// hidden from `list()` / `describe()` and rejected at `execute()`;
@@ -174,6 +179,13 @@ impl ToolService for ScopedToolService {
         // snapshot reports them healthy by default).
         if let Some(snap) = &health_snap {
             defs.retain(|d| snap.is_healthy(&d.name));
+        }
+
+        // Deferred-tier drop: remove tools deferred out of the model's initial
+        // list. They stay executable (execute resolves against self.inner) and
+        // describable, and are discoverable via `tool_search`.
+        if !self.deferred.is_empty() {
+            defs.retain(|d| !self.is_deferred(&d.name));
         }
 
         // Request-time rewriter pass: extensions / host code may rewrite
@@ -367,6 +379,9 @@ impl ToolService for ScopedToolService {
         defs.retain(|d| !self.is_permission_denied(&d.name));
         if let Some(snap) = &health_snap {
             defs.retain(|d| snap.is_healthy(&d.name));
+        }
+        if !self.deferred.is_empty() {
+            defs.retain(|d| !self.is_deferred(&d.name));
         }
         // Mirror `list()`: rewriters run after gating, before the
         // metadata-form conversion. Cached output reflects the rewrite,

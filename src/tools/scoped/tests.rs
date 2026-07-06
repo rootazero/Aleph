@@ -16,6 +16,32 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 // Stubs
 // -------------------------------------------------------------------------
 
+/// A `LoopTool` whose name is set at construction time (owned `String`).
+/// Used by deferred-tier tests that need two tools with distinct names.
+struct NamedStub(String);
+impl NamedStub {
+    fn new(n: &str) -> Self {
+        Self(n.to_string())
+    }
+}
+#[async_trait::async_trait]
+impl LoopTool for NamedStub {
+    fn name(&self) -> &str {
+        &self.0
+    }
+    fn description(&self) -> &str {
+        "stub"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        LoopToolResult::Success {
+            output: json!({}),
+        }
+    }
+}
+
 /// Noop tool service stub used as `parent_tools` for SubagentTool in tests.
 struct NoopParentTools;
 
@@ -1653,4 +1679,49 @@ async fn no_policy_means_pre_wiring_behavior() {
     let svc = ScopedToolService::new(make_registry(&["alpha"]), BTreeSet::new());
     assert!(svc.describe("alpha").await.is_some());
     assert!(svc.execute("alpha", json!({})).await.is_ok());
+}
+
+// -------------------------------------------------------------------------
+// Deferred-tier exposure: dropped from list/metadata_schema, reachable via
+// describe/execute (so a model that finds the tool via `tool_search` can
+// still call it).
+// -------------------------------------------------------------------------
+
+#[tokio::test]
+async fn deferred_tools_dropped_from_list_but_still_describable_and_executable() {
+    // Registry with two tools; defer "beta".
+    let mut reg = LoopToolRegistry::new();
+    reg.register(Box::new(NamedStub::new("alpha")));
+    reg.register(Box::new(NamedStub::new("beta")));
+    let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
+        .with_deferred(["beta".to_string()].into_iter().collect());
+
+    // list() and metadata_schema() omit the deferred tool.
+    let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
+    assert!(names.contains(&"alpha".to_string()));
+    assert!(
+        !names.contains(&"beta".to_string()),
+        "deferred tool must not be listed"
+    );
+    let meta_names: Vec<String> = svc.metadata_schema().iter().map(|d| d.name.clone()).collect();
+    assert!(!meta_names.contains(&"beta".to_string()));
+
+    // describe() and execute() still reach it (searched → callable).
+    assert!(
+        svc.describe("beta").await.is_some(),
+        "deferred tool must stay describable"
+    );
+    assert!(
+        svc.execute("beta", json!({})).await.is_ok(),
+        "deferred tool must stay executable"
+    );
+}
+
+#[tokio::test]
+async fn empty_deferred_set_is_byte_identical() {
+    let mut reg = LoopToolRegistry::new();
+    reg.register(Box::new(NamedStub::new("alpha")));
+    let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new());
+    let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
+    assert!(names.contains(&"alpha".to_string()));
 }

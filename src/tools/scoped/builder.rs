@@ -45,6 +45,7 @@ impl ScopedToolService {
             health: None,
             last_health_generation: std::sync::atomic::AtomicU64::new(0),
             definition_rewriters: Vec::new(),
+            deferred: BTreeSet::new(),
             tool_permissions: None,
             unattended: false,
         }
@@ -79,6 +80,20 @@ impl ScopedToolService {
     pub fn with_definition_rewriter(mut self, rewriter: Arc<dyn ToolDefinitionRewriter>) -> Self {
         self.definition_rewriters.push(rewriter);
         self
+    }
+
+    /// Set the deferred tool-name set (the "deferred" exposure tier). Deferred
+    /// tools are dropped from `list()` / `metadata_schema()` but remain
+    /// executable + describable. Empty set = no-op.
+    #[must_use]
+    pub fn with_deferred(mut self, deferred: BTreeSet<String>) -> Self {
+        self.deferred = deferred;
+        self
+    }
+
+    /// Whether `name` is in the deferred tier (dropped from LLM-visible lists).
+    pub(super) fn is_deferred(&self, name: &str) -> bool {
+        self.deferred.contains(name)
     }
 
     /// Invalidate the cached `metadata_schema()` output so the next call
