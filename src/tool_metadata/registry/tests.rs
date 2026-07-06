@@ -121,30 +121,6 @@ async fn test_register_custom_commands() {
 }
 
 #[tokio::test]
-async fn test_list_by_source_type() {
-    let registry = ToolCatalog::new();
-    registry.register_builtin_tools().await;
-
-    let skills = vec![SkillInfo {
-        id: "test".to_string(),
-        name: "Test".to_string(),
-        description: "Test skill".to_string(),
-        ecosystem: "aleph".to_string(),
-    }];
-    registry.register_skills(&skills).await;
-
-    let builtin = registry.list_by_source_type("Builtin").await;
-    assert_eq!(builtin.len(), 10); // 10 builtin tools (2 generation + 2 skill + snapshot + switch + groupchat + session_new [alias: new] + cron + voice)
-
-    let skill = registry.list_by_source_type("Skill").await;
-    assert_eq!(skill.len(), 1);
-
-    // Native should be empty (reserved for future OS command tools)
-    let native = registry.list_by_source_type("Native").await;
-    assert_eq!(native.len(), 0);
-}
-
-#[tokio::test]
 async fn test_search() {
     let registry = ToolCatalog::new();
 
@@ -1067,28 +1043,6 @@ async fn test_list_namespace_children_empty() {
 
     let children = registry.list_namespace_children("search").await;
     assert!(children.is_empty());
-}
-
-#[tokio::test]
-async fn test_list_by_source_type_case_insensitive() {
-    // Regression: ToolSource::label() yields "MCP", so a case-sensitive
-    // compare against the documented "Mcp" silently returned nothing.
-    let registry = ToolCatalog::new();
-    let mcp_tool = UnifiedTool::new(
-        "mcp:github:pr_list",
-        "pr_list",
-        "List PRs",
-        ToolSource::Mcp {
-            server: "github".to_string(),
-        },
-    );
-    registry.register_with_conflict_resolution(mcp_tool).await;
-
-    // Documented (mixed-case) spelling must match the "MCP" label.
-    assert_eq!(registry.list_by_source_type("Mcp").await.len(), 1);
-    assert_eq!(registry.list_by_source_type("mcp").await.len(), 1);
-    assert_eq!(registry.list_by_source_type("MCP").await.len(), 1);
-    assert_eq!(registry.list_by_source_type("Skill").await.len(), 0);
 }
 
 #[tokio::test]

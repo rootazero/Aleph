@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use tracing::{debug, info};
 
-use super::super::types::{ToolSourceType, UnifiedTool};
+use super::super::types::UnifiedTool;
 use super::types::ToolStorage;
 
 /// State management functionality for `ToolCatalog`
@@ -75,33 +75,6 @@ impl ToolState {
         info!("Tool registry atomically refreshed: {} tools", count);
     }
 
-    /// Remove all tools of a specific source type
-    ///
-    /// This enables incremental updates - only refresh the affected source
-    /// instead of clearing and re-registering everything.
-    ///
-    /// # Arguments
-    ///
-    /// * `source_type` - The source type to remove (Skill, Mcp, Custom, etc.)
-    ///
-    /// # Returns
-    ///
-    /// Number of tools removed
-    pub async fn remove_by_source_type(&self, source_type: ToolSourceType) -> usize {
-        let mut tools = self.tools.write().await;
-        let initial_count = tools.len();
-
-        tools.retain(|_, tool| ToolSourceType::from(&tool.source) != source_type);
-
-        let removed = initial_count - tools.len();
-        debug!(
-            source_type = ?source_type,
-            removed = removed,
-            "Removed tools by source type"
-        );
-        removed
-    }
-
     /// Remove tools from a specific MCP server
     ///
     /// Used when restarting or removing a single MCP server without
@@ -132,47 +105,4 @@ impl ToolState {
         removed
     }
 
-    /// Remove all skill tools
-    ///
-    /// Used when refreshing skills without affecting other tool sources.
-    ///
-    /// # Returns
-    ///
-    /// Number of tools removed
-    pub async fn remove_skills(&self) -> usize {
-        self.remove_by_source_type(ToolSourceType::Skill).await
-    }
-
-    /// Remove all custom commands
-    ///
-    /// Used when updating routing rules without affecting other tool sources.
-    ///
-    /// # Returns
-    ///
-    /// Number of tools removed
-    pub async fn remove_custom_commands(&self) -> usize {
-        self.remove_by_source_type(ToolSourceType::Custom).await
-    }
-
-    /// Remove all MCP tools (from all servers)
-    ///
-    /// Used when refreshing all MCP servers.
-    ///
-    /// # Returns
-    ///
-    /// Number of tools removed
-    pub async fn remove_all_mcp_tools(&self) -> usize {
-        self.remove_by_source_type(ToolSourceType::Mcp).await
-    }
-
-    /// Remove all native tools
-    ///
-    /// Used when refreshing native tool configuration.
-    ///
-    /// # Returns
-    ///
-    /// Number of tools removed
-    pub async fn remove_native_tools(&self) -> usize {
-        self.remove_by_source_type(ToolSourceType::Native).await
-    }
 }

@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use crate::config::RoutingRuleConfig;
 use crate::skill::SkillInfo;
 
-use super::types::{ChannelType, ToolIndex, ToolIndexEntry, ToolSourceType, UnifiedTool};
+use super::types::{ChannelType, ToolIndex, ToolIndexEntry, UnifiedTool};
 use conflict::ConflictResolver;
 use discovery::ToolDiscovery;
 // Re-exports for external (integration test, gateway) consumers. The
@@ -59,7 +59,6 @@ use types::ToolStorage;
 ///
 /// // Query tools
 /// let all = registry.list_all().await;
-/// let mcp_only = registry.list_by_source_type("Mcp").await;
 /// let tool = registry.get_by_name("search").await;
 /// ```
 pub struct ToolCatalog {
@@ -215,54 +214,9 @@ impl ToolCatalog {
         self.health.invalidate_all();
     }
 
-    /// Remove all tools of a specific source type
-    pub async fn remove_by_source_type(&self, source_type: ToolSourceType) -> usize {
-        let n = self.state.remove_by_source_type(source_type).await;
-        if n > 0 {
-            self.health.invalidate_all();
-        }
-        n
-    }
-
     /// Remove tools from a specific MCP server
     pub async fn remove_by_mcp_server(&self, server_name: &str) -> usize {
         let n = self.state.remove_by_mcp_server(server_name).await;
-        if n > 0 {
-            self.health.invalidate_all();
-        }
-        n
-    }
-
-    /// Remove all skill tools
-    pub async fn remove_skills(&self) -> usize {
-        let n = self.state.remove_skills().await;
-        if n > 0 {
-            self.health.invalidate_all();
-        }
-        n
-    }
-
-    /// Remove all custom commands
-    pub async fn remove_custom_commands(&self) -> usize {
-        let n = self.state.remove_custom_commands().await;
-        if n > 0 {
-            self.health.invalidate_all();
-        }
-        n
-    }
-
-    /// Remove all MCP tools (from all servers)
-    pub async fn remove_all_mcp_tools(&self) -> usize {
-        let n = self.state.remove_all_mcp_tools().await;
-        if n > 0 {
-            self.health.invalidate_all();
-        }
-        n
-    }
-
-    /// Remove all native tools
-    pub async fn remove_native_tools(&self) -> usize {
-        let n = self.state.remove_native_tools().await;
         if n > 0 {
             self.health.invalidate_all();
         }
@@ -341,11 +295,6 @@ impl ToolCatalog {
     /// List all tools including inactive ones
     pub async fn list_all_with_inactive(&self) -> Vec<UnifiedTool> {
         self.query.list_all_with_inactive().await
-    }
-
-    /// List tools by source type
-    pub async fn list_by_source_type(&self, source_type: &str) -> Vec<UnifiedTool> {
-        self.query.list_by_source_type(source_type).await
     }
 
     /// List tools by MCP server name

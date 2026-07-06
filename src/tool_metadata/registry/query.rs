@@ -364,23 +364,6 @@ impl ToolQuery {
         tools.values().cloned().collect()
     }
 
-    /// List tools by source type
-    ///
-    /// # Arguments
-    ///
-    /// * `source_type` - One of "Native", "Builtin", "Mcp", "Skill", "Custom",
-    ///   "Plugin". Matching is case-insensitive: `ToolSource::label()` yields
-    ///   `"MCP"`, so a case-sensitive compare against the documented `"Mcp"`
-    ///   would silently return nothing.
-    pub async fn list_by_source_type(&self, source_type: &str) -> Vec<UnifiedTool> {
-        let tools = self.tools.read().await;
-        tools
-            .values()
-            .filter(|t| t.is_active && t.source.label().eq_ignore_ascii_case(source_type))
-            .cloned()
-            .collect()
-    }
-
     /// List tools by MCP server name
     pub async fn list_by_mcp_server(&self, server: &str) -> Vec<UnifiedTool> {
         let tools = self.tools.read().await;
