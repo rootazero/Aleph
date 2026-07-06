@@ -5,6 +5,7 @@
 //! preset's aggregator is the acting model.
 //! Spec: docs/superpowers/specs/2026-07-05-moa-continuous-advisory-port-design.md
 
+pub(crate) mod activation;
 pub(crate) mod advisory_view;
 pub mod config_handle;
 pub(crate) mod fan_out;
