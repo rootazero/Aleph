@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use super::{notify_tool_result, notify_tool_start};
-use crate::config::patcher::{ConfigPatcher, PatchRequest};
+use crate::config::patcher::ConfigPatcher;
 use crate::config::{default_advisor_timeout_secs, Config, MoaFanout, MoaPreset, MoaSlot, MoaToml};
 use crate::error::Result;
 use crate::providers::moa::{get_moa_config, store_moa_config};
@@ -26,8 +26,6 @@ use crate::providers::session_moa_handle::{clear_session_moa, get_session_moa};
 use crate::sync_primitives::Arc;
 use crate::tools::turn_context::current_turn_context;
 use crate::tools::AlephTool;
-
-use super::error::ToolError;
 
 /// Guidance shown when `on`/`once` can't resolve a preset to activate (no
 /// `[moa]` section, no presets, or the named/`default_preset` preset is
@@ -393,24 +391,9 @@ impl MoaManageTool {
             aggregator_temperature,
         };
 
-        // Layer-2 validation: run the preset through the SAME
-        // `MoaToml::validation_errors()` pipeline a TOML-parsed config goes
-        // through (recursive-slot guard, empty-advisor guard, ...) against a
-        // scratch config containing only this preset.
-        let mut scratch = MoaToml::default();
-        scratch.presets.insert(name.clone(), preset.clone());
-        let errors = scratch.validation_errors();
-        if !errors.is_empty() {
-            return Ok(MoaManageOutput {
-                success: false,
-                message: format!("Preset '{name}' rejected: {}", errors.join("; ")),
-                data: Some(serde_json::json!({ "errors": errors })),
-            });
-        }
-
-        let patcher = match &self.config_patcher {
-            Some(p) => p,
-            None => {
+        let (config, patcher) = match (&self.config, &self.config_patcher) {
+            (Some(c), Some(p)) => (Arc::clone(c), Arc::clone(p)),
+            _ => {
                 return Ok(MoaManageOutput {
                     success: false,
                     message: "Config patcher not available".to_string(),
@@ -418,82 +401,36 @@ impl MoaManageTool {
                 })
             }
         };
-
-        // Every MoaPreset field is serialized explicitly (Option fields as
-        // `null` when unset) so the deep-merge patch fully replaces an
-        // existing same-named preset instead of leaving stale fields behind.
-        let preset_json = serde_json::to_value(&preset)
-            .map_err(|e| ToolError::Execution(format!("Failed to serialize preset: {e}")))?;
-        let mut presets_patch = serde_json::Map::new();
-        presets_patch.insert(name.clone(), preset_json);
-        let mut patch = serde_json::json!({ "presets": presets_patch });
-        if set_default.unwrap_or(false) {
-            patch["default_preset"] = serde_json::json!(name);
-        }
-
-        let request = PatchRequest {
-            path: "moa".to_string(),
-            patch,
-            health_check: false,
-            dry_run: false,
-        };
-
-        match patcher.apply(request).await {
-            Ok(result) => {
-                if result.success {
-                    // Hot-refresh the process-global handle so the change is
-                    // visible to the very next run (mirrors self_config's
-                    // route hot-apply).
-                    if let Some(cfg) = &self.config {
-                        store_moa_config(cfg.read().await.moa.clone());
-                    }
-                    Ok(MoaManageOutput {
-                        success: true,
-                        message: format!(
-                            "Preset '{name}' saved ({} field change(s)).",
-                            result.diff.len()
-                        ),
-                        data: Some(serde_json::to_value(&result).unwrap_or_default()),
-                    })
-                } else {
-                    Ok(MoaManageOutput {
-                        success: false,
-                        message: format!("Preset '{name}' patch did not apply."),
-                        data: None,
-                    })
-                }
-            }
+        let store = crate::providers::moa::MoaPresetStore::new(config, patcher);
+        match store
+            .save_preset(&name, preset, set_default.unwrap_or(false))
+            .await
+        {
+            Ok(result) => Ok(MoaManageOutput {
+                success: true,
+                message: format!(
+                    "Preset '{name}' saved ({} field change(s)).",
+                    result.diff.len()
+                ),
+                data: Some(serde_json::to_value(&result).unwrap_or_default()),
+            }),
+            Err(crate::providers::moa::MoaStoreError::Validation(errors)) => Ok(MoaManageOutput {
+                success: false,
+                message: format!("Preset '{name}' rejected: {}", errors.join("; ")),
+                data: Some(serde_json::json!({ "errors": errors })),
+            }),
             Err(e) => Ok(MoaManageOutput {
                 success: false,
-                message: format!("Config patch failed: {e}"),
+                message: e.to_string(),
                 data: None,
             }),
         }
     }
 
     async fn delete_preset(&self, name: String) -> Result<MoaManageOutput> {
-        let moa_cfg = get_moa_config().unwrap_or_default();
-        if !moa_cfg.presets.contains_key(&name) {
-            return Ok(MoaManageOutput {
-                success: false,
-                message: format!("Preset '{name}' does not exist."),
-                data: None,
-            });
-        }
-        if moa_cfg.presets.len() == 1 {
-            return Ok(MoaManageOutput {
-                success: false,
-                message: format!(
-                    "Cannot delete '{name}': it is the only MoA preset. Create another preset \
-                     first with set_preset."
-                ),
-                data: None,
-            });
-        }
-
-        let patcher = match &self.config_patcher {
-            Some(p) => p,
-            None => {
+        let (config, patcher) = match (&self.config, &self.config_patcher) {
+            (Some(c), Some(p)) => (Arc::clone(c), Arc::clone(p)),
+            _ => {
                 return Ok(MoaManageOutput {
                     success: false,
                     message: "Config patcher not available".to_string(),
@@ -501,58 +438,16 @@ impl MoaManageTool {
                 })
             }
         };
-
-        let mut presets_patch = serde_json::Map::new();
-        presets_patch.insert(name.clone(), serde_json::Value::Null);
-        let mut patch = serde_json::json!({ "presets": presets_patch });
-
-        // The deleted preset was the default: reassign to any remaining
-        // preset (alphabetically first, for determinism) so a subsequent
-        // `resolve_preset(None)` doesn't dangle on a name that no longer
-        // exists.
-        if moa_cfg.default_preset.as_deref() == Some(name.as_str()) {
-            let mut remaining: Vec<&String> =
-                moa_cfg.presets.keys().filter(|k| *k != &name).collect();
-            remaining.sort();
-            if let Some(next) = remaining.first() {
-                patch["default_preset"] = serde_json::json!(next);
-            }
-        }
-
-        // A session pointing at the deleted preset by name is left as-is:
-        // there is no reverse index from preset name -> session keys (the
-        // map has no enumeration need elsewhere), and `status`/run
-        // construction already fail soft when a preset no longer resolves.
-
-        let request = PatchRequest {
-            path: "moa".to_string(),
-            patch,
-            health_check: false,
-            dry_run: false,
-        };
-
-        match patcher.apply(request).await {
-            Ok(result) => {
-                if result.success {
-                    if let Some(cfg) = &self.config {
-                        store_moa_config(cfg.read().await.moa.clone());
-                    }
-                    Ok(MoaManageOutput {
-                        success: true,
-                        message: format!("Preset '{name}' deleted."),
-                        data: Some(serde_json::to_value(&result).unwrap_or_default()),
-                    })
-                } else {
-                    Ok(MoaManageOutput {
-                        success: false,
-                        message: format!("Preset '{name}' delete did not apply."),
-                        data: None,
-                    })
-                }
-            }
+        let store = crate::providers::moa::MoaPresetStore::new(config, patcher);
+        match store.delete_preset(&name).await {
+            Ok(result) => Ok(MoaManageOutput {
+                success: true,
+                message: format!("Preset '{name}' deleted."),
+                data: Some(serde_json::to_value(&result).unwrap_or_default()),
+            }),
             Err(e) => Ok(MoaManageOutput {
                 success: false,
-                message: format!("Config patch failed: {e}"),
+                message: e.to_string(),
                 data: None,
             }),
         }
@@ -733,11 +628,7 @@ mod tests {
         // Prime a model pick — activating MoA must clear it (round-2 E3
         // selector-slot exclusivity, symmetric with select_model's "moa:"
         // branch clearing any sticky MoA preset).
-        crate::providers::session_model_handle::set_session_model(
-            &key,
-            None,
-            "gpt-5".to_string(),
-        );
+        crate::providers::session_model_handle::set_session_model(&key, None, "gpt-5".to_string());
         let out = TURN_CONTEXT
             .scope(ctx, async {
                 MoaManageTool::default()
@@ -830,7 +721,13 @@ mod tests {
             .filter_map(|v| v.as_str())
             .collect();
         for a in [
-            "on", "off", "once", "status", "list", "set_preset", "delete_preset",
+            "on",
+            "off",
+            "once",
+            "status",
+            "list",
+            "set_preset",
+            "delete_preset",
         ] {
             assert!(actions.contains(&a), "action enum missing {a}");
         }
@@ -879,9 +776,25 @@ mod tests {
 
     #[tokio::test]
     async fn set_preset_rejects_recursive_advisor_slot() {
-        // No patcher wired — this only exercises the pre-patch validation
-        // branch, which must reject before ever touching self.config_patcher.
-        let out = MoaManageTool::default()
+        // `set_preset` now delegates to `MoaPresetStore`, which runs
+        // `MoaToml::validation_errors()` (the recursive-slot guard) before it
+        // ever calls `ConfigPatcher::apply` — a real patcher is wired here
+        // (roundtrip-test pattern) purely so the store can be constructed;
+        // the assertions below confirm rejection happens pre-write, not that
+        // no patcher exists.
+        use crate::config::backup::ConfigBackup;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(&config_path, "").unwrap();
+        let config = Arc::new(RwLock::new(Config::default()));
+        let backup = ConfigBackup::new(dir.path().join("backups"), 10);
+        let patcher = Arc::new(ConfigPatcher::new(config.clone(), config_path, backup));
+        let tool = MoaManageTool::new()
+            .with_config(config)
+            .with_patcher(patcher);
+
+        let out = tool
             .call(MoaManageArgs::SetPreset {
                 name: "evil".to_string(),
                 advisors: vec![MoaSlot {
@@ -920,7 +833,11 @@ mod tests {
         std::fs::write(&config_path, "").unwrap();
         let config = Arc::new(RwLock::new(Config::default()));
         let backup = ConfigBackup::new(dir.path().join("backups"), 10);
-        let patcher = Arc::new(ConfigPatcher::new(config.clone(), config_path.clone(), backup));
+        let patcher = Arc::new(ConfigPatcher::new(
+            config.clone(),
+            config_path.clone(),
+            backup,
+        ));
         let tool = MoaManageTool::new()
             .with_config(config.clone())
             .with_patcher(patcher);
