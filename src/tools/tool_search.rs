@@ -10,6 +10,10 @@
 //! (name + description) — no new dependency, no coupling to the memory FTS5
 //! index. Mechanical lexical rank that the MODEL initiates → R7-clean (not
 //! intent classification), R10 presentation layer (zero harness growth).
+//!
+//! The corpus is the raw registry snapshot, unfiltered by allow/deny/health
+//! gates; a tool surfaced here but blocked by policy degrades gracefully to an
+//! execute-time rejection rather than being silently absent from search.
 
 use std::collections::HashMap;
 
@@ -145,10 +149,6 @@ impl ToolSearchTool {
         Self { index: Arc::new(Bm25::build(docs)) }
     }
 
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.index.n == 0
-    }
 }
 
 #[async_trait]
@@ -255,7 +255,7 @@ mod tests {
         let t = ToolSearchTool::new(corpus());
         let out = t.execute(json!({"query":"a e i o u the to in","limit":2}), CancellationToken::new()).await;
         if let ToolResult::Success { output } = out {
-            assert!(output["results"].as_array().unwrap().len() <= 2);
+            assert_eq!(output["results"].as_array().unwrap().len(), 2);
         } else {
             panic!("expected success");
         }
