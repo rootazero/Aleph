@@ -21,7 +21,7 @@ use super::{notify_tool_result, notify_tool_start};
 use crate::config::patcher::ConfigPatcher;
 use crate::config::{default_advisor_timeout_secs, Config, MoaFanout, MoaPreset, MoaSlot, MoaToml};
 use crate::error::Result;
-use crate::providers::moa::{get_moa_config, store_moa_config};
+use crate::providers::moa::get_moa_config;
 use crate::providers::session_moa_handle::{clear_session_moa, get_session_moa};
 use crate::sync_primitives::Arc;
 use crate::tools::turn_context::current_turn_context;
@@ -558,6 +558,7 @@ mod tests {
     // the crate-wide lock in `config_handle` — shared with `select_model.rs`
     // tests, which touch the same slot.
     use crate::providers::moa::config_handle::moa_config_test_lock;
+    use crate::providers::moa::store_moa_config;
 
     fn test_ctx(ephemeral_id: &str) -> TurnContext {
         TurnContext {
