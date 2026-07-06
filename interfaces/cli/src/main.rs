@@ -756,7 +756,9 @@ async fn dispatch_trace(server_url: &str, action: TraceAction, json: bool) -> Cl
 async fn dispatch_identity(server_url: &str, action: IdentityAction, json: bool) -> CliResult<()> {
     use commands::identity_cmd;
     match action {
-        IdentityAction::Get { agent } => identity_cmd::get(server_url, agent.as_deref(), json).await,
+        IdentityAction::Get { agent } => {
+            identity_cmd::get(server_url, agent.as_deref(), json).await
+        }
         IdentityAction::Set {
             content,
             file,

@@ -155,7 +155,10 @@ fn sanitize_link_url(url: &str) -> String {
 #[derive(Debug, PartialEq)]
 pub(crate) enum WikiSegment<'a> {
     Text(&'a str),
-    Link { target: &'a str, label: Option<&'a str> },
+    Link {
+        target: &'a str,
+        label: Option<&'a str>,
+    },
 }
 
 /// Hand-rolled `[[target]]` / `[[target|label]]` scanner (no regex dep in the
@@ -268,7 +271,10 @@ mod tests {
     #[test]
     fn renders_wikilink_alias_label() {
         let out = render_excerpt("see [[rust-notes|My Rust]] here");
-        assert!(out.contains(r#"data-wl="rust-notes">My Rust</a>"#), "got: {out}");
+        assert!(
+            out.contains(r#"data-wl="rust-notes">My Rust</a>"#),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -282,8 +288,20 @@ mod tests {
     fn split_wikilinks_handles_mixed_text() {
         let segs = split_wikilinks("x [[a]] y [[b|B]] [[unclosed");
         assert_eq!(segs.len(), 5); // "x ", link a, " y ", link b, " [[unclosed"
-        assert!(matches!(segs[1], WikiSegment::Link { target: "a", label: None }));
-        assert!(matches!(segs[3], WikiSegment::Link { target: "b", label: Some("B") }));
+        assert!(matches!(
+            segs[1],
+            WikiSegment::Link {
+                target: "a",
+                label: None
+            }
+        ));
+        assert!(matches!(
+            segs[3],
+            WikiSegment::Link {
+                target: "b",
+                label: Some("B")
+            }
+        ));
         assert!(matches!(segs[4], WikiSegment::Text(" [[unclosed")));
     }
 
@@ -296,7 +314,10 @@ mod tests {
         assert!(matches!(segs[0], WikiSegment::Text("]] ")));
         assert!(matches!(
             segs[1],
-            WikiSegment::Link { target: "中文", label: Some("别名") }
+            WikiSegment::Link {
+                target: "中文",
+                label: Some("别名")
+            }
         ));
     }
 

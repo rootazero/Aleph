@@ -125,7 +125,8 @@ mod tests {
             "content": "# Test",
             "backlinks": ["wiki/other"]
         }"##;
-        let response: NoteDetailResponse = serde_json::from_str(json).expect("Failed to deserialize");
+        let response: NoteDetailResponse =
+            serde_json::from_str(json).expect("Failed to deserialize");
         assert_eq!(response.node.id, "wiki/test");
         assert_eq!(response.content, "# Test");
         assert_eq!(response.backlinks.len(), 1);
@@ -155,7 +156,8 @@ mod tests {
                 }
             ]
         }"##;
-        let response: NoteDetailResponse = serde_json::from_str(json).expect("Failed to deserialize");
+        let response: NoteDetailResponse =
+            serde_json::from_str(json).expect("Failed to deserialize");
         assert_eq!(response.outgoing.len(), 1);
         assert_eq!(response.outgoing[0].to, "wiki/rust");
         assert_eq!(response.outgoing[0].relation, Some("refers".to_string()));

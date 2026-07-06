@@ -1,6 +1,4 @@
-use crate::canvas_engine::adapter::{
-    GraphQueryResponse, GraphSearchResponse, NoteDetailResponse,
-};
+use crate::canvas_engine::adapter::{GraphQueryResponse, GraphSearchResponse, NoteDetailResponse};
 use crate::context::DashboardState;
 use serde_json::json;
 

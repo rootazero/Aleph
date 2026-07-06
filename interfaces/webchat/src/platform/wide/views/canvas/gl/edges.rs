@@ -42,8 +42,8 @@ pub fn edge_kind_code(kind: Option<&str>) -> u8 {
         Some("mention") => 5,
         Some("related_similarity") => 6,
         Some(_) => 4, // keyword/entity verbs and any future kind
-        // 7 (surprising) is not a wire kind string — it is a build-time
-        // override applied on top of the base kind (see `build_galaxy`).
+                      // 7 (surprising) is not a wire kind string — it is a build-time
+                      // override applied on top of the base kind (see `build_galaxy`).
     }
 }
 

@@ -909,7 +909,13 @@ mod tests {
         };
         let v = serde_json::to_value(&spend).unwrap();
         assert_eq!(v["kind"], "moa_advisor_spend");
-        for k in ["advisor_count", "billed_count", "input_tokens", "output_tokens", "cost_usd"] {
+        for k in [
+            "advisor_count",
+            "billed_count",
+            "input_tokens",
+            "output_tokens",
+            "cost_usd",
+        ] {
             assert!(v.get(k).is_some(), "missing {k}");
         }
     }

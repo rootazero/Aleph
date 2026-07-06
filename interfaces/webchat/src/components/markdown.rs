@@ -272,7 +272,11 @@ fn now_ms() -> Option<f64> {
 /// When no clock is in context (e.g. storybook) it degrades to a static render.
 #[component]
 #[must_use]
-pub fn TypewriterRenderer(content: String, message_id: String, is_streaming: bool) -> impl IntoView {
+pub fn TypewriterRenderer(
+    content: String,
+    message_id: String,
+    is_streaming: bool,
+) -> impl IntoView {
     let Some(clock) = use_context::<TypewriterClock>() else {
         return if is_streaming {
             view! { <StreamingRenderer content=content /> }.into_any()

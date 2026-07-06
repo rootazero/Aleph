@@ -169,7 +169,8 @@ impl Scene {
         let kind_at = |data: &GraphData, i: usize| data.edge_kinds.get(i).copied().unwrap_or(0);
         // Brightness for edge `i`, defaulting to 1.0 (full) if the parallel vec
         // is absent/short — mirrors `kind_at` so both stay aligned with `edges`.
-        let bright_at = |data: &GraphData, i: usize| data.edge_bright.get(i).copied().unwrap_or(1.0);
+        let bright_at =
+            |data: &GraphData, i: usize| data.edge_bright.get(i).copied().unwrap_or(1.0);
 
         if self.lod <= 0.0 || self.data.nodes.is_empty() {
             self.filtered_edges = self.data.edges.clone();
@@ -241,7 +242,10 @@ impl Scene {
     /// using the last-frame view-projection matrix. Returns `None` if the node
     /// is behind the camera or not found.
     pub fn screen_pos_of(&self, id: &str) -> Option<(f32, f32)> {
-        let node = self.id_index.get(id).map(|&i| &self.data.nodes[i as usize])?;
+        let node = self
+            .id_index
+            .get(id)
+            .map(|&i| &self.data.nodes[i as usize])?;
         let m = self.last_vp.as_slice();
         let p = &node.pos;
         let cx = m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12];

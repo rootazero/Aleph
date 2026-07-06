@@ -109,7 +109,8 @@ fn ToolDetailView() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
 
-    move || match workspace.selected_tool.get() {
+    move || {
+        match workspace.selected_tool.get() {
         None => view! {
             <div class="h-full flex flex-col items-center justify-center
                         text-center text-text-tertiary gap-3 py-12 px-6">
@@ -157,6 +158,7 @@ fn ToolDetailView() -> impl IntoView {
                 </div>
             }.into_any()
         }
+    }
     }
 }
 

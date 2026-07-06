@@ -184,11 +184,7 @@ impl CronTestHarness {
 
     /// Manually trigger a job.
     pub async fn manual_run(&self, id: &str) {
-        let default_timeout_ms = self
-            .state
-            .config
-            .job_timeout_secs
-            .saturating_mul(1000) as i64;
+        let default_timeout_ms = self.state.config.job_timeout_secs.saturating_mul(1000) as i64;
         let snapshot = phase1_mark_manual(
             &self.state.store,
             self.clock.as_ref(),

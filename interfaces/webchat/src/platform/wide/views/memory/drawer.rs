@@ -155,7 +155,9 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
             spawn_local(async move {
                 match GraphApi::rename_note(&state, &agent, &path, &new_title).await {
                     Ok(new_id) => {
-                        target.set(Some(DrawerTarget::Note(CompressedFact::stub_from_path(&new_id))));
+                        target.set(Some(DrawerTarget::Note(CompressedFact::stub_from_path(
+                            &new_id,
+                        ))));
                         is_saving.set(false);
                         is_renaming.set(false);
                     }
@@ -394,7 +396,9 @@ fn navigate_drawer(
                 .and_then(|r| r.results.first().map(|f| f.id.clone()))
         };
         if let Some(id) = id {
-            target_signal.set(Some(DrawerTarget::Note(CompressedFact::stub_from_path(&id))));
+            target_signal.set(Some(DrawerTarget::Note(CompressedFact::stub_from_path(
+                &id,
+            ))));
         }
     });
 }

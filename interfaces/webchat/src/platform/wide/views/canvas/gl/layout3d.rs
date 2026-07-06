@@ -206,6 +206,9 @@ mod tests {
         }
         let same = pos[0].sub(&pos[1]).length();
         let cross = pos[0].sub(&pos[2]).length();
-        assert!(same < cross, "same-community {same} should be < cross {cross}");
+        assert!(
+            same < cross,
+            "same-community {same} should be < cross {cross}"
+        );
     }
 }

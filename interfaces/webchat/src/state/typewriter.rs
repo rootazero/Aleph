@@ -188,10 +188,7 @@ pub fn advance_reveal(prev: Reveal, total: usize, now: f64, cps: u32, instant: b
     }
     let budget = dt / 1000.0 * f64::from(cps) + prev.frac;
     let whole = budget.floor();
-    let new_revealed = prev
-        .revealed
-        .saturating_add(whole as usize)
-        .min(total);
+    let new_revealed = prev.revealed.saturating_add(whole as usize).min(total);
     let frac = if new_revealed >= total {
         0.0
     } else {
@@ -292,7 +289,11 @@ mod tests {
         // Content grows to 30 chars after the pause. The next 33ms frame paces
         // ~6.6 chars from where we were — NOT a 5000ms dump.
         let grown = advance_reveal(r, 30, 5033.0, 200, false);
-        assert!(grown.revealed <= 17, "paced, not dumped: {}", grown.revealed);
+        assert!(
+            grown.revealed <= 17,
+            "paced, not dumped: {}",
+            grown.revealed
+        );
         assert!(grown.revealed >= 10);
     }
 

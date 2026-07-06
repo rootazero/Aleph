@@ -1106,13 +1106,20 @@ mod tests {
             ("t1".into(), "file_read".into(), Some("a.rs".to_string())),
             ("t2".into(), "file_read".into(), Some("b.rs".to_string())),
             ("t3".into(), "file_read".into(), Some("a.rs".to_string())), // dup 去重
-            ("t4".into(), "web_search".into(), Some("panel bug".to_string())),
+            (
+                "t4".into(),
+                "web_search".into(),
+                Some("panel bug".to_string()),
+            ),
             ("t5".into(), "file_read".into(), Some("c.rs".to_string())), // search 打断后新起一条
         ];
         let entries = explore_entries(&items);
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].label, "a.rs, b.rs");
-        assert_eq!(entries[0].tool_ids, vec!["t1".to_string(), "t2".to_string(), "t3".to_string()]);
+        assert_eq!(
+            entries[0].tool_ids,
+            vec!["t1".to_string(), "t2".to_string(), "t3".to_string()]
+        );
         assert_eq!(entries[1].kind, ToolKind::Search);
         assert_eq!(entries[1].label, "panel bug");
         assert_eq!(entries[2].label, "c.rs");

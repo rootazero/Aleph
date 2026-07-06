@@ -294,12 +294,23 @@ mod tests {
         let uniform = vec![2u32, 2, 2, 2, 2];
         let th = hub_spike_threshold(&uniform);
         for &c in &uniform {
-            assert_eq!(spike_strength(c, th), 0.0, "uniform graph must have no spikes");
+            assert_eq!(
+                spike_strength(c, th),
+                0.0,
+                "uniform graph must have no spikes"
+            );
         }
         // A lone dominant hub in an otherwise low-degree graph still spikes.
         let spread = vec![1u32, 1, 1, 1, 20];
         let th2 = hub_spike_threshold(&spread);
-        assert!(spike_strength(20, th2) > 0.0, "true hub must keep its spike");
-        assert_eq!(spike_strength(1, th2), 0.0, "low-degree node stays spikeless");
+        assert!(
+            spike_strength(20, th2) > 0.0,
+            "true hub must keep its spike"
+        );
+        assert_eq!(
+            spike_strength(1, th2),
+            0.0,
+            "low-degree node stays spikeless"
+        );
     }
 }

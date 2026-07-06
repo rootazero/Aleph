@@ -251,7 +251,8 @@ impl WorkspaceState {
 
     /// 用户点选：选中 + 钉住 + 确保 Split 打开（聊天侧任何"→ 详情"入口都走这里）。
     pub fn select_tool(&self, run_id: impl Into<String>, tool_id: impl Into<String>) {
-        self.selected_tool.set(Some((run_id.into(), tool_id.into())));
+        self.selected_tool
+            .set(Some((run_id.into(), tool_id.into())));
         self.pinned.set(true);
         if self.mode.get_untracked() != LayoutMode::Split {
             self.set_layout(LayoutMode::Split);

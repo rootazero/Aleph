@@ -198,10 +198,22 @@ pub(crate) fn apply_trace_event(
         // with tool_summary/verifier_veto narration (same sink, live +
         // replay both covered).
         "moa_advisor" => {
-            let index = trace_event.get("index").and_then(serde_json::Value::as_u64).unwrap_or(0);
-            let count = trace_event.get("count").and_then(serde_json::Value::as_u64).unwrap_or(0);
-            let label = trace_event.get("label").and_then(|v| v.as_str()).unwrap_or("");
-            let text = trace_event.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            let index = trace_event
+                .get("index")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let count = trace_event
+                .get("count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let label = trace_event
+                .get("label")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let text = trace_event
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let error = trace_event.get("error").and_then(|v| v.as_str());
             if count == 0 {
                 // Activation failure (runner build error): MoA didn't engage.
@@ -210,10 +222,7 @@ pub(crate) fn apply_trace_event(
                     &format!("⚠ MoA 未生效：{}", error.unwrap_or("unknown")),
                 );
             } else if let Some(err) = error {
-                append_reasoning(
-                    chat,
-                    &format!("◇ 顾问 {index}/{count} — {label}\n⚠ {err}"),
-                );
+                append_reasoning(chat, &format!("◇ 顾问 {index}/{count} — {label}\n⚠ {err}"));
             } else {
                 append_reasoning(chat, &format!("◇ 顾问 {index}/{count} — {label}\n{text}"));
             }
@@ -221,7 +230,10 @@ pub(crate) fn apply_trace_event(
         }
         // Fan-out complete; the aggregator (acting model) is being called.
         "moa_aggregating" => {
-            let aggregator = trace_event.get("aggregator").and_then(|v| v.as_str()).unwrap_or("");
+            let aggregator = trace_event
+                .get("aggregator")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let n = trace_event
                 .get("advisor_count")
                 .and_then(serde_json::Value::as_u64)
@@ -231,7 +243,10 @@ pub(crate) fn apply_trace_event(
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
             if cached {
-                append_reasoning(chat, &format!("◆ MoA 聚合中（{aggregator}，沿用缓存顾问意见）"));
+                append_reasoning(
+                    chat,
+                    &format!("◆ MoA 聚合中（{aggregator}，沿用缓存顾问意见）"),
+                );
             } else {
                 append_reasoning(chat, &format!("◆ MoA 聚合中（{aggregator}，{n} 位顾问）"));
             }
@@ -255,7 +270,9 @@ pub(crate) fn apply_trace_event(
                 .get("advisor_count")
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0);
-            let cost = trace_event.get("cost_usd").and_then(serde_json::Value::as_f64);
+            let cost = trace_event
+                .get("cost_usd")
+                .and_then(serde_json::Value::as_f64);
             let cost_str = cost.map_or(String::new(), |c| format!("，约 ${c:.4}"));
             append_reasoning(
                 chat,
@@ -266,10 +283,16 @@ pub(crate) fn apply_trace_event(
         // wire-whitelisted). Renders the full "why did MoA advise this" view
         // into the reasoning panel (round-2 W3b).
         "moa_turn_trace" => {
-            let preset = trace_event.get("preset").and_then(|v| v.as_str()).unwrap_or("");
+            let preset = trace_event
+                .get("preset")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let payload = trace_event.get("payload").cloned().unwrap_or_default();
             let mut block = format!("📋 MoA turn trace — preset {preset}");
-            if let Some(advisors) = payload.get("advisors").and_then(serde_json::Value::as_array) {
+            if let Some(advisors) = payload
+                .get("advisors")
+                .and_then(serde_json::Value::as_array)
+            {
                 for (i, a) in advisors.iter().enumerate() {
                     let label = a.get("label").and_then(|v| v.as_str()).unwrap_or("");
                     let output = a.get("output").and_then(|v| v.as_str()).unwrap_or("");
@@ -380,7 +403,9 @@ fn resolve_target(
         // *send* time (authoritative when the user switches tabs before the
         // run is accepted, I1), so prefer that route. Fall back to the active
         // conversation only for runs with no client send (e.g. daemon-initiated).
-        "run_accepted" => sessions.route_lookup(run_id).or_else(|| sessions.active_conv()),
+        "run_accepted" => sessions
+            .route_lookup(run_id)
+            .or_else(|| sessions.active_conv()),
         // `reasoning` without a run_id: route to the active conversation too;
         // with a run_id it must follow that run's owning conversation like
         // every other event, so it doesn't bleed into whichever conversation
@@ -980,7 +1005,11 @@ mod projection_tests {
             t.as_ref().map(|(c, _)| c.agent_id.get_untracked()),
             Some(singleton.agent_id.get_untracked())
         );
-        assert_eq!(t.map(|(_, is_fg)| is_fg), Some(true), "A is foreground at send time");
+        assert_eq!(
+            t.map(|(_, is_fg)| is_fg),
+            Some(true),
+            "A is foreground at send time"
+        );
         sessions.activate(singleton, b);
 
         // Background chunk should route to A's live state, not the singleton (B).
@@ -1017,18 +1046,25 @@ mod projection_tests {
 
         // run_accepted must resolve to A (send-time truth), not B (foreground),
         // and must NOT double-count A's running refcount.
-        let (t, is_fg) = resolve_target(&sessions, singleton, "run_accepted", "run-a", Some("sk-a"))
-            .expect("resolved to A's background state");
+        let (t, is_fg) =
+            resolve_target(&sessions, singleton, "run_accepted", "run-a", Some("sk-a"))
+                .expect("resolved to A's background state");
         assert!(!is_fg, "A is not foreground — B is active");
         let a_bg = sessions.chat_for(a, singleton).expect("A background");
         t.start_assistant_message("run-a");
         t.append_chunk("run-a", "hi");
         assert_eq!(a_bg.assistant_text_for_run("run-a"), "hi");
-        assert!(singleton.assistant_text_for_run("run-a").is_empty(), "B untouched");
+        assert!(
+            singleton.assistant_text_for_run("run-a").is_empty(),
+            "B untouched"
+        );
 
         // A single settle clears running → no phantom dot from a double bind.
         assert!(sessions.is_running(a));
         resolve_target(&sessions, singleton, "run_complete", "run-a", None);
-        assert!(!sessions.is_running(a), "one settle clears it → bound exactly once");
+        assert!(
+            !sessions.is_running(a),
+            "one settle clears it → bound exactly once"
+        );
     }
 }

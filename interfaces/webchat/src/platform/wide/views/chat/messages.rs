@@ -853,7 +853,10 @@ fn ExploreGroupRow(
     // 折叠头摘要：运行中 "🔍 探索中… N 项"；完成 "✓ 探索了 N 项 (读取×3 · 搜索×1)"
     let n = tools.len();
     let counts = summarize_tools(
-        &tools.iter().map(|t| (t.tool_id.clone(), t.tool_name.clone())).collect::<Vec<_>>(),
+        &tools
+            .iter()
+            .map(|t| (t.tool_id.clone(), t.tool_name.clone()))
+            .collect::<Vec<_>>(),
     )
     .into_iter()
     .map(|(k, c)| {
@@ -866,14 +869,23 @@ fn ExploreGroupRow(
     })
     .collect::<Vec<_>>()
     .join(" · ");
-    let header = move || if completed {
-        format!("{} {} {} ({})",
-            t_string!(i18n, chat.explore_done), n,
-            t_string!(i18n, chat.explore_items), counts.clone())
-    } else {
-        format!("{} {} {}",
-            t_string!(i18n, chat.explore_running), n,
-            t_string!(i18n, chat.explore_items))
+    let header = move || {
+        if completed {
+            format!(
+                "{} {} {} ({})",
+                t_string!(i18n, chat.explore_done),
+                n,
+                t_string!(i18n, chat.explore_items),
+                counts.clone()
+            )
+        } else {
+            format!(
+                "{} {} {}",
+                t_string!(i18n, chat.explore_running),
+                n,
+                t_string!(i18n, chat.explore_items)
+            )
+        }
     };
 
     // 展开体条目：headline 从 payload 现算（合并逻辑在纯函数里）。
@@ -881,11 +893,18 @@ fn ExploreGroupRow(
         let tools = tools.clone();
         let run = run_id.clone();
         Memo::new(move |_| {
-            let items: Vec<(String, String, Option<String>)> = tools.iter().map(|t| {
-                let kind = ToolKind::from_name(&t.tool_name);
-                let payload = workspace.and_then(|w| w.get_tool_payload(&run, &t.tool_id));
-                (t.tool_id.clone(), t.tool_name.clone(), tool_headline(kind, &payload))
-            }).collect();
+            let items: Vec<(String, String, Option<String>)> = tools
+                .iter()
+                .map(|t| {
+                    let kind = ToolKind::from_name(&t.tool_name);
+                    let payload = workspace.and_then(|w| w.get_tool_payload(&run, &t.tool_id));
+                    (
+                        t.tool_id.clone(),
+                        t.tool_name.clone(),
+                        tool_headline(kind, &payload),
+                    )
+                })
+                .collect();
             explore_entries(&items)
         })
     };
