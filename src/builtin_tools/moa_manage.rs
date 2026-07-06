@@ -233,35 +233,33 @@ impl MoaManageTool {
         let Some(ctx) = current_turn_context() else {
             return Ok(no_turn_context_output());
         };
+        let key = ctx.session_key.to_key_string();
 
-        let moa_cfg = get_moa_config();
-        let resolved = moa_cfg
-            .as_ref()
-            .and_then(|cfg| cfg.resolve_preset(preset.as_deref()));
-        let Some((name, _preset)) = resolved else {
-            return Ok(MoaManageOutput {
+        let armed = if one_shot {
+            crate::providers::moa::activation::arm_one_shot(&key, preset)
+        } else {
+            crate::providers::moa::activation::arm_sticky(&key, preset)
+        };
+
+        match armed {
+            Ok(name) => {
+                let message = if one_shot {
+                    format!("MoA '{name}' active for this session for the next turn only")
+                } else {
+                    format!("MoA '{name}' active for this session from the NEXT turn")
+                };
+                Ok(MoaManageOutput {
+                    success: true,
+                    message,
+                    data: Some(serde_json::json!({ "preset": name, "one_shot": one_shot })),
+                })
+            }
+            Err(_msg) => Ok(MoaManageOutput {
                 success: false,
                 message: NO_PRESET_GUIDANCE.to_string(),
                 data: None,
-            });
-        };
-
-        let key = ctx.session_key.to_key_string();
-        set_session_moa(&key, preset, one_shot);
-        // Selector-slot exclusivity (round-2 E3): arming MoA supersedes any
-        // per-session model pick — one slot, no precedence confusion.
-        crate::providers::session_model_handle::clear_session_model(&key);
-
-        let message = if one_shot {
-            format!("MoA '{name}' active for this session for the next turn only")
-        } else {
-            format!("MoA '{name}' active for this session from the NEXT turn")
-        };
-        Ok(MoaManageOutput {
-            success: true,
-            message,
-            data: Some(serde_json::json!({ "preset": name, "one_shot": one_shot })),
-        })
+            }),
+        }
     }
 
     async fn deactivate(&self) -> Result<MoaManageOutput> {

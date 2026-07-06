@@ -86,49 +86,44 @@ impl AlephTool for SelectModelTool {
 
         let key = ctx.session_key.to_key_string();
 
-        // Round-2 E3: the selector is ONE slot — a "moa:<preset>" (or bare
-        // "moa") value arms MoA sticky and clears any model pick; a normal
-        // model pick clears MoA. No coexistence confusion (spec §6).
+        // Round-2 E3 / Round-3 F1: the selector is ONE slot — "moa:<preset>"
+        // (or bare "moa") arms MoA sticky and clears any model pick; a normal
+        // model pick clears MoA. Arm logic is the single source in
+        // moa::activation.
         if args.model == "moa" || args.model.starts_with("moa:") {
-            let preset = args.model.strip_prefix("moa:").filter(|s| !s.is_empty());
-            let resolved = crate::providers::moa::get_moa_config()
-                .as_ref()
-                .and_then(|cfg| cfg.resolve_preset(preset))
-                .map(|(name, _)| name);
-            let Some(name) = resolved else {
-                let message = format!(
-                    "MoA preset '{}' not found — use the moa tool (action='list') to see presets.",
-                    preset.unwrap_or("<default>")
-                );
-                notify_tool_result(Self::NAME, &message, false);
-                return Ok(SelectModelOutput {
-                    ok: false,
-                    model: args.model,
-                    provider: None,
-                    message,
-                });
-            };
-            crate::providers::session_moa_handle::set_session_moa(
-                &key,
-                preset.map(str::to_string),
-                false,
-            );
-            crate::providers::session_model_handle::clear_session_model(&key);
-            let message = format!(
-                "MoA preset '{name}' activated for this session (sticky); model pick cleared. \
-                 Takes effect from the next turn."
-            );
-            notify_tool_result(Self::NAME, &message, true);
-            return Ok(SelectModelOutput {
-                ok: true,
-                model: args.model,
-                provider: None,
-                message,
-            });
+            let preset = args
+                .model
+                .strip_prefix("moa:")
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            match crate::providers::moa::activation::arm_sticky(&key, preset) {
+                Ok(name) => {
+                    let message = format!(
+                        "MoA preset '{name}' activated for this session (sticky); model pick \
+                         cleared. Takes effect from the next turn."
+                    );
+                    notify_tool_result(Self::NAME, &message, true);
+                    return Ok(SelectModelOutput {
+                        ok: true,
+                        model: args.model,
+                        provider: None,
+                        message,
+                    });
+                }
+                Err(message) => {
+                    notify_tool_result(Self::NAME, &message, false);
+                    return Ok(SelectModelOutput {
+                        ok: false,
+                        model: args.model,
+                        provider: None,
+                        message,
+                    });
+                }
+            }
         }
 
         // Normal pick: selector-slot exclusivity clears any MoA sticky.
-        crate::providers::session_moa_handle::clear_session_moa(&key);
+        crate::providers::moa::activation::disarm(&key);
         session_model_handle::set_session_model(&key, args.provider.clone(), args.model.clone());
 
         let message = match &args.provider {
