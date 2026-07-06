@@ -206,4 +206,24 @@ mod tests {
         let err = store.delete_preset("solo").await.unwrap_err();
         assert!(matches!(err, MoaStoreError::OnlyPreset(_)));
     }
+
+    #[tokio::test]
+    async fn delete_default_reassigns_to_surviving_preset() {
+        let _guard = moa_config_test_lock();
+        let (store, _dir) = temp_store();
+        store
+            .save_preset("alpha", preset("gpt-5.5", "claude-opus-4-8"), false)
+            .await
+            .unwrap();
+        store
+            .save_preset("zeta", preset("gpt-5.5-mini", "claude-sonnet-4-8"), true)
+            .await
+            .unwrap();
+
+        store.delete_preset("zeta").await.expect("delete ok");
+
+        let listed = store.list().await;
+        assert_eq!(listed.default_preset.as_deref(), Some("alpha"));
+        assert!(!listed.presets.contains_key("zeta"));
+    }
 }
