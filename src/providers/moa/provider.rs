@@ -710,7 +710,7 @@ mod tests {
     fn try_build_for_run_errors() {
         use crate::providers::session_moa_handle::SessionMoaPref;
         let named: HashMap<String, Arc<dyn AiProvider>> = HashMap::new();
-        let pref = SessionMoaPref { preset: None, one_shot: false };
+        let pref = SessionMoaPref { preset: None, one_shot: false, restore: None };
         // No config at all.
         assert!(try_build_for_run(&pref, None, &named, None).is_err());
         // Preset references an unconfigured provider.
@@ -723,7 +723,7 @@ aggregator = { provider = "ghost", model = "n" }
         )
         .unwrap();
         let err = try_build_for_run(
-            &SessionMoaPref { preset: Some("p".into()), one_shot: false },
+            &SessionMoaPref { preset: Some("p".into()), one_shot: false, restore: None },
             Some(&cfg),
             &named,
             None,
