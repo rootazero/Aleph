@@ -10,9 +10,11 @@ pub(crate) mod advisory_view;
 pub mod config_handle;
 pub(crate) mod fan_out;
 pub(crate) mod prompts;
+pub mod preset_store;
 pub mod provider;
 
 pub use config_handle::{get_moa_config, store_moa_config};
+pub use preset_store::{MoaPresetStore, MoaStoreError};
 pub use provider::{try_build_for_run, MoaProvider};
 
 /// Parse a `/moa <prompt>` one-shot command. The argument is ALWAYS a
