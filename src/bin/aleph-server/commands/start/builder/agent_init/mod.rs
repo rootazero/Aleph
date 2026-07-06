@@ -732,6 +732,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             mid_turn_steering: app_config.execution.mid_turn_steering,
             core_tools: app_config.tools.core.clone(),
             truncate_tool_descriptions: app_config.tools.truncate_tool_descriptions,
+            defer_mcp_tools: app_config.tools.defer_mcp_tools,
             max_runs_global: app_config.execution.max_runs_global.max(1),
             max_runs_per_agent: app_config.execution.max_runs_per_agent.max(1),
             ..Default::default()

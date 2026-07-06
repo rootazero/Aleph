@@ -96,6 +96,9 @@ pub struct ExecutionEngineConfig {
     pub core_tools: Vec<String>,
     /// Mirror of `[tools] truncate_tool_descriptions`.
     pub truncate_tool_descriptions: bool,
+    /// Mirror of `[tools] defer_mcp_tools`. Gates the deferred exposure tier +
+    /// `tool_search` registration at the per-request seam.
+    pub defer_mcp_tools: bool,
 }
 
 impl Default for ExecutionEngineConfig {
@@ -109,6 +112,7 @@ impl Default for ExecutionEngineConfig {
             scratchpad_progress_push: false,
             core_tools: crate::config::types::tools::default_core_tools(),
             truncate_tool_descriptions: false,
+            defer_mcp_tools: false,
         }
     }
 }

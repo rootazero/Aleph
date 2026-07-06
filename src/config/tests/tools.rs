@@ -79,6 +79,7 @@ fn test_unified_tools_config_from_legacy() {
         system_info_enabled: false,
         core: default_core_tools(),
         truncate_tool_descriptions: false,
+        defer_mcp_tools: false,
     };
 
     // Create legacy McpConfig with some servers

@@ -139,6 +139,15 @@ pub struct ToolsConfig {
     /// first sentence (extra token savings at some discoverability cost).
     #[serde(default)]
     pub truncate_tool_descriptions: bool,
+
+    /// When true, tools from connected MCP servers are DEFERRED: dropped from
+    /// the model's initial tool list and discoverable only via the
+    /// `tool_search` meta-tool (which returns matches with their schemas).
+    /// Default false = byte-identical tool surface (escape hatch). Independent
+    /// of `core` / schema collapsing; a deferred tool is neither listed nor
+    /// collapsed until `tool_search` surfaces it.
+    #[serde(default)]
+    pub defer_mcp_tools: bool,
 }
 
 pub const fn default_shell_timeout() -> u64 {
@@ -194,6 +203,7 @@ impl Default for ToolsConfig {
             system_info_enabled: true,
             core: default_core_tools(),
             truncate_tool_descriptions: false,
+            defer_mcp_tools: false,
         }
     }
 }
@@ -714,6 +724,18 @@ pub struct McpServerConfig {
 #[cfg(test)]
 mod core_tools_tests {
     use super::*;
+
+    #[test]
+    fn defer_mcp_tools_defaults_off() {
+        let cfg = ToolsConfig::default();
+        assert!(!cfg.defer_mcp_tools, "deferred tier must default OFF (escape-hatch)");
+    }
+
+    #[test]
+    fn defer_mcp_tools_deserializes() {
+        let cfg: ToolsConfig = toml::from_str("defer_mcp_tools = true").unwrap();
+        assert!(cfg.defer_mcp_tools);
+    }
 
     #[test]
     fn default_core_contains_essentials() {
