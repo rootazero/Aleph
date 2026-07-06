@@ -506,7 +506,7 @@ async fn handle_non_streaming(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::event_emitter::{EventEmitter, RunSummary, StreamEvent};
+    use crate::gateway::event_emitter::RunSummary;
     use tokio::sync::mpsc;
 
     fn emitter(tx: mpsc::Sender<String>) -> SseEventEmitter {

@@ -4,8 +4,23 @@
 //! run/consumer that accumulates the deliverable answer and the reasoning,
 //! stripping reasoning/completion/memory framing from the *live* visible
 //! stream across delta boundaries (G4). `snapshot()` (the live `full_text`)
-//! and `finalize().answer` (the terminal `final_response`) derive from the
-//! same accumulator and can never disagree — the anti-drift invariant.
+//! and `finalize().answer` draw from the same `visible` accumulator — the
+//! anti-drift invariant: one source, with `finalize()` adding only an
+//! idempotent final-sanitize pass on top (so they agree up to that clean pass,
+//! e.g. a trailing `<task-complete/>` present in `snapshot()` is stripped in
+//! `finalize().answer`).
+//!
+//! # Consumers
+//!
+//! The event drain (`execution_engine::event_drain`) consumes the *streaming*
+//! surface — `push_text_delta` / `snapshot` / `next_chunk_index` /
+//! `flush_boundary` / `reset_iteration` — as a live scrubbing accumulator; it
+//! never calls `finalize` (the terminal answer there comes from `FlowOutcome`).
+//! The *terminal* surface — `finalize`, `AssembledMessage`,
+//! `push_reasoning_delta`, and the `reasoning` accumulator — is the API for the
+//! deferred `ReplyEmitter` adoption (single-owner finalize on the channel
+//! path). It is exercised by this module's tests until that consumer lands; if
+//! that adoption is dropped rather than deferred, trim this surface per R10.
 
 use crate::memory::streaming_scrubber::{StreamingContextScrubber, DISCARD_TAG_PAIRS};
 
@@ -95,6 +110,11 @@ impl MessageAssembler {
     /// Terminal answer + reasoning. Flushes any held tail first, then applies
     /// the idempotent final sanitizer (catches self-closing `<task-complete/>`
     /// and trailing incomplete directives the streaming scrubber leaves).
+    ///
+    /// Reads the current `visible` accumulator: a consumer that calls
+    /// `reset_iteration` per tool boundary (as the drain does) would see only
+    /// the last iteration's text here, so such a consumer must not rely on
+    /// `finalize` for the whole-run answer.
     pub fn finalize(&mut self) -> AssembledMessage {
         let _ = self.flush_boundary();
         let answer = finalize_sanitize(&self.visible);

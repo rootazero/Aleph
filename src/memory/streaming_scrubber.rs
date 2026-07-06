@@ -462,4 +462,19 @@ mod tests {
         let v2 = s.feed("ursday plans"); // not a tag
         assert_eq!(format!("{v1}{v2}"), "keep <thursday plans");
     }
+
+    /// Drift guard: the memory-context entry in `DISCARD_TAG_PAIRS` must stay
+    /// byte-identical to the canonical fence the assembler injects, or echoed
+    /// recalled-memory would leak to the user. Pins the literals to the source
+    /// of truth without coupling this generic scrubber to that module at
+    /// compile time.
+    #[test]
+    fn discard_tag_pairs_memory_context_matches_canonical_fence() {
+        use crate::memory::assembler::context_block::{MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN};
+        assert_eq!(
+            DISCARD_TAG_PAIRS[0],
+            (MEMORY_CONTEXT_OPEN, MEMORY_CONTEXT_CLOSE),
+            "DISCARD_TAG_PAIRS[0] drifted from the canonical <memory-context> fence"
+        );
+    }
 }
