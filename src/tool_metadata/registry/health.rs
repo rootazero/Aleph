@@ -21,8 +21,9 @@
 //!   tool for one more turn while a background refresh re-evaluates.
 //!   This matches hermes's "favour availability over latency" stance.
 //! * `invalidate_all()` clears the cache and bumps `generation`; the
-//!   catalog subscribes to [`crate::tools::registry::RegistryChange`]
-//!   and calls it on every tool registration / unregistration.
+//!   catalog's own mutation methods (`register_with_conflict_resolution`,
+//!   `refresh_atomic`, `remove_by_mcp_server`, `set_tool_active`, …) call
+//!   it directly after changing the tool set.
 
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicU64, Ordering};

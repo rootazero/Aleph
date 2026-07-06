@@ -223,7 +223,7 @@ impl AlephTool for FileOpsTool {
 - organize: Auto-organize files by type into categorized folders (Images, Documents, Videos, Audio, Archives, Code, Others)
 
 PATH RESOLUTION:
-- Relative paths (e.g., "output.pdf", "images/photo.jpg") → resolved to ~/.aleph/output/
+- Relative paths → resolved against the active workspace scope; rejected if no scope is set
 - Home paths (e.g., "~/Desktop/file.txt") → expanded to user's home directory
 - Absolute paths (e.g., "/Users/name/file.txt") → used as-is
 

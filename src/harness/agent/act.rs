@@ -22,9 +22,9 @@
 //! * [`HarnessDeps::parallel_tool_concurrency`](crate::harness::deps::HarnessDeps)
 //!   is `Some(n)` with `n >= 2`.
 //! * the batch has at least two calls.
-//! * every call returns `true` from
-//!   [`ToolService::is_call_concurrent_safe`](crate::tools::service::ToolService::is_call_concurrent_safe)
-//!   for its concrete arguments.
+//! * the resource-scope claims of every call admit parallel dispatch —
+//!   [`batch_parallelizable`](crate::tools::concurrency::batch_parallelizable)
+//!   over each call's [`ToolService::call_concurrency_claim`](crate::tools::service::ToolService::call_concurrency_claim).
 //! * no two calls in the batch carry the same canonical `(name, args)` —
 //!   parallel mode skips within-batch dedup, so duplicates fall back to the
 //!   serial path where the memo correctly emits a cached result for the
