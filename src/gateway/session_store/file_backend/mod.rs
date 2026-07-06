@@ -41,6 +41,25 @@ pub(crate) fn sanitize_key_for_dir(key: &str) -> String {
     }
 }
 
+/// Read the epoch of a session directory `name` given the already-sanitized
+/// base `pattern`. Returns `Some(n)` only when `name` is `pattern` followed by
+/// a distinct `<sep>s{n}` epoch segment; `None` for the epoch-0 base dir or an
+/// unrelated sibling.
+///
+/// The separator is `:` on POSIX but `_` on Windows, where
+/// [`sanitize_key_for_dir`] maps `:`→`_` — so a Windows dir name (e.g.
+/// `agent_main_main_s7`) contains **no literal `:`**. Splitting on `:` alone
+/// (the previous implementation) therefore never found the suffix on Windows
+/// and always reported epoch 0, so the router resolved every "new chat" to
+/// `:s1` and merged it into the existing conversation. Requiring the leading
+/// separator also stops a sibling like `agent_main_mains5` from being misread
+/// as epoch 5.
+fn epoch_from_dir_name(pattern: &str, name: &str) -> Option<u32> {
+    let rest = name.strip_prefix(pattern)?;
+    let epoch_seg = rest.strip_prefix(':').or_else(|| rest.strip_prefix('_'))?;
+    epoch_seg.strip_prefix('s')?.parse::<u32>().ok()
+}
+
 #[derive(Debug, Clone)]
 pub struct FileSessionStoreConfig {
     pub base_dir: PathBuf,
@@ -892,14 +911,8 @@ impl SessionStore for FileSessionStore {
             .map_err(|e| SessionStoreError::DatabaseError(format!("Dir entry failed: {e}")))?
         {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with(&sanitized_pattern) {
-                if let Some(suffix) = name.rsplit(':').next() {
-                    if let Some(n_str) = suffix.strip_prefix('s') {
-                        if let Ok(n) = n_str.parse::<u32>() {
-                            max_epoch = max_epoch.max(n);
-                        }
-                    }
-                }
+            if let Some(n) = epoch_from_dir_name(&sanitized_pattern, &name) {
+                max_epoch = max_epoch.max(n);
             }
         }
         Ok(max_epoch)
@@ -1064,6 +1077,75 @@ impl SessionStore for FileSessionStore {
 }
 
 use tokio::io::AsyncWriteExt;
+
+#[cfg(test)]
+mod epoch_tests {
+    use super::*;
+
+    fn temp_store() -> (FileSessionStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        (FileSessionStore::new(config).expect("store"), dir)
+    }
+
+    // The epoch parser must read `s{n}` regardless of whether the base and its
+    // suffix are joined by `:` (POSIX dir names) or `_` (Windows dir names,
+    // where `sanitize_key_for_dir` maps `:`→`_`). The old `rsplit(':')` broke
+    // on Windows and always reported 0, so every new chat collapsed onto `:s1`.
+    #[test]
+    fn epoch_from_dir_name_reads_both_separators() {
+        // POSIX-style names (pattern keeps ':').
+        assert_eq!(
+            epoch_from_dir_name("agent:main:main", "agent:main:main:s7"),
+            Some(7)
+        );
+        // Windows-style names (pattern + dir both sanitized to '_').
+        assert_eq!(
+            epoch_from_dir_name("agent_main_main", "agent_main_main_s42"),
+            Some(42)
+        );
+        // The epoch-0 base dir has no suffix → not counted.
+        assert_eq!(
+            epoch_from_dir_name("agent_main_main", "agent_main_main"),
+            None
+        );
+        // A sibling that merely shares the prefix must not be misread as an
+        // epoch (no separator before `s5`).
+        assert_eq!(
+            epoch_from_dir_name("agent_main_main", "agent_main_mains5"),
+            None
+        );
+        // Unrelated key → None.
+        assert_eq!(
+            epoch_from_dir_name("agent_main_main", "agent_main_cron_job"),
+            None
+        );
+    }
+
+    // End-to-end: persisting several epochs and asking for the current one must
+    // return the highest — on every platform. Before the fix this returned 0 on
+    // Windows (dir names carry no ':'), so `router::route` handed every new chat
+    // `:s1`, merging it into the existing conversation.
+    #[tokio::test]
+    async fn get_current_epoch_returns_highest_persisted_epoch() {
+        let (store, _dir) = temp_store();
+        let base = SessionKey::main("main");
+        for epoch in [0u32, 1, 2, 5, 10] {
+            store.get_or_create(&base.with_epoch(epoch)).await.unwrap();
+        }
+        let current = store
+            .get_current_epoch(&base.base_key_pattern())
+            .await
+            .unwrap();
+        assert_eq!(
+            current, 10,
+            "epoch detection must see the highest sN directory on all platforms"
+        );
+    }
+}
 
 #[cfg(test)]
 mod reap_tests {
