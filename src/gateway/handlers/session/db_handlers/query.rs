@@ -14,10 +14,26 @@ use super::types::{HistoryMessage, SessionInfo};
 /// content. Sessions seeded before the raw-input persistence fix leaked the
 /// ephemeral per-turn `<system-reminder>` working-directory block into that
 /// content, so their stored title is a truncated reminder fragment rather than
-/// the user's text. Treat such a leaked title as absent so the clean
-/// LLM-generated `topic` (or the "New chat" fallback) is shown instead.
+/// the user's text. Treat such a leaked title as absent so a real title is
+/// shown instead.
 fn clean_derived_title(title: Option<String>) -> Option<String> {
     title.filter(|t| !t.trim_start().starts_with("<system-reminder>"))
+}
+
+/// Resolve a session's sidebar title. The LLM-generated `topic` (auto-named on
+/// the first turn, stored top-level or under `identity_meta.custom.topic`) is
+/// authoritative; the first-message-derived title is only a fallback — shown as
+/// an instant placeholder until the async topic lands, or when topic generation
+/// produced nothing. A leaked `<system-reminder>` derived title is scrubbed so
+/// it never surfaces even as the fallback.
+fn resolve_display_title(
+    topic: Option<String>,
+    identity_topic: Option<String>,
+    derived_title: Option<String>,
+) -> Option<String> {
+    topic
+        .or(identity_topic)
+        .or_else(|| clean_derived_title(derived_title))
 }
 
 /// Handle sessions.list RPC request with database backend
@@ -43,16 +59,17 @@ pub async fn handle_list_db(
                 // that should not appear in user-facing session lists
                 .filter(|m| m.session_type != "task" && m.session_type != "ephemeral")
                 .map(|m| {
-                    let topic = clean_derived_title(m.derived_title.clone()).or_else(|| {
-                        m.topic.clone().or_else(|| {
-                            m.identity_meta.as_ref().and_then(|im| {
-                                im.custom
-                                    .get("topic")
-                                    .and_then(|v| v.as_str())
-                                    .map(String::from)
-                            })
-                        })
+                    let identity_topic = m.identity_meta.as_ref().and_then(|im| {
+                        im.custom
+                            .get("topic")
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
                     });
+                    let topic = resolve_display_title(
+                        m.topic.clone(),
+                        identity_topic,
+                        m.derived_title.clone(),
+                    );
                     let status = m.status.clone().or_else(|| {
                         m.identity_meta.as_ref().and_then(|im| {
                             im.custom
@@ -346,7 +363,65 @@ pub async fn handle_preview_db(
 
 #[cfg(test)]
 mod tests {
-    use super::clean_derived_title;
+    use super::{clean_derived_title, resolve_display_title};
+
+    fn s(v: &str) -> Option<String> {
+        Some(v.to_string())
+    }
+
+    #[test]
+    fn llm_topic_wins_over_derived_first_message() {
+        // The core fix: once the async LLM topic lands, it takes precedence over
+        // the raw first-message title so the sidebar shows the concise name.
+        assert_eq!(
+            resolve_display_title(s("冒烟工作目录"), None, s("冒烟测试：你的当前工作目录是什么？")),
+            s("冒烟工作目录")
+        );
+    }
+
+    #[test]
+    fn identity_topic_wins_over_derived_first_message() {
+        // File backend stores the auto-topic under identity_meta.custom.topic.
+        assert_eq!(
+            resolve_display_title(None, s("MOA状态查询"), s("请查询一下 MOA 的当前状态好吗")),
+            s("MOA状态查询")
+        );
+    }
+
+    #[test]
+    fn derived_title_is_the_placeholder_until_topic_lands() {
+        // No topic yet (generation still async / not run) → show the raw message.
+        assert_eq!(
+            resolve_display_title(None, None, s("你当前的工作目录是什么？")),
+            s("你当前的工作目录是什么？")
+        );
+    }
+
+    #[test]
+    fn leaked_derived_title_scrubbed_when_no_topic() {
+        assert_eq!(
+            resolve_display_title(
+                None,
+                None,
+                s("<system-reminder>\nWorking directory: `/Users/x/.aleph`")
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn topic_shown_even_when_derived_title_is_leaked() {
+        // Old polluted sessions that already have an LLM topic still render it.
+        assert_eq!(
+            resolve_display_title(None, s("创建MOA预设"), s("<system-reminder>\nWorking directory")),
+            s("创建MOA预设")
+        );
+    }
+
+    #[test]
+    fn all_absent_resolves_to_none() {
+        assert_eq!(resolve_display_title(None, None, None), None);
+    }
 
     #[test]
     fn leaked_system_reminder_title_is_dropped() {
