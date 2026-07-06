@@ -99,7 +99,6 @@ mod tests {
             seq: 0,
             delta: delta.into(),
             full_text: delta.into(),
-            content: delta.into(),
             chunk_index: 0,
             is_final: false,
             is_intermediate: false,

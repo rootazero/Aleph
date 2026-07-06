@@ -69,8 +69,7 @@ pub(crate) async fn emit_flow_event(
                     .emit(StreamEvent::ResponseChunk {
                         run_id: run_id.to_string(),
                         seq,
-                        delta: visible.clone(),
-                        content: visible, // backward-compat alias
+                        delta: visible,
                         full_text,
                         chunk_index: idx,
                         is_final: false,
@@ -207,8 +206,7 @@ async fn flush_text_boundary(
             .emit(StreamEvent::ResponseChunk {
                 run_id: run_id.to_string(),
                 seq,
-                delta: tail.clone(),
-                content: tail,
+                delta: tail,
                 full_text,
                 chunk_index: idx,
                 is_final: false,
@@ -405,7 +403,7 @@ mod tests {
         events
             .iter()
             .filter_map(|e| match e {
-                StreamEvent::ResponseChunk { content, .. } => Some(content.clone()),
+                StreamEvent::ResponseChunk { delta, .. } => Some(delta.clone()),
                 _ => None,
             })
             .collect()

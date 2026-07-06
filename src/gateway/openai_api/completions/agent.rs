@@ -79,10 +79,10 @@ impl EventEmitter for SseEventEmitter {
 
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
         let frame: Option<String> = match event {
-            StreamEvent::ResponseChunk { content, .. } => {
+            StreamEvent::ResponseChunk { delta, .. } => {
                 let chunk = self.make_chunk(
                     Delta {
-                        content: Some(content),
+                        content: Some(delta),
                         role: None,
                         tool_calls: None,
                     },
@@ -455,8 +455,8 @@ async fn handle_non_streaming(
 
     for event in &events {
         match event {
-            StreamEvent::ResponseChunk { content: chunk, .. } => {
-                content.push_str(chunk);
+            StreamEvent::ResponseChunk { delta, .. } => {
+                content.push_str(delta);
             }
             StreamEvent::RunComplete { summary, .. } => {
                 total_tokens = summary.total_tokens;

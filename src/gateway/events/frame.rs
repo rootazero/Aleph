@@ -62,6 +62,11 @@ pub enum GatewayEventFrame {
         seq: u64,
         delta: String,
         full_text: String,
+        /// Wire-only back-compat alias mirroring `delta`. Retained because
+        /// `aleph_protocol::StreamEvent::ResponseChunk` (TUI/CLI) deserializes the
+        /// wire JSON and requires `content` (no `delta`/`full_text`, no serde
+        /// default). The internal `StreamEvent` dropped this field; here it is
+        /// re-derived from `delta`.
         content: String,
         chunk_index: u32,
         is_final: bool,
@@ -333,16 +338,15 @@ impl From<StreamEvent> for GatewayEventFrame {
                 seq,
                 delta,
                 full_text,
-                content,
                 chunk_index,
                 is_final,
                 is_intermediate,
             } => Self::ResponseChunk {
                 run_id,
                 seq,
+                content: delta.clone(), // wire alias (see field doc); must precede `delta`
                 delta,
                 full_text,
-                content,
                 chunk_index,
                 is_final,
                 is_intermediate,
