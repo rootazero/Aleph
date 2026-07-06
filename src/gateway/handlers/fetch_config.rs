@@ -623,8 +623,15 @@ mod tests {
     // backend nor write a fetch:firecrawl vault key (firecrawl shares [search]).
     // Other backends (crawl4ai) and default_provider still round-trip.
     #[tokio::test]
-    #[serial_test::serial(aleph_home_env)]
     async fn handle_update_never_persists_firecrawl_backend() {
+        // Single-source ALEPH_HOME isolation: hold the crate-wide guard for the
+        // whole test so no concurrently-running test's override (or dropped
+        // tempdir) is observed during the config save. Replaces the former
+        // `aleph_home_env` serial group, which did NOT exclude the tests that
+        // guard ALEPH_HOME via ALEPH_HOME_TEST_GUARD.
+        let _home_guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let prev = std::env::var("ALEPH_HOME").ok();
         // SAFETY: single-threaded test mutates a process env var so the config

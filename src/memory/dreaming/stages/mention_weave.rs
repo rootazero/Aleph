@@ -228,17 +228,18 @@ mod tests {
 
     // `get_notes_with_content`'s default impl hydrates bodies from
     // `crate::utils::paths::get_note_memory_dir()`, which resolves off the
-    // process-global `ALEPH_HOME` — not the store's own db path. The named
-    // `aleph_home_env` serial group (established in
-    // `gateway::handlers::search_config` / `fetch_config`) coordinates this
-    // mutation crate-wide so no other test observes a torn override.
+    // process-global `ALEPH_HOME` — not the store's own db path. Hold the
+    // crate-wide `ALEPH_HOME_TEST_GUARD` for the whole test so this mutation is
+    // coordinated against every other ALEPH_HOME-touching test and no thread
+    // observes a torn override.
     #[tokio::test]
-    #[serial_test::serial(aleph_home_env)]
     async fn mention_weave_materializes_unlinked_mention_edges() {
+        let _home_guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let home = tempfile::TempDir::new().unwrap();
         let prev = std::env::var_os("ALEPH_HOME");
-        // SAFETY: serialized by the `aleph_home_env` group above; restored
-        // before the test returns, so no other thread observes the override.
+        // SAFETY: guarded single mutator; restored before the test returns.
         unsafe {
             std::env::set_var("ALEPH_HOME", home.path());
         }

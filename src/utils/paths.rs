@@ -19,6 +19,14 @@ use std::path::PathBuf;
 /// Process-global environment guard for tests that mutate `ALEPH_HOME`.
 /// Acquiring this mutex serialises tests so they don't observe each other's
 /// temporary directories or leave stale values behind.
+///
+/// **This is the single source of ALEPH_HOME mutual exclusion.** Any test that
+/// sets/removes `ALEPH_HOME` MUST hold this guard for its whole body:
+/// `let _g = ALEPH_HOME_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());`.
+/// Do NOT introduce a separate `#[serial(...)]` group for this — two regimes do
+/// not exclude each other, and a mutex-guarded test will then observe the
+/// serial-group test's dropped tempdir mid-save (config paths resolve off
+/// `ALEPH_HOME`).
 #[cfg(test)]
 pub(crate) static ALEPH_HOME_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

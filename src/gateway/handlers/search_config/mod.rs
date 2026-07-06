@@ -118,8 +118,13 @@ mod tests {
     // hard-fails on a searxng backend without base_url (validate.rs), so
     // accepting the write bricks every subsequent config load.
     #[tokio::test]
-    #[serial_test::serial(aleph_home_env)]
     async fn handle_update_rejects_searxng_without_base_url_and_preserves_entry() {
+        // Hold the crate-wide ALEPH_HOME guard for the whole test (replaces the
+        // former `aleph_home_env` serial group, which raced the mutex-guarded
+        // tests). Single source of ALEPH_HOME mutual exclusion across the crate.
+        let _home_guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let prev = std::env::var("ALEPH_HOME").ok();
         // SAFETY: single-threaded test mutates a process env var so any config
@@ -214,8 +219,11 @@ mod tests {
     // Sibling structural prerequisite: a google backend without engine_id is
     // equally unloadable — reject its creation instead of persisting it.
     #[tokio::test]
-    #[serial_test::serial(aleph_home_env)]
     async fn handle_update_rejects_google_without_engine_id() {
+        // Same crate-wide ALEPH_HOME guard as the sibling test above.
+        let _home_guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let prev = std::env::var("ALEPH_HOME").ok();
         // SAFETY: see above — scoped ALEPH_HOME override, restored below.

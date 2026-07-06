@@ -537,6 +537,11 @@ mod tests {
     /// is also our escape hatch if `dirs::home_dir()` panics on weird boxes.
     #[test]
     fn aleph_home_respects_env_override() {
+        // Hold the crate-wide guard so this env mutation can't race the other
+        // ALEPH_HOME-touching tests (config saves resolve their path off it).
+        let _home_guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
         let prev = std::env::var("ALEPH_HOME").ok();
         // SAFETY: this single-threaded test mutates a process env var; the
