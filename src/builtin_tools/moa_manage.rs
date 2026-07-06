@@ -22,7 +22,7 @@ use crate::config::patcher::{ConfigPatcher, PatchRequest};
 use crate::config::{default_advisor_timeout_secs, Config, MoaFanout, MoaPreset, MoaSlot, MoaToml};
 use crate::error::Result;
 use crate::providers::moa::{get_moa_config, store_moa_config};
-use crate::providers::session_moa_handle::{clear_session_moa, get_session_moa, set_session_moa};
+use crate::providers::session_moa_handle::{clear_session_moa, get_session_moa};
 use crate::sync_primitives::Arc;
 use crate::tools::turn_context::current_turn_context;
 use crate::tools::AlephTool;
@@ -654,6 +654,7 @@ impl AlephTool for MoaManageTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::session_moa_handle::set_session_moa;
     use crate::routing::session_key::SessionKey;
     use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
     use crate::tools::AlephTool;
