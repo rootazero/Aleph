@@ -81,6 +81,17 @@ impl MessageAssembler {
         idx
     }
 
+    /// Clear the visible accumulator at a think-iteration boundary while
+    /// preserving the monotonic `chunk_index` and the reasoning accumulator.
+    /// The drain calls this at each tool-call boundary so every iteration's
+    /// `full_text` starts fresh (matching the prior per-iteration semantics),
+    /// while the chunk counter stays monotonic across the whole run.
+    /// Precondition: the scrubber was just drained via `flush_boundary`, so no
+    /// partial-tag tail is stranded.
+    pub fn reset_iteration(&mut self) {
+        self.visible.clear();
+    }
+
     /// Terminal answer + reasoning. Flushes any held tail first, then applies
     /// the idempotent final sanitizer (catches self-closing `<task-complete/>`
     /// and trailing incomplete directives the streaming scrubber leaves).

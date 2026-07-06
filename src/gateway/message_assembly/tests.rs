@@ -47,3 +47,18 @@ fn chunk_index_is_monotonic() {
     assert_eq!(a.next_chunk_index(), 1);
     assert_eq!(a.next_chunk_index(), 2);
 }
+
+#[test]
+fn reset_iteration_clears_visible_but_keeps_chunk_index() {
+    let mut a = MessageAssembler::new();
+    a.push_text_delta("first iter");
+    assert_eq!(a.next_chunk_index(), 0);
+    assert_eq!(a.next_chunk_index(), 1);
+    a.reset_iteration();
+    assert_eq!(a.snapshot(), "", "visible cleared at iteration boundary");
+    assert_eq!(
+        a.next_chunk_index(),
+        2,
+        "chunk index stays monotonic across reset_iteration"
+    );
+}
