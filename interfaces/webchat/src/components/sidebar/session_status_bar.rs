@@ -5,24 +5,25 @@
 // Data sources (both existing infrastructure, zero new backend):
 //   • gateway state ← DashboardState.is_connected / connection_error
 //     (same derivation as the dashboard Home view).
-//   • active run count ← `activity.stats` RPC (`active_total`), already
-//     registered server-side and consumed by Home. Polled every 10s while
-//     connected, mirroring the reference 10s status poll.
+//   • active run count ← SessionMap.running_session_count(), the SAME
+//     server-authoritative `server_running` set that lights the per-row red
+//     dot. Reading one signal makes the footer count and the dots update
+//     together on every `RunningSetChanged` event — no divergence, no lag.
+//     (The prior implementation polled `activity.stats` on a 10s timer, an
+//     independent source that drifted out of sync with the dots.)
 //
 use leptos::prelude::*;
 
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
+use crate::state::sessions::SessionMap;
 
 #[component]
 #[must_use]
 pub fn SessionStatusBar() -> impl IntoView {
     let dash = expect_context::<DashboardState>();
+    let sessions = expect_context::<SessionMap>();
     let i18n = use_i18n();
-
-    let active_runs = RwSignal::new(Option::<u64>::None);
-    // Bumped on each (re)connect so stale poll loops self-terminate.
-    let poll_gen = RwSignal::new(0u32);
 
     // Gateway state string + tone, derived reactively (matches Home).
     let gateway_label = move || {
@@ -46,45 +47,9 @@ pub fn SessionStatusBar() -> impl IntoView {
         format!("{base}{tone}")
     };
 
-    // Poll activity.stats while connected: immediate fetch on connect, then
-    // every 10s. Disconnect clears the count.
-    Effect::new(move || {
-        if dash.is_connected.get() {
-            let my_gen = poll_gen.get_untracked().wrapping_add(1);
-            poll_gen.set(my_gen);
-            leptos::task::spawn_local(async move {
-                // `poll_gen`/`active_runs` are owned by this component.
-                // On tab switch the component is disposed (and these
-                // signals with it), but this detached future keeps
-                // running — `try_*` lets it notice the disposal and stop
-                // instead of panicking on a dead signal.
-                while let Some(gen) = poll_gen.try_get_untracked() {
-                    if gen != my_gen || !dash.is_connected.get_untracked() {
-                        break;
-                    }
-                    let count = match dash
-                        .rpc_call("activity.stats", serde_json::Value::Null)
-                        .await
-                    {
-                        Ok(result) => result
-                            .get("active_total")
-                            .and_then(serde_json::Value::as_u64)
-                            .unwrap_or(0),
-                        Err(_) => 0,
-                    };
-                    // `try_set` returns `Some` only when the signal was
-                    // already disposed (component gone during the await
-                    // above) — stop rather than spin for another 10s.
-                    if active_runs.try_set(Some(count)).is_some() {
-                        break;
-                    }
-                    gloo_timers::future::TimeoutFuture::new(10_000).await;
-                }
-            });
-        } else {
-            active_runs.set(None);
-        }
-    });
+    // Active run count = size of the server-authoritative running set. Tracked
+    // read → re-renders in lockstep with the sidebar dots on every event.
+    let active_count = move || sessions.running_session_count().to_string();
 
     view! {
         <div class="flex items-center justify-between px-3 py-2 border-t border-border
@@ -94,7 +59,7 @@ pub fn SessionStatusBar() -> impl IntoView {
                 <span>{gateway_label}</span>
             </div>
             <div class="flex items-center gap-1 tabular-nums normal-case">
-                <span>{move || active_runs.get().map(|n| n.to_string()).unwrap_or_else(|| "–".to_string())}</span>
+                <span>{active_count}</span>
                 <span class="text-text-tertiary/70">{t!(i18n, session.active)}</span>
             </div>
         </div>
