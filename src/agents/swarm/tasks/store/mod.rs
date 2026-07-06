@@ -8,7 +8,14 @@
 //! - [`helpers`] — `now_epoch`, `db_err`, `summarize`
 //! - [`row_decode`] — `read_task_row`, `load_dependencies`, `derive_status`, `load_task`
 //! - [`schema`] — DDL migration (sync, runs under the mutex lock)
-//! - this module — `SqliteCoordTaskStore` + the `CoordTaskStore` trait impl
+//! - [`crud`] — create / get / update / list / delete task rows
+//! - [`deps`] — dependency edges and newly-unblocked queries
+//! - [`locks`] — task lock acquire / release / stale-release
+//! - [`runs`] — task-run lifecycle and run reviews
+//! - [`comments`] — task comment append / list
+//! - [`journal`] — per-task and per-team journals
+//! - this module — `SqliteCoordTaskStore` + the thin `CoordTaskStore` trait
+//!   impl that delegates to the topic submodules above
 
 mod comments;
 mod crud;
