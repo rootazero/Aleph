@@ -331,6 +331,16 @@ impl SessionMap {
     pub fn is_running_session_key(&self, sk: &str) -> bool {
         self.server_running.with(|s| s.contains(sk))
     }
+
+    /// 响应式读：当前服务端权威运行中的会话数——侧栏底部"活跃"计数器的唯一入口。
+    ///
+    /// 与逐行红点 [`Self::is_running_session_key`] 同读 `server_running` 信号，故
+    /// 二者恒一致：任一 `RunningSetChanged` 事件同时刷新计数与红点，杜绝"红点亮着
+    /// 计数却为 0"之类的分叉（旧实现走 10s 轮询 `activity.stats`，与红点异源而滞后）。
+    #[must_use]
+    pub fn running_session_count(&self) -> usize {
+        self.server_running.with(HashSet::len)
+    }
 }
 
 #[cfg(test)]
@@ -494,6 +504,34 @@ mod tests {
                 !map.is_running_session_key("sess-cold"),
                 "seed ignored after event"
             );
+        });
+    }
+
+    #[test]
+    fn running_count_tracks_server_set_in_lockstep_with_dot() {
+        use std::collections::HashSet;
+        with_owner(|| {
+            let map = SessionMap::new();
+            assert_eq!(map.running_session_count(), 0, "empty at boot");
+
+            // Two sessions running → count 2, matching two lit dots (same source).
+            map.set_server_running(
+                1,
+                HashSet::from(["sess-a".to_string(), "sess-b".to_string()]),
+            );
+            assert_eq!(map.running_session_count(), 2, "count == running-set size");
+            assert!(map.is_running_session_key("sess-a"));
+            assert!(map.is_running_session_key("sess-b"));
+
+            // Server releases one → count and dot fall together, no lag/divergence.
+            map.set_server_running(2, HashSet::from(["sess-a".to_string()]));
+            assert_eq!(map.running_session_count(), 1, "count follows release");
+            assert!(map.is_running_session_key("sess-a"));
+            assert!(!map.is_running_session_key("sess-b"));
+
+            // All clear → count 0 (never a stuck non-zero counter).
+            map.set_server_running(3, HashSet::new());
+            assert_eq!(map.running_session_count(), 0, "cleared with the dots");
         });
     }
 
