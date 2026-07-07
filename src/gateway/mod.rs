@@ -79,6 +79,7 @@ pub mod http_server;
 pub mod inbound_context;
 pub mod inbound_router;
 pub mod interfaces;
+pub mod message_assembly;
 pub mod pair_loop_guard;
 pub mod pairing_store;
 pub mod pipeline;

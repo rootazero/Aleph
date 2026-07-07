@@ -53,8 +53,7 @@ fn final_chunk(run_id: String, seq: u64, content: String) -> StreamEvent {
         run_id,
         seq,
         delta: content.clone(),
-        full_text: content.clone(),
-        content,
+        full_text: content,
         chunk_index: 0,
         is_final: true,
         is_intermediate: false,
@@ -101,8 +100,7 @@ pub(super) fn plan_instant(
                             run_id: run_id.clone(),
                             seq: next_seq(),
                             delta: accumulated.clone(),
-                            full_text: accumulated.clone(),
-                            content: accumulated,
+                            full_text: accumulated,
                             chunk_index: 0,
                             is_final: false,
                             is_intermediate: true,
@@ -219,7 +217,6 @@ mod tests {
             seq: 0,
             delta: delta.into(),
             full_text: delta.into(),
-            content: delta.into(),
             chunk_index: 0,
             is_final,
             is_intermediate: false,
@@ -242,9 +239,9 @@ mod tests {
         assert_eq!(events.len(), 1);
         match &events[0] {
             StreamEvent::ResponseChunk {
-                content, is_final, ..
+                delta, is_final, ..
             } => {
-                assert_eq!(content, "Hello world");
+                assert_eq!(delta, "Hello world");
                 assert!(is_final);
             }
             other => panic!("expected final ResponseChunk, got {other:?}"),
@@ -295,7 +292,7 @@ mod tests {
         // Flushed chunk + the RunComplete itself.
         assert_eq!(events.len(), 2);
         assert!(
-            matches!(&events[0], StreamEvent::ResponseChunk { content, .. } if content == "partial")
+            matches!(&events[0], StreamEvent::ResponseChunk { delta, .. } if delta == "partial")
         );
         assert!(matches!(events[1], StreamEvent::RunComplete { .. }));
     }
@@ -308,7 +305,6 @@ mod tests {
             seq: 0,
             delta: delta.into(),
             full_text: delta.into(),
-            content: delta.into(),
             chunk_index: 0,
             is_final: false,
             is_intermediate: true,
@@ -336,8 +332,8 @@ mod tests {
             InstantOutcome::Replace(events) => {
                 assert_eq!(events.len(), 1);
                 assert!(
-                    matches!(&events[0], StreamEvent::ResponseChunk { content, is_final, .. }
-                        if content == "ab" && *is_final)
+                    matches!(&events[0], StreamEvent::ResponseChunk { delta, is_final, .. }
+                        if delta == "ab" && *is_final)
                 );
             }
             other => panic!("expected Replace, got {other:?}"),
@@ -353,8 +349,8 @@ mod tests {
             InstantOutcome::Replace(events) => {
                 assert_eq!(events.len(), 1);
                 assert!(
-                    matches!(&events[0], StreamEvent::ResponseChunk { content, is_intermediate, is_final, .. }
-                        if content == "progress" && *is_intermediate && !*is_final)
+                    matches!(&events[0], StreamEvent::ResponseChunk { delta, is_intermediate, is_final, .. }
+                        if delta == "progress" && *is_intermediate && !*is_final)
                 );
             }
             other => panic!("expected Replace, got {other:?}"),
@@ -395,8 +391,8 @@ mod tests {
             InstantOutcome::Prepend(events) => {
                 assert_eq!(events.len(), 1);
                 assert!(
-                    matches!(&events[0], StreamEvent::ResponseChunk { content, is_final, .. }
-                        if content == "answer" && *is_final)
+                    matches!(&events[0], StreamEvent::ResponseChunk { delta, is_final, .. }
+                        if delta == "answer" && *is_final)
                 );
             }
             other => panic!("expected Prepend, got {other:?}"),
@@ -419,8 +415,8 @@ mod tests {
         match plan_instant(&mut buf, &rc, seq_source()) {
             InstantOutcome::Prepend(events) => {
                 assert!(
-                    matches!(&events[0], StreamEvent::ResponseChunk { content, .. }
-                        if content == "from summary")
+                    matches!(&events[0], StreamEvent::ResponseChunk { delta, .. }
+                        if delta == "from summary")
                 );
             }
             other => panic!("expected Prepend, got {other:?}"),

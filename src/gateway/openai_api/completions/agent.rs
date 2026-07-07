@@ -79,10 +79,10 @@ impl EventEmitter for SseEventEmitter {
 
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
         let frame: Option<String> = match event {
-            StreamEvent::ResponseChunk { content, .. } => {
+            StreamEvent::ResponseChunk { delta, .. } => {
                 let chunk = self.make_chunk(
                     Delta {
-                        content: Some(content),
+                        content: Some(delta),
                         role: None,
                         tool_calls: None,
                     },
@@ -455,8 +455,8 @@ async fn handle_non_streaming(
 
     for event in &events {
         match event {
-            StreamEvent::ResponseChunk { content: chunk, .. } => {
-                content.push_str(chunk);
+            StreamEvent::ResponseChunk { delta, .. } => {
+                content.push_str(delta);
             }
             StreamEvent::RunComplete { summary, .. } => {
                 total_tokens = summary.total_tokens;
@@ -497,4 +497,99 @@ async fn handle_non_streaming(
     };
 
     Ok(Json(response).into_response())
+}
+
+// =============================================================================
+// Tests — OpenAI-compat SSE regression guards (Task 6)
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::event_emitter::RunSummary;
+    use tokio::sync::mpsc;
+
+    fn emitter(tx: mpsc::Sender<String>) -> SseEventEmitter {
+        SseEventEmitter::new(tx, "cmpl-test".to_string(), "test-model".to_string(), 0)
+    }
+
+    /// The SSE surface forwards a ResponseChunk's `delta` verbatim as the
+    /// OpenAI `choices[].delta.content`. Guards against re-introducing a raw
+    /// `content` alias read or dropping the delta (G1 regression guard). The
+    /// upstream drain (Task 3) is what strips `<think>`; this surface only
+    /// forwards, so we feed already-clean text and assert verbatim forwarding.
+    #[tokio::test]
+    async fn sse_forwards_response_chunk_delta_as_content() {
+        let (tx, mut rx) = mpsc::channel::<String>(8);
+        let em = emitter(tx);
+        em.emit(StreamEvent::ResponseChunk {
+            run_id: "r".to_string(),
+            seq: 0,
+            delta: "visible answer".to_string(),
+            full_text: "visible answer".to_string(),
+            chunk_index: 0,
+            is_final: false,
+            is_intermediate: false,
+        })
+        .await
+        .expect("emit ok");
+        drop(em); // close tx so rx.recv() terminates
+        let frame = rx.recv().await.expect("one SSE frame");
+        assert!(
+            frame.contains("visible answer"),
+            "delta must be forwarded as SSE content: {frame:?}"
+        );
+    }
+
+    /// Reasoning is never forwarded to the OpenAI SSE surface — the reasoning
+    /// leak guard for this surface (G4). Emitting a Reasoning event produces
+    /// no SSE frame at all.
+    #[tokio::test]
+    async fn sse_suppresses_reasoning_events() {
+        let (tx, mut rx) = mpsc::channel::<String>(8);
+        let em = emitter(tx);
+        em.emit(StreamEvent::Reasoning {
+            run_id: "r".to_string(),
+            seq: 0,
+            content: "SECRET internal reasoning".to_string(),
+            is_complete: false,
+        })
+        .await
+        .expect("emit ok");
+        drop(em);
+        assert!(
+            rx.recv().await.is_none(),
+            "reasoning must not reach the SSE surface"
+        );
+    }
+
+    /// The terminal RunComplete frame carries finish_reason=stop and NO text —
+    /// summary.final_response must never leak into the SSE stream (the text was
+    /// already streamed as clean deltas).
+    #[tokio::test]
+    async fn sse_run_complete_carries_no_summary_text() {
+        let (tx, mut rx) = mpsc::channel::<String>(8);
+        let em = emitter(tx);
+        em.emit(StreamEvent::RunComplete {
+            run_id: "r".to_string(),
+            seq: 0,
+            summary: RunSummary {
+                final_response: Some("SHOULD_NOT_LEAK".to_string()),
+                ..Default::default()
+            },
+            total_duration_ms: 0,
+        })
+        .await
+        .expect("emit ok");
+        drop(em);
+        let frame = rx.recv().await.expect("final SSE frame");
+        assert!(
+            frame.contains("stop"),
+            "finish_reason=stop present: {frame:?}"
+        );
+        assert!(
+            !frame.contains("SHOULD_NOT_LEAK"),
+            "summary text must not leak into the SSE terminal frame: {frame:?}"
+        );
+    }
 }

@@ -17,7 +17,7 @@ use crate::views::runtimes::RuntimesView;
 use crate::views::settings::{
     AcpHarnessesView, AppearanceView, BehaviorView, BrowserView, ChannelPlatformPage,
     ChannelsOverview, EmbeddingProvidersView, ExecutionView, GeneralView, GenerationProvidersView,
-    McpView, MemoryView, NetworkView, PluginsView, PoliciesView, ProvidersView,
+    McpView, MemoryView, MoaView, NetworkView, PluginsView, PoliciesView, ProvidersView,
     RerankingProvidersView, RouteView, RoutingRulesView, SearchView, SecurityView, Settings,
     SkillsView,
 };
@@ -611,6 +611,7 @@ fn SettingsRouter() -> impl IntoView {
             }
             "/settings/reranking-providers" => view! { <RerankingProvidersView /> }.into_any(),
             "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
+            "/settings/moa" => view! { <MoaView /> }.into_any(),
             "/settings/model-route" => {
                 if form_factor.form_factor.get() == FormFactor::Phone {
                     view! { <PhoneModelRoute /> }.into_any()

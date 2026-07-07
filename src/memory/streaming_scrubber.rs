@@ -47,6 +47,19 @@ pub const DEFAULT_OPEN_TAG: &str = "<memory>";
 /// Default close fence emitted by `render_markdown_v1`.
 pub const DEFAULT_CLOSE_TAG: &str = "</memory>";
 
+/// The tag pairs the message assembler discards from the visible stream:
+/// echoed memory framing, chain-of-thought, and loop completion markers.
+/// All ASCII (byte-level scan safe). `<task-complete/>` is self-closing and
+/// is handled by the finalize-time `sanitize_llm_output` pass, not here.
+pub const DISCARD_TAG_PAIRS: &[(&str, &str)] = &[
+    ("<memory-context>", "</memory-context>"),
+    ("<think>", "</think>"),
+    ("<thinking>", "</thinking>"),
+    ("<thought>", "</thought>"),
+    ("<antthinking>", "</antthinking>"),
+    ("<completion-check>", "</completion-check>"),
+];
+
 /// Streaming-safe memory-fence scrubber.
 ///
 /// Holds back fragments at chunk boundaries that could plausibly be the
@@ -65,9 +78,10 @@ pub const DEFAULT_CLOSE_TAG: &str = "</memory>";
 /// UTF-8 char-boundary slicing.
 #[derive(Debug, Clone)]
 pub struct StreamingContextScrubber {
-    open_tag: String,
-    close_tag: String,
-    in_span: bool,
+    /// Discard tag pairs (open, close). One entry for the single-tag ctors.
+    pairs: Vec<(String, String)>,
+    /// Index into `pairs` of the currently open span, or `None`.
+    active: Option<usize>,
     /// Bytes held back across calls because they might be the prefix of a tag.
     buf: String,
 }
@@ -83,24 +97,34 @@ impl StreamingContextScrubber {
     /// be ASCII; non-ASCII input is rejected via `debug_assert` so byte-
     /// level scanning never breaks UTF-8 char boundaries on real content.
     pub fn with_tags(open: impl Into<String>, close: impl Into<String>) -> Self {
-        let open_tag = open.into();
-        let close_tag = close.into();
-        debug_assert!(!open_tag.is_empty(), "open tag must not be empty");
-        debug_assert!(!close_tag.is_empty(), "close tag must not be empty");
-        debug_assert!(open_tag.is_ascii(), "open tag must be ASCII");
-        debug_assert!(close_tag.is_ascii(), "close tag must be ASCII");
+        let open = open.into();
+        let close = close.into();
+        Self::with_tag_set(&[(open.as_str(), close.as_str())])
+    }
+
+    /// Multi-pair discard scrubber. Every pair's tags must be ASCII; non-ASCII
+    /// input is rejected via `debug_assert` so byte-level scanning never breaks
+    /// UTF-8 char boundaries on real content.
+    pub fn with_tag_set(pairs: &[(&str, &str)]) -> Self {
+        debug_assert!(!pairs.is_empty(), "at least one tag pair required");
+        for (o, c) in pairs {
+            debug_assert!(!o.is_empty() && !c.is_empty(), "tags must not be empty");
+            debug_assert!(o.is_ascii() && c.is_ascii(), "tags must be ASCII");
+        }
         Self {
-            open_tag,
-            close_tag,
-            in_span: false,
+            pairs: pairs
+                .iter()
+                .map(|(o, c)| ((*o).to_string(), (*c).to_string()))
+                .collect(),
+            active: None,
             buf: String::new(),
         }
     }
 
     /// Reset to fresh state — equivalent to dropping the instance and making
-    /// a new one with the same tag pair.
+    /// a new one with the same tag pairs.
     pub fn reset(&mut self) {
-        self.in_span = false;
+        self.active = None;
         self.buf.clear();
     }
 
@@ -108,7 +132,7 @@ impl StreamingContextScrubber {
     /// for tests and metrics.
     #[must_use]
     pub const fn in_span(&self) -> bool {
-        self.in_span
+        self.active.is_some()
     }
 
     /// Feed a streaming text chunk. Returns the visible portion to emit.
@@ -129,13 +153,13 @@ impl StreamingContextScrubber {
         let mut cursor: usize = 0;
 
         loop {
-            if self.in_span {
-                let close = self.close_tag.as_bytes();
+            if let Some(active) = self.active {
+                let close = self.pairs[active].1.as_bytes();
                 match find_ascii_ci(&work_bytes[cursor..], close) {
                     Some(rel_idx) => {
                         // Skip span + close tag entirely.
                         cursor = cursor + rel_idx + close.len();
-                        self.in_span = false;
+                        self.active = None;
                         // Loop continues to scan the rest of the buffer.
                     }
                     None => {
@@ -153,22 +177,37 @@ impl StreamingContextScrubber {
                     }
                 }
             } else {
-                let open = self.open_tag.as_bytes();
-                match find_ascii_ci(&work_bytes[cursor..], open) {
-                    Some(rel_idx) => {
-                        let abs_idx = cursor + rel_idx;
+                // Earliest open tag among all pairs.
+                let mut best: Option<(usize, usize)> = None; // (abs_idx, pair_idx)
+                for (i, (open, _)) in self.pairs.iter().enumerate() {
+                    if let Some(rel) = find_ascii_ci(&work_bytes[cursor..], open.as_bytes()) {
+                        let abs = cursor + rel;
+                        if best.is_none_or(|(b, _)| abs < b) {
+                            best = Some((abs, i));
+                        }
+                    }
+                }
+                match best {
+                    Some((abs, i)) => {
                         // Emit visible prefix before the open tag.
-                        out.push_str(&work[cursor..abs_idx]);
-                        cursor = abs_idx + open.len();
-                        self.in_span = true;
+                        out.push_str(&work[cursor..abs]);
+                        cursor = abs + self.pairs[i].0.len();
+                        self.active = Some(i);
                         // Loop continues; next iteration searches for close.
                     }
                     None => {
-                        // No open tag — hold back a possible partial open
-                        // tail. Everything before that is emittable.
-                        let tail_len = max_partial_suffix_ascii_ci(&work_bytes[cursor..], open);
-                        if tail_len > 0 {
-                            let split = work.len() - tail_len;
+                        // No open tag — hold back the longest partial suffix
+                        // matching any open tag. Everything before is emittable.
+                        let tail = self
+                            .pairs
+                            .iter()
+                            .map(|(open, _)| {
+                                max_partial_suffix_ascii_ci(&work_bytes[cursor..], open.as_bytes())
+                            })
+                            .max()
+                            .unwrap_or(0);
+                        if tail > 0 {
+                            let split = work.len() - tail;
                             out.push_str(&work[cursor..split]);
                             self.buf = work[split..].to_string();
                         } else {
@@ -188,9 +227,9 @@ impl StreamingContextScrubber {
     /// - Otherwise: any held tail is emitted verbatim (it turned out not to
     ///   be a real tag).
     pub fn flush(&mut self) -> String {
-        if self.in_span {
+        if self.active.is_some() {
             self.buf.clear();
-            self.in_span = false;
+            self.active = None;
             return String::new();
         }
         std::mem::take(&mut self.buf)
@@ -399,5 +438,43 @@ mod tests {
         let a = s.feed("你好 <mem");
         let b = s.feed("ory>x</memory> 完成");
         assert_eq!(format!("{a}{b}"), "你好  完成");
+    }
+
+    #[test]
+    fn tag_set_strips_think_and_memory_across_boundaries() {
+        let mut s = StreamingContextScrubber::with_tag_set(&[
+            ("<memory-context>", "</memory-context>"),
+            ("<think>", "</think>"),
+        ]);
+        // <think> split across deltas, interleaved with a memory-context span.
+        let a = s.feed("answer <thi");
+        let b = s.feed("nk>hidden reasoning</think> and <memory-context>x</memory-context> tail");
+        assert_eq!(format!("{a}{b}"), "answer  and  tail");
+        assert_eq!(s.flush(), "");
+        assert!(!s.in_span());
+    }
+
+    #[test]
+    fn tag_set_holds_ambiguous_open_prefix_until_disambiguated() {
+        let mut s = StreamingContextScrubber::with_tag_set(DISCARD_TAG_PAIRS);
+        // "<th" is a prefix of "<think>"/"<thinking>"/"<thought>" — must hold back.
+        let v1 = s.feed("keep <th");
+        let v2 = s.feed("ursday plans"); // not a tag
+        assert_eq!(format!("{v1}{v2}"), "keep <thursday plans");
+    }
+
+    /// Drift guard: the memory-context entry in `DISCARD_TAG_PAIRS` must stay
+    /// byte-identical to the canonical fence the assembler injects, or echoed
+    /// recalled-memory would leak to the user. Pins the literals to the source
+    /// of truth without coupling this generic scrubber to that module at
+    /// compile time.
+    #[test]
+    fn discard_tag_pairs_memory_context_matches_canonical_fence() {
+        use crate::memory::assembler::context_block::{MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN};
+        assert_eq!(
+            DISCARD_TAG_PAIRS[0],
+            (MEMORY_CONTEXT_OPEN, MEMORY_CONTEXT_CLOSE),
+            "DISCARD_TAG_PAIRS[0] drifted from the canonical <memory-context> fence"
+        );
     }
 }

@@ -121,6 +121,24 @@ impl MoaToml {
                     "[moa.presets.{name}] an enabled preset needs at least one advisor"
                 ));
             }
+            // Global distinctness: every slot (all advisors + aggregator) must be
+            // a unique (provider, model) after case/whitespace normalization.
+            let mut seen = std::collections::HashSet::new();
+            let mut all_slots: Vec<&MoaSlot> = preset.advisors.iter().collect();
+            all_slots.push(&preset.aggregator);
+            for slot in all_slots {
+                let key = (
+                    slot.provider.trim().to_lowercase(),
+                    slot.model.trim().to_lowercase(),
+                );
+                if !seen.insert(key) {
+                    errs.push(format!(
+                        "[moa.presets.{name}] duplicate slot (provider, model) — \
+                         advisors and aggregator must all be distinct"
+                    ));
+                    break;
+                }
+            }
         }
         if let Some(d) = &self.default_preset {
             if !self.presets.contains_key(d) {
@@ -208,7 +226,9 @@ aggregator = { provider = "b", model = "n" }
                 ..MoaToml::default()
             };
             assert!(
-                cfg.validation_errors().iter().any(|e| e.contains("recursive")),
+                cfg.validation_errors()
+                    .iter()
+                    .any(|e| e.contains("recursive")),
                 "provider {prov} must be rejected"
             );
         }
@@ -251,5 +271,73 @@ aggregator = { provider = "b", model = "n" }
         let mut solo = parsed.clone();
         solo.default_preset = None;
         assert_eq!(solo.resolve_preset(None).unwrap().0, "default");
+    }
+
+    fn slot(p: &str, m: &str) -> MoaSlot {
+        MoaSlot {
+            provider: p.into(),
+            model: m.into(),
+        }
+    }
+
+    fn preset_with(advisors: Vec<MoaSlot>, aggregator: MoaSlot) -> MoaToml {
+        MoaToml {
+            presets: HashMap::from([(
+                "p".to_string(),
+                MoaPreset {
+                    enabled: true,
+                    advisors,
+                    aggregator,
+                    fanout: MoaFanout::default(),
+                    advisor_timeout_secs: 120,
+                    advisor_max_tokens: None,
+                    advisor_temperature: None,
+                    aggregator_temperature: None,
+                },
+            )]),
+            ..MoaToml::default()
+        }
+    }
+
+    #[test]
+    fn duplicate_advisor_slots_rejected() {
+        let cfg = preset_with(
+            vec![slot("openai", "gpt-5.5"), slot("openai", "gpt-5.5")],
+            slot("anthropic", "claude-opus-4-8"),
+        );
+        assert!(cfg
+            .validation_errors()
+            .iter()
+            .any(|e| e.contains("duplicate slot")));
+    }
+
+    #[test]
+    fn aggregator_equal_to_advisor_rejected() {
+        let cfg = preset_with(vec![slot("openai", "gpt-5.5")], slot("openai", "gpt-5.5"));
+        assert!(cfg
+            .validation_errors()
+            .iter()
+            .any(|e| e.contains("duplicate slot")));
+    }
+
+    #[test]
+    fn dedup_is_case_and_whitespace_insensitive() {
+        let cfg = preset_with(vec![slot("OpenAI", " gpt-5.5 ")], slot("openai", "gpt-5.5"));
+        assert!(cfg
+            .validation_errors()
+            .iter()
+            .any(|e| e.contains("duplicate slot")));
+    }
+
+    #[test]
+    fn all_distinct_slots_pass_dedup() {
+        let cfg = preset_with(
+            vec![slot("openai", "gpt-5.5"), slot("deepseek", "deepseek-v4")],
+            slot("anthropic", "claude-opus-4-8"),
+        );
+        assert!(!cfg
+            .validation_errors()
+            .iter()
+            .any(|e| e.contains("duplicate slot")));
     }
 }

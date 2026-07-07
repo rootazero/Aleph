@@ -189,7 +189,6 @@ where
                 run_id: run_id.to_string(),
                 seq: 1,
                 delta: error_response.clone(),
-                content: error_response.clone(),
                 full_text: String::new(),
                 chunk_index: 0,
                 is_final: true,

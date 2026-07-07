@@ -109,7 +109,6 @@ mod tests {
                 seq: 1,
                 delta: "hi".to_string(),
                 full_text: "hi".to_string(),
-                content: "hi".to_string(),
                 chunk_index: 0,
                 is_final: false,
                 is_intermediate: false,

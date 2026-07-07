@@ -13,13 +13,13 @@ impl EventEmitter for ReplyEmitter {
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
         match event {
             StreamEvent::ResponseChunk {
-                content,
+                delta,
                 is_final,
                 is_intermediate,
                 ..
             } => {
                 if is_intermediate {
-                    if content.is_empty() {
+                    if delta.is_empty() {
                         // Intermediate boundary marker from DeltaSink: the LLM
                         // finished one iteration (tool use) and will continue.
                         if self.config.stream_enabled {
@@ -88,33 +88,31 @@ impl EventEmitter for ReplyEmitter {
                     } else {
                         // Non-empty intermediate: send immediately as standalone message
                         if self.should_voice().await {
-                            self.send_as_voice(&content).await;
+                            self.send_as_voice(&delta).await;
                         } else {
-                            self.send_to_channel(&content).await;
+                            self.send_to_channel(&delta).await;
                         }
                     }
                     // Do NOT buffer — this is a separate message from the final response
                 } else {
                     // React with 👀 on first non-intermediate chunk and start typing indicator
-                    if !self.has_sent.load(Ordering::SeqCst) && !content.is_empty() {
+                    if !self.has_sent.load(Ordering::SeqCst) && !delta.is_empty() {
                         self.react_on_inbound("👀").await;
                         self.start_typing_indicator();
                     }
 
                     // Existing behavior: accumulate text into buffer
-                    if !content.is_empty() {
-                        self.buffer.lock().await.push_str(&content);
+                    if !delta.is_empty() {
+                        self.buffer.lock().await.push_str(&delta);
                     }
 
                     // Real-time streaming: push chunks to controller and act
                     // Skip streaming text when voice mode is active — buffer only,
                     // voice reply will be sent on RunComplete.
-                    if self.config.stream_enabled
-                        && !content.is_empty()
-                        && !self.should_voice().await
+                    if self.config.stream_enabled && !delta.is_empty() && !self.should_voice().await
                     {
                         let mut ctrl = self.streaming.lock().await;
-                        ctrl.push_chunk(&content);
+                        ctrl.push_chunk(&delta);
                         match ctrl.poll_action() {
                             StreamAction::SendInitial(text) => {
                                 let mut text = sanitize_llm_output(&text).into_owned();

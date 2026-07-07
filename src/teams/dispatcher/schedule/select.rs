@@ -1,0 +1,642 @@
+//! Pure scheduling policy for the team dispatcher: which tasks are managed,
+//! which are schedulable, and which are zombies. No I/O — exercisable without
+//! a live dispatcher.
+
+use std::collections::{HashMap, HashSet};
+
+use crate::agents::swarm::tasks::acceptance::lead_review_required;
+use crate::agents::swarm::tasks::timeout::read_task_timeout;
+use crate::agents::swarm::tasks::{CoordTask, CoordTaskStatus};
+
+/// Task metadata key marking a task as managed by the autonomous dispatcher.
+///
+/// Only tasks carrying `{"managed_by": "dispatcher"}` are scheduled or
+/// reclaimed. Tasks created by the synchronous `team_delegate` tool omit it,
+/// so the two execution paths never contend over the same row.
+pub const MANAGED_BY_KEY: &str = "managed_by";
+/// Value of [`MANAGED_BY_KEY`] for dispatcher-managed tasks.
+pub const MANAGED_BY_DISPATCHER: &str = "dispatcher";
+
+/// Returns whether `task` is owned by the autonomous dispatcher.
+#[must_use]
+pub fn is_dispatcher_managed(task: &CoordTask) -> bool {
+    task.metadata
+        .get(MANAGED_BY_KEY)
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| s == MANAGED_BY_DISPATCHER)
+}
+
+/// Terminal status for a successful member run: review-gated tasks
+/// (`lead_review_required` in metadata, stamped by the workflow compiler)
+/// park in `WaitingReview` for `workflow_step_review` to resolve; everything
+/// else completes directly. Pure — the review verdict itself is the lead
+/// LLM's call (R7), this only routes the row.
+pub(super) fn completion_status(task: &CoordTask) -> CoordTaskStatus {
+    if lead_review_required(&task.metadata) {
+        CoordTaskStatus::WaitingReview
+    } else {
+        CoordTaskStatus::Completed
+    }
+}
+
+/// Pure predicate: should `task` be reaped as a zombie given the current
+/// running set, wall-clock, and TTL? Extracted from [`TeamDispatcher::reclaim_zombies`]
+/// so the decision logic can be exercised without spinning up a full
+/// dispatcher.
+///
+/// Returns `true` only for `InProgress` dispatcher-managed tasks that this
+/// process isn't running, have a recorded `started_at`, and whose elapsed
+/// time exceeds the task's **effective** zombie threshold. A `zombie_ttl_secs`
+/// of 0 disables detection (matches the runtime fast-path in
+/// [`TeamDispatcher::reclaim_zombies`]).
+///
+/// The effective threshold is `max(zombie_ttl_secs, per-task timeout)`. The
+/// global config already guarantees `zombie_ttl_secs >= task_timeout_secs` so a
+/// healthy long-running task is never reaped before its own deadline; a per-task
+/// timeout override ([`read_task_timeout`]) can exceed that global, so it is
+/// folded in here too — otherwise a legitimately long task orphaned by a process
+/// restart would be force-failed before its own budget elapsed.
+#[must_use]
+pub fn is_zombie(
+    task: &CoordTask,
+    running: &HashSet<String>,
+    now_epoch: u64,
+    zombie_ttl_secs: u64,
+) -> bool {
+    if zombie_ttl_secs == 0 {
+        return false;
+    }
+    if task.status != CoordTaskStatus::InProgress {
+        return false;
+    }
+    if !is_dispatcher_managed(task) {
+        return false;
+    }
+    if running.contains(&task.id) {
+        return false;
+    }
+    let Some(started) = task.started_at else {
+        return false;
+    };
+    let effective_ttl = zombie_ttl_secs.max(read_task_timeout(&task.metadata).unwrap_or(0));
+    now_epoch.saturating_sub(started) > effective_ttl
+}
+
+/// Pure scheduling filter: from `tasks`, pick those ready to run right now,
+/// fairly distributed across owners.
+///
+/// A task is schedulable when it is dispatcher-managed, has a derived status
+/// of `Pending` (all dependencies satisfied), has an owner, is unlocked, and
+/// is not already running in this process. The candidate pool is ordered by
+/// priority (descending) then creation time (ascending) — preserving the
+/// leader-set priority intent — and then filled with **load-balanced
+/// round-robin across owners**: each slot goes to the eligible task whose
+/// owner is currently least busy (counting both this-process in-flight tasks,
+/// supplied via `running`, and earlier picks in this same pass), with the
+/// priority/FIFO order as the tiebreaker.
+///
+/// This is the multi-agent fairness guarantee — one greedy owner can no longer
+/// monopolise the whole concurrency pool while other team members have ready
+/// work, mirroring openclaw's per-lane `maxConcurrent` and hermes' per-source
+/// limit. `max_per_owner` (`0` = disabled) additionally enforces a hard cap on
+/// how many concurrent tasks any single owner may hold.
+///
+/// Backward-compatible: when only one owner has ready work, or when every
+/// candidate fits in `available_slots`, the result is the same set the old
+/// strict-priority `take(available_slots)` produced (single-owner picks fall
+/// through to pure priority/FIFO order).
+#[must_use]
+pub fn select_schedulable(
+    tasks: &[CoordTask],
+    running: &HashMap<String, String>,
+    available_slots: usize,
+    max_per_owner: usize,
+) -> Vec<CoordTask> {
+    if available_slots == 0 {
+        return Vec::new();
+    }
+
+    let mut candidates: Vec<&CoordTask> = tasks
+        .iter()
+        .filter(|t| t.status == CoordTaskStatus::Pending)
+        .filter(|t| is_dispatcher_managed(t))
+        .filter(|t| t.owner.is_some())
+        .filter(|t| t.locked_by.is_none())
+        .filter(|t| !running.contains_key(&t.id))
+        .collect();
+
+    // Base order: leader-set priority first, then FIFO. Within one owner this
+    // is the exact consumption order; across owners it is the tiebreaker.
+    candidates.sort_by(|a, b| {
+        b.priority
+            .cmp(&a.priority)
+            .then(a.created_at.cmp(&b.created_at))
+    });
+
+    // Per-owner concurrency load, seeded from tasks already in flight in this
+    // process. Owned `String` keys keep the fill free of borrow gymnastics —
+    // owner ids are short and the candidate set per tick is small.
+    let mut load: HashMap<String, usize> = HashMap::new();
+    for owner in running.values() {
+        *load.entry(owner.clone()).or_insert(0) += 1;
+    }
+
+    let mut picked: Vec<CoordTask> = Vec::with_capacity(available_slots);
+    let mut consumed = vec![false; candidates.len()];
+
+    while picked.len() < available_slots {
+        // Pick the eligible candidate whose owner is least loaded; ties resolve
+        // to the earliest in priority/FIFO order (first un-consumed wins).
+        let mut best: Option<usize> = None;
+        let mut best_load = usize::MAX;
+        for (i, task) in candidates.iter().enumerate() {
+            if consumed[i] {
+                continue;
+            }
+            let owner = task.owner.as_deref().unwrap_or("");
+            let owner_load = *load.get(owner).unwrap_or(&0);
+            if max_per_owner > 0 && owner_load >= max_per_owner {
+                continue; // hard per-owner cap reached
+            }
+            if owner_load < best_load {
+                best_load = owner_load;
+                best = Some(i);
+            }
+        }
+        let Some(i) = best else {
+            break; // nothing left that is both un-consumed and under cap
+        };
+        consumed[i] = true;
+        let owner = candidates[i].owner.clone().unwrap_or_default();
+        *load.entry(owner).or_insert(0) += 1;
+        picked.push(candidates[i].clone());
+    }
+
+    picked
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::swarm::tasks::Priority;
+
+    fn task(
+        id: &str,
+        status: CoordTaskStatus,
+        owner: Option<&str>,
+        managed: bool,
+        priority: Priority,
+        created_at: u64,
+    ) -> CoordTask {
+        CoordTask {
+            id: id.to_string(),
+            team_id: Some("team-1".to_string()),
+            subject: id.to_string(),
+            description: String::new(),
+            status,
+            owner: owner.map(|s| s.to_string()),
+            priority,
+            result: None,
+            metadata: if managed {
+                serde_json::json!({ MANAGED_BY_KEY: MANAGED_BY_DISPATCHER })
+            } else {
+                serde_json::json!({})
+            },
+            dependencies: vec![],
+            created_at,
+            started_at: None,
+            completed_at: None,
+            locked_by: None,
+            locked_at: None,
+        }
+    }
+
+    #[test]
+    fn completion_status_routes_review_gated_tasks_to_waiting_review() {
+        use crate::agents::swarm::tasks::acceptance::with_lead_review_required;
+
+        let plain = task(
+            "t1",
+            CoordTaskStatus::InProgress,
+            Some("a"),
+            true,
+            Priority::Normal,
+            1,
+        );
+        assert_eq!(completion_status(&plain), CoordTaskStatus::Completed);
+
+        let mut gated = task(
+            "t2",
+            CoordTaskStatus::InProgress,
+            Some("a"),
+            true,
+            Priority::Normal,
+            1,
+        );
+        gated.metadata = with_lead_review_required(gated.metadata, true);
+        assert_eq!(completion_status(&gated), CoordTaskStatus::WaitingReview);
+    }
+
+    #[test]
+    fn selects_only_pending_managed_owned_unlocked() {
+        let running = HashMap::new();
+        let tasks = vec![
+            task(
+                "ok",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                1,
+            ),
+            task(
+                "blocked",
+                CoordTaskStatus::Blocked,
+                Some("a"),
+                true,
+                Priority::Normal,
+                2,
+            ),
+            task(
+                "no-owner",
+                CoordTaskStatus::Pending,
+                None,
+                true,
+                Priority::Normal,
+                3,
+            ),
+            task(
+                "unmanaged",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                false,
+                Priority::Normal,
+                4,
+            ),
+        ];
+        let picked = select_schedulable(&tasks, &running, 10, 0);
+        assert_eq!(picked.len(), 1);
+        assert_eq!(picked[0].id, "ok");
+    }
+
+    #[test]
+    fn skips_locked_and_running_tasks() {
+        let mut running = HashMap::new();
+        running.insert("running-task".to_string(), "a".to_string());
+        let mut locked = task(
+            "locked",
+            CoordTaskStatus::Pending,
+            Some("a"),
+            true,
+            Priority::Normal,
+            1,
+        );
+        locked.locked_by = Some("a".to_string());
+        let tasks = vec![
+            locked,
+            task(
+                "running-task",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                2,
+            ),
+            task(
+                "free",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                3,
+            ),
+        ];
+        let picked = select_schedulable(&tasks, &running, 10, 0);
+        assert_eq!(picked.len(), 1);
+        assert_eq!(picked[0].id, "free");
+    }
+
+    #[test]
+    fn orders_by_priority_then_creation() {
+        let running = HashMap::new();
+        let tasks = vec![
+            task(
+                "low-old",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Low,
+                1,
+            ),
+            task(
+                "crit-new",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Critical,
+                9,
+            ),
+            task(
+                "norm-old",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                2,
+            ),
+            task(
+                "norm-new",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                5,
+            ),
+        ];
+        let picked = select_schedulable(&tasks, &running, 10, 0);
+        let order: Vec<&str> = picked.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(order, vec!["crit-new", "norm-old", "norm-new", "low-old"]);
+    }
+
+    #[test]
+    fn respects_available_slots_cap() {
+        let running = HashMap::new();
+        let tasks: Vec<CoordTask> = (0..10)
+            .map(|i| {
+                task(
+                    &format!("t{i}"),
+                    CoordTaskStatus::Pending,
+                    Some("a"),
+                    true,
+                    Priority::Normal,
+                    i,
+                )
+            })
+            .collect();
+        let picked = select_schedulable(&tasks, &running, 3, 0);
+        assert_eq!(picked.len(), 3);
+    }
+
+    // ---- Multi-agent fairness ---------------------------------------------
+
+    #[test]
+    fn spreads_slots_across_owners_round_robin() {
+        // Three owners each with two ready tasks; only three slots free. A
+        // strict-priority `take(3)` could hand all slots to one owner; the
+        // fair scheduler must give one slot to each distinct owner.
+        let running = HashMap::new();
+        let tasks = vec![
+            task(
+                "a1",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                1,
+            ),
+            task(
+                "b1",
+                CoordTaskStatus::Pending,
+                Some("b"),
+                true,
+                Priority::Normal,
+                2,
+            ),
+            task(
+                "c1",
+                CoordTaskStatus::Pending,
+                Some("c"),
+                true,
+                Priority::Normal,
+                3,
+            ),
+            task(
+                "a2",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                4,
+            ),
+            task(
+                "b2",
+                CoordTaskStatus::Pending,
+                Some("b"),
+                true,
+                Priority::Normal,
+                5,
+            ),
+            task(
+                "c2",
+                CoordTaskStatus::Pending,
+                Some("c"),
+                true,
+                Priority::Normal,
+                6,
+            ),
+        ];
+        let picked = select_schedulable(&tasks, &running, 3, 0);
+        assert_eq!(picked.len(), 3);
+        let owners: HashSet<&str> = picked.iter().filter_map(|t| t.owner.as_deref()).collect();
+        assert_eq!(owners.len(), 3, "each owner should get exactly one slot");
+        // Within the fair fill, the priority/FIFO tiebreaker still picks each
+        // owner's first task.
+        let ids: HashSet<&str> = picked.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, HashSet::from(["a1", "b1", "c1"]));
+    }
+
+    #[test]
+    fn inflight_load_defers_busy_owner() {
+        // Owner "a" is already running one task; with a single free slot the
+        // idle owner "b" wins it even though "a"'s task is earlier in FIFO.
+        let mut running = HashMap::new();
+        running.insert("a-running".to_string(), "a".to_string());
+        let tasks = vec![
+            task(
+                "a1",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                1,
+            ),
+            task(
+                "b1",
+                CoordTaskStatus::Pending,
+                Some("b"),
+                true,
+                Priority::Normal,
+                2,
+            ),
+        ];
+        let picked = select_schedulable(&tasks, &running, 1, 0);
+        assert_eq!(picked.len(), 1);
+        assert_eq!(
+            picked[0].id, "b1",
+            "freed slot should go to the least-busy owner"
+        );
+    }
+
+    #[test]
+    fn max_per_owner_caps_single_owner() {
+        // A single owner with five ready tasks and four free slots is capped
+        // at two concurrent tasks by `max_per_owner = 2`.
+        let running = HashMap::new();
+        let tasks: Vec<CoordTask> = (0..5)
+            .map(|i| {
+                task(
+                    &format!("t{i}"),
+                    CoordTaskStatus::Pending,
+                    Some("a"),
+                    true,
+                    Priority::Normal,
+                    i,
+                )
+            })
+            .collect();
+        let picked = select_schedulable(&tasks, &running, 4, 2);
+        assert_eq!(
+            picked.len(),
+            2,
+            "hard per-owner cap bounds one owner below the slot count"
+        );
+    }
+
+    #[test]
+    fn fair_fill_is_byte_identical_for_single_owner() {
+        // The fairness path must not perturb the single-owner case: same set,
+        // same priority/FIFO order as the old strict-priority `take`.
+        let running = HashMap::new();
+        let tasks = vec![
+            task(
+                "low",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Low,
+                3,
+            ),
+            task(
+                "crit",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Critical,
+                1,
+            ),
+            task(
+                "norm",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                2,
+            ),
+        ];
+        let picked = select_schedulable(&tasks, &running, 2, 0);
+        let order: Vec<&str> = picked.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(order, vec!["crit", "norm"]);
+    }
+
+    // ---- Zombie reclamation ------------------------------------------------
+
+    /// Build an InProgress dispatcher-managed task with `started_at` set.
+    fn in_progress_task(id: &str, started_at: u64, managed: bool) -> CoordTask {
+        let mut t = task(
+            id,
+            CoordTaskStatus::InProgress,
+            Some("a"),
+            managed,
+            Priority::Normal,
+            0,
+        );
+        t.started_at = Some(started_at);
+        t
+    }
+
+    #[test]
+    fn zombie_detection_disabled_when_ttl_zero() {
+        let t = in_progress_task("zombie", 1000, true);
+        let running: HashSet<String> = HashSet::new();
+        assert!(!is_zombie(&t, &running, 1_000_000, 0));
+    }
+
+    #[test]
+    fn zombie_detection_ignores_currently_running_task() {
+        let t = in_progress_task("active", 1000, true);
+        let mut running = HashSet::new();
+        running.insert("active".to_string());
+        assert!(!is_zombie(&t, &running, 1_000_000, 60));
+    }
+
+    #[test]
+    fn zombie_detection_ignores_unmanaged_task() {
+        // team_delegate-owned tasks are caller's responsibility, not ours.
+        let t = in_progress_task("delegated", 1000, false);
+        let running = HashSet::new();
+        assert!(!is_zombie(&t, &running, 1_000_000, 60));
+    }
+
+    #[test]
+    fn zombie_detection_ignores_task_without_started_at() {
+        let mut t = in_progress_task("no_clock", 1000, true);
+        t.started_at = None;
+        let running = HashSet::new();
+        assert!(!is_zombie(&t, &running, 1_000_000, 60));
+    }
+
+    #[test]
+    fn zombie_detection_respects_grace_window() {
+        let t = in_progress_task("young", 1_000_000, true);
+        let running = HashSet::new();
+        // started 30s ago, ttl 60s → not yet a zombie
+        assert!(!is_zombie(&t, &running, 1_000_030, 60));
+    }
+
+    #[test]
+    fn zombie_detection_fires_past_grace_window() {
+        let t = in_progress_task("old", 1_000_000, true);
+        let running = HashSet::new();
+        // started 7201s ago, ttl 7200s → zombie
+        assert!(is_zombie(&t, &running, 1_007_201, 7200));
+    }
+
+    #[test]
+    fn zombie_detection_ignores_pending_tasks() {
+        // A Pending task is never a zombie even if status is somehow stale —
+        // only InProgress qualifies (Pending should never even have started_at).
+        let mut t = in_progress_task("pending", 0, true);
+        t.status = CoordTaskStatus::Pending;
+        let running = HashSet::new();
+        assert!(!is_zombie(&t, &running, 1_000_000, 60));
+    }
+
+    #[test]
+    fn zombie_detection_honours_longer_per_task_timeout() {
+        use crate::agents::swarm::tasks::timeout::with_task_timeout;
+        // A task with a per-task timeout (1000s) above the global zombie TTL (60s)
+        // must not be reaped before its own deadline — the effective threshold is
+        // max(global, per-task). Started 500s ago: past the global TTL but inside
+        // its own 1000s budget → not yet a zombie.
+        let mut t = in_progress_task("long", 1_000_000, true);
+        t.metadata = with_task_timeout(t.metadata, Some(1000));
+        let running = HashSet::new();
+        assert!(!is_zombie(&t, &running, 1_000_500, 60));
+        // Past its own budget → finally a zombie.
+        assert!(is_zombie(&t, &running, 1_001_001, 60));
+    }
+
+    #[test]
+    fn zombie_detection_ignores_shorter_per_task_timeout() {
+        use crate::agents::swarm::tasks::timeout::with_task_timeout;
+        // A per-task timeout *below* the global TTL never shrinks the safety net:
+        // the global zombie grace still governs (effective = max(global, per-task)).
+        let mut t = in_progress_task("short", 1_000_000, true);
+        t.metadata = with_task_timeout(t.metadata, Some(10));
+        let running = HashSet::new();
+        // 30s elapsed: past the 10s per-task timeout but inside the 60s global
+        // grace → not a zombie (the in-process timeout already aborts the run;
+        // the zombie reaper is only the orphan safety net).
+        assert!(!is_zombie(&t, &running, 1_000_030, 60));
+    }
+}

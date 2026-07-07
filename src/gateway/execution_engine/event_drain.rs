@@ -1,10 +1,11 @@
 //! Event drain: maps `FlowStreamEvent` variants to `EventEmitter` calls.
 //!
 //! This is a pure, stateless-per-call helper extracted from the in-progress
-//! `StreamCallback`. It holds drain-side state in `DrainState` (text
-//! accumulator, chunk counter, scrubber) so callers don't need to replicate
-//! that logic. Wired into the live path by `helpers::run_dispatch_and_drain`
-//! (called from `run_loop.rs`).
+//! `StreamCallback`. It holds drain-side state in `DrainState` (a single
+//! `MessageAssembler` owning the visible-text accumulator, chunk counter, and
+//! discard scrubber) so callers don't need to replicate that logic. Wired into
+//! the live path by `helpers::run_dispatch_and_drain` (called from
+//! `run_loop.rs`).
 
 use crate::sync_primitives::Arc;
 
@@ -13,46 +14,22 @@ use tokio::sync::Mutex;
 use crate::gateway::event_emitter::{
     EventEmitError, EventEmitter, RunSummary, StreamEvent, ToolErrorItem, ToolSummaryItem,
 };
-use crate::memory::assembler::context_block::{MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN};
-use crate::memory::StreamingContextScrubber;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent};
 use aleph_protocol::TokenBreakdownView;
 
 /// Mutable drain state shared across calls for a single run.
 ///
-/// This owns the live text-stream state that was previously stranded in the
-/// now-retired `StreamingDeltaSink`: a running `full_text` accumulator, a
-/// monotonic `chunk_index`, and a [`StreamingContextScrubber`] that strips any
-/// `<memory-context>` framing the model echoes back from the injected
-/// recalled-memory block before it reaches the user. The drain task processes
-/// events serially on one task, so the `Mutex<DrainState>` it lives behind is
-/// effectively uncontended.
-#[derive(Debug)]
+/// Owns the single [`MessageAssembler`](crate::gateway::message_assembly::MessageAssembler)
+/// reducer for this run: the visible-text accumulator that populates each
+/// `ResponseChunk.full_text`, the monotonic `chunk_index`, and the
+/// cross-delta discard scrubber that strips echoed `<memory-context>` framing
+/// AND inline reasoning/completion tags (`<think>` etc.) before they reach the
+/// user. Consolidated from the retired `StreamingDeltaSink` + inline
+/// `StreamingContextScrubber`. The drain task processes events serially, so
+/// the `Mutex<DrainState>` is effectively uncontended.
+#[derive(Debug, Default)]
 pub(crate) struct DrainState {
-    /// Accumulated visible text within the current think iteration. Populates
-    /// the `full_text` field of every `ResponseChunk`; reset at each tool
-    /// boundary so each iteration's running text starts fresh.
-    accumulated: String,
-    /// Monotonic chunk counter across the whole run.
-    chunk_index: u32,
-    /// Strips echoed `<memory-context>` framing from the streamed text. Holds
-    /// back partial-tag tails across deltas; drained at tool / run boundaries.
-    scrubber: StreamingContextScrubber,
-}
-
-impl Default for DrainState {
-    fn default() -> Self {
-        Self {
-            accumulated: String::new(),
-            chunk_index: 0,
-            // The injected fence is `<memory-context>`, not the scrubber's
-            // bare-`<memory>` default — wire the real tags explicitly.
-            scrubber: StreamingContextScrubber::with_tags(
-                MEMORY_CONTEXT_OPEN,
-                MEMORY_CONTEXT_CLOSE,
-            ),
-        }
-    }
+    assembler: crate::gateway::message_assembly::MessageAssembler,
 }
 
 /// Map one `FlowStreamEvent` to the appropriate `EventEmitter` call(s).
@@ -69,22 +46,20 @@ pub(crate) async fn emit_flow_event(
 ) -> Result<(), EventEmitError> {
     match event {
         FlowStreamEvent::Delta(text) => {
-            // Scrub any echoed `<memory-context>` framing before it lands in
-            // the user-visible stream, accumulate the running iteration text
-            // (populates `full_text`), and stamp a monotonic `chunk_index`.
-            // A partial tag at the chunk tail is held inside the scrubber and
-            // surfaces on the next delta or on the tool/run boundary flush, so
-            // nothing is lost. (Consolidated from the retired StreamingDeltaSink.)
+            // Feed the raw delta through the run's assembler: strips echoed
+            // `<memory-context>` framing AND inline reasoning/completion tags
+            // across delta boundaries (G4), accumulates the running iteration
+            // text (populates `full_text`), and stamps a monotonic chunk index.
+            // A partial tag at the chunk tail is held inside the assembler and
+            // surfaces on the next delta or the tool/run boundary flush.
             let emitted = {
                 let mut s = state.lock().await;
-                let visible = s.scrubber.feed(&text);
+                let visible = s.assembler.push_text_delta(&text);
                 if visible.is_empty() {
                     None
                 } else {
-                    s.accumulated.push_str(&visible);
-                    let full_text = s.accumulated.clone();
-                    let idx = s.chunk_index;
-                    s.chunk_index += 1;
+                    let full_text = s.assembler.snapshot().to_string();
+                    let idx = s.assembler.next_chunk_index();
                     Some((visible, full_text, idx))
                 }
             };
@@ -94,8 +69,7 @@ pub(crate) async fn emit_flow_event(
                     .emit(StreamEvent::ResponseChunk {
                         run_id: run_id.to_string(),
                         seq,
-                        delta: visible.clone(),
-                        content: visible, // backward-compat alias
+                        delta: visible,
                         full_text,
                         chunk_index: idx,
                         is_final: false,
@@ -124,11 +98,12 @@ pub(crate) async fn emit_flow_event(
             // Text-iteration boundary: drain any held-back scrubber tail and
             // reset the running `full_text` so the next iteration starts fresh.
             // Idempotent across parallel tool calls in one response (the first
-            // resets `accumulated`; later calls see it already empty).
+            // clears the assembler's visible accumulator; later calls see it
+            // already empty).
             flush_text_boundary(emitter, run_id, state).await?;
             {
                 let mut s = state.lock().await;
-                s.accumulated.clear();
+                s.assembler.reset_iteration();
             }
             let seq = emitter.next_seq();
             emitter
@@ -205,7 +180,7 @@ pub(crate) async fn emit_flow_event(
 /// Drain the scrubber's held-back partial-tag tail at a text-iteration or run
 /// boundary. If the tail turned out not to be a real fence it is emitted as a
 /// trailing chunk; a genuine unterminated span is discarded (never leaked).
-/// [`StreamingContextScrubber::flush`] resets the scrubber either way, so the
+/// `MessageAssembler::flush_boundary` resets the scrubber either way, so the
 /// next iteration starts clean. No-op when the scrubber holds nothing.
 async fn flush_text_boundary(
     emitter: &Arc<dyn EventEmitter>,
@@ -214,14 +189,14 @@ async fn flush_text_boundary(
 ) -> Result<(), EventEmitError> {
     let emitted = {
         let mut s = state.lock().await;
-        let tail = s.scrubber.flush();
+        // Drain any held-back partial-tag tail; `flush_boundary` appends it to
+        // the assembler's visible accumulator, so `snapshot()` includes it.
+        let tail = s.assembler.flush_boundary();
         if tail.is_empty() {
             None
         } else {
-            s.accumulated.push_str(&tail);
-            let full_text = s.accumulated.clone();
-            let idx = s.chunk_index;
-            s.chunk_index += 1;
+            let full_text = s.assembler.snapshot().to_string();
+            let idx = s.assembler.next_chunk_index();
             Some((tail, full_text, idx))
         }
     };
@@ -231,8 +206,7 @@ async fn flush_text_boundary(
             .emit(StreamEvent::ResponseChunk {
                 run_id: run_id.to_string(),
                 seq,
-                delta: tail.clone(),
-                content: tail,
+                delta: tail,
                 full_text,
                 chunk_index: idx,
                 is_final: false,
@@ -429,7 +403,7 @@ mod tests {
         events
             .iter()
             .filter_map(|e| match e {
-                StreamEvent::ResponseChunk { content, .. } => Some(content.clone()),
+                StreamEvent::ResponseChunk { delta, .. } => Some(delta.clone()),
                 _ => None,
             })
             .collect()
@@ -593,6 +567,41 @@ mod tests {
         assert_eq!(
             last_full, "Second part.",
             "second iteration full_text must not carry the first"
+        );
+    }
+
+    /// Inline `<think>` blocks — even split across delta boundaries — are
+    /// stripped from the live `ResponseChunk` stream (G4). Previously the drain
+    /// only scrubbed `<memory-context>`, so raw reasoning leaked live and was
+    /// only retro-cleaned at RunComplete.
+    #[tokio::test]
+    async fn inline_think_is_stripped_from_live_response_chunks() {
+        let (inner, emitter) = make_emitter();
+        let state = make_state();
+
+        for d in ["Here is <thi", "nk>hidden</think> the answer"] {
+            emit_flow_event(
+                FlowStreamEvent::Delta(d.to_string()),
+                &emitter,
+                "r1",
+                &state,
+            )
+            .await
+            .expect("emit ok");
+        }
+
+        let joined: String = inner
+            .events()
+            .await
+            .into_iter()
+            .filter_map(|e| match e {
+                StreamEvent::ResponseChunk { delta, .. } => Some(delta),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            joined, "Here is  the answer",
+            "no raw <think> in the live stream"
         );
     }
 

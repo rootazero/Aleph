@@ -216,7 +216,7 @@ impl EventEmitter for FeishuEventEmitter {
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
         match &event {
             StreamEvent::ResponseChunk {
-                content,
+                delta,
                 is_final,
                 is_intermediate,
                 ..
@@ -235,7 +235,7 @@ impl EventEmitter for FeishuEventEmitter {
                 }
 
                 // Create card on first non-empty chunk
-                if !content.is_empty() {
+                if !delta.is_empty() {
                     let mut card_guard = self.card.lock().await;
                     if card_guard.is_none() {
                         if let Some(new_card) = self.create_card().await {
@@ -246,7 +246,7 @@ impl EventEmitter for FeishuEventEmitter {
                         }
                     }
                     if let Some(card) = card_guard.as_ref() {
-                        card.update(&self.api, content).await;
+                        card.update(&self.api, delta).await;
                     }
                 }
 
