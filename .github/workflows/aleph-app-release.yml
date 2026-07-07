@@ -277,8 +277,11 @@ jobs:
           platforms='{}'
           add() {
             if [ -f "$2" ] && [ -f "$3" ]; then
+              # GitHub normalizes spaces in release asset names to "." on upload,
+              # so the download URL must use the normalized name, not the raw
+              # local basename (no-op for the space-free full-app bundles).
               platforms=$(jq --arg k "$1" --arg s "$(cat "$3")" \
-                --arg u "$BASE/$(basename "$2")" \
+                --arg u "$BASE/$(basename "$2" | tr ' ' '.')" \
                 '.[$k]={signature:$s,url:$u}' <<<"$platforms")
               echo "  + $1 -> $(basename "$2")"
             else
@@ -302,7 +305,9 @@ jobs:
       # app never pulls the full app's bundle. Built from the separated
       # aleph-panel-* artifacts. Same skip-when-unsigned behaviour as latest.json.
       # The lite bundle filenames contain a space ("Aleph Panel.app.tar.gz"), so
-      # globs are resolved into quoted variables (never passed as bare args).
+      # globs are resolved into quoted variables (never passed as bare args) AND
+      # the manifest URL must use GitHub's space->"." asset-name normalization
+      # (see the `tr ' ' '.'` below) — otherwise the updater 404s on download.
       - name: Generate panel updater manifest (latest-panel.json)
         run: |
           shopt -s nullglob
@@ -314,7 +319,7 @@ jobs:
             local key="$1" bundle="$2" sig="$3"
             if [ -n "$bundle" ] && [ -f "$bundle" ] && [ -n "$sig" ] && [ -f "$sig" ]; then
               platforms=$(jq --arg k "$key" --arg s "$(cat "$sig")" \
-                --arg u "$BASE/$(basename "$bundle")" \
+                --arg u "$BASE/$(basename "$bundle" | tr ' ' '.')" \
                 '.[$k]={signature:$s,url:$u}' <<<"$platforms")
               echo "  + $key -> $(basename "$bundle")"
             else
