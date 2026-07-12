@@ -153,9 +153,13 @@ impl CodeCheckTool {
     }
 
     async fn run(&self, args: CodeCheckArgs) -> Result<CodeCheckOutput> {
+        // Prefer a worktree-isolated subagent's scoped sandbox override; fall
+        // back to the construction-time sandbox outside that scope.
         let sandbox =
-            match self.sandbox.as_ref() {
-                Some(s) => s.clone(),
+            match crate::sandbox::context::current_sandbox_override()
+                .or_else(|| self.sandbox.clone())
+            {
+                Some(s) => s,
                 None => return Ok(unconfigured(
                     "code_check: sandbox not configured — boot wiring must inject Arc<dyn Sandbox>",
                 )),

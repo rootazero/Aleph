@@ -235,6 +235,17 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         None => None,
     };
 
+    // P3 Stage H — command sandbox override: a worktree-isolated child runs its
+    // exec tools (`bash` / `code_exec` / `code_check`) through a `WorktreeSandbox`
+    // so commands execute at the worktree path with `CARGO_TARGET_DIR` redirected.
+    // Installed as a task-local around `run_body` below (mirrors `fs_scope`);
+    // `None` for a non-isolated child keeps the parent's shared sandbox.
+    let sandbox_override: Option<Arc<dyn crate::sandbox::Sandbox>> =
+        worktree_handle.as_ref().map(|h| {
+            Arc::new(crate::sandbox::WorktreeSandbox::new(h.path().to_path_buf()))
+                as Arc<dyn crate::sandbox::Sandbox>
+        });
+
     let run_body = async {
         // 2. Unique ephemeral session key for this sub-agent.
         let child_id = ephemeral_for(&req.agent_def.id);
@@ -398,18 +409,13 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             .transpose()
             .map_err(|_| "max_iterations exceeds platform limit".to_string())?;
 
-        // P3 Stage H — isolation override: when a worktree is provisioned for
-        // this child, swap in a WorktreeSandbox so all command execution runs
-        // at the worktree path with CARGO_TARGET_DIR redirected.
-        let sandbox: Arc<dyn crate::sandbox::Sandbox> = match worktree_handle.as_ref() {
-            Some(h) => Arc::new(crate::sandbox::WorktreeSandbox::new(h.path().to_path_buf())),
-            None => base.sandbox.clone(),
-        };
-
         let deps = HarnessDeps {
             session: base.session.clone(),
             tools: scoped_tools,
-            sandbox,
+            // Command isolation for a worktree child is installed as a task-local
+            // sandbox override around `run_body` (see `sandbox_override` above),
+            // not through this field — the harness never reads `deps.sandbox`.
+            sandbox: base.sandbox.clone(),
             llm,
             robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
             verifier_chain: None,
@@ -529,9 +535,10 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             }
         }
     };
+    let body = crate::sandbox::context::with_sandbox_override(sandbox_override, run_body);
     let result: Result<LoopRunResult, String> = match fs_scope {
-        Some(scope) => crate::tools::fs_scope::with_fs_scope(Some(scope), run_body).await,
-        None => run_body.await,
+        Some(scope) => crate::tools::fs_scope::with_fs_scope(Some(scope), body).await,
+        None => body.await,
     };
 
     // P3 Stage I — explicit MCP scope shutdown on the success path. Errors and
