@@ -1,10 +1,48 @@
-//! Section 2 — Aleph 集群:列出在线节点 + Enroll(铸 token)+ 注销(下线节点)。
+//! Section 2 — Aleph 集群:舰队列表(在线 + 离线合并)+ 预登记 + 注销。
 //! 节点命令下发是 LLM 经对话驱动的(R8),Panel 只做只读列表 + 生命周期管理。
+//!
+//! LAN-trust:**没有 token**。节点是在自己的 `connect` 里登记的,所以这里交给
+//! operator 的不是一串 token,而是**在目标机器上要跑的那条命令**。「Enroll」只是
+//! 预占位:先把名字在舰队里占下(以 offline 出现),节点随后同名拨入时归并到这一行。
+//!
+//! 舰队是**实时**的:`node.connected` / `node.disconnected` 早就在事件总线上发着了,
+//! 但此前没有任何订阅者——列表只在进页面时拉一次,节点上下线永远看不见。
 
 use crate::api::cluster::{ClusterApi, EnrollResult, Environment};
 use crate::context::DashboardState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+
+/// 节点加入命令。纯函数——`host` 由调用方注入,便于测试(浏览器外没有 `window()`)。
+fn join_command(host: &str, node_name: &str) -> String {
+    format!("aleph-server node --center ws://{host} --name {node_name}")
+}
+
+/// Panel 自己所连的 host —— Panel 正是这个 core 提供的,所以它的 origin 就是
+/// 节点要拨的中心地址。
+fn center_host() -> String {
+    web_sys::window()
+        .and_then(|w| w.location().host().ok())
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "<center-host>:18790".to_string())
+}
+
+/// 把 Unix 秒渲染成粗粒度的「多久以前」。离线节点只需要量级,不需要精确时刻。
+fn last_seen_label(last_seen_at: Option<i64>, now_unix: i64) -> String {
+    let Some(ts) = last_seen_at else {
+        return "从未连入".to_string();
+    };
+    match (now_unix - ts).max(0) {
+        s if s < 60 => "刚刚".to_string(),
+        s if s < 3600 => format!("{} 分钟前", s / 60),
+        s if s < 86_400 => format!("{} 小时前", s / 3600),
+        s => format!("{} 天前", s / 86_400),
+    }
+}
+
+fn now_unix() -> i64 {
+    (js_sys::Date::now() / 1000.0) as i64
+}
 
 #[component]
 pub fn ClusterSection() -> impl IntoView {
@@ -19,10 +57,12 @@ pub fn ClusterSection() -> impl IntoView {
     let enroll_name = RwSignal::new(String::new());
     let enroll_result = RwSignal::new(Option::<EnrollResult>::None);
     let enroll_err = RwSignal::new(Option::<String>::None);
+    // The name the enroll actually succeeded with — the join command must echo
+    // that one, not whatever the field happens to hold afterwards.
+    let enrolled_name = RwSignal::new(String::new());
 
     let load = move || {
         spawn_local(async move {
-            loading.set(true);
             match ClusterApi::list_environments(&state).await {
                 Ok(list) => {
                     nodes.set(list);
@@ -42,12 +82,37 @@ pub fn ClusterSection() -> impl IntoView {
         loading.set(false);
     }
 
+    // Live fleet feed. The center already publishes `node.connected` /
+    // `node.disconnected` on every node handshake and teardown; nothing was
+    // listening, so the list went stale the moment it rendered.
+    if state.is_operator() {
+        Effect::new(move |_| {
+            spawn_local(async move {
+                let _ = state.subscribe_topic("node.**").await;
+            });
+        });
+        let sub_id = state.subscribe_events(move |evt| {
+            if evt.topic == "node.connected" || evt.topic == "node.disconnected" {
+                load();
+            }
+        });
+        on_cleanup(move || state.unsubscribe_events(sub_id));
+    }
+
     let submit_enroll = move |_| {
         let name = enroll_name.get();
+        if name.trim().is_empty() {
+            enroll_err.set(Some("请先填写节点名称".to_string()));
+            return;
+        }
         enroll_err.set(None);
         spawn_local(async move {
-            match ClusterApi::enroll_node(&state, name).await {
-                Ok(r) => enroll_result.set(Some(r)),
+            match ClusterApi::enroll_node(&state, name.clone()).await {
+                Ok(r) => {
+                    enrolled_name.set(name);
+                    enroll_result.set(Some(r));
+                    load();
+                }
                 Err(e) => enroll_err.set(Some(e)),
             }
         });
@@ -92,27 +157,64 @@ pub fn ClusterSection() -> impl IntoView {
                     </Show>
                     <For
                         each=move || nodes.get()
-                        key=|n| n.id.clone()
+                        key=|n| (n.id.clone(), n.status.clone())
                         children=move |node: Environment| {
+                            let online = node.is_online();
+                            let tags = node.tags.clone();
+                            let last_seen = last_seen_label(node.last_seen_at, now_unix());
+                            let cmd_count = node.commands.len();
                             view! {
                                 <div class="flex items-center justify-between py-3 border-b border-border last:border-0">
                                     <div class="min-w-0">
                                         <div class="text-text-primary font-medium">{node.name.clone()}</div>
                                         <div class="text-xs text-text-tertiary font-mono">{node.id.clone()}</div>
+                                        <Show when={
+                                            let has = !tags.is_empty();
+                                            move || has
+                                        }>
+                                            <div class="flex flex-wrap gap-1 mt-1">
+                                                {tags
+                                                    .iter()
+                                                    .map(|t| {
+                                                        view! {
+                                                            <span class="px-1.5 py-0.5 rounded bg-surface text-text-secondary text-[11px] font-mono">
+                                                                {t.clone()}
+                                                            </span>
+                                                        }
+                                                    })
+                                                    .collect_view()}
+                                            </div>
+                                        </Show>
                                     </div>
                                     <div class="flex items-center gap-4 text-xs text-text-secondary">
                                         <span class="flex items-center gap-1">
-                                            <span class="w-2 h-2 rounded-full bg-success inline-block"></span>
+                                            // Honest status: the merged fleet view carries offline
+                                            // nodes too, and every row used to be painted green.
+                                            <span class=if online {
+                                                "w-2 h-2 rounded-full inline-block bg-success"
+                                            } else {
+                                                "w-2 h-2 rounded-full inline-block bg-text-tertiary"
+                                            }></span>
                                             {node.status.clone()}
                                         </span>
-                                        <span>{node.commands.len()} " cmds"</span>
+                                        <Show
+                                            when=move || online
+                                            fallback={
+                                                let seen = last_seen.clone();
+                                                move || {
+                                                    view! { <span title="最近一次在线">{seen.clone()}</span> }
+                                                }
+                                            }
+                                        >
+                                            <span>{cmd_count} " cmds"</span>
+                                        </Show>
                                         <button
                                             class="px-2 py-1 rounded border border-border text-error hover:bg-error/10 disabled:opacity-40 disabled:cursor-not-allowed"
                                             disabled={
                                                 let id = node.id.clone();
                                                 move || removing.get().as_deref() == Some(id.as_str())
                                             }
-                                            title="注销该节点(驱逐会话并撤销 token)"
+                                            title="注销该节点(驱逐会话并吊销设备记录;它无法再连回来)"
                                             on:click={
                                                 let node_id = node.id;
                                                 move |_| {
@@ -142,21 +244,27 @@ pub fn ClusterSection() -> impl IntoView {
 
             <Show when=move || show_enroll.get()>
                 <div class="aleph-scrim fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-                    <div class="glass bg-surface-overlay/85 rounded-lg border border-border p-6 max-w-md w-full space-y-4">
+                    <div class="glass bg-surface-overlay/85 rounded-lg border border-border p-6 max-w-lg w-full space-y-4">
                         <h3 class="text-text-primary font-semibold">"登记新节点"</h3>
                         <Show
                             when=move || enroll_result.get().is_none()
                             fallback=move || {
                                 let r = enroll_result.get().unwrap();
+                                let cmd = join_command(&center_host(), &enrolled_name.get());
                                 view! {
                                     <div class="space-y-2">
-                                        <p class="text-sm text-text-secondary">"在目标机器上用此 token 加入:"</p>
+                                        <p class="text-sm text-text-secondary">
+                                            "在目标机器上运行这条命令,节点会自己接入(无需 token):"
+                                        </p>
                                         <textarea
                                             readonly=true
                                             rows="3"
                                             class="w-full px-3 py-2 bg-surface border border-border rounded-lg text-text-primary font-mono text-xs"
-                                            prop:value=r.token.clone()
+                                            prop:value=cmd
                                         ></textarea>
+                                        <p class="text-xs text-text-tertiary">
+                                            "追加 --tag gpu --tag region=us 可给节点打标签(node_invoke_many 按标签扇出)。"
+                                        </p>
                                         <p class="text-xs text-text-tertiary">"node_id: " {r.node_id}</p>
                                     </div>
                                 }
@@ -164,7 +272,7 @@ pub fn ClusterSection() -> impl IntoView {
                         >
                             <input
                                 type="text"
-                                placeholder="node 名称"
+                                placeholder="node 名称(须与 --name 一致)"
                                 class="w-full px-3 py-2 bg-surface border border-border rounded-lg text-text-primary"
                                 prop:value=move || enroll_name.get()
                                 on:input=move |ev| enroll_name.set(event_target_value(&ev))
@@ -186,7 +294,7 @@ pub fn ClusterSection() -> impl IntoView {
                                     class="px-4 py-2 bg-primary text-white rounded-lg"
                                     on:click=submit_enroll
                                 >
-                                    "生成 token"
+                                    "登记"
                                 </button>
                             </Show>
                         </div>
@@ -194,5 +302,34 @@ pub fn ClusterSection() -> impl IntoView {
                 </div>
             </Show>
         </section>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{join_command, last_seen_label};
+
+    #[test]
+    fn never_connected_node_says_so() {
+        assert_eq!(last_seen_label(None, 1_700_000_000), "从未连入");
+    }
+
+    #[test]
+    fn last_seen_buckets_by_magnitude() {
+        let now = 1_700_000_000;
+        assert_eq!(last_seen_label(Some(now - 30), now), "刚刚");
+        assert_eq!(last_seen_label(Some(now - 600), now), "10 分钟前");
+        assert_eq!(last_seen_label(Some(now - 7200), now), "2 小时前");
+        assert_eq!(last_seen_label(Some(now - 172_800), now), "2 天前");
+        // A clock skew that puts last_seen in the future must not underflow.
+        assert_eq!(last_seen_label(Some(now + 500), now), "刚刚");
+    }
+
+    #[test]
+    fn join_command_targets_the_center_the_panel_is_served_from() {
+        assert_eq!(
+            join_command("10.0.0.4:18790", "worker-1"),
+            "aleph-server node --center ws://10.0.0.4:18790 --name worker-1"
+        );
     }
 }
