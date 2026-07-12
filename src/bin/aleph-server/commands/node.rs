@@ -146,6 +146,12 @@ pub async fn handle_node(
     name: String,
     tags: Vec<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // The node is a standalone process: nothing else installs a tracing
+    // subscriber for it (the `start` command sets one up, but this subcommand
+    // returns long before that). Without this the node runs SILENT — no enroll
+    // confirmation, no refusal, no reconnect diagnostics.
+    init_node_tracing();
+
     let (table, approval_slot) = build_command_table(&name);
     let table = Arc::new(table);
     let declared = table.descriptors();
@@ -165,6 +171,28 @@ pub async fn handle_node(
     let mut backoff = BACKOFF_INITIAL_MS;
     loop {
         let started = std::time::Instant::now();
+
+        // Persist the assigned id the MOMENT the center hands it back — not when
+        // the session ends. A session lasts as long as the node is up, so a node
+        // killed mid-session would otherwise never write its identity file and
+        // would re-enroll on its next boot, minting exactly the duplicate device
+        // row this whole flow exists to prevent.
+        let persisted = std::sync::Mutex::new(node_id.clone());
+        let on_identity = |id: &str, persist: bool| {
+            let mut cur = persisted.lock().unwrap_or_else(|e| e.into_inner());
+            if persist && cur.as_deref() != Some(id) {
+                persist_identity(
+                    Some(&id_path),
+                    &NodeIdentity {
+                        node_id: id.to_string(),
+                        center: center.clone(),
+                    },
+                );
+                tracing::info!("node '{name}' enrolled as {id}");
+            }
+            *cur = Some(id.to_string());
+        };
+
         let outcome = run_session(
             &url,
             node_id.as_deref(),
@@ -173,28 +201,17 @@ pub async fn handle_node(
             &tags,
             &table,
             &approval_slot,
+            &on_identity,
         )
         .await;
 
+        // Carry whatever identity the session settled on into the next attempt.
+        node_id = persisted
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
         match outcome {
-            Ok(assigned) => {
-                // The center handed back (or confirmed) our identity. Persist a
-                // freshly minted / adopted id so the next boot reuses it.
-                if let Some((id, persist)) = assigned {
-                    if persist && node_id.as_deref() != Some(id.as_str()) {
-                        persist_identity(
-                            Some(&id_path),
-                            &NodeIdentity {
-                                node_id: id.clone(),
-                                center: center.clone(),
-                            },
-                        );
-                        tracing::info!("node '{name}' enrolled as {id}");
-                    }
-                    node_id = Some(id);
-                }
-                tracing::warn!("node session ended cleanly; reconnecting");
-            }
+            Ok(()) => tracing::warn!("node session ended cleanly; reconnecting"),
             Err(e) if e.is::<Deregistered>() => {
                 tracing::error!(
                     "node '{name}' was deregistered by the center. Its identity file \
@@ -214,6 +231,19 @@ pub async fn handle_node(
         tokio::time::sleep(Duration::from_millis(with_jitter(backoff))).await;
         backoff = (backoff * 2).min(BACKOFF_MAX_MS);
     }
+}
+
+/// Install a stderr tracing subscriber for the node process. `RUST_LOG` wins;
+/// otherwise `info`, which is the level the enroll / refusal / reconnect lines
+/// are emitted at.
+fn init_node_tracing() {
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // A second init (tests, embedding) is not an error worth aborting a node for.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 /// Spread reconnects over ±25% so a fleet does not stampede the center in
@@ -268,9 +298,11 @@ fn build_command_table(name: &str) -> (CommandTable, ApprovalSlot) {
     (table, slot)
 }
 
-/// Run one connected session. Returns the identity the center assigned, as
-/// `Some((node_id, persist))` — `persist` marks an id the node has not stored
-/// yet (first boot, or the center adopted an operator's pre-enrolled row).
+/// Run one connected session.
+///
+/// `on_identity(node_id, persist)` fires as soon as the center's `connect` reply
+/// lands — i.e. before the (arbitrarily long) read loop — so the node's identity
+/// reaches disk immediately rather than only if the session terminates cleanly.
 ///
 /// Errors carry [`Deregistered`] when the center refused this node outright;
 /// the caller treats that as terminal rather than backing off forever.
@@ -282,7 +314,8 @@ async fn run_session(
     tags: &[String],
     table: &Arc<CommandTable>,
     approval_slot: &ApprovalSlot,
-) -> Result<Option<(String, bool)>, Box<dyn std::error::Error>> {
+    on_identity: &(dyn Fn(&str, bool) + Send + Sync),
+) -> Result<(), Box<dyn std::error::Error>> {
     let (ws, _resp) = tokio_tungstenite::connect_async(url).await?;
     let (mut write, mut read) = ws.split();
 
@@ -318,15 +351,15 @@ async fn run_session(
     if let Some(err) = reply.get("error") {
         return Err(format!("center refused connect: {err}").into());
     }
-    let assigned = match parse_connect_verdict(&reply) {
+    match parse_connect_verdict(&reply) {
         Some(ConnectVerdict::Deregistered) => return Err(Box::new(Deregistered)),
-        Some(ConnectVerdict::Registered { node_id, persist }) => Some((node_id, persist)),
+        Some(ConnectVerdict::Registered { node_id, persist }) => on_identity(&node_id, persist),
         // A center that says nothing about nodes accepted the socket but did not
         // register us — surface it instead of silently idling as a zombie.
         None => {
             return Err(format!("center did not register this node: {reply}").into());
         }
-    };
+    }
     tracing::info!("node '{name}' connected to center");
 
     // Bidirectional channel for this connection: outbound mpsc drained by a
@@ -387,7 +420,7 @@ async fn run_session(
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     writer.abort();
     loop_result?;
-    Ok(assigned)
+    Ok(())
 }
 
 /// 解析一帧；若是 `tool.call` 请求则 dispatch 并返回应答帧 JSON；否则 None。
