@@ -389,9 +389,6 @@ impl SessionStore for E2eSessionStore {
     async fn set_idle(&self, _key: &SessionKey) -> Result<(), SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
-    async fn set_running(&self, _key: &SessionKey) -> Result<(), SessionStoreError> {
-        Err(SessionStoreError::DatabaseError("stub".into()))
-    }
 }
 
 // ---------------------------------------------------------------------------
