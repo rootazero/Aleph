@@ -52,6 +52,18 @@ pub enum ExclusiveScope {
     /// `Paths` scopes conflict only when their path sets overlap
     /// (equal or ancestor/descendant), so disjoint-path mutations parallelize.
     Paths(BTreeSet<String>),
+    /// Touches exactly this set of cluster nodes (remote execution arms),
+    /// keyed by the `node` selector the caller named. Two `Nodes` scopes
+    /// conflict only when they name a common node, so `node_invoke` calls
+    /// against *different* machines run concurrently instead of serializing
+    /// the whole batch behind a `Global` claim.
+    ///
+    /// A node's filesystem is a different machine from the center's, so a
+    /// `Nodes` scope never conflicts with a `Paths` scope. (`node_file` is
+    /// deliberately NOT modelled here: it straddles both — it reads/writes a
+    /// center-local path *and* the node — so it keeps the conservative
+    /// [`ExclusiveScope::Global`] claim.)
+    Nodes(BTreeSet<String>),
 }
 
 impl ConcurrencyClaim {
@@ -79,6 +91,29 @@ impl ConcurrencyClaim {
         }
     }
 
+    /// Convenience constructor for a bounded cluster-node scope. Node keys are
+    /// taken verbatim (they are the caller's `node` selector — a name or id).
+    /// An empty set degrades to [`ExclusiveScope::Global`]: we could not pin
+    /// which machines the call reaches, so assume all of them.
+    pub fn nodes<I, S>(nodes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let set: BTreeSet<String> = nodes
+            .into_iter()
+            .map(|n| n.as_ref().trim().to_string())
+            .filter(|n| !n.is_empty())
+            .collect();
+        if set.is_empty() {
+            Self::global()
+        } else {
+            Self::Exclusive {
+                scope: ExclusiveScope::Nodes(set),
+            }
+        }
+    }
+
     /// The whole-world exclusive claim. Conflicts with everything.
     #[must_use]
     pub const fn global() -> Self {
@@ -95,6 +130,8 @@ impl ConcurrencyClaim {
 /// * `Shared`   vs `Exclusive(_)`     → conflict (read may observe a torn write)
 /// * `Global`   vs anything           → conflict (unbounded footprint)
 /// * `Paths(a)` vs `Paths(b)`         → conflict iff the path sets overlap
+/// * `Nodes(a)` vs `Nodes(b)`         → conflict iff they name a common node
+/// * `Paths(_)` vs `Nodes(_)`         → no conflict (different machines)
 #[must_use]
 pub fn claims_conflict(a: &ConcurrencyClaim, b: &ConcurrencyClaim) -> bool {
     use ConcurrencyClaim::{Exclusive, Shared};
@@ -106,10 +143,14 @@ pub fn claims_conflict(a: &ConcurrencyClaim, b: &ConcurrencyClaim) -> bool {
 }
 
 fn scopes_conflict(a: &ExclusiveScope, b: &ExclusiveScope) -> bool {
-    use ExclusiveScope::{Global, Paths};
+    use ExclusiveScope::{Global, Nodes, Paths};
     match (a, b) {
         (Global, _) | (_, Global) => true,
         (Paths(pa), Paths(pb)) => paths_overlap(pa, pb),
+        (Nodes(na), Nodes(nb)) => !na.is_disjoint(nb),
+        // A remote node's state and the center's filesystem are on different
+        // machines — a bounded claim on one cannot touch the other.
+        (Paths(_), Nodes(_)) | (Nodes(_), Paths(_)) => false,
     }
 }
 
@@ -265,6 +306,49 @@ mod tests {
 
     fn paths(items: &[&str]) -> ConcurrencyClaim {
         ConcurrencyClaim::paths(items.iter().copied())
+    }
+
+    fn nodes(items: &[&str]) -> ConcurrencyClaim {
+        ConcurrencyClaim::nodes(items.iter().copied())
+    }
+
+    #[test]
+    fn distinct_nodes_parallelize_but_the_same_node_serializes() {
+        assert!(
+            !claims_conflict(&nodes(&["worker-1"]), &nodes(&["worker-2"])),
+            "invokes on different machines must run concurrently"
+        );
+        assert!(
+            claims_conflict(&nodes(&["worker-1"]), &nodes(&["worker-1"])),
+            "two invokes into one node share its bash session workspace"
+        );
+        // Overlapping sets conflict on the common member.
+        assert!(claims_conflict(
+            &nodes(&["worker-1", "worker-2"]),
+            &nodes(&["worker-2"])
+        ));
+    }
+
+    #[test]
+    fn node_scope_is_disjoint_from_center_paths_but_not_from_global() {
+        assert!(
+            !claims_conflict(&nodes(&["worker-1"]), &paths(&["src/main.rs"])),
+            "a remote node and the center's filesystem are different machines"
+        );
+        assert!(claims_conflict(
+            &nodes(&["worker-1"]),
+            &ConcurrencyClaim::global()
+        ));
+        assert!(
+            claims_conflict(&nodes(&["worker-1"]), &ConcurrencyClaim::Shared),
+            "a read may still observe center-side effects of a remote call"
+        );
+    }
+
+    #[test]
+    fn empty_node_selector_degrades_to_global() {
+        assert_eq!(ConcurrencyClaim::nodes(Vec::<&str>::new()), ConcurrencyClaim::global());
+        assert_eq!(ConcurrencyClaim::nodes(["   "]), ConcurrencyClaim::global());
     }
 
     #[test]

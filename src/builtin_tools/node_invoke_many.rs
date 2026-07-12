@@ -129,6 +129,20 @@ Each node runs in its own sandbox with an independent `timeout_ms` (default 1200
                 }
             }
         }
+        // JoinSet yields in COMPLETION order, so the same fan-out over the same
+        // fleet would hand the model a differently-ordered array every run (fast
+        // nodes first). Sort by (node, node_id) to match the deterministic
+        // ordering `node_list` / `environments.list` already guarantee — the
+        // model compares these side by side.
+        results.sort_by(|a, b| {
+            let key = |v: &Value| {
+                (
+                    v["node"].as_str().unwrap_or_default().to_string(),
+                    v["node_id"].as_str().unwrap_or_default().to_string(),
+                )
+            };
+            key(a).cmp(&key(b))
+        });
         let invoked = results.len();
         let succeeded = results.iter().filter(|r| r["ok"] == json!(true)).count();
         Ok(json!({

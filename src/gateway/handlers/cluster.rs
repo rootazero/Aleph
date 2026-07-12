@@ -1,19 +1,21 @@
-//! 集群中心侧 RPC：`cluster.enroll`（登记 node 设备记录）、
-//! `cluster.deregister`（operator 注销节点：驱逐在线会话 + 抹除设备记录）、
-//! `environments.list`（read，枚举在线节点）。LAN-trust 模型下节点不再持有
-//! token——连接身份由 connect 参数形状（`commands` + `tags`）声明，enroll 只
-//! 负责在 `security_store` 留下设备记录供离线视图合并。
+//! 集群中心侧 RPC：`cluster.enroll`（**预**登记 node 设备记录）、
+//! `cluster.deregister`（operator 注销节点：驱逐在线会话 + 吊销设备记录）、
+//! `environments.list`（枚举在线 + 离线节点）。
+//!
+//! LAN-trust 模型下节点不持 token——连接身份由 connect 参数形状（`commands` +
+//! `tags`）声明，**登记本身也在 `connect` 里完成**（`cluster::admit_node`）。本文件
+//! 的 `cluster.enroll` 因此不是节点入网的必经之路，只是 operator 的预占位入口；
+//! 它与 connect 自助登记共用同一设备记录真源，故同名不会铸出两行。
 
 use crate::sync_primitives::Arc;
 
 use serde::Deserialize;
 use tracing::warn;
 
-use crate::cluster::{normalize_node_key, ResolveError};
+use crate::cluster::{mint_node_device, normalize_node_key, ResolveError};
 use crate::gateway::handlers::auth::AuthContext;
 use crate::gateway::handlers::{parse_params, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
-use crate::gateway::security::store::DeviceUpsertData;
 
 /// 没有任何匹配节点时的错误码（同 devices.* 的 -32004 not-found）。
 const NODE_NOT_FOUND: i32 = -32004;
@@ -23,9 +25,13 @@ struct EnrollParams {
     node_name: String,
 }
 
-/// 登记一个 role=node 的设备记录，返回 `node_id` 给操作员转交节点机。
-/// LAN-trust：不再铸 token——节点凭 connect 参数形状（`commands`+`tags`）
-/// 声明身份（见 `cluster::maybe_register_node`），enroll 仅留存离线视图记录。
+/// **预登记**一个 role=node 的设备记录（operator 在 Panel 点 Enroll）。
+///
+/// LAN-trust：不铸 token。节点**并不需要**先走这里——它 `connect` 时会自助登记
+/// （`cluster::admit_node`）。本 RPC 的价值是让 operator 先占位：节点还没拨入前
+/// 就以 `status:"offline"` 出现在舰队视图里，且节点随后按**同名**拨入时会被
+/// [`crate::cluster::admit_node`] 归并到这条记录，不会再各铸一个 UUID 留下幽灵行。
+/// 设备记录的写入与 `connect` 自助登记共用同一真源 [`mint_node_device`]。
 pub async fn handle_cluster_enroll(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,
@@ -35,32 +41,15 @@ pub async fn handle_cluster_enroll(
         Err(resp) => return resp,
     };
 
-    let device_id = uuid::Uuid::new_v4().to_string();
-    let fingerprint: String = device_id.chars().take(16).collect();
-
-    // Placeholder identity material: server-provisioned nodes have no hardware key (mirrors connect.rs).
-    if let Err(e) = ctx.security_store.upsert_device(&DeviceUpsertData {
-        device_id: &device_id,
-        device_name: &params.node_name,
-        device_type: None,
-        public_key: &[0u8; 32],
-        fingerprint: &fingerprint,
-        role: "node",
-        scopes: &["node".to_string()],
-    }) {
-        return JsonRpcResponse::error(
+    match mint_node_device(&ctx.security_store, &params.node_name) {
+        Ok(node_id) => JsonRpcResponse::success(
             request.id,
-            INTERNAL_ERROR,
-            format!("failed to register node device: {e}"),
-        );
+            serde_json::json!({
+                "node_id": node_id,
+            }),
+        ),
+        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
     }
-
-    JsonRpcResponse::success(
-        request.id,
-        serde_json::json!({
-            "node_id": device_id,
-        }),
-    )
 }
 
 #[derive(Deserialize)]
@@ -97,15 +86,19 @@ fn resolve_enrolled_node(ctx: &AuthContext, q: &str) -> Option<String> {
 /// operator-gated：注销一个节点。两步下线——
 /// ① `forget` 即时驱逐在线会话（立刻从 `environments.list` 消失，且不再
 ///    被 `node_invoke`/`node_file` 寻址到）；
-/// ② `revoke_device` 抹除设备记录（enroll 写入 `security_store`，此处对称撤除）。
+/// ② `revoke_device` 吊销设备记录（`revoked_at` 置位）。
 ///
-/// 注意：本调用不强制 close 节点当前 WS socket——它会在下一次 ping/idle-watchdog
-/// 到期时由传输层断开。LAN-trust 下没有 token 可撤销；阻止重连属于网络边界
-/// （bind/origin）职责，T6 重做节点 enrollment 时再收紧。
+/// **注销是粘的**：②不只是记账。节点下一次 `connect` 会经 `cluster::admit_node`
+/// 撞上这条 `revoked_at`，被判 `NodeAdmission::Deregistered` 而拒绝登记，节点收到
+/// `{"node":{"status":"deregistered"}}` 后自行退出。此前 connect 从不查设备表，
+/// 被注销的节点在下一轮退避重连里就自己复活了——注销形同虚设。
+///
+/// 本调用仍不强制 close 节点当前 socket——它会在下一次 ping/idle-watchdog 到期时
+/// 由传输层断开，或在节点自己重连时被拒。
 ///
 /// 寻址先走在线 `NodeRegistry` 多级匹配；不在线则回退 `security_store` 的已登记
-/// 节点设备（精确 id / 唯一精确 name）——environments.list 里可见的离线节点
-/// 必须同样可注销（此时 `evicted:false`，仅撤 token + 设备记录）。
+/// 节点设备（精确 id / 唯一归一化 name）——environments.list 里可见的离线节点
+/// 必须同样可注销（此时 `evicted:false`）。
 pub async fn handle_cluster_deregister(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,

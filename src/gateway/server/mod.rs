@@ -150,10 +150,6 @@ pub struct GatewaySharedState {
     /// operator-allow-listed — the DNS-rebinding / cross-origin-WebSocket
     /// guard. Native clients (no `Origin` header) are unaffected.
     pub origin_policy: Arc<crate::gateway::origin_policy::OriginPolicy>,
-    /// 每条连接的反向 RPC 通道（`conn_id → channel`）。连接建立时由入站
-    /// 循环登记，断开时注销。0b 的 `NodeRegistry` 经此对 node 连接发起
-    /// `node.invoke`；本表本身不区分 node/非 node —— 仅是传输层注册表。
-    pub reverse_rpc: Arc<RwLock<HashMap<String, crate::cluster::ReverseRpcChannel>>>,
     /// Cluster node registry (shared Arc with `GatewayServer`). Center-side view
     /// of connected `role:node` peers; populated by the connect handler.
     pub node_registry: Arc<crate::cluster::NodeRegistry>,
@@ -306,9 +302,6 @@ pub struct GatewayServer {
     /// Security store handle for the node `last_seen_at` stamping in the
     /// WS connect/disconnect paths. See `GatewaySharedState::security_store`.
     security_store: Option<Arc<crate::gateway::security::SecurityStore>>,
-    /// 见 [`GatewaySharedState::reverse_rpc`]。`build_router` 把它 clone 进
-    /// 共享状态，因此两侧指向同一张表。
-    pub reverse_rpc: Arc<RwLock<HashMap<String, crate::cluster::ReverseRpcChannel>>>,
     /// See [`GatewaySharedState::node_registry`]. `build_router` clones this Arc
     /// into the shared state so both point at the same registry.
     pub node_registry: Arc<crate::cluster::NodeRegistry>,
@@ -363,7 +356,6 @@ impl GatewayServer {
             shared_token_mgr: None,
             device_token_mgr: None,
             security_store: None,
-            reverse_rpc: Arc::new(RwLock::new(HashMap::new())),
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
         }
@@ -414,7 +406,6 @@ impl GatewayServer {
             shared_token_mgr: None,
             device_token_mgr: None,
             security_store: None,
-            reverse_rpc: Arc::new(RwLock::new(HashMap::new())),
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
         }
@@ -533,7 +524,6 @@ impl GatewayServer {
                     self.config.allowed_origins.clone(),
                 )
             }),
-            reverse_rpc: self.reverse_rpc.clone(),
             node_registry: self.node_registry.clone(),
             exec_approval_manager: self.exec_approval_manager.clone(),
         });
@@ -761,13 +751,6 @@ mod tests {
         assert_eq!(config.max_connections, 1000);
         assert!(!config.allow_any_origin);
         assert!(config.allowed_origins.is_empty());
-    }
-
-    #[tokio::test]
-    async fn reverse_rpc_registry_is_empty_on_fresh_server() {
-        let addr = "127.0.0.1:0".parse().unwrap();
-        let server = GatewayServer::new(addr);
-        assert_eq!(server.reverse_rpc.read().await.len(), 0);
     }
 
     #[tokio::test]

@@ -35,6 +35,14 @@ const OPERATOR_TOOLS: &[&str] = &[
     "clawhub",
     "hub_install_run",
     "moa",
+    // Cluster: driving remote execution arms. Local `bash` is deliberately open
+    // to chat tier, but the fleet is a different blast radius — one call reaches
+    // every machine the center owns, and `node_file` moves bytes across that
+    // boundary. Read-only discovery (`node_list`) stays open so a chat-tier run
+    // can still *describe* the fleet.
+    "node_invoke",
+    "node_invoke_many",
+    "node_file",
 ];
 
 /// True when `tool` mutates Aleph's own configuration and therefore requires an
@@ -68,6 +76,10 @@ mod tests {
             "clawhub",
             "hub_install_run",
             "moa",
+            // Cluster write tools: remote exec + file transfer across the fleet.
+            "node_invoke",
+            "node_invoke_many",
+            "node_file",
         ] {
             assert!(tool_requires_operator(t), "{t} must require operator");
         }
@@ -88,6 +100,9 @@ mod tests {
             "ask_user",
             "bash",
             "code_exec",
+            // Read-only fleet discovery stays open — it names nodes, it cannot
+            // drive them.
+            "node_list",
         ] {
             assert!(
                 !tool_requires_operator(t),

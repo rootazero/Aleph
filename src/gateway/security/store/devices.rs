@@ -41,6 +41,26 @@ impl SecurityStore {
         }
     }
 
+    /// Fetch a device by id, **including revoked ones**.
+    ///
+    /// [`Self::is_device_approved`] collapses "revoked" and "never existed" into
+    /// the same `false`, and [`Self::list_devices`] hides revoked rows entirely.
+    /// Node admission (`cluster::admit_node`) must tell those apart: a revoked
+    /// node has to be refused on reconnect, while an unknown one is adopted.
+    pub fn get_device(&self, device_id: &str) -> SqliteResult<Option<DeviceRow>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT device_id, device_name, device_type, public_key, fingerprint, role, scopes,
+                    created_at, approved_at, last_seen_at, revoked_at
+             FROM devices WHERE device_id = ?1",
+        )?;
+        match stmt.query_row(params![device_id], DeviceRow::from_row) {
+            Ok(device) => Ok(Some(device)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Check if device is approved (not revoked)
     pub fn is_device_approved(&self, device_id: &str) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());

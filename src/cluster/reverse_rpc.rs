@@ -141,7 +141,13 @@ impl ReverseRpcChannel {
 
     /// 对连接发起一次反向 RPC 请求并等待响应。
     ///
-    /// `timeout_ms` 到点仍无响应 → `Timeout`（并清理 pending 条目）。
+    /// `timeout_ms` 是**整次调用**的预算，覆盖「把帧压进出站队列」与「等响应」两段。
+    ///
+    /// 出站是**有界** mpsc（由该连接的 writer task 排空）。若对端 TCP 停止收字节
+    /// （慢消费者 / 半开连接），writer 会卡在 `send` 上、队列灌满，此时
+    /// `outbound.send().await` 会**无限期挂起**——旧实现在这里没有超时，等于把
+    /// `timeout_ms` 契约悄悄作废，调用方（`node_invoke` / 审批）永久挂死。现在入队
+    /// 也在预算内，满队列到点即 `Timeout`。
     pub async fn call(
         &self,
         method: &str,
@@ -150,17 +156,26 @@ impl ReverseRpcChannel {
     ) -> Result<JsonRpcResponse, ReverseRpcError> {
         let (id, rx) = self.pending.register();
         let req = JsonRpcRequest::with_id(method, Some(params), Value::String(id.clone()));
-        // JsonRpcRequest is a plain struct (String + two Option<Value>) — serialization
-        // cannot fail. expect() makes that invariant explicit instead of inventing a
-        // misleading transport error.
         let frame = serde_json::to_string(&req)?;
 
-        if self.outbound.send(frame).await.is_err() {
-            self.pending.cancel(&id);
-            return Err(ReverseRpcError::TransportClosed);
+        let budget = Duration::from_millis(timeout_ms);
+        let deadline = tokio::time::Instant::now() + budget;
+
+        match tokio::time::timeout_at(deadline, self.outbound.send(frame)).await {
+            // Receiver gone: the connection's writer task is finished.
+            Ok(Err(_)) => {
+                self.pending.cancel(&id);
+                return Err(ReverseRpcError::TransportClosed);
+            }
+            // Never got the frame queued within the budget — a wedged peer.
+            Err(_) => {
+                self.pending.cancel(&id);
+                return Err(ReverseRpcError::Timeout(timeout_ms));
+            }
+            Ok(Ok(())) => {}
         }
 
-        match tokio::time::timeout(Duration::from_millis(timeout_ms), rx).await {
+        match tokio::time::timeout_at(deadline, rx).await {
             Ok(Ok(resp)) => Ok(resp),
             Ok(Err(_)) => Err(ReverseRpcError::Cancelled), // sender dropped
             Err(_) => {
@@ -290,6 +305,23 @@ mod tests {
             .expect("task joins")
             .expect_err("must be cancelled");
         assert!(matches!(err, ReverseRpcError::Cancelled));
+    }
+
+    #[tokio::test]
+    async fn call_times_out_instead_of_hanging_on_a_wedged_outbound_queue() {
+        // A peer whose socket stopped draining: the writer task never pulls from
+        // the queue, so it fills up. `send().await` would block forever without a
+        // budget — the whole point of `timeout_ms` is that it cannot.
+        let (out_tx, _out_rx_never_drained) = tokio::sync::mpsc::channel::<String>(1);
+        // Fill the single slot so the next send must wait for capacity.
+        out_tx.send("stale frame".to_string()).await.unwrap();
+
+        let channel = ReverseRpcChannel::new(out_tx);
+        let err = channel
+            .call("tool.call", json!({}), 50)
+            .await
+            .expect_err("a wedged queue must time out, not hang");
+        assert!(matches!(err, ReverseRpcError::Timeout(50)), "{err:?}");
     }
 
     #[tokio::test]

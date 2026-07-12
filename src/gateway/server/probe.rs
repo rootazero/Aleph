@@ -97,7 +97,6 @@ mod tests {
             security_store: None,
             middleware_chain: MiddlewareChain::new(handlers, rate_limiter),
             origin_policy: Arc::new(crate::gateway::origin_policy::OriginPolicy::loopback_only()),
-            reverse_rpc: Arc::new(RwLock::new(HashMap::new())),
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
         })

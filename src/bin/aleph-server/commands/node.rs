@@ -3,11 +3,15 @@
 //! 拨向中心 WS、声明命令、入站循环服务 `tool.call`，在本机 sandbox 跑 bash。
 //! 断线指数退避重连。无 DB / 无 harness / 无 LLM。
 //!
-//! LAN-trust 模型：节点不再持有 token。首启时调 `cluster.enroll` 在中心登记
-//! 一条设备记录，拿回 `node_id`（UUID）并落盘；之后每次 `connect` 用该
-//! `node_id` 作 `device_id` 声明身份（连同 `commands` + `tags` 形状）。中心
-//! 据此把节点稳定地键入同一 UUID（修正 touch_device / environments.list /
-//! deregister 的记账漂移）。无 token、无配对码、无 AUTH_FAILED。
+//! LAN-trust 模型：节点不持 token。**登记就发生在 `connect` 里**——首启时不带
+//! `device_id` 拨入，中心在 connect 回包的 `result.node` 里铸/归并一个 `node_id`
+//! 交回，节点落盘；之后每次 connect 都带上它，中心据此把记账稳定键入同一 UUID
+//! （touch_device / environments.list / deregister）。
+//!
+//! 为什么登记不能是独立的 RPC：中心强制「一条连接的首帧必须是 `connect`」
+//! （`gateway/server/handler.rs`），且登录墙只在 `connect` 之前放行。旧实现另开
+//! 一条 WS、首帧直接发 `cluster.enroll`，**必被拒且连接被关**——新节点从来就没
+//! 登记成功过。`connect` 是唯一同时越过这两道闸的帧，所以登记只能长在它上面。
 
 use alephcore::sync_primitives::RwLock;
 use std::path::{Path, PathBuf};
@@ -93,12 +97,49 @@ fn write_identity(path: &Path, id: &NodeIdentity) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Parse a `cluster.enroll` reply into the minted `node_id`. Pure.
-fn parse_enroll_node_id(resp: &Value) -> Option<String> {
-    resp.pointer("/result/node_id")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
+/// The center's verdict, carried in the `connect` reply under `result.node`.
+enum ConnectVerdict {
+    /// Registered. `node_id` is authoritative; persist it when `persist` is set
+    /// (first boot, or the center adopted an operator's pre-enrolled row).
+    Registered { node_id: String, persist: bool },
+    /// The center revoked this node's device record (`cluster.deregister`).
+    /// Terminal: retrying cannot help until an operator re-enrolls it.
+    Deregistered,
 }
+
+/// Parse the center's `connect` reply. `None` = the center answered but said
+/// nothing about nodes (an older center, or a rejected handshake).
+fn parse_connect_verdict(resp: &Value) -> Option<ConnectVerdict> {
+    let node = resp.pointer("/result/node")?;
+    if node.get("status").and_then(|v| v.as_str()) == Some("deregistered") {
+        return Some(ConnectVerdict::Deregistered);
+    }
+    let node_id = node.get("node_id").and_then(|v| v.as_str())?.to_string();
+    let persist = node
+        .get("persist")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    Some(ConnectVerdict::Registered { node_id, persist })
+}
+
+/// A session that lived at least this long counts as "healthy" — only then do we
+/// reset the reconnect backoff. Without this, a center that accepts the socket
+/// and immediately closes it (wrong origin, shutting down) would keep the node
+/// hot-looping at `BACKOFF_INITIAL_MS` forever.
+const HEALTHY_SESSION_MS: u128 = 30_000;
+
+/// Deregistration is terminal, so it needs its own error identity to break the
+/// reconnect loop.
+#[derive(Debug)]
+struct Deregistered;
+
+impl std::fmt::Display for Deregistered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("node was deregistered by the center")
+    }
+}
+
+impl std::error::Error for Deregistered {}
 
 pub async fn handle_node(
     center: String,
@@ -112,41 +153,78 @@ pub async fn handle_node(
     let id_path = identity_path(&name)
         .ok_or_else(|| format!("Invalid node name (path traversal not allowed): {name}"))?;
 
-    // Resolve the node identity: persisted enrollment > enroll now.
-    let node_id = match read_identity(&id_path) {
-        Some(id) => {
-            tracing::info!("node '{name}' using persisted identity {}", id.node_id);
-            id.node_id
-        }
-        None => {
-            let id = enroll_node(&url, &center, &name).await?;
-            persist_identity(Some(&id_path), &id);
-            id.node_id
-        }
-    };
+    // Persisted identity, if any. `None` on first boot — `connect` mints one.
+    // Unlike the old flow this never blocks startup on the center being up: a
+    // node booted before its center just backs off and retries like any other
+    // disconnect, instead of exiting with an enroll error.
+    let mut node_id = read_identity(&id_path).map(|id| {
+        tracing::info!("node '{name}' using persisted identity {}", id.node_id);
+        id.node_id
+    });
 
     let mut backoff = BACKOFF_INITIAL_MS;
     loop {
-        match run_session(
+        let started = std::time::Instant::now();
+        let outcome = run_session(
             &url,
-            &node_id,
+            node_id.as_deref(),
             &name,
             &declared,
             &tags,
             &table,
             &approval_slot,
         )
-        .await
-        {
-            Ok(()) => {
+        .await;
+
+        match outcome {
+            Ok(assigned) => {
+                // The center handed back (or confirmed) our identity. Persist a
+                // freshly minted / adopted id so the next boot reuses it.
+                if let Some((id, persist)) = assigned {
+                    if persist && node_id.as_deref() != Some(id.as_str()) {
+                        persist_identity(
+                            Some(&id_path),
+                            &NodeIdentity {
+                                node_id: id.clone(),
+                                center: center.clone(),
+                            },
+                        );
+                        tracing::info!("node '{name}' enrolled as {id}");
+                    }
+                    node_id = Some(id);
+                }
                 tracing::warn!("node session ended cleanly; reconnecting");
-                backoff = BACKOFF_INITIAL_MS;
+            }
+            Err(e) if e.is::<Deregistered>() => {
+                tracing::error!(
+                    "node '{name}' was deregistered by the center. Its identity file \
+                     ({}) is now dead — an operator must re-enroll this node (delete the \
+                     file to join as a new node). Exiting.",
+                    id_path.display()
+                );
+                return Err(e);
             }
             Err(e) => tracing::error!("node session error: {e}; retrying in {backoff}ms"),
         }
-        tokio::time::sleep(Duration::from_millis(backoff)).await;
+
+        // Only a session that actually stayed up earns a backoff reset.
+        if started.elapsed().as_millis() >= HEALTHY_SESSION_MS {
+            backoff = BACKOFF_INITIAL_MS;
+        }
+        tokio::time::sleep(Duration::from_millis(with_jitter(backoff))).await;
         backoff = (backoff * 2).min(BACKOFF_MAX_MS);
     }
+}
+
+/// Spread reconnects over ±25% so a fleet does not stampede the center in
+/// lockstep after it restarts. Uses the process-wide RNG already in the tree.
+fn with_jitter(backoff_ms: u64) -> u64 {
+    let spread = backoff_ms / 4;
+    if spread == 0 {
+        return backoff_ms;
+    }
+    let offset = rand::random_range(0..=spread * 2);
+    backoff_ms.saturating_sub(spread).saturating_add(offset)
 }
 
 /// Best-effort persist; a write failure warns but does not abort the node
@@ -190,71 +268,65 @@ fn build_command_table(name: &str) -> (CommandTable, ApprovalSlot) {
     (table, slot)
 }
 
-/// Register this node with the center via `cluster.enroll` and return the
-/// minted identity. LAN-trust: no token is minted — enroll only records a
-/// device entry and hands back the `node_id` (UUID) used for connect keying.
-/// No retry/backoff here — the caller's reconnect loop owns that.
-async fn enroll_node(
-    url: &str,
-    center: &str,
-    name: &str,
-) -> Result<NodeIdentity, Box<dyn std::error::Error>> {
-    let (mut ws, _resp) = tokio_tungstenite::connect_async(url).await?;
-
-    let enroll = json!({
-        "jsonrpc": "2.0", "id": 1, "method": "cluster.enroll",
-        "params": { "node_name": name }
-    });
-    ws.send(Message::Text(enroll.to_string().into())).await?;
-    let reply = ws
-        .next()
-        .await
-        .ok_or("center closed before enroll reply")??;
-    let Message::Text(text) = reply else {
-        return Err("unexpected non-text enroll reply".into());
-    };
-    let val: Value = serde_json::from_str(text.as_str())?;
-    let node_id = parse_enroll_node_id(&val)
-        .ok_or_else(|| format!("center did not return a node_id: {val}"))?;
-    tracing::info!("node '{name}' enrolled as {node_id}");
-    Ok(NodeIdentity {
-        node_id,
-        center: center.to_string(),
-    })
-}
-
+/// Run one connected session. Returns the identity the center assigned, as
+/// `Some((node_id, persist))` — `persist` marks an id the node has not stored
+/// yet (first boot, or the center adopted an operator's pre-enrolled row).
+///
+/// Errors carry [`Deregistered`] when the center refused this node outright;
+/// the caller treats that as terminal rather than backing off forever.
 async fn run_session(
     url: &str,
-    node_id: &str,
+    node_id: Option<&str>,
     name: &str,
     declared: &[CommandDescriptor],
     tags: &[String],
     table: &Arc<CommandTable>,
     approval_slot: &ApprovalSlot,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Option<(String, bool)>, Box<dyn std::error::Error>> {
     let (ws, _resp) = tokio_tungstenite::connect_async(url).await?;
     let (mut write, mut read) = ws.split();
 
-    // LAN-trust connect: `device_id` is the enrolled UUID so the center keys
-    // this node's records stably; `commands` + `tags` are the node-detection
-    // signal (no other client sends them). No token.
+    // LAN-trust connect. `commands` + `tags` are the node-detection signal (no
+    // other client sends them). `device_id` is our persisted id — omitted on the
+    // very first boot, in which case the center mints one and returns it below.
+    // No token.
+    let mut params = serde_json::Map::new();
+    if let Some(id) = node_id {
+        params.insert("device_id".into(), json!(id));
+    }
+    params.insert("device_name".into(), json!(name));
+    params.insert("commands".into(), json!(declared));
+    params.insert("tags".into(), json!(tags));
     let connect = json!({
         "jsonrpc": "2.0", "id": 1, "method": "connect",
-        "params": {
-            "device_id": node_id,
-            "device_name": name,
-            "commands": declared,
-            "tags": tags
-        }
+        "params": Value::Object(params)
     });
     write
         .send(Message::Text(connect.to_string().into()))
         .await?;
-    // Drain the connect reply (LAN-trust always succeeds; no auth to check).
-    let _reply = read
+
+    // Read the connect reply — this is where enrollment happens, so it must NOT
+    // be discarded (the old code dropped it and never noticed a refusal).
+    let reply = read
         .next()
         .await
         .ok_or("center closed before connect reply")??;
+    let Message::Text(text) = reply else {
+        return Err("unexpected non-text connect reply".into());
+    };
+    let reply: Value = serde_json::from_str(text.as_str())?;
+    if let Some(err) = reply.get("error") {
+        return Err(format!("center refused connect: {err}").into());
+    }
+    let assigned = match parse_connect_verdict(&reply) {
+        Some(ConnectVerdict::Deregistered) => return Err(Box::new(Deregistered)),
+        Some(ConnectVerdict::Registered { node_id, persist }) => Some((node_id, persist)),
+        // A center that says nothing about nodes accepted the socket but did not
+        // register us — surface it instead of silently idling as a zombie.
+        None => {
+            return Err(format!("center did not register this node: {reply}").into());
+        }
+    };
     tracing::info!("node '{name}' connected to center");
 
     // Bidirectional channel for this connection: outbound mpsc drained by a
@@ -315,7 +387,7 @@ async fn run_session(
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     writer.abort();
     loop_result?;
-    Ok(())
+    Ok(assigned)
 }
 
 /// 解析一帧；若是 `tool.call` 请求则 dispatch 并返回应答帧 JSON；否则 None。
@@ -431,11 +503,60 @@ mod tests {
     }
 
     #[test]
-    fn parse_enroll_node_id_reads_minted_id() {
-        let ok = json!({"result": {"node_id": "uuid-123"}});
-        assert_eq!(parse_enroll_node_id(&ok).as_deref(), Some("uuid-123"));
-        // Missing / malformed replies yield None (caller errors out).
-        assert!(parse_enroll_node_id(&json!({"result": {}})).is_none());
-        assert!(parse_enroll_node_id(&json!({"error": {"code": -32000}})).is_none());
+    fn connect_verdict_reads_minted_id_and_persist_flag() {
+        // First boot: the center mints an id and tells us to persist it.
+        let minted = json!({"result": {"node": {"node_id": "uuid-123", "status": "registered", "persist": true}}});
+        match parse_connect_verdict(&minted).expect("a verdict") {
+            ConnectVerdict::Registered { node_id, persist } => {
+                assert_eq!(node_id, "uuid-123");
+                assert!(persist);
+            }
+            ConnectVerdict::Deregistered => panic!("must be registered"),
+        }
+
+        // Reconnect: same id echoed back, nothing new to write to disk.
+        let reconnect = json!({"result": {"node": {"node_id": "uuid-123", "status": "registered", "persist": false}}});
+        match parse_connect_verdict(&reconnect).expect("a verdict") {
+            ConnectVerdict::Registered { node_id, persist } => {
+                assert_eq!(node_id, "uuid-123");
+                assert!(!persist, "an unchanged id must not rewrite the identity file");
+            }
+            ConnectVerdict::Deregistered => panic!("must be registered"),
+        }
+    }
+
+    #[test]
+    fn connect_verdict_detects_deregistration() {
+        let kicked =
+            json!({"result": {"node": {"node_id": "uuid-123", "status": "deregistered"}}});
+        assert!(matches!(
+            parse_connect_verdict(&kicked),
+            Some(ConnectVerdict::Deregistered)
+        ));
+    }
+
+    #[test]
+    fn connect_verdict_absent_when_center_says_nothing_about_nodes() {
+        // A plain Panel-style connect reply, or an error envelope: no node block
+        // ⇒ the session errors out instead of idling as an unregistered zombie.
+        assert!(parse_connect_verdict(&json!({"result": {"role": "operator"}})).is_none());
+        assert!(parse_connect_verdict(&json!({"error": {"code": -32000}})).is_none());
+    }
+
+    #[test]
+    fn jitter_stays_within_a_quarter_of_the_backoff() {
+        for backoff in [BACKOFF_INITIAL_MS, 8_000, BACKOFF_MAX_MS] {
+            let spread = backoff / 4;
+            for _ in 0..64 {
+                let j = with_jitter(backoff);
+                assert!(
+                    j >= backoff - spread && j <= backoff + spread,
+                    "jitter {j} out of ±25% band around {backoff}"
+                );
+            }
+        }
+        // Degenerate backoffs must not panic on an empty range.
+        assert_eq!(with_jitter(0), 0);
+        assert_eq!(with_jitter(3), 3);
     }
 }
