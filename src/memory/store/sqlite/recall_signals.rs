@@ -1,9 +1,12 @@
 //! `RecallSignalStore` — tracks which notes get retrieved during conversations.
 //!
-//! Each retrieval hit is recorded as a signal keyed by (`note_path`, `query_hash`,
-//! `day_bucket`, channel) for natural deduplication.  Aggregated signals later
-//! feed the 8-dimensional promotion scorer that decides which short-term
-//! memories should be promoted to long-term.
+//! Each retrieval hit is recorded as a signal scoped to the recording
+//! `agent_id` and keyed by (`note_path`, `query_hash`, `day_bucket`, channel)
+//! for natural deduplication. The only live consumer of the
+//! aggregate is `recall_hit_counts` (`signal_count` per note), which feeds
+//! retrieval-time reinforcement so frequently-recalled notes float to the top
+//! (热门浮顶); the dream daemon's co-recall / hit-rate metrics read the same rows.
+//! (The other `RecallAggregate` fields are currently unconsumed — see the struct.)
 
 use chrono::Utc;
 use rusqlite::params;
@@ -60,10 +63,12 @@ pub fn today_bucket() -> String {
 // ---------------------------------------------------------------------------
 
 impl SqliteMemoryBackend {
-    /// Record retrieval signals for a batch of hits.
+    /// Record retrieval signals for a batch of hits, scoped to `agent_id`.
     ///
-    /// Uses `INSERT OR IGNORE` so the same (`fact_id`, `query_hash`, `day_bucket`,
-    /// channel) combination is recorded at most once per day per channel.
+    /// Uses `INSERT OR IGNORE` on the dedup key
+    /// (`agent_id`, `note_path`, `query_hash`, `day_bucket`, `channel`), so the
+    /// same note/query/day/channel is recorded at most once per day per channel
+    /// *per agent* — two agents recalling the same relative path stay distinct.
     ///
     /// Returns the number of newly inserted rows.
     pub fn record_signals(
@@ -72,6 +77,7 @@ impl SqliteMemoryBackend {
         channel: &str,
         hits: &[RecallHit],
         session_id: Option<&str>,
+        agent_id: &str,
         namespace: &str,
     ) -> Result<usize, AlephError> {
         if hits.is_empty() {
@@ -88,8 +94,8 @@ impl SqliteMemoryBackend {
         let now = Utc::now().timestamp();
 
         let sql = "INSERT OR IGNORE INTO recall_signals \
-                   (id, note_path, query_hash, query_text, channel, score, session_id, namespace, created_at, day_bucket) \
-                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+                   (id, note_path, agent_id, query_hash, query_text, channel, score, session_id, namespace, created_at, day_bucket) \
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 
         let mut stmt = conn
             .prepare_cached(sql)
@@ -102,6 +108,7 @@ impl SqliteMemoryBackend {
                 .execute(params![
                     id,
                     hit.note_path,
+                    agent_id,
                     qhash,
                     query,
                     channel,
@@ -126,6 +133,7 @@ impl SqliteMemoryBackend {
 
     pub fn aggregate_for_facts(
         &self,
+        agent_id: &str,
         note_paths: &[String],
     ) -> Result<Vec<RecallAggregate>, AlephError> {
         if note_paths.is_empty() {
@@ -139,9 +147,11 @@ impl SqliteMemoryBackend {
 
         let mut results = Vec::new();
 
-        // Chunk to stay under SQLite's 999-variable limit
-        for chunk in note_paths.chunks(Self::SQLITE_MAX_VARS) {
+        // Chunk to stay under SQLite's 999-variable limit — reserve one slot
+        // for the trailing `agent_id` bind appended to each chunk.
+        for chunk in note_paths.chunks(Self::SQLITE_MAX_VARS - 1) {
             let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+            let agent_ph = format!("?{}", chunk.len() + 1);
             let sql = format!(
                 "SELECT \
                      note_path, \
@@ -153,15 +163,16 @@ impl SqliteMemoryBackend {
                      MIN(created_at)             AS first_recall, \
                      MAX(created_at)             AS last_recall \
                  FROM recall_signals \
-                 WHERE note_path IN ({}) \
+                 WHERE note_path IN ({}) AND agent_id = {agent_ph} \
                  GROUP BY note_path",
                 placeholders.join(", ")
             );
 
-            let params: Vec<Box<dyn rusqlite::types::ToSql>> = chunk
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = chunk
                 .iter()
                 .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>)
                 .collect();
+            params.push(Box::new(agent_id.to_string()) as Box<dyn rusqlite::types::ToSql>);
             let param_refs: Vec<&dyn rusqlite::types::ToSql> =
                 params.iter().map(|p| p.as_ref()).collect();
 
@@ -205,6 +216,7 @@ impl SqliteMemoryBackend {
     /// `co_recall_edges` dream stage.
     pub fn co_recall_pairs(
         &self,
+        agent_id: &str,
         min_co_hits: i64,
         limit: usize,
     ) -> Result<Vec<(String, String, i64)>, AlephError> {
@@ -222,6 +234,8 @@ impl SqliteMemoryBackend {
                   AND a.day_bucket = b.day_bucket \
                   AND a.channel    = b.channel \
                   AND a.note_path  < b.note_path \
+                  AND a.agent_id   = ?3 \
+                  AND b.agent_id   = ?3 \
                  GROUP BY a.note_path, b.note_path \
                  HAVING COUNT(*) >= ?1 \
                  ORDER BY co_hits DESC, a.note_path, b.note_path \
@@ -230,7 +244,7 @@ impl SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("co_recall_pairs prepare: {e}")))?;
 
         let rows = stmt
-            .query_map(params![min_co_hits, limit as i64], |row| {
+            .query_map(params![min_co_hits, limit as i64, agent_id], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -318,12 +332,12 @@ mod tests {
         ];
 
         let inserted = store
-            .record_signals("hello world", "slack", &hits, Some("s1"), "owner")
+            .record_signals("hello world", "slack", &hits, Some("s1"), "owner", "owner")
             .unwrap();
         assert_eq!(inserted, 2);
 
         let agg = store
-            .aggregate_for_facts(&["f1".into(), "f2".into()])
+            .aggregate_for_facts("owner", &["f1".into(), "f2".into()])
             .unwrap();
         assert_eq!(agg.len(), 2);
 
@@ -344,13 +358,13 @@ mod tests {
         }];
 
         let first = store
-            .record_signals("test query", "slack", &hits, None, "owner")
+            .record_signals("test query", "slack", &hits, None, "owner", "owner")
             .unwrap();
         assert_eq!(first, 1);
 
         // Same query, same channel, same day => dedup
         let second = store
-            .record_signals("test query", "slack", &hits, None, "owner")
+            .record_signals("test query", "slack", &hits, None, "owner", "owner")
             .unwrap();
         assert_eq!(second, 0);
     }
@@ -364,13 +378,13 @@ mod tests {
         }];
 
         store
-            .record_signals("q", "slack", &hits, None, "owner")
+            .record_signals("q", "slack", &hits, None, "owner", "owner")
             .unwrap();
         store
-            .record_signals("q", "web", &hits, None, "owner")
+            .record_signals("q", "web", &hits, None, "owner", "owner")
             .unwrap();
 
-        let agg = store.aggregate_for_facts(&["f1".into()]).unwrap();
+        let agg = store.aggregate_for_facts("owner", &["f1".into()]).unwrap();
         assert_eq!(agg.len(), 1);
         assert_eq!(agg[0].signal_count, 2);
         assert_eq!(agg[0].unique_channels, 2);
@@ -385,7 +399,7 @@ mod tests {
         }];
 
         store
-            .record_signals("q", "slack", &hits, None, "owner")
+            .record_signals("q", "slack", &hits, None, "owner", "owner")
             .unwrap();
 
         // retention_days=0 means cutoff = now, so all signals created at now are < now+1
@@ -397,7 +411,7 @@ mod tests {
         // so let's verify with a direct check and then force by using the aggregate.
 
         // First verify signal exists
-        let agg = store.aggregate_for_facts(&["f1".into()]).unwrap();
+        let agg = store.aggregate_for_facts("owner", &["f1".into()]).unwrap();
         assert_eq!(agg.len(), 1);
 
         // retention_days=0 means cutoff = now. Signals created at exactly now
@@ -406,28 +420,75 @@ mod tests {
         {
             let conn = store.conn.lock().unwrap();
             conn.execute(
-                "INSERT INTO recall_signals (id, note_path, query_hash, query_text, channel, score, namespace, created_at, day_bucket) \
-                 VALUES ('old1', 'f2', 'hash', 'old', 'slack', 0.5, 'owner', 1000, '2020-01-01')",
+                "INSERT INTO recall_signals (id, note_path, agent_id, query_hash, query_text, channel, score, namespace, created_at, day_bucket) \
+                 VALUES ('old1', 'f2', 'owner', 'hash', 'old', 'slack', 0.5, 'owner', 1000, '2020-01-01')",
                 [],
             ).unwrap();
         }
 
-        let agg2 = store.aggregate_for_facts(&["f2".into()]).unwrap();
+        let agg2 = store.aggregate_for_facts("owner", &["f2".into()]).unwrap();
         assert_eq!(agg2.len(), 1);
 
         // Now cleanup with retention_days=0 => cutoff = now, old signal (created_at=1000) is deleted
         let deleted = store.cleanup_old_signals(0).unwrap();
         assert!(deleted >= 1);
 
-        let agg3 = store.aggregate_for_facts(&["f2".into()]).unwrap();
+        let agg3 = store.aggregate_for_facts("owner", &["f2".into()]).unwrap();
         assert!(agg3.is_empty());
     }
 
     #[test]
     fn aggregate_empty_ids_returns_empty() {
         let store = setup();
-        let agg = store.aggregate_for_facts(&[]).unwrap();
+        let agg = store.aggregate_for_facts("owner", &[]).unwrap();
         assert!(agg.is_empty());
+    }
+
+    #[test]
+    fn signals_are_scoped_per_agent() {
+        let store = setup();
+        // Two agents each record a recall for the SAME relative note_path,
+        // same query/day/channel — the dedup key includes agent_id, so both
+        // rows survive instead of the second being ignored.
+        store
+            .record_signals(
+                "q",
+                "slack",
+                &[hit("skill/shared")],
+                None,
+                "agent-a",
+                "owner",
+            )
+            .unwrap();
+        store
+            .record_signals(
+                "q",
+                "slack",
+                &[hit("skill/shared")],
+                None,
+                "agent-b",
+                "owner",
+            )
+            .unwrap();
+
+        // Each agent sees only its own signal — no cross-agent pollution.
+        let a = store
+            .aggregate_for_facts("agent-a", &["skill/shared".into()])
+            .unwrap();
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].signal_count, 1);
+
+        let b = store
+            .aggregate_for_facts("agent-b", &["skill/shared".into()])
+            .unwrap();
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].signal_count, 1);
+
+        // An agent with no signals of its own sees nothing for that path.
+        let c = store
+            .aggregate_for_facts("agent-c", &["skill/shared".into()])
+            .unwrap();
+        assert!(c.is_empty());
     }
 
     fn hit(path: &str) -> RecallHit {
@@ -442,13 +503,27 @@ mod tests {
         let store = setup();
         // Two queries both surface (a, b); one also surfaces c.
         store
-            .record_signals("q1", "web", &[hit("n/a"), hit("n/b"), hit("n/c")], None, "owner")
+            .record_signals(
+                "q1",
+                "web",
+                &[hit("n/a"), hit("n/b"), hit("n/c")],
+                None,
+                "owner",
+                "owner",
+            )
             .unwrap();
         store
-            .record_signals("q2", "web", &[hit("n/a"), hit("n/b")], None, "owner")
+            .record_signals(
+                "q2",
+                "web",
+                &[hit("n/a"), hit("n/b")],
+                None,
+                "owner",
+                "owner",
+            )
             .unwrap();
 
-        let pairs = store.co_recall_pairs(2, 10).unwrap();
+        let pairs = store.co_recall_pairs("owner", 2, 10).unwrap();
         // Only (a, b) reaches 2 co-hits; (a, c) and (b, c) have 1.
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0], ("n/a".to_string(), "n/b".to_string(), 2));
@@ -458,14 +533,21 @@ mod tests {
     fn co_recall_pairs_are_canonical_and_threshold_gated() {
         let store = setup();
         store
-            .record_signals("q1", "web", &[hit("n/b"), hit("n/a")], None, "owner")
+            .record_signals(
+                "q1",
+                "web",
+                &[hit("n/b"), hit("n/a")],
+                None,
+                "owner",
+                "owner",
+            )
             .unwrap();
 
         // Threshold 1 surfaces the single co-occurrence, canonically ordered.
-        let pairs = store.co_recall_pairs(1, 10).unwrap();
+        let pairs = store.co_recall_pairs("owner", 1, 10).unwrap();
         assert_eq!(pairs, vec![("n/a".to_string(), "n/b".to_string(), 1)]);
         // Threshold 2 filters it out.
-        assert!(store.co_recall_pairs(2, 10).unwrap().is_empty());
+        assert!(store.co_recall_pairs("owner", 2, 10).unwrap().is_empty());
     }
 
     #[test]
@@ -473,11 +555,11 @@ mod tests {
         let store = setup();
         // Different queries each surfacing one note — never co-recalled.
         store
-            .record_signals("q1", "web", &[hit("n/a")], None, "owner")
+            .record_signals("q1", "web", &[hit("n/a")], None, "owner", "owner")
             .unwrap();
         store
-            .record_signals("q2", "web", &[hit("n/b")], None, "owner")
+            .record_signals("q2", "web", &[hit("n/b")], None, "owner", "owner")
             .unwrap();
-        assert!(store.co_recall_pairs(1, 10).unwrap().is_empty());
+        assert!(store.co_recall_pairs("owner", 1, 10).unwrap().is_empty());
     }
 }

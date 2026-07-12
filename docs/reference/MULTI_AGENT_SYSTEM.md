@@ -502,6 +502,23 @@ added four pieces on top of the port above:
   single `"moa-advisors"` bucket (`aggregate_moa_advisor_usage`,
   `src/resilience/database/traces.rs`) instead of one synthetic "agent" per
   advisor slot, keeping team/session usage views honest.
+- **Panel visual config** (Round 4, 2026-07-06; deepened 2026-07-12): a
+  visual `[moa]` preset editor at Settings → MoA
+  (`interfaces/webchat/src/platform/wide/views/settings/moa/`) — preset
+  cards, a create/edit form whose advisor/aggregator dropdowns are
+  constrained to already-configured, credentialed models
+  (`options::available_options` over `providers.catalog`, with the synthetic
+  `"moa"` pseudo-row filtered out), advanced knobs, and a global
+  `save_traces` toggle. Writes go through the gateway RPCs
+  `moa.{listPresets,savePreset,deletePreset,setDefault,setSaveTraces}`
+  (`src/gateway/handlers/moa.rs`) backed by the single write-core
+  `MoaPresetStore` (`src/providers/moa/preset_store.rs`) — the same core the
+  `moa` tool uses, so tool and panel never diverge. Each card shows the
+  per-turn model-call count and a "Use in chat" action that arms the preset
+  on the chat session's model selector (`ModelOverride{provider:"moa"}`); a
+  "Duplicate" action clones a preset as a starting point. Activation itself
+  stays session-scoped (chat model picker + `moa` tool); the settings page
+  only edits config (R4 kept it a pure config surface).
 
 ### One-Shot Task Fan-Out (existing, previously undocumented)
 

@@ -5,7 +5,6 @@
 //! consumers don't require changes.
 
 pub mod expansion;
-pub mod hybrid;
 mod relation_surface;
 pub mod scoring;
 pub mod trace;
@@ -217,14 +216,18 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
     /// Fetch recall-frequency counts for the candidate notes when reinforcement
     /// salience is enabled. Returns an empty map when disabled or on any store
     /// error, degrading gracefully to neutral (legacy) scoring.
-    async fn fetch_reinforcement_counts(&self, facts: &[ScoredFact]) -> HashMap<String, i64> {
+    async fn fetch_reinforcement_counts(
+        &self,
+        agent_id: &str,
+        facts: &[ScoredFact],
+    ) -> HashMap<String, i64> {
         if !self.scoring.reinforcement_enabled || facts.is_empty() {
             return HashMap::new();
         }
         let paths: Vec<String> = facts.iter().map(|f| f.fact.id.clone()).collect();
         self.indexer
             .store()
-            .recall_hit_counts(&paths)
+            .recall_hit_counts(agent_id, &paths)
             .await
             .unwrap_or_default()
     }
@@ -236,7 +239,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
     /// gated on `reinforcement_enabled` so disabling hot-floating also stops
     /// recording. The store dedups per `(note_path, query, day, channel)`, so a
     /// note must surface across *distinct* queries/days to genuinely heat up.
-    async fn record_recall(&self, query: &str, namespace: &str, ranked: &[ScoredFact]) {
+    async fn record_recall(&self, query: &str, agent_id: &str, ranked: &[ScoredFact]) {
         if !self.scoring.reinforcement_enabled || ranked.is_empty() {
             return;
         }
@@ -247,7 +250,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         if let Err(e) = self
             .indexer
             .store()
-            .record_recall_hits(query, AUTO_RECALL_CHANNEL, &hits, namespace)
+            .record_recall_hits(query, AUTO_RECALL_CHANNEL, &hits, agent_id)
             .await
         {
             tracing::debug!(error = %e, "failed to record recall signals (non-fatal)");
@@ -410,15 +413,9 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         // No embedder configured (FTS-only deployment): skip the vector leg
         // silently — this is a known steady state, not an outage.
         let Some(embedder) = self.embedder.as_ref() else {
-            let t0 = Instant::now();
-            let results = self.text_retrieve(query, agent_id, limit).await?;
-            sink.record(
-                "fts_search",
-                t0.elapsed().as_millis() as u64,
-                0,
-                results.len(),
-            );
-            return Ok(results);
+            return self
+                .text_retrieve_scored(query, agent_id, limit, sink)
+                .await;
         };
         // Embedding requires a remote API call; when that endpoint is
         // unreachable (network outage, provider down) the notes themselves
@@ -430,15 +427,9 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
                     error = %e,
                     "note retrieval: embedding unavailable, falling back to FTS-only search"
                 );
-                let t0 = Instant::now();
-                let results = self.text_retrieve(query, agent_id, limit).await?;
-                sink.record(
-                    "fts_search",
-                    t0.elapsed().as_millis() as u64,
-                    0,
-                    results.len(),
-                );
-                return Ok(results);
+                return self
+                    .text_retrieve_scored(query, agent_id, limit, sink)
+                    .await;
             }
         };
         let dim = embedding.len() as u32;
@@ -486,7 +477,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
 
         let facts: Vec<ScoredFact> = results.iter().map(|r| r.to_scored_fact(agent_id)).collect();
         let ranked = self.apply_rerank(query, facts, sink).await;
-        let counts = self.fetch_reinforcement_counts(&ranked).await;
+        let counts = self.fetch_reinforcement_counts(agent_id, &ranked).await;
         let mut ranked = self.apply_scoring(ranked, now_unix(), &counts, sink);
         let before = ranked.len();
         let t0 = Instant::now();
@@ -549,6 +540,34 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
             .collect())
     }
 
+    /// FTS-only recall tail shared by both `retrieve_inner` degradation branches
+    /// (no embedder configured, and transient embed-endpoint outage). Runs the
+    /// same reinforcement + recency scoring and recall recording as the hybrid
+    /// path, so 热门浮顶 (hot-surfacing) accrues signal and ranks even when the
+    /// vector leg is unavailable — mirrors `multi_agent_text_fallback`'s
+    /// graceful-degradation contract (P7). Without this, an FTS-only deployment
+    /// never writes `recall_signals`, leaving reinforcement a permanent no-op.
+    async fn text_retrieve_scored(
+        &self,
+        query: &str,
+        agent_id: &str,
+        limit: usize,
+        sink: &mut TraceSink,
+    ) -> Result<Vec<ScoredFact>, AlephError> {
+        let t0 = Instant::now();
+        let results = self.text_retrieve(query, agent_id, limit).await?;
+        sink.record(
+            "fts_search",
+            t0.elapsed().as_millis() as u64,
+            0,
+            results.len(),
+        );
+        let counts = self.fetch_reinforcement_counts(agent_id, &results).await;
+        let ranked = self.apply_scoring(results, now_unix(), &counts, sink);
+        self.record_recall(query, agent_id, &ranked).await;
+        Ok(ranked)
+    }
+
     /// Hybrid search across multiple agents. Results from each agent are
     /// collected, merged, sorted by score, and truncated to `limit`.
     ///
@@ -566,7 +585,9 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         // No embedder configured (FTS-only deployment): degrade to per-agent
         // keyword search, mirroring the single-agent path.
         let Some(embedder) = self.embedder.as_ref() else {
-            return self.multi_agent_text_fallback(query, agent_ids, limit).await;
+            return self
+                .multi_agent_text_fallback(query, agent_ids, limit)
+                .await;
         };
 
         // Embed once, reuse across agents. When the embedding endpoint is
@@ -580,7 +601,9 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
                     error = %e,
                     "multi-agent recall: embedding unavailable, falling back to FTS-only search"
                 );
-                return self.multi_agent_text_fallback(query, agent_ids, limit).await;
+                return self
+                    .multi_agent_text_fallback(query, agent_ids, limit)
+                    .await;
             }
         };
         let dim = embedding.len() as u32;
@@ -618,17 +641,19 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         });
         all_results.truncate(self.fetch_limit(limit));
 
+        // Close the hot-floating loop across the multi-agent ("smart recall")
+        // path too. Recall signals are per-agent, so this path records and reads
+        // reinforcement under the first workspace id as a representative label
+        // (notes owned by the other agents contribute no cross-agent
+        // reinforcement here — acceptable for the fuzzy smart-recall path).
+        let recall_agent = agent_ids.first().map_or("owner", String::as_str);
         let ranked = self
             .apply_rerank(query, all_results, &mut TraceSink::Off)
             .await;
-        let counts = self.fetch_reinforcement_counts(&ranked).await;
+        let counts = self.fetch_reinforcement_counts(recall_agent, &ranked).await;
         let mut ranked = self.apply_scoring(ranked, now_unix(), &counts, &mut TraceSink::Off);
         ranked.truncate(limit);
-        // Close the hot-floating loop across the multi-agent ("smart recall")
-        // path too. `namespace` is signal metadata only (not part of the dedup
-        // key), so the first workspace id is a fine representative label.
-        let namespace = agent_ids.first().map_or("owner", String::as_str);
-        self.record_recall(query, namespace, &ranked).await;
+        self.record_recall(query, recall_agent, &ranked).await;
         Ok(ranked)
     }
 
@@ -884,7 +909,10 @@ mod tests {
             .retrieve_multi_agent("dreame", &["default".to_string()], 10)
             .await
             .unwrap();
-        assert!(!multi.is_empty(), "multi-agent FTS fallback should surface the note");
+        assert!(
+            !multi.is_empty(),
+            "multi-agent FTS fallback should surface the note"
+        );
 
         // Vector search is honestly unavailable.
         assert!(retrieval
@@ -986,7 +1014,10 @@ mod tests {
         assert_eq!(dup, 0);
 
         let counts = store
-            .recall_hit_counts(&["notes/a.md".to_string(), "notes/b.md".to_string()])
+            .recall_hit_counts(
+                "default",
+                &["notes/a.md".to_string(), "notes/b.md".to_string()],
+            )
             .await
             .unwrap();
         assert_eq!(counts.get("notes/a.md"), Some(&1));
@@ -998,7 +1029,7 @@ mod tests {
             .await
             .unwrap();
         let counts2 = store
-            .recall_hit_counts(&["notes/a.md".to_string()])
+            .recall_hit_counts("default", &["notes/a.md".to_string()])
             .await
             .unwrap();
         assert_eq!(counts2.get("notes/a.md"), Some(&2));
@@ -1022,7 +1053,7 @@ mod tests {
         let counts = retrieval
             .indexer
             .store()
-            .recall_hit_counts(&["notes/x.md".to_string()])
+            .recall_hit_counts("default", &["notes/x.md".to_string()])
             .await
             .unwrap();
         assert!(

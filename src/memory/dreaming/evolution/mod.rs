@@ -32,8 +32,8 @@ pub mod score;
 
 pub use budget::EditBudget;
 pub use evidence::{action_fingerprint, gate_supersede_evidence, EvidenceDecision};
-pub use gate::{evaluate_gate, select_gate_score, GateMetric, GateOutcome};
-pub use score::{memory_health_score, score_merge_candidate, MemoryScore};
+pub use gate::{evaluate_gate, GateOutcome};
+pub use score::{memory_health_score, score_merge_candidate};
 
 use serde::{Deserialize, Serialize};
 

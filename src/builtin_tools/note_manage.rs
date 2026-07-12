@@ -888,7 +888,7 @@ impl NoteManageTool {
         if let Err(e) = self
             .indexer
             .store()
-            .record_recall_hits(query, NOTE_MANAGE_RECALL_CHANNEL, &hits, "owner")
+            .record_recall_hits(query, NOTE_MANAGE_RECALL_CHANNEL, &hits, agent_id)
             .await
         {
             tracing::debug!(error = %e, "note_manage query: recall signal write failed");

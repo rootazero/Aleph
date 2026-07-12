@@ -102,6 +102,91 @@ pub fn build_cheap_summary_provider(
     }
 }
 
+/// Build the cheap-tier provider for the **dream pipeline**'s LLM stages
+/// (`[memory.dreaming] model`).
+///
+/// Resolves in the same two tiers as [`build_cheap_summary_provider`], and for
+/// the same reason: every LLM stage in the dream pipeline is a small
+/// classification or summarization task (`note_drift` asks for one word out of
+/// `CONSISTENT | CONTRADICTORY | STALE`; `daily_digest` writes a paragraph).
+/// Running that unattended, nightly, on the operator's main reasoning model is
+/// pure waste — a single night once cost tens of thousands of main-model calls.
+///
+/// 1. **Explicit** — `[memory.dreaming] model`, used verbatim.
+/// 2. **Auto** — unset/blank ⇒ the primary preset's declared `default_aux_model`.
+///    A vendor with no declared cheap tier keeps the main LLM rather than
+///    silently routing to a same-tier sibling.
+///
+/// Returns `None` (⇒ dreaming reuses the main provider) when dreaming is
+/// disabled, the primary key has no `[providers.*]` entry to clone, no cheap
+/// model resolves, the resolved model *is* the primary's own default (setting
+/// `model` to the main model is therefore the explicit opt-out from auto
+/// routing), or `create_provider` fails.
+///
+/// Fail-soft: a misconfigured model never aborts boot and never blocks dreaming.
+#[must_use]
+pub fn build_dream_provider(
+    config: &Config,
+    primary_provider_key: &str,
+) -> Option<Arc<dyn AiProvider>> {
+    let dreaming = &config.memory.dreaming;
+    if !dreaming.enabled {
+        return None;
+    }
+
+    let base = config.providers.get(primary_provider_key)?;
+
+    let explicit = dreaming
+        .model
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let dream_model: String = match explicit {
+        Some(model) => model.to_string(),
+        None => crate::providers::get_preset(&primary_provider_key.to_lowercase())
+            .and_then(|p| p.default_aux_model)?
+            .to_string(),
+    };
+
+    // No-op when the resolved model is the primary's own default — the rebuilt
+    // provider would be byte-identical, so reuse the main LLM.
+    if base
+        .models
+        .first()
+        .is_some_and(|m| m.as_str() == dream_model)
+    {
+        return None;
+    }
+
+    let source = if explicit.is_some() {
+        "dreaming.model"
+    } else {
+        "preset aux_model"
+    };
+    let mut dream_cfg = base.clone();
+    dream_cfg.models = vec![dream_model.clone()];
+    match create_provider(primary_provider_key, dream_cfg) {
+        Ok(provider) => {
+            tracing::info!(
+                provider = %primary_provider_key,
+                dream_model = %dream_model,
+                source,
+                "dreaming: routing dream-pipeline stages to cheap-tier model"
+            );
+            Some(provider)
+        }
+        Err(e) => {
+            tracing::warn!(
+                provider = %primary_provider_key,
+                dream_model = %dream_model,
+                error = %e,
+                "dreaming: cheap provider build failed — dream stages will use the main LLM"
+            );
+            None
+        }
+    }
+}
+
 /// Build the optional dedicated provider for the strategic-planner node
 /// (`[strategy] planner_model`). Mirrors [`build_cheap_summary_provider`]'s
 /// vendor-cloning approach — clone the primary provider's config, swap only the

@@ -43,13 +43,16 @@ pub struct RawMetrics {
     pub never_recalled_count: u32,
     pub skill_notes_total: u32,
     pub skill_notes_recalled: u32,
+    /// Mature skill-note cohort (created more than `MATURE_SKILL_DAYS` ago) —
+    /// the population MutationGate's wasted-distillation detector judges. Notes
+    /// too new to have had a recall opportunity are excluded so a fresh cycle's
+    /// produce cannot make the detector misfire on cold start.
+    pub mature_skill_total: u32,
+    /// How many of `mature_skill_total` have at least one recall hit — the
+    /// numerator of the wasted-distillation ratio.
+    pub mature_skill_recalled: u32,
     pub correction_count: u32,
     pub session_count: u32,
-    // Spec 3 — tool-invocation aggregates (24h window). Populated by
-    // `compute_raw_metrics` reading `RawMemorySource::ToolInvocation` rows.
-    pub tool_calls_total_24h: u64,
-    pub tool_calls_failed_24h: u64,
-    pub tool_avg_duration_ms_24h: u64,
 }
 
 impl SignalSnapshot {
@@ -136,44 +139,6 @@ impl SignalSnapshot {
             source: "session_metadata".into(),
         });
 
-        // Spec 3 — tool-invocation health. Failure rate is a Health signal;
-        // raw call volume rolls into Quality so the strategy selector can
-        // detect "we're not using tools at all" vs "tools are failing".
-        let tool_failure_rate = if m.tool_calls_total_24h > 0 {
-            (m.tool_calls_failed_24h as f64 / m.tool_calls_total_24h as f64).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        signals.push(DreamSignal {
-            signal_type: SignalType::Health,
-            name: "tool_failure_rate".into(),
-            score: tool_failure_rate,
-            source: "raw_memories.tool_invocation".into(),
-        });
-        // Normalize volume against a soft cap of 500 calls/24h. Above that
-        // we clamp to 1.0 — the score saturates so further increases don't
-        // pull strategy selection astray.
-        const TOOL_VOLUME_SOFT_CAP: f64 = 500.0;
-        let tool_volume_score =
-            ((m.tool_calls_total_24h as f64) / TOOL_VOLUME_SOFT_CAP).clamp(0.0, 1.0);
-        signals.push(DreamSignal {
-            signal_type: SignalType::Quality,
-            name: "tool_call_volume".into(),
-            score: tool_volume_score,
-            source: "raw_memories.tool_invocation".into(),
-        });
-        // Latency saturates at a 30-second soft cap (anything slower is
-        // already a hard fail in the harness-level turn_timeout).
-        const TOOL_LATENCY_SOFT_CAP_MS: f64 = 30_000.0;
-        let tool_latency_score =
-            ((m.tool_avg_duration_ms_24h as f64) / TOOL_LATENCY_SOFT_CAP_MS).clamp(0.0, 1.0);
-        signals.push(DreamSignal {
-            signal_type: SignalType::Health,
-            name: "tool_latency_score".into(),
-            score: tool_latency_score,
-            source: "raw_memories.tool_invocation".into(),
-        });
-
         Self {
             signals,
             collected_at: now,
@@ -258,45 +223,5 @@ mod tests {
         let json = serde_json::to_string(&snapshot).unwrap();
         let back: SignalSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(back.signals.len(), snapshot.signals.len());
-    }
-
-    #[test]
-    fn tool_failure_rate_reflects_ratio() {
-        let metrics = RawMetrics {
-            tool_calls_total_24h: 10,
-            tool_calls_failed_24h: 3,
-            ..Default::default()
-        };
-        let snapshot = SignalSnapshot::from_metrics(&metrics);
-        assert!((snapshot.score("tool_failure_rate") - 0.3).abs() < 0.01);
-    }
-
-    #[test]
-    fn tool_volume_saturates_at_soft_cap() {
-        let metrics = RawMetrics {
-            tool_calls_total_24h: 10_000, // far above the 500 soft cap
-            ..Default::default()
-        };
-        let snapshot = SignalSnapshot::from_metrics(&metrics);
-        assert_eq!(snapshot.score("tool_call_volume"), 1.0);
-    }
-
-    #[test]
-    fn tool_signals_default_zero_when_no_calls() {
-        let metrics = RawMetrics::default();
-        let snapshot = SignalSnapshot::from_metrics(&metrics);
-        assert_eq!(snapshot.score("tool_failure_rate"), 0.0);
-        assert_eq!(snapshot.score("tool_call_volume"), 0.0);
-        assert_eq!(snapshot.score("tool_latency_score"), 0.0);
-    }
-
-    #[test]
-    fn tool_latency_score_saturates_above_30s() {
-        let metrics = RawMetrics {
-            tool_avg_duration_ms_24h: 60_000, // 60s, double the soft cap
-            ..Default::default()
-        };
-        let snapshot = SignalSnapshot::from_metrics(&metrics);
-        assert_eq!(snapshot.score("tool_latency_score"), 1.0);
     }
 }

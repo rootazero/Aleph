@@ -50,7 +50,11 @@ impl DreamStage for CoRecallEdgesStage {
     }
 
     async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
-        let pairs = match ctx.database.co_recall_pairs(MIN_CO_HITS, MAX_PAIRS_SCANNED) {
+        let pairs = match ctx.database.co_recall_pairs(
+            &ctx.agent_id,
+            MIN_CO_HITS,
+            MAX_PAIRS_SCANNED,
+        ) {
             Ok(p) => p,
             Err(e) => {
                 // Non-fatal: a broken signals table must not stall the dream

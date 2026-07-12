@@ -67,7 +67,12 @@ impl RippleTask {
                     .into_iter()
                     .map(|r| {
                         let mut f = r.to_memory_fact(&self.agent_id);
-                        f.similarity_score = Some(r.score);
+                        // `vector_search_notes_with_content` returns the raw vec0
+                        // L2 distance (lower = closer, unbounded above). Convert to
+                        // a higher-is-better similarity in (0, 1] so `is_similar`'s
+                        // `>= similarity_threshold` gate compares correctly — same
+                        // convention as notes/retrieval.rs and tool_index.
+                        f.similarity_score = Some(1.0 / (1.0 + r.score.max(0.0)));
                         f
                     })
                     .collect();

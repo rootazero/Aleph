@@ -60,7 +60,10 @@ impl DreamStage for SkillDistillStage {
 
         // Fingerprints of supersedes the recall-evidence gate rejected on
         // prior cycles — loaded once so re-proposals drop without re-gating.
-        let rejected_fingerprints = ctx.database.distill_rejects(&ctx.agent_id).unwrap_or_default();
+        let rejected_fingerprints = ctx
+            .database
+            .distill_rejects(&ctx.agent_id)
+            .unwrap_or_default();
 
         for path in &synthesis_paths {
             let content = match ctx.load_content(path).await {
@@ -106,6 +109,10 @@ impl DreamStage for SkillDistillStage {
                 .await
             {
                 Ok(r) => r,
+                Err(e) if super::is_provider_exhausted(&e) => {
+                    tracing::warn!(error = %e, "SkillDistill: provider exhausted — aborting dream cycle");
+                    return Err(e);
+                }
                 Err(e) => {
                     tracing::warn!(path, error = %e, "SkillDistill LLM call failed");
                     continue;
@@ -214,9 +221,10 @@ impl DreamStage for SkillDistillStage {
         ctx.report
             .extra
             .insert("skill_distill_count".into(), applied.to_string());
-        // Produced count for MutationGate's wasted-distillation detector
-        // (drained post-pipeline; the recall side comes from raw metrics).
-        ctx.report.distill_produced = applied as u32;
+        // This cycle's flow count lives in `extra["skill_distill_count"]`.
+        // MutationGate's `distill_produced`/`distill_recalled` are set later
+        // from the mature skill-note cohort (see compute_raw_metrics), not from
+        // fresh produce — a just-written note can't have been recalled yet.
         tracing::info!(applied, "SkillDistill completed");
         Ok(ctx)
     }

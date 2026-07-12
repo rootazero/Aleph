@@ -2,6 +2,7 @@ pub const RECALL_SIGNALS_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS recall_signals (
     id          TEXT PRIMARY KEY,
     note_path   TEXT NOT NULL,
+    agent_id    TEXT NOT NULL DEFAULT 'default',
     query_hash  TEXT NOT NULL,
     query_text  TEXT NOT NULL,
     channel     TEXT NOT NULL DEFAULT 'unknown',
@@ -13,9 +14,9 @@ CREATE TABLE IF NOT EXISTS recall_signals (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_recall_dedup
-    ON recall_signals(note_path, query_hash, day_bucket, channel);
-CREATE INDEX IF NOT EXISTS idx_recall_note_path
-    ON recall_signals(note_path);
+    ON recall_signals(agent_id, note_path, query_hash, day_bucket, channel);
+CREATE INDEX IF NOT EXISTS idx_recall_agent_path
+    ON recall_signals(agent_id, note_path);
 CREATE INDEX IF NOT EXISTS idx_recall_day_bucket
     ON recall_signals(day_bucket);
 "#;

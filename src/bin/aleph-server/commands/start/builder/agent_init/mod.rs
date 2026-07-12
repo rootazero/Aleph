@@ -666,6 +666,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             &row.channel,
                             &[hit],
                             row.session_id.as_deref(),
+                            &row.agent_id,
                             &row.namespace,
                         )
                         .map(|_| ())
@@ -881,10 +882,25 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Start DreamDaemon with command handler so decay mutations are event-sourced.
         // Spec 5 Task 12: thread wiki handle into DreamDaemon for IndexRefresherStage.
         // The embedder is required to build a DreamContext (SkillDistill stage).
+        //
+        // Dreaming runs unattended every night and its LLM stages are all small
+        // classification / summarization calls, so route them to the cheap tier
+        // ([memory.dreaming] model, else the preset's aux model). Falls back to
+        // the main provider when no cheap tier resolves.
+        let dream_prov = alephcore::orchestrator::build_dream_provider(
+            app_config,
+            &app_config
+                .general
+                .default_provider
+                .clone()
+                .unwrap_or_default(),
+        )
+        .or_else(|| default_prov.clone());
+
         alephcore::memory::ensure_dream_daemon_with_orientation(
             memory_db.clone(),
             std::sync::Arc::new(app_config.memory.clone()),
-            default_prov.clone(),
+            dream_prov,
             command_handler,
             orientation.clone(),
             embedder_out.clone(),

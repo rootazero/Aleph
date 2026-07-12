@@ -31,7 +31,14 @@ pub fn available_options(
         .collect();
 
     let mut out = Vec::new();
-    for entry in catalog.iter().filter(|e| e.enabled && e.has_api_key) {
+    // Exclude the synthetic `moa` pseudo-provider row (id/protocol "moa") that
+    // `providers.catalog` appends when presets exist — picking it as an advisor
+    // or aggregator would build a recursive MoaSlot{provider:"moa"} the server
+    // rejects at save time. Filter it here so it never appears as an option.
+    for entry in catalog
+        .iter()
+        .filter(|e| e.enabled && e.has_api_key && e.id != "moa")
+    {
         for model in &entry.models {
             let key = (norm(&entry.id), norm(model));
             if blocked.contains(&key) {
@@ -100,5 +107,19 @@ mod tests {
         e.has_api_key = false;
         let opts = available_options(&[e], &[], None);
         assert!(opts.is_empty());
+    }
+
+    #[test]
+    fn synthetic_moa_pseudo_provider_is_excluded() {
+        // providers.catalog appends an id="moa" row (enabled + has_api_key) whose
+        // models are preset names; it must never be a selectable advisor/aggregator.
+        let catalog = vec![
+            entry("openai", &["gpt-5.5"]),
+            entry("moa", &["my-preset", "other-preset"]),
+        ];
+        let opts = available_options(&catalog, &[], None);
+        assert!(opts.iter().all(|o| o.provider != "moa"));
+        assert_eq!(opts.len(), 1);
+        assert_eq!(opts[0].provider, "openai");
     }
 }

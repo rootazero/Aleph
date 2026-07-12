@@ -3,7 +3,7 @@
 //! Three detection mechanisms:
 //! 1. Merge cycle: same note pair merged 3+ consecutive cycles
 //! 2. Synthesis oscillation: negation patterns between recent syntheses
-//! 3. Wasted distillation: skill-notes produced but never recalled
+//! 3. Wasted distillation: mature skill-notes that never get recalled
 
 use std::collections::{HashSet, VecDeque};
 
@@ -53,11 +53,16 @@ impl MutationGate {
         self.current_assertions.push(assertion.to_string());
     }
 
-    pub fn record_skill_distill_output(&mut self, produced: u32, recalled: u32) {
+    /// Record one cycle's mature skill-note cohort: `cohort_size` skill notes
+    /// old enough to have had a recall opportunity, `cohort_recalled` of which
+    /// were actually recalled. The detector fires when the recall rate across
+    /// the window stays below `DISTILL_MIN_RECALL_RATE`.
+    pub fn record_skill_distill_output(&mut self, cohort_size: u32, cohort_recalled: u32) {
         if self.distill_history.len() >= DISTILL_WINDOW {
             self.distill_history.pop_front();
         }
-        self.distill_history.push_back((produced, recalled));
+        self.distill_history
+            .push_back((cohort_size, cohort_recalled));
     }
 
     pub fn advance_cycle(&mut self) {

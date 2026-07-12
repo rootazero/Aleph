@@ -51,7 +51,7 @@ pub use report::{DreamReport, DreamReportStatus};
 pub use event_log::{DreamEvent, EventLog};
 pub use evolution::{
     evaluate_gate, memory_health_score, score_merge_candidate, EditBudget, EvolutionOutcome,
-    GateOutcome, MemoryScore,
+    GateOutcome,
 };
 pub use mutation_gate::MutationGate;
 pub use selector::{GateDecision, SelectionDecision, StrategySelector};
@@ -183,7 +183,9 @@ impl DreamPipeline {
                     min_candidates: dreaming_cfg.feedback_distill_min_candidates,
                     lookback: dreaming_cfg.feedback_lookback,
                 }),
-                Box::new(stages::NoteDriftStage),
+                Box::new(stages::NoteDriftStage {
+                    max_pairs: dreaming_cfg.drift_max_pairs_per_run,
+                }),
                 Box::new(stages::IndexRefresherStage),
                 // Materialize behavioral co-recall edges BEFORE the graph
                 // recompute so the 5-signal relevance pass sees them this
@@ -497,6 +499,32 @@ impl DreamRunStatus {
     }
 }
 
+/// Whether a scheduled cycle must be skipped because one already ran today.
+///
+/// `cancelled` is the ONLY status that earns a retry: such a run yielded to
+/// fresh user activity before doing its work, so re-running once the user goes
+/// idle again is the intent.
+///
+/// Every other same-day status — `success`, `timeout`, `error`, or a stale
+/// `running` left behind by a crashed process — means "today's cycle is spent,
+/// do not start another". Retrying on `timeout`/`error` was the original defect:
+/// the guard skipped only on `success`, so a cycle that could never succeed
+/// restarted on every tick for the whole window, re-running every LLM stage from
+/// scratch (~130 full cycles, and tens of thousands of provider calls, in a
+/// single night). A broken cycle must cost one attempt, not a window's worth.
+fn should_skip_scheduled_run(status: &DreamStatus, today: &str) -> bool {
+    let Some(last_run_at) = status.last_run_at else {
+        return false;
+    };
+    let Some(last_date) = Local.timestamp_opt(last_run_at, 0).single() else {
+        return false;
+    };
+    if last_date.format("%Y-%m-%d").to_string() != today {
+        return false;
+    }
+    status.last_status.as_deref() != Some("cancelled")
+}
+
 /// `DreamDaemon` orchestrates idle-time consolidation.
 pub struct DreamDaemon {
     database: MemoryBackend,
@@ -754,19 +782,14 @@ impl DreamDaemon {
         let run_date = Local::now().format("%Y-%m-%d").to_string();
 
         if let Ok(status) = self.database.get_dream_status().await {
-            if let Some(last_run_at) = status.last_run_at {
-                let last_date = Local.timestamp_opt(last_run_at, 0).single();
-                if let Some(last_date) = last_date {
-                    if last_date.format("%Y-%m-%d").to_string() == run_date
-                        && status.last_status.as_deref() == Some("success")
-                    {
-                        info!(
-                            reason = "already_ran_today",
-                            last_run_at, "DreamDaemon tick: skipped"
-                        );
-                        return Ok(());
-                    }
-                }
+            if should_skip_scheduled_run(&status, &run_date) {
+                info!(
+                    reason = "already_ran_today",
+                    last_run_at = status.last_run_at,
+                    last_status = status.last_status.as_deref().unwrap_or("unknown"),
+                    "DreamDaemon tick: skipped"
+                );
+                return Ok(());
             }
         }
 
@@ -1063,24 +1086,6 @@ impl DreamDaemon {
             }
         };
 
-        // --- Phase 5: Validation (L1 + L2, deterministic) ---
-        let validation_report = DreamValidationReport {
-            l1_format: ValidationTier {
-                passed: true,
-                checks_run: 0,
-                checks_passed: 0,
-                issues: vec![],
-            },
-            l2_consistency: ValidationTier {
-                passed: true,
-                checks_run: 0,
-                checks_passed: 0,
-                issues: vec![],
-            },
-            l3_semantic: None,
-            l4_retrospective: None,
-        };
-
         // --- Phase 5.5: Evolution gate (memory-health before/after) ---
         // SkillOpt discipline at cycle granularity: score the corpus before and
         // after this cycle's edits, accept-track the best, and conserve (rather
@@ -1091,6 +1096,31 @@ impl DreamDaemon {
             .list_notes(DEFAULT_AGENT_ID)
             .await
             .unwrap_or_default();
+
+        // --- Phase 5: Validation (L2 consistency, deterministic) ---
+        // L2 (duplicate content-hash) runs cheaply from the index — no file
+        // reads. L1 (format) needs full note markdown; re-reading the whole
+        // corpus every cycle is too costly, so it stays a vacuous pass and
+        // `overall_ok()` gates on L2 alone. Wiring a real L2 revives the strategy
+        // selector's personality loop (validation pass-rate over the window):
+        // duplicate-hash rot now tightens the synthesize threshold instead of
+        // every cycle rubber-stamping `passed` with zero checks run.
+        let l2_pairs: Vec<(String, String)> = post_index
+            .iter()
+            .map(|n| (n.path.clone(), n.content_hash.clone()))
+            .collect();
+        let validation_report = DreamValidationReport {
+            l1_format: ValidationTier {
+                passed: true,
+                checks_run: 0,
+                checks_passed: 0,
+                issues: vec![],
+            },
+            l2_consistency: validation::run_l2_validation(&l2_pairs),
+            l3_semantic: None,
+            l4_retrospective: None,
+        };
+
         // Same prior report as the baseline: the rot term is a lagging signal, so
         // both sides of the evolution gate carry the identical penalty and it
         // cancels in the health *delta* — the gate still judges on this cycle's
@@ -1102,7 +1132,14 @@ impl DreamDaemon {
             prior_report.as_ref(),
         )
         .await;
-        report.distill_recalled = post_metrics.skill_notes_recalled;
+        // MutationGate's wasted-distillation detector compares the same mature
+        // cohort on both sides: of the skill notes old enough to have had a
+        // recall chance, how many actually got recalled. Feeding it this-cycle's
+        // fresh produce is why it misfired on cold start; feeding the recall side
+        // the whole-corpus stock is why it went toothless once anything was ever
+        // recalled. Both now come from the mature cohort.
+        report.distill_produced = post_metrics.mature_skill_total;
+        report.distill_recalled = post_metrics.mature_skill_recalled;
         let candidate_health = memory_health_score(&SignalSnapshot::from_metrics(&post_metrics));
         let best_before = *self.best_health.lock().unwrap_or_else(|e| e.into_inner());
         let gate_outcome = evaluate_gate(
@@ -1158,11 +1195,7 @@ impl DreamDaemon {
         // --- Phase 7: Update personality + mutation gate ---
         {
             let mut selector = self.selector.lock().unwrap_or_else(|e| e.into_inner());
-            selector.record_cycle_outcome(
-                strategy,
-                event.validation.overall_ok(),
-                signal_snapshot.score("skill_recall_rate"),
-            );
+            selector.record_cycle_outcome(event.validation.overall_ok());
         }
         {
             let mut gate = self.mutation_gate.lock().unwrap_or_else(|e| e.into_inner());
@@ -1176,7 +1209,9 @@ impl DreamDaemon {
             for assertion in &report.synthesis_assertions {
                 gate.record_synthesis_assertion(assertion);
             }
-            if report.distill_produced > 0 || report.distill_recalled > 0 {
+            // Only feed the detector once a mature cohort exists; before then
+            // there is nothing to judge (feeding zeros would never arm it).
+            if report.distill_produced > 0 {
                 gate.record_skill_distill_output(report.distill_produced, report.distill_recalled);
             }
             gate.advance_cycle();
@@ -1187,21 +1222,26 @@ impl DreamDaemon {
     }
 }
 
+/// Skill notes younger than this are excluded from `MutationGate`'s
+/// wasted-distillation cohort — they haven't had a fair chance to be recalled.
+/// Mirrors `NoteDecay`'s 7-day "too new to touch" protection window.
+const MATURE_SKILL_DAYS: i64 = 7;
+
 /// Compute a `RawMetrics` snapshot for the Dream cycle.
 ///
-/// Pulls notes (count + 24h growth) from the in-memory note index, folds in
-/// 24h tool-invocation aggregates from `raw_memories` so the signal collector
-/// can surface `tool_failure_rate` / `tool_call_volume` / `tool_latency_score`
-/// (Spec 3), and folds in per-note recall counts from `recall_signals` so the
-/// recall-derived signals (`note_hit_rate` / `never_recalled_ratio` /
-/// `skill_recall_rate`) carry real values rather than the historical zeros.
+/// Pulls notes (count + 24h growth) from the in-memory note index and folds in
+/// per-note recall counts from `recall_signals` so the recall-derived signals
+/// (`note_hit_rate` / `never_recalled_ratio` / `skill_recall_rate`) carry real
+/// values rather than the historical zeros.
 ///
 /// The recall wiring is load-bearing: `skill_recall_rate` feeds the strategy
 /// selector's `growth_pressure` (a false 0 perpetually inflated the synthesize
-/// pressure) and the `MutationGate` wasted-distillation detector (a false 0
-/// made it fire `Conserve` the moment any skill was produced). Both the tool
-/// and the recall queries degrade to a warning + zeros on backend failure —
-/// strategy selection runs on the surviving signals rather than aborting.
+/// pressure), and the `mature_skill_total` / `mature_skill_recalled` pair feeds
+/// `MutationGate`'s wasted-distillation detector — restricted to skill notes
+/// old enough to have had a recall opportunity so a fresh cycle's produce can't
+/// make it misfire. The recall query degrades to a warning + zeros on backend
+/// failure — strategy selection runs on the surviving signals rather than
+/// aborting.
 async fn compute_raw_metrics(
     notes: &[NoteIndexEntry],
     store: &SqliteMemoryBackend,
@@ -1210,29 +1250,23 @@ async fn compute_raw_metrics(
 ) -> RawMetrics {
     let day_ago = now_timestamp() - 86_400;
     let notes_added_24h = notes.iter().filter(|n| n.created_at >= day_ago).count() as u32;
-
-    let (tool_total, tool_failed, tool_avg_ms) =
-        match crate::memory::tool_signal_sink::aggregate_tool_stats(store, agent_id, day_ago, 5_000)
-            .await
-        {
-            Ok(stats) => (stats.total, stats.failed, stats.avg_duration_ms),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    agent = agent_id,
-                    "tool-invocation aggregation failed; tool signals will read zero",
-                );
-                (0, 0, 0)
-            }
-        };
+    // Skill notes created before this cutoff are "mature": old enough to have
+    // had a recall opportunity, so their recall rate is a fair signal for
+    // MutationGate's wasted-distillation detector.
+    let mature_cutoff = now_timestamp() - MATURE_SKILL_DAYS * 86_400;
 
     // Fold in recall signals with a single batch query over every note path.
     // `recall_hit_counts` returns only the paths that have at least one recorded
     // recall, so its key set is exactly the recalled subset.
     let total_notes = notes.len() as u32;
     let all_paths: Vec<String> = notes.iter().map(|n| n.path.clone()).collect();
+    // The mature-skill cohort (denominator/numerator of MutationGate's
+    // wasted-distillation ratio) is derived from the same recall `hits`, so it
+    // is accumulated inside the Ok arm; the Err path leaves both at zero.
+    let mut mature_skill_total = 0u32;
+    let mut mature_skill_recalled = 0u32;
     let (note_hit_rate, never_recalled_count, skill_notes_total, skill_notes_recalled) =
-        match store.recall_hit_counts(&all_paths).await {
+        match store.recall_hit_counts(agent_id, &all_paths).await {
             Ok(hits) => {
                 let recalled_total = hits.len() as u32;
                 let never = total_notes.saturating_sub(recalled_total);
@@ -1240,6 +1274,18 @@ async fn compute_raw_metrics(
                 let skill_recalled = notes
                     .iter()
                     .filter(|n| n.category == "skill" && hits.contains_key(&n.path))
+                    .count() as u32;
+                mature_skill_total = notes
+                    .iter()
+                    .filter(|n| n.category == "skill" && n.created_at < mature_cutoff)
+                    .count() as u32;
+                mature_skill_recalled = notes
+                    .iter()
+                    .filter(|n| {
+                        n.category == "skill"
+                            && n.created_at < mature_cutoff
+                            && hits.contains_key(&n.path)
+                    })
                     .count() as u32;
                 let hit_rate = if total_notes > 0 {
                     f64::from(recalled_total) / f64::from(total_notes)
@@ -1287,12 +1333,11 @@ async fn compute_raw_metrics(
         never_recalled_count,
         skill_notes_total,
         skill_notes_recalled,
+        mature_skill_total,
+        mature_skill_recalled,
         duplication_rate,
         contradiction_rate,
         staleness_rate,
-        tool_calls_total_24h: tool_total,
-        tool_calls_failed_24h: tool_failed,
-        tool_avg_duration_ms_24h: tool_avg_ms,
         ..Default::default()
     }
 }
@@ -1316,6 +1361,89 @@ fn parse_window(config: &ConfigDreamingConfig) -> Result<(NaiveTime, NaiveTime),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // should_skip_scheduled_run — the once-per-day guard
+    // -----------------------------------------------------------------------
+
+    /// Build a status whose `last_run_at` is `hours_ago` before now.
+    fn status_from(hours_ago: i64, last_status: Option<&str>) -> DreamStatus {
+        DreamStatus {
+            last_run_at: Some(Local::now().timestamp() - hours_ago * 3600),
+            last_status: last_status.map(str::to_string),
+            last_duration_ms: None,
+        }
+    }
+
+    fn today() -> String {
+        Local::now().format("%Y-%m-%d").to_string()
+    }
+
+    #[test]
+    fn skips_when_todays_run_succeeded() {
+        assert!(should_skip_scheduled_run(
+            &status_from(0, Some("success")),
+            &today()
+        ));
+    }
+
+    /// Regression: a timed-out run used to leave `last_status = "timeout"`,
+    /// which the old guard did not treat as "ran today" — so the daemon
+    /// restarted a full cycle on every 60s tick for the rest of the window.
+    #[test]
+    fn skips_when_todays_run_timed_out() {
+        assert!(
+            should_skip_scheduled_run(&status_from(0, Some("timeout")), &today()),
+            "a timed-out cycle must cost one attempt, not restart every tick"
+        );
+    }
+
+    /// Regression: same defect via the error path — a 403/quota failure left
+    /// `last_status = "error"` and the daemon kept relaunching cycles.
+    #[test]
+    fn skips_when_todays_run_errored() {
+        assert!(
+            should_skip_scheduled_run(&status_from(0, Some("error")), &today()),
+            "an errored cycle must not restart every tick"
+        );
+    }
+
+    /// A stale `running` row is left behind when the process dies mid-cycle.
+    /// Treat it as spent: erring toward "no dream today" is safe; erring toward
+    /// "retry" risks a crash-loop burning provider quota.
+    #[test]
+    fn skips_when_todays_run_left_stale_running_marker() {
+        assert!(should_skip_scheduled_run(
+            &status_from(0, Some("running")),
+            &today()
+        ));
+    }
+
+    /// `cancelled` is the one status that earns a retry: the cycle yielded to
+    /// fresh user activity and never got to do its work.
+    #[test]
+    fn retries_when_todays_run_was_cancelled_by_user_activity() {
+        assert!(!should_skip_scheduled_run(
+            &status_from(0, Some("cancelled")),
+            &today()
+        ));
+    }
+
+    #[test]
+    fn runs_when_last_run_was_a_previous_day() {
+        assert!(!should_skip_scheduled_run(
+            &status_from(48, Some("success")),
+            &today()
+        ));
+    }
+
+    #[test]
+    fn runs_when_there_is_no_prior_run() {
+        assert!(!should_skip_scheduled_run(
+            &DreamStatus::default(),
+            &today()
+        ));
+    }
 
     #[test]
     fn test_window_within_normal() {
@@ -1504,42 +1632,6 @@ mod tests {
         let m = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID, None).await;
         assert_eq!(m.total_notes, 3);
         assert_eq!(m.notes_added_24h, 2);
-        // With no tool invocations recorded yet, the new fields stay zero.
-        assert_eq!(m.tool_calls_total_24h, 0);
-        assert_eq!(m.tool_calls_failed_24h, 0);
-        assert_eq!(m.tool_avg_duration_ms_24h, 0);
-    }
-
-    #[tokio::test]
-    async fn compute_raw_metrics_folds_in_tool_invocation_stats() {
-        use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-        let temp =
-            std::env::temp_dir().join(format!("aleph_metrics_tool_{}", uuid::Uuid::new_v4()));
-        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
-
-        // Synthesize three fresh tool invocations: 2 ok (10 + 30 ms) + 1 fail.
-        for (name, ok, ms) in [
-            ("read_file", true, 10u64),
-            ("shell", true, 30),
-            ("grep", false, 0),
-        ] {
-            let raw = RawMemory::new(
-                format!("tool {name}"),
-                RawMemorySource::ToolInvocation {
-                    tool_name: name.into(),
-                    success: ok,
-                    duration_ms: ms,
-                },
-            )
-            .with_agent(DEFAULT_AGENT_ID);
-            store.insert_raw_memory(&raw).await.unwrap();
-        }
-
-        let m = compute_raw_metrics(&[], store.as_ref(), DEFAULT_AGENT_ID, None).await;
-        assert_eq!(m.tool_calls_total_24h, 3);
-        assert_eq!(m.tool_calls_failed_24h, 1);
-        // (10 + 30 + 0) / 3 = 13
-        assert_eq!(m.tool_avg_duration_ms_24h, 40 / 3);
     }
 
     #[tokio::test]
@@ -1580,8 +1672,8 @@ mod tests {
 
         let m = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID, None).await;
         // Skill recall: 1 of 2 skill notes recalled → skill_recall_rate = 0.5,
-        // which keeps the wasted-distillation gate from misfiring (its bug was
-        // a structural recalled=0).
+        // feeding the strategy selector's growth_pressure with a real value
+        // instead of the historical structural zero.
         assert_eq!(m.skill_notes_total, 2);
         assert_eq!(m.skill_notes_recalled, 1);
         // 3 notes, 1 recalled → 2 never recalled.
@@ -1591,6 +1683,52 @@ mod tests {
         // The derived skill_recall_rate signal must now be non-zero.
         let snap = SignalSnapshot::from_metrics(&m);
         assert!((snap.score("skill_recall_rate") - 0.5).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn compute_raw_metrics_mature_skill_cohort_excludes_fresh() {
+        let temp =
+            std::env::temp_dir().join(format!("aleph_metrics_mature_{}", uuid::Uuid::new_v4()));
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+
+        let now = now_timestamp();
+        let old = now - 30 * 86_400; // mature: older than MATURE_SKILL_DAYS
+        let skill = |path: &str, created: i64| NoteIndexEntry {
+            path: path.into(),
+            filename: path.rsplit('/').next().unwrap_or(path).into(),
+            agent_id: DEFAULT_AGENT_ID.into(),
+            category: "skill".into(),
+            tags: vec![],
+            link_count: 0,
+            created_at: created,
+            updated_at: created,
+            content_hash: "h".into(),
+        };
+        // Two mature skills (one recalled) + one freshly-distilled skill.
+        let notes = vec![
+            skill("skill/mature-recalled", old),
+            skill("skill/mature-cold", old),
+            skill("skill/fresh", now),
+        ];
+
+        store
+            .record_recall_hits(
+                "q",
+                "auto-recall",
+                &[("skill/mature-recalled".to_string(), 0.9)],
+                DEFAULT_AGENT_ID,
+            )
+            .await
+            .unwrap();
+
+        let m = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID, None).await;
+        // All three count toward the whole-corpus skill stats...
+        assert_eq!(m.skill_notes_total, 3);
+        // ...but only the two mature notes form the wasted-distillation cohort;
+        // the fresh note (no recall opportunity yet) is excluded, so it can't
+        // drag the ratio toward a false Conserve.
+        assert_eq!(m.mature_skill_total, 2);
+        assert_eq!(m.mature_skill_recalled, 1);
     }
 
     #[tokio::test]

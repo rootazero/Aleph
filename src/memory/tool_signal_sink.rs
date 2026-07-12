@@ -15,7 +15,6 @@ use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 
-use crate::error::AlephError;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 
 /// Fire-and-forget sink for per-tool-invocation signals.
@@ -114,77 +113,10 @@ impl ToolSignalSink for RawMemoryToolSink {
     }
 }
 
-/// Aggregate tool-invocation statistics for an agent over the last
-/// `since_seconds` window. Returns `(total, succeeded, failed, avg_duration_ms)`.
-///
-/// Reads `RawMemorySource::ToolInvocation` rows. Reuses the in-memory
-/// filtering path that the default `RawMemoryStore::get_raw_by_source`
-/// provides — backends with a smarter SQL query override it.
-pub async fn aggregate_tool_stats(
-    store: &dyn RawMemoryStore,
-    agent_id: &str,
-    since_unix_secs: i64,
-    limit: usize,
-) -> Result<ToolStats, AlephError> {
-    let rows = store
-        .get_raw_by_source(
-            // Probe variant; only the discriminator token matters for filtering.
-            RawMemorySource::ToolInvocation {
-                tool_name: String::new(),
-                success: false,
-                duration_ms: 0,
-            },
-            agent_id,
-            limit,
-        )
-        .await?;
-
-    let mut total: u64 = 0;
-    let mut succeeded: u64 = 0;
-    let mut failed: u64 = 0;
-    let mut total_duration_ms: u64 = 0;
-
-    for r in rows {
-        if r.created_at < since_unix_secs {
-            continue;
-        }
-        if let RawMemorySource::ToolInvocation {
-            success,
-            duration_ms,
-            ..
-        } = &r.source
-        {
-            total = total.saturating_add(1);
-            if *success {
-                succeeded = succeeded.saturating_add(1);
-            } else {
-                failed = failed.saturating_add(1);
-            }
-            total_duration_ms = total_duration_ms.saturating_add(*duration_ms);
-        }
-    }
-
-    let avg_duration_ms = total_duration_ms.checked_div(total).unwrap_or(0);
-    Ok(ToolStats {
-        total,
-        succeeded,
-        failed,
-        avg_duration_ms,
-    })
-}
-
-/// Aggregated tool-invocation metrics over a time window.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ToolStats {
-    pub total: u64,
-    pub succeeded: u64,
-    pub failed: u64,
-    pub avg_duration_ms: u64,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::AlephError;
     use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
     use crate::sync_primitives::Mutex;
     use async_trait::async_trait;
@@ -256,71 +188,6 @@ mod tests {
         assert!(rows[1].content.contains("perm denied"));
         assert_eq!(rows[0].agent_id, "agent-1");
         assert_eq!(rows[0].session_id.as_deref(), Some("sess-x"));
-    }
-
-    #[tokio::test]
-    async fn aggregate_tool_stats_buckets_success_and_failure() {
-        let store = Arc::new(MemStore::new());
-        let sink = RawMemoryToolSink::new(store.clone(), "agent-1", "sess");
-
-        sink.record_tool_call("a", true, 10, None).await;
-        sink.record_tool_call("b", true, 30, None).await;
-        sink.record_tool_call("c", false, 0, Some("oops")).await;
-
-        let stats = aggregate_tool_stats(store.as_ref(), "agent-1", 0, 100)
-            .await
-            .unwrap();
-        assert_eq!(stats.total, 3);
-        assert_eq!(stats.succeeded, 2);
-        assert_eq!(stats.failed, 1);
-        // Two succeeded (10 + 30) plus one zero-duration failure → 40/3 = 13.
-        assert_eq!(stats.avg_duration_ms, (10 + 30) / 3);
-    }
-
-    #[tokio::test]
-    async fn aggregate_tool_stats_respects_since_window() {
-        let store = Arc::new(MemStore::new());
-        // Write one stale + one fresh row by hand to control timestamps.
-        let stale = RawMemory {
-            id: "old".into(),
-            content: "stale".into(),
-            source: RawMemorySource::ToolInvocation {
-                tool_name: "old".into(),
-                success: true,
-                duration_ms: 5,
-            },
-            agent_id: "agent-1".into(),
-            session_id: None,
-            path: None,
-            layer: None,
-            attachment_text: None,
-            is_processed: false,
-            created_at: 1_000,
-        };
-        let fresh = RawMemory {
-            id: "new".into(),
-            content: "fresh".into(),
-            source: RawMemorySource::ToolInvocation {
-                tool_name: "new".into(),
-                success: true,
-                duration_ms: 25,
-            },
-            agent_id: "agent-1".into(),
-            session_id: None,
-            path: None,
-            layer: None,
-            attachment_text: None,
-            is_processed: false,
-            created_at: 9_999_999,
-        };
-        store.insert_raw_memory(&stale).await.unwrap();
-        store.insert_raw_memory(&fresh).await.unwrap();
-
-        let stats = aggregate_tool_stats(store.as_ref(), "agent-1", 5_000, 100)
-            .await
-            .unwrap();
-        assert_eq!(stats.total, 1, "only the fresh row should count");
-        assert_eq!(stats.avg_duration_ms, 25);
     }
 
     #[tokio::test]

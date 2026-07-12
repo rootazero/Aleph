@@ -31,35 +31,6 @@ impl GateOutcome {
     }
 }
 
-/// Which comparison metric to project a (hard, soft) score pair onto.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum GateMetric {
-    /// Deterministic health score only (cheapest, default).
-    #[default]
-    Hard,
-    /// LLM-judge score only.
-    Soft,
-    /// Weighted blend of hard and soft.
-    Mixed,
-}
-
-/// Project a `(hard, soft)` score pair onto a single comparison scalar.
-///
-/// `mixed_weight` is the weight given to `soft` in `Mixed` mode (clamped to
-/// `[0, 1]`); `Hard`/`Soft` ignore it. Mirrors SkillOpt `select_gate_score`.
-#[must_use]
-pub fn select_gate_score(hard: f64, soft: f64, metric: GateMetric, mixed_weight: f64) -> f64 {
-    match metric {
-        GateMetric::Hard => hard,
-        GateMetric::Soft => soft,
-        GateMetric::Mixed => {
-            let w = mixed_weight.clamp(0.0, 1.0);
-            (1.0 - w) * hard + w * soft
-        }
-    }
-}
-
 /// Pure gate decision: is `candidate` strictly better than `current`, and does
 /// it beat `best`? `epsilon` is the minimum improvement that counts as "better"
 /// (guards against float noise and rewards only meaningful gains).
@@ -109,15 +80,6 @@ mod tests {
             evaluate_gate(0.52, 0.5, 0.5, 0.01),
             GateOutcome::AcceptNewBest
         );
-    }
-
-    #[test]
-    fn select_gate_score_projects_each_metric() {
-        assert!((select_gate_score(0.8, 0.2, GateMetric::Hard, 0.5) - 0.8).abs() < 1e-9);
-        assert!((select_gate_score(0.8, 0.2, GateMetric::Soft, 0.5) - 0.2).abs() < 1e-9);
-        assert!((select_gate_score(0.8, 0.2, GateMetric::Mixed, 0.5) - 0.5).abs() < 1e-9);
-        // weight clamps
-        assert!((select_gate_score(0.8, 0.2, GateMetric::Mixed, 2.0) - 0.2).abs() < 1e-9);
     }
 
     #[test]

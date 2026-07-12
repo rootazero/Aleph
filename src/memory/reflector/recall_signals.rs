@@ -13,6 +13,8 @@ pub const REFLECT_CHANNEL: &str = "reflect";
 #[derive(Debug, Clone)]
 pub struct SignalRow {
     pub note_path: String,
+    /// Recording agent — the recall-signal scope key (per-agent partition).
+    pub agent_id: String,
     pub query_text: String,
     pub channel: String,
     pub score: f32,
@@ -35,6 +37,7 @@ where
     for (path, meta) in note_lookup {
         let row = SignalRow {
             note_path: path.clone(),
+            agent_id: opts.agent_id.clone(),
             query_text: query.to_string(),
             channel: REFLECT_CHANNEL.to_string(),
             score: meta.relevance,

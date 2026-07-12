@@ -13,10 +13,14 @@
 //! - `recency_weight` — 1.0 / (1.0 + `days_since_update` / 30.0)
 //! - `link_weight`    — `min(incoming_link_count` / 3.0, 1.0)
 //!
-//! ## Protection rules (score not computed; note skipped)
+//! ## Protection rules (note skipped, not archived)
 //!
 //! 1. Created fewer than 7 days ago.
 //! 2. Has 3 or more incoming links from other notes.
+//! 3. `permanent: true` frontmatter / `permanent`/`pinned` tag, or a
+//!    `protected_types` category.
+//! 4. High/Critical severity — floored, not archived, so the C2.7 confidence
+//!    floor (0.7/0.85) stays meaningful.
 //!
 //! ## Archive thresholds
 //!
@@ -198,6 +202,10 @@ impl DreamStage for NoteDecayStage {
         }
 
         // --- Archive low-scoring notes ---
+        // Track paths we actually move to archive/ so the C2.7 confidence pass
+        // below only skips genuinely-archived notes. Notes that stay (permanent,
+        // High/Critical severity, or a failed move) must still be floored.
+        let mut archived_now: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (path, score, category, filename) in &low_score_notes {
             let source_path = ctx
                 .indexer
@@ -211,15 +219,26 @@ impl DreamStage for NoteDecayStage {
                 continue;
             }
 
-            // Honour the per-note `permanent: true` frontmatter flag, which the
-            // lightweight index `tags` (checked in the first loop) cannot see.
-            // Only archival candidates are read here, so this stays cheap.
+            // Honour the per-note `permanent: true` flag and High/Critical
+            // severity — neither of which the lightweight index `tags` (checked
+            // in the first loop) can see. Only archival candidates are read
+            // here, so this stays cheap.
             if let Ok(content) = tokio::fs::read_to_string(&source_path).await {
-                if KnowledgeNote::from_markdown(filename, &content).is_ok_and(|n| n.is_permanent())
-                {
-                    notes_protected += 1;
-                    tracing::debug!(path, "NoteDecay: permanent note exempt from archival");
-                    continue;
+                if let Ok(note) = KnowledgeNote::from_markdown(filename, &content) {
+                    if note.is_permanent() {
+                        notes_protected += 1;
+                        tracing::debug!(path, "NoteDecay: permanent note exempt from archival");
+                        continue;
+                    }
+                    // Critical/High notes have their confidence floored at
+                    // 0.85/0.7 by the C2.7 pass below; archiving them out of the
+                    // index would make that floor meaningless. Exempt them from
+                    // archival (Med/Low still archive on low activity).
+                    if matches!(note.severity, Severity::High | Severity::Critical) {
+                        notes_protected += 1;
+                        tracing::debug!(path, "NoteDecay: high-severity note exempt from archival");
+                        continue;
+                    }
                 }
             }
 
@@ -253,6 +272,7 @@ impl DreamStage for NoteDecayStage {
                     // Evict from content cache if present
                     ctx.note_contents.remove(path.as_str());
 
+                    archived_now.insert(path.clone());
                     notes_archived += 1;
                     tracing::info!(path, score, "NoteDecay: archived low-activity note");
                 }
@@ -277,10 +297,8 @@ impl DreamStage for NoteDecayStage {
         // Permanent notes (frontmatter / tag) and `protected_types` categories
         // are skipped so core knowledge never erodes.
         // ---------------------------------------------------------------
-        let archived_paths: std::collections::HashSet<&str> = low_score_notes
-            .iter()
-            .map(|(p, _, _, _)| p.as_str())
-            .collect();
+        let archived_paths: std::collections::HashSet<&str> =
+            archived_now.iter().map(String::as_str).collect();
 
         let now_ts = chrono::Utc::now().timestamp();
 
@@ -781,6 +799,45 @@ mod tests {
         assert_eq!(
             out.report.notes_protected, 1,
             "note with 3 full-path incoming links must be protected (was the >=3 rule reached?)"
+        );
+        assert_eq!(
+            out.report.notes_archived, 0,
+            "protected note must not be archived"
+        );
+    }
+
+    #[tokio::test]
+    async fn high_severity_note_is_exempt_from_archival() {
+        // A High-severity note with no activity (never recalled, stale, no
+        // links) scores well below the 0.1 reference threshold, but must be
+        // protected: archiving it out of the index would make the C2.7
+        // confidence floor (0.7) it relies on meaningless.
+        let (mut ctx, _store) = build_decay_ctx().await;
+
+        let md = KnowledgeNote {
+            title: "crit".into(),
+            category: "reference".into(),
+            facts: vec!["load-bearing fact".into()],
+            severity: Severity::High,
+            content_hash: "hc".into(),
+            created_at: 1,
+            updated_at: 1,
+            ..Default::default()
+        }
+        .to_markdown();
+        let dir = ctx.indexer.memory_dir().join("default").join("reference");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(dir.join("crit.md"), &md).await.unwrap();
+
+        // Old enough to clear the <7-day rule; `reference` is not a protected
+        // category and has no incoming links, so only severity can protect it.
+        ctx.notes = vec![decay_entry("reference/crit", 1, 1)];
+
+        let out = NoteDecayStage::default().execute(ctx).await.unwrap();
+
+        assert_eq!(
+            out.report.notes_protected, 1,
+            "High-severity note must be exempt from archival"
         );
         assert_eq!(
             out.report.notes_archived, 0,

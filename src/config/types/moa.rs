@@ -121,6 +121,14 @@ impl MoaToml {
                     "[moa.presets.{name}] an enabled preset needs at least one advisor"
                 ));
             }
+            // A 0s advisor budget makes every advisor time out instantly, so the
+            // preset silently degrades to aggregator-alone — reject it as a
+            // configuration mistake rather than let it fail-soft every turn.
+            if preset.advisor_timeout_secs == 0 {
+                errs.push(format!(
+                    "[moa.presets.{name}] advisor_timeout_secs must be >= 1"
+                ));
+            }
             // Global distinctness: every slot (all advisors + aggregator) must be
             // a unique (provider, model) after case/whitespace normalization.
             let mut seen = std::collections::HashSet::new();
@@ -247,6 +255,16 @@ aggregator = { provider = "b", model = "n" }
             .validation_errors()
             .iter()
             .any(|e| e.contains("at least one advisor")));
+    }
+
+    #[test]
+    fn zero_advisor_timeout_rejected() {
+        let mut cfg = preset_with(vec![slot("openai", "gpt-5.5")], slot("anthropic", "opus"));
+        cfg.presets.get_mut("p").unwrap().advisor_timeout_secs = 0;
+        assert!(cfg
+            .validation_errors()
+            .iter()
+            .any(|e| e.contains("advisor_timeout_secs must be >= 1")));
     }
 
     #[test]

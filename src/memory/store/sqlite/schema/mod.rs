@@ -9,6 +9,10 @@ use rusqlite::Connection;
 /// Initialize the core relational schema.
 pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     migrations::migrate_recall_signals_note_path(conn)?;
+    // Add the agent_id scope column before the DDL below recreates the
+    // agent-scoped dedup / lookup indexes (which reference the column). No-op on
+    // fresh databases — the DDL then creates the table already carrying it.
+    migrations::migrate_recall_signals_agent_id(conn)?;
 
     conn.execute_batch(
         "DROP INDEX IF EXISTS idx_recall_fact_id; \
