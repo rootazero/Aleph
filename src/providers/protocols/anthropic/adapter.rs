@@ -666,7 +666,8 @@ impl ProtocolAdapter for AnthropicProtocol {
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
-            let error_text = response.text().await.unwrap_or_default();
+            let error_text =
+                crate::providers::protocols::http_client::read_error_body(response).await;
             return Err(classify_anthropic_error_response(
                 status.as_u16(),
                 retry_after.as_deref(),
