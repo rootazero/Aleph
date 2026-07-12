@@ -223,7 +223,6 @@ fn followup_harness(session: Arc<InProcessActorSessionService>) -> AgentHarness 
     let deps = HarnessDeps {
         session,
         tools: Arc::new(AlwaysOkTools),
-        sandbox: Arc::new(crate::sandbox::NoopSandbox),
         llm: Arc::new(SleepingProvider {
             sleep: std::time::Duration::from_secs(0),
         }),
@@ -461,12 +460,10 @@ async fn harness_accumulates_provider_token_usage() {
 
     let (session, sid) = fresh_session("test-tokens").await;
     let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(AlwaysOkTools);
-    let sandbox: Arc<dyn crate::sandbox::Sandbox> = Arc::new(crate::sandbox::NoopSandbox);
 
     let deps = HarnessDeps {
         session,
         tools,
-        sandbox,
         llm: provider,
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -533,12 +530,10 @@ async fn max_iterations_stops_runaway_loop() {
 
     let (session, sid) = fresh_session("test-cap").await;
     let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(AlwaysOkTools);
-    let sandbox: Arc<dyn crate::sandbox::Sandbox> = Arc::new(crate::sandbox::NoopSandbox);
 
     let deps = HarnessDeps {
         session,
         tools,
-        sandbox,
         llm: provider,
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -599,12 +594,10 @@ async fn turn_timeout_returns_ok_with_hit_limit_not_err() {
 
     let (session, sid) = fresh_session("test-turn-timeout-ok-path").await;
     let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(AlwaysOkTools);
-    let sandbox: Arc<dyn crate::sandbox::Sandbox> = Arc::new(crate::sandbox::NoopSandbox);
 
     let deps = HarnessDeps {
         session,
         tools,
-        sandbox,
         llm: provider,
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,

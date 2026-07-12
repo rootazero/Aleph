@@ -818,9 +818,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         std::collections::HashMap::new(),
                     ),
                 };
-                let sub_sandbox: Arc<dyn crate::sandbox::Sandbox> =
-                    Arc::new(crate::sandbox::NoopSandbox);
-
                 let mut t = SubagentTool::new(
                     sub_provider,
                     run_chain,
@@ -828,7 +825,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     background_tracker,
                     sub_session,
                     parent_view_for_children,
-                    sub_sandbox,
                 )
                 .with_parent_agent_id(request.session_key.agent_id().to_string())
                 .with_parent_session_id(request.session_key.to_key_string())

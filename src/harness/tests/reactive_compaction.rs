@@ -22,8 +22,6 @@ use crate::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback, Tu
 use crate::orchestrator::dispatch::TerminateReason;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
-use crate::sandbox::test_util::MockSandbox;
-use crate::sandbox::SandboxOutput;
 use crate::session::events::{
     now_ms, EventSeq, MessageContent, SessionEvent, SessionEventRecord, TurnTrigger,
 };
@@ -382,13 +380,6 @@ fn sample_session_id() -> SessionId {
     SessionId::main("test")
 }
 
-fn noop_sandbox_output() -> SandboxOutput {
-    SandboxOutput {
-        exit_code: Some(0),
-        ..Default::default()
-    }
-}
-
 fn user_message_event(text: &str) -> SessionEvent {
     SessionEvent::UserMessage {
         turn_id: uuid::Uuid::new_v4(),
@@ -419,7 +410,6 @@ fn build_deps(
     HarnessDeps {
         session,
         tools: Arc::new(EmptyTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm,
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,

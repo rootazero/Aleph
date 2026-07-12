@@ -13,8 +13,11 @@
 //!   explains in natural language, the system merely relays — zero added
 //!   judgment.
 
+use std::sync::Arc;
+
 use tokio::task_local;
 
+use crate::sandbox::Sandbox;
 use crate::session::service::SessionId;
 
 task_local! {
@@ -23,6 +26,12 @@ task_local! {
     /// when the LLM actually provided one — absence ⇒ the approval prompt stays
     /// byte-identical to its pre-justification form.
     pub static EXEC_JUSTIFICATION: String;
+    /// The command sandbox a worktree-isolated subagent's exec tools must use.
+    /// Scoped around the subagent run by [`with_sandbox_override`] so `bash` /
+    /// `code_exec` / `code_check` run at the worktree path (with
+    /// `CARGO_TARGET_DIR` redirected) instead of the parent's shared workspace.
+    /// Absent ⇒ tools use their construction-time sandbox (the common path).
+    pub static SANDBOX_OVERRIDE: Arc<dyn Sandbox>;
 }
 
 /// Returns the current session id if we're inside a `SESSION_ID.scope(...)`,
@@ -39,4 +48,54 @@ pub fn current_session() -> Option<SessionId> {
 #[must_use]
 pub fn current_justification() -> Option<String> {
     EXEC_JUSTIFICATION.try_with(|j| j.clone()).ok()
+}
+
+/// The exec-tool sandbox override in scope for the current call, if any. Command
+/// tools prefer this over their construction-time sandbox so a worktree-isolated
+/// subagent's commands run inside its checkout.
+#[must_use]
+pub fn current_sandbox_override() -> Option<Arc<dyn Sandbox>> {
+    SANDBOX_OVERRIDE.try_with(|s| s.clone()).ok()
+}
+
+/// Run `fut` with `sandbox` installed as the exec-tool sandbox override. `None`
+/// runs `fut` unchanged (the common, non-isolated path). Mirrors
+/// `tools::fs_scope::with_fs_scope`.
+pub async fn with_sandbox_override<F>(sandbox: Option<Arc<dyn Sandbox>>, fut: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    match sandbox {
+        Some(s) => SANDBOX_OVERRIDE.scope(s, fut).await,
+        None => fut.await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn sandbox_override_absent_outside_scope() {
+        assert!(current_sandbox_override().is_none());
+    }
+
+    #[tokio::test]
+    async fn sandbox_override_visible_inside_and_cleared_after() {
+        let sb: Arc<dyn Sandbox> = Arc::new(crate::sandbox::NoopSandbox);
+        let seen =
+            with_sandbox_override(Some(sb), async { current_sandbox_override().is_some() }).await;
+        assert!(seen, "override must be visible inside the scope");
+        assert!(
+            current_sandbox_override().is_none(),
+            "override must clear once the scope ends"
+        );
+    }
+
+    #[tokio::test]
+    async fn sandbox_override_none_is_a_noop() {
+        let seen =
+            with_sandbox_override(None, async { current_sandbox_override().is_some() }).await;
+        assert!(!seen);
+    }
 }

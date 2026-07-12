@@ -259,7 +259,6 @@ async fn list_includes_subagent_tool_when_set() {
         tracker,
         in_mem_session(),
         Arc::new(NoopParentTools),
-        Arc::new(crate::sandbox::NoopSandbox),
     ));
 
     let registry = make_registry(&["read_file"]);
@@ -319,7 +318,6 @@ async fn subagent_survives_non_empty_allow_set() {
         Arc::new(BackgroundAgentTracker::new()),
         in_mem_session(),
         Arc::new(NoopParentTools),
-        Arc::new(crate::sandbox::NoopSandbox),
     ));
 
     // Production-shaped allow set: only registry-known tool names, no
@@ -423,7 +421,6 @@ async fn execute_routes_to_subagent_tool_by_name() {
         tracker,
         in_mem_session(),
         Arc::new(NoopParentTools),
-        Arc::new(crate::sandbox::NoopSandbox),
     ));
 
     // Registry has NO "subagent" tool — proves routing goes to st, not inner

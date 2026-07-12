@@ -153,9 +153,13 @@ impl CodeCheckTool {
     }
 
     async fn run(&self, args: CodeCheckArgs) -> Result<CodeCheckOutput> {
+        // Prefer a worktree-isolated subagent's scoped sandbox override; fall
+        // back to the construction-time sandbox outside that scope.
         let sandbox =
-            match self.sandbox.as_ref() {
-                Some(s) => s.clone(),
+            match crate::sandbox::context::current_sandbox_override()
+                .or_else(|| self.sandbox.clone())
+            {
+                Some(s) => s,
                 None => return Ok(unconfigured(
                     "code_check: sandbox not configured — boot wiring must inject Arc<dyn Sandbox>",
                 )),
@@ -763,5 +767,56 @@ not json at all"#;
         assert!(out.truncated);
         assert_eq!(out.error_count, MAX_DIAGNOSTICS);
         assert!(!out.ok);
+    }
+
+    /// F3 regression: `code_check` must resolve a worktree-isolated subagent's
+    /// scoped sandbox override in preference to its construction-time sandbox,
+    /// so a subagent's type-check runs inside its own checkout. This is the
+    /// second exec-tool resolution site (identical `.or_else` chain to
+    /// `code_exec`); the deterministic two-sandbox check pins it without a
+    /// subprocess.
+    #[tokio::test]
+    async fn run_prefers_scoped_sandbox_override() {
+        use crate::routing::session_key::SessionKey;
+        use crate::sandbox::context::{with_sandbox_override, SESSION_ID};
+        use crate::sandbox::test_util::MockSandbox;
+
+        let ok = || SandboxOutput {
+            exit_code: Some(0),
+            ..Default::default()
+        };
+        // Distinct sandboxes so we can tell which one actually ran.
+        let parent = MockSandbox::new(ok());
+        let scoped = MockSandbox::new(ok());
+        let parent_dyn: Arc<dyn Sandbox> = parent.clone();
+        let scoped_dyn: Arc<dyn Sandbox> = scoped.clone();
+        let tool = CodeCheckTool::new().with_sandbox(parent_dyn);
+
+        let session = SessionKey::ephemeral("code-check-override");
+        SESSION_ID
+            .scope(
+                session,
+                with_sandbox_override(Some(scoped_dyn), async {
+                    tool.call(CodeCheckArgs {
+                        path: None,
+                        command: Some("true".to_string()),
+                        timeout: Some(5),
+                    })
+                    .await
+                    .expect("tool call");
+                }),
+            )
+            .await;
+
+        assert_eq!(
+            parent.calls.lock().await.len(),
+            0,
+            "construction-time sandbox must be bypassed when an override is scoped"
+        );
+        assert_eq!(
+            scoped.calls.lock().await.len(),
+            1,
+            "the scoped override must receive the check command"
+        );
     }
 }

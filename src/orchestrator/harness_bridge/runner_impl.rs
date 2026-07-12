@@ -449,7 +449,6 @@ impl HarnessRunner for AgentHarnessRunner {
         let deps = HarnessDeps {
             session: self.session_service.clone(),
             tools,
-            sandbox,
             llm,
             robustness_profile,
             verifier_chain: self.verifier_chain.clone(),

@@ -25,8 +25,6 @@ use crate::providers::adapter::NativeToolCall;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
-use crate::sandbox::test_util::MockSandbox;
-use crate::sandbox::SandboxOutput;
 use crate::session::events::{
     now_ms, EventSeq, MessageContent, SessionEvent, SessionEventRecord, TurnTrigger,
 };
@@ -291,13 +289,6 @@ impl HarnessCallback for CapturingCallback {
 
 // -- Helpers -----------------------------------------------------------------
 
-fn noop_sandbox_output() -> SandboxOutput {
-    SandboxOutput {
-        exit_code: Some(0),
-        ..Default::default()
-    }
-}
-
 fn user_message(text: &str) -> SessionEvent {
     SessionEvent::UserMessage {
         turn_id: uuid::Uuid::new_v4(),
@@ -328,7 +319,6 @@ fn make_deps(
     HarnessDeps {
         session,
         tools: Arc::new(EmptyTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider,
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -621,7 +611,6 @@ fn make_deps_with_tools(
     HarnessDeps {
         session,
         tools,
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider,
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -919,7 +908,6 @@ fn make_parallel_deps(
     HarnessDeps {
         session,
         tools,
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider,
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,

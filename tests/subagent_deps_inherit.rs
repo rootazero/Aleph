@@ -30,7 +30,6 @@ use alephcore::harness::chain_context::ChainContext;
 use alephcore::harness::{NoopTraceSink, StallConfig, TraceSink};
 use alephcore::providers::adapter::{ProviderResponse, RequestPayload};
 use alephcore::providers::AiProvider;
-use alephcore::sandbox::{Sandbox, SandboxCommand, SandboxError, SandboxOutput};
 use alephcore::session::events::ToolOutput;
 use alephcore::session::in_process::InProcessActorSessionService;
 use alephcore::session::service::SessionService;
@@ -45,18 +44,6 @@ fn fresh_session_service() -> Arc<dyn SessionService> {
     migrate_add_session_events(&conn).expect("migrate session_events");
     let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
     Arc::new(InProcessActorSessionService::new(store))
-}
-
-struct InertSandbox;
-
-#[async_trait]
-impl Sandbox for InertSandbox {
-    async fn execute(&self, _cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
-        Ok(SandboxOutput {
-            exit_code: Some(0),
-            ..Default::default()
-        })
-    }
 }
 
 struct NoopTools;
@@ -127,12 +114,10 @@ async fn subagent_base_carries_4_p1_fields() {
     });
     let session = fresh_session_service();
     let tools: Arc<dyn ToolService> = Arc::new(NoopTools);
-    let sandbox: Arc<dyn Sandbox> = Arc::new(InertSandbox);
 
     let base = SpawnerBase {
         session,
         parent_tools: tools,
-        sandbox,
         provider,
         chain: ChainContext::new(),
         raw_memory_writer: None,

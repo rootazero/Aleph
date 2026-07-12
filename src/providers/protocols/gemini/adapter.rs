@@ -174,7 +174,8 @@ impl ProtocolAdapter for GeminiProtocol {
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
-            let error_text = response.text().await.unwrap_or_default();
+            let error_text =
+                crate::providers::protocols::http_client::read_error_body(response).await;
             // Parse Gemini's error envelope for a clean message; fall back to raw text.
             let parsed = parse_gemini_error_body(&error_text);
             let detail = parsed.as_ref().map_or_else(

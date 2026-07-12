@@ -24,7 +24,6 @@ use alephcore::harness::trace::LoopTraceEvent;
 use alephcore::harness::TraceSink;
 use alephcore::providers::adapter::{ProviderResponse, RequestPayload};
 use alephcore::providers::AiProvider;
-use alephcore::sandbox::{Sandbox, SandboxCommand, SandboxError, SandboxOutput};
 use alephcore::session::events::ToolOutput;
 use alephcore::session::in_process::InProcessActorSessionService;
 use alephcore::session::service::SessionService;
@@ -51,18 +50,6 @@ fn fresh_session_service() -> Arc<dyn SessionService> {
 }
 
 // -- Mocks --------------------------------------------------------------------
-
-struct InertSandbox;
-
-#[async_trait]
-impl Sandbox for InertSandbox {
-    async fn execute(&self, _cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
-        Ok(SandboxOutput {
-            exit_code: Some(0),
-            ..Default::default()
-        })
-    }
-}
 
 struct NoopTools;
 
@@ -144,7 +131,6 @@ async fn h_t1_worktree_isolation_happy_path() {
     let base = SpawnerBase {
         session: fresh_session_service(),
         parent_tools: Arc::new(NoopTools),
-        sandbox: Arc::new(InertSandbox),
         provider: Arc::new(OneShotProvider),
         chain: ChainContext::new(),
         raw_memory_writer: None,

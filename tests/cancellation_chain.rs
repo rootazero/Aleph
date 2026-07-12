@@ -30,7 +30,6 @@ use alephcore::agents::{AgentDef, AgentMode};
 use alephcore::harness::chain_context::ChainContext;
 use alephcore::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
 use alephcore::providers::AiProvider;
-use alephcore::sandbox::{Sandbox, SandboxCommand, SandboxError, SandboxOutput};
 use alephcore::session::events::ToolOutput;
 use alephcore::session::in_process::InProcessActorSessionService;
 use alephcore::session::service::SessionService;
@@ -45,18 +44,6 @@ fn fresh_session_service() -> Arc<dyn SessionService> {
     migrate_add_session_events(&conn).expect("migrate session_events");
     let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
     Arc::new(InProcessActorSessionService::new(store))
-}
-
-struct InertSandbox;
-
-#[async_trait]
-impl Sandbox for InertSandbox {
-    async fn execute(&self, _cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
-        Ok(SandboxOutput {
-            exit_code: Some(0),
-            ..Default::default()
-        })
-    }
 }
 
 /// LLM provider that hangs forever waiting on the cancellation token.
@@ -171,12 +158,10 @@ fn base_with_hanging_llm(cancel: CancellationToken) -> SpawnerBase {
     let tools: Arc<dyn ToolService> = Arc::new(HangingTool {
         cancel: CancellationToken::new(), // independent token, never fires
     });
-    let sandbox: Arc<dyn Sandbox> = Arc::new(InertSandbox);
 
     SpawnerBase {
         session,
         parent_tools: tools,
-        sandbox,
         provider,
         chain: ChainContext::new(),
         raw_memory_writer: None,
@@ -207,12 +192,10 @@ fn base_with_hanging_tool(cancel: CancellationToken) -> SpawnerBase {
     let provider: Arc<dyn AiProvider> = Arc::new(FastToolCallProvider);
     let session = fresh_session_service();
     let tools: Arc<dyn ToolService> = Arc::new(HangingTool { cancel });
-    let sandbox: Arc<dyn Sandbox> = Arc::new(InertSandbox);
 
     SpawnerBase {
         session,
         parent_tools: tools,
-        sandbox,
         provider,
         chain: ChainContext::new(),
         raw_memory_writer: None,

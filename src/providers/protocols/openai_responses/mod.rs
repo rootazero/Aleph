@@ -357,7 +357,8 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
-            let error_text = response.text().await.unwrap_or_default();
+            let error_text =
+                crate::providers::protocols::http_client::read_error_body(response).await;
             if status.as_u16() == 429 {
                 let suggestion = retry_after.as_ref().map_or_else(
                     || "Rate limited. Wait before retrying or upgrade your API plan.".to_string(),

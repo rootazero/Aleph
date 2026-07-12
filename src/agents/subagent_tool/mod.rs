@@ -34,7 +34,6 @@ use crate::agents::background_tracker::BackgroundAgentTracker;
 use crate::agents::teammates::TeammateManager;
 use crate::agents::AgentRegistry;
 use crate::providers::AiProvider;
-use crate::sandbox::Sandbox;
 use crate::session::service::SessionService;
 use crate::sync_primitives::Arc;
 use crate::teams::messages::inbox::Inbox;
@@ -57,8 +56,6 @@ pub struct SubagentTool {
     pub(super) session: Arc<dyn SessionService>,
     /// Parent tool service; the harness decorates it with an allowlist.
     pub(super) parent_tools: Arc<dyn ToolService>,
-    /// Shared sandbox passed to child harnesses.
-    pub(super) sandbox: Arc<dyn Sandbox>,
     /// Optional teammate manager for auto team creation/registration.
     pub(super) teammate_manager: Option<Arc<TeammateManager>>,
     /// Optional message router for `send_message` actions.
@@ -130,7 +127,6 @@ impl SubagentTool {
         background_tracker: Arc<BackgroundAgentTracker>,
         session: Arc<dyn SessionService>,
         parent_tools: Arc<dyn ToolService>,
-        sandbox: Arc<dyn Sandbox>,
     ) -> Self {
         Self {
             provider,
@@ -139,7 +135,6 @@ impl SubagentTool {
             background_tracker,
             session,
             parent_tools,
-            sandbox,
             teammate_manager: None,
             message_router: None,
             inbox: None,

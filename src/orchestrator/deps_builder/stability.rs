@@ -24,13 +24,9 @@ pub fn build_stability_triple(config: &Config) -> StabilityTriple {
             turn_timeout: None,
         };
     };
-    let stall_config = s.stall_timeout_secs.map(|secs| {
-        let mut sc = StallConfig::default().with_timeout(Duration::from_secs(secs));
-        if let Some(ci) = s.stall_check_interval_secs {
-            sc = sc.with_check_interval(Duration::from_secs(ci));
-        }
-        sc
-    });
+    let stall_config = s
+        .stall_timeout_secs
+        .map(|secs| StallConfig::default().with_timeout(Duration::from_secs(secs)));
     StabilityTriple {
         stall_config,
         consecutive_failure_cap: s.consecutive_failure_cap,
@@ -58,7 +54,6 @@ mod tests {
         let cfg = Config {
             stability: Some(StabilityToml {
                 stall_timeout_secs: None,
-                stall_check_interval_secs: None,
                 consecutive_failure_cap: None,
                 turn_timeout_secs: Some(60),
             }),

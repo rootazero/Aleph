@@ -16,15 +16,14 @@ use crate::error::Result as AlephResult;
 use crate::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::AiProvider;
-use crate::sandbox::test_util::MockSandbox;
 use crate::session::events::SessionEvent;
 use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 use crate::verification::stop_hooks::{StopHookContext, StopHookHandler, StopHookVerdict};
 use crate::verification::{StopHookVerifier, VerifierChain};
 
 use super::{
-    noop_sandbox_output, sample_session_id, tiny_budget_config, turn_started_event,
-    user_message_event, CountingProvider, FailingProvider, MockSession, NoopTools,
+    sample_session_id, tiny_budget_config, turn_started_event, user_message_event,
+    CountingProvider, FailingProvider, MockSession, NoopTools,
 };
 
 // =============================================================================
@@ -100,7 +99,6 @@ async fn split_session_directive_continues_run_in_child_session() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -182,7 +180,6 @@ async fn split_session_failsoft_compacts_and_continues() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -458,7 +455,6 @@ async fn max_iterations_cap_fires_grace_turn_for_terminal_text() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -527,7 +523,6 @@ async fn boundary_grace_turn_failsoft_on_llm_error() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -594,7 +589,6 @@ async fn empty_response_retries_then_recovers() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -645,7 +639,6 @@ async fn empty_response_exhausted_sets_terminate_reason() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -706,7 +699,6 @@ async fn tool_memo_does_not_span_turns() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: tools.clone(),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -757,7 +749,6 @@ async fn boundary_grace_turn_times_out_instead_of_hanging() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -831,7 +822,6 @@ async fn compact_to_fit_turn_keeps_token_breakdown_in_lockstep() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider as Arc<dyn AiProvider>,
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -918,7 +908,6 @@ async fn stop_hook_halt_terminates_loop_with_dedicated_reason() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: Some(chain),
@@ -1052,7 +1041,6 @@ async fn max_output_tokens_recovery_eventually_returns_clean_text() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -1116,7 +1104,6 @@ async fn max_output_tokens_recovery_exhausted_sets_dedicated_terminate_reason() 
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -1235,7 +1222,6 @@ async fn max_output_tokens_mid_run_does_not_stain_terminate_reason() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
