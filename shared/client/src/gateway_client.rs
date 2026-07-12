@@ -73,7 +73,29 @@ impl GatewayClient {
 
         let (mut write, mut read) = ws_stream.split();
 
+        // Session-init handshake. The gateway enforces "the first frame on a
+        // connection must be `connect`" and answers AUTH_REQUIRED + closes the
+        // socket otherwise — so firing the method straight down a fresh socket
+        // made EVERY `aleph-server gateway call` fail with
+        // `First request must be 'connect'`. `connect` is also the frame that
+        // establishes the operator role, so it has to precede the method anyway.
+        //
+        // Distinct id (0) from the method's (1): the response loop below matches
+        // on the method's id, so the handshake reply is skipped naturally.
+        const CONNECT_ID: i64 = 0;
         let request_id = 1;
+
+        let connect = json!({
+            "jsonrpc": "2.0",
+            "method": "connect",
+            "params": { "device_name": "aleph-cli", "channel_kind": "cli" },
+            "id": CONNECT_ID
+        });
+        write
+            .send(Message::Text(connect.to_string().into()))
+            .await
+            .map_err(|e| CliError::Connection(e.to_string()))?;
+
         // Build JSON-RPC request
         let request = json!({
             "jsonrpc": "2.0",

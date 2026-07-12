@@ -298,6 +298,84 @@ fn now_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
+/// Reject a born-dead cap at the boundary (P7). `pursuit_max_iterations=0` and
+/// `timeout_minutes=0` were both accepted: the goal was created, the very next
+/// continuation hook found it instantly exhausted, and the user got a baffling
+/// "⏹ reached its iteration cap (0 iterations)" push for work that never
+/// started. The loop tool rejects the identical input (`reject_zero_cap`); this
+/// is goal's parity.
+fn reject_zero_caps(args: &GoalArgs) -> Result<()> {
+    if args.pursuit_max_iterations == Some(0) {
+        return Err(AlephError::tool(
+            "pursuit_max_iterations must be at least 1 — 0 would create a goal \
+             that is exhausted before its first autonomous step. Omit it for an \
+             interactive (non-autonomous) goal."
+                .to_string(),
+        ));
+    }
+    if args.timeout_minutes == Some(0) {
+        return Err(AlephError::tool(
+            "timeout_minutes must be at least 1 — 0 sets a deadline in the past, \
+             which blocks the goal on its next turn. Omit it for no time limit."
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Name the limit that will immediately re-block an `Active` autonomous goal, or
+/// `None` when the pursuit really can run.
+///
+/// The resume recipe is "lift the binding limit AND set status=active"; doing
+/// only the second half persists an `Active` goal that the very next continuation
+/// hook finds exhausted, re-Blocks, and announces to the user's channel as
+/// "⏹ reached its iteration cap" — for a resume they thought had worked. Only the
+/// two limits the tool can actually evaluate are checked here: the iteration cap
+/// and the wall-clock deadline. The token budget needs the live session counter,
+/// which only the continuation hook has.
+fn inert_resume_reason(goal: &Goal, now: u64) -> Option<String> {
+    let PursuitMode::Active { max_iterations } = goal.pursuit else {
+        return None; // interactive goal: nothing autonomous to resume.
+    };
+    if goal.status != GoalStatus::Active {
+        return None; // paused/blocked/complete on purpose.
+    }
+    if goal.continuations_used >= max_iterations {
+        return Some(format!(
+            "Not resumed: all {max_iterations} autonomous iterations are already \
+             spent. Pass pursuit_max_iterations greater than {} to give it more \
+             runway.",
+            goal.continuations_used
+        ));
+    }
+    if goal.deadline_ms.is_some_and(|d| now != 0 && now > d) {
+        return Some(
+            "Not resumed: the wall-clock deadline has already passed. Pass a fresh \
+             timeout_minutes to give it more time."
+                .to_string(),
+        );
+    }
+    None
+}
+
+/// Reject a gate command the gate runner cannot execute (P7). The per-goal gate
+/// is run through `ShellStopHook::shell_safe`, which refuses shell
+/// metacharacters — so `gate_command='cargo build && cargo test'` produced a gate
+/// that could never render a verdict. The model has to learn that HERE, at the
+/// moment it sets the gate, not silently several autonomous iterations later at
+/// the completion claim (where it now fails closed and burns an iteration).
+fn validate_gate_command(cmd: &str) -> Result<()> {
+    if crate::verification::stop_hooks::is_shell_safe(cmd) {
+        return Ok(());
+    }
+    Err(AlephError::tool(format!(
+        "gate_command contains shell metacharacters the gate runner refuses to \
+         execute (no &&, ||, ;, |, $, backticks, redirects): {cmd}. Use ONE \
+         command (e.g. 'cargo test'); wrap a multi-step check in a script and \
+         call that."
+    )))
+}
+
 #[async_trait]
 impl AlephTool for GoalTool {
     const NAME: &'static str = "goal";
@@ -357,6 +435,12 @@ token_budget. \
                 let objective = args.objective.as_deref().ok_or_else(|| {
                     AlephError::tool("goal 'set' requires 'objective'".to_string())
                 })?;
+                reject_zero_caps(&args)?;
+                if let Some(cmd) = args.gate_command.as_deref() {
+                    if !cmd.trim().is_empty() {
+                        validate_gate_command(cmd)?;
+                    }
+                }
                 // `tokens_at_start` is seeded to 0 here: the tool has no live
                 // per-session token counter at call time. The autonomous driver
                 // captures the real baseline lazily on the first continuation
@@ -431,9 +515,20 @@ token_budget. \
                     .store
                     .get(&session)?
                     .ok_or_else(|| AlephError::tool("no standing goal to update".to_string()))?;
+                reject_zero_caps(&args)?;
                 let prev_status = goal.status;
                 if let Some(status) = args.status {
                     goal = goal.with_status(status, now);
+                    if status != GoalStatus::Complete {
+                        // `Passed` is the objective gate's verdict on ONE completion
+                        // claim, and `awaiting_gate` skips the gate whenever it is
+                        // set. Leaving it on a re-activated goal permanently
+                        // disarmed the gate: the model's next `complete` claim —
+                        // and every one after it — was accepted unverified. Reset it
+                        // to the resting state the type documents, exactly as
+                        // `reopen_after_gate_failure` does on the veto path.
+                        goal = goal.with_gate_outcome(crate::goal::GateOutcome::Unchecked, now);
+                    }
                 }
                 // In-place reconfiguration (R8: natural-language tuning without a
                 // destructive clear+set that would wipe continuations_used /
@@ -455,10 +550,13 @@ token_budget. \
                     goal = goal.with_deadline_ms(Some(deadline_from_minutes(now, minutes)));
                 }
                 if let Some(cmd) = args.gate_command.clone() {
-                    // Empty string clears the per-goal gate; anything else sets it.
+                    // Empty string clears the per-goal gate; anything else sets it
+                    // — after the same boundary check `set` applies, so an
+                    // unrunnable gate can never be installed by either door.
                     let next = if cmd.trim().is_empty() {
                         None
                     } else {
+                        validate_gate_command(&cmd)?;
                         Some(cmd)
                     };
                     goal = goal.with_gate_command(next);
@@ -478,7 +576,31 @@ token_budget. \
                 if let Some(lesson) = args.lesson.clone() {
                     goal = goal.with_lesson_appended(lesson, now);
                 }
-                self.store.put(&goal)?;
+                // Atomic commit: re-reads the LIVE `pending_continuation_ms` under
+                // the store lock and keeps it, so a tool update landing while a
+                // claimed continuation fires cannot restore a stale marker (which
+                // would stall the next claim until the 60s stale grace). The claim
+                // pipeline stays the single owner of that field. `false` = the goal
+                // was cleared between this turn's read and the write.
+                if !self.store.commit_field_update(&goal)? {
+                    return Ok(GoalOutput {
+                        success: false,
+                        message: "The standing goal was cleared while this update ran — \
+                                  nothing to update. Set a new goal if you still need one."
+                            .to_string(),
+                    });
+                }
+                // Honest report on a resume that cannot actually take: re-activating
+                // a goal whose binding limit is still spent leaves it Active for
+                // exactly one hook, which re-Blocks it and pushes a bewildering
+                // "⏹ cap reached" to the user's channel. Say so instead, and name
+                // the parameter that would fix it (loop's honesty parity).
+                if let Some(blocker) = inert_resume_reason(&goal, now) {
+                    return Ok(GoalOutput {
+                        success: false,
+                        message: format!("{blocker} {}", Self::render(&goal, now)),
+                    });
+                }
                 // Clear the welded plan on a tool-owned authoritative termination
                 // so the stale plan does not bleed into later plain turns of this
                 // reused session. `Blocked` is never re-arbitrated; a Passive
@@ -499,15 +621,27 @@ token_budget. \
                 })
             }
             GoalAction::Clear => {
+                // Report what actually happened: an unconditional "Standing goal
+                // cleared." on a session that never had one told the model it had
+                // undone something, which is how a model ends up assuring the user
+                // their (never-created) goal is gone.
+                let existed = self.store.get(&session)?;
                 self.store.delete(&session)?;
                 // Clear the goal-welded Strategy in lockstep with the
                 // authoritative goal deletion (spec §6 lifecycle). Best-effort:
                 // a missing global / corrupt row is a no-op, never fails the
                 // user's clear. The loop-keyed Strategy (if any) is untouched.
                 self.clear_welded_strategy(&session);
+                let Some(prev) = existed else {
+                    return Ok(GoalOutput {
+                        success: true,
+                        message: "No standing goal was set for this session — nothing to clear."
+                            .to_string(),
+                    });
+                };
                 Ok(GoalOutput {
                     success: true,
-                    message: "Standing goal cleared.".to_string(),
+                    message: format!("Standing goal cleared: {}", prev.objective),
                 })
             }
             GoalAction::List => {
@@ -1486,5 +1620,180 @@ mod tests {
             !b_line.contains("(this session)"),
             "B not flagged: {b_line}"
         );
+    }
+
+    // ---- boundary validation + honest reporting ---------------------------
+
+    #[tokio::test]
+    async fn set_rejects_a_born_dead_iteration_cap() {
+        let (tool, _d) = tool_with_session("s");
+        let err = tool
+            .call(GoalArgs {
+                action: GoalAction::Set,
+                objective: Some("do it".into()),
+                status: None,
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: Some(0),
+                gate_command: None,
+                lesson: None,
+                timeout_minutes: None,
+            })
+            .await
+            .expect_err("a 0-iteration pursuit is exhausted before its first step");
+        assert!(err.to_string().contains("at least 1"), "got: {err}");
+        // …and nothing was persisted.
+        assert!(tool.store.get("s").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn set_rejects_a_zero_timeout() {
+        let (tool, _d) = tool_with_session("s");
+        let err = tool
+            .call(GoalArgs {
+                action: GoalAction::Set,
+                objective: Some("do it".into()),
+                status: None,
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: Some(5),
+                gate_command: None,
+                lesson: None,
+                timeout_minutes: Some(0),
+            })
+            .await
+            .expect_err("a 0-minute deadline is already in the past");
+        assert!(err.to_string().contains("at least 1"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn set_rejects_a_gate_command_the_gate_runner_cannot_execute() {
+        let (tool, _d) = tool_with_session("s");
+        let err = tool
+            .call(GoalArgs {
+                action: GoalAction::Set,
+                objective: Some("ship it".into()),
+                status: None,
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: Some(5),
+                gate_command: Some("cargo build && cargo test".into()),
+                lesson: None,
+                timeout_minutes: None,
+            })
+            .await
+            .expect_err("shell metacharacters make the gate unrunnable");
+        assert!(err.to_string().contains("metacharacters"), "got: {err}");
+        assert!(
+            tool.store.get("s").unwrap().is_none(),
+            "a goal must not be created with a gate that can never render a verdict"
+        );
+    }
+
+    #[tokio::test]
+    async fn reactivating_a_gate_passed_goal_rearms_the_gate() {
+        let (tool, _d) = tool_with_session("s");
+        let g = Goal::new("s", "obj", 0, 1)
+            .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+            .with_status(GoalStatus::Complete, 1)
+            .with_gate_outcome(crate::goal::GateOutcome::Passed, 1);
+        tool.store.put(&g).unwrap();
+
+        let out = tool
+            .call(GoalArgs {
+                action: GoalAction::Update,
+                objective: None,
+                status: Some(GoalStatus::Active),
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: Some(10),
+                gate_command: None,
+                lesson: None,
+                timeout_minutes: None,
+            })
+            .await
+            .unwrap();
+        assert!(out.success, "{}", out.message);
+        let stored = tool.store.get("s").unwrap().unwrap();
+        assert_eq!(stored.status, GoalStatus::Active);
+        assert_eq!(
+            stored.gate_outcome,
+            crate::goal::GateOutcome::Unchecked,
+            "a resumed goal's next completion claim must face the gate again"
+        );
+    }
+
+    #[tokio::test]
+    async fn reactivating_without_lifting_the_binding_cap_is_reported_honestly() {
+        let (tool, _d) = tool_with_session("s");
+        let mut g = Goal::new("s", "obj", 0, 1)
+            .with_pursuit(PursuitMode::Active { max_iterations: 3 })
+            .with_status(GoalStatus::Blocked, 1);
+        g.continuations_used = 3;
+        tool.store.put(&g).unwrap();
+
+        let out = tool
+            .call(GoalArgs {
+                action: GoalAction::Update,
+                objective: None,
+                status: Some(GoalStatus::Active),
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: None, // the half-resume
+                gate_command: None,
+                lesson: None,
+                timeout_minutes: None,
+            })
+            .await
+            .unwrap();
+        assert!(
+            !out.success,
+            "the hook would re-block this goal on the very next run: {}",
+            out.message
+        );
+        assert!(
+            out.message.contains("pursuit_max_iterations"),
+            "{}",
+            out.message
+        );
+
+        // Lifting the cap in the same call is the real resume, and it succeeds.
+        let out = tool
+            .call(GoalArgs {
+                action: GoalAction::Update,
+                objective: None,
+                status: Some(GoalStatus::Active),
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: Some(8),
+                gate_command: None,
+                lesson: None,
+                timeout_minutes: None,
+            })
+            .await
+            .unwrap();
+        assert!(out.success, "{}", out.message);
+        let stored = tool.store.get("s").unwrap().unwrap();
+        assert_eq!(stored.continuations_used, 3, "progress is kept");
+    }
+
+    #[tokio::test]
+    async fn clear_says_so_when_there_was_nothing_to_clear() {
+        let (tool, _d) = tool_with_session("s");
+        let out = tool
+            .call(GoalArgs {
+                action: GoalAction::Clear,
+                objective: None,
+                status: None,
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: None,
+                gate_command: None,
+                lesson: None,
+                timeout_minutes: None,
+            })
+            .await
+            .unwrap();
+        assert!(out.message.contains("nothing to clear"), "{}", out.message);
     }
 }

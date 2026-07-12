@@ -237,6 +237,21 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
         if let Some(path) = bounded_file_writer_path(name, input) {
             return ConcurrencyClaim::paths(std::iter::once(path));
         }
+        // `node_invoke` drives exactly one cluster node, named right there in the
+        // args. Bind it to that node so a batch touching different machines runs
+        // concurrently (the whole point of owning a fleet) while two calls into
+        // the SAME node serialize — they share its one bash session workspace.
+        //
+        // Deliberately NOT extended to the other two cluster tools:
+        //   * `node_invoke_many` selects by TAG, so its footprint is whatever the
+        //     registry currently matches — not derivable from `input` alone.
+        //   * `node_file` straddles a center-local path AND a node.
+        // Both keep the conservative `Global` claim below.
+        if name == "node_invoke" {
+            if let Some(node) = input.get("node").and_then(Value::as_str) {
+                return ConcurrencyClaim::nodes(std::iter::once(node));
+            }
+        }
         // Safe default: read-only allowlist → `Shared`; everything else
         // (known mutators AND any unlisted/unknown tool) → whole-world
         // exclusive. A forgotten mutator serializes (correct) rather than

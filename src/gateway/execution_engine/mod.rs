@@ -20,6 +20,7 @@ mod execute;
 mod failure_receipt;
 mod fast_path;
 mod gate;
+mod goal_continuation;
 pub mod helpers;
 mod history;
 pub mod markdown_skill_refresh;
