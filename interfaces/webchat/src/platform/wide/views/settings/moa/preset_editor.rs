@@ -22,7 +22,11 @@ fn blank_preset() -> MoaPresetDto {
             model: String::new(),
         },
         fanout: "per_iteration".to_string(),
-        advisor_timeout_secs: 30,
+        // Mirrors the core `default_advisor_timeout_secs()` (120). The panel is
+        // a separate WASM crate that can't import alephcore, so this constant is
+        // duplicated here; keep the two in sync. A preset created in the panel
+        // must get the same advisor budget as one authored via the tool or TOML.
+        advisor_timeout_secs: 120,
         advisor_max_tokens: None,
         advisor_temperature: None,
         aggregator_temperature: None,
@@ -74,23 +78,27 @@ pub(super) fn MoaPresetEditor(
             return;
         }
         let p = preset.get();
-        if p.enabled {
-            if p.advisors.is_empty() {
-                error.set(Some("At least one advisor is required".to_string()));
-                return;
-            }
-            let incomplete = p
-                .advisors
-                .iter()
-                .any(|s| s.provider.is_empty() || s.model.is_empty())
-                || p.aggregator.provider.is_empty()
-                || p.aggregator.model.is_empty();
-            if incomplete {
-                error.set(Some(
-                    "Select a model for every advisor and the aggregator".to_string(),
-                ));
-                return;
-            }
+        // Mirror the server rule (MoaToml::validation_errors): the aggregator
+        // and every present advisor slot must be complete regardless of
+        // `enabled` (a disabled preset = aggregator acts alone), while only an
+        // enabled preset requires at least one advisor. Keeping this in step
+        // with the server turns "blank aggregator" into an inline message
+        // instead of an opaque server rejection.
+        if p.enabled && p.advisors.is_empty() {
+            error.set(Some("At least one advisor is required".to_string()));
+            return;
+        }
+        let incomplete = p
+            .advisors
+            .iter()
+            .any(|s| s.provider.is_empty() || s.model.is_empty())
+            || p.aggregator.provider.is_empty()
+            || p.aggregator.model.is_empty();
+        if incomplete {
+            error.set(Some(
+                "Select a model for every advisor and the aggregator".to_string(),
+            ));
+            return;
         }
 
         saving.set(true);
@@ -211,15 +219,26 @@ pub(super) fn MoaPresetEditor(
                     "Enabled"
                 </label>
 
-                <label class="flex items-center gap-2 text-sm text-text-secondary">
-                    <input
-                        type="checkbox"
-                        prop:checked=move || make_default.get()
-                        on:change=move |ev| make_default.set(event_target_checked(&ev))
-                        class="w-4 h-4"
-                    />
-                    "Set as default preset"
-                </label>
+                <div class="space-y-1">
+                    <label class="flex items-center gap-2 text-sm text-text-secondary">
+                        <input
+                            type="checkbox"
+                            prop:checked=move || make_default.get()
+                            prop:disabled=move || initial_is_default
+                            on:change=move |ev| make_default.set(event_target_checked(&ev))
+                            class="w-4 h-4 disabled:opacity-50"
+                        />
+                        "Set as default preset"
+                    </label>
+                    // Unchecking never clears the default server-side (default is
+                    // only ever moved, not removed) — so lock the box on the
+                    // preset that already holds it and point users at promotion.
+                    {initial_is_default.then(|| view! {
+                        <p class="text-xs text-text-tertiary">
+                            "This preset is the default. Promote another preset to change it."
+                        </p>
+                    })}
+                </div>
             </div>
 
             <div class="p-4 bg-surface-raised border border-border rounded-xl">
@@ -258,8 +277,13 @@ pub(super) fn MoaPresetEditor(
                                     min="1"
                                     prop:value=move || preset.get().advisor_timeout_secs.to_string()
                                     on:input=move |ev| {
+                                        // Reject 0 (mirrors the server >= 1 rule): a 0s budget
+                                        // times out every advisor instantly. Ignore it so the
+                                        // last valid value stays.
                                         if let Ok(v) = event_target_value(&ev).trim().parse::<u64>() {
-                                            preset.update(|p| p.advisor_timeout_secs = v);
+                                            if v >= 1 {
+                                                preset.update(|p| p.advisor_timeout_secs = v);
+                                            }
                                         }
                                     }
                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"

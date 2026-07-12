@@ -69,6 +69,10 @@ pub enum MoaManageArgs {
         advisors: Vec<MoaSlot>,
         /// The acting model: receives the full payload plus advisor guidance.
         aggregator: MoaSlot,
+        /// `false` = advisors are skipped and the aggregator acts alone.
+        /// Omit for `true`.
+        #[serde(default)]
+        enabled: Option<bool>,
         /// Advisor fan-out cadence. Omit for `per_iteration` (hermes default).
         #[serde(default)]
         fanout: Option<MoaFanout>,
@@ -92,6 +96,16 @@ pub enum MoaManageArgs {
     DeletePreset {
         /// Preset name to delete.
         name: String,
+    },
+    /// Make an existing preset the `[moa].default_preset`.
+    SetDefault {
+        /// Preset name to promote to default.
+        name: String,
+    },
+    /// Toggle capture of the heavy `MoaTurnTrace` (full advisor I/O) events.
+    SetSaveTraces {
+        /// `true` = record full advisor traces; `false` = off.
+        on: bool,
     },
 }
 
@@ -124,8 +138,8 @@ impl JsonSchema for MoaManageArgs {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["on", "off", "once", "status", "list", "set_preset", "delete_preset"],
-                    "description": "Operation: on (activate preset for this session, sticky) / off (deactivate) / once (next turn only) / status / list / set_preset (create or overwrite a preset) / delete_preset."
+                    "enum": ["on", "off", "once", "status", "list", "set_preset", "delete_preset", "set_default", "set_save_traces"],
+                    "description": "Operation: on (activate preset for this session, sticky) / off (deactivate) / once (next turn only) / status / list / set_preset (create or overwrite a preset) / delete_preset / set_default (promote a preset to [moa].default_preset) / set_save_traces (toggle full advisor trace capture)."
                 },
                 "preset": {
                     "type": "string",
@@ -133,7 +147,15 @@ impl JsonSchema for MoaManageArgs {
                 },
                 "name": {
                     "type": "string",
-                    "description": "set_preset/delete_preset: preset name. REQUIRED for those actions."
+                    "description": "set_preset/delete_preset/set_default: preset name. REQUIRED for those actions."
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "description": "set_preset: false = create the preset disabled (aggregator acts alone, advisors skipped). Default true."
+                },
+                "on": {
+                    "type": "boolean",
+                    "description": "set_save_traces: true records full advisor I/O traces, false disables. REQUIRED for that action."
                 },
                 "advisors": {
                     "type": "array",
@@ -367,12 +389,32 @@ impl MoaManageTool {
         })
     }
 
+    /// Construct the shared preset write-store, or return the "not available"
+    /// output when config/patcher weren't injected (e.g. a bare tool instance).
+    /// The single seam every preset-mutating action goes through.
+    fn resolve_store(
+        &self,
+    ) -> std::result::Result<crate::providers::moa::MoaPresetStore, MoaManageOutput> {
+        match (&self.config, &self.config_patcher) {
+            (Some(c), Some(p)) => Ok(crate::providers::moa::MoaPresetStore::new(
+                Arc::clone(c),
+                Arc::clone(p),
+            )),
+            _ => Err(MoaManageOutput {
+                success: false,
+                message: "MoA config or patcher not available".to_string(),
+                data: None,
+            }),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn set_preset(
         &self,
         name: String,
         advisors: Vec<MoaSlot>,
         aggregator: MoaSlot,
+        enabled: Option<bool>,
         fanout: Option<MoaFanout>,
         advisor_timeout_secs: Option<u64>,
         advisor_max_tokens: Option<u32>,
@@ -381,7 +423,7 @@ impl MoaManageTool {
         set_default: Option<bool>,
     ) -> Result<MoaManageOutput> {
         let preset = MoaPreset {
-            enabled: true,
+            enabled: enabled.unwrap_or(true),
             advisors,
             aggregator,
             fanout: fanout.unwrap_or_default(),
@@ -391,17 +433,10 @@ impl MoaManageTool {
             aggregator_temperature,
         };
 
-        let (config, patcher) = match (&self.config, &self.config_patcher) {
-            (Some(c), Some(p)) => (Arc::clone(c), Arc::clone(p)),
-            _ => {
-                return Ok(MoaManageOutput {
-                    success: false,
-                    message: "MoA config or patcher not available".to_string(),
-                    data: None,
-                })
-            }
+        let store = match self.resolve_store() {
+            Ok(s) => s,
+            Err(out) => return Ok(out),
         };
-        let store = crate::providers::moa::MoaPresetStore::new(config, patcher);
         match store
             .save_preset(&name, preset, set_default.unwrap_or(false))
             .await
@@ -428,21 +463,55 @@ impl MoaManageTool {
     }
 
     async fn delete_preset(&self, name: String) -> Result<MoaManageOutput> {
-        let (config, patcher) = match (&self.config, &self.config_patcher) {
-            (Some(c), Some(p)) => (Arc::clone(c), Arc::clone(p)),
-            _ => {
-                return Ok(MoaManageOutput {
-                    success: false,
-                    message: "MoA config or patcher not available".to_string(),
-                    data: None,
-                })
-            }
+        let store = match self.resolve_store() {
+            Ok(s) => s,
+            Err(out) => return Ok(out),
         };
-        let store = crate::providers::moa::MoaPresetStore::new(config, patcher);
         match store.delete_preset(&name).await {
             Ok(result) => Ok(MoaManageOutput {
                 success: true,
                 message: format!("Preset '{name}' deleted."),
+                data: Some(serde_json::to_value(&result).unwrap_or_default()),
+            }),
+            Err(e) => Ok(MoaManageOutput {
+                success: false,
+                message: e.to_string(),
+                data: None,
+            }),
+        }
+    }
+
+    async fn set_default(&self, name: String) -> Result<MoaManageOutput> {
+        let store = match self.resolve_store() {
+            Ok(s) => s,
+            Err(out) => return Ok(out),
+        };
+        match store.set_default(&name).await {
+            Ok(result) => Ok(MoaManageOutput {
+                success: true,
+                message: format!("Preset '{name}' is now the default."),
+                data: Some(serde_json::to_value(&result).unwrap_or_default()),
+            }),
+            Err(e) => Ok(MoaManageOutput {
+                success: false,
+                message: e.to_string(),
+                data: None,
+            }),
+        }
+    }
+
+    async fn set_save_traces(&self, on: bool) -> Result<MoaManageOutput> {
+        let store = match self.resolve_store() {
+            Ok(s) => s,
+            Err(out) => return Ok(out),
+        };
+        match store.set_save_traces(on).await {
+            Ok(result) => Ok(MoaManageOutput {
+                success: true,
+                message: format!(
+                    "MoA advisor trace capture {}.",
+                    if on { "enabled" } else { "disabled" }
+                ),
                 data: Some(serde_json::to_value(&result).unwrap_or_default()),
             }),
             Err(e) => Ok(MoaManageOutput {
@@ -465,9 +534,9 @@ impl AlephTool for MoaManageTool {
         session. MoA consults several advisor models in parallel on the live conversation before \
         each step and hands their private guidance to the acting aggregator model. action='on' \
         activates a preset for this session (sticky), 'once' for the next turn only, 'off' \
-        deactivates, 'status'/'list' inspect, 'set_preset'/'delete_preset' manage presets \
-        conversationally. MoA multiplies per-turn cost by the advisor count — activate only when \
-        the user asks for it.";
+        deactivates, 'status'/'list' inspect, 'set_preset'/'delete_preset'/'set_default' manage \
+        presets and 'set_save_traces' toggles full advisor trace capture — all conversationally. \
+        MoA multiplies per-turn cost by the advisor count — activate only when the user asks for it.";
 
     type Args = MoaManageArgs;
     type Output = MoaManageOutput;
@@ -498,6 +567,12 @@ impl AlephTool for MoaManageTool {
             MoaManageArgs::DeletePreset { name } => {
                 notify_tool_start(Self::NAME, &format!("delete_preset:{name}"))
             }
+            MoaManageArgs::SetDefault { name } => {
+                notify_tool_start(Self::NAME, &format!("set_default:{name}"))
+            }
+            MoaManageArgs::SetSaveTraces { on } => {
+                notify_tool_start(Self::NAME, &format!("set_save_traces:{on}"))
+            }
         }
 
         let result = match args {
@@ -510,6 +585,7 @@ impl AlephTool for MoaManageTool {
                 name,
                 advisors,
                 aggregator,
+                enabled,
                 fanout,
                 advisor_timeout_secs,
                 advisor_max_tokens,
@@ -521,6 +597,7 @@ impl AlephTool for MoaManageTool {
                     name,
                     advisors,
                     aggregator,
+                    enabled,
                     fanout,
                     advisor_timeout_secs,
                     advisor_max_tokens,
@@ -531,6 +608,8 @@ impl AlephTool for MoaManageTool {
                 .await
             }
             MoaManageArgs::DeletePreset { name } => self.delete_preset(name).await,
+            MoaManageArgs::SetDefault { name } => self.set_default(name).await,
+            MoaManageArgs::SetSaveTraces { on } => self.set_save_traces(on).await,
         };
 
         match &result {
@@ -729,6 +808,8 @@ mod tests {
             "list",
             "set_preset",
             "delete_preset",
+            "set_default",
+            "set_save_traces",
         ] {
             assert!(actions.contains(&a), "action enum missing {a}");
         }
@@ -806,6 +887,7 @@ mod tests {
                     provider: "anthropic".to_string(),
                     model: "n".to_string(),
                 },
+                enabled: None,
                 fanout: None,
                 advisor_timeout_secs: None,
                 advisor_max_tokens: None,
@@ -855,6 +937,7 @@ mod tests {
                     provider: "anthropic".into(),
                     model: "opus".into(),
                 },
+                enabled: None,
                 fanout: None,
                 advisor_timeout_secs: None,
                 advisor_max_tokens: None,
@@ -882,6 +965,7 @@ mod tests {
                     provider: "anthropic".into(),
                     model: "opus".into(),
                 },
+                enabled: None,
                 fanout: None,
                 advisor_timeout_secs: None,
                 advisor_max_tokens: None,
@@ -902,6 +986,76 @@ mod tests {
         let live = get_moa_config().expect("hot-reloaded after delete");
         assert!(!live.presets.contains_key("roundtrip"));
         assert_eq!(live.default_preset.as_deref(), Some("survivor"));
+
+        store_moa_config(None);
+    }
+
+    #[tokio::test]
+    async fn set_default_save_traces_and_disabled_preset_via_tool() {
+        // Round-4 deepen E4: the tool reaches feature-parity with the moa.*
+        // RPCs — create a disabled preset, promote a default standalone, and
+        // toggle save_traces, all conversationally.
+        use crate::config::backup::ConfigBackup;
+        let _guard = moa_config_test_lock();
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(&config_path, "").unwrap();
+        let config = Arc::new(RwLock::new(Config::default()));
+        let backup = ConfigBackup::new(dir.path().join("backups"), 10);
+        let patcher = Arc::new(ConfigPatcher::new(config.clone(), config_path, backup));
+        let tool = MoaManageTool::new()
+            .with_config(config)
+            .with_patcher(patcher);
+
+        let disabled = |name: &str| MoaManageArgs::SetPreset {
+            name: name.to_string(),
+            advisors: vec![MoaSlot {
+                provider: "openai".into(),
+                model: "gpt-5".into(),
+            }],
+            aggregator: MoaSlot {
+                provider: "anthropic".into(),
+                model: "opus".into(),
+            },
+            enabled: Some(false),
+            fanout: None,
+            advisor_timeout_secs: None,
+            advisor_max_tokens: None,
+            advisor_temperature: None,
+            aggregator_temperature: None,
+            set_default: None,
+        };
+
+        assert!(tool.call(disabled("solo-agg")).await.unwrap().success);
+        assert!(tool.call(disabled("full")).await.unwrap().success);
+        assert!(
+            !get_moa_config().unwrap().presets["solo-agg"].enabled,
+            "enabled=false must persist"
+        );
+
+        // set_default action promotes an existing preset with no full re-save.
+        assert!(
+            tool.call(MoaManageArgs::SetDefault {
+                name: "full".into()
+            })
+            .await
+            .unwrap()
+            .success
+        );
+        assert_eq!(
+            get_moa_config().unwrap().default_preset.as_deref(),
+            Some("full")
+        );
+
+        // set_save_traces action toggles the trace gate.
+        assert!(
+            tool.call(MoaManageArgs::SetSaveTraces { on: true })
+                .await
+                .unwrap()
+                .success
+        );
+        assert!(get_moa_config().unwrap().save_traces);
 
         store_moa_config(None);
     }

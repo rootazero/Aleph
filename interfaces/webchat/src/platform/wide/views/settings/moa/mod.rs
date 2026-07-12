@@ -8,16 +8,16 @@
 mod options;
 mod preset_editor;
 
-pub use options::{available_options, SlotOption};
-
 use std::collections::HashSet;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_router::hooks::use_navigate;
 
 use crate::api::moa::{MoaApi, MoaConfigDto, MoaPresetDto, MoaSlotDto};
-use crate::api::{CatalogEntry, CatalogView, ProvidersApi};
+use crate::api::{CatalogEntry, CatalogView, ModelOverride, ProvidersApi};
 use crate::context::DashboardState;
+use crate::views::chat::state::ChatState;
 
 use preset_editor::MoaPresetEditor;
 
@@ -25,6 +25,8 @@ use preset_editor::MoaPresetEditor;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum EditorTarget {
     New,
+    /// Prefill the editor from an existing preset but save under a new name.
+    Clone(String),
     Existing(String),
 }
 
@@ -32,6 +34,11 @@ enum EditorTarget {
 #[must_use]
 pub fn MoaView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    // B1 "Use in chat": arm the preset on the chat session's model selector,
+    // then navigate to chat. `ChatState` is provided at app root (Copy);
+    // `navigate` is stored so per-card callbacks can invoke it.
+    let chat = expect_context::<ChatState>();
+    let navigate = StoredValue::new(use_navigate());
 
     let config = RwSignal::new(MoaConfigDto::default());
     let catalog = RwSignal::new(Vec::<CatalogEntry>::new());
@@ -75,7 +82,13 @@ pub fn MoaView() -> impl IntoView {
     // i.e. at least 2 distinct models.
     let configured_model_count = move || {
         let mut seen: HashSet<(String, String)> = HashSet::new();
-        for entry in catalog.get().iter().filter(|e| e.enabled && e.has_api_key) {
+        // Exclude the synthetic `moa` pseudo-provider row so its preset-name
+        // "models" can't satisfy the >= 2 create-gate (mirrors options.rs).
+        for entry in catalog
+            .get()
+            .iter()
+            .filter(|e| e.enabled && e.has_api_key && e.id != "moa")
+        {
             for model in &entry.models {
                 seen.insert((entry.id.clone(), model.clone()));
             }
@@ -139,6 +152,11 @@ pub fn MoaView() -> impl IntoView {
                 if let Some(target) = editing.get() {
                     let (initial_name, initial_preset) = match &target {
                         EditorTarget::New => (None, None),
+                        // Clone prefills the form from `name` but leaves the name
+                        // blank (is_new) so Save creates a fresh preset.
+                        EditorTarget::Clone(name) => {
+                            (None, config.get().presets.get(name).cloned())
+                        }
                         EditorTarget::Existing(name) => {
                             (Some(name.clone()), config.get().presets.get(name).cloned())
                         }
@@ -185,16 +203,29 @@ pub fn MoaView() -> impl IntoView {
                                             let Some(preset) = preset else { return view!{ <div></div> }.into_any(); };
                                             let is_default = cfg.default_preset.as_deref() == Some(name.as_str());
                                             let name_edit = name.clone();
+                                            let name_dup = name.clone();
                                             let name_default = name.clone();
                                             let name_delete = name.clone();
+                                            let name_activate = name.clone();
                                             view! {
                                                 <PresetCard
                                                     name=name.clone()
                                                     preset=preset
                                                     is_default=is_default
                                                     on_edit=move || editing.set(Some(EditorTarget::Existing(name_edit.clone())))
+                                                    on_duplicate=move || editing.set(Some(EditorTarget::Clone(name_dup.clone())))
                                                     on_set_default=move || set_default(name_default.clone())
                                                     on_delete=move || delete_preset(name_delete.clone())
+                                                    on_activate=move || {
+                                                        // Park the request; the chat view's restore_from applies it
+                                                        // after activating the session (a direct selected_model set
+                                                        // would be overwritten by that restore).
+                                                        chat.pending_model_override.set(Some(ModelOverride::Qualified {
+                                                            provider: "moa".to_string(),
+                                                            model: name_activate.clone(),
+                                                        }));
+                                                        navigate.with_value(|nav| nav("/", Default::default()));
+                                                    }
                                                 />
                                             }.into_any()
                                         }).collect_view()}
@@ -233,13 +264,22 @@ fn PresetCard(
     preset: MoaPresetDto,
     is_default: bool,
     on_edit: impl Fn() + 'static + Send,
+    on_duplicate: impl Fn() + 'static + Send,
     on_set_default: impl Fn() + 'static + Send,
     on_delete: impl Fn() + 'static + Send,
+    on_activate: impl Fn() + 'static + Send,
 ) -> impl IntoView {
     let slot_chip = |slot: &MoaSlotDto| format!("{} / {}", slot.provider, slot.model);
     let advisor_chips: Vec<String> = preset.advisors.iter().map(slot_chip).collect();
     let aggregator_chip = slot_chip(&preset.aggregator);
     let enabled = preset.enabled;
+    // Model calls per turn: each advisor + the aggregator (disabled = aggregator
+    // acts alone). Surfaces the cost the `moa` tool warns about, per preset.
+    let call_count = if enabled {
+        preset.advisors.len() + 1
+    } else {
+        1
+    };
 
     view! {
         <div class="p-4 bg-surface-raised border border-border rounded-xl space-y-3">
@@ -266,11 +306,23 @@ fn PresetCard(
                     }}
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
+                    {if enabled {
+                        view! {
+                            <button
+                                on:click=move |_| on_activate()
+                                class="text-xs font-medium text-primary hover:underline"
+                            >
+                                "Use in chat"
+                            </button>
+                        }.into_any()
+                    } else {
+                        view! { <span></span> }.into_any()
+                    }}
                     {if !is_default {
                         view! {
                             <button
                                 on:click=move |_| on_set_default()
-                                class="text-xs text-primary hover:underline"
+                                class="text-xs text-text-secondary hover:text-primary"
                             >
                                 "Set default"
                             </button>
@@ -285,6 +337,12 @@ fn PresetCard(
                         "Edit"
                     </button>
                     <button
+                        on:click=move |_| on_duplicate()
+                        class="text-xs text-text-secondary hover:text-primary"
+                    >
+                        "Duplicate"
+                    </button>
+                    <button
                         on:click=move |_| on_delete()
                         class="text-xs text-danger hover:underline"
                     >
@@ -292,11 +350,17 @@ fn PresetCard(
                     </button>
                 </div>
             </div>
-            <div class="flex flex-wrap gap-1.5 text-xs">
+            <div class="flex flex-wrap items-center gap-1.5 text-xs">
                 {advisor_chips.into_iter().map(|chip| view! {
                     <span class="px-2 py-1 rounded bg-info/10 text-info">{chip}</span>
                 }).collect_view()}
                 <span class="px-2 py-1 rounded bg-primary/10 text-primary">{format!("Σ {aggregator_chip}")}</span>
+                <span
+                    class="px-2 py-1 rounded bg-surface-sunken text-text-tertiary"
+                    title="Model calls per turn (advisors + aggregator)"
+                >
+                    {format!("×{call_count}/turn")}
+                </span>
             </div>
         </div>
     }

@@ -4,7 +4,7 @@
 
 use crate::config::patcher::{ConfigPatcher, PatchRequest, PatchResult};
 use crate::config::{Config, MoaPreset, MoaToml};
-use crate::providers::moa::config_handle::{get_moa_config, store_moa_config};
+use crate::providers::moa::config_handle::store_moa_config;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
@@ -92,7 +92,11 @@ impl MoaPresetStore {
     }
 
     pub async fn delete_preset(&self, name: &str) -> Result<PatchResult, MoaStoreError> {
-        let moa_cfg = get_moa_config().unwrap_or_default();
+        // Read the current presets from `self.config` — the same in-memory
+        // source `list()`/`save_preset` use — so all four store operations share
+        // one read source (the process-global handle is a write-side broadcast
+        // for the runtime, not a second store-of-record).
+        let moa_cfg = self.config.read().await.moa.clone().unwrap_or_default();
         if !moa_cfg.presets.contains_key(name) {
             return Err(MoaStoreError::Absent(name.to_string()));
         }
@@ -118,7 +122,7 @@ impl MoaPresetStore {
     }
 
     pub async fn set_default(&self, name: &str) -> Result<PatchResult, MoaStoreError> {
-        let moa_cfg = get_moa_config().unwrap_or_default();
+        let moa_cfg = self.config.read().await.moa.clone().unwrap_or_default();
         if !moa_cfg.presets.contains_key(name) {
             return Err(MoaStoreError::Absent(name.to_string()));
         }
