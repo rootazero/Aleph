@@ -68,7 +68,29 @@ pub async fn active_timer_loop(session_key: &str) -> Option<String> {
 /// error. Mirrors `active_standing_goal`.
 pub async fn active_strategy(session_key: &str) -> Option<crate::strategy::Strategy> {
     let store = crate::strategy::global()?;
-    resolve_active_strategy(&store, session_key)
+    resolve_active_strategy(&store, session_key, goal_tier_live(session_key))
+}
+
+/// Is the goal-keyed Strategy tier live for this session?
+///
+/// The goal-welded plan is minted at `goal set` and deleted at every *terminal*
+/// transition — but `Paused` is not terminal, so a paused goal's plan kept
+/// winning the top strategy tier and steering every unrelated turn, while the
+/// goal itself vanished from the prompt (`active_standing_goal` surfaces only
+/// `Active`). The user saw an agent silently executing a plan for work they had
+/// explicitly paused. Gating the tier on the goal's own status keeps the plan on
+/// disk — a resume gets it back, unlike deleting it — while it stops steering.
+/// No goal row at all → the tier is live (a plan welded without a goal, or one
+/// awaiting the gate, behaves exactly as before).
+fn goal_tier_live(session_key: &str) -> bool {
+    let Some(store) = crate::goal::global() else {
+        return true;
+    };
+    match store.get(session_key) {
+        Ok(Some(goal)) => goal.status != crate::goal::GoalStatus::Paused,
+        // Missing row / unreadable → do not change the pre-existing behaviour.
+        Ok(None) | Err(_) => true,
+    }
 }
 
 /// Resolve the welded Strategy for a session key against an explicit store
@@ -81,13 +103,16 @@ pub async fn active_strategy(session_key: &str) -> Option<crate::strategy::Strat
 fn resolve_active_strategy(
     store: &crate::strategy::StrategyStore,
     session_key: &str,
+    goal_tier_live: bool,
 ) -> Option<crate::strategy::Strategy> {
-    if let Some(s) = store
-        .get(&crate::strategy::goal_key(session_key))
-        .ok()
-        .flatten()
-    {
-        return Some(s);
+    if goal_tier_live {
+        if let Some(s) = store
+            .get(&crate::strategy::goal_key(session_key))
+            .ok()
+            .flatten()
+        {
+            return Some(s);
+        }
     }
     if let Some(s) = store
         .get(&crate::strategy::loop_key(session_key))
@@ -259,7 +284,7 @@ mod active_strategy_tests {
             )
             .unwrap();
         assert_eq!(
-            resolve_active_strategy(&store, &sk).map(|s| s.objective),
+            resolve_active_strategy(&store, &sk, true).map(|s| s.objective),
             Some("team-obj".to_string())
         );
 
@@ -268,11 +293,19 @@ mod active_strategy_tests {
             .put(&crate::strategy::goal_key(&sk), &mk_strategy("goal-obj"))
             .unwrap();
         assert_eq!(
-            resolve_active_strategy(&store, &sk).map(|s| s.objective),
+            resolve_active_strategy(&store, &sk, true).map(|s| s.objective),
             Some("goal-obj".to_string())
         );
 
+        // …but a PAUSED goal takes its tier out of the running: the plan stays on
+        // disk (a resume gets it back) yet stops steering unrelated turns. The
+        // team frame below it wins instead.
+        assert_eq!(
+            resolve_active_strategy(&store, &sk, false).map(|s| s.objective),
+            Some("team-obj".to_string())
+        );
+
         // a non-team session never hits the team tier
-        assert!(resolve_active_strategy(&store, "agent:bob:main").is_none());
+        assert!(resolve_active_strategy(&store, "agent:bob:main", true).is_none());
     }
 }

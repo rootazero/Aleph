@@ -104,6 +104,19 @@ pub struct Goal {
     /// old payloads read `false`.
     #[serde(default)]
     pub baseline_captured: bool,
+    /// Wall-clock (Unix epoch ms) at which the currently-claimed autonomous
+    /// continuation is due to fire, or `None` when none is in flight. This is
+    /// the fan-out gate + accounting anchor of the pursuit pipeline, mirroring
+    /// `looping::LoopState::pending_tick_wake_ms`:
+    /// [`crate::goal::GoalStore::try_claim_continuation`] refuses to claim a
+    /// second continuation while one is pending, and
+    /// [`crate::goal::GoalStore::rearm_after_busy`] re-stamps it (without
+    /// spending another iteration) when the claimed run lost the session slot.
+    /// Owned exclusively by the claim pipeline — never hand-written by the tool
+    /// (see `GoalStore::commit_field_update`). `#[serde(default)]` → old
+    /// payloads read `None`.
+    #[serde(default)]
+    pub pending_continuation_ms: Option<u64>,
 }
 
 /// Ring cap on accumulated lessons kept per goal (newest retained). Bounds the
@@ -134,7 +147,17 @@ impl Goal {
             lessons: Vec::new(),
             deadline_ms: None,
             baseline_captured: false,
+            pending_continuation_ms: None,
         }
+    }
+
+    /// Stamp (or clear) the in-flight continuation marker. Scheduling state, not
+    /// a lifecycle transition — deliberately does not bump `updated_at_ms`
+    /// (mirrors `looping::LoopState::with_pending_tick`).
+    #[must_use]
+    pub const fn with_pending_continuation(mut self, wake_ms: Option<u64>) -> Self {
+        self.pending_continuation_ms = wake_ms;
+        self
     }
 
     /// Record that one autonomous continuation was enqueued for this goal.
@@ -232,11 +255,19 @@ impl Goal {
         now_total_tokens.saturating_sub(self.tokens_at_start)
     }
 
+    /// Over the token budget — enforceable ONLY once a real baseline is captured.
+    ///
+    /// Without `baseline_captured`, `tokens_at_start` is the tool's placeholder 0,
+    /// so `tokens_used` would return the session's ENTIRE lifetime token count and
+    /// a fresh goal in a long-running session would read as instantly over budget.
+    /// The continuation hook used to hold this invariant by hand (passing
+    /// `tokens_now = 0` until it had seeded the baseline); making it a property of
+    /// the type instead means no future caller can get it wrong.
     #[must_use]
     pub fn over_budget(&self, now_total_tokens: u64) -> bool {
         match self.token_budget {
-            Some(b) => self.tokens_used(now_total_tokens) > b,
-            None => false,
+            Some(b) if self.baseline_captured => self.tokens_used(now_total_tokens) > b,
+            _ => false,
         }
     }
 
@@ -325,11 +356,22 @@ mod tests {
 
     #[test]
     fn over_budget_only_when_budget_set_and_exceeded() {
-        let g = sample().with_budget(Some(500));
+        // Baseline captured at the goal's own start token count (1_000).
+        let g = sample().with_budget(Some(500)).with_baseline(1_000, 0);
         assert!(!g.over_budget(1_200));
         assert!(g.over_budget(1_600));
         let no_budget = sample();
         assert!(!no_budget.over_budget(u64::MAX));
+    }
+
+    #[test]
+    fn over_budget_is_unenforceable_until_the_baseline_is_captured() {
+        // The tool seeds tokens_at_start = 0 (it has no live counter), so without
+        // this guard a brand-new goal in a long session reads as instantly over
+        // budget and is blocked before it takes a single step.
+        let fresh = sample().with_budget(Some(500));
+        assert!(!fresh.baseline_captured);
+        assert!(!fresh.over_budget(u64::MAX));
     }
 
     #[test]
