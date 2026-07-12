@@ -94,6 +94,13 @@
 `tool.call` 的**响应**、`node.approval.request` 的**请求**——后两者都在登录墙之前
 被拦截处理,故远程节点无需任何凭据即可稳态工作。
 
+> **「首帧规则」是协议级不变量,不是集群的私事。** 任何直连 WS 的客户端都必须先握手
+> `connect` 再发方法。它曾同时放倒两处:① 本节的节点冷启动登记;② `aleph-server
+> gateway call`(`shared/client/src/gateway_client.rs::call_raw` 把方法当首帧发 ⇒
+> **全方法失效**,恒报 `First request must be 'connect'`)。两者已一并修复。
+> **写新的 WS 客户端时**:握手 params 只带 `device_name`/`channel_kind`,**绝不要带
+> `commands`/`tags`**——那是中心识别「集群节点」的形状,会把你的客户端注册成执行臂。
+
 ### 节点自助登记(`cluster::admit_node`)
 
 ```bash
@@ -118,6 +125,16 @@ aleph-server node \
 `{node_id, center}`),之后每次 connect 都带上它。`persist:false` = 中心只是确认了
 你已有的 id,不必重写文件。旧版含 `bearer` 字段的凭证文件可无损升级(serde 丢弃死
 字段、保留 `node_id`)。标签由 CLI 每次启动提供,**不**持久化。
+
+> **落盘时机是关键**:`run_session` 在**收到 connect 裁决的当场**回调 `on_identity`
+> 写盘,**早于读循环**——不能等 `run_session` 返回后再写。session 与节点同寿,等它返回
+> 意味着「节点被 kill 就永远不落盘」,下次启动重新登记 ⇒ 恰好铸出本流程要消灭的那种
+> 重复设备行。(此坑由真机 e2e 抓出,单测看不见。)
+
+> **节点进程自带日志**:`handle_node` 入口调 `init_node_tracing()`(stderr + `RUST_LOG`,
+> 默认 info)。tracing subscriber 只在 `start` 命令里装,而 `node` 子命令根本走不到那儿
+> ——不自己装就**全程静默**:登记成功/被拒/重连一行日志都没有,连下文「被注销 → 打印
+> 可操作提示后退出」这条路径都不可能被看见。
 
 `admit_node` 的四条判定(`src/cluster/enrollment.rs`):
 
