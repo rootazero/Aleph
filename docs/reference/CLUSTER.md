@@ -32,7 +32,7 @@
 | `src/builtin_tools/node_invoke_many.rs` | 中心侧 **LLM 工具**:按标签把命令并发扇出到一组节点 | `NodeInvokeManyTool` / `invoke_one` |
 | `src/builtin_tools/node_file.rs` | 中心侧 **LLM 工具**:node↔center 文件传输 | `NodeFileTool` |
 | `src/gateway/handlers/cluster.rs` | 中心侧 RPC:`cluster.enroll` / `cluster.deregister` / `environments.list` | `handle_cluster_enroll` / `handle_cluster_deregister` / `handle_environments_list` |
-| `src/bin/aleph-server/commands/node.rs` | `aleph-server node` 节点拨出运行时 | `handle_node` / `run_session` / `enroll_node` |
+| `src/bin/aleph-server/commands/node.rs` | `aleph-server node` 节点拨出运行时 | `handle_node` / `run_session` / `parse_connect_verdict` / `init_node_tracing` |
 
 ## 架构
 
@@ -380,6 +380,50 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 - jail containment:`node_file_cmd.rs` 的 `file_write_rejects_traversal`。
 - 审批 fail-closed:`node_approval.rs` 的 `outcome_mapping_is_fail_closed` /
   `none_channel_denies` / `transport_closed_denies`。
+
+## 与 openclaw 的对照映射 (Gap Analysis)
+
+> 参考实现:`openclaw` 的 **`src/node-host/`(边缘) ↔ `src/gateway/node-*`(中心)**。
+> **注意别走错门**:`openclaw/src/fleet/` 不是分布式节点子系统,那是多租户容器编排
+> (Docker/Podman 里跑整个 openclaw 实例),与本文无关。
+>
+> 本节记录「Aleph 的哪些设计是从 openclaw 映射来的、哪些是有意分道、哪些还欠着」,
+> 以便下次改集群时不必重新做一遍对比。锚点均已核到行。
+
+| 维度 | openclaw | Aleph | 判定 |
+|------|----------|-------|------|
+| 拓扑 | 星型,node 拨出中心,单 WS | 同 | **对齐** |
+| **身份在握手回包里交回** | HelloOk 携 `auth.deviceToken`,客户端就地落盘(`packages/gateway-client/src/client.ts:866-876`) | `connect` 回包携 `result.node.node_id`,节点落盘(`cluster::admit_node`) | **映射**——Aleph「登记折叠进 connect」正是此模式;旧实现另开 socket 发 `cluster.enroll` 才是偏离 |
+| 未批准/已撤销 → 能力清零 | 配对未批准 ⇒ `effectiveCaps: []`(`src/gateway/node-connect-reconcile.ts:167`) | 设备 `revoked_at` ⇒ `NodeAdmission::Deregistered`,拒绝登记 | **映射**(注销粘性) |
+| 反向 RPC 形状 | center 发 **event** `node.invoke.request`,node 回 **req** `node.invoke.result`;关联需 (id, nodeId, connId) 三元组 | 对称 req/res,靠**结构**区分(有 `method`=请求);pending 表天然 per-connection ⇒ connId 隐含 | **分道且更简**(少一层关联键) |
+| 断线 fail-fast | `unregister` reject 全部 pending | `PendingInvokes::cancel_all()` | **对齐** |
+| 舰队排序 | connected-first → displayName → nodeId(`src/gateway/node-catalog.ts:305-311`) | `handle_environments_list` 同序(online → name → id) | **对齐** |
+| 按名寻址归一化 | `node-match.ts::normalizeNodeKey`(`[^a-z0-9]+ → -`) | `cluster::normalize_node_key` 单一真源,在线/离线共用 | **对齐** |
+| 重连退避 | 1s → ×2 → 30s,**无 jitter**(`client.ts:1506`;全仓 grep `jitter` 零命中) | 2s → ×2 → 60s,**±25% jitter** + 仅在活过 30s 的会话后重置 | 🟢 **超越**(N 节点不齐步撞门;不对"接受即关闭"的中心热转) |
+| 扇出 | **没有**——`invoke()` 只收单个 `nodeId`(`src/gateway/node-registry.ts:606`) | `node_invoke_many` 按 tag AND 并发扇出 + 部分失败容忍 + 结果确定序 | 🟢 **超越**(openclaw 无对应物) |
+| 并发调度 | 无(每 invoke 各自 Promise,无资源模型) | `ExclusiveScope::Nodes`——不同机器的 `node_invoke` 并行,同机器串行 | 🟢 **超越**(利用已有 `ConcurrencyClaim` 基建,Rust 侧独有) |
+| 出站背压 | `bufferedAmount > MAX_BUFFERED_BYTES` ⇒ **直接关 socket**(`node-registry.ts:894` `rejectSlowNodeSocket`) | 有界 mpsc + **入队纳入 `timeout_ms` 预算**(调用方不再挂死);卡死的 socket 靠 90s idle-watchdog 收走 | ⚠️ **部分对齐,残留缺口**——见下 |
+| 超时语义 | 解析为 `{ok:false, error:{code:"TIMEOUT"}}`(值) | `ReverseRpcError::Timeout` (类型化 Err) | **分道**(Rust 类型安全表达,调用方无法忽略) |
+| 取消帧 | **无**(靠中心 deadline + 节点自杀子进程 + 断线) | 无(节点侧 bash 自带 60s 超时兜底) | **对齐** |
+
+### 有意不移植(YAGNI / 红线)
+
+| openclaw 能力 | 为何不移植 |
+|---------------|-----------|
+| 设备密钥对 + 签名挑战 + 三态配对审批 + SSH 反向验证 | Aleph 信任模型 = **LAN-trust**(网络边界即信任边界),刻意不建认证层 |
+| 节点托管 MCP server / skills(`node-host/mcp.ts`, `skills.ts`) | **R3 核心轻量化**:节点是纯执行臂(bash + file),不做能力宿主 |
+| 离线工作队列 + APNs 唤醒(`node-pending-work.ts`) | Aleph 节点是常驻 headless 机器,不是会睡眠的手机 |
+| `idempotencyKey` | openclaw 自己的 node-host **也完全忽略它**(只用于 pending 去重),移植即死代码 |
+| 三段式 exec 审批(prepare → approve → run + 计划绑定) | Aleph 复用**已有** `ExecApprovalManager` + Panel 审批卡,`node.approval.request` 一跳搞定(更薄,R10) |
+
+### 尚未闭合(诚实记账)
+
+- **慢消费者不踢 socket**:openclaw 在出站缓冲超限时**主动关掉**那条坏连接
+  (`rejectSlowNodeSocket`),把坏节点从舰队里摘掉。Aleph 现在只做到「调用方不再被
+  拖死」(入队有预算),但**卡死的节点 socket 仍占着 registry 一个在线位**,要等
+  90s idle-watchdog 才被收走——期间 `node_list` 会把它报成 online,发给它的调用会
+  全部超时。补法:在 `ReverseRpcChannel::call` 的入队超时路径上标记该会话不健康并
+  `NodeRegistry::forget`。**未做**——需要先想清楚「一次超时就摘除」会不会误杀。
 
 ## 与「一核多端」的边界
 
