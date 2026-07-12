@@ -275,7 +275,13 @@ const MAX_OUTPUT_BYTES: u64 = 64 * 1024;
 /// Reject command strings that contain shell metacharacters which could be used
 /// to inject additional commands when passed to `sh -c`. Alphanumeric ASCII,
 /// whitespace, and common safe path/punctuation characters are allowed.
-fn is_shell_safe(command: &str) -> bool {
+///
+/// Public so the `goal` tool can enforce the SAME rule at the boundary: a
+/// per-goal `gate_command` that would be rejected here is a gate that can never
+/// pass judgment, and the model must learn that when it sets the gate — not
+/// silently, several autonomous iterations later, at the completion claim.
+#[must_use]
+pub fn is_shell_safe(command: &str) -> bool {
     const SAFE: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /._-:\"'=";
     command
         .chars()

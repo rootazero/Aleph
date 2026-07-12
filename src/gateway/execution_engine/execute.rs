@@ -5,7 +5,6 @@ use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
 use crate::resilience::TaskStatus;
 use crate::sync_primitives::Arc;
-use crate::verification::stop_hooks::{execute_stop_hooks_arc, StopHookContext};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -149,10 +148,7 @@ where
         // re-enter `execute()` on the SAME session (see the drop site for why
         // holding it until the literal end of this function would deadlock
         // that re-entry).
-        let _run_slot = match self
-            .admit_run(&request, &run_id, &agent, cancel_tx)
-            .await?
-        {
+        let _run_slot = match self.admit_run(&request, &run_id, &agent, cancel_tx).await? {
             GateOutcome::Admitted(slot) => slot,
             GateOutcome::HandledInline => return Ok(()),
         };
@@ -740,270 +736,20 @@ where
 
                 // Autonomous-continuation hook (R7/R10-safe, opt-in).
                 // Fires only when the session has a standing goal with
-                // `PursuitMode::Active` that still needs more work. Increments
-                // the counter BEFORE spawning so termination is guaranteed even
-                // if the continuation run crashes before re-entering this hook.
+                // `PursuitMode::Active` that still needs more work. The whole
+                // post-run decision — lazy token-baseline capture, in-flight
+                // dedupe, cap enforcement, iteration bump — is ONE atomic store
+                // call (`GoalStore::try_claim_continuation`) inside
+                // `goal_continuation`: the clock-less sibling of the loop's
+                // `try_claim_tick` just below.
                 if let Some(cont_deps) = self.continuation_deps.get() {
-                    let goal_store = crate::goal::global();
-                    if let Some(store) = goal_store {
-                        let session_key_str = request.session_key.to_key_string();
-                        match store.get(&session_key_str) {
-                            Ok(Some(goal)) => {
-                                let now_ms = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map_or(0, |d| d.as_millis() as u64);
-
-                                // Token-budget accounting (codex/openclaw parity).
-                                // ONLY runs when the goal carries a token_budget —
-                                // the common no-budget path reads no session state
-                                // and stays behavior-identical. On the first hook
-                                // that sees a budget, capture the real baseline
-                                // (the session's cumulative total at this moment)
-                                // and persist it; thereafter pass the live total so
-                                // `should_continue`/`exhausted_while_active` enforce
-                                // the budget. Previously these calls hardcoded
-                                // `tokens_now = 0`, so `over_budget` could never
-                                // fire — the budget was advertised but dead.
-                                // Only capture/enforce the token baseline on an ACTIVE
-                                // goal: `tokens_now` is consumed solely by the Active
-                                // path (should_continue / exhausted_while_active). For a
-                                // goal the model just marked Complete (awaiting gate),
-                                // the gate branch ignores `tokens_now`, so seeding a
-                                // baseline there is a wasted SQLite write plus a spurious
-                                // `updated_at` bump on a terminal goal.
-                                let (goal, tokens_now) = if goal.token_budget.is_some()
-                                    && goal.is_active()
-                                {
-                                    match self.session_manager.as_ref() {
-                                        Some(sm) => {
-                                            match sm.get_total_tokens(&request.session_key).await {
-                                                Ok(Some(total)) if goal.baseline_captured => {
-                                                    (goal, total)
-                                                }
-                                                Ok(Some(total)) => {
-                                                    let seeded =
-                                                        goal.clone().with_baseline(total, now_ms);
-                                                    if let Err(e) = store.put(&seeded) {
-                                                        warn!(error = %e, session = %session_key_str,
-                                                        "goal pursuit: failed to persist token baseline; budget unenforced this turn");
-                                                        (goal, 0)
-                                                    } else {
-                                                        // Baseline just captured → 0 spent
-                                                        // so far; never a false over-budget.
-                                                        (seeded, total)
-                                                    }
-                                                }
-                                                // No row yet / read error → skip budget
-                                                // enforcement this turn (graceful: iteration
-                                                // and deadline caps still apply).
-                                                Ok(None) => (goal, 0),
-                                                Err(e) => {
-                                                    warn!(error = %e, session = %session_key_str,
-                                                    "goal pursuit: session token read failed; budget unenforced this turn");
-                                                    (goal, 0)
-                                                }
-                                            }
-                                        }
-                                        None => (goal, 0),
-                                    }
-                                } else {
-                                    (goal, 0)
-                                };
-
-                                // 闸门分支：模型在 Active 续跑下自报 Complete，
-                                // 但客观闸门（stop_hooks 退出码）尚未确认。
-                                // 在接受 complete 为终止前先跑闸门（Ralph
-                                // Wiggum 营救）。结构化退出码，零 LLM 调用（R7）。
-                                let gate_configured =
-                                    cont_deps.gate.is_some() || goal.gate_command.is_some();
-                                if crate::tasks::goal_pursuit::awaiting_gate(&goal, gate_configured)
-                                {
-                                    let gate = crate::verification::stop_hooks::effective_gate(
-                                        cont_deps.gate.as_ref(),
-                                        goal.gate_command.as_deref(),
-                                    )
-                                    .ok_or_else(|| {
-                                        ExecutionError::Failed(
-                                            "configured gate resolved to none".into(),
-                                        )
-                                    })?;
-                                    let hctx = StopHookContext {
-                                        final_text: Some(goal.objective.clone()),
-                                        iterations: goal.continuations_used as usize,
-                                        tool_calls_made: 0,
-                                        stop_reason: "goal_complete_claim".to_string(),
-                                    };
-                                    let result = execute_stop_hooks_arc(
-                                        &gate,
-                                        &hctx,
-                                        &CancellationToken::new(),
-                                    )
-                                    .await;
-                                    let vetoed =
-                                        result.halt_reason().or_else(|| result.blocking_reason());
-                                    match vetoed {
-                                        None => {
-                                            // 闸门通过 → 确认完成，循环终止。
-                                            let confirmed =
-                                                crate::tasks::goal_pursuit::confirm_complete(
-                                                    &goal, now_ms,
-                                                );
-                                            if let Err(e) = store.put(&confirmed) {
-                                                warn!(error = %e, session = %session_key_str,
-                                                    "goal pursuit: failed to persist gate confirmation");
-                                            } else {
-                                                info!(session = %session_key_str,
-                                                    "goal pursuit: objective gate passed, goal verified complete");
-                                                // Gate-confirmed complete is an
-                                                // authoritative end-point: clear
-                                                // the welded Strategy so it does
-                                                // not bleed into a later plain
-                                                // turn in this reused session
-                                                // (spec §6). Best-effort.
-                                                clear_goal_welded_strategy(&session_key_str);
-                                            }
-                                        }
-                                        Some(reason) => {
-                                            // 闸门否决 → 退回 Active(或 Blocked)。
-                                            let reopened =
-                                                crate::tasks::goal_pursuit::reopen_after_gate_failure(
-                                                    &goal, reason, now_ms,
-                                                );
-                                            let reopened_active = reopened.is_active();
-                                            if let Err(e) = store.put(&reopened) {
-                                                warn!(error = %e, session = %session_key_str,
-                                                    "goal pursuit: failed to persist gate veto");
-                                            } else if reopened_active {
-                                                let bumped =
-                                                    reopened.clone().spent_continuation(now_ms);
-                                                if let Err(e) = store.put(&bumped) {
-                                                    warn!(error = %e, session = %session_key_str,
-                                                        "goal pursuit: failed to persist continuation counter after veto");
-                                                } else {
-                                                    let prompt =
-                                                        crate::tasks::goal_pursuit::gate_failure_prompt(
-                                                            &goal, reason,
-                                                        );
-                                                    info!(session = %session_key_str,
-                                                        "goal pursuit: objective gate vetoed completion, re-running with feedback");
-                                                    spawn_continuation_run(
-                                                        cont_deps.registry.clone(),
-                                                        cont_deps.adapter.clone(),
-                                                        request.session_key.clone(),
-                                                        session_key_str.clone(),
-                                                        prompt,
-                                                        cont_deps.event_bus.clone(),
-                                                        None,
-                                                        ContinuationKind::Goal,
-                                                    );
-                                                }
-                                            } else {
-                                                // Vetoed with no runway left → the
-                                                // reopen path Blocked the goal. This
-                                                // is an authoritative dormant end —
-                                                // clear the welded plan (the failed
-                                                // plan must not bleed into later
-                                                // plain turns; a user resume re-reasons).
-                                                clear_goal_welded_strategy(&session_key_str);
-                                                info!(session = %session_key_str,
-                                                    "goal pursuit: objective gate vetoed at iteration cap, goal blocked");
-                                            }
-                                        }
-                                    }
-                                } else if crate::tasks::goal_pursuit::should_continue(
-                                    &goal, tokens_now, now_ms,
-                                ) {
-                                    let bumped = goal.clone().spent_continuation(now_ms);
-                                    if let Err(e) = store.put(&bumped) {
-                                        warn!(error = %e, session = %session_key_str,
-                                            "goal pursuit: failed to persist continuation counter; skipping");
-                                    } else {
-                                        let prompt =
-                                            crate::tasks::goal_pursuit::continuation_prompt(&goal);
-                                        spawn_continuation_run(
-                                            cont_deps.registry.clone(),
-                                            cont_deps.adapter.clone(),
-                                            request.session_key.clone(),
-                                            session_key_str.clone(),
-                                            prompt,
-                                            cont_deps.event_bus.clone(),
-                                            None,
-                                            ContinuationKind::Goal,
-                                        );
-                                        info!(session = %session_key_str,
-                                            continuations_used = bumped.continuations_used,
-                                            "goal pursuit: enqueued autonomous continuation");
-                                    }
-                                } else if crate::tasks::goal_pursuit::exhausted_while_active(
-                                    &goal, tokens_now, now_ms,
-                                ) {
-                                    // Distinguish token-budget / wall-clock
-                                    // exhaustion from the iteration cap so the user
-                                    // sees the real stop reason on their next turn.
-                                    let note = if goal.over_budget(tokens_now) {
-                                        crate::tasks::goal_pursuit::budget_reached_note(&goal)
-                                    } else if goal
-                                        .deadline_ms
-                                        .is_some_and(|d| now_ms != 0 && now_ms > d)
-                                    {
-                                        crate::tasks::goal_pursuit::deadline_reached_note(&goal)
-                                    } else {
-                                        crate::tasks::goal_pursuit::cap_reached_note(&goal)
-                                    };
-                                    let blocked = goal
-                                        .clone()
-                                        .with_status(crate::goal::GoalStatus::Blocked, now_ms)
-                                        .with_note(Some(note.clone()), now_ms);
-                                    if let Err(e) = store.put(&blocked) {
-                                        warn!(error = %e, session = %session_key_str,
-                                            "goal pursuit: failed to persist cap-reached block");
-                                    } else {
-                                        // Authoritative dormant end — clear the
-                                        // welded plan (mirror loop's cap-stop) so
-                                        // it does not bleed into later plain turns.
-                                        clear_goal_welded_strategy(&session_key_str);
-                                        // R5: a Blocked goal is invisible in the
-                                        // prompt (only Active surfaces), so the
-                                        // most common autonomous ending — hitting
-                                        // a cap — was silent. Ping the origin
-                                        // channel like loop's cap-exhaustion stop;
-                                        // Panel-only sessions rely on the stored note.
-                                        let origin = match crate::gateway::event_emitter::origin_fanout::channel_registry() {
-                                            Some(reg) => agent
-                                                .origin_route(&request.session_key)
-                                                .await
-                                                .map(|(ch, conv)| (reg, ch, conv)),
-                                            None => None,
-                                        };
-                                        notify_origin(origin.as_ref(), format!("⏹ {note}")).await;
-                                        info!(session = %session_key_str,
-                                            continuations_used = goal.continuations_used,
-                                            "goal pursuit: cap reached, goal blocked for user guidance");
-                                    }
-                                } else if goal.status == crate::goal::GoalStatus::Complete
-                                    && matches!(goal.pursuit, crate::goal::PursuitMode::Active { .. })
-                                {
-                                    // Active-pursuit goal the model self-reported
-                                    // Complete with NO gate to arbitrate it (a gate
-                                    // would have routed through `awaiting_gate`
-                                    // above, which owns the weld clear on confirm).
-                                    // This is the common gate-less autonomous
-                                    // completion — an authoritative terminal end,
-                                    // so clear the welded plan here (idempotent for
-                                    // the already-gate-Passed case).
-                                    clear_goal_welded_strategy(&session_key_str);
-                                }
-                            }
-                            Ok(None) => {} // No goal for this session — common path, silent.
-                            Err(e) => {
-                                warn!(
-                                    error = %e,
-                                    session = %request.session_key.to_key_string(),
-                                    "goal pursuit: goal store lookup failed"
-                                );
-                            }
-                        }
-                    }
+                    super::goal_continuation::post_run(
+                        cont_deps,
+                        &self.session_manager,
+                        &request.session_key,
+                        &agent,
+                    )
+                    .await;
 
                     // Loop continuation hook: the clock-gated sibling of the
                     // goal hook above. The whole post-run decision — lazy
@@ -1206,8 +952,13 @@ where
 /// path blocked only goals — a failed loop tick left the loop a stuck `Active`
 /// that never re-fired (silent stall).
 #[derive(Clone, Copy, Debug)]
-enum ContinuationKind {
-    Goal,
+pub(super) enum ContinuationKind {
+    /// An autonomous goal continuation. Carries the wake stamped by
+    /// `GoalStore::try_claim_continuation`; at fire time it must `confirm_fire`
+    /// with it — a mismatch means the goal was cleared, completed or re-claimed
+    /// while this continuation waited out an `AgentBusy` retry, and it must not
+    /// execute (the ghost run this kills would burn a full stale LLM turn).
+    Goal { wake_ms: u64 },
     /// A clock-driven loop tick. Carries the wake stamped by
     /// `LoopRegistry::try_claim_tick`; at fire time the tick must
     /// `confirm_fire` with it — a mismatch means the loop was stopped or
@@ -1215,10 +966,18 @@ enum ContinuationKind {
     Loop { wake_ms: u64 },
 }
 
+/// The session's bound origin channel: `(registry, channel_id, conversation_id)`.
+/// Named so the continuation helpers do not each spell out the 3-tuple.
+pub(super) type OriginRoute = (
+    Arc<crate::gateway::channel_registry::ChannelRegistry>,
+    String,
+    String,
+);
+
 /// 入队一次自主续跑 run（同一 session、同一 agent，给定 prompt）。
 /// 被 goal 续跑（`should_continue` / gate-failure）与 loop tick 续跑共用——
 /// 消除重复的 `RunRequest` 构造与 `tokio::spawn` 样板。`kind` 路由失败处理。
-fn spawn_continuation_run(
+pub(super) fn spawn_continuation_run(
     registry: Arc<crate::gateway::agent_instance::AgentRegistry>,
     adapter: Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
     session_key: crate::routing::session_key::SessionKey,
@@ -1257,17 +1016,32 @@ fn spawn_continuation_run(
         if let Some(d) = delay_ms {
             tokio::time::sleep(std::time::Duration::from_millis(d)).await;
         }
-        // Fire-time gate: the registry state may have changed during the
-        // (minutes-long) sleep — loop(stop), a cap stop, or a fresh start all
-        // supersede this tick. Without the atomic confirm, a stopped loop
-        // still burned one full stale LLM turn (ghost tick).
-        if let ContinuationKind::Loop { wake_ms } = kind {
-            let confirmed = crate::looping::global()
-                .is_some_and(|reg| reg.confirm_fire(&session_key_str, wake_ms));
-            if !confirmed {
-                info!(session = %session_key_str,
-                    "loop: tick superseded during its delay (loop stopped or replaced); skipping");
-                return;
+        // Fire-time gate: the stored state may have changed during the delay —
+        // loop(stop) / a cap stop / a fresh start supersede a tick; goal(clear),
+        // a completion, or a stale-grace re-claim supersede a continuation.
+        // Without the atomic confirm, a superseded run still burned one full
+        // stale LLM turn (the ghost run).
+        match kind {
+            ContinuationKind::Loop { wake_ms } => {
+                let confirmed = crate::looping::global()
+                    .is_some_and(|reg| reg.confirm_fire(&session_key_str, wake_ms));
+                if !confirmed {
+                    info!(session = %session_key_str,
+                        "loop: tick superseded during its delay (loop stopped or replaced); skipping");
+                    return;
+                }
+            }
+            ContinuationKind::Goal { wake_ms } => {
+                let confirmed = crate::goal::global().is_some_and(|store| {
+                    store
+                        .confirm_fire(&session_key_str, wake_ms)
+                        .unwrap_or(false)
+                });
+                if !confirmed {
+                    info!(session = %session_key_str,
+                        "goal pursuit: continuation superseded (goal cleared, completed or re-claimed); skipping");
+                    return;
+                }
             }
         }
         let Some(cont_agent) = registry.get(&cont_agent_id).await else {
@@ -1282,17 +1056,14 @@ fn spawn_continuation_run(
         // fan the continuation's final reply out to it (Telegram/Slack) and,
         // on failure, to deliver the halt notice (G3). `None` for Panel-only
         // (`gui:chat`) sessions, which still get live event-bus streaming.
-        let origin: Option<(
-            Arc<crate::gateway::channel_registry::ChannelRegistry>,
-            String,
-            String,
-        )> = match crate::gateway::event_emitter::origin_fanout::channel_registry() {
-            Some(reg) => cont_agent
-                .origin_route(&session_key)
-                .await
-                .map(|(ch, conv)| (reg, ch, conv)),
-            None => None,
-        };
+        let origin: Option<OriginRoute> =
+            match crate::gateway::event_emitter::origin_fanout::channel_registry() {
+                Some(reg) => cont_agent
+                    .origin_route(&session_key)
+                    .await
+                    .map(|(ch, conv)| (reg, ch, conv)),
+                None => None,
+            };
         // Kept for the AgentBusy retry re-spawn (the original is consumed by
         // the emitter construction just below).
         let retry_bus = event_bus.clone();
@@ -1327,65 +1098,74 @@ fn spawn_continuation_run(
                 info!(session = %session_key_str, kind = ?kind,
                     "continuation cancelled by user");
             } else if matches!(e, ExecutionError::AgentBusy(_)) {
-                // A scheduling collision, not a pursuit failure: another run
-                // of this agent held the slot when the tick fired — possibly
-                // in a DIFFERENT session, whose completion re-enters the hook
-                // under its own key and would never re-arm THIS loop. The old
-                // behavior turned the collision into a terminal stop with a
-                // confusing "halted by an error: Agent is busy" receipt; a
-                // bare skip would instead strand the loop silently dormant.
-                // So: re-arm the SAME claimed tick with a short retry delay
-                // (atomic in the registry, no iteration bump) and re-enqueue.
-                // Goals keep the visible blocking path below — they have no
-                // pending/claim machinery to retry through, and a Blocked
-                // goal is user-recoverable and notified.
-                match kind {
+                // A scheduling collision, not a pursuit failure: another run of
+                // this session held the slot when this one fired (commonly a
+                // queued user message that won the race for the just-freed
+                // slot). The iteration was already spent at claim time, so
+                // BOTH kinds re-arm the SAME claimed run with a short retry
+                // delay (atomic in the store/registry, no second bump) and
+                // re-enqueue. Dropping it instead — what goals used to do —
+                // burned an autonomous step for zero work, and stalled the
+                // pursuit outright whenever the colliding run then failed (a
+                // failed run never reaches the continuation hook, so nothing
+                // re-armed the goal).
+                let (delay_ms, next_kind) = match kind {
                     ContinuationKind::Loop { .. } => {
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .map_or(0, |d| d.as_millis() as u64);
-                        let rearmed = crate::looping::global()
-                            .and_then(|r| r.rearm_after_busy(&session_key_str, now));
-                        match rearmed {
+                        match crate::looping::global()
+                            .and_then(|r| r.rearm_after_busy(&session_key_str, now))
+                        {
                             Some((delay_ms, wake_ms)) => {
                                 info!(session = %session_key_str, delay_ms,
                                     "loop: agent busy at tick fire; re-armed the tick with a retry delay");
-                                spawn_continuation_run(
-                                    registry.clone(),
-                                    adapter.clone(),
-                                    session_key.clone(),
-                                    session_key_str.clone(),
-                                    prompt.clone(),
-                                    retry_bus.clone(),
-                                    Some(delay_ms),
-                                    ContinuationKind::Loop { wake_ms },
-                                );
+                                (Some(delay_ms), ContinuationKind::Loop { wake_ms })
                             }
-                            None => info!(session = %session_key_str,
-                                "loop: agent busy at tick fire; loop no longer active, re-claimed, or capped — tick dropped"),
+                            None => {
+                                info!(session = %session_key_str,
+                                    "loop: agent busy at tick fire; loop no longer active, re-claimed, or capped — tick dropped");
+                                (None, kind)
+                            }
                         }
                     }
-                    ContinuationKind::Goal => {
-                        // A scheduling collision, not a pursuit failure — the
-                        // loop sibling above treats it as benign, and goals now
-                        // do too. The busy holder is another run of this agent
-                        // (commonly a user turn racing this session's own
-                        // continuation): its completion re-enters the goal hook
-                        // under the SAME session key and re-arms the pursuit. So
-                        // leave the goal Active rather than permanently Blocking
-                        // it — a user simply chatting while a goal pursues must
-                        // not spuriously kill the work they asked for (loop's
-                        // "视同 Cancelled 留 Active" parity, R5).
-                        info!(session = %session_key_str,
-                            "goal pursuit: continuation hit a busy agent; leaving goal active, next completed run re-arms it");
+                    ContinuationKind::Goal { .. } => {
+                        match super::goal_continuation::rearm_goal_after_busy(
+                            &session_key_str,
+                            origin.as_ref(),
+                        )
+                        .await
+                        {
+                            Some((delay_ms, wake_ms)) => {
+                                (Some(delay_ms), ContinuationKind::Goal { wake_ms })
+                            }
+                            None => (None, kind),
+                        }
                     }
+                };
+                if let Some(delay_ms) = delay_ms {
+                    spawn_continuation_run(
+                        registry.clone(),
+                        adapter.clone(),
+                        session_key.clone(),
+                        session_key_str.clone(),
+                        prompt.clone(),
+                        retry_bus.clone(),
+                        Some(delay_ms),
+                        next_kind,
+                    );
                 }
             } else {
                 match kind {
-                    ContinuationKind::Goal => {
+                    ContinuationKind::Goal { .. } => {
                         warn!(error = %e, session = %session_key_str,
                             "goal pursuit: continuation run failed; blocking goal for user guidance");
-                        block_goal_on_failure(&session_key_str, &e, origin.as_ref()).await;
+                        super::goal_continuation::block_goal_on_failure(
+                            &session_key_str,
+                            &e,
+                            origin.as_ref(),
+                        )
+                        .await;
                     }
                     ContinuationKind::Loop { .. } => {
                         warn!(error = %e, session = %session_key_str,
@@ -1398,83 +1178,6 @@ fn spawn_continuation_run(
     });
 }
 
-/// Clear the goal-welded Strategy for a session (best-effort). Called at every
-/// authoritative goal termination — gate-confirmed complete, cap/deadline/
-/// budget exhaustion, gate-veto-at-cap, and failure block — so the stale plan
-/// neither bleeds into later plain turns of the reused session (the goal tier is
-/// resolved FIRST in `resolve_active_strategy`) nor blocks a future same-
-/// objective `goal set` from re-planning. The loop sibling clears `loop_key`
-/// inline at its cap-stop / failure-stop; this is goal's single-source
-/// equivalent so those sites do not each hand-roll the delete. The tool-side
-/// terminations (`goal clear`, self-reported terminal `update`) clear the same
-/// key in `builtin_tools/goal.rs`; only Passive-complete and Blocked are cleared
-/// there — Active-pursuit completion is gate-arbitrated here so a gate veto can
-/// still reopen the goal WITH its plan intact.
-fn clear_goal_welded_strategy(session_key_str: &str) {
-    if let Some(strat) = crate::strategy::global() {
-        if let Err(e) = strat.delete(&crate::strategy::goal_key(session_key_str)) {
-            info!(session = %session_key_str, error = %e,
-                "goal pursuit: failed to clear welded strategy on termination (ignored)");
-        }
-    }
-}
-
-/// G3: when an autonomous continuation fails (non-cancellation), transition the
-/// session's goal to `Blocked` with the error and best-effort notify the origin
-/// channel. Without this, a transient failure leaves the goal a stuck `Active`
-/// with no in-flight run — silent stall — and a `Blocked` goal is invisible in
-/// the prompt (`active_standing_goal` only surfaces `Active`), so the channel
-/// notice is the user's signal that unattended pursuit halted.
-async fn block_goal_on_failure(
-    session_key_str: &str,
-    error: &ExecutionError,
-    origin: Option<&(
-        Arc<crate::gateway::channel_registry::ChannelRegistry>,
-        String,
-        String,
-    )>,
-) {
-    let reason: String = format!("{error}").chars().take(300).collect();
-    if let Some(store) = crate::goal::global() {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as u64);
-        match store.get(session_key_str) {
-            // Only block a goal still actively being pursued — never clobber a
-            // goal the failed run had already marked complete/blocked.
-            Ok(Some(goal)) if goal.is_active() => {
-                let note = format!(
-                    "Autonomous pursuit was halted by an error and blocked for your \
-                     guidance: {reason}. Review progress, then clear or re-set the \
-                     goal to continue."
-                );
-                let blocked = goal
-                    .with_status(crate::goal::GoalStatus::Blocked, now_ms)
-                    .with_note(Some(note), now_ms);
-                if let Err(e) = store.put(&blocked) {
-                    warn!(error = %e, session = %session_key_str,
-                        "goal pursuit: failed to persist failure block");
-                } else {
-                    // Authoritative dormant end — clear the welded plan so the
-                    // failed plan does not bleed into later plain turns (mirror
-                    // the cap-stop / loop failure-stop cleanup).
-                    clear_goal_welded_strategy(session_key_str);
-                }
-            }
-            // Already terminal (complete/blocked/paused) or no goal → nothing
-            // to block. A store error is logged, not silently swallowed.
-            Ok(_) => {}
-            Err(e) => warn!(error = %e, session = %session_key_str,
-                "goal pursuit: goal lookup failed during failure block"),
-        }
-    }
-    notify_origin(
-        origin,
-        format!("⚠️ Autonomous pursuit of your standing goal halted: {reason}"),
-    )
-    .await;
-}
-
 /// Loop sibling of [`block_goal_on_failure`]: when a clock-driven loop tick run
 /// fails (non-cancellation), mark the loop `Stopped` and best-effort notify the
 /// origin channel. Without this, a failed tick left the loop a stuck `Active`
@@ -1483,11 +1186,7 @@ async fn block_goal_on_failure(
 async fn stop_loop_on_failure(
     session_key_str: &str,
     error: &ExecutionError,
-    origin: Option<&(
-        Arc<crate::gateway::channel_registry::ChannelRegistry>,
-        String,
-        String,
-    )>,
+    origin: Option<&OriginRoute>,
 ) {
     let reason: String = format!("{error}").chars().take(300).collect();
     if let Some(reg) = crate::looping::global() {
@@ -1525,14 +1224,7 @@ async fn stop_loop_on_failure(
 /// budget exhaustion block) so every unattended ending is equally visible;
 /// Panel-only sessions have no origin and rely on the stored stop reason
 /// (loop) / blocked note (goal).
-async fn notify_origin(
-    origin: Option<&(
-        Arc<crate::gateway::channel_registry::ChannelRegistry>,
-        String,
-        String,
-    )>,
-    text: String,
-) {
+pub(super) async fn notify_origin(origin: Option<&OriginRoute>, text: String) {
     if let Some((reg, ch, conv)) = origin {
         let msg = crate::gateway::channel::OutboundMessage::text(conv.clone(), text);
         if let Err(e) = reg
@@ -1573,7 +1265,12 @@ mod naked_loop_planner_tests {
             false,
             "/loop watch CI every 5m"
         ));
-        assert!(!naked_loop_planner_should_fire(&k, true, false, "  /goal x"));
+        assert!(!naked_loop_planner_should_fire(
+            &k,
+            true,
+            false,
+            "  /goal x"
+        ));
     }
 
     #[test]
