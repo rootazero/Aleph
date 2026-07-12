@@ -87,13 +87,12 @@ pub(crate) fn cognitive_layer(slot: SlotKind, source: &ItemSource) -> CognitiveL
 }
 
 /// Note categories that are time/episode-bound (lived experience) rather than
-/// distilled knowledge. Matches the `subagent-*` / `transcript` note-type dirs.
+/// distilled knowledge. Keyed on `NoteType::to_category_dir()` output — the
+/// `transcript` / `subagent-*` dirs (never the `MemoryCategory` enum names).
 fn is_episodic_category(category: &str) -> bool {
     matches!(
         category,
         "transcript"
-            | "events"
-            | "cases"
             | "subagent-run"
             | "subagent-session"
             | "subagent-checkpoint"

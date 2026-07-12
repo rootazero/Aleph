@@ -213,7 +213,12 @@ impl Gatherer {
             .get_raw_by_path_prefix(&prefix, agent_id, 5)
             .await
         {
-            Ok(raws) => raws.into_iter().map(raw_to_candidate).collect(),
+            // Current-session raws are the live working set → `SessionRecent`
+            // slot so the render-time cognitive view classifies them `Working`.
+            Ok(raws) => raws
+                .into_iter()
+                .map(|r| raw_to_candidate(r, SlotKind::SessionRecent))
+                .collect(),
             Err(e) => {
                 warn!(error = %e, session = sid, "assembler.gather: raw fetch failed");
                 Vec::new()
@@ -271,7 +276,11 @@ impl Gatherer {
                 .get_raw_by_source(RawMemorySource::SessionCompressed, id, 20)
                 .await
             {
-                Ok(raws) => out.extend(raws.into_iter().map(raw_to_candidate)),
+                // Cross-session compressed rows are audit substrate → `Raw` tier.
+                Ok(raws) => out.extend(
+                    raws.into_iter()
+                        .map(|r| raw_to_candidate(r, SlotKind::RawFragments)),
+                ),
                 Err(e) => {
                     warn!(error = %e, agent = %id, "assembler.gather: session_compressed fetch failed");
                 }
@@ -353,7 +362,11 @@ fn insight_to_candidate(insight: crate::memory::dreaming::DailyInsight) -> Candi
     }
 }
 
-fn raw_to_candidate(r: RawMemory) -> Candidate {
+/// Convert a raw memory row into a candidate. `slot` decides its cognitive tier
+/// via `render::cognitive_layer`: current-session live fragments (the working
+/// set) pass `SlotKind::SessionRecent` → `Working`; cross-session
+/// `SessionCompressed` rows pass `SlotKind::RawFragments` → `Raw` audit substrate.
+fn raw_to_candidate(r: RawMemory, slot: SlotKind) -> Candidate {
     let session_id = r.session_id.clone().unwrap_or_default();
     let fact_source = raw_source_to_fact_source(&r.source);
     let path = r.path.clone();
@@ -368,7 +381,7 @@ fn raw_to_candidate(r: RawMemory) -> Candidate {
         },
         relevance: 0.6,
         updated_at: r.created_at,
-        slot_hint: SlotKind::RawFragments,
+        slot_hint: slot,
         fact_source,
     }
 }
@@ -397,7 +410,7 @@ mod tests {
     fn raw_to_candidate_populates_source() {
         let raw =
             RawMemory::new("content".into(), RawMemorySource::Transcript).with_session("sess-1");
-        let c = raw_to_candidate(raw);
+        let c = raw_to_candidate(raw, SlotKind::RawFragments);
         match &c.source {
             ItemSource::Raw { session_id, .. } => assert_eq!(session_id, "sess-1"),
             _ => panic!("expected ItemSource::Raw"),
@@ -407,13 +420,29 @@ mod tests {
     }
 
     #[test]
+    fn current_session_raw_maps_to_working_tier() {
+        use crate::memory::assembler::render::cognitive_layer;
+        use crate::memory::context::CognitiveLayer;
+        let raw =
+            RawMemory::new("live".into(), RawMemorySource::Transcript).with_session("sess-3");
+        let c = raw_to_candidate(raw, SlotKind::SessionRecent);
+        assert_eq!(c.slot_hint, SlotKind::SessionRecent);
+        // Regression: the live working set must render as `Working`, not the
+        // `Raw` audit tier (four-layer cognitive view — MEMORY_SYSTEM.md §3.1).
+        assert_eq!(
+            cognitive_layer(c.slot_hint, &c.source),
+            CognitiveLayer::Working
+        );
+    }
+
+    #[test]
     fn session_compressed_maps_to_correct_fact_source() {
         let raw = RawMemory::new(
             "compressed summary".into(),
             RawMemorySource::SessionCompressed,
         )
         .with_session("sess-2");
-        let c = raw_to_candidate(raw);
+        let c = raw_to_candidate(raw, SlotKind::RawFragments);
         assert_eq!(c.fact_source, FactSource::SessionCompressed);
     }
 

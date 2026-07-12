@@ -60,12 +60,11 @@ impl StrategySelector {
     }
 
     /// Record outcome of a completed Dream cycle for personality adaptation.
-    pub fn record_cycle_outcome(
-        &mut self,
-        _strategy: DreamStrategy,
-        validation_passed: bool,
-        _skill_recall_hit_rate: f64,
-    ) {
+    ///
+    /// Personality keys solely on the validation pass-rate over the sliding
+    /// window (see `personality_adjustment`), so only `validation_passed` is
+    /// recorded — the cycle strategy and skill-recall rate are not consulted.
+    pub fn record_cycle_outcome(&mut self, validation_passed: bool) {
         if self.history.len() >= PERSONALITY_WINDOW {
             self.history.pop_front();
         }
@@ -213,7 +212,7 @@ mod tests {
     fn personality_high_pass_rate_lowers_threshold() {
         let mut selector = StrategySelector::new();
         for _ in 0..10 {
-            selector.record_cycle_outcome(DreamStrategy::Consolidate, true, 0.5);
+            selector.record_cycle_outcome(true);
         }
         assert!(selector.synthesize_threshold() < DEFAULT_SYNTHESIZE_THRESHOLD);
     }
@@ -222,7 +221,7 @@ mod tests {
     fn personality_low_pass_rate_raises_threshold() {
         let mut selector = StrategySelector::new();
         for _ in 0..10 {
-            selector.record_cycle_outcome(DreamStrategy::Consolidate, false, 0.0);
+            selector.record_cycle_outcome(false);
         }
         assert!(selector.synthesize_threshold() > DEFAULT_SYNTHESIZE_THRESHOLD);
     }
@@ -231,7 +230,7 @@ mod tests {
     fn threshold_clamped_to_range() {
         let mut selector = StrategySelector::new();
         for _ in 0..20 {
-            selector.record_cycle_outcome(DreamStrategy::Synthesize, true, 1.0);
+            selector.record_cycle_outcome(true);
         }
         assert!(selector.synthesize_threshold() >= MIN_SYNTHESIZE_THRESHOLD);
         assert!(selector.synthesize_threshold() <= MAX_SYNTHESIZE_THRESHOLD);

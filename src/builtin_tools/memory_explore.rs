@@ -153,7 +153,10 @@ impl MemoryExploreTool {
             .iter()
             .map(|r| {
                 let mut f = r.to_memory_fact(&self.agent_id);
-                f.similarity_score = Some(r.score);
+                // Raw vec0 L2 distance (lower = closer) → higher-is-better
+                // similarity in (0, 1], so the value the model sees as
+                // `relevance_score` and the BFS similarity gate are correct.
+                f.similarity_score = Some(1.0 / (1.0 + r.score.max(0.0)));
                 f
             })
             .collect();

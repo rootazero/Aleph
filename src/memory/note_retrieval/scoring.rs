@@ -6,8 +6,11 @@
 //! applied in the background dream daemon:
 //!
 //! * **Recency decay** — a fresh note should outrank a stale one of equal raw
-//!   relevance. Reuses the exponential half-life decay semantics already used by
-//!   the note-decay dream stage (`0.5^(age_days / half_life_days)`).
+//!   relevance, via a true half-life `0.5^(age_days / half_life_days)` (its own
+//!   `recency_half_life_days` knob; halves at exactly `half_life_days`). The
+//!   note-decay *dream* stage applies a related-but-distinct time-constant form,
+//!   `exp(-days / half_life_days)` (halves at ~0.69·`half_life_days`) — the two
+//!   subsystems share the "half_life" naming but not the curve.
 //! * **MMR diversity** — pure relevance ordering returns near-duplicate notes;
 //!   Maximal Marginal Relevance trades a little relevance for coverage. We use
 //!   token-Jaccard overlap as the redundancy proxy so no per-candidate

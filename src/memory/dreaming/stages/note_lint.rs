@@ -39,7 +39,6 @@ impl DreamStage for NoteLintStage {
         let mut format_fixed = 0u32;
         let mut broken_links_found = 0u32;
         let mut links_repaired = 0u32;
-        let links_purged = 0u32;
 
         // Snapshot note list so we can iterate without borrowing ctx
         let note_paths: Vec<String> = ctx.notes.iter().map(|n| n.path.clone()).collect();
@@ -214,13 +213,14 @@ impl DreamStage for NoteLintStage {
         ctx.report.format_fixed = format_fixed;
         ctx.report.broken_links_found = broken_links_found;
         ctx.report.links_repaired = links_repaired;
-        ctx.report.links_purged = links_purged;
+        // `DreamReport.links_purged` intentionally stays at its Default (0): the
+        // tombstone design never purges links, so lint has no purge producer.
+        // Reporting a hardcoded 0 only added a permanent "0 purged" noise line.
 
         tracing::info!(
             format_fixed,
             broken_links_found,
             links_repaired,
-            links_purged,
             "NoteLint completed"
         );
 
@@ -258,10 +258,8 @@ impl DreamStage for NoteLintStage {
         // elsewhere — orientation is a projection, never load-bearing).
         if let Some(orient) = ctx.orientation.as_ref() {
             let orphans = orphan_count(ctx.indexer.store().as_ref(), &ctx.agent_id).await;
-            let did_work = format_fixed > 0
-                || broken_links_found > 0
-                || links_repaired > 0
-                || links_purged > 0;
+            let did_work =
+                format_fixed > 0 || broken_links_found > 0 || links_repaired > 0;
             // Skip wholly-clean passes (no fixes, no orphans) so log.md stays an
             // event timeline rather than filling with empty "nothing to do" rows.
             if did_work || orphans > 0 {
@@ -270,7 +268,7 @@ impl DreamStage for NoteLintStage {
                     action: LogAction::Lint,
                     summary: format!(
                         "wiki lint pass: {format_fixed} frontmatter fixed, \
-                         {links_repaired} links repaired, {links_purged} purged"
+                         {links_repaired} links repaired"
                     ),
                     detail_lines: vec![
                         format!("broken links found: {broken_links_found}"),

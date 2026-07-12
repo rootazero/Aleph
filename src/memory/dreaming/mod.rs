@@ -51,7 +51,7 @@ pub use report::{DreamReport, DreamReportStatus};
 pub use event_log::{DreamEvent, EventLog};
 pub use evolution::{
     evaluate_gate, memory_health_score, score_merge_candidate, EditBudget, EvolutionOutcome,
-    GateOutcome, MemoryScore,
+    GateOutcome,
 };
 pub use mutation_gate::MutationGate;
 pub use selector::{GateDecision, SelectionDecision, StrategySelector};
@@ -1063,24 +1063,6 @@ impl DreamDaemon {
             }
         };
 
-        // --- Phase 5: Validation (L1 + L2, deterministic) ---
-        let validation_report = DreamValidationReport {
-            l1_format: ValidationTier {
-                passed: true,
-                checks_run: 0,
-                checks_passed: 0,
-                issues: vec![],
-            },
-            l2_consistency: ValidationTier {
-                passed: true,
-                checks_run: 0,
-                checks_passed: 0,
-                issues: vec![],
-            },
-            l3_semantic: None,
-            l4_retrospective: None,
-        };
-
         // --- Phase 5.5: Evolution gate (memory-health before/after) ---
         // SkillOpt discipline at cycle granularity: score the corpus before and
         // after this cycle's edits, accept-track the best, and conserve (rather
@@ -1091,6 +1073,31 @@ impl DreamDaemon {
             .list_notes(DEFAULT_AGENT_ID)
             .await
             .unwrap_or_default();
+
+        // --- Phase 5: Validation (L2 consistency, deterministic) ---
+        // L2 (duplicate content-hash) runs cheaply from the index — no file
+        // reads. L1 (format) needs full note markdown; re-reading the whole
+        // corpus every cycle is too costly, so it stays a vacuous pass and
+        // `overall_ok()` gates on L2 alone. Wiring a real L2 revives the strategy
+        // selector's personality loop (validation pass-rate over the window):
+        // duplicate-hash rot now tightens the synthesize threshold instead of
+        // every cycle rubber-stamping `passed` with zero checks run.
+        let l2_pairs: Vec<(String, String)> = post_index
+            .iter()
+            .map(|n| (n.path.clone(), n.content_hash.clone()))
+            .collect();
+        let validation_report = DreamValidationReport {
+            l1_format: ValidationTier {
+                passed: true,
+                checks_run: 0,
+                checks_passed: 0,
+                issues: vec![],
+            },
+            l2_consistency: validation::run_l2_validation(&l2_pairs),
+            l3_semantic: None,
+            l4_retrospective: None,
+        };
+
         // Same prior report as the baseline: the rot term is a lagging signal, so
         // both sides of the evolution gate carry the identical penalty and it
         // cancels in the health *delta* — the gate still judges on this cycle's
@@ -1158,11 +1165,7 @@ impl DreamDaemon {
         // --- Phase 7: Update personality + mutation gate ---
         {
             let mut selector = self.selector.lock().unwrap_or_else(|e| e.into_inner());
-            selector.record_cycle_outcome(
-                strategy,
-                event.validation.overall_ok(),
-                signal_snapshot.score("skill_recall_rate"),
-            );
+            selector.record_cycle_outcome(event.validation.overall_ok());
         }
         {
             let mut gate = self.mutation_gate.lock().unwrap_or_else(|e| e.into_inner());
@@ -1189,19 +1192,17 @@ impl DreamDaemon {
 
 /// Compute a `RawMetrics` snapshot for the Dream cycle.
 ///
-/// Pulls notes (count + 24h growth) from the in-memory note index, folds in
-/// 24h tool-invocation aggregates from `raw_memories` so the signal collector
-/// can surface `tool_failure_rate` / `tool_call_volume` / `tool_latency_score`
-/// (Spec 3), and folds in per-note recall counts from `recall_signals` so the
-/// recall-derived signals (`note_hit_rate` / `never_recalled_ratio` /
-/// `skill_recall_rate`) carry real values rather than the historical zeros.
+/// Pulls notes (count + 24h growth) from the in-memory note index and folds in
+/// per-note recall counts from `recall_signals` so the recall-derived signals
+/// (`note_hit_rate` / `never_recalled_ratio` / `skill_recall_rate`) carry real
+/// values rather than the historical zeros.
 ///
 /// The recall wiring is load-bearing: `skill_recall_rate` feeds the strategy
 /// selector's `growth_pressure` (a false 0 perpetually inflated the synthesize
 /// pressure) and the `MutationGate` wasted-distillation detector (a false 0
-/// made it fire `Conserve` the moment any skill was produced). Both the tool
-/// and the recall queries degrade to a warning + zeros on backend failure —
-/// strategy selection runs on the surviving signals rather than aborting.
+/// made it fire `Conserve` the moment any skill was produced). The recall query
+/// degrades to a warning + zeros on backend failure — strategy selection runs
+/// on the surviving signals rather than aborting.
 async fn compute_raw_metrics(
     notes: &[NoteIndexEntry],
     store: &SqliteMemoryBackend,
@@ -1210,21 +1211,6 @@ async fn compute_raw_metrics(
 ) -> RawMetrics {
     let day_ago = now_timestamp() - 86_400;
     let notes_added_24h = notes.iter().filter(|n| n.created_at >= day_ago).count() as u32;
-
-    let (tool_total, tool_failed, tool_avg_ms) =
-        match crate::memory::tool_signal_sink::aggregate_tool_stats(store, agent_id, day_ago, 5_000)
-            .await
-        {
-            Ok(stats) => (stats.total, stats.failed, stats.avg_duration_ms),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    agent = agent_id,
-                    "tool-invocation aggregation failed; tool signals will read zero",
-                );
-                (0, 0, 0)
-            }
-        };
 
     // Fold in recall signals with a single batch query over every note path.
     // `recall_hit_counts` returns only the paths that have at least one recorded
@@ -1290,9 +1276,6 @@ async fn compute_raw_metrics(
         duplication_rate,
         contradiction_rate,
         staleness_rate,
-        tool_calls_total_24h: tool_total,
-        tool_calls_failed_24h: tool_failed,
-        tool_avg_duration_ms_24h: tool_avg_ms,
         ..Default::default()
     }
 }
@@ -1504,42 +1487,6 @@ mod tests {
         let m = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID, None).await;
         assert_eq!(m.total_notes, 3);
         assert_eq!(m.notes_added_24h, 2);
-        // With no tool invocations recorded yet, the new fields stay zero.
-        assert_eq!(m.tool_calls_total_24h, 0);
-        assert_eq!(m.tool_calls_failed_24h, 0);
-        assert_eq!(m.tool_avg_duration_ms_24h, 0);
-    }
-
-    #[tokio::test]
-    async fn compute_raw_metrics_folds_in_tool_invocation_stats() {
-        use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-        let temp =
-            std::env::temp_dir().join(format!("aleph_metrics_tool_{}", uuid::Uuid::new_v4()));
-        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
-
-        // Synthesize three fresh tool invocations: 2 ok (10 + 30 ms) + 1 fail.
-        for (name, ok, ms) in [
-            ("read_file", true, 10u64),
-            ("shell", true, 30),
-            ("grep", false, 0),
-        ] {
-            let raw = RawMemory::new(
-                format!("tool {name}"),
-                RawMemorySource::ToolInvocation {
-                    tool_name: name.into(),
-                    success: ok,
-                    duration_ms: ms,
-                },
-            )
-            .with_agent(DEFAULT_AGENT_ID);
-            store.insert_raw_memory(&raw).await.unwrap();
-        }
-
-        let m = compute_raw_metrics(&[], store.as_ref(), DEFAULT_AGENT_ID, None).await;
-        assert_eq!(m.tool_calls_total_24h, 3);
-        assert_eq!(m.tool_calls_failed_24h, 1);
-        // (10 + 30 + 0) / 3 = 13
-        assert_eq!(m.tool_avg_duration_ms_24h, 40 / 3);
     }
 
     #[tokio::test]

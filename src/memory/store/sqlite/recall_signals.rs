@@ -1,9 +1,11 @@
 //! `RecallSignalStore` — tracks which notes get retrieved during conversations.
 //!
 //! Each retrieval hit is recorded as a signal keyed by (`note_path`, `query_hash`,
-//! `day_bucket`, channel) for natural deduplication.  Aggregated signals later
-//! feed the 8-dimensional promotion scorer that decides which short-term
-//! memories should be promoted to long-term.
+//! `day_bucket`, channel) for natural deduplication. The only live consumer of the
+//! aggregate is `recall_hit_counts` (`signal_count` per note), which feeds
+//! retrieval-time reinforcement so frequently-recalled notes float to the top
+//! (热门浮顶); the dream daemon's co-recall / hit-rate metrics read the same rows.
+//! (The other `RecallAggregate` fields are currently unconsumed — see the struct.)
 
 use chrono::Utc;
 use rusqlite::params;

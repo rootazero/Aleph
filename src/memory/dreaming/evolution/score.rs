@@ -1,25 +1,14 @@
 //! Memory-health scoring — the deterministic substrate the evolution gate
 //! compares against.
 //!
-//! `hard` reuses the existing `SignalSnapshot` (zero extra cost): memory is
-//! *healthier* when contradiction / duplication / staleness are low and recall
-//! hit-rates are high. `soft` is an optional LLM-judge score, populated only
-//! when a candidate lands in the gate's epsilon band (so the model is consulted
-//! exactly where arithmetic is ambiguous — R7).
-
-use serde::{Deserialize, Serialize};
+//! `memory_health_score` reuses the existing `SignalSnapshot` (zero extra cost):
+//! memory is *healthier* when contradiction / duplication / staleness are low and
+//! recall hit-rates are high. `score_merge_candidate` scores a proposed merge.
+//! Both are plain `f64` in `[0, 1]` — the gate compares them arithmetically and
+//! never replaces the LLM's content decisions (R7).
 
 use crate::memory::dreaming::signals::SignalSnapshot;
 use crate::memory::notes::KnowledgeNote;
-
-/// A scored snapshot of memory health at a point in the dream cycle.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
-pub struct MemoryScore {
-    /// Deterministic health score in `[0, 1]` (higher = healthier).
-    pub hard: f64,
-    /// Optional LLM-judge score in `[0, 1]`; `0.0` when not evaluated.
-    pub soft: f64,
-}
 
 // Weights for the deterministic health projection. Recall quality is rewarded;
 // the three "rot" signals are penalties. Tuned so a pristine corpus

@@ -5,7 +5,6 @@
 //! consumers don't require changes.
 
 pub mod expansion;
-pub mod hybrid;
 mod relation_surface;
 pub mod scoring;
 pub mod trace;
@@ -410,15 +409,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         // No embedder configured (FTS-only deployment): skip the vector leg
         // silently — this is a known steady state, not an outage.
         let Some(embedder) = self.embedder.as_ref() else {
-            let t0 = Instant::now();
-            let results = self.text_retrieve(query, agent_id, limit).await?;
-            sink.record(
-                "fts_search",
-                t0.elapsed().as_millis() as u64,
-                0,
-                results.len(),
-            );
-            return Ok(results);
+            return self.text_retrieve_scored(query, agent_id, limit, sink).await;
         };
         // Embedding requires a remote API call; when that endpoint is
         // unreachable (network outage, provider down) the notes themselves
@@ -430,15 +421,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
                     error = %e,
                     "note retrieval: embedding unavailable, falling back to FTS-only search"
                 );
-                let t0 = Instant::now();
-                let results = self.text_retrieve(query, agent_id, limit).await?;
-                sink.record(
-                    "fts_search",
-                    t0.elapsed().as_millis() as u64,
-                    0,
-                    results.len(),
-                );
-                return Ok(results);
+                return self.text_retrieve_scored(query, agent_id, limit, sink).await;
             }
         };
         let dim = embedding.len() as u32;
@@ -547,6 +530,34 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
                 scored_fact_from_index_entry(entry, agent_id, 1.0 - (i as f32 / total.max(1.0)))
             })
             .collect())
+    }
+
+    /// FTS-only recall tail shared by both `retrieve_inner` degradation branches
+    /// (no embedder configured, and transient embed-endpoint outage). Runs the
+    /// same reinforcement + recency scoring and recall recording as the hybrid
+    /// path, so 热门浮顶 (hot-surfacing) accrues signal and ranks even when the
+    /// vector leg is unavailable — mirrors `multi_agent_text_fallback`'s
+    /// graceful-degradation contract (P7). Without this, an FTS-only deployment
+    /// never writes `recall_signals`, leaving reinforcement a permanent no-op.
+    async fn text_retrieve_scored(
+        &self,
+        query: &str,
+        agent_id: &str,
+        limit: usize,
+        sink: &mut TraceSink,
+    ) -> Result<Vec<ScoredFact>, AlephError> {
+        let t0 = Instant::now();
+        let results = self.text_retrieve(query, agent_id, limit).await?;
+        sink.record(
+            "fts_search",
+            t0.elapsed().as_millis() as u64,
+            0,
+            results.len(),
+        );
+        let counts = self.fetch_reinforcement_counts(&results).await;
+        let ranked = self.apply_scoring(results, now_unix(), &counts, sink);
+        self.record_recall(query, agent_id, &ranked).await;
+        Ok(ranked)
     }
 
     /// Hybrid search across multiple agents. Results from each agent are
