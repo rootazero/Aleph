@@ -8,16 +8,19 @@
 //! 中心侧 LLM 工具 `node_list` / `node_invoke` / `node_invoke_many` / `node_file`
 //! 在 `crate::builtin_tools` 经这些原语驱动节点。信任模型为 LAN-trust：节点不持
 //! token，连接身份由 connect 帧的参数形状（`commands` + `tags`）声明（见
-//! [`maybe_register_node`]）。工程视角全貌见 `docs/reference/CLUSTER.md`。
+//! [`maybe_register_node`]），登记本身也在 `connect` 里完成（见 [`admit_node`]）。
+//! 工程视角全貌见 `docs/reference/CLUSTER.md`。
 //!
 //! 红线：本模块不含任何 LLM 推理（R7），不进入 `src/harness/`（R10）。
 
+mod enrollment;
 mod node_approval;
 mod node_file_cmd;
 mod node_runtime;
 mod registry;
 mod reverse_rpc;
 
+pub use enrollment::{admit_node, mint_node_device, NodeAdmission};
 pub use node_approval::{ApprovalSlot, CenterApprovalRequester, NODE_APPROVAL_TIMEOUT_MS};
 pub(crate) use node_file_cmd::sha256_hex;
 pub use node_file_cmd::{FileReadCommand, FileWriteCommand, MAX_FILE_BYTES};

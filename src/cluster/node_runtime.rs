@@ -41,10 +41,15 @@ impl CommandTable {
         self.commands.insert(name.into(), cmd);
     }
 
-    /// 节点 connect 时声明给中心的命令目录。
+    /// 节点 connect 时声明给中心的命令目录。**按名排序**——backing store 是
+    /// `HashMap`，迭代序每次进程启动都不同，会让节点每次 connect 上报的目录顺序
+    /// 抖动，进而抖动 `environments.list` 与模型可见的 `node_list` 输出。
     #[must_use]
     pub fn descriptors(&self) -> Vec<CommandDescriptor> {
-        self.commands.values().map(|c| c.descriptor()).collect()
+        let mut out: Vec<CommandDescriptor> =
+            self.commands.values().map(|c| c.descriptor()).collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
     }
 
     /// 分发一帧反向 RPC 请求体。`method` 必须是 `"tool.call"`；`params` 形如
@@ -226,5 +231,35 @@ mod tests {
         let d = table().descriptors();
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].name, "echo");
+    }
+
+    /// A command that reports whatever name it was built with, so the sort can
+    /// actually be observed (EchoCmd hardcodes "echo").
+    struct NamedCmd(&'static str);
+
+    #[async_trait]
+    impl NodeCommand for NamedCmd {
+        async fn run(&self, _args: Value) -> Result<Value, String> {
+            Ok(Value::Null)
+        }
+        fn descriptor(&self) -> CommandDescriptor {
+            CommandDescriptor {
+                name: self.0.to_string(),
+                schema: json!({"type": "object"}),
+            }
+        }
+    }
+
+    #[test]
+    fn descriptors_are_sorted_by_name() {
+        // The HashMap backing store iterates in a per-process-random order; the
+        // declared catalog must not inherit that jitter (it lands verbatim in
+        // environments.list and in what the model sees via node_list).
+        let mut t = CommandTable::new();
+        for name in ["file.write", "bash", "file.read"] {
+            t.register(name, Arc::new(NamedCmd(name)));
+        }
+        let names: Vec<String> = t.descriptors().into_iter().map(|d| d.name).collect();
+        assert_eq!(names, vec!["bash", "file.read", "file.write"]);
     }
 }

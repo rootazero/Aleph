@@ -1,32 +1,43 @@
-//! 集成测试：反向 RPC 端到端（服务端 → 已连 WS 客户端）。
+//! 集成测试：反向 RPC 端到端（中心 → 已连节点）。
 //!
-//! 验证 Phase 0a 的传输原语：一个真实 `GatewayServer`（LAN-trust 无鉴权）
-//! 接受一个 WS 客户端连接后，能从 `server.reverse_rpc` 取出该连接的
-//! `ReverseRpcChannel`，对客户端发起 `tool.call` 请求，并拿回客户端构造的响应。
+//! 验证传输原语：一个真实 `GatewayServer`（LAN-trust 无鉴权）接受一个**节点形状**
+//! 的 WS 连接后，能从 `NodeRegistry` 取出该节点的 `ReverseRpcChannel`，对它发起
+//! `tool.call` 请求，并拿回节点构造的响应。
+//!
+//! 走的是**生产路径**：`node_invoke` / `node_file` / 审批同样经 `NodeRegistry`
+//! 拿 channel。（此前这里读的是一张 `GatewayServer::reverse_rpc` 旁路表——它在
+//! 生产代码里从来只写不读，唯一的读者就是本测试，已随之删除。）
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use alephcore::cluster::ReverseRpcChannel;
+use alephcore::cluster::{NodeRegistry, ReverseRpcChannel};
 use alephcore::gateway::server::{GatewayConfig, GatewayServer};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
-use tokio::sync::RwLock;
 use tokio_tungstenite::tungstenite::Message;
 
-type ReverseRpcRegistry = Arc<RwLock<HashMap<String, ReverseRpcChannel>>>;
-
 #[tokio::test]
-async fn server_calls_method_on_connected_client_and_gets_response() {
-    // 1) 起服务端（LAN-trust 无鉴权；不调用 server.run()，自行 bind
-    //    随机端口并 axum::serve，以拿到实际监听地址）。
+async fn center_calls_tool_on_connected_node_and_gets_response() {
+    // 1) 起服务端（LAN-trust 无鉴权；不调用 server.run()，自行 bind 随机端口
+    //    并 axum::serve，以拿到实际监听地址）。
     let config = GatewayConfig::default();
     let dummy_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let server = GatewayServer::with_config(dummy_addr, config);
+    let mut server = GatewayServer::with_config(dummy_addr, config);
 
-    let reverse_rpc: ReverseRpcRegistry = server.reverse_rpc.clone();
+    // `connect` must be really registered: node registration hangs off its
+    // success reply. (A bare GatewayServer registers no handlers.)
+    let connect_ctx = Arc::new(alephcore::gateway::handlers::connect::ConnectContext {
+        state_versions: server.state_versions.clone(),
+        transport_policy: alephcore::gateway::handlers::auth::TransportPolicy::defaults(),
+    });
+    server.handlers_mut().register("connect", move |req| {
+        let ctx = Arc::clone(&connect_ctx);
+        async move { alephcore::gateway::handlers::connect::handle_connect(req, ctx).await }
+    });
+
+    let node_registry: Arc<NodeRegistry> = server.node_registry.clone();
     let router = server.build_router();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let bound = listener.local_addr().unwrap();
@@ -41,8 +52,8 @@ async fn server_calls_method_on_connected_client_and_gets_response() {
     // 保持 `server` 存活至测试结束（其拥有的 Arc 经 build_router 共享给 router）。
     let _server_keepalive = &server;
 
-    // 2) 客户端连接 + connect 握手（无鉴权下也照常发，顺带验证 connect 这个
-    //    *请求* 帧不会被服务端的"响应拦截"误吞），随后保持在线扮演应答节点。
+    // 2) 客户端以**节点形状**连接：connect params 带 `commands` + `tags`，这是
+    //    LAN-trust 下中心识别节点的唯一信号。随后保持在线扮演应答节点。
     let url = format!("ws://{bound}/ws");
     let (mut ws, _resp) = tokio_tungstenite::connect_async(url.as_str())
         .await
@@ -52,7 +63,12 @@ async fn server_calls_method_on_connected_client_and_gets_response() {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "connect",
-            "params": {"device_name": "test-node", "device_id": "node-test"}
+            "params": {
+                "device_id": "node-test",
+                "device_name": "test-node",
+                "commands": [{"name": "bash", "schema": {}}],
+                "tags": ["linux"]
+            }
         })
         .to_string()
         .into(),
@@ -86,10 +102,10 @@ async fn server_calls_method_on_connected_client_and_gets_response() {
         }
     });
 
-    // 3) 等连接登记进 reverse_rpc（连接建立时入站循环已 insert）。
-    let channel = wait_for_one_channel(&reverse_rpc).await;
+    // 3) 等节点登记进 NodeRegistry（连接建立是异步的）。
+    let (channel, _declared) = wait_for_node(&node_registry, "test-node").await;
 
-    // 4) 服务端发起反向 RPC，断言拿回客户端构造的响应。
+    // 4) 中心发起反向 RPC，断言拿回节点构造的响应。
     let resp = channel
         .call("tool.call", json!({"tool": "bash"}), 2_000)
         .await
@@ -100,13 +116,19 @@ async fn server_calls_method_on_connected_client_and_gets_response() {
     client_task.await.unwrap();
 }
 
-/// 轮询 reverse_rpc 注册表直到出现一条连接通道（连接建立是异步的）。
-async fn wait_for_one_channel(reg: &ReverseRpcRegistry) -> ReverseRpcChannel {
+/// 轮询 `NodeRegistry` 直到该节点上线，返回 `node_invoke` 走的同一条 channel。
+async fn wait_for_node(
+    registry: &NodeRegistry,
+    name: &str,
+) -> (
+    ReverseRpcChannel,
+    Vec<alephcore::cluster::CommandDescriptor>,
+) {
     for _ in 0..100 {
-        if let Some((_, ch)) = reg.read().await.iter().next() {
-            return ch.clone();
+        if let Ok(found) = registry.resolve(name) {
+            return found;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    panic!("no reverse_rpc channel registered within timeout");
+    panic!("node '{name}' never registered within timeout");
 }

@@ -1,22 +1,18 @@
 //! 集成测试：节点拨入中心 → 中心经反向 RPC 发 tool.call → 节点 dispatch 跑 bash
 //! → 中心拿回结果。LAN-trust 无鉴权传输。
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use alephcore::cluster::{CommandTable, ReverseRpcChannel};
+use alephcore::cluster::{CommandTable, NodeRegistry, ReverseRpcChannel};
 use alephcore::gateway::server::{GatewayConfig, GatewayServer};
 use alephcore::routing::session_key::SessionKey;
 use alephcore::sandbox::{Sandbox, SandboxCommand, SandboxError, SandboxOutput};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use tokio::sync::RwLock;
 use tokio_tungstenite::tungstenite::Message;
-
-type ReverseRpcRegistry = Arc<RwLock<HashMap<String, ReverseRpcChannel>>>;
 
 /// 内联 canned sandbox：返回固定输出（test_util::MockSandbox 对集成测试不可见）。
 struct CannedSandbox;
@@ -37,8 +33,20 @@ impl Sandbox for CannedSandbox {
 async fn center_runs_bash_on_connected_node() {
     let config = GatewayConfig::default();
     let dummy: SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let server = GatewayServer::with_config(dummy, config);
-    let reverse_rpc: ReverseRpcRegistry = server.reverse_rpc.clone();
+    let mut server = GatewayServer::with_config(dummy, config);
+
+    // `connect` must be really registered: node registration hangs off its
+    // success reply. (A bare GatewayServer registers no handlers.)
+    let connect_ctx = Arc::new(alephcore::gateway::handlers::connect::ConnectContext {
+        state_versions: server.state_versions.clone(),
+        transport_policy: alephcore::gateway::handlers::auth::TransportPolicy::defaults(),
+    });
+    server.handlers_mut().register("connect", move |req| {
+        let ctx = Arc::clone(&connect_ctx);
+        async move { alephcore::gateway::handlers::connect::handle_connect(req, ctx).await }
+    });
+
+    let node_registry: Arc<NodeRegistry> = server.node_registry.clone();
     let router = server.build_router();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let bound = listener.local_addr().unwrap();
@@ -56,9 +64,12 @@ async fn center_runs_bash_on_connected_node() {
     let (mut ws, _r) = tokio_tungstenite::connect_async(url.as_str())
         .await
         .unwrap();
+    // Node shape: `commands` + `tags` are what makes the center register this
+    // connection in the NodeRegistry (the path node_invoke actually uses).
     ws.send(Message::Text(
         json!({"jsonrpc":"2.0","id":1,"method":"connect",
-               "params":{"device_name":"itest-node","device_id":"node-itest"}})
+               "params":{"device_name":"itest-node","device_id":"node-itest",
+                         "commands":[{"name":"bash","schema":{}}],"tags":[]}})
         .to_string()
         .into(),
     ))
@@ -90,7 +101,7 @@ async fn center_runs_bash_on_connected_node() {
         }
     });
 
-    let channel = wait_for_one_channel(&reverse_rpc).await;
+    let (channel, _declared) = wait_for_node(&node_registry, "itest-node").await;
     let resp = channel
         .call(
             "tool.call",
@@ -104,14 +115,20 @@ async fn center_runs_bash_on_connected_node() {
     node.await.unwrap();
 }
 
-async fn wait_for_one_channel(reg: &ReverseRpcRegistry) -> ReverseRpcChannel {
+async fn wait_for_node(
+    registry: &NodeRegistry,
+    name: &str,
+) -> (
+    ReverseRpcChannel,
+    Vec<alephcore::cluster::CommandDescriptor>,
+) {
     for _ in 0..100 {
-        if let Some((_, ch)) = reg.read().await.iter().next() {
-            return ch.clone();
+        if let Ok(found) = registry.resolve(name) {
+            return found;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    panic!("no reverse_rpc channel registered within timeout");
+    panic!("node '{name}' never registered within timeout");
 }
 
 #[tokio::test]
