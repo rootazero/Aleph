@@ -559,6 +559,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_unix_candidates_cover_asdf_and_nix() {
+        // `install_dir_candidates()` derives the home-based candidates from the
+        // process-global `$HOME`, and the assertions below re-read it. Without
+        // the guard a concurrently-running `post_install` test can swap `$HOME`
+        // between those two reads, so the candidate list is built against its
+        // tempdir while the expectation is built against the real home — a flake
+        // that fires only under the full parallel suite. `HomeEnvGuard::acquire`
+        // is the read-only arm of the crate's single HOME mutual-exclusion source.
+        let _home_guard = crate::runtimes::post_install::HomeEnvGuard::acquire();
+
         let cands = install_dir_candidates();
         // System Nix profiles are unconditional on macOS/Linux.
         assert!(

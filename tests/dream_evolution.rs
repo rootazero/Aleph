@@ -43,10 +43,11 @@ async fn full_evolution_cycle_consolidate() {
         &MemoryDecayPolicy::default(),
     );
     // Consolidate: lint, review, consolidate, feedback_distill, drift, index,
-    // graph_recompute, weave, decay, skill_lifecycle, goal_lessons_promote —
-    // mirrors the authoritative name-list test `pipeline_from_strategy_consolidate`
-    // in `src/memory/dreaming/mod.rs`.
-    assert_eq!(pipeline.stages.len(), 11);
+    // co_recall_edges, graph_recompute, weave, mention_weave, decay,
+    // skill_lifecycle, goal_lessons_promote — mirrors the authoritative
+    // name-list test `pipeline_from_strategy_consolidate` in
+    // `src/memory/dreaming/mod.rs`, which is the source of truth for the count.
+    assert_eq!(pipeline.stages.len(), 13);
     assert_eq!(
         pipeline.stages.last().map(|s| s.name()),
         Some("goal_lessons_promote")
@@ -154,13 +155,15 @@ async fn merge_cycle_forces_conserve() {
     let selection = selector.select(&snapshot, &gate_decision);
     assert_eq!(selection.strategy, DreamStrategy::Conserve);
 
-    // Conserve pipeline is minimal: lint, review, index, graph_recompute
+    // Conserve pipeline is minimal: lint, review, index, co_recall_edges,
+    // graph_recompute — mirrors `pipeline_from_strategy_conserve` in
+    // `src/memory/dreaming/mod.rs`, which is the source of truth for the count.
     let pipeline = DreamPipeline::from_strategy(
         selection.strategy,
         &DreamingConfig::default(),
         &MemoryDecayPolicy::default(),
     );
-    assert_eq!(pipeline.stages.len(), 4);
+    assert_eq!(pipeline.stages.len(), 5);
 }
 
 /// Personality adaptation across multiple cycles.
@@ -170,14 +173,14 @@ async fn personality_adapts_over_cycles() {
 
     // 10 successful cycles → threshold drops
     for _ in 0..10 {
-        selector.record_cycle_outcome(DreamStrategy::Consolidate, true, 0.5);
+        selector.record_cycle_outcome(true);
     }
     let threshold_after_success = selector.synthesize_threshold();
 
     // Reset and do 10 failed cycles → threshold rises
     let mut selector2 = StrategySelector::new();
     for _ in 0..10 {
-        selector2.record_cycle_outcome(DreamStrategy::Consolidate, false, 0.0);
+        selector2.record_cycle_outcome(false);
     }
     let threshold_after_failure = selector2.synthesize_threshold();
 

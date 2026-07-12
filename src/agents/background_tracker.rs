@@ -378,6 +378,27 @@ impl BackgroundAgentTracker {
             .collect()
     }
 
+    /// Whether any sub-agent is currently running under `root_session` (the
+    /// owning top-level session key, `SessionKey::to_key_string()`). O(running)
+    /// scan of the live set.
+    ///
+    /// Backs the gateway's `Interrupt` busy-input guard: a run driving a live
+    /// sub-agent fan-out (team dispatch / parallel subagents) has expensive
+    /// in-flight parallel work that a single mid-task course-correction must
+    /// not destroy. When this returns `true` the Interrupt is demoted to the
+    /// busy queue (wait for the current run to finish) instead of cancelling
+    /// the sibling — hermes `run.py:5436-5446` demote-to-queue parity.
+    pub fn session_has_running(&self, root_session: &str) -> bool {
+        self.running
+            .read()
+            .unwrap_or_else(|e| {
+                warn!("BackgroundAgentTracker lock poisoned, recovering");
+                e.into_inner()
+            })
+            .values()
+            .any(|agent| agent.meta.root_session == root_session)
+    }
+
     /// Lightweight metadata for one still-running agent. `None` when the
     /// `request_id` is unknown (never registered, or already completed).
     pub fn running_meta(&self, request_id: &str) -> Option<RunningMeta> {
@@ -551,6 +572,29 @@ mod tests {
         let running = tracker.list_running();
         assert_eq!(running.len(), 1);
         assert_eq!(running[0].0, "req-1");
+    }
+
+    #[test]
+    fn session_has_running_matches_by_root_session() {
+        let tracker = BackgroundAgentTracker::new();
+        let root = "agent:parent-007:peer:user"; // SessionKey::to_key_string() form
+        tracker.register_with_meta(
+            "child-1".to_string(),
+            CancellationToken::new(),
+            "fan-out task".to_string(),
+            SpawnMeta {
+                root_session: root.to_string(),
+                depth: 1,
+                ..SpawnMeta::default()
+            },
+        );
+        // The owning session sees its live child; an unrelated session does not.
+        assert!(tracker.session_has_running(root));
+        assert!(!tracker.session_has_running("agent:other:peer:user"));
+
+        // Once the child finishes it no longer counts as protected in-flight work.
+        tracker.mark_completed("child-1", CompletedOutcome::ok_text("done"));
+        assert!(!tracker.session_has_running(root));
     }
 
     #[test]

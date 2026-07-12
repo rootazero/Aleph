@@ -277,6 +277,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_update_stores_key_in_vault() {
+        // `handle_update` persists via `save_incremental`, whose path resolves
+        // off `ALEPH_HOME`. Hold the crate-wide guard for the whole test (same
+        // single source of mutual exclusion as the fetch/search/providers
+        // handler tests): without it this test observed a concurrently-running
+        // test's tempdir override — and, once that tempdir was dropped, failed
+        // the save with "No such file or directory". The override also keeps
+        // the write off the developer's real ~/.aleph/config.toml.
+        let _home_guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ALEPH_HOME").ok();
+        // SAFETY: single-threaded test mutates a process env var so the config
+        // save lands in the tempdir, not the real ~/.aleph. Restored below.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", dir.path());
+        }
+
         let config = Arc::new(RwLock::new(Config::default()));
         let event_bus = Arc::new(GatewayEventBus::new());
         let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
@@ -298,7 +316,7 @@ mod tests {
         let request =
             JsonRpcRequest::with_id("rerank_config.update", Some(params), serde_json::json!(1));
         let response = handle_update(request, config.clone(), event_bus, vault.clone()).await;
-        assert!(response.is_success());
+        assert!(response.is_success(), "update failed: {:?}", response.error);
 
         // Verify api_key is NOT in config
         let cfg = config.read().await;
@@ -312,6 +330,11 @@ mod tests {
         // Verify api_key IS in vault
         let secret = vault.get_secret(&vault_key("jina")).unwrap().unwrap();
         assert_eq!(secret.expose(), "test-secret-key");
+
+        match prev {
+            Some(v) => unsafe { std::env::set_var("ALEPH_HOME", v) },
+            None => unsafe { std::env::remove_var("ALEPH_HOME") },
+        }
     }
 
     #[tokio::test]

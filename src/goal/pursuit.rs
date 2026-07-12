@@ -1,17 +1,21 @@
-//! Goal pursuit — the R7/R10-safe autonomous continuation driver.
+//! Goal pursuit — the R7/R10-safe autonomous continuation decisions.
 //!
-//! When a gateway run finishes for a session whose standing goal is `Active`
-//! pursuit and still unfinished/under-caps, the gateway spawns ONE more
-//! continuation run for the SAME session via `ExecutionAdapter::execute`
-//! directly (see `src/gateway/execution_engine/execute.rs`). The cron
-//! executor is deliberately NOT used: it runs under a distinct
+//! Pure functions only: given a [`Goal`] plus the live token count and clock,
+//! decide whether one more autonomous continuation runs, what prompt it
+//! carries, and what note explains a structural stop. The *driver* that acts on
+//! these decisions is the gateway continuation hook
+//! (`src/gateway/execution_engine/goal_continuation.rs`), and the atomic claim
+//! that serializes them is [`crate::goal::GoalStore::try_claim_continuation`].
+//! The cron executor is deliberately NOT used: it runs under a distinct
 //! `agent:<id>:cron:<job>` session key, so the goal — stored under the
 //! interactive session key — would never be found. Completion is decided
 //! solely by the model calling `goal(update, complete)` (read here as plain
-//! state — no judgment); iteration/token caps are structural backstops. Lives
-//! in `src/tasks/`, never in `src/harness/` (R10 12-file redline).
+//! state — no judgment); iteration/token/deadline caps are structural
+//! backstops. Sibling of `looping::pursuit` (the clock-gated variant); never
+//! in `src/harness/` (R10 12-file redline).
 
 use crate::goal::{GateOutcome, Goal, GoalStatus, PursuitMode};
+use crate::looping::types::fmt_duration_ms;
 
 /// Render accumulated lessons (the state file) for injection into a
 /// continuation prompt. Empty → empty string (regression-safe: no prompt change
@@ -56,16 +60,48 @@ pub fn should_continue(goal: &Goal, tokens_now: u64, now_ms: u64) -> bool {
     true
 }
 
+/// The OTHER two structural budgets the loop silently enforces — the wall-clock
+/// deadline and the token budget — rendered as a remaining-quota clause for the
+/// continuation prompt. The iteration pace is already in the prompt's header, so
+/// this only adds what the model would otherwise be blind to: a goal cut off at
+/// its token budget used to just stop mid-work, the binding constraint invisible.
+/// Mirrors `looping::pursuit::tick_prompt`'s quota clause (loop hardening ⑧);
+/// `tokens_now` is the session's live cumulative total (0 = unavailable → the
+/// budget clause is omitted rather than lying about the remainder).
+fn render_quota(goal: &Goal, tokens_now: u64, now_ms: u64) -> String {
+    let mut quota = String::new();
+    if let Some(deadline) = goal.deadline_ms {
+        if now_ms != 0 && deadline > now_ms {
+            quota.push_str(&format!(
+                " ~{} of wall-clock budget left.",
+                fmt_duration_ms(deadline - now_ms)
+            ));
+        }
+    }
+    if let Some(budget) = goal.token_budget {
+        if goal.baseline_captured && tokens_now > 0 {
+            quota.push_str(&format!(
+                " ~{} of {budget} token budget left.",
+                budget.saturating_sub(goal.tokens_used(tokens_now))
+            ));
+        }
+    }
+    quota
+}
+
 /// Continuation prompt re-stating the goal (hermes parity), used when
 /// enqueuing the next autonomous run.
 ///
 /// Iteration-aware: this continuation is the `(continuations_used + 1)`-th
 /// autonomous step. The pace (`N/max`) is surfaced so the model can self-budget
-/// (R9 — intelligence in the prompt). On the FINAL allowed iteration it switches
-/// to a wrap-up prompt (hermes "grace call" parity) so the model concludes
-/// gracefully instead of being cut mid-thought when the next hook stops it.
+/// (R9 — intelligence in the prompt), together with the remaining wall-clock and
+/// token budget (see [`render_quota`]). On the FINAL allowed iteration it
+/// switches to a wrap-up prompt (hermes "grace call" parity) so the model
+/// concludes gracefully instead of being cut mid-thought when the next hook
+/// stops it. `tokens_now` / `now_ms` may be 0 when unavailable — the
+/// corresponding clause is then simply omitted.
 #[must_use]
-pub fn continuation_prompt(goal: &Goal) -> String {
+pub fn continuation_prompt(goal: &Goal, tokens_now: u64, now_ms: u64) -> String {
     let (this_iter, max_iter) = match goal.pursuit {
         PursuitMode::Active { max_iterations } => {
             (goal.continuations_used.saturating_add(1), max_iterations)
@@ -88,17 +124,29 @@ pub fn continuation_prompt(goal: &Goal) -> String {
         )
     } else {
         let remaining = max_iter.saturating_sub(this_iter);
+        let quota = render_quota(goal, tokens_now, now_ms);
         format!(
             "[Continuing toward your standing goal — autonomous iteration \
              {this_iter}/{max_iter}]\nGoal: {}{lessons}\n\nTake the next concrete step; \
              pace yourself against the {remaining} continuation(s) remaining after \
-             this one. If you have achieved the goal, call goal(action='update', \
-             status='complete') and stop. If you are blocked and need the user, \
-             call goal(action='update', status='blocked') and stop.",
+             this one.{quota} {AUDIT_CONTRACT} If you have achieved the goal, call \
+             goal(action='update', status='complete') and stop. If you are blocked \
+             and need the user, call goal(action='update', status='blocked') and stop.",
             goal.objective,
         )
     }
 }
+
+/// The two failure modes an unattended pursuit falls into, closed in the prompt
+/// rather than in code (R9 — the harness stays dumb): declaring victory on a
+/// quietly-shrunk objective, and bailing to `blocked` on the first obstacle.
+/// Condensed from codex's continuation contract (`goals/continuation.md`), whose
+/// audit sections exist for exactly these two.
+const AUDIT_CONTRACT: &str = "Before claiming complete, audit against the \
+    objective as the user stated it — not a narrower or easier restatement of it — \
+    and treat uncertain or indirect evidence as NOT achieved. Before reporting \
+    blocked, make sure the same obstacle has survived a real attempt to work \
+    around it; a first-try failure is not a blocker.";
 
 /// True when an `Active`-pursuit goal whose status is still `Active` can no
 /// longer continue — i.e. the autonomous loop has hit its iteration (or budget)
@@ -160,6 +208,22 @@ pub fn budget_reached_note(goal: &Goal) -> String {
     }
 }
 
+/// Pick the note that explains WHY autonomous pursuit stopped, from the three
+/// structural stops `should_continue` enforces (token budget / wall-clock
+/// deadline / iteration cap). Single source for the continuation hook, which
+/// previously hand-rolled this three-way choice inline — the same collapse
+/// `looping::pursuit::stop_reason_note` did for the loop (loop hardening ④ 熵减).
+#[must_use]
+pub fn stop_reason_note(goal: &Goal, tokens_now: u64, now_ms: u64) -> String {
+    if goal.over_budget(tokens_now) {
+        budget_reached_note(goal)
+    } else if goal.deadline_ms.is_some_and(|d| now_ms != 0 && now_ms > d) {
+        deadline_reached_note(goal)
+    } else {
+        cap_reached_note(goal)
+    }
+}
+
 /// 模型在 `Active` 续跑下自报 `Complete`，但客观闸门尚未确认。
 /// 调用方据此在续跑钩子里跑闸门。被动/交互 goal（非 Active 续跑）永远
 /// 返回 false——它们的 complete 立即终止，不经闸门。
@@ -178,32 +242,36 @@ pub fn confirm_complete(goal: &Goal, now_ms: u64) -> Goal {
 }
 
 /// 闸门否决（Ralph Wiggum 营救）：把误报完成的 goal 退回 `Active` 并把
-/// 闸门失败原因写入 `note`，让下一次续跑能据此行动。若迭代上限已耗尽，
-/// 退回 Active 会立刻再次 exhaust——直接转 `Blocked`（复用 `cap_reached_note`，
-/// 不复制 Blocked 逻辑）。无论哪条路径都把 `gate_outcome` 复位 `Unchecked`，
-/// 保证下一次 complete 主张会被重新 gate。
+/// 闸门失败原因写入 `note`，让下一次续跑能据此行动。若**任一**结构上限已耗尽
+/// （迭代 / 墙钟 deadline / token 预算），退回 Active 会立刻再次 exhaust——
+/// 直接转 `Blocked`，note 说明真正的绑定上限（`stop_reason_note`）。
+/// 无论哪条路径都把 `gate_outcome` 复位 `Unchecked`，保证下一次 complete
+/// 主张会被重新 gate。
+///
+/// `tokens_now` / `now_ms` 与 `should_continue` 同义（0 = 该维度不可用，不参与
+/// 判定），所以"还有跑道吗"这个问题在整个子系统里只有一个答案来源。
 #[must_use]
-pub fn reopen_after_gate_failure(goal: &Goal, reason: &str, now_ms: u64) -> Goal {
-    let cap_spent = match goal.pursuit {
-        PursuitMode::Active { max_iterations } => goal.continuations_used >= max_iterations,
-        PursuitMode::Passive => true,
-    };
+pub fn reopen_after_gate_failure(goal: &Goal, reason: &str, tokens_now: u64, now_ms: u64) -> Goal {
     let trimmed_lesson: String = format!("Objective gate vetoed: {reason}")
         .chars()
         .take(300)
         .collect();
-    if cap_spent {
-        let note = cap_reached_note(goal);
-        goal.clone()
-            .with_status(GoalStatus::Blocked, now_ms)
+    // Reopen only if the goal could actually run again — the iteration cap was
+    // the only limit consulted here before, so a veto happily reopened a goal
+    // whose deadline had passed or whose token budget was spent, and the very
+    // next hook re-blocked it (one wasted autonomous run + a contradictory note).
+    let reopened = goal.clone().with_status(GoalStatus::Active, now_ms);
+    if should_continue(&reopened, tokens_now, now_ms) {
+        let trimmed: String = reason.chars().take(300).collect();
+        let note = format!("Objective gate vetoed completion: {trimmed}");
+        reopened
             .with_note(Some(note), now_ms)
             .with_gate_outcome(GateOutcome::Unchecked, now_ms)
             .with_lesson_appended(trimmed_lesson, now_ms)
     } else {
-        let trimmed: String = reason.chars().take(300).collect();
-        let note = format!("Objective gate vetoed completion: {trimmed}");
+        let note = stop_reason_note(goal, tokens_now, now_ms);
         goal.clone()
-            .with_status(GoalStatus::Active, now_ms)
+            .with_status(GoalStatus::Blocked, now_ms)
             .with_note(Some(note), now_ms)
             .with_gate_outcome(GateOutcome::Unchecked, now_ms)
             .with_lesson_appended(trimmed_lesson, now_ms)
@@ -280,22 +348,26 @@ mod tests {
 
     #[test]
     fn stops_when_over_budget() {
-        let g = active_goal(5).with_budget(Some(100));
-        // tokens_at_start=0, so tokens_used(250)=250 > 100 → over budget.
+        let g = active_goal(5).with_budget(Some(100)).with_baseline(0, 0);
+        // baseline at 0, so tokens_used(250)=250 > 100 → over budget.
         assert!(!should_continue(&g, 250, 0));
+        // …but an uncaptured baseline never enforces the budget (the tool's
+        // placeholder 0 would otherwise read as "the whole session was spent").
+        let no_baseline = active_goal(5).with_budget(Some(100));
+        assert!(should_continue(&no_baseline, 250, 0));
     }
 
     #[test]
     fn continuation_prompt_restates_objective() {
         let g = active_goal(5);
-        assert!(continuation_prompt(&g).contains("obj"));
-        assert!(continuation_prompt(&g).contains("status='complete'"));
+        assert!(continuation_prompt(&g, 0, 0).contains("obj"));
+        assert!(continuation_prompt(&g, 0, 0).contains("status='complete'"));
     }
 
     #[test]
     fn continuation_prompt_surfaces_pace_when_not_final() {
         let g = active_goal(5); // continuations_used = 0 → this is iteration 1/5
-        let p = continuation_prompt(&g);
+        let p = continuation_prompt(&g, 0, 0);
         assert!(p.contains("iteration 1/5"), "got: {p}");
         assert!(p.contains("4 continuation"), "remaining shown: {p}");
         assert!(!p.contains("Final autonomous"));
@@ -305,7 +377,7 @@ mod tests {
     fn continuation_prompt_is_grace_call_on_final_iteration() {
         let mut g = active_goal(3);
         g.continuations_used = 2; // about to run iteration 3/3 — the last one
-        let p = continuation_prompt(&g);
+        let p = continuation_prompt(&g, 0, 0);
         assert!(p.contains("Final autonomous iteration 3/3"), "got: {p}");
         assert!(p.contains("LAST autonomous step"));
         assert!(p.contains("status='complete'"));
@@ -374,7 +446,7 @@ mod tests {
     #[test]
     fn reopen_after_gate_failure_reopens_active_when_cap_remaining() {
         let g = active_goal(5).with_status(GoalStatus::Complete, 1);
-        let r = reopen_after_gate_failure(&g, "tests failed: 3 errors", 9);
+        let r = reopen_after_gate_failure(&g, "tests failed: 3 errors", 0, 9);
         assert_eq!(r.status, GoalStatus::Active);
         assert_eq!(r.gate_outcome, GateOutcome::Unchecked);
         assert!(r.note.unwrap().contains("tests failed"));
@@ -384,9 +456,34 @@ mod tests {
     fn reopen_after_gate_failure_blocks_when_cap_spent() {
         let mut g = active_goal(3).with_status(GoalStatus::Complete, 1);
         g.continuations_used = 3; // cap 已满
-        let r = reopen_after_gate_failure(&g, "still red", 9);
+        let r = reopen_after_gate_failure(&g, "still red", 0, 9);
         assert_eq!(r.status, GoalStatus::Blocked);
         assert!(r.note.unwrap().contains("Blocked"));
+    }
+
+    #[test]
+    fn reopen_after_gate_failure_blocks_when_the_deadline_is_spent() {
+        // Iterations remain (0/5) but the wall clock is gone: reopening would hand
+        // the goal runway it does not have, and the next hook would re-block it
+        // with a contradictory note. Only the iteration cap was checked before.
+        let g = active_goal(5)
+            .with_deadline_ms(Some(1_000))
+            .with_status(GoalStatus::Complete, 1);
+        let r = reopen_after_gate_failure(&g, "still red", 0, 2_000);
+        assert_eq!(r.status, GoalStatus::Blocked);
+        assert!(r.note.unwrap().to_lowercase().contains("wall-clock"));
+        assert_eq!(r.gate_outcome, GateOutcome::Unchecked);
+    }
+
+    #[test]
+    fn reopen_after_gate_failure_blocks_when_the_token_budget_is_spent() {
+        let g = active_goal(5)
+            .with_budget(Some(100))
+            .with_baseline(0, 0)
+            .with_status(GoalStatus::Complete, 1);
+        let r = reopen_after_gate_failure(&g, "still red", 250, 9);
+        assert_eq!(r.status, GoalStatus::Blocked);
+        assert!(r.note.unwrap().contains("token budget"));
     }
 
     #[test]
@@ -401,7 +498,7 @@ mod tests {
     #[test]
     fn reopen_after_gate_failure_appends_lesson() {
         let g = active_goal(5).with_status(GoalStatus::Complete, 1);
-        let r = reopen_after_gate_failure(&g, "tests failed: 3 errors", 9);
+        let r = reopen_after_gate_failure(&g, "tests failed: 3 errors", 0, 9);
         assert_eq!(r.lessons.len(), 1);
         assert!(r.lessons[0].contains("tests failed: 3 errors"));
         assert!(r.lessons[0].contains("Objective gate vetoed"));
@@ -410,7 +507,7 @@ mod tests {
     #[test]
     fn continuation_prompt_includes_prior_lessons() {
         let g = active_goal(5).with_lesson_appended("forgot to run migrations".into(), 2);
-        let p = continuation_prompt(&g);
+        let p = continuation_prompt(&g, 0, 0);
         assert!(p.contains("Lessons from earlier iterations"), "got: {p}");
         assert!(p.contains("forgot to run migrations"));
     }
@@ -418,7 +515,7 @@ mod tests {
     #[test]
     fn continuation_prompt_unchanged_when_no_lessons() {
         let g = active_goal(5);
-        assert!(!continuation_prompt(&g).contains("Lessons from earlier"));
+        assert!(!continuation_prompt(&g, 0, 0).contains("Lessons from earlier"));
     }
 
     #[test]
@@ -472,6 +569,52 @@ mod tests {
         // No budget set → cannot be the binding stop; reuse the cap note.
         let g = active_goal(7);
         assert_eq!(budget_reached_note(&g), cap_reached_note(&g));
+    }
+
+    #[test]
+    fn continuation_prompt_surfaces_remaining_token_budget() {
+        // The binding constraint the hook silently enforces must be visible to
+        // the model (loop's tick_prompt parity): 1000-budget goal, baseline at
+        // 10_000, live total 10_400 → ~600 left.
+        let g = active_goal(5)
+            .with_budget(Some(1_000))
+            .with_baseline(10_000, 1);
+        let p = continuation_prompt(&g, 10_400, 0);
+        assert!(p.contains("~600 of 1000 token budget left"), "got: {p}");
+    }
+
+    #[test]
+    fn continuation_prompt_omits_budget_clause_without_a_live_count() {
+        // No baseline captured / no live counter → say nothing rather than
+        // report a bogus remainder.
+        let g = active_goal(5).with_budget(Some(1_000));
+        assert!(!continuation_prompt(&g, 0, 0).contains("token budget left"));
+    }
+
+    #[test]
+    fn continuation_prompt_surfaces_remaining_wall_clock() {
+        let g = active_goal(5).with_deadline_ms(Some(600_000));
+        let p = continuation_prompt(&g, 0, 300_000); // 5 minutes left
+        assert!(p.contains("of wall-clock budget left"), "got: {p}");
+        assert!(p.contains("5m"), "got: {p}");
+        // Clock-less callers get no clause (no lying countdown).
+        assert!(!continuation_prompt(&g, 0, 0).contains("wall-clock budget left"));
+    }
+
+    #[test]
+    fn stop_reason_note_picks_the_binding_limit() {
+        // Token budget binds first.
+        let over = active_goal(5).with_budget(Some(100)).with_baseline(0, 0);
+        assert!(stop_reason_note(&over, 250, 0).contains("token budget"));
+        // Then the wall clock.
+        let late = active_goal(5).with_deadline_ms(Some(1_000));
+        assert!(stop_reason_note(&late, 0, 2_000)
+            .to_lowercase()
+            .contains("wall-clock"));
+        // Otherwise the iteration cap.
+        let mut capped = active_goal(3);
+        capped.continuations_used = 3;
+        assert!(stop_reason_note(&capped, 0, 0).contains("iteration cap"));
     }
 
     #[test]

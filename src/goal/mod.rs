@@ -2,10 +2,11 @@
 //! budget, managed by the LLM via the `goal` tool (R8), re-surfaced each
 //! turn by `StandingGoalLayer`. Distinct from the per-task `scratchpad`.
 
+pub mod pursuit;
 pub mod store;
 pub mod types;
 
-pub use store::GoalStore;
+pub use store::{ContinuationDecision, GoalStore, RearmDecision};
 pub use types::{GateOutcome, Goal, GoalStatus, PursuitMode};
 
 use crate::sync_primitives::Arc;
