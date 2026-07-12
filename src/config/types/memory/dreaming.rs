@@ -38,6 +38,15 @@ pub struct DreamingConfig {
     pub feedback_distill_min_candidates: usize,
     #[serde(default = "super::defaults::default_feedback_lookback")]
     pub feedback_lookback: usize,
+    /// Optional dedicated model for the dream pipeline's LLM stages.
+    ///
+    /// Every LLM stage here is a small classification or summarization task
+    /// (`CONSISTENT | CONTRADICTORY | STALE`, digest text, …) — cheap-tier work
+    /// that has no business running on the operator's main reasoning model.
+    /// Unset ⇒ fall back to the primary provider's declared cheap aux model;
+    /// only a vendor with no cheap tier keeps using the main LLM.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 impl Default for DreamingConfig {
@@ -60,6 +69,7 @@ impl Default for DreamingConfig {
             feedback_distill_min_candidates:
                 super::defaults::default_feedback_distill_min_candidates(),
             feedback_lookback: super::defaults::default_feedback_lookback(),
+            model: None,
         }
     }
 }

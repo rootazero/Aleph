@@ -22,7 +22,25 @@ use super::DreamStage;
 // Stage struct
 // ---------------------------------------------------------------------------
 
-pub struct NoteDriftStage;
+pub struct NoteDriftStage {
+    /// Hard cap on note pairs compared per run (`[memory.dreaming]
+    /// drift_max_pairs_per_run`).
+    ///
+    /// Every pair costs one LLM call. Uncapped, the work is
+    /// O(recent_notes × outgoing_links) — which is how a single night's
+    /// dreaming reached tens of thousands of provider calls. The cap was
+    /// configurable from day one but never read here; honour it.
+    pub max_pairs: usize,
+}
+
+impl Default for NoteDriftStage {
+    fn default() -> Self {
+        Self {
+            max_pairs: crate::config::types::memory::DreamingConfig::default()
+                .drift_max_pairs_per_run,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // DreamStage impl
@@ -43,6 +61,9 @@ impl DreamStage for NoteDriftStage {
         let week_ago = chrono::Utc::now().timestamp() - 7 * 86_400;
         let mut contradictions_found = 0u32;
         let mut notes_marked_stale = 0u32;
+        // One LLM call per pair — bounded by `max_pairs`.
+        let mut pairs_checked = 0usize;
+        let mut budget_exhausted = false;
 
         // Snapshot recently-updated note paths to avoid borrowing ctx inside the loop.
         let recent_paths: Vec<String> = ctx
@@ -52,7 +73,7 @@ impl DreamStage for NoteDriftStage {
             .map(|n| n.path.clone())
             .collect();
 
-        for recent_path in &recent_paths {
+        'outer: for recent_path in &recent_paths {
             // Fetch outgoing links for this note.
             // NoteStore::get_outgoing_links expects the full `path` key (e.g. "reference/rust").
             let links = match ctx
@@ -83,6 +104,11 @@ impl DreamStage for NoteDriftStage {
             };
 
             for linked_target in &links {
+                if pairs_checked >= self.max_pairs {
+                    budget_exhausted = true;
+                    break 'outer;
+                }
+
                 // `linked_target` is the raw wikilink text (filename without category).
                 // Resolve it to a full path present in ctx.notes.
                 let linked_path = match resolve_link_path(&ctx, linked_target) {
@@ -121,12 +147,21 @@ impl DreamStage for NoteDriftStage {
                     Respond with exactly one word: CONSISTENT, CONTRADICTORY, or STALE.";
 
                 let msgs = vec![UnifiedMessage::user(&prompt)];
+                pairs_checked += 1;
                 let response = match ctx
                     .provider
                     .process(RequestPayload::new(&msgs).with_system(Some(system)))
                     .await
                 {
                     Ok(r) => r,
+                    Err(e) if super::is_provider_exhausted(&e) => {
+                        tracing::warn!(
+                            error = %e,
+                            pairs_checked,
+                            "NoteDrift: provider exhausted — aborting dream cycle"
+                        );
+                        return Err(e);
+                    }
                     Err(e) => {
                         tracing::warn!(
                             recent = recent_path.as_str(),
@@ -167,9 +202,17 @@ impl DreamStage for NoteDriftStage {
         ctx.report.contradictions_found = contradictions_found;
         ctx.report.notes_marked_stale = notes_marked_stale;
 
+        if budget_exhausted {
+            tracing::info!(
+                max_pairs = self.max_pairs,
+                "NoteDrift: pair budget exhausted — remaining pairs deferred to the next cycle"
+            );
+        }
+
         tracing::info!(
             contradictions_found,
             notes_marked_stale,
+            pairs_checked,
             "NoteDrift completed"
         );
 
@@ -460,7 +503,34 @@ mod tests {
 
     #[test]
     fn stage_name() {
-        assert_eq!(NoteDriftStage.name(), "note_drift");
+        assert_eq!(NoteDriftStage::default().name(), "note_drift");
+    }
+
+    /// The cap exists to bound LLM spend: it was configurable from day one but
+    /// `note_drift` never read it, so a run cost one call per (recent note ×
+    /// outgoing link) with no ceiling.
+    #[test]
+    fn default_max_pairs_comes_from_dreaming_config() {
+        assert_eq!(
+            NoteDriftStage::default().max_pairs,
+            crate::config::types::memory::DreamingConfig::default().drift_max_pairs_per_run,
+        );
+    }
+
+    /// Guards the pairing arithmetic the cap protects against: 11 recent notes
+    /// averaging ~6 links each is 70 LLM calls per run uncapped — the exact
+    /// shape observed in the logs. Capped at 20, a run cannot exceed 20.
+    #[test]
+    fn pair_budget_bounds_calls_below_the_uncapped_product() {
+        let recent_notes = 11usize;
+        let links_each = 6usize;
+        let uncapped = recent_notes * links_each;
+        let cap = NoteDriftStage::default().max_pairs;
+        assert!(
+            cap < uncapped,
+            "cap ({cap}) must actually bound the uncapped pair count ({uncapped})"
+        );
+        assert_eq!(uncapped.min(cap), cap);
     }
 
     #[test]
