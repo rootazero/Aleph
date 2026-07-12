@@ -51,6 +51,11 @@ impl TeamDispatcher {
         // 2b. Reclaim orphaned in-progress tasks (restart reconciliation).
         self.reclaim_orphaned().await;
 
+        // 2c. Surface tasks silently stalled awaiting lead review. Non-
+        //     destructive: warns only, never advances the verdict (R7 — the
+        //     approve/reject call is the lead LLM's, not the dispatcher's).
+        self.warn_stale_reviews().await;
+
         // 3. List schedulable pending tasks. `derive_status` already excludes
         //    tasks with unsatisfied dependencies (those report as Blocked).
         let available = self.semaphore.available_permits();
@@ -142,7 +147,9 @@ impl TeamDispatcher {
                 .await
             {
                 tracing::warn!(task_id = %task.id, error = %e, "dispatcher: mark in-progress failed");
-                let _ = self.coord_store.release_lock(&task.id, &owner).await;
+                if let Err(e) = self.coord_store.release_lock(&task.id, &owner).await {
+                    tracing::warn!(task_id = %task.id, error = %e, "dispatcher: release_lock failed after mark-in-progress failure");
+                }
                 continue;
             }
 
@@ -346,7 +353,9 @@ impl TeamDispatcher {
             }
         }
 
-        let _ = self.coord_store.release_lock(&task_id, &owner).await;
+        if let Err(e) = self.coord_store.release_lock(&task_id, &owner).await {
+            tracing::warn!(task_id = %task_id, error = %e, "dispatcher: release_lock failed at run_task teardown");
+        }
         self.running.lock().await.remove(&task_id);
         // Wake the loop so newly-unblocked dependents are picked up immediately.
         self.signal();
@@ -357,7 +366,7 @@ impl TeamDispatcher {
         let Some(store) = &self.artifact_store else {
             return;
         };
-        let _ = store
+        if let Err(e) = store
             .create_artifact(NewArtifact {
                 task_id: task_id.to_string(),
                 agent_id: agent_id.to_string(),
@@ -370,6 +379,9 @@ impl TeamDispatcher {
                 assignee: None,
                 priority: 0,
             })
-            .await;
+            .await
+        {
+            tracing::warn!(task_id = %task_id, error = %e, "dispatcher: persist_artifact create_artifact failed");
+        }
     }
 }

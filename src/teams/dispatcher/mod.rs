@@ -16,7 +16,7 @@ pub mod handoff;
 pub mod runner;
 pub mod schedule;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use tokio::sync::{Mutex, Notify, Semaphore};
@@ -132,6 +132,13 @@ pub struct TeamDispatcher {
     /// the keys alone preserve the original "don't re-claim a running task"
     /// semantics for reclamation.
     pub(crate) running: Arc<Mutex<HashMap<CoordTaskId, String>>>,
+    /// Ids already surfaced by [`Self::warn_stale_reviews`] as stalled in
+    /// `WaitingReview` past the TTL. In-memory dedup so the janitor warns once
+    /// per stuck task instead of every tick; pruned back to the live
+    /// `WaitingReview` set each pass so a task that returns to review later can
+    /// warn again. Never drives a status transition — the approve/reject verdict
+    /// is the lead LLM's call (R7); this only makes a silent stall visible.
+    pub(crate) warned_stale_reviews: Arc<Mutex<HashSet<CoordTaskId>>>,
     /// Channel registry used to deliver a workflow `clarify` step's question to
     /// the originating channel. Held as a `OnceCell` because the registry is
     /// injected after the dispatcher is constructed (the same deferred-injection
@@ -169,6 +176,7 @@ impl TeamDispatcher {
             signal,
             semaphore,
             running: Arc::new(Mutex::new(HashMap::new())),
+            warned_stale_reviews: Arc::new(Mutex::new(HashSet::new())),
             channels: None,
             shutdown_token: tokio_util::sync::CancellationToken::new(),
         }

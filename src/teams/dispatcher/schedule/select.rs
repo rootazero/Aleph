@@ -82,6 +82,40 @@ pub fn is_zombie(
     now_epoch.saturating_sub(started) > effective_ttl
 }
 
+/// Pure predicate: has `task` been parked in `WaitingReview` longer than the
+/// TTL without a lead verdict? The sibling of [`is_zombie`] for the review gate.
+///
+/// A review-gated task ([`completion_status`] → `WaitingReview`) finishes its
+/// run and then waits for `workflow_step_review` / `task_review`. Unlike an
+/// `InProgress` task, **no janitor pass reaps it** — so if the lead never
+/// reviews (its run ended, or it forgot), the task and its whole downstream DAG
+/// branch stall silently. This predicate lets [`TeamDispatcher::warn_stale_reviews`]
+/// surface that stall. It deliberately does **not** resolve the review: the
+/// approve/reject verdict is the lead LLM's call (R7), so the dispatcher only
+/// makes the wait visible, never auto-completes it.
+///
+/// Staleness is anchored to `started_at` (the run start), a slight over-estimate
+/// of the actual review wait — so the warning fires no earlier than `ttl_secs`
+/// after the run began, which is the right side to err on for a coarse
+/// "stuck too long" signal and needs no extra run-history query. A `ttl_secs`
+/// of 0 disables the check, reusing the zombie-detection kill-switch.
+#[must_use]
+pub fn is_stale_review(task: &CoordTask, now_epoch: u64, ttl_secs: u64) -> bool {
+    if ttl_secs == 0 {
+        return false;
+    }
+    if task.status != CoordTaskStatus::WaitingReview {
+        return false;
+    }
+    if !is_dispatcher_managed(task) {
+        return false;
+    }
+    let Some(started) = task.started_at else {
+        return false;
+    };
+    now_epoch.saturating_sub(started) > ttl_secs
+}
+
 /// Pure scheduling filter: from `tasks`, pick those ready to run right now,
 /// fairly distributed across owners.
 ///
@@ -638,5 +672,62 @@ mod tests {
         // grace → not a zombie (the in-process timeout already aborts the run;
         // the zombie reaper is only the orphan safety net).
         assert!(!is_zombie(&t, &running, 1_000_030, 60));
+    }
+
+    // ---- Stale review detection -------------------------------------------
+
+    /// Build a `WaitingReview` dispatcher-managed task with `started_at` set.
+    fn waiting_review_task(id: &str, started_at: u64, managed: bool) -> CoordTask {
+        let mut t = task(
+            id,
+            CoordTaskStatus::WaitingReview,
+            Some("a"),
+            managed,
+            Priority::Normal,
+            0,
+        );
+        t.started_at = Some(started_at);
+        t
+    }
+
+    #[test]
+    fn stale_review_disabled_when_ttl_zero() {
+        let t = waiting_review_task("stuck", 1000, true);
+        assert!(!is_stale_review(&t, 1_000_000, 0));
+    }
+
+    #[test]
+    fn stale_review_ignores_non_waiting_review_status() {
+        // An InProgress task is the zombie reaper's job, not this one.
+        let t = in_progress_task("running", 1000, true);
+        assert!(!is_stale_review(&t, 1_000_000, 60));
+    }
+
+    #[test]
+    fn stale_review_ignores_unmanaged_task() {
+        // team_delegate-owned review tasks are the caller's responsibility.
+        let t = waiting_review_task("delegated", 1000, false);
+        assert!(!is_stale_review(&t, 1_000_000, 60));
+    }
+
+    #[test]
+    fn stale_review_ignores_task_without_started_at() {
+        let mut t = waiting_review_task("no_clock", 1000, true);
+        t.started_at = None;
+        assert!(!is_stale_review(&t, 1_000_000, 60));
+    }
+
+    #[test]
+    fn stale_review_respects_grace_window() {
+        let t = waiting_review_task("young", 1_000_000, true);
+        // parked 30s ago, ttl 60s → not yet stale
+        assert!(!is_stale_review(&t, 1_000_030, 60));
+    }
+
+    #[test]
+    fn stale_review_fires_past_grace_window() {
+        let t = waiting_review_task("old", 1_000_000, true);
+        // parked 61s ago, ttl 60s → stale
+        assert!(is_stale_review(&t, 1_000_061, 60));
     }
 }

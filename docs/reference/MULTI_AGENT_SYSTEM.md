@@ -661,7 +661,11 @@ src/teams/
 ├── notifier.rs             // TeamNotifier (task outcomes → leader inbox)
 ├── dispatcher/
 │   ├── mod.rs              // TeamDispatcher, DispatcherConfig, dispatch loop
-│   ├── schedule.rs         // dispatch_once, select_schedulable, run_task
+│   ├── schedule/
+│   │   ├── mod.rs           // dispatch_once, run_task, persist_artifact
+│   │   ├── select.rs        // select_schedulable, is_zombie, is_stale_review
+│   │   ├── failure.rs       // fail_or_retry (bounded retry + backoff)
+│   │   └── reclaim.rs       // reclaim_zombies / reclaim_orphaned / warn_stale_reviews
 │   ├── runner.rs           // execute_member_task (shared with team_delegate)
 │   └── handoff.rs          // build_handoff_context
 ├── messages/

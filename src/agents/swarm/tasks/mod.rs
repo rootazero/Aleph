@@ -11,7 +11,6 @@ pub mod acceptance;
 pub mod dag;
 pub mod retry;
 pub mod store;
-pub mod template;
 pub mod timeout;
 
 // ---------------------------------------------------------------------------
@@ -554,4 +553,73 @@ pub trait CoordTaskStore: Send + Sync {
     /// Hard-delete all tasks for a team and their child rows
     /// (runs/comments/journals/dependencies). Returns coord_tasks rows deleted.
     async fn delete_team_tasks(&self, team_id: &str) -> crate::error::Result<usize>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// SSOT drift-guard for the dependency-resolution rule.
+    ///
+    /// "A `blocked_by` dep is satisfied iff its status ∈ {completed, skipped}"
+    /// is expressed as [`CoordTaskStatus::satisfies_dependency`] AND hand-copied
+    /// as raw SQL `status (NOT) IN ('completed', 'skipped')` in three store sites
+    /// (`store/crud.rs` unresolved_parents, `store/deps.rs` get_newly_unblocked,
+    /// `store/row_decode.rs` has_unresolved_deps). Its terminal-dead twin
+    /// "{failed, cancelled} → Unsatisfiable" is copied as `IN ('failed',
+    /// 'cancelled')` in two sites (`store/crud.rs` dead_parents,
+    /// `store/row_decode.rs` has_dead_deps).
+    ///
+    /// The inner **wildcard-free match** makes this compile-fail the moment a new
+    /// `CoordTaskStatus` variant is added, forcing a conscious classification here
+    /// — and the string-set assertions pin the exact `as_str()` literals the SQL
+    /// depends on, so the enum can never silently drift from those SQL copies.
+    /// If this test changes, update every SQL site named above in lockstep.
+    #[test]
+    fn dependency_resolution_rule_is_pinned_across_all_statuses() {
+        use CoordTaskStatus::*;
+        let all = [
+            Pending,
+            Blocked,
+            InProgress,
+            WaitingReview,
+            Completed,
+            Failed,
+            Cancelled,
+            Skipped,
+            Paused,
+            Unsatisfiable,
+        ];
+
+        for s in all {
+            // Wildcard-free: a new variant must be classified explicitly.
+            match s {
+                Completed | Skipped => assert!(
+                    s.satisfies_dependency(),
+                    "{s} must satisfy deps (SQL IN 'completed','skipped')"
+                ),
+                Pending | Blocked | InProgress | WaitingReview | Failed | Cancelled | Paused
+                | Unsatisfiable => assert!(
+                    !s.satisfies_dependency(),
+                    "{s} must NOT satisfy deps — would drift from the SQL literal"
+                ),
+            }
+        }
+
+        // Exact satisfying set, as the SQL `IN ('completed', 'skipped')` sees it.
+        let satisfying: Vec<&str> = all
+            .iter()
+            .filter(|s| s.satisfies_dependency())
+            .map(|s| s.as_str())
+            .collect();
+        assert_eq!(satisfying, ["completed", "skipped"]);
+
+        // Exact terminal-dead set, as the SQL `IN ('failed', 'cancelled')` sees it.
+        let dead: Vec<&str> = all
+            .iter()
+            .filter(|s| matches!(s, Failed | Cancelled))
+            .map(|s| s.as_str())
+            .collect();
+        assert_eq!(dead, ["failed", "cancelled"]);
+    }
 }
