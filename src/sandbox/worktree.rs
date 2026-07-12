@@ -412,4 +412,89 @@ mod tests {
 
         h.cleanup().await.expect("cleanup");
     }
+
+    /// F3 end-to-end: a worktree-isolated subagent scopes its `WorktreeSandbox`
+    /// as the exec-tool override, so a real `code_exec` shell command runs
+    /// *inside the worktree checkout* with `CARGO_TARGET_DIR` redirected — not
+    /// through the parent's construction-time sandbox. This is the exact path
+    /// that was silently inert before the fix (the override reached only the
+    /// never-read `HarnessDeps.sandbox`, so `bash`/`code_exec`/`code_check` kept
+    /// using the parent's sandbox). Proves routing + real cwd + the
+    /// `CARGO_TARGET_DIR` redirect (the last of which was previously untested).
+    #[tokio::test]
+    async fn isolated_subagent_command_runs_in_worktree_via_override() {
+        use crate::builtin_tools::code_exec::{CodeExecArgs, CodeExecTool, Language};
+        use crate::sandbox::context::{with_sandbox_override, SESSION_ID};
+        use crate::sandbox::test_util::MockSandbox;
+        use crate::sandbox::{Sandbox, SandboxOutput};
+        use crate::tools::AlephTool;
+
+        let _serial = WORKTREE_REPO_SERIAL.lock().await;
+        let repo_root = std::env::current_dir().expect("cwd");
+        let h = create(&repo_root, "task7-e2e-override", None)
+            .await
+            .expect("create");
+        let worktree_path = h.path().to_path_buf();
+
+        // Construction-time ("parent") sandbox — must be bypassed while the
+        // worktree override is in scope. Recording its calls lets us assert it.
+        let parent = MockSandbox::new(SandboxOutput {
+            exit_code: Some(0),
+            ..Default::default()
+        });
+        let parent_dyn: Arc<dyn Sandbox> = parent.clone();
+        let tool = CodeExecTool::new().with_sandbox(parent_dyn);
+
+        let override_sb: Arc<dyn Sandbox> = Arc::new(WorktreeSandbox::new(worktree_path.clone()));
+
+        let session = crate::routing::session_key::SessionKey::ephemeral("task7-e2e-override");
+        let out = SESSION_ID
+            .scope(
+                session,
+                with_sandbox_override(Some(override_sb), async {
+                    tool.call(CodeExecArgs {
+                        language: Language::Shell,
+                        code: "pwd; echo \"CTD=$CARGO_TARGET_DIR\"".to_string(),
+                        working_dir: None,
+                        timeout: Some(30),
+                        allow_network: false,
+                        allow_subprocess: false,
+                        extra_writable_paths: Vec::new(),
+                        justification: None,
+                    })
+                    .await
+                    .expect("tool call")
+                }),
+            )
+            .await;
+
+        // Routing preferred the scoped override — the parent sandbox is untouched.
+        assert_eq!(
+            parent.calls.lock().await.len(),
+            0,
+            "worktree override must bypass the construction-time sandbox"
+        );
+        assert!(out.success, "isolated command failed: {}", out.stderr);
+
+        let basename = worktree_path.file_name().unwrap().to_str().unwrap();
+        assert!(
+            out.stdout.contains(basename),
+            "pwd did not run inside the worktree: stdout={:?}",
+            out.stdout
+        );
+        // `CARGO_TARGET_DIR` must point at <worktree>/target — the redirect that
+        // keeps a subagent's cargo builds out of the parent's target dir.
+        let ctd_line = out
+            .stdout
+            .lines()
+            .find(|l| l.starts_with("CTD="))
+            .unwrap_or("");
+        assert!(
+            ctd_line.contains(basename) && ctd_line.contains("target"),
+            "CARGO_TARGET_DIR not redirected into the worktree: {ctd_line:?} (full stdout {:?})",
+            out.stdout
+        );
+
+        h.cleanup().await.expect("cleanup");
+    }
 }
