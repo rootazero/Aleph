@@ -39,6 +39,56 @@ pub use skill_distill::SkillDistillStage;
 pub use skill_lifecycle::SkillLifecycleStage;
 pub use workflow_proposal::WorkflowProposalStage;
 
+/// Whether a provider error makes every further LLM call in this cycle futile.
+///
+/// An exhausted quota or a rejected key does not heal between two calls issued
+/// milliseconds apart. Stages that loop over items used to treat such an error
+/// exactly like a transient per-item hiccup — `warn!` then `continue` — so once
+/// the provider started returning 403 they kept hammering it for every remaining
+/// item (over 13,000 doomed calls in one observed night). Abort the cycle
+/// instead: the daemon records the failure and, per the once-per-day guard, does
+/// not retry until tomorrow.
+pub(crate) fn is_provider_exhausted(err: &crate::error::AlephError) -> bool {
+    matches!(
+        err,
+        crate::error::AlephError::AuthenticationError { .. }
+            | crate::error::AlephError::RateLimitError { .. }
+    )
+}
+
+#[cfg(test)]
+mod exhaustion_tests {
+    use super::is_provider_exhausted;
+    use crate::error::AlephError;
+
+    #[test]
+    fn quota_exhausted_403_surfaces_as_authentication_error_and_aborts() {
+        // The shape actually observed in production: Kimi/Moonshot returns 403
+        // "You've reached your usage limit for this billing cycle".
+        let err = AlephError::authentication(
+            "kimi",
+            "Anthropic authentication failed (403): You've reached your usage limit",
+        );
+        assert!(is_provider_exhausted(&err));
+    }
+
+    #[test]
+    fn rate_limit_aborts() {
+        assert!(is_provider_exhausted(&AlephError::rate_limit(
+            "429 too many requests"
+        )));
+    }
+
+    #[test]
+    fn transient_errors_do_not_abort_the_cycle() {
+        assert!(!is_provider_exhausted(&AlephError::NetworkError {
+            message: "connection reset".to_string(),
+            suggestion: None,
+        }));
+        assert!(!is_provider_exhausted(&AlephError::other("bad json")));
+    }
+}
+
 use async_trait::async_trait;
 
 use super::{distill_action, DreamContext};

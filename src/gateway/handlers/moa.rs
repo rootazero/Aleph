@@ -74,7 +74,10 @@ pub async fn handle_list_presets(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
 ) -> JsonRpcResponse {
-    let moa = config.read().await.moa.clone();
+    // Fresh install has `Config.moa == None`; default to an empty `MoaToml` so
+    // the wire shape is a consistent `{}` (matching `MoaPresetStore::list`)
+    // rather than JSON `null`, which every consumer would otherwise special-case.
+    let moa = config.read().await.moa.clone().unwrap_or_default();
     match serde_json::to_value(&moa) {
         Ok(v) => JsonRpcResponse::success(request.id, v),
         Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),

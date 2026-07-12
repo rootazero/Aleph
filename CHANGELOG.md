@@ -7,6 +7,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [26.7.7]
+
+A large capability release. The headline is **Mixture-of-Agents (MoA)
+continuous advisory** — any agent turn can now be shadowed by a panel of
+advisor models whose views are aggregated into the reply — landing alongside
+**progressive tool disclosure** (per-turn token savings from collapsing
+non-core tool schemas behind an on-demand `tool_search`), **true multi-session
+parallelism** (the run gate moved from per-agent to per-session), a
+**`[[wikilink]]` note lifecycle** with rename cascades and provenance, a
+deepened **memory-galaxy canvas**, a **narration-led chat stream** with a
+live-follow workspace, and a rebuilt **session single-source-of-truth**
+event log under the hood.
+
+### Added
+
+- **Mixture-of-Agents (MoA) continuous advisory** — a new virtual
+  `MoaProvider` fans a turn out to a configurable panel of advisor models in
+  parallel (with per-advisor timeout, prompt-cache breakpoints and a signature
+  cache), then an aggregator model synthesizes the reply. Presets are authored
+  and switched entirely by conversation through the new `moa` tool (session
+  activation + preset CRUD), a `/moa` one-shot command (operator-gated), and a
+  Panel visual-config page. Advisor token spend is tracked in its own usage
+  bucket and VESR records the aggregator as the acting model, so MoA never
+  pollutes the primary model's accounting.
+- **Progressive tool disclosure + `tool_search`** — non-core tool schemas are
+  now collapsed to just their name + description (a lightweight catalog),
+  cutting a large share of per-turn tool-schema tokens, and the model pulls a
+  full schema back on demand via `get_tool_schema`. A new self-contained
+  `tool_search` meta-tool (BM25 ranker, no dependencies) lets the model
+  discover deferred tools, and MCP tools can be pushed into that deferred tier
+  via `[tools] defer_mcp_tools`. A byte-identical escape hatch keeps the old
+  behavior when disclosure is off.
+- **True multi-session parallelism** — the run gate moved from a per-agent
+  lock to a per-session `SessionRunRegistry`, so one agent can run in several
+  sessions at once while any single session stays mutually exclusive. A
+  run-lifetime `ConcurrencyLimiter` enforces global + per-agent caps that
+  hot-reload from `[execution]` config, and a server-authoritative running-set
+  broadcast drives unified "running" dots and a run-slots gauge across CLI,
+  TUI and Panel.
+- **`[[wikilink]]` note lifecycle** — notes now parse `[[wikilinks]]` (with
+  aliases), resolve them through a strategy chain that records provenance
+  (`resolved_by` / `status` / `label`), cascade on rename (including typed
+  relations), and use tombstone delete semantics with targeted inbound
+  back-fill. The dreaming daemon materializes unlinked-mention soft edges, and
+  wikilinks render as clickable anchors across the galaxy, drawer and phone
+  note views.
+- **Deepened memory-galaxy canvas** — the graph view now clusters by
+  community-centroid gravity, brightens nodes by recency and confidence, tints
+  edges by relation kind (semantic / related / co-recalled / keyword vs. the
+  wikilink backbone), and adds pan (shift / middle-drag) to the orbit camera.
+  Node detail shows backlinks and a path breadcrumb, with a truncation badge
+  when the node cap is hit; the dead 2D canvas engine was removed and pure
+  graph→galaxy transforms extracted.
+- **Narration-led chat stream + live-follow workspace** — the transcript now
+  reads as a narration with compact single-line tool rows (status glyphs, live
+  elapsed) and merged "explore" groups for consecutive reads. The workspace
+  pane becomes a tool-detail viewer that live-follows the foreground
+  conversation (with pin), and the typewriter reveal and markdown rendering
+  were improved.
+- **Session single-source-of-truth event log** — `session_events` is now the
+  canonical log; a `MessageProjector` materializes events into the `messages`
+  table, a boot-time `ProjectionReconciler` back-fills transcripts, and
+  messages carry `tool_call_id` / `tool_name` plus an `AssistantRunMeta`
+  stamp. Legacy sessions are back-filled and read behind a locked invariant.
+- **Computer-use semantic interaction** — new `set_value` / `ax_action`
+  accessibility actions with write-verification via stateless locator scoring,
+  an `observe` parameter that fuses act→observe (returning post-state /
+  screenshot), and recovery hints appended to tool failures so the model can
+  self-correct. Computer use is now hard-blocked inside password managers, and
+  the Windows UIA backend implements value read/write and action dispatch to
+  reach macOS parity.
+- **Message-stream assembler** — a single `MessageAssembler` reducer now owns
+  the assembled message, stripping inline `<think>` blocks live as the stream
+  drains and routing both streaming and final text through one shared
+  sanitize atom.
+- **Live-hot-reloadable execution caps** — the `[execution]` run-cap section
+  is now Live: changing `max_runs_global` / `max_runs_per_agent` takes effect
+  without a restart via an arc-swap global semaphore.
+
+### Fixed
+
+- **Session sidebar showed a raw `<system-reminder>`** — per-turn reminders
+  (working directory, etc.) are now delivered as transient recall context each
+  turn instead of being prepended into the persisted user message, so derived
+  session titles no longer leak reminder text.
+- **MoA presets on the default provider never activated** — the primary
+  provider key is now mapped into `named_providers`, and the `moa` tool's args
+  schema is hand-written flat (the Anthropic adapter was stripping a root
+  `oneOf` union, leaving an arg-less tool) — both found in runtime QA.
+- **`file_ops` glob path-escape** — search / batch-move now reject absolute and
+  `..` glob patterns, re-check every match against the deny list, and reject
+  Windows drive-relative / UNC-prefixed globs (`C:foo`).
+- **Session epoch parsing on Windows** — fixed a Windows-only failure parsing
+  the session epoch.
+- **Sandbox stdin / timeout hardening** — stdin EOF handling and foreground
+  timeout clamping in the command sandbox were hardened.
+- **Windows standalone-server self-update** — the desktop shell now stops the
+  running daemon before replacing its own binary on Windows.
+- **Panel "running" dot correctness** — the red running dot is now purely
+  server-authoritative with a sequence guard and cold-load seed guard, and the
+  run-slots gauge refreshes on every running-set change (was connect-time
+  only).
+- **Reconciler token undercount** — the projection reconciler no longer
+  undercounts tokens on turns that straddle the compaction watermark.
+- **Structural entropy reduction** — several oversized modules (coordinated-task
+  store, dispatcher schedule, and others) were split into focused directory
+  submodules with no behavior change, and a swath of zero-consumer dead code
+  was removed per the thin-harness R10 diet.
+
 ## [26.7.1]
 
 A harness-reliability and polish release. The headline is a **context

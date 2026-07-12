@@ -84,6 +84,10 @@ impl DreamStage for NoteSynthesisStage {
                 .await
             {
                 Ok(r) => r,
+                Err(e) if super::is_provider_exhausted(&e) => {
+                    tracing::warn!(error = %e, "Synthesis: provider exhausted — aborting dream cycle");
+                    return Err(e);
+                }
                 Err(e) => {
                     tracing::warn!(category, error = %e, "Synthesis LLM call failed");
                     continue;

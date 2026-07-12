@@ -79,7 +79,6 @@ pub(crate) async fn run_fan_out(
 /// directly (round-2 B4), never through this MISS-only path.
 pub(crate) fn emit_fanout_events(
     sink: &Option<Arc<dyn TraceSink>>,
-    _advisors: &[AdvisorSlot],
     results: &[AdvisorResult],
     aggregator_label: &str,
 ) {

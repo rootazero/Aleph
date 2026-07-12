@@ -183,7 +183,9 @@ impl DreamPipeline {
                     min_candidates: dreaming_cfg.feedback_distill_min_candidates,
                     lookback: dreaming_cfg.feedback_lookback,
                 }),
-                Box::new(stages::NoteDriftStage),
+                Box::new(stages::NoteDriftStage {
+                    max_pairs: dreaming_cfg.drift_max_pairs_per_run,
+                }),
                 Box::new(stages::IndexRefresherStage),
                 // Materialize behavioral co-recall edges BEFORE the graph
                 // recompute so the 5-signal relevance pass sees them this
@@ -497,6 +499,32 @@ impl DreamRunStatus {
     }
 }
 
+/// Whether a scheduled cycle must be skipped because one already ran today.
+///
+/// `cancelled` is the ONLY status that earns a retry: such a run yielded to
+/// fresh user activity before doing its work, so re-running once the user goes
+/// idle again is the intent.
+///
+/// Every other same-day status — `success`, `timeout`, `error`, or a stale
+/// `running` left behind by a crashed process — means "today's cycle is spent,
+/// do not start another". Retrying on `timeout`/`error` was the original defect:
+/// the guard skipped only on `success`, so a cycle that could never succeed
+/// restarted on every tick for the whole window, re-running every LLM stage from
+/// scratch (~130 full cycles, and tens of thousands of provider calls, in a
+/// single night). A broken cycle must cost one attempt, not a window's worth.
+fn should_skip_scheduled_run(status: &DreamStatus, today: &str) -> bool {
+    let Some(last_run_at) = status.last_run_at else {
+        return false;
+    };
+    let Some(last_date) = Local.timestamp_opt(last_run_at, 0).single() else {
+        return false;
+    };
+    if last_date.format("%Y-%m-%d").to_string() != today {
+        return false;
+    }
+    status.last_status.as_deref() != Some("cancelled")
+}
+
 /// `DreamDaemon` orchestrates idle-time consolidation.
 pub struct DreamDaemon {
     database: MemoryBackend,
@@ -754,19 +782,14 @@ impl DreamDaemon {
         let run_date = Local::now().format("%Y-%m-%d").to_string();
 
         if let Ok(status) = self.database.get_dream_status().await {
-            if let Some(last_run_at) = status.last_run_at {
-                let last_date = Local.timestamp_opt(last_run_at, 0).single();
-                if let Some(last_date) = last_date {
-                    if last_date.format("%Y-%m-%d").to_string() == run_date
-                        && status.last_status.as_deref() == Some("success")
-                    {
-                        info!(
-                            reason = "already_ran_today",
-                            last_run_at, "DreamDaemon tick: skipped"
-                        );
-                        return Ok(());
-                    }
-                }
+            if should_skip_scheduled_run(&status, &run_date) {
+                info!(
+                    reason = "already_ran_today",
+                    last_run_at = status.last_run_at,
+                    last_status = status.last_status.as_deref().unwrap_or("unknown"),
+                    "DreamDaemon tick: skipped"
+                );
+                return Ok(());
             }
         }
 
@@ -1338,6 +1361,89 @@ fn parse_window(config: &ConfigDreamingConfig) -> Result<(NaiveTime, NaiveTime),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // should_skip_scheduled_run — the once-per-day guard
+    // -----------------------------------------------------------------------
+
+    /// Build a status whose `last_run_at` is `hours_ago` before now.
+    fn status_from(hours_ago: i64, last_status: Option<&str>) -> DreamStatus {
+        DreamStatus {
+            last_run_at: Some(Local::now().timestamp() - hours_ago * 3600),
+            last_status: last_status.map(str::to_string),
+            last_duration_ms: None,
+        }
+    }
+
+    fn today() -> String {
+        Local::now().format("%Y-%m-%d").to_string()
+    }
+
+    #[test]
+    fn skips_when_todays_run_succeeded() {
+        assert!(should_skip_scheduled_run(
+            &status_from(0, Some("success")),
+            &today()
+        ));
+    }
+
+    /// Regression: a timed-out run used to leave `last_status = "timeout"`,
+    /// which the old guard did not treat as "ran today" — so the daemon
+    /// restarted a full cycle on every 60s tick for the rest of the window.
+    #[test]
+    fn skips_when_todays_run_timed_out() {
+        assert!(
+            should_skip_scheduled_run(&status_from(0, Some("timeout")), &today()),
+            "a timed-out cycle must cost one attempt, not restart every tick"
+        );
+    }
+
+    /// Regression: same defect via the error path — a 403/quota failure left
+    /// `last_status = "error"` and the daemon kept relaunching cycles.
+    #[test]
+    fn skips_when_todays_run_errored() {
+        assert!(
+            should_skip_scheduled_run(&status_from(0, Some("error")), &today()),
+            "an errored cycle must not restart every tick"
+        );
+    }
+
+    /// A stale `running` row is left behind when the process dies mid-cycle.
+    /// Treat it as spent: erring toward "no dream today" is safe; erring toward
+    /// "retry" risks a crash-loop burning provider quota.
+    #[test]
+    fn skips_when_todays_run_left_stale_running_marker() {
+        assert!(should_skip_scheduled_run(
+            &status_from(0, Some("running")),
+            &today()
+        ));
+    }
+
+    /// `cancelled` is the one status that earns a retry: the cycle yielded to
+    /// fresh user activity and never got to do its work.
+    #[test]
+    fn retries_when_todays_run_was_cancelled_by_user_activity() {
+        assert!(!should_skip_scheduled_run(
+            &status_from(0, Some("cancelled")),
+            &today()
+        ));
+    }
+
+    #[test]
+    fn runs_when_last_run_was_a_previous_day() {
+        assert!(!should_skip_scheduled_run(
+            &status_from(48, Some("success")),
+            &today()
+        ));
+    }
+
+    #[test]
+    fn runs_when_there_is_no_prior_run() {
+        assert!(!should_skip_scheduled_run(
+            &DreamStatus::default(),
+            &today()
+        ));
+    }
 
     #[test]
     fn test_window_within_normal() {

@@ -79,6 +79,10 @@ impl DreamStage for NoteReviewStage {
                 .await
             {
                 Ok(r) => r,
+                Err(e) if super::is_provider_exhausted(&e) => {
+                    tracing::warn!(error = %e, "note_review: provider exhausted — aborting dream cycle");
+                    return Err(e);
+                }
                 Err(e) => {
                     // Transient provider failure: leave the row queued so a later
                     // cycle can adjudicate it. Rubber-stamping here would void the

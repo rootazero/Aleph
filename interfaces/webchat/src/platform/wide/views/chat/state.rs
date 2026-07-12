@@ -385,6 +385,14 @@ pub struct ChatState {
     /// server-side `preferred_model` persistence is a follow-up). Picker
     /// component owns reads/writes through this signal.
     pub selected_model: RwSignal<Option<crate::api::providers::ModelOverride>>,
+    /// A model override requested from OUTSIDE the chat view (e.g. the MoA
+    /// settings page's "Use in chat"). Parked here instead of written straight
+    /// to `selected_model` because `restore_from` — which runs when the chat
+    /// view activates a session on navigation — would immediately overwrite
+    /// `selected_model` from the (empty) snapshot and lose it. Ephemeral: NOT in
+    /// `SessionSnapshot`; `restore_from` consumes it right after the snapshot
+    /// restore so the externally-requested model wins.
+    pub pending_model_override: RwSignal<Option<crate::api::providers::ModelOverride>>,
     /// Run IDs whose final assistant reply should be spoken aloud — the
     /// voice-loop turns started from the composer mic button. `events.rs` pops
     /// each on `run_complete` and plays its TTS audio. Ephemeral, like
@@ -448,6 +456,7 @@ impl ChatState {
             active_project_root: RwSignal::new(None),
             active_project_name: RwSignal::new(None),
             selected_model: RwSignal::new(None),
+            pending_model_override: RwSignal::new(None),
             voice_run_ids: RwSignal::new(Vec::new()),
             provider_retry: RwSignal::new(None),
             next_msg_id: RwSignal::new(0),
@@ -1000,6 +1009,12 @@ impl ChatState {
         self.active_project_root.set(snap.active_project_root);
         self.active_project_name.set(snap.active_project_name);
         self.selected_model.set(snap.selected_model);
+        // A model requested from outside the chat view (MoA "Use in chat")
+        // survives this restore: apply it over the snapshot value, then consume.
+        if let Some(mo) = self.pending_model_override.get_untracked() {
+            self.selected_model.set(Some(mo));
+            self.pending_model_override.set(None);
+        }
         self.next_msg_id.set(snap.next_msg_id);
         // Carried in the snapshot so the occupancy gauge survives a tab swap
         // (None for a fresh/empty tab, which correctly hides the gauge).

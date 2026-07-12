@@ -278,12 +278,7 @@ impl AiProvider for MoaProvider {
 
                 // 4. Display + accounting + heavy trace events (MISS only;
                 //    per-advisor + aggregating emission lives in fan_out.rs).
-                super::fan_out::emit_fanout_events(
-                    &self.sink,
-                    &self.advisors,
-                    &results,
-                    &self.aggregator_label,
-                );
+                super::fan_out::emit_fanout_events(&self.sink, &results, &self.aggregator_label);
                 if !usages.is_empty() {
                     let spend = self.spend_event(results.len(), &usages);
                     self.emit(spend);
