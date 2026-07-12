@@ -59,10 +59,13 @@ pub struct DreamReport {
     /// `MutationGate::record_synthesis_assertion` for oscillation detection.
     #[serde(default)]
     pub synthesis_assertions: Vec<String>,
-    /// Skill-distill notes produced this cycle (for wasted-distillation detection).
+    /// Mature skill-note cohort size (created more than `MATURE_SKILL_DAYS`
+    /// ago) — the denominator of MutationGate's wasted-distillation ratio. Same
+    /// cohort as `distill_recalled`, so the ratio is a recall rate rather than
+    /// the old flow-vs-stock mismatch.
     #[serde(default)]
     pub distill_produced: u32,
-    /// Skill notes recalled (used) — the recall side of the distill ratio.
+    /// How many of that mature cohort have been recalled — the numerator.
     #[serde(default)]
     pub distill_recalled: u32,
     /// Merges the evolution gate rejected this cycle (would fuse distinct

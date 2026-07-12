@@ -43,6 +43,14 @@ pub struct RawMetrics {
     pub never_recalled_count: u32,
     pub skill_notes_total: u32,
     pub skill_notes_recalled: u32,
+    /// Mature skill-note cohort (created more than `MATURE_SKILL_DAYS` ago) —
+    /// the population MutationGate's wasted-distillation detector judges. Notes
+    /// too new to have had a recall opportunity are excluded so a fresh cycle's
+    /// produce cannot make the detector misfire on cold start.
+    pub mature_skill_total: u32,
+    /// How many of `mature_skill_total` have at least one recall hit — the
+    /// numerator of the wasted-distillation ratio.
+    pub mature_skill_recalled: u32,
     pub correction_count: u32,
     pub session_count: u32,
 }

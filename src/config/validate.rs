@@ -364,17 +364,6 @@ impl Config {
             )));
         }
 
-        if self.memory.memory_decay.access_boost < 0.0 {
-            error!(
-                value = self.memory.memory_decay.access_boost,
-                "Invalid memory decay access_boost"
-            );
-            return Err(AlephError::invalid_config(format!(
-                "memory.memory_decay.access_boost must be >= 0, got {}",
-                self.memory.memory_decay.access_boost
-            )));
-        }
-
         if !(0.0..=1.0).contains(&self.memory.memory_decay.min_strength) {
             error!(
                 value = self.memory.memory_decay.min_strength,

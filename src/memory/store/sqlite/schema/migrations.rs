@@ -1,5 +1,5 @@
 use crate::error::AlephError;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 /// Rename `fact_id` to `note_path` in the `recall_signals` table.
 /// Safe to call multiple times (checks column existence first).
@@ -21,6 +21,55 @@ pub fn migrate_recall_signals_note_path(conn: &Connection) -> Result<(), AlephEr
             })?;
     }
 
+    Ok(())
+}
+
+/// Add the `agent_id` scope column to `recall_signals` for existing databases.
+///
+/// The table pre-dates per-agent recall scoping; without it, the aggregate
+/// reads (`aggregate_for_facts` / `recall_signals_last_hit` / `co_recall_pairs`)
+/// mixed recall signals across every agent sharing the single `memory.db`, so
+/// two agents holding a note at the same relative path polluted each other's
+/// hot-surfacing counts. New rows carry the recording agent; existing rows are
+/// backfilled (best-effort) from the `namespace` value the auto-recall path
+/// already wrote there. Safe to call multiple times (checks column existence).
+///
+/// Runs before the DDL recreates the agent-scoped indexes, so on a fresh
+/// database (table not yet created) it is a no-op — the DDL then creates the
+/// table already carrying `agent_id`.
+pub fn migrate_recall_signals_agent_id(conn: &Connection) -> Result<(), AlephError> {
+    let table_exists = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='recall_signals'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(|e| AlephError::config(format!("recall_signals table check: {e}")))?
+        .is_some();
+    if !table_exists {
+        return Ok(());
+    }
+
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(recall_signals)")
+        .map_err(|e| AlephError::config(format!("PRAGMA table_info recall_signals: {e}")))?;
+    let has_agent_id = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| AlephError::config(format!("table_info query: {e}")))?
+        .any(|name| name.is_ok_and(|n| n == "agent_id"));
+    drop(stmt);
+
+    if has_agent_id {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "ALTER TABLE recall_signals ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'; \
+         UPDATE recall_signals SET agent_id = namespace; \
+         CREATE INDEX IF NOT EXISTS idx_recall_agent_path \
+             ON recall_signals(agent_id, note_path);",
+    )
+    .map_err(|e| AlephError::config(format!("Failed to add recall_signals.agent_id: {e}")))?;
     Ok(())
 }
 

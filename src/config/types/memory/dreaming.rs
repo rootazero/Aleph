@@ -91,8 +91,6 @@ impl DreamingConfig {
 pub struct MemoryDecayPolicy {
     #[serde(default = "super::defaults::default_memory_decay_half_life_days")]
     pub half_life_days: f32,
-    #[serde(default = "super::defaults::default_memory_decay_access_boost")]
-    pub access_boost: f32,
     #[serde(default = "super::defaults::default_memory_decay_min_strength")]
     pub min_strength: f32,
     #[serde(default = "super::defaults::default_memory_decay_protected_types")]
@@ -103,7 +101,6 @@ impl Default for MemoryDecayPolicy {
     fn default() -> Self {
         Self {
             half_life_days: super::defaults::default_memory_decay_half_life_days(),
-            access_boost: super::defaults::default_memory_decay_access_boost(),
             min_strength: super::defaults::default_memory_decay_min_strength(),
             protected_types: super::defaults::default_memory_decay_protected_types(),
         }

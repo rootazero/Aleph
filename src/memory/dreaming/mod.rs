@@ -1109,7 +1109,14 @@ impl DreamDaemon {
             prior_report.as_ref(),
         )
         .await;
-        report.distill_recalled = post_metrics.skill_notes_recalled;
+        // MutationGate's wasted-distillation detector compares the same mature
+        // cohort on both sides: of the skill notes old enough to have had a
+        // recall chance, how many actually got recalled. Feeding it this-cycle's
+        // fresh produce is why it misfired on cold start; feeding the recall side
+        // the whole-corpus stock is why it went toothless once anything was ever
+        // recalled. Both now come from the mature cohort.
+        report.distill_produced = post_metrics.mature_skill_total;
+        report.distill_recalled = post_metrics.mature_skill_recalled;
         let candidate_health = memory_health_score(&SignalSnapshot::from_metrics(&post_metrics));
         let best_before = *self.best_health.lock().unwrap_or_else(|e| e.into_inner());
         let gate_outcome = evaluate_gate(
@@ -1179,7 +1186,9 @@ impl DreamDaemon {
             for assertion in &report.synthesis_assertions {
                 gate.record_synthesis_assertion(assertion);
             }
-            if report.distill_produced > 0 || report.distill_recalled > 0 {
+            // Only feed the detector once a mature cohort exists; before then
+            // there is nothing to judge (feeding zeros would never arm it).
+            if report.distill_produced > 0 {
                 gate.record_skill_distill_output(report.distill_produced, report.distill_recalled);
             }
             gate.advance_cycle();
@@ -1190,6 +1199,11 @@ impl DreamDaemon {
     }
 }
 
+/// Skill notes younger than this are excluded from `MutationGate`'s
+/// wasted-distillation cohort — they haven't had a fair chance to be recalled.
+/// Mirrors `NoteDecay`'s 7-day "too new to touch" protection window.
+const MATURE_SKILL_DAYS: i64 = 7;
+
 /// Compute a `RawMetrics` snapshot for the Dream cycle.
 ///
 /// Pulls notes (count + 24h growth) from the in-memory note index and folds in
@@ -1199,10 +1213,12 @@ impl DreamDaemon {
 ///
 /// The recall wiring is load-bearing: `skill_recall_rate` feeds the strategy
 /// selector's `growth_pressure` (a false 0 perpetually inflated the synthesize
-/// pressure) and the `MutationGate` wasted-distillation detector (a false 0
-/// made it fire `Conserve` the moment any skill was produced). The recall query
-/// degrades to a warning + zeros on backend failure — strategy selection runs
-/// on the surviving signals rather than aborting.
+/// pressure), and the `mature_skill_total` / `mature_skill_recalled` pair feeds
+/// `MutationGate`'s wasted-distillation detector — restricted to skill notes
+/// old enough to have had a recall opportunity so a fresh cycle's produce can't
+/// make it misfire. The recall query degrades to a warning + zeros on backend
+/// failure — strategy selection runs on the surviving signals rather than
+/// aborting.
 async fn compute_raw_metrics(
     notes: &[NoteIndexEntry],
     store: &SqliteMemoryBackend,
@@ -1211,14 +1227,23 @@ async fn compute_raw_metrics(
 ) -> RawMetrics {
     let day_ago = now_timestamp() - 86_400;
     let notes_added_24h = notes.iter().filter(|n| n.created_at >= day_ago).count() as u32;
+    // Skill notes created before this cutoff are "mature": old enough to have
+    // had a recall opportunity, so their recall rate is a fair signal for
+    // MutationGate's wasted-distillation detector.
+    let mature_cutoff = now_timestamp() - MATURE_SKILL_DAYS * 86_400;
 
     // Fold in recall signals with a single batch query over every note path.
     // `recall_hit_counts` returns only the paths that have at least one recorded
     // recall, so its key set is exactly the recalled subset.
     let total_notes = notes.len() as u32;
     let all_paths: Vec<String> = notes.iter().map(|n| n.path.clone()).collect();
+    // The mature-skill cohort (denominator/numerator of MutationGate's
+    // wasted-distillation ratio) is derived from the same recall `hits`, so it
+    // is accumulated inside the Ok arm; the Err path leaves both at zero.
+    let mut mature_skill_total = 0u32;
+    let mut mature_skill_recalled = 0u32;
     let (note_hit_rate, never_recalled_count, skill_notes_total, skill_notes_recalled) =
-        match store.recall_hit_counts(&all_paths).await {
+        match store.recall_hit_counts(agent_id, &all_paths).await {
             Ok(hits) => {
                 let recalled_total = hits.len() as u32;
                 let never = total_notes.saturating_sub(recalled_total);
@@ -1226,6 +1251,18 @@ async fn compute_raw_metrics(
                 let skill_recalled = notes
                     .iter()
                     .filter(|n| n.category == "skill" && hits.contains_key(&n.path))
+                    .count() as u32;
+                mature_skill_total = notes
+                    .iter()
+                    .filter(|n| n.category == "skill" && n.created_at < mature_cutoff)
+                    .count() as u32;
+                mature_skill_recalled = notes
+                    .iter()
+                    .filter(|n| {
+                        n.category == "skill"
+                            && n.created_at < mature_cutoff
+                            && hits.contains_key(&n.path)
+                    })
                     .count() as u32;
                 let hit_rate = if total_notes > 0 {
                     f64::from(recalled_total) / f64::from(total_notes)
@@ -1273,6 +1310,8 @@ async fn compute_raw_metrics(
         never_recalled_count,
         skill_notes_total,
         skill_notes_recalled,
+        mature_skill_total,
+        mature_skill_recalled,
         duplication_rate,
         contradiction_rate,
         staleness_rate,
@@ -1527,8 +1566,8 @@ mod tests {
 
         let m = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID, None).await;
         // Skill recall: 1 of 2 skill notes recalled → skill_recall_rate = 0.5,
-        // which keeps the wasted-distillation gate from misfiring (its bug was
-        // a structural recalled=0).
+        // feeding the strategy selector's growth_pressure with a real value
+        // instead of the historical structural zero.
         assert_eq!(m.skill_notes_total, 2);
         assert_eq!(m.skill_notes_recalled, 1);
         // 3 notes, 1 recalled → 2 never recalled.
@@ -1538,6 +1577,52 @@ mod tests {
         // The derived skill_recall_rate signal must now be non-zero.
         let snap = SignalSnapshot::from_metrics(&m);
         assert!((snap.score("skill_recall_rate") - 0.5).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn compute_raw_metrics_mature_skill_cohort_excludes_fresh() {
+        let temp =
+            std::env::temp_dir().join(format!("aleph_metrics_mature_{}", uuid::Uuid::new_v4()));
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+
+        let now = now_timestamp();
+        let old = now - 30 * 86_400; // mature: older than MATURE_SKILL_DAYS
+        let skill = |path: &str, created: i64| NoteIndexEntry {
+            path: path.into(),
+            filename: path.rsplit('/').next().unwrap_or(path).into(),
+            agent_id: DEFAULT_AGENT_ID.into(),
+            category: "skill".into(),
+            tags: vec![],
+            link_count: 0,
+            created_at: created,
+            updated_at: created,
+            content_hash: "h".into(),
+        };
+        // Two mature skills (one recalled) + one freshly-distilled skill.
+        let notes = vec![
+            skill("skill/mature-recalled", old),
+            skill("skill/mature-cold", old),
+            skill("skill/fresh", now),
+        ];
+
+        store
+            .record_recall_hits(
+                "q",
+                "auto-recall",
+                &[("skill/mature-recalled".to_string(), 0.9)],
+                DEFAULT_AGENT_ID,
+            )
+            .await
+            .unwrap();
+
+        let m = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID, None).await;
+        // All three count toward the whole-corpus skill stats...
+        assert_eq!(m.skill_notes_total, 3);
+        // ...but only the two mature notes form the wasted-distillation cohort;
+        // the fresh note (no recall opportunity yet) is excluded, so it can't
+        // drag the ratio toward a false Conserve.
+        assert_eq!(m.mature_skill_total, 2);
+        assert_eq!(m.mature_skill_recalled, 1);
     }
 
     #[tokio::test]

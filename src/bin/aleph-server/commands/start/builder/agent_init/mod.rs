@@ -666,6 +666,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             &row.channel,
                             &[hit],
                             row.session_id.as_deref(),
+                            &row.agent_id,
                             &row.namespace,
                         )
                         .map(|_| ())

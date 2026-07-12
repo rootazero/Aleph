@@ -1921,20 +1921,20 @@ impl NoteStore for SqliteMemoryBackend {
     }
 
     /// Phase C2.7 — return the most recent `created_at` recall signal for
-    /// `note_path`, or `None` when no signals exist. The `recall_signals`
-    /// table has no `agent_id` column; recall data is already scoped to the
-    /// active agent's `SQLite` database, so `agent_id` is accepted but unused.
+    /// `(agent_id, note_path)`, or `None` when no signals exist. Scoped to the
+    /// recording agent so a sibling agent's recall of a same-named note can't
+    /// resurrect this one from decay.
     async fn recall_signals_last_hit(
         &self,
         agent_id: &str,
         note_path: &str,
     ) -> Result<Option<i64>, AlephError> {
-        let _ = agent_id;
         let conn = lock_conn!(self)?;
         let v: Option<i64> = conn
             .query_row(
-                "SELECT MAX(created_at) FROM recall_signals WHERE note_path = ?1",
-                params![note_path],
+                "SELECT MAX(created_at) FROM recall_signals \
+                 WHERE note_path = ?1 AND agent_id = ?2",
+                params![note_path, agent_id],
                 |r| r.get(0),
             )
             .optional()
@@ -1945,11 +1945,12 @@ impl NoteStore for SqliteMemoryBackend {
 
     async fn recall_hit_counts(
         &self,
+        agent_id: &str,
         note_paths: &[String],
     ) -> Result<std::collections::HashMap<String, i64>, AlephError> {
         // Reuse the existing recall-signal aggregator; `signal_count` is the
         // per-note recall frequency (deduped by query/day/channel).
-        let aggregates = self.aggregate_for_facts(note_paths)?;
+        let aggregates = self.aggregate_for_facts(agent_id, note_paths)?;
         Ok(aggregates
             .into_iter()
             .map(|a| (a.note_path, a.signal_count))
@@ -1961,7 +1962,7 @@ impl NoteStore for SqliteMemoryBackend {
         query: &str,
         channel: &str,
         hits: &[(String, f32)],
-        namespace: &str,
+        agent_id: &str,
     ) -> Result<usize, AlephError> {
         if hits.is_empty() {
             return Ok(0);
@@ -1977,7 +1978,9 @@ impl NoteStore for SqliteMemoryBackend {
                 },
             )
             .collect();
-        self.record_signals(query, channel, &recall_hits, None, namespace)
+        // The auto-recall path carries no distinct namespace, so the vestigial
+        // `namespace` column mirrors `agent_id`.
+        self.record_signals(query, channel, &recall_hits, None, agent_id, agent_id)
     }
 
     async fn sources_of(&self, agent_id: &str, note_path: &str) -> Result<Vec<String>, AlephError> {

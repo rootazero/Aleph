@@ -118,7 +118,7 @@ pub(crate) async fn gate_action_evidence(
     let hits = match ctx
         .indexer
         .store()
-        .recall_hit_counts(std::slice::from_ref(old_note_path))
+        .recall_hit_counts(&ctx.agent_id, std::slice::from_ref(old_note_path))
         .await
     {
         Ok(counts) => counts.get(old_note_path).copied().unwrap_or(0),

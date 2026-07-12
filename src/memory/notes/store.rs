@@ -565,9 +565,10 @@ pub trait NoteStore: Send + Sync {
     /// stores compile unchanged and simply contribute no reinforcement boost.
     async fn recall_hit_counts(
         &self,
+        agent_id: &str,
         note_paths: &[String],
     ) -> Result<std::collections::HashMap<String, i64>, AlephError> {
-        let _ = note_paths;
+        let _ = (agent_id, note_paths);
         Ok(std::collections::HashMap::new())
     }
 
@@ -587,9 +588,9 @@ pub trait NoteStore: Send + Sync {
         query: &str,
         channel: &str,
         hits: &[(String, f32)],
-        namespace: &str,
+        agent_id: &str,
     ) -> Result<usize, AlephError> {
-        let _ = (query, channel, hits, namespace);
+        let _ = (query, channel, hits, agent_id);
         Ok(0)
     }
 

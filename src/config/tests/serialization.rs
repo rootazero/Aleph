@@ -46,7 +46,6 @@ fn test_memory_config_deserialization() {
         },
         "memory_decay": {
             "half_life_days": 20.0,
-            "access_boost": 0.1,
             "min_strength": 0.2,
             "protected_types": ["personal", "project"]
         }

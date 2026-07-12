@@ -4,9 +4,7 @@
 //! (`_get_tool_usage` + `_compute_tool_breakdown`) into a typed, single-pass
 //! Rust aggregator. The data substrate already exists: every tool call is
 //! captured as a [`RawMemorySource::ToolInvocation`] row by
-//! [`crate::memory::tool_signal_sink::RawMemoryToolSink`], and the dream
-//! cycle's [`crate::memory::tool_signal_sink::aggregate_tool_stats`] already
-//! computes window-level totals for the signal/strategy selector.
+//! [`crate::memory::tool_signal_sink::RawMemoryToolSink`].
 //!
 //! This module adds the **per-tool breakdown** that was missing: top-N tools
 //! by invocation count, each with success/failure split, average latency, and
@@ -78,10 +76,9 @@ pub struct ToolUsageReport {
 /// Aggregate `ToolInvocation` rows for `agent_id` whose `created_at` is at or
 /// after `since_unix_secs` into a [`ToolUsageReport`].
 ///
-/// Reuses [`RawMemoryStore::get_raw_by_source`] (the same fetch path as
-/// `aggregate_tool_stats`); backends with a smarter SQL filter override it.
-/// `fetch_limit` bounds how many rows the store returns; `top_n` bounds how
-/// many per-tool entries appear in the report.
+/// Reuses [`RawMemoryStore::get_raw_by_source`]; backends with a smarter SQL
+/// filter override it. `fetch_limit` bounds how many rows the store returns;
+/// `top_n` bounds how many per-tool entries appear in the report.
 pub async fn aggregate_tool_usage(
     store: &dyn RawMemoryStore,
     agent_id: &str,

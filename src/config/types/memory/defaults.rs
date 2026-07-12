@@ -111,10 +111,6 @@ pub const fn default_memory_decay_half_life_days() -> f32 {
     90.0
 }
 
-pub const fn default_memory_decay_access_boost() -> f32 {
-    0.2
-}
-
 pub const fn default_memory_decay_min_strength() -> f32 {
     0.1
 }

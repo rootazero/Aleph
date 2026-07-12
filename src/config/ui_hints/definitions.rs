@@ -193,12 +193,6 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
             group: "memory",
             advanced: true,
         },
-        "memory.memory_decay.access_boost" => {
-            label: "Fact Access Boost",
-            help: "Boost per access for memory decay",
-            group: "memory",
-            advanced: true,
-        },
         "memory.memory_decay.min_strength" => {
             label: "Fact Min Strength",
             help: "Minimum strength before pruning facts",
