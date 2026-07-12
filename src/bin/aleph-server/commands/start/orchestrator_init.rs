@@ -554,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn stability_stall_uses_default_check_interval() {
+    fn stability_stall_timeout_builds_stall_config() {
         let cfg = cfg_with_stability(Some(StabilityToml {
             stall_timeout_secs: Some(120),
             ..StabilityToml::default()
@@ -562,11 +562,6 @@ mod tests {
         let (sc, cap, tt) = build_stability_triple(&cfg);
         let sc = sc.expect("stall_timeout_secs=120 → Some(StallConfig)");
         assert_eq!(sc.timeout, Duration::from_secs(120));
-        // missing stall_check_interval_secs → falls back to default (30s)
-        assert_eq!(
-            sc.check_interval,
-            alephcore::harness::StallConfig::default().check_interval
-        );
         assert!(cap.is_none());
         // turn_timeout defaults to the production cap when not configured.
         assert_eq!(tt, Some(Duration::from_secs(120)));
@@ -576,14 +571,12 @@ mod tests {
     fn stability_full_section_all_some() {
         let cfg = cfg_with_stability(Some(StabilityToml {
             stall_timeout_secs: Some(300),
-            stall_check_interval_secs: Some(15),
             consecutive_failure_cap: Some(8),
             turn_timeout_secs: Some(180),
         }));
         let (sc, cap, tt) = build_stability_triple(&cfg);
         let sc = sc.expect("full section → Some(StallConfig)");
         assert_eq!(sc.timeout, Duration::from_secs(300));
-        assert_eq!(sc.check_interval, Duration::from_secs(15));
         assert_eq!(cap, Some(8));
         assert_eq!(tt, Some(Duration::from_secs(180)));
     }

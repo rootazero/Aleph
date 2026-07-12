@@ -24,14 +24,11 @@ pub struct GuardrailsToml {
 /// `[stability]` — P0 rescue knobs (stall watchdog + failure cap + per-turn
 /// timeout). Each field is `Option<u64>` so callers can opt into a subset;
 /// missing fields stay None. `stall_timeout_secs` is the trigger that builds
-/// `StallConfig`; `stall_check_interval_secs` falls back to
-/// `StallConfig::default().check_interval` (30s) when the timeout is set.
+/// `StallConfig`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct StabilityToml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stall_timeout_secs: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stall_check_interval_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consecutive_failure_cap: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -311,7 +308,6 @@ enabled = true
 
 [stability]
 stall_timeout_secs = 300
-stall_check_interval_secs = 30
 consecutive_failure_cap = 8
 turn_timeout_secs = 300
 
@@ -330,7 +326,6 @@ critical_threshold = 0.85
             p.stability,
             Some(StabilityToml {
                 stall_timeout_secs: Some(300),
-                stall_check_interval_secs: Some(30),
                 consecutive_failure_cap: Some(8),
                 turn_timeout_secs: Some(300),
             })

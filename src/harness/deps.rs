@@ -73,10 +73,14 @@ pub struct HarnessDeps {
     /// to place the prompt-cache breakpoint at the stable/dynamic boundary,
     /// so per-turn dynamic content (`RuntimeContext.current_time`,
     /// `tool_runtime_state`, etc.) no longer busts the prefix hash. `None`
-    /// keeps the legacy "single-string system" path. Setting this WITHOUT
-    /// setting `system_prompt` is supported; the harness will concatenate
-    /// the parts into a string for the legacy field too (so adapters that
-    /// only read `system_prompt` still see the full prompt).
+    /// keeps the legacy "single-string system" path. These parts are threaded
+    /// via `RequestPayload::with_system_blocks` *independently* of
+    /// `system_prompt` (see `build_request_payload`) — the harness does NOT
+    /// concatenate them into the legacy `system_prompt` field. A caller that
+    /// sets parts WITHOUT `system_prompt` leaves the legacy field empty, so an
+    /// adapter reading only `system_prompt` (not `system_blocks`) would see no
+    /// system prompt; set both if you need that. The production bridge always
+    /// sets both, so this never bites today.
     pub system_prompt_parts: Option<Vec<crate::thinker::prompt_builder::SystemPromptPart>>,
     /// Per-run recall context (hybrid memory retrieval + routing experience),
     /// rendered once pre-loop by the harness bridge and appended by `think`
@@ -170,23 +174,16 @@ pub struct HarnessDeps {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_STALL_TIMEOUT_SECS: u64 = 300;
-const DEFAULT_STALL_CHECK_INTERVAL_SECS: u64 = 30;
 
 #[derive(Debug, Clone)]
 pub struct StallConfig {
     pub timeout: Duration,
-    /// Advisory only: stored and threaded through `deps`, but `is_stalled`
-    /// reads `timeout` alone — stall detection runs at turn boundaries, not on
-    /// an independent poller. A poller would false-kill healthy long LLM
-    /// streams, since `record_activity` ticks per LLM call, not per delta.
-    pub check_interval: Duration,
 }
 
 impl Default for StallConfig {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(DEFAULT_STALL_TIMEOUT_SECS),
-            check_interval: Duration::from_secs(DEFAULT_STALL_CHECK_INTERVAL_SECS),
         }
     }
 }
@@ -195,12 +192,6 @@ impl StallConfig {
     #[must_use]
     pub const fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_check_interval(mut self, interval: Duration) -> Self {
-        self.check_interval = interval;
         self
     }
 }
@@ -258,7 +249,6 @@ mod stall_tests {
     async fn test_stalled_when_timeout_exceeded() {
         let config = StallConfig {
             timeout: Duration::from_millis(10),
-            check_interval: Duration::from_millis(1),
         };
         let tracker = StallTracker::new(config);
 
@@ -273,7 +263,6 @@ mod stall_tests {
 
         let config = StallConfig {
             timeout: Duration::from_millis(10),
-            check_interval: Duration::from_millis(1),
         };
         let tracker = StallTracker::new(config);
 

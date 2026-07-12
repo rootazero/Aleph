@@ -747,11 +747,8 @@ async fn cross_turn_stall_still_works() {
     // After Task 4, record_activity also fires inside the Think completion
     // path, so this test specifically exercises the "no Think completion at all"
     // case. We force that by pre-stalling the tracker via a 50ms budget.
-    deps.stall_config = Some(
-        StallConfig::default()
-            .with_timeout(std::time::Duration::from_millis(50))
-            .with_check_interval(std::time::Duration::from_millis(10)),
-    );
+    deps.stall_config =
+        Some(StallConfig::default().with_timeout(std::time::Duration::from_millis(50)));
     let harness = AgentHarness::new(deps);
 
     let mut cb = NoopHarnessCallback;
@@ -829,11 +826,8 @@ async fn long_think_does_not_falsely_trip_stall() {
     let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
 
     let mut deps = minimal_deps(session, tools, provider);
-    deps.stall_config = Some(
-        StallConfig::default()
-            .with_timeout(std::time::Duration::from_millis(200))
-            .with_check_interval(std::time::Duration::from_millis(10)),
-    );
+    deps.stall_config =
+        Some(StallConfig::default().with_timeout(std::time::Duration::from_millis(200)));
     let harness = AgentHarness::new(deps);
 
     let mut cb = NoopHarnessCallback;
