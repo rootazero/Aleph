@@ -3,10 +3,6 @@
 //! `HarnessDeps` is the single struct injected into `AgentHarness::new`.
 //! All fields are `Arc<dyn Trait>` so the harness is cheaply cloneable and
 //! thread-safe.
-//!
-//! Note: There is no separate `SandboxFactory` trait in this codebase;
-//! the factory function (`build_sandbox`) returns `Arc<dyn Sandbox>` directly,
-//! so we hold the sandbox instance rather than a factory.
 
 use crate::context::budget::preflight::PreflightPipeline;
 use crate::context::budget::ContextBudget;
@@ -14,7 +10,6 @@ use crate::context::compact::compactor::ContextCompactor;
 use crate::harness::chain_context::ChainContext;
 use crate::harness::trace_sink::TraceSink;
 use crate::providers::AiProvider;
-use crate::sandbox::Sandbox;
 use crate::session::service::SessionService;
 use crate::tools::service::ToolService;
 use crate::verification::VerifierChain;
@@ -26,8 +21,6 @@ use tokio::sync::Mutex;
 pub struct HarnessDeps {
     pub session: Arc<dyn SessionService>,
     pub tools: Arc<dyn ToolService>,
-    /// Shared sandbox instance (produced by `build_sandbox` at boot).
-    pub sandbox: Arc<dyn Sandbox>,
     /// The LLM provider. Provider-tier failover (ordered chain, model-level
     /// fallback, circuit breaker) is layered *inside* this `AiProvider` via
     /// `providers::FailoverProvider`; the harness sees one provider and never

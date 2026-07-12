@@ -21,7 +21,6 @@ use alephcore::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback
 use alephcore::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload};
 use alephcore::providers::AiProvider;
 use alephcore::routing::session_key::SessionKey;
-use alephcore::sandbox::{Sandbox, SandboxCommand, SandboxError, SandboxOutput};
 use alephcore::session::events::{SessionEvent, ToolOutput};
 use alephcore::session::in_process::InProcessActorSessionService;
 use alephcore::session::service::{SessionId, SessionService};
@@ -42,17 +41,6 @@ fn fresh_session_service() -> Arc<dyn SessionService> {
 /// A no-op sandbox. `HarnessDeps::sandbox` is required but the `NoopTool`
 /// used here returns before ever reaching the sandbox, so `execute` should
 /// never actually be called.
-struct InertSandbox;
-
-#[async_trait]
-impl Sandbox for InertSandbox {
-    async fn execute(&self, _cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
-        Ok(SandboxOutput {
-            exit_code: Some(0),
-            ..Default::default()
-        })
-    }
-}
 
 /// A tool that always succeeds with an empty JSON object — exercises the Act
 /// phase without depending on real filesystem / network behavior.
@@ -142,7 +130,6 @@ fn make_harness(session: Arc<dyn SessionService>) -> AgentHarness {
     AgentHarness::new(HarnessDeps {
         session,
         tools: Arc::new(NoopTool),
-        sandbox: Arc::new(InertSandbox),
         llm: Scripted::new(),
         verifier_chain: None,
         context_budget: None,

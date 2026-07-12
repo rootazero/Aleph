@@ -80,7 +80,6 @@ mod stubs {
         HarnessDeps {
             session: fresh_session_service(),
             tools: Arc::new(NoopTool),
-            sandbox: Arc::new(crate::sandbox::NoopSandbox),
             llm: Arc::new(InertProvider),
             robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
             verifier_chain: None,

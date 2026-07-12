@@ -13,8 +13,6 @@ use crate::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback, Tu
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::AiProvider;
-use crate::sandbox::test_util::MockSandbox;
-use crate::sandbox::SandboxOutput;
 use crate::session::events::{
     now_ms, EventSeq, MessageContent, SessionEvent, SessionEventRecord, ToolOutput, TurnTrigger,
 };
@@ -271,13 +269,6 @@ fn sample_session_id() -> SessionId {
     SessionId::main("test")
 }
 
-fn noop_sandbox_output() -> SandboxOutput {
-    SandboxOutput {
-        exit_code: Some(0),
-        ..Default::default()
-    }
-}
-
 fn ok_output(value: serde_json::Value) -> ToolOutput {
     ToolOutput {
         value,
@@ -335,7 +326,6 @@ async fn act_executes_tools_sequentially() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: tools.clone(),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -414,7 +404,6 @@ async fn act_tool_failure_returns_harness_tool_error() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools,
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -487,7 +476,6 @@ async fn act_tool_error_event_carries_persistence_hint() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools,
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::with_tool_calls("fetching…", tool_calls),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -625,7 +613,6 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(ScriptedToolsNever),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -803,7 +790,6 @@ async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
     let deps = HarnessDeps {
         session,
         tools,
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -923,7 +909,6 @@ async fn tool_error_trace_carries_retryable_flag() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: tools.clone(),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -1050,7 +1035,6 @@ async fn g3_repairs_case_mismatched_tool_name() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: tools.clone(),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::with_tool_calls(
             "calling…",
             vec![NativeToolCall {
@@ -1121,7 +1105,6 @@ async fn g3_does_not_repair_when_lowercase_is_also_unknown() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: tools.clone(),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::with_tool_calls(
             "calling…",
             vec![NativeToolCall {
@@ -1189,7 +1172,6 @@ async fn g1_last_step_injects_max_steps_hint() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools,
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -1250,7 +1232,6 @@ async fn g1_does_not_inject_when_not_last_step() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools,
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -1348,7 +1329,6 @@ async fn act_parallel_overlaps_concurrent_safe_calls_and_preserves_order() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: tools.clone(),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls.clone()),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -1465,7 +1445,6 @@ async fn act_falls_back_to_serial_when_any_call_is_unsafe() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: tools.clone(),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -1538,7 +1517,6 @@ async fn deferred_results_emit_one_tool_result_per_skipped_call() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools,
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::text_only("idle"),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -1645,7 +1623,6 @@ async fn serial_batch_defers_all_when_steer_present_before_first_call() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: tools.clone(),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::text_only("idle"),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -1736,7 +1713,6 @@ async fn serial_batch_runs_full_when_no_midturn_steer() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: tools.clone(),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::text_only("idle"),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -1827,7 +1803,6 @@ async fn group_boundary_defers_remaining_groups_when_steer_present() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: tools.clone(),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::text_only("idle"),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,

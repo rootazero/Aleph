@@ -283,7 +283,6 @@ impl SubagentTool {
             cancel,
             self.session.clone(),
             self.parent_tools.clone(),
-            self.sandbox.clone(),
         )
         .with_parent_agent_id(self.parent_agent_id.clone());
         if let Some(w) = self.raw_memory_writer.clone() {

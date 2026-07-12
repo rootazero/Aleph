@@ -24,8 +24,6 @@ use crate::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback, Tu
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
-use crate::sandbox::test_util::MockSandbox;
-use crate::sandbox::SandboxOutput;
 use crate::session::events::{
     now_ms, EventSeq, MessageContent, SessionEvent, SessionEventRecord, TurnTrigger,
 };
@@ -218,13 +216,6 @@ fn sample_session_id() -> SessionId {
     SessionId::main("task10-wiring")
 }
 
-fn noop_sandbox_output() -> SandboxOutput {
-    SandboxOutput {
-        exit_code: Some(0),
-        ..Default::default()
-    }
-}
-
 fn turn_started_event() -> SessionEvent {
     SessionEvent::TurnStarted {
         turn_id: uuid::Uuid::new_v4(),
@@ -295,7 +286,6 @@ async fn budget_critical_compacts_and_continues_with_prior_text() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -365,7 +355,6 @@ async fn budget_critical_compacts_and_continues_no_prior_text() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -453,7 +442,6 @@ async fn budget_warning_invokes_compactor_before_llm() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -544,7 +532,6 @@ async fn stop_hook_veto_forces_continue_and_injects_block_reason() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: Some(chain),
@@ -619,7 +606,6 @@ async fn diminishing_returns_fires_grace_and_hits_limit() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -728,7 +714,6 @@ async fn tool_loop_verifier_vetoes_repeated_tool_call_with_no_text() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: Some(chain),
@@ -862,7 +847,6 @@ async fn tool_loop_halt_fires_salvage_grace_turn_and_closes_orphan() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: Some(chain),
@@ -1015,7 +999,6 @@ async fn per_tool_budget_overrun_recovers_as_tool_error_not_run_abort() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(SleepyBudgetedTool),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider as Arc<dyn AiProvider>,
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -1106,7 +1089,6 @@ async fn veto_cap_follows_profile_steer_max() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: profile,
         verifier_chain: Some(chain),
@@ -1262,7 +1244,6 @@ async fn grace_turn_payload_has_no_orphaned_tool_calls() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         // conservative: halt_threshold=8; provider loops 8× identical calls
         // then the grace turn fires.
@@ -1486,7 +1467,6 @@ async fn weak_model_fanout_then_thrash_steers_and_delivers_partial() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
         robustness_profile: profile,
         verifier_chain: Some(chain),

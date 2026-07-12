@@ -223,7 +223,6 @@ mod tests {
         SpawnerBase {
             session,
             parent_tools: Arc::new(AlwaysOkTools),
-            sandbox: Arc::new(crate::sandbox::NoopSandbox),
             provider,
             chain: ChainContext::new(),
             raw_memory_writer: None,
@@ -1058,7 +1057,6 @@ mod tests {
             CancellationToken::new(),
             session,
             Arc::new(AlwaysOkTools),
-            Arc::new(crate::sandbox::NoopSandbox),
         )
         .with_trace_sink(Arc::new(NoopTraceSink) as Arc<dyn crate::harness::TraceSink>)
         .with_routing_store(store.clone());

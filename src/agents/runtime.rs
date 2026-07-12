@@ -14,7 +14,6 @@ use crate::harness::chain_context::ChainContext;
 use crate::memory::extensions::MemoryExtensionRegistry;
 use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::providers::AiProvider;
-use crate::sandbox::Sandbox;
 use crate::session::service::SessionService;
 use crate::sync_primitives::Arc;
 use crate::tools::service::ToolService;
@@ -114,8 +113,6 @@ pub struct AgentRuntime {
     /// Parent tool service — decorated with `AllowlistToolService` inside
     /// the spawner.
     parent_tools: Arc<dyn ToolService>,
-    /// Shared sandbox instance passed to the child harness.
-    sandbox: Arc<dyn Sandbox>,
     /// Spec 1 G2 — when set, the spawner emits a `RawMemory(Delegation)`
     /// row after each successful subagent run.
     raw_memory_writer: Option<Arc<dyn RawMemoryStore>>,
@@ -166,7 +163,6 @@ impl AgentRuntime {
         cancel_token: CancellationToken,
         session: Arc<dyn SessionService>,
         parent_tools: Arc<dyn ToolService>,
-        sandbox: Arc<dyn Sandbox>,
     ) -> Self {
         Self {
             provider,
@@ -174,7 +170,6 @@ impl AgentRuntime {
             cancel_token,
             session,
             parent_tools,
-            sandbox,
             raw_memory_writer: None,
             capture_registry: None,
             parent_agent_id: None,
@@ -455,7 +450,6 @@ impl AgentRuntime {
         let base = SpawnerBase {
             session: self.session.clone(),
             parent_tools: self.parent_tools.clone(),
-            sandbox: self.sandbox.clone(),
             provider,
             chain: parent_chain,
             raw_memory_writer: self.raw_memory_writer.clone(),

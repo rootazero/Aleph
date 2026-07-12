@@ -19,7 +19,6 @@ use crate::harness::{AgentHarness, HarnessDeps};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
 use crate::routing::session_key::SessionKey;
-use crate::sandbox::{Sandbox, SandboxCommand, SandboxError, SandboxOutput};
 use crate::session::events::{SessionEvent, ToolOutput};
 use crate::session::in_process::InProcessActorSessionService;
 use crate::session::service::{SessionId, SessionService};
@@ -34,18 +33,6 @@ fn fresh_session_service() -> Arc<dyn SessionService> {
     migrate_add_session_events(&conn).expect("migrate session_events");
     let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
     Arc::new(InProcessActorSessionService::new(store))
-}
-
-struct InertSandbox;
-
-#[async_trait]
-impl Sandbox for InertSandbox {
-    async fn execute(&self, _cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
-        Ok(SandboxOutput {
-            exit_code: Some(0),
-            ..Default::default()
-        })
-    }
 }
 
 struct NoopTool;
@@ -104,7 +91,6 @@ async fn session_driver_delegates_to_harness_run() {
     let harness = AgentHarness::new(HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTool),
-        sandbox: Arc::new(InertSandbox),
         llm: Arc::new(TextOnlyProvider),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -181,7 +167,6 @@ async fn session_driver_preserves_cancelled_semantics() {
     let harness = AgentHarness::new(HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTool),
-        sandbox: Arc::new(InertSandbox),
         llm: Arc::new(CancellingProvider),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,

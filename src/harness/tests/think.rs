@@ -13,8 +13,6 @@ use crate::harness::{
 };
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
-use crate::sandbox::test_util::MockSandbox;
-use crate::sandbox::SandboxOutput;
 use crate::session::events::{
     now_ms, EventSeq, MessageContent, SessionEvent, SessionEventRecord, TurnTrigger,
 };
@@ -220,13 +218,6 @@ fn sample_session_id() -> SessionId {
     SessionId::main("test")
 }
 
-fn noop_sandbox_output() -> SandboxOutput {
-    SandboxOutput {
-        exit_code: Some(0),
-        ..Default::default()
-    }
-}
-
 fn user_message_event(text: &str) -> SessionEvent {
     SessionEvent::UserMessage {
         turn_id: uuid::Uuid::new_v4(),
@@ -257,7 +248,6 @@ async fn think_with_no_tool_use_returns_done() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(EmptyTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: FixedProvider::text_only("hi"),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -318,7 +308,6 @@ async fn think_llm_error_maps_to_harness_llm() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(EmptyTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: Arc::new(ErrProvider),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -363,7 +352,6 @@ async fn primary_transient_error_without_fallback_still_propagates() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(EmptyTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: Arc::new(ErrProvider),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -453,7 +441,6 @@ async fn callback_fires_on_delta_and_tool_call() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(OkTool),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: FixedProvider::with_tool_call("calling…", "echo"),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -524,7 +511,6 @@ async fn run_returns_cancelled_when_token_is_pre_cancelled() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(EmptyTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: Arc::new(PanicProvider),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -598,7 +584,6 @@ async fn think_tool_use_after_act_returns_continue() {
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(OkOnceTool),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: FixedProvider::with_tool_call("calling…", "echo"),
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,

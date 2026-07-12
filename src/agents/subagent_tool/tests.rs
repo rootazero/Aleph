@@ -85,7 +85,6 @@ fn make_tool() -> SubagentTool {
         make_tracker(),
         in_mem_session(),
         Arc::new(NoopTestToolService),
-        Arc::new(crate::sandbox::NoopSandbox),
     )
 }
 
@@ -292,7 +291,6 @@ async fn test_check_status_completed() {
         tracker,
         in_mem_session(),
         Arc::new(NoopTestToolService),
-        Arc::new(crate::sandbox::NoopSandbox),
     );
 
     let result = tool
@@ -523,7 +521,6 @@ async fn check_status_returns_progress_array_when_running() {
         tracker,
         in_mem_session(),
         Arc::new(NoopTestToolService),
-        Arc::new(crate::sandbox::NoopSandbox),
     );
 
     let result = tool
@@ -740,7 +737,6 @@ async fn foreground_subagent_cancels_on_parent_token() {
         make_tracker(),
         in_mem_session(),
         Arc::new(NoopTestToolService),
-        Arc::new(crate::sandbox::NoopSandbox),
     )
     .with_cancel_token(parent.clone());
 
@@ -780,7 +776,6 @@ async fn foreground_subagent_cancels_on_harness_per_call_token() {
         make_tracker(),
         in_mem_session(),
         Arc::new(NoopTestToolService),
-        Arc::new(crate::sandbox::NoopSandbox),
     )
     .with_cancel_token(parent.clone());
 
@@ -861,7 +856,6 @@ async fn foreground_subagent_inherits_trace_sink() {
         make_tracker(),
         in_mem_session(),
         Arc::new(NoopTestToolService),
-        Arc::new(crate::sandbox::NoopSandbox),
     )
     .with_trace_sink(sink.clone() as Arc<dyn crate::harness::TraceSink>);
 
@@ -891,7 +885,6 @@ async fn background_subagent_forwards_trace_to_parent_sink() {
         tracker.clone(),
         in_mem_session(),
         Arc::new(NoopTestToolService),
-        Arc::new(crate::sandbox::NoopSandbox),
     )
     .with_trace_sink(sink.clone() as Arc<dyn crate::harness::TraceSink>);
 
@@ -984,7 +977,6 @@ async fn execute_list_enumerates_background_agents() {
         tracker,
         in_mem_session(),
         Arc::new(NoopTestToolService),
-        Arc::new(crate::sandbox::NoopSandbox),
     );
 
     let result = tool
@@ -1019,7 +1011,6 @@ async fn check_status_completed_is_repeatable() {
         tracker,
         in_mem_session(),
         Arc::new(NoopTestToolService),
-        Arc::new(crate::sandbox::NoopSandbox),
     );
 
     for poll in 1..=2 {
@@ -1064,7 +1055,6 @@ async fn check_status_completed_reports_run_metrics() {
         tracker,
         in_mem_session(),
         Arc::new(NoopTestToolService),
-        Arc::new(crate::sandbox::NoopSandbox),
     );
 
     let result = tool

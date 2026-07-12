@@ -1,7 +1,7 @@
 //! Subagent spawner — Harness-based sub-agent execution.
 //!
 //! Replacement for the legacy pre-Harness `run_subagent` entry point.
-//! The spawner takes a `SpawnerBase` (shared session/tools/sandbox/provider)
+//! The spawner takes a `SpawnerBase` (shared session/tools/provider)
 //! plus a `SpawnRequest` (`agent_def`, task, model, timeout, cancel), builds a
 //! child ephemeral `SessionKey`, assembles a `HarnessDeps` bundle with the
 //! agent's system prompt and `max_iterations` + a tool service wrapped in
@@ -29,7 +29,6 @@ use crate::memory::extensions::MemoryExtensionRegistry;
 use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::providers::AiProvider;
 use crate::routing::session_key::SessionKey;
-use crate::sandbox::Sandbox;
 use crate::session::events::{
     now_ms, MessageContent, SessionEvent, SessionEventRecord, TurnTrigger,
 };
@@ -38,7 +37,7 @@ use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 use crate::tools::service::ToolService;
 
 /// Shared infrastructure shared by all sub-agent spawns in a given
-/// orchestration context (session actor, parent tool service, sandbox,
+/// orchestration context (session actor, parent tool service,
 /// provider, and the parent's chain context).
 #[derive(Clone)]
 pub struct SpawnerBase {
@@ -47,8 +46,6 @@ pub struct SpawnerBase {
     /// The parent's tool service. The spawner decorates this with an
     /// `AllowlistToolService` gated on `AgentDef.is_tool_allowed`.
     pub parent_tools: Arc<dyn ToolService>,
-    /// Shared sandbox instance.
-    pub sandbox: Arc<dyn Sandbox>,
     /// Provider used for LLM calls. The spawner wraps this with a
     /// `ModelOverrideProvider` when `SpawnRequest.model` is set.
     pub provider: Arc<dyn AiProvider>,
@@ -412,10 +409,6 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         let deps = HarnessDeps {
             session: base.session.clone(),
             tools: scoped_tools,
-            // Command isolation for a worktree child is installed as a task-local
-            // sandbox override around `run_body` (see `sandbox_override` above),
-            // not through this field — the harness never reads `deps.sandbox`.
-            sandbox: base.sandbox.clone(),
             llm,
             robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
             verifier_chain: None,
