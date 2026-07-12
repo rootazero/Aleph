@@ -130,17 +130,36 @@ where
                     // a healthy sibling: there is nothing new to contribute, so
                     // tearing down in-flight work is pure loss. Symmetric with
                     // the `Steer` empty-content guard, and the same intrinsic
-                    // protection Hermes gives `internal` events. Past this gate
-                    // the message just waits its turn in the busy queue.
-                    let target = if super::steering::has_steering_content(request) {
+                    // protection Hermes gives `internal` events.
+                    //
+                    // A run driving a live sub-agent fan-out is likewise
+                    // protected: a single mid-task course-correction must not
+                    // destroy expensive parallel work. When such work is in
+                    // flight the Interrupt is demoted to the follow-up queue
+                    // (wait for the current run to finish, then restart as a
+                    // fresh run) instead of cancelling — hermes
+                    // `run.py:5436-5446` demote-to-queue parity. `/stop` and
+                    // Panel `chat.abort` are explicit user-stop intents and go
+                    // through `cancel_session`, NOT this branch, so they are
+                    // never demoted.
+                    //
+                    // Past any of these gates the message just waits its turn in
+                    // the busy queue.
+                    let target = if !super::steering::has_steering_content(request) {
+                        None
+                    } else if !super::steering::session_is_interruptible(&request.session_key) {
+                        info!(
+                            session = %request.session_key.to_key_string(),
+                            "busy-input interrupt: session has an active sub-agent fan-out; demoting to the follow-up queue (protecting in-flight parallel work) — message will restart as a fresh run once the current run finishes",
+                        );
+                        None
+                    } else {
                         let runs = self.active_runs.read().await;
                         super::steering::find_steering_target_id(
                             &runs,
                             run_id,
                             &request.session_key,
                         )
-                    } else {
-                        None
                     };
                     if let Some(target_id) = target {
                         let _ = self.cancel(&target_id).await;
