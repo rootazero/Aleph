@@ -458,12 +458,6 @@ pub struct ChatState {
     /// `SessionIdentityMeta.custom["exec_tier"]`; the composer's tier pill owns
     /// reads/writes. Session-scoped → rides along in [`SessionSnapshot`].
     pub session_exec_tier: RwSignal<Option<String>>,
-    /// A tier selected before the chat view finished activating its session.
-    /// Parked here for exactly the reason [`Self::pending_model_override`]
-    /// exists: `restore_from` would otherwise overwrite `session_exec_tier` from
-    /// the (stale) snapshot and silently drop the user's choice. Ephemeral: NOT
-    /// in `SessionSnapshot`; consumed by `restore_from` right after the restore.
-    pub pending_exec_tier: RwSignal<Option<String>>,
     /// Run IDs whose final assistant reply should be spoken aloud — the
     /// voice-loop turns started from the composer mic button. `events.rs` pops
     /// each on `run_complete` and plays its TTS audio. Ephemeral, like
@@ -530,7 +524,6 @@ impl ChatState {
             pending_model_override: RwSignal::new(None),
             run_costs: RwSignal::new(std::collections::HashMap::new()),
             session_exec_tier: RwSignal::new(None),
-            pending_exec_tier: RwSignal::new(None),
             voice_run_ids: RwSignal::new(Vec::new()),
             provider_retry: RwSignal::new(None),
             next_msg_id: RwSignal::new(0),
@@ -1106,12 +1099,6 @@ impl ChatState {
         }
         self.run_costs.set(snap.run_costs);
         self.session_exec_tier.set(snap.session_exec_tier);
-        // Same rescue as `pending_model_override`: a tier picked before this
-        // restore ran wins over the snapshot's (stale) value, then is consumed.
-        if let Some(tier) = self.pending_exec_tier.get_untracked() {
-            self.session_exec_tier.set(Some(tier));
-            self.pending_exec_tier.set(None);
-        }
         self.next_msg_id.set(snap.next_msg_id);
         // Carried in the snapshot so the occupancy gauge survives a tab swap
         // (None for a fresh/empty tab, which correctly hides the gauge).

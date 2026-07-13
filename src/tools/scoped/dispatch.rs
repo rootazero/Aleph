@@ -8,7 +8,7 @@ use crate::extension::hooks::{HookContext, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 use crate::sandbox::exec_approval::{denial_ledger, session_memory};
-use crate::session::events::ToolOutput;
+use crate::session::events::{ToolOutput, TurnId};
 use crate::sync_primitives::Arc;
 use crate::tools::runtime::LoopTool;
 use crate::tools::service::ToolError;
@@ -192,8 +192,14 @@ impl ScopedToolService {
         // declaration-driven seam that lets builtin / MCP / extension / skill
         // tools opt into approval without being hard-coded gateway-side — or
         // when the merged permission policy resolves to `Ask` for this tool
-        // (the mechanism the Ask exec tier projects onto).
-        if self.inner.requires_confirmation(name) || self.is_permission_ask(name) {
+        // (the mechanism the exec tier's metadata rule feeds), or when the
+        // call's ARGUMENTS trip the tier's destructive-argument filter — the
+        // only gate that needs the input, because `file_ops` hides `delete`
+        // behind the same tool name as `list`.
+        if self.inner.requires_confirmation(name)
+            || self.is_permission_ask(name)
+            || self.tier_asks_for_arguments(name, &input)
+        {
             match &self.approval_requester {
                 Some(requester) => {
                     let reason = format!("Tool `{name}` requires your confirmation to run.");
@@ -462,7 +468,17 @@ impl ScopedToolService {
         )
         .await;
 
-        let outcome = requester.request_approval(name, reason).await;
+        // Stamp the approval record with the tool call it gates. Requesters see
+        // only `(tool_name, reason)`, so without this the client can only pair a
+        // pending approval to a tool row by position — and `exec.approvals.pending`
+        // is an unordered map, so with two concurrent tool calls the card renders
+        // under the wrong tool and the user approves something they never read.
+        let tool_call_id = self.newest_tool_call(name).await.map(|(_, id)| id);
+        let outcome = crate::approval::with_tool_call_id(
+            tool_call_id,
+            requester.request_approval(name, reason),
+        )
+        .await;
         if !outcome.is_approved() {
             let reason_kind = match outcome {
                 ApprovalOutcome::Timeout => denial_ledger::DenialReason::Timeout,
@@ -513,19 +529,50 @@ impl ScopedToolService {
         Ok(())
     }
 
+    /// Correlation ids of the tool call currently being dispatched for `name`.
+    ///
+    /// `ToolService` dispatch carries no call identity, so they are recovered
+    /// from the newest `ToolCallRequested` for this tool: the harness emits that
+    /// event immediately before dispatching, and every confirm-gated tool claims
+    /// `ConcurrencyClaim::global()` (never batched), so the newest request for
+    /// `name` is this call. `call_id` is the harness `call.id` — the same string
+    /// clients see as `ToolStart.tool_id`.
+    ///
+    /// Only approval decision points call this, so the event-log scan stays off
+    /// the hot path.
+    async fn newest_tool_call(&self, name: &str) -> Option<(TurnId, String)> {
+        use crate::session::events::SessionEvent;
+
+        let turn = self.turn_context.as_ref()?;
+        let session_svc = crate::session::service::global_session_service()?;
+        let events = match session_svc.get_events(&turn.session_key, None, None).await {
+            Ok(events) => events,
+            Err(e) => {
+                tracing::warn!(
+                    tool = %name,
+                    error = ?e,
+                    "failed to read session events — approval tool call not correlated"
+                );
+                return None;
+            }
+        };
+        events.iter().rev().find_map(|rec| match &rec.event {
+            SessionEvent::ToolCallRequested {
+                turn_id,
+                call_id,
+                name: requested,
+                ..
+            } if requested == name => Some((*turn_id, call_id.clone())),
+            _ => None,
+        })
+    }
+
     /// Persist this gate's decision into the session event log (the SSOT the
     /// model replays). Without it an agent never learns that the user already
     /// refused an action and simply asks again.
     ///
-    /// `ToolService` dispatch carries no call identity, so the correlation ids
-    /// are recovered from the newest `ToolCallRequested` for this tool: the
-    /// harness emits that event immediately before dispatching, and every
-    /// confirm-gated tool claims `ConcurrencyClaim::global()` (never batched),
-    /// so the newest request for `name` is this call.
-    ///
-    /// Only decision points reach here — never the session-memory short-circuit
-    /// — so the event-log scan stays off the hot path. Best-effort: a failed
-    /// emit is logged, never allowed to overturn a decision the user has made.
+    /// Best-effort: a failed emit is logged, never allowed to overturn a
+    /// decision the user has made.
     async fn record_approval_decision(&self, name: &str, denial_reason: Option<&str>) {
         use crate::session::events::{now_ms, ApprovalSource, SessionEvent};
 
@@ -537,26 +584,7 @@ impl ScopedToolService {
         };
         let session_id = &turn.session_key;
 
-        let events = match session_svc.get_events(session_id, None, None).await {
-            Ok(events) => events,
-            Err(e) => {
-                tracing::warn!(
-                    tool = %name,
-                    error = ?e,
-                    "failed to read session events — approval decision not persisted"
-                );
-                return;
-            }
-        };
-        let Some((turn_id, call_id)) = events.iter().rev().find_map(|rec| match &rec.event {
-            SessionEvent::ToolCallRequested {
-                turn_id,
-                call_id,
-                name: requested,
-                ..
-            } if requested == name => Some((*turn_id, call_id.clone())),
-            _ => None,
-        }) else {
+        let Some((turn_id, call_id)) = self.newest_tool_call(name).await else {
             tracing::debug!(
                 tool = %name,
                 "no ToolCallRequested to correlate — approval decision not persisted"

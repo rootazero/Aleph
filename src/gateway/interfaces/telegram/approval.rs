@@ -62,9 +62,9 @@ impl TelegramChannelApprovalCapability {
     /// Build the inline keyboard for `request` via the shared risk-aware
     /// builder ([`ApprovalBridge::build_approval_keyboard`]) instead of a
     /// hand-rolled Approve/Deny pair, so the rendered decision tiers follow
-    /// the request's [`allowed_decisions`] set (session/always appear only
-    /// when permitted). Capability (tool) approvals can honor at most a
-    /// session-scoped grant, so their set stops at the session tier.
+    /// the request's [`allowed_decisions`] set (the session tier appears only
+    /// when permitted). Every grant is at most session-scoped, so capability
+    /// (tool) approvals declare that set directly.
     fn approval_keyboard(request: &ApprovalRequest, approval_id: &str) -> InlineKeyboard {
         let allowed: Vec<ApprovalDecisionType> = match request {
             ApprovalRequest::Command(cmd) => cmd.allowed_decisions.clone(),
@@ -229,13 +229,18 @@ mod tests {
         );
         let kb = TelegramChannelApprovalCapability::approval_keyboard(&request, "rec-123");
         let json = serde_json::to_string(&kb).unwrap();
-        for decision in ["once", "session", "always", "deny"] {
+        for decision in ["once", "session", "deny"] {
             let data = format!("approve:rec-123:{decision}");
             assert!(json.contains(&data), "missing button {data}: {json}");
             // 与 RPC 侧 ApprovalBridge::parse_callback 必须双向一致
             let (id, _) = ApprovalBridge::parse_callback(&data).expect("parses");
             assert_eq!(id, "rec-123");
         }
+        // No tier promises permanence — nothing persists an allow-always grant.
+        assert!(
+            !json.contains("approve:rec-123:always"),
+            "keyboard must not offer allow-always: {json}"
+        );
     }
 
     #[test]

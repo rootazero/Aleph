@@ -46,6 +46,7 @@ impl ScopedToolService {
             definition_rewriters: Vec::new(),
             deferred: BTreeSet::new(),
             tool_permissions: None,
+            exec_tier: None,
             unattended: false,
         }
     }
@@ -61,6 +62,14 @@ impl ScopedToolService {
         permissions: crate::config::types::policies::ToolPermissionsConfig,
     ) -> Self {
         self.tool_permissions = Some(permissions);
+        self
+    }
+
+    /// Attach the effective execution tier for this turn. The tier decides
+    /// every tool no explicit override names — see [`Self::permission_for`].
+    #[must_use]
+    pub fn with_exec_tier(mut self, tier: crate::config::types::policies::ExecTier) -> Self {
+        self.exec_tier = Some(tier);
         self
     }
 
@@ -214,13 +223,64 @@ impl ScopedToolService {
     // Helpers (shared with the trait impl in mod.rs and dispatch.rs)
     // -------------------------------------------------------------------------
 
-    /// Effective permission for `name` under the attached policy.
-    /// `None` policy → `Allow` (pre-wiring behavior).
+    /// Effective permission for `name` — the single chokepoint every
+    /// permission gate funnels through.
+    ///
+    /// Precedence, most specific first:
+    /// 1. **explicit exact-name** entry in the merged [`ToolPermissionsConfig`]
+    ///    — an operator who names a tool has made a deliberate decision;
+    /// 2. **explicit glob** entry (same call: [`ToolPermissionsConfig::resolve_explicit`]);
+    /// 3. the **exec tier's rule**, read off the tool's declared metadata
+    ///    ([`ExecTier::rule_for`]) — never off its name;
+    /// 4. the configured `default` (`Allow` when no policy is attached).
+    ///
+    /// [`ToolPermissionsConfig`]: crate::config::types::policies::ToolPermissionsConfig
+    /// [`ToolPermissionsConfig::resolve_explicit`]: crate::config::types::policies::ToolPermissionsConfig::resolve_explicit
+    /// [`ExecTier::rule_for`]: crate::config::types::policies::ExecTier::rule_for
     pub(super) fn permission_for(&self, name: &str) -> crate::extension::PermissionAction {
-        match &self.tool_permissions {
-            Some(p) => p.resolve(name),
-            None => crate::extension::PermissionAction::Allow,
+        if let Some(explicit) = self.explicit_permission(name) {
+            return explicit;
         }
+        if let Some(action) = self
+            .exec_tier
+            .and_then(|tier| tier.rule_for(self.tool_facts(name)))
+        {
+            return action;
+        }
+        self.tool_permissions
+            .as_ref()
+            .map_or(crate::extension::PermissionAction::Allow, |p| p.default)
+    }
+
+    /// The permission an override entry explicitly states for `name`, if any.
+    fn explicit_permission(&self, name: &str) -> Option<crate::extension::PermissionAction> {
+        self.tool_permissions
+            .as_ref()
+            .and_then(|p| p.resolve_explicit(name))
+    }
+
+    /// The tool's DECLARED facts, as the tier rules consume them. An unknown
+    /// name yields the fail-closed shape (non-idempotent = mutating), which is
+    /// what makes the `Ask` tier hold for tools nobody has classified.
+    fn tool_facts<'a>(&self, name: &'a str) -> crate::config::types::policies::ToolFacts<'a> {
+        crate::config::types::policies::ToolFacts {
+            name,
+            idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
+            requires_approval: self.inner.requires_confirmation(name),
+        }
+    }
+
+    /// `true` when this *call*'s arguments trip the tier's destructive-argument
+    /// hard filter (`file_ops` delete/move/…), which a name-keyed rule cannot
+    /// see. Skipped when an override explicitly names the tool: the operator
+    /// already decided, and the tier — argument filter included — only speaks
+    /// when nobody did.
+    pub(super) fn tier_asks_for_arguments(&self, name: &str, input: &Value) -> bool {
+        if self.explicit_permission(name).is_some() {
+            return false;
+        }
+        self.exec_tier
+            .is_some_and(|tier| tier.asks_for_arguments(name, input))
     }
 
     /// `true` when the permission policy denies `name` outright.

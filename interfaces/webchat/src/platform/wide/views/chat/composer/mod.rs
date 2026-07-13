@@ -242,40 +242,6 @@ pub(super) fn InputArea() -> impl IntoView {
         .cloned()
     });
 
-    // Answer a pending `ask_user` with the current draft. Returns `true` when a
-    // question was pending — the caller must then NOT fall through to the send /
-    // queue path.
-    //
-    // This is the composer's half of the rule every channel already enforces in
-    // `inbound_router::try_intercept_hitl`: while a clarification is pending,
-    // whatever the user sends IS the answer. Without it the draft would be
-    // queued behind a turn that can never reach its next boundary — the parked
-    // tool would sit there until it timed out, and the user would have no way to
-    // reach it except aborting the run.
-    let answer_pending_ask = move || -> bool {
-        let Some(ask) = pending_ask.get_untracked() else {
-            return false;
-        };
-        let reply = input_text.get_untracked().trim().to_string();
-        // A question IS pending, so consume the keystroke either way — an empty
-        // draft simply isn't an answer.
-        if reply.is_empty() {
-            return true;
-        }
-        input_text.set(String::new());
-        chat.push_user_message(&reply);
-        let dash = dashboard;
-        spawn_local(async move {
-            match crate::api::ClarificationApi::resolve(&dash, &ask.session_key, &reply).await {
-                Ok(()) => dash
-                    .pending_clarifications
-                    .update(|l| l.retain(|p| p.session_key != ask.session_key)),
-                Err(e) => chat.set_send_error(ChatSendError::classify(e)),
-            }
-        });
-        true
-    };
-
     // Queue a follow-up while a run is active instead of sending it now.
     // Runs the same client-side injection guard as `send_message` so a
     // blocked prompt never enters the queue, then stashes the draft on
@@ -305,6 +271,63 @@ pub(super) fn InputArea() -> impl IntoView {
         attachments.set(Vec::new());
         show_palette.set(false);
         current_namespace.set(None);
+    };
+
+    // Answer a pending `ask_user` with the current draft. Returns `true` when a
+    // question was pending — the caller must then NOT fall through to the send /
+    // queue path.
+    //
+    // This is the composer's half of the rule every channel already enforces in
+    // `inbound_router::try_intercept_hitl`: while a clarification is pending,
+    // whatever the user sends IS the answer. Without it the draft would be
+    // queued behind a turn that can never reach its next boundary — the parked
+    // tool would sit there until it timed out, and the user would have no way to
+    // reach it except aborting the run.
+    //
+    // A stale question is the trap: core answers `resolved: false` when nobody
+    // was unblocked (expired / superseded / run cancelled). The reply is then
+    // still an unsent chat message — restore the draft and route it through the
+    // normal path instead of swallowing it.
+    let answer_pending_ask = move || -> bool {
+        let Some(ask) = pending_ask.get_untracked() else {
+            return false;
+        };
+        let reply = input_text.get_untracked().trim().to_string();
+        // A question IS pending, so consume the keystroke either way — an empty
+        // draft simply isn't an answer.
+        if reply.is_empty() {
+            return true;
+        }
+        input_text.set(String::new());
+        let dash = dashboard;
+        spawn_local(async move {
+            match crate::api::ClarificationApi::resolve(&dash, &ask.session_key, &reply).await {
+                Ok(true) => {
+                    chat.push_user_message(&reply);
+                    dash.pending_clarifications
+                        .update(|l| l.retain(|p| p.session_key != ask.session_key));
+                }
+                Ok(false) => {
+                    // The question is dead: drop it so it stops owning Enter,
+                    // put the draft back, and send it as the ordinary message it
+                    // turned out to be.
+                    dash.pending_clarifications
+                        .update(|l| l.retain(|p| p.session_key != ask.session_key));
+                    input_text.set(reply);
+                    if chat.active_run_id.get_untracked().is_some() {
+                        enqueue_message();
+                    } else {
+                        send_message();
+                    }
+                }
+                Err(e) => {
+                    // The answer never left the client — keep the draft.
+                    input_text.set(reply);
+                    chat.set_send_error(ChatSendError::classify(e));
+                }
+            }
+        });
+        true
     };
 
     // Flush the entire prompt queue into the live run in one batch. Each prompt

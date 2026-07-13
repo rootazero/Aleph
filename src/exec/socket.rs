@@ -15,12 +15,14 @@ pub enum ApprovalDecisionType {
     /// Allow this execution only
     AllowOnce,
     /// Allow for the remainder of this session — remembered in the in-memory
-    /// session approval store so the same command/tool is not re-prompted, but
-    /// never persisted to the on-disk allowlist. Sits between `AllowOnce`
-    /// (no memory) and `AllowAlways` (forever, on disk); mirrors codex
-    /// `ApprovedForSession` and hermes' `session` consent tier.
+    /// session approval store so the same command/tool is not re-prompted.
+    /// The widest grant Aleph offers; mirrors codex `ApprovedForSession` and
+    /// hermes' `session` consent tier.
     AllowSession,
-    /// Allow and add to allowlist
+    /// Legacy wire value for "allow forever". No persistent allowlist exists,
+    /// so every resolver narrows this to [`Self::AllowSession`]
+    /// (`ExecApprovalManager::clamp_decision`). Kept only so in-flight callback
+    /// payloads and external clients still deserialize.
     AllowAlways,
     /// Deny execution
     Deny,

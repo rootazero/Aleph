@@ -120,8 +120,16 @@ impl ChannelApprovalBridgeAdapter {
 /// silently refused. Neither existing requester can cover both surfaces alone
 /// and there is no combinator, so this composite is the seam.
 ///
-/// Fail-closed: with no channel route and no reachable operator, the outcome is
-/// `Denied` immediately — never `Allowed`, never a hang.
+/// Fail-closed, but NOT fail-fast: with no channel route the approval goes to
+/// the operator and parks until the approval timeout, whose `Timeout` outcome
+/// is not an approval. There is no cheap proof that an operator is watching —
+/// the event bus only knows raw broadcast subscribers, and internal ones (the
+/// R5 router, the provider hot-reload watcher) always exist, so a subscriber
+/// count can only ever say "yes". A guard built on it would always pass, which
+/// is why the former `can_reach_operator()` was deleted rather than kept as a
+/// lie. Failing fast needs a count of AUTHORIZED GATEWAY CONNECTIONS (the only
+/// surfaces that can call `exec.approval.resolve`); wiring the presence tracker
+/// down here is the real fix.
 pub struct FallbackApprovalRequester {
     channel: Arc<ChannelApprovalBridgeAdapter>,
     operator: Arc<OperatorApprovalRequester>,
@@ -143,15 +151,7 @@ impl ApprovalRequester for FallbackApprovalRequester {
         if self.channel.can_reach_user().await {
             return self.channel.request_approval(tool_name, reason).await;
         }
-        if self.operator.can_reach_operator() {
-            return self.operator.request_approval(tool_name, reason).await;
-        }
-        warn!(
-            tool = %tool_name,
-            "no channel route and no operator subscriber — approval cannot reach \
-             a human, denying"
-        );
-        ApprovalOutcome::Denied
+        self.operator.request_approval(tool_name, reason).await
     }
 }
 
@@ -345,22 +345,41 @@ mod tests {
         assert_eq!(handle.await.unwrap(), ApprovalOutcome::Approved);
     }
 
-    /// Fail-closed: no channel route and nobody subscribed to the event bus →
-    /// the approval can reach no human, so deny at once (never allow, never
-    /// park until the timeout).
+    /// Fail-closed: an unreachable channel never becomes an implicit approval.
+    /// The composite hands the call to the operator, and the operator's refusal
+    /// is what decides — the missing channel decides nothing.
     #[tokio::test]
-    async fn denies_when_no_transport_available() {
+    async fn operator_denial_is_honoured_when_channel_missing() {
+        use crate::exec::socket::ApprovalDecisionType;
         use crate::gateway::event_bus::GatewayEventBus;
+        use crate::gateway::events::GatewayEventFrame;
 
         let event_bus = Arc::new(GatewayEventBus::new());
-        let operator = Arc::new(OperatorApprovalRequester::new(test_manager(), event_bus));
+        let manager = test_manager();
+        let operator = Arc::new(OperatorApprovalRequester::new(
+            manager.clone(),
+            event_bus.clone(),
+        ));
         let requester = FallbackApprovalRequester::new(unregistered_adapter(), operator);
+        let mut rx = event_bus.subscribe_typed();
 
-        let out = TURN_CONTEXT
-            .scope(panel_turn(), async {
-                requester.request_approval("bash", "rm -rf /tmp/x").await
-            })
-            .await;
-        assert_eq!(out, ApprovalOutcome::Denied);
+        let handle = tokio::spawn(async move {
+            TURN_CONTEXT
+                .scope(panel_turn(), async move {
+                    requester.request_approval("bash", "rm -rf /tmp/x").await
+                })
+                .await
+        });
+
+        loop {
+            match rx.recv().await.expect("event bus closed") {
+                GatewayEventFrame::ApprovalRequested { approval_id, .. } => {
+                    manager.resolve(&approval_id, ApprovalDecisionType::Deny, None);
+                    break;
+                }
+                _ => continue,
+            }
+        }
+        assert_eq!(handle.await.unwrap(), ApprovalOutcome::Denied);
     }
 }

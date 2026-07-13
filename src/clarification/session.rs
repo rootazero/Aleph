@@ -27,6 +27,7 @@
 //! ```
 
 use super::{ClarificationRequest, ClarificationResult, ClarificationType};
+use crate::gateway::events::{ClarificationOutcome, GatewayEventFrame};
 use crate::sync_primitives::{Arc, AsyncRwLock};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -64,6 +65,35 @@ struct PendingEntry {
 impl PendingEntry {
     fn is_expired(&self) -> bool {
         self.created_at.elapsed() > self.timeout
+    }
+
+    /// Whether a waiter is still parked on this entry.
+    ///
+    /// A closed oneshot receiver PROVES nobody is waiting: the only holder is
+    /// the `ask_user` future, so a closed channel means that future was dropped
+    /// — an aborted / cancelled run. Such an entry is a zombie: it can never be
+    /// answered, yet `list_pending` would resurrect it as a card in a freshly
+    /// loaded Panel and `has_pending` would let it eat the user's next message.
+    fn is_live(&self) -> bool {
+        !self.is_expired() && self.sender.as_ref().is_some_and(|s| !s.is_closed())
+    }
+}
+
+/// Announce that the question on `session_key` is over.
+///
+/// The terminal twin of the `AskUser` frame: without it a client cannot know a
+/// question ended and keeps the card (and its Enter hijack) alive — in every
+/// window, not just the one that answered. Best-effort: no bus is wired in CLI
+/// subcommands and unit tests, and a clarification must still resolve there.
+fn publish_ended(session_key: &str, outcome: ClarificationOutcome) {
+    let Some(bus) = crate::gateway::event_emitter::gateway_event_bus() else {
+        return;
+    };
+    if let Err(e) = bus.publish_frame(&GatewayEventFrame::ClarificationEnded {
+        session_key: session_key.to_string(),
+        outcome,
+    }) {
+        tracing::debug!(error = %e, "failed to publish ClarificationEnded");
     }
 }
 
@@ -121,13 +151,14 @@ impl ClarificationManager {
         rx
     }
 
-    /// Whether `session_key` has a live (non-expired) pending clarification.
+    /// Whether `session_key` has a live pending clarification — one that is
+    /// neither expired nor abandoned by its waiter (see [`PendingEntry::is_live`]).
     pub async fn has_pending(&self, session_key: &str) -> bool {
         self.pending
             .read()
             .await
             .get(session_key)
-            .is_some_and(|e| !e.is_expired())
+            .is_some_and(PendingEntry::is_live)
     }
 
     /// Snapshot every live pending clarification.
@@ -141,7 +172,7 @@ impl ClarificationManager {
             .read()
             .await
             .iter()
-            .filter(|(_, e)| !e.is_expired())
+            .filter(|(_, e)| e.is_live())
             .map(|(session_key, e)| PendingClarification {
                 session_key: session_key.clone(),
                 question: e.request.prompt.clone(),
@@ -156,7 +187,12 @@ impl ClarificationManager {
     }
 
     /// Resolve the pending clarification for `session_key` from the user's
-    /// reply text. Returns `true` if a pending entry was resolved.
+    /// reply text. Returns `true` ONLY if a waiter was actually unblocked with
+    /// the reply.
+    ///
+    /// `false` means the reply answered nothing (no such question, already
+    /// answered, expired, or its run was aborted) — the caller must NOT treat
+    /// it as consumed, or the user's message is silently eaten.
     ///
     /// The reply is interpreted against the request: for a select-type
     /// request a 1-based numeric reply picks that option, a reply matching an
@@ -171,47 +207,60 @@ impl ClarificationManager {
             if let Some(sender) = entry.sender.take() {
                 let _ = sender.send(ClarificationResult::timeout());
             }
-            return true;
+            drop(pending);
+            publish_ended(session_key, ClarificationOutcome::Expired);
+            return false;
         }
         let result = interpret_reply(&entry.request, reply);
-        match entry.sender.take() {
+        let delivered = match entry.sender.take() {
             Some(sender) => sender.send(result).is_ok(),
             None => false,
+        };
+        drop(pending);
+        if delivered {
+            publish_ended(session_key, ClarificationOutcome::Resolved);
         }
+        delivered
     }
 
     /// Cancel the pending clarification for `session_key`, if any, unblocking
     /// its waiter with [`ClarificationResult::cancelled`].
     pub async fn cancel(&self, session_key: &str) -> bool {
         let mut pending = self.pending.write().await;
-        match pending.remove(session_key) {
-            Some(mut entry) => {
-                if let Some(sender) = entry.sender.take() {
-                    let _ = sender.send(ClarificationResult::cancelled());
-                }
-                true
-            }
-            None => false,
+        let Some(mut entry) = pending.remove(session_key) else {
+            return false;
+        };
+        if let Some(sender) = entry.sender.take() {
+            let _ = sender.send(ClarificationResult::cancelled());
         }
+        drop(pending);
+        publish_ended(session_key, ClarificationOutcome::Cancelled);
+        true
     }
 
     /// Drop expired entries, unblocking their waiters with a timeout result.
     /// Returns the number of entries reaped.
     pub async fn cleanup_expired(&self) -> usize {
-        let mut pending = self.pending.write().await;
-        let mut count = 0;
-        pending.retain(|_, entry| {
-            if entry.is_expired() {
-                if let Some(sender) = entry.sender.take() {
-                    let _ = sender.send(ClarificationResult::timeout());
+        let reaped: Vec<String> = {
+            let mut pending = self.pending.write().await;
+            let mut reaped = Vec::new();
+            pending.retain(|session_key, entry| {
+                if entry.is_expired() {
+                    if let Some(sender) = entry.sender.take() {
+                        let _ = sender.send(ClarificationResult::timeout());
+                    }
+                    reaped.push(session_key.clone());
+                    false
+                } else {
+                    true
                 }
-                count += 1;
-                false
-            } else {
-                true
-            }
-        });
-        count
+            });
+            reaped
+        };
+        for session_key in &reaped {
+            publish_ended(session_key, ClarificationOutcome::Expired);
+        }
+        reaped.len()
     }
 }
 
@@ -418,6 +467,105 @@ mod tests {
         assert!(
             mgr.has_pending("live-sess").await,
             "the live entry must be kept"
+        );
+    }
+
+    /// Defect B: a run cancelled while `ask_user` was parked drops the
+    /// receiver. Nothing tells the manager, so the entry lingers — but a closed
+    /// oneshot PROVES nobody is waiting, so it must not be resurrected as a
+    /// card, must not eat the user's next message, and must not be resolvable.
+    #[tokio::test]
+    async fn abandoned_waiter_leaves_no_live_pending_entry() {
+        let mgr = ClarificationManager::new();
+        let rx = mgr
+            .register("sess-zombie", text_request(), DEFAULT_CLARIFY_TIMEOUT)
+            .await;
+        drop(rx); // the run was cancelled — the `ask_user` future is gone
+
+        assert!(!mgr.has_pending("sess-zombie").await);
+        assert!(mgr.list_pending().await.is_empty());
+        assert!(
+            !mgr.resolve("sess-zombie", "an answer nobody wants").await,
+            "a zombie clarification must not report the reply as consumed"
+        );
+    }
+
+    /// Defect A: a reply arriving after the question expired answers nothing.
+    /// Reporting `true` here is what lets a client destroy the user's draft and
+    /// send their message nowhere.
+    #[tokio::test]
+    async fn resolve_after_expiry_reports_not_resolved() {
+        let mgr = ClarificationManager::new();
+        let rx = mgr
+            .register("sess-late", text_request(), Duration::from_millis(1))
+            .await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        assert!(!mgr.resolve("sess-late", "too late").await);
+        assert_eq!(
+            rx.await.unwrap().result_type,
+            ClarificationResultType::Timeout
+        );
+    }
+
+    /// Every clarification that begins must end with exactly one terminal
+    /// frame — the signal a client needs to drop the card, release its Enter
+    /// hijack, and stay in sync in a window that never saw the answer.
+    #[tokio::test]
+    #[serial_test::serial(gateway_event_bus)]
+    async fn each_ending_publishes_one_terminal_frame() {
+        use crate::gateway::event_bus::GatewayEventBus;
+        use crate::gateway::event_emitter::team_fanout::set_team_event_bus;
+
+        let bus = Arc::new(GatewayEventBus::new());
+        set_team_event_bus(bus.clone());
+        let mut rx = bus.subscribe_typed();
+
+        let mgr = ClarificationManager::new();
+
+        let answered = mgr
+            .register("term-resolved", text_request(), DEFAULT_CLARIFY_TIMEOUT)
+            .await;
+        assert!(mgr.resolve("term-resolved", "Spanish").await);
+        let _ = answered.await;
+
+        let cancelled = mgr
+            .register("term-cancelled", text_request(), DEFAULT_CLARIFY_TIMEOUT)
+            .await;
+        assert!(mgr.cancel("term-cancelled").await);
+        let _ = cancelled.await;
+
+        let expired = mgr
+            .register("term-expired", text_request(), Duration::from_millis(1))
+            .await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(mgr.cleanup_expired().await, 1);
+        let _ = expired.await;
+
+        // The bus is a process-wide global, so other tests publish onto it too;
+        // keep only this test's own sessions.
+        let mut seen = Vec::new();
+        while let Ok(frame) = rx.try_recv() {
+            if let GatewayEventFrame::ClarificationEnded {
+                session_key,
+                outcome,
+            } = frame
+            {
+                if session_key.starts_with("term-") {
+                    seen.push((session_key, outcome));
+                }
+            }
+        }
+        assert_eq!(
+            seen,
+            vec![
+                ("term-resolved".to_string(), ClarificationOutcome::Resolved),
+                (
+                    "term-cancelled".to_string(),
+                    ClarificationOutcome::Cancelled
+                ),
+                ("term-expired".to_string(), ClarificationOutcome::Expired),
+            ]
         );
     }
 

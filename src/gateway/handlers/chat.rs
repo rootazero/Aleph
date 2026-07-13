@@ -137,9 +137,21 @@ pub struct ClearParams {
 pub struct RewindParams {
     /// Session key to rewind
     pub session_key: String,
-    /// First event seq to retire. Everything from here on leaves the live
-    /// conversation. The Panel takes it from the message id it already holds:
-    /// the projector writes ids as `{session_key}:{seq}`.
+    /// First event seq to retire — INCLUSIVE. Everything with `seq >= this`
+    /// leaves the live conversation (event log) and its projected rows are
+    /// deleted from the transcript; everything with `seq < this` survives
+    /// untouched, as do transcript rows that were never projected from an event
+    /// (boot-time orphan notices, legacy rows).
+    ///
+    /// The caller passes the seq of the message it wants to REPLACE, taken from
+    /// the id that message already carries: the projector writes row ids as
+    /// `"{session_key}:{seq}"` (see
+    /// [`crate::session::projection::parse_source_seq`]). To edit-and-resend a
+    /// user message, rewind at that message's seq — it and everything after it
+    /// disappear — then `chat.send` the new text. `chat.rewind` never appends
+    /// the replacement itself.
+    ///
+    /// Must be >= 1 (the first append lands at seq 1).
     pub seq: u64,
 }
 
@@ -435,27 +447,21 @@ pub async fn handle_rewind(
         }
     };
 
-    // Realign the Panel's projection with the shortened log. Derived from the
-    // live events rather than from the message rows, so the two views agree by
-    // construction.
-    let keep = match crate::session::store::live_projected_row_count(&session_key).await {
-        Ok(n) => n,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to recount session event log: {e}"),
-            );
-        }
-    };
-
-    match session_manager.truncate_messages(&session_key, keep).await {
-        Ok(_) => JsonRpcResponse::success(
+    // Realign the Panel's projection with the shortened log by deleting the
+    // rows the retired events produced — matched by their source seq, never by
+    // row count: `messages` is not a 1:1 image of the live event log (orphan
+    // notices and other writers append rows with no source event), so a
+    // count-derived ordinal cuts the wrong range.
+    match session_manager
+        .delete_messages_from_seq(&session_key, params.seq)
+        .await
+    {
+        Ok(removed) => JsonRpcResponse::success(
             request.id,
             json!({
                 "session_key": params.session_key,
                 "events_retired": retired,
-                "messages_kept": keep,
+                "messages_removed": removed,
             }),
         ),
         Err(e) => JsonRpcResponse::error(

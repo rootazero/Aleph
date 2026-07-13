@@ -111,6 +111,12 @@ pub struct ScopedToolService {
     /// `confirm_tools`. `None` = no policy configured (allow-all default,
     /// byte-identical to pre-wiring behavior).
     pub(super) tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
+    /// Effective execution tier for this turn (global → session → channel
+    /// clamp, resolved by the run loop). Consulted by `permission_for` only
+    /// for tools no explicit override names, and it reads the tool's DECLARED
+    /// metadata, not its name. `None` = no tier wired (unit tests, pre-boot);
+    /// the production path always wires one via `build_request_tool_service`.
+    pub(super) exec_tier: Option<crate::config::types::policies::ExecTier>,
     /// True when this service serves an UNATTENDED run (an autonomous goal
     /// continuation — no human on the channel). Confirm-gated tools fail closed
     /// (auto-denied) instead of awaiting an approval that can never arrive.

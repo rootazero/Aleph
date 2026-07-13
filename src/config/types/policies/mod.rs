@@ -40,7 +40,7 @@ pub mod tool_permissions;
 pub mod tool_safety;
 pub mod web_fetch;
 
-pub use exec_tier::{builtin_tiers, ExecTier, EXEC_TIER_SESSION_KEY};
+pub use exec_tier::{builtin_tiers, ExecTier, ToolFacts, EXEC_TIER_SESSION_KEY};
 pub use experimental::ExperimentalPolicy;
 pub use intent::IntentDetectionPolicy;
 pub use keyword::KeywordPolicy;

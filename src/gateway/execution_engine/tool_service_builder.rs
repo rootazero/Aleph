@@ -77,10 +77,13 @@ pub(super) fn mcp_tool_registry() -> Option<&'static Arc<crate::tools::ToolHandl
 ///   no extension hooks are active for this request.
 /// * `session_id` — session identifier surfaced into `HookContext` for
 ///   extension command hooks.
-/// * `tool_permissions` — merged tool permission policy for this turn
+/// * `tool_permissions` — merged EXPLICIT tool permission policy for this turn
 ///   (global `[policies.tool_permissions]` → agent override → channel
 ///   override, most restrictive wins). `None` = all-default policy; pass
 ///   `None` rather than a default config so the hot path stays a no-op.
+/// * `exec_tier` — effective execution tier (global → session → channel clamp).
+///   Decides every tool the explicit policy above does not name, from the
+///   tool's declared metadata.
 /// * `unattended` — true for an autonomous continuation run; makes the service
 ///   fail closed on confirm-gated tools (no human to approve).
 /// * `core_tools` — tool names kept at full schema (progressive tool
@@ -99,6 +102,7 @@ pub fn build_request_tool_service(
     hook_executor: Option<Arc<HookExecutor>>,
     session_id: impl Into<String>,
     tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
+    exec_tier: crate::config::types::policies::ExecTier,
     unattended: bool,
     core_tools: &[String],
     truncate_tool_descriptions: bool,
@@ -111,6 +115,7 @@ pub fn build_request_tool_service(
     if let Some(perms) = tool_permissions {
         svc = svc.with_tool_permissions(perms);
     }
+    svc = svc.with_exec_tier(exec_tier);
     svc = svc.with_unattended(unattended);
     if let Some(refresh) = tool_refresh {
         svc = svc.with_refresh(refresh);
@@ -197,6 +202,7 @@ mod tests {
             None,
             "",
             None,
+            crate::config::types::policies::ExecTier::Auto,
             false,
             &[],
             false,
@@ -238,6 +244,7 @@ mod tests {
             None,
             "",
             None,
+            crate::config::types::policies::ExecTier::Auto,
             false,
             &[],
             false,
@@ -267,6 +274,7 @@ mod tests {
             None,
             "",
             None,
+            crate::config::types::policies::ExecTier::Auto,
             false,
             &[],
             false,
@@ -297,6 +305,7 @@ mod tests {
             None,
             "",
             None,
+            crate::config::types::policies::ExecTier::Auto,
             false,
             &[],
             false,
@@ -315,6 +324,7 @@ mod tests {
             None,
             "",
             None,
+            crate::config::types::policies::ExecTier::Auto,
             false,
             &[],
             false,
@@ -367,6 +377,7 @@ mod progressive_tests {
             None,
             "",
             None,
+            crate::config::types::policies::ExecTier::Auto,
             false,
             &["bash".to_string()],
             false, // core, truncate
@@ -396,6 +407,7 @@ mod progressive_tests {
             None,
             "",
             None,
+            crate::config::types::policies::ExecTier::Auto,
             false,
             &["*".to_string()],
             false,

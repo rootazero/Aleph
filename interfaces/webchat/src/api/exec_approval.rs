@@ -28,6 +28,10 @@ struct PendingRecord {
     /// the approval to the tool row of the conversation that is waiting.
     #[serde(default)]
     session_key: String,
+    /// Harness call id of the tool this approval belongs to — how the inline
+    /// card finds its tool row. Absent for approvals raised outside a tool call.
+    #[serde(default)]
+    tool_call_id: Option<String>,
     /// Why the approval was requested. Server-supplied; without it the
     /// operator only ever sees a bare tool name.
     #[serde(default)]
@@ -56,6 +60,7 @@ impl ExecApprovalApi {
                 command: p.record.command,
                 agent_id: p.record.agent_id,
                 session_key: p.record.session_key,
+                tool_call_id: p.record.tool_call_id,
                 reason: p.record.reason,
                 expires_at_ms: now + p.remaining_ms as i64,
             })

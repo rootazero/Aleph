@@ -152,6 +152,31 @@ async fn handle_delete_db_inner(
                 }
             }
 
+            // Retire the SSOT event log before the projection — same ordering
+            // as `chat.clear`. Deleting the `messages` rows alone would leave
+            // the conversation alive in `session_events`: still replayed by the
+            // model, still searchable, and re-materialised into a brand-new
+            // transcript by `ProjectionReconciler` at the next boot.
+            //
+            // Retire rather than physically purge, even though this is the
+            // strongest deletion a user can perform: retirement already removes
+            // the events from EVERY read path (replay, BM25 search — the FTS
+            // mirror is physically dropped, run markers, reconciler), so no
+            // content the user believes deleted can surface again. A hard purge
+            // would be a second deletion mechanism for the same job with no
+            // additional user-visible effect, and it would free seqs that a
+            // re-created session under the same (stable) key could collide with.
+            let retired = match crate::session::store::retire_live_events(&session_key, 1).await {
+                Ok(n) => n,
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INTERNAL_ERROR,
+                        format!("Failed to delete session event log: {e}"),
+                    );
+                }
+            };
+
             match manager.delete_session(&session_key).await {
                 Ok(result) => {
                     // SessionEnd — the session has been removed; extension
@@ -161,7 +186,8 @@ async fn handle_delete_db_inner(
                         request.id,
                         json!({
                             "session_key": key_str,
-                            "deleted": result.deleted,
+                            "deleted": result.deleted || retired > 0,
+                            "events_retired": retired,
                         }),
                     )
                 }
@@ -482,5 +508,80 @@ pub async fn handle_set_project_root_db(
             INTERNAL_ERROR,
             format!("Failed to set project_root: {e}"),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use crate::session::events::{MessageContent, SessionEvent};
+    use crate::session::store::SessionEventStore;
+    use tempfile::tempdir;
+
+    fn user_event(text: &str) -> SessionEvent {
+        SessionEvent::UserMessage {
+            turn_id: uuid::Uuid::new_v4(),
+            content: MessageContent {
+                text: text.into(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: 0,
+            synthetic: false,
+        }
+    }
+
+    /// Deleting a conversation must delete the conversation — not just the
+    /// transcript the Panel happens to read. The event log is the SSOT: leaving
+    /// it live keeps the content replayable by the model, searchable via BM25,
+    /// and re-materialisable by `ProjectionReconciler` at the next boot.
+    #[tokio::test]
+    async fn delete_retires_the_event_log_so_nothing_replays_or_searches() {
+        let events = crate::session::store::install_test_event_store();
+        let temp = tempdir().unwrap();
+        let manager = SessionManager::new(SessionManagerConfig {
+            db_path: temp.path().join("delete_ssot.db"),
+            ..Default::default()
+        })
+        .unwrap();
+        let key = SessionKey::from_key_string("agent:deltest:main").unwrap();
+        manager.get_or_create(&key).await.unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(manager);
+
+        events
+            .append(&key, 1, &user_event("the passphrase is hunter2"), 0)
+            .await
+            .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "sessions.delete".into(),
+            params: Some(json!({ "session_key": key.to_key_string() })),
+            id: Some(json!(1)),
+        };
+        let response = handle_delete_db(request, store).await;
+        assert!(
+            response.error.is_none(),
+            "delete failed: {:?}",
+            response.error
+        );
+        let result = response.result.expect("result");
+        assert_eq!(result["deleted"], true);
+        assert_eq!(result["events_retired"], 1);
+
+        assert!(
+            events.load_all_events(&key).await.unwrap().is_empty(),
+            "a deleted conversation must yield nothing to a replay"
+        );
+        assert!(
+            events
+                .search_events(&key, "passphrase", 5)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a deleted conversation must yield nothing to FTS"
+        );
     }
 }

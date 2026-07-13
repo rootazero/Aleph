@@ -15,41 +15,22 @@
 //!    tool call.
 //! 4. "Follow global" clears the override.
 //!
-//! Two traps this codebase already knows about, handled the established way:
-//!   * `restore_from` re-hydrates `session_exec_tier` from the session snapshot
-//!     and would clobber a value written straight to the signal — so a selection
-//!     made before the chat view activates its session parks in
-//!     `ChatState::pending_exec_tier` (exactly like `pending_model_override`).
-//!   * A brand-new conversation has no `session_key` yet, so there is nothing to
-//!     patch. The selection is held and flushed by the effect below as soon as
-//!     the first `chat.send` resolves a session key.
+//! The trap: a brand-new conversation has no `session_key` yet, so there is
+//! nothing to patch. The choice is parked KEYED BY CONVERSATION and flushed as
+//! soon as that conversation's first `chat.send` resolves a session key. Keying
+//! is the whole point — a single parked value would be applied to whichever
+//! conversation happened to be restored next, silently escalating a chat the
+//! user never touched.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use serde::Deserialize;
-use serde_json::Value;
+use std::collections::HashMap;
 
 use crate::api::sessions::set_exec_tier;
+use crate::api::tool_permissions::{TierPreset, ToolPermissionsApi};
 use crate::context::DashboardState;
+use crate::state::sessions::{ConvId, SessionMap};
 use crate::views::chat::state::ChatState;
-
-/// One tier as core presents it. Ordered least → most permissive by core.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct TierPresetView {
-    pub id: String,
-    pub label: String,
-    pub description: String,
-}
-
-/// The slice of `config.get_tool_permissions` this pill needs. The advanced
-/// `default` / `overrides` axes belong to the settings page and are ignored
-/// here on purpose.
-#[derive(Debug, Clone, Deserialize)]
-struct TierConfigView {
-    exec_tier: String,
-    #[serde(default)]
-    tiers: Vec<TierPresetView>,
-}
 
 /// The tier whose blast radius warrants a second click.
 const FULL_TIER: &str = "full";
@@ -58,7 +39,7 @@ const FULL_TIER: &str = "full";
 /// ("Auto 自动" → "Auto"), so the composer chip stays compact. Falls back to
 /// the raw id when the tier is unknown to this client (forward compatibility:
 /// core may grow a fourth tier).
-fn pill_label(tiers: &[TierPresetView], id: &str) -> String {
+fn pill_label(tiers: &[TierPreset], id: &str) -> String {
     tiers
         .iter()
         .find(|t| t.id == id)
@@ -71,24 +52,22 @@ fn pill_label(tiers: &[TierPresetView], id: &str) -> String {
 pub fn ExecTierPicker() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    let sessions = expect_context::<SessionMap>();
 
     let open = RwSignal::new(false);
-    let tiers: RwSignal<Vec<TierPresetView>> = RwSignal::new(Vec::new());
+    let tiers: RwSignal<Vec<TierPreset>> = RwSignal::new(Vec::new());
     let global_tier = RwSignal::new(String::new());
     // Tier id currently armed for the "are you sure" second click (Full only).
     let confirming: RwSignal<Option<String>> = RwSignal::new(None);
-    // Set when the user picks a tier; cleared once it has been persisted. Keeps
-    // the flush effect from re-patching an unchanged tier on every session swap.
-    let dirty = RwSignal::new(false);
+    // Choices made in a conversation that had no session key yet, keyed by the
+    // conversation they were made in. Survives tab swaps (the composer is not
+    // remounted) and can never be applied to the wrong chat.
+    let parked: RwSignal<HashMap<ConvId, Option<String>>> = RwSignal::new(HashMap::new());
 
     // The global tier + the three presets. Fetched once on mount: the pill's
     // label depends on the global tier even before the popover is ever opened.
     spawn_local(async move {
-        match dashboard
-            .rpc_call("config.get_tool_permissions", Value::Null)
-            .await
-            .and_then(|v| serde_json::from_value::<TierConfigView>(v).map_err(|e| e.to_string()))
-        {
+        match ToolPermissionsApi::get_global(&dashboard).await {
             Ok(cfg) => {
                 global_tier.set(cfg.exec_tier);
                 tiers.set(cfg.tiers);
@@ -106,34 +85,47 @@ pub fn ExecTierPicker() -> impl IntoView {
             .unwrap_or_else(|| global_tier.get())
     });
 
-    // Flush a pending selection to core. Runs when the tier changes and again
-    // when a fresh conversation finally has a session key to patch.
-    Effect::new(move |_| {
-        let session_key = chat.session_key.get();
-        let tier = chat.session_exec_tier.get();
-        if !dirty.get() {
-            return;
-        }
-        let Some(session_key) = session_key else {
-            // No session yet — hold the choice; this effect re-runs on the
-            // session_key signal once `chat.send` resolves one.
-            return;
-        };
-        dirty.set(false);
+    let persist = move |session_key: String, tier: Option<String>| {
         spawn_local(async move {
             if let Err(e) = set_exec_tier(&dashboard, &session_key, tier.as_deref()).await {
                 web_sys::console::warn_1(&format!("Failed to persist session tier: {e}").into());
             }
         });
+    };
+
+    // Flush the parked choice of the conversation it was made in, once that
+    // conversation's first `chat.send` resolves a session key. Re-runs on both
+    // signals, so it also fires when the user switches back to a conversation
+    // whose tier is still unflushed.
+    Effect::new(move |_| {
+        let session_key = chat.session_key.get();
+        let Some(conv) = sessions.active.get() else {
+            return;
+        };
+        let Some(session_key) = session_key else {
+            return;
+        };
+        let Some(tier) = parked.try_update(|m| m.remove(&conv)).flatten() else {
+            return;
+        };
+        persist(session_key, tier);
     });
 
-    // Park the choice where `restore_from` will re-apply it after the snapshot
-    // restore, then set it live. Straight-to-signal alone loses the selection
-    // whenever the chat view (re)activates a session right after the click.
     let select = move |id: Option<String>| {
-        chat.pending_exec_tier.set(id.clone());
-        chat.session_exec_tier.set(id);
-        dirty.set(true);
+        chat.session_exec_tier.set(id.clone());
+        match chat.session_key.get_untracked() {
+            // Live session — write through; nothing to park.
+            Some(session_key) => persist(session_key, id),
+            // Brand-new conversation: hold the choice against THIS conversation
+            // until its first send resolves a session key.
+            None => {
+                if let Some(conv) = sessions.active_conv() {
+                    parked.update(|m| {
+                        m.insert(conv, id);
+                    });
+                }
+            }
+        }
         confirming.set(None);
         open.set(false);
     };
@@ -213,8 +205,8 @@ pub fn ExecTierPicker() -> impl IntoView {
 
                     <For
                         each=move || tiers.get()
-                        key=|t: &TierPresetView| t.id.clone()
-                        children=move |tier: TierPresetView| {
+                        key=|t: &TierPreset| t.id.clone()
+                        children=move |tier: TierPreset| {
                             let id_for_click = tier.id.clone();
                             let id_for_active = tier.id.clone();
                             let id_for_confirm = tier.id.clone();
@@ -273,14 +265,14 @@ pub fn ExecTierPicker() -> impl IntoView {
 mod tests {
     use super::*;
 
-    fn tiers() -> Vec<TierPresetView> {
+    fn tiers() -> Vec<TierPreset> {
         vec![
-            TierPresetView {
+            TierPreset {
                 id: "ask".to_string(),
                 label: "Ask 请求".to_string(),
                 description: "…".to_string(),
             },
-            TierPresetView {
+            TierPreset {
                 id: "auto".to_string(),
                 label: "Auto 自动".to_string(),
                 description: "…".to_string(),
@@ -300,19 +292,5 @@ mod tests {
         // pill must degrade to the raw id rather than render blank.
         assert_eq!(pill_label(&tiers(), "paranoid"), "paranoid");
         assert_eq!(pill_label(&[], "auto"), "auto");
-    }
-
-    #[test]
-    fn tier_config_deserializes_from_the_rpc_shape() {
-        let v = serde_json::json!({
-            "exec_tier": "auto",
-            "tiers": [{ "id": "ask", "label": "Ask 请求", "description": "d" }],
-            "default": "allow",
-            "overrides": { "bash": "ask" },
-        });
-        let cfg: TierConfigView = serde_json::from_value(v).unwrap();
-        assert_eq!(cfg.exec_tier, "auto");
-        assert_eq!(cfg.tiers.len(), 1);
-        assert_eq!(cfg.tiers[0].id, "ask");
     }
 }

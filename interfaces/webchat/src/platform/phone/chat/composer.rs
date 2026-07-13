@@ -92,34 +92,6 @@ pub fn PhoneComposer() -> impl IntoView {
         .cloned()
     });
 
-    // Answer a pending `ask_user` with the current draft. Returns `true` when a
-    // question was pending — the caller must then NOT fall through to send/queue.
-    // Same rule every channel enforces in `inbound_router::try_intercept_hitl`:
-    // while a clarification is pending, whatever the user sends IS the answer.
-    // Queueing it instead would strand the parked tool until its timeout — the
-    // turn cannot reach another boundary to drain the queue at.
-    let answer_pending_ask = move || -> bool {
-        let Some(ask) = pending_ask.get_untracked() else {
-            return false;
-        };
-        let reply = input_text.get_untracked().trim().to_string();
-        if reply.is_empty() {
-            return true;
-        }
-        input_text.set(String::new());
-        chat.push_user_message(&reply);
-        let dash = dashboard;
-        spawn_local(async move {
-            match crate::api::ClarificationApi::resolve(&dash, &ask.session_key, &reply).await {
-                Ok(()) => dash
-                    .pending_clarifications
-                    .update(|l| l.retain(|p| p.session_key != ask.session_key)),
-                Err(e) => chat.set_send_error(ChatSendError::classify(e)),
-            }
-        });
-        true
-    };
-
     // Queue a follow-up while a run is active → it becomes a ghost bubble.
     // No client-side prompt-injection guard (server is the authority).
     let enqueue = move || {
@@ -132,6 +104,53 @@ pub fn PhoneComposer() -> impl IntoView {
             attachments: Vec::new(),
         });
         input_text.set(String::new());
+    };
+
+    // Answer a pending `ask_user` with the current draft. Returns `true` when a
+    // question was pending — the caller must then NOT fall through to send/queue.
+    // Same rule every channel enforces in `inbound_router::try_intercept_hitl`:
+    // while a clarification is pending, whatever the user sends IS the answer.
+    // Queueing it instead would strand the parked tool until its timeout — the
+    // turn cannot reach another boundary to drain the queue at.
+    //
+    // `resolved: false` = nobody was unblocked (expired / superseded / run
+    // cancelled). The reply is then an ordinary chat message, not an answer:
+    // restore the draft and send it rather than swallowing the keystroke.
+    let answer_pending_ask = move || -> bool {
+        let Some(ask) = pending_ask.get_untracked() else {
+            return false;
+        };
+        let reply = input_text.get_untracked().trim().to_string();
+        if reply.is_empty() {
+            return true;
+        }
+        input_text.set(String::new());
+        let dash = dashboard;
+        spawn_local(async move {
+            match crate::api::ClarificationApi::resolve(&dash, &ask.session_key, &reply).await {
+                Ok(true) => {
+                    chat.push_user_message(&reply);
+                    dash.pending_clarifications
+                        .update(|l| l.retain(|p| p.session_key != ask.session_key));
+                }
+                Ok(false) => {
+                    dash.pending_clarifications
+                        .update(|l| l.retain(|p| p.session_key != ask.session_key));
+                    input_text.set(reply);
+                    if chat.active_run_id.get_untracked().is_some() {
+                        enqueue();
+                    } else {
+                        send();
+                    }
+                }
+                Err(e) => {
+                    // The answer never left the client — keep the draft.
+                    input_text.set(reply);
+                    chat.set_send_error(ChatSendError::classify(e));
+                }
+            }
+        });
+        true
     };
 
     // Flush the entire queue. While a run is active each send Steer-injects into

@@ -1676,6 +1676,171 @@ async fn no_policy_means_pre_wiring_behavior() {
     assert!(svc.execute("alpha", json!({})).await.is_ok());
 }
 
+// =============================================================================
+// Exec tier at the enforcement chokepoint (`permission_for`).
+//
+// Every name below is one the registry can actually emit: MCP tools are
+// registered as `{server_id}__{tool}` (`McpHandler::qualified_name`), builtins
+// under their own names. A tier rule that only holds for invented names holds
+// for nothing.
+// =============================================================================
+
+/// Registry over the names a tier test asserts about.
+fn tier_registry() -> Arc<LoopToolRegistry> {
+    let mut r = LoopToolRegistry::new();
+    for name in [
+        "bash",
+        "file_ops",
+        "system",
+        "browser_evaluate",
+        "github__create_issue",
+        "slack__send_message",
+        "search",
+        "memory_search",
+        "web_fetch",
+        "agent_delete",
+    ] {
+        r.register(Box::new(NamedStub::new(name)));
+    }
+    Arc::new(r)
+}
+
+fn tiered(tier: crate::config::types::policies::ExecTier) -> ScopedToolService {
+    ScopedToolService::new(tier_registry(), BTreeSet::new()).with_exec_tier(tier)
+}
+
+#[test]
+fn ask_tier_asks_for_every_mutating_tool_the_glob_table_missed() {
+    use crate::config::types::policies::ExecTier;
+    use crate::extension::PermissionAction;
+    let svc = tiered(ExecTier::Ask);
+    for name in [
+        // MCP tools — registered as `{server_id}__{tool}`, never `mcp__*`.
+        "github__create_issue",
+        "slack__send_message",
+        // The whole browser family, including arbitrary JS in the user's
+        // logged-in browser.
+        "browser_evaluate",
+        // Plain mutators.
+        "system",
+        "bash",
+        "file_ops",
+    ] {
+        assert_eq!(
+            svc.permission_for(name),
+            PermissionAction::Ask,
+            "`{name}` mutates — the Ask tier promises it stops for a human"
+        );
+    }
+}
+
+#[test]
+fn ask_tier_is_fail_closed_for_an_unknown_tool() {
+    use crate::config::types::policies::ExecTier;
+    use crate::extension::PermissionAction;
+    // A tool nobody has classified (not even registered) declares nothing →
+    // non-idempotent → Ask. New tools are covered on arrival.
+    assert_eq!(
+        tiered(ExecTier::Ask).permission_for("brand_new_tool"),
+        PermissionAction::Ask
+    );
+}
+
+#[test]
+fn ask_tier_leaves_declared_read_only_tools_allowed() {
+    use crate::config::types::policies::ExecTier;
+    use crate::extension::PermissionAction;
+    let svc = tiered(ExecTier::Ask);
+    for name in ["search", "memory_search", "web_fetch"] {
+        assert_eq!(
+            svc.permission_for(name),
+            PermissionAction::Allow,
+            "`{name}` is a declared pure read — the model must still investigate freely"
+        );
+    }
+}
+
+#[test]
+fn auto_tier_only_guards_the_destructive_tail() {
+    use crate::config::types::policies::ExecTier;
+    use crate::extension::PermissionAction;
+    let svc = tiered(ExecTier::Auto);
+    assert_eq!(svc.permission_for("agent_delete"), PermissionAction::Ask);
+    for name in ["bash", "file_ops", "github__create_issue", "search"] {
+        assert_eq!(svc.permission_for(name), PermissionAction::Allow);
+    }
+}
+
+#[test]
+fn full_tier_asks_for_nothing() {
+    use crate::config::types::policies::ExecTier;
+    use crate::extension::PermissionAction;
+    let svc = tiered(ExecTier::Full);
+    for name in ["bash", "agent_delete", "github__create_issue", "system"] {
+        assert_eq!(svc.permission_for(name), PermissionAction::Allow);
+    }
+}
+
+#[test]
+fn explicit_override_wins_over_the_tier_rule() {
+    use crate::config::types::policies::ExecTier;
+    use crate::extension::PermissionAction;
+    let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Ask)
+        .with_tool_permissions(perms(
+            PermissionAction::Allow,
+            &[
+                // Named by the operator: a deliberate decision beats the tier.
+                ("bash", PermissionAction::Allow),
+                // A glob entry is explicit too.
+                ("github__*", PermissionAction::Deny),
+                // And an override can tighten a tool the tier left alone.
+                ("search", PermissionAction::Deny),
+            ],
+        ));
+    assert_eq!(svc.permission_for("bash"), PermissionAction::Allow);
+    assert_eq!(
+        svc.permission_for("github__create_issue"),
+        PermissionAction::Deny
+    );
+    assert_eq!(svc.permission_for("search"), PermissionAction::Deny);
+    // Everything the overrides don't name still answers to the tier.
+    assert_eq!(
+        svc.permission_for("browser_evaluate"),
+        PermissionAction::Ask
+    );
+}
+
+#[tokio::test]
+async fn auto_tier_asks_before_a_destructive_file_ops_call() {
+    use crate::config::types::policies::ExecTier;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+    let requester = StdArc::new(FakeRequester {
+        outcome: ApprovalOutcome::Approved,
+        calls: AtomicUsize::new(0),
+    });
+    let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Auto)
+        .with_turn_context(turn_ctx("agent-tier-fileops"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+
+    // A read-shaped call runs untouched — `file_ops` is not destructive per se.
+    svc.execute("file_ops", json!({"operation": "list", "path": "/tmp"}))
+        .await
+        .expect("list runs");
+    assert_eq!(requester.calls.load(Ordering::SeqCst), 0);
+
+    // The delete hiding behind the same tool name does stop for a human.
+    svc.execute("file_ops", json!({"operation": "delete", "path": "/tmp/x"}))
+        .await
+        .expect("approved delete runs");
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        1,
+        "Auto promises irreversible operations ask first — including `file_ops` delete"
+    );
+}
+
 // -------------------------------------------------------------------------
 // Deferred-tier exposure: dropped from list/metadata_schema, reachable via
 // describe/execute (so a model that finds the tool via `tool_search` can

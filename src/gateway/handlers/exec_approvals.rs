@@ -2,22 +2,20 @@
 //!
 //! Handlers for exec approval operations:
 //! - exec.approval.resolve - Resolve an approval with a decision
-//! - exec.approvals.get - Get approval config with hash
-//! - exec.approvals.set - Set approval config (with optimistic lock)
-//! - exec.approvals.node.get - Get node approval config
-//! - exec.approvals.node.set - Set node approval config
+//! - exec.approvals.pending - List pending approvals
+//! - exec.callback.handle - Resolve an approval from an inline-button callback
+//!
+//! Approval grants are in-memory only (once / session), so there is no
+//! approval config to read or write.
 
 use crate::sync_primitives::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use super::HandlerRegistry;
-use crate::exec::{
-    ApprovalBridge, ApprovalDecisionType, ConfigWithHash, ExecApprovalManager, ExecApprovalsFile,
-    PendingApproval, StorageError,
-};
+use crate::exec::{ApprovalBridge, ApprovalDecisionType, ExecApprovalManager, PendingApproval};
 
 /// Parameters for exec.approval.resolve
 #[derive(Debug, Deserialize)]
@@ -28,22 +26,6 @@ pub struct ApprovalResolveParams {
     pub decision: ApprovalDecisionType,
     /// Display name of resolver
     pub resolved_by: Option<String>,
-}
-
-/// Parameters for exec.approvals.set
-#[derive(Debug, Deserialize)]
-pub struct ApprovalsSetParams {
-    /// New config
-    pub config: ExecApprovalsFile,
-    /// Base hash for optimistic lock
-    pub base_hash: String,
-}
-
-/// Response for exec.approvals.get
-#[derive(Debug, Serialize)]
-pub struct ApprovalsGetResponse {
-    pub config: ExecApprovalsFile,
-    pub hash: String,
 }
 
 /// Response for list pending
@@ -86,20 +68,6 @@ pub fn register_handlers(registry: &mut HandlerRegistry, manager: Arc<ExecApprov
     }
     {
         let m = manager.clone();
-        registry.register("exec.approvals.get", move |req| {
-            let m = m.clone();
-            async move { handle_approvals_get(req, m).await }
-        });
-    }
-    {
-        let m = manager.clone();
-        registry.register("exec.approvals.set", move |req| {
-            let m = m.clone();
-            async move { handle_approvals_set(req, m).await }
-        });
-    }
-    {
-        let m = manager.clone();
         registry.register("exec.approvals.pending", move |req| {
             let m = m.clone();
             async move { handle_approvals_pending(req, m).await }
@@ -136,50 +104,6 @@ async fn handle_approval_resolve(
             INVALID_PARAMS,
             format!("Approval not found or already resolved: {}", params.id),
         )
-    }
-}
-
-/// Handle exec.approvals.get
-///
-/// Returns the current approval config with hash.
-async fn handle_approvals_get(
-    request: JsonRpcRequest,
-    manager: Arc<ExecApprovalManager>,
-) -> JsonRpcResponse {
-    match manager.get_config() {
-        Ok(ConfigWithHash { config, hash }) => {
-            JsonRpcResponse::success(request.id, json!(ApprovalsGetResponse { config, hash }))
-        }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to load config: {e}"),
-        ),
-    }
-}
-
-/// Handle exec.approvals.set
-///
-/// Updates the approval config with optimistic locking.
-async fn handle_approvals_set(
-    request: JsonRpcRequest,
-    manager: Arc<ExecApprovalManager>,
-) -> JsonRpcResponse {
-    let params: ApprovalsSetParams = match super::parse_params(&request) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-
-    match manager.set_config(params.config, &params.base_hash) {
-        Ok(new_hash) => JsonRpcResponse::success(request.id, json!({ "hash": new_hash })),
-        Err(StorageError::OptimisticLockFailed { base, current }) => JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            format!(
-                "Config changed since last load. Expected hash: {base}, current: {current}. Please reload and retry."
-            ),
-        ),
-        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to save config: {e}")),
     }
 }
 
@@ -254,77 +178,14 @@ async fn handle_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exec::ExecApprovalsStorage;
-    use tempfile::TempDir;
 
-    fn temp_manager() -> (TempDir, Arc<ExecApprovalManager>) {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("exec-approvals.json");
-        let storage = Arc::new(ExecApprovalsStorage::with_path(path));
-        let manager = Arc::new(ExecApprovalManager::with_storage(storage));
-        (dir, manager)
-    }
-
-    #[tokio::test]
-    async fn test_handle_approvals_get() {
-        let (_dir, manager) = temp_manager();
-
-        let request = JsonRpcRequest::with_id("exec.approvals.get", None, json!(1));
-        let response = handle_approvals_get(request, manager).await;
-
-        assert!(response.is_success());
-        let result = response.result.unwrap();
-        assert!(result.get("config").is_some());
-        assert!(result.get("hash").is_some());
-    }
-
-    #[tokio::test]
-    async fn test_handle_approvals_set() {
-        let (_dir, manager) = temp_manager();
-
-        // First get the current hash
-        let get_request = JsonRpcRequest::with_id("exec.approvals.get", None, json!(1));
-        let get_response = handle_approvals_get(get_request, manager.clone()).await;
-        let hash = get_response.result.unwrap()["hash"]
-            .as_str()
-            .unwrap()
-            .to_string();
-
-        // Now set with the correct base hash
-        let set_request = JsonRpcRequest::new(
-            "exec.approvals.set",
-            Some(json!({
-                "config": { "version": 1 },
-                "base_hash": hash
-            })),
-            Some(json!(1)),
-        );
-        let set_response = handle_approvals_set(set_request, manager).await;
-
-        assert!(set_response.is_success());
-    }
-
-    #[tokio::test]
-    async fn test_handle_approvals_set_optimistic_lock_failure() {
-        let (_dir, manager) = temp_manager();
-
-        // Try to set with wrong hash
-        let set_request = JsonRpcRequest::new(
-            "exec.approvals.set",
-            Some(json!({
-                "config": { "version": 1 },
-                "base_hash": "wrong-hash"
-            })),
-            Some(json!(1)),
-        );
-        let set_response = handle_approvals_set(set_request, manager).await;
-
-        assert!(set_response.is_error());
+    fn temp_manager() -> Arc<ExecApprovalManager> {
+        Arc::new(ExecApprovalManager::new())
     }
 
     #[tokio::test]
     async fn test_handle_approvals_pending() {
-        let (_dir, manager) = temp_manager();
+        let manager = temp_manager();
 
         let request = JsonRpcRequest::with_id("exec.approvals.pending", None, json!(1));
         let response = handle_approvals_pending(request, manager).await;
@@ -336,7 +197,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_approval_resolve_not_found() {
-        let (_dir, manager) = temp_manager();
+        let manager = temp_manager();
 
         let request = JsonRpcRequest::new(
             "exec.approval.resolve",
@@ -353,7 +214,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_callback_invalid_data() {
-        let (_dir, manager) = temp_manager();
+        let manager = temp_manager();
 
         let request = JsonRpcRequest::new(
             "exec.callback.handle",
@@ -372,7 +233,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_callback_approval_not_found() {
-        let (_dir, manager) = temp_manager();
+        let manager = temp_manager();
 
         let request = JsonRpcRequest::new(
             "exec.callback.handle",
@@ -392,13 +253,11 @@ mod tests {
 
     #[tokio::test]
     async fn register_handlers_registers_all_methods() {
-        let (_dir, manager) = temp_manager();
+        let manager = temp_manager();
         let mut registry = HandlerRegistry::empty();
         register_handlers(&mut registry, manager);
         for m in [
             "exec.approval.resolve",
-            "exec.approvals.get",
-            "exec.approvals.set",
             "exec.approvals.pending",
             "exec.callback.handle",
         ] {

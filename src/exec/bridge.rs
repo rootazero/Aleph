@@ -17,9 +17,14 @@ impl ApprovalBridge {
     ///
     /// `allowed` is the request's permitted decision set (see
     /// [`crate::exec::allowed_decisions`]). A low-risk command yields
-    /// `[Allow Once] [Allow Always]` / `[Deny]`; a destructive command omits
-    /// the `Allow Always` button so it cannot be permanently allowlisted in one
-    /// tap; a blocked command offers only `Deny`.
+    /// `[Allow Once] [Allow Session]` / `[Deny]`; a blocked command offers only
+    /// `Deny`.
+    ///
+    /// No `Allow Always` button is ever rendered, even when `allowed` carries
+    /// [`ApprovalDecisionType::AllowAlways`]: there is no persistent allowlist
+    /// to write to, so the button would promise a permanence the system cannot
+    /// deliver (`ExecApprovalManager::clamp_decision` narrows it to a session
+    /// grant anyway).
     #[must_use]
     pub fn build_approval_keyboard(
         approval_id: &str,
@@ -36,12 +41,6 @@ impl ApprovalBridge {
             allow_row.push(InlineButton {
                 text: "✅ Allow Session".into(),
                 callback_data: format!("approve:{approval_id}:session"),
-            });
-        }
-        if allowed.contains(&ApprovalDecisionType::AllowAlways) {
-            allow_row.push(InlineButton {
-                text: "✅ Allow Always".into(),
-                callback_data: format!("approve:{approval_id}:always"),
             });
         }
 
@@ -83,13 +82,17 @@ impl ApprovalBridge {
         Some((approval_id, decision))
     }
 
-    /// Get the response text for a decision
+    /// Get the response text for a decision.
+    ///
+    /// `AllowAlways` reports a session grant — that is what the manager
+    /// actually applies (see `ExecApprovalManager::clamp_decision`).
     #[must_use]
     pub const fn decision_response_text(decision: &ApprovalDecisionType) -> &'static str {
         match decision {
             ApprovalDecisionType::AllowOnce => "✅ Allowed (once)",
-            ApprovalDecisionType::AllowSession => "✅ Allowed (session)",
-            ApprovalDecisionType::AllowAlways => "✅ Allowed (always)",
+            ApprovalDecisionType::AllowSession | ApprovalDecisionType::AllowAlways => {
+                "✅ Allowed (session)"
+            }
             ApprovalDecisionType::Deny => "❌ Denied",
         }
     }
@@ -163,31 +166,19 @@ mod tests {
     }
 
     #[test]
-    fn test_build_approval_keyboard() {
+    fn test_build_approval_keyboard_never_offers_always() {
+        // Even a decision set that still carries the legacy `AllowAlways` must
+        // not render a button promising permanence — nothing persists it.
         let keyboard = ApprovalBridge::build_approval_keyboard(
             "test123",
             &crate::exec::allowed_decisions::full_set(),
         );
         assert_eq!(keyboard.rows.len(), 2);
-        assert_eq!(keyboard.rows[0].len(), 2); // Allow Once, Allow Always
+        assert_eq!(keyboard.rows[0].len(), 1); // Allow Once only
         assert_eq!(keyboard.rows[1].len(), 1); // Deny
         assert!(keyboard.rows[0][0].callback_data.contains("test123"));
         assert!(keyboard.rows[0][0].callback_data.contains("once"));
-        assert!(keyboard.rows[0][1].callback_data.contains("always"));
         assert!(keyboard.rows[1][0].callback_data.contains("deny"));
-    }
-
-    #[test]
-    fn test_build_approval_keyboard_danger_omits_always() {
-        // Danger commands offer only Once + Deny — no "Allow Always" button.
-        let allowed = vec![ApprovalDecisionType::AllowOnce, ApprovalDecisionType::Deny];
-        let keyboard = ApprovalBridge::build_approval_keyboard("danger1", &allowed);
-        assert_eq!(keyboard.rows.len(), 2);
-        assert_eq!(keyboard.rows[0].len(), 1); // Allow Once only
-        assert!(keyboard.rows[0][0].callback_data.contains("once"));
-        assert_eq!(keyboard.rows[1].len(), 1); // Deny
-        assert!(keyboard.rows[1][0].callback_data.contains("deny"));
-        // No button anywhere offers permanent allowlisting.
         assert!(!keyboard
             .rows
             .iter()
@@ -211,8 +202,13 @@ mod tests {
             "✅ Allowed (once)"
         );
         assert_eq!(
+            ApprovalBridge::decision_response_text(&ApprovalDecisionType::AllowSession),
+            "✅ Allowed (session)"
+        );
+        // Legacy `AllowAlways` reports the session grant that is actually applied.
+        assert_eq!(
             ApprovalBridge::decision_response_text(&ApprovalDecisionType::AllowAlways),
-            "✅ Allowed (always)"
+            "✅ Allowed (session)"
         );
         assert_eq!(
             ApprovalBridge::decision_response_text(&ApprovalDecisionType::Deny),

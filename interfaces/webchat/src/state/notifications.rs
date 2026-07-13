@@ -34,6 +34,11 @@ pub struct PendingApprovalView {
     /// Session the requesting turn belongs to. Scopes the inline chat card to
     /// the conversation that is actually waiting.
     pub session_key: String,
+    /// The harness call id of the tool this approval belongs to — the same id
+    /// `stream.tool_start` carries. The key the inline card is paired on.
+    /// `None` for approvals with no owning tool row (cluster-node approvals,
+    /// raw exec-command approvals): those render unattached, in the bell.
+    pub tool_call_id: Option<String>,
     /// Why the tool asked (server-supplied escalation context).
     pub reason: Option<String>,
     /// Absolute epoch-ms deadline, derived at fetch time from the server's
@@ -169,6 +174,7 @@ mod tests {
             command: "bash".to_string(),
             agent_id: "main".to_string(),
             session_key: "gui:chat:main".to_string(),
+            tool_call_id: None,
             reason: None,
             expires_at_ms: 60_000,
         };

@@ -81,6 +81,23 @@ pub trait SessionEventStore: Send + Sync + 'static {
         from_seq: EventSeq,
     ) -> Result<usize, SessionError>;
 
+    /// True when the event at `seq` exists and has been retired.
+    ///
+    /// The `messages` projection is drained asynchronously, so an event can be
+    /// retired while it still sits in the projector's queue. The projector
+    /// re-checks here at WRITE time; without it a `clear` silently un-clears
+    /// itself in the transcript milliseconds later.
+    ///
+    /// Default `Ok(false)` — a store with no soft delete has nothing to hide.
+    async fn is_retired(
+        &self,
+        session_id: &SessionId,
+        seq: EventSeq,
+    ) -> Result<bool, SessionError> {
+        let _ = (session_id, seq);
+        Ok(false)
+    }
+
     /// Cross-session scan for resume detection. Returns, per session, that
     /// session's `RunStarted` / `RunFinished` events in `seq` order.
     /// Sessions with no run markers are omitted. Served by the existing
@@ -415,6 +432,31 @@ impl SessionEventStore for SqliteEventStore {
         Ok(retired)
     }
 
+    async fn is_retired(
+        &self,
+        session_id: &SessionId,
+        seq: EventSeq,
+    ) -> Result<bool, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        let seq_i64 = i64::try_from(seq)
+            .map_err(|_| SessionError::Storage(format!("seq {seq} exceeds i64::MAX")))?;
+
+        let conn = self.conn.lock().await;
+        let retired: Option<bool> = conn
+            .query_row(
+                "SELECT retired_at IS NOT NULL FROM session_events
+                 WHERE session_id = ?1 AND seq = ?2",
+                params![session_key, seq_i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+        // An unknown seq is not retired: the projector's queue can only carry
+        // events that were appended, so this is a store the event never
+        // reached (tests, alternative store) — nothing to withhold.
+        Ok(retired.unwrap_or(false))
+    }
+
     async fn load_run_markers(
         &self,
     ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError> {
@@ -691,21 +733,39 @@ pub async fn retire_live_events(
     }
 }
 
-/// Number of `messages`-projection rows a session's live event log still
-/// materialises — i.e. the `keep_count` that realigns the projection with the
-/// log after [`retire_live_events`].
+/// The process-wide event store used by tests that need the real
+/// `retire_live_events` / `is_event_retired` path (the handlers reach the store
+/// through the `OnceLock` above, so they cannot be handed one).
 ///
-/// Counts through [`crate::session::projection::project_row`], the projector's
-/// own event→row rule, so the two views cannot drift.
-pub async fn live_projected_row_count(session_id: &SessionId) -> Result<usize, SessionError> {
-    let Some(store) = global_session_event_store() else {
-        return Ok(0);
-    };
-    let live = store.load_all_events(session_id).await?;
-    Ok(live
-        .iter()
-        .filter(|rec| crate::session::projection::project_row(&rec.event).is_some())
-        .count())
+/// A single shared in-memory store: `set_global_session_event_store` only ever
+/// honours the first call, so every test must install the SAME instance or the
+/// losers would silently observe a store they never wrote to. Tests keep to
+/// their own session keys.
+#[cfg(test)]
+pub(crate) fn install_test_event_store() -> Arc<SqliteEventStore> {
+    static TEST_STORE: OnceLock<Arc<SqliteEventStore>> = OnceLock::new();
+    let store = TEST_STORE
+        .get_or_init(|| {
+            let conn = Connection::open_in_memory().expect("in-memory sqlite");
+            migrate_add_session_events(&conn).expect("migrate session_events");
+            Arc::new(SqliteEventStore::new(conn))
+        })
+        .clone();
+    set_global_session_event_store(store.clone());
+    store
+}
+
+/// True when the event at `seq` has been retired in the process-wide event log.
+///
+/// Consulted by the projector before it writes a row: the drain is async, so a
+/// `clear` / `rewind` can retire an event that is still queued. `false` when no
+/// store is installed (CLI one-shot, tests) — there is no soft-delete state to
+/// respect.
+pub async fn is_event_retired(session_id: &SessionId, seq: EventSeq) -> Result<bool, SessionError> {
+    match global_session_event_store() {
+        Some(store) => store.is_retired(session_id, seq).await,
+        None => Ok(false),
+    }
 }
 
 #[cfg(test)]

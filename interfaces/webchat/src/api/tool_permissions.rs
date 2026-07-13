@@ -1,5 +1,8 @@
 //! Panel API for global tool permission management (config.* RPC calls).
-//! Used by the Settings → Policies page.
+//!
+//! The single decoder for `config.get_tool_permissions` — Settings → Policies
+//! edits the advanced axes, the composer's `ExecTierPicker` reads the tier and
+//! its presets. One wire shape, one DTO: two hand-written decoders would drift.
 
 use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
@@ -73,5 +76,26 @@ impl ToolPermissionsApi {
             .rpc_call("config.update_tool_permissions", params)
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_deserializes_from_the_rpc_shape() {
+        let v = json!({
+            "exec_tier": "auto",
+            "tiers": [{ "id": "ask", "label": "Ask 请求", "description": "d" }],
+            "default": "allow",
+            "overrides": { "bash": "ask" },
+        });
+        let cfg: ToolPermissionsResponse = serde_json::from_value(v).unwrap();
+        assert_eq!(cfg.exec_tier, "auto");
+        assert_eq!(cfg.tiers.len(), 1);
+        assert_eq!(cfg.tiers[0].id, "ask");
+        assert_eq!(cfg.default, "allow");
+        assert_eq!(cfg.overrides.get("bash").map(String::as_str), Some("ask"));
     }
 }

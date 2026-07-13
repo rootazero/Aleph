@@ -388,9 +388,12 @@ impl AlephTool for AskUserTool {
             Ok(Ok(result)) => result,
             // Sender dropped without sending — treat as cancelled.
             Ok(Err(_)) => ClarificationResult::cancelled(),
-            // Timed out — reap the stale registry entry.
+            // Timed out — reap the stale registry entry. `cleanup_expired`
+            // rather than `cancel` so the terminal frame clients receive says
+            // `expired`, matching the status returned here; the entry is past
+            // its deadline by construction (same duration, registered first).
             Err(_) => {
-                self.clarification.cancel(&session_key).await;
+                self.clarification.cleanup_expired().await;
                 ClarificationResult::timeout()
             }
         };

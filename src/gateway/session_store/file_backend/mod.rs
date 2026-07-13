@@ -655,6 +655,47 @@ impl SessionStore for FileSessionStore {
         })
     }
 
+    async fn delete_messages_from_seq(
+        &self,
+        key: &SessionKey,
+        from_seq: u64,
+    ) -> Result<usize, SessionStoreError> {
+        let key_str = key.to_key_string();
+        let messages = self.read_transcript(&key_str, None).await?;
+        let before = messages.len();
+
+        let kept: Vec<MessageRecord> = messages
+            .into_iter()
+            .filter(|m| {
+                crate::session::projection::parse_source_seq(&m.id, &key_str)
+                    .is_none_or(|seq| seq < from_seq)
+            })
+            .collect();
+        let removed = before - kept.len();
+        if removed == 0 {
+            return Ok(0);
+        }
+
+        let path = self.transcript_path(&key_str);
+        let mut contents = String::new();
+        for msg in &kept {
+            let line = serde_json::to_string(msg)
+                .map_err(|e| SessionStoreError::DatabaseError(format!("Serialize failed: {e}")))?;
+            contents.push_str(&line);
+            contents.push('\n');
+        }
+        tokio::fs::write(&path, contents).await.map_err(|e| {
+            SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
+        })?;
+
+        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+            meta.message_count = kept.len() as i64;
+            self.write_metadata(&key_str, &meta).await?;
+        }
+
+        Ok(removed)
+    }
+
     async fn list_checkpoints(
         &self,
         key: &SessionKey,

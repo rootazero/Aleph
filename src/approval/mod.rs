@@ -50,11 +50,13 @@ pub mod node_requester;
 pub mod operator_requester;
 mod policy;
 mod session_route;
+pub mod tool_call;
 mod types;
 
 pub use audit::audit_identity;
 pub use node_requester::run_node_approval;
 pub use operator_requester::OperatorApprovalRequester;
+pub use tool_call::{current_tool_call_id, with_tool_call_id};
 
 pub use config::{matches_glob, ConfigApprovalPolicy, PolicyConfig, PolicyRule};
 pub use policy::ApprovalPolicy;

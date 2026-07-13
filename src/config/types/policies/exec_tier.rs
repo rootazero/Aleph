@@ -1,11 +1,26 @@
 //! Execution permission tier — the single user-facing dial over tool permissions.
 //!
 //! Three tiers (codex-style): **Ask** / **Auto** / **Full**. A tier is *not* a
-//! second policy axis: it projects onto the existing
-//! [`ToolPermissionsConfig`] (`default` + per-tool `overrides`), so there is
-//! exactly one mechanism enforcing tool permissions. Explicit
-//! `[policies.tool_permissions]` entries are merged over the tier preset by the
-//! run loop, which is what makes a Panel "advanced overrides" section coherent.
+//! second policy axis and *not* a second enforcement mechanism: it is a rule
+//! consulted by the one chokepoint every gate already funnels through
+//! ([`crate::tools::scoped::ScopedToolService::permission_for`]) whenever no
+//! explicit `[policies.tool_permissions]` entry names the tool. Explicit
+//! entries win over the tier, which is what makes a Panel "advanced overrides"
+//! section coherent.
+//!
+//! ## The rules read declared metadata, never the tool's name
+//!
+//! Tool names are not a contract. MCP tools are registered as
+//! `{server_id}__{tool}` (`github__delete_repo`), browser tools as `browser_*`,
+//! and every future tool as whatever its author picked — so any table of name
+//! globs silently lets whole families through the gate it claims to hold.
+//!
+//! The property that already declares what a tool *does* is
+//! `ToolDefinitionMetadata.idempotent`: projected from the maintained pure-read
+//! allowlist [`crate::tools::retry::IDEMPOTENT_BUILTIN_TOOLS`] for builtins and
+//! from the server's own hints for MCP tools, defaulting to `false`. Hence the
+//! rule: **a tool that is not idempotent is a mutating tool**. Unknown tools
+//! are non-idempotent, so `Ask` is fail-closed for anything new.
 //!
 //! The tier axis is orthogonal to `[sandbox.command_policy]`. No tier — not
 //! even `Full` — can lower the command-policy hardline floor (fork bombs,
@@ -13,8 +28,8 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-use super::tool_permissions::ToolPermissionsConfig;
 use crate::extension::PermissionAction;
 
 /// Identity-metadata custom key under which a session's per-session tier
@@ -22,6 +37,55 @@ use crate::extension::PermissionAction;
 /// read per turn by the execution engine). Same carrier pattern as
 /// `custom["project_root"]`.
 pub const EXEC_TIER_SESSION_KEY: &str = "exec_tier";
+
+/// What a tier rule is allowed to know about a tool: its declared metadata.
+/// Filled at the enforcement chokepoint from the tool's own `ToolDefinition`.
+#[derive(Debug, Clone, Copy)]
+pub struct ToolFacts<'a> {
+    /// Registry name. Only consulted for the curated destructive set below,
+    /// never to guess whether the tool mutates.
+    pub name: &'a str,
+    /// `ToolDefinitionMetadata.idempotent` — the tool declares itself a
+    /// read-only / pure query. Everything else mutates, including every tool
+    /// Aleph has never heard of.
+    pub idempotent: bool,
+    /// `ToolDefinitionMetadata.requires_approval` — for MCP tools this carries
+    /// the server's `destructiveHint`.
+    pub requires_approval: bool,
+}
+
+/// `file_ops` operations that destroy or relocate data irreversibly.
+///
+/// `file_ops` multiplexes `list` / `search` / `stats` *and* `delete` / `move`
+/// behind one tool name, so no name-keyed rule can tell them apart: under
+/// `Auto` a delete would never ask, contradicting the tier's own promise. This
+/// is the tier system's only argument-level rule — a deterministic safety hard
+/// filter (explicitly permitted by R7), not a judgement about intent. Values
+/// are the serialized `FileOperation` variants (`src/builtin_tools/file_ops/types.rs`).
+const DESTRUCTIVE_FILE_OPS: &[&str] = &["delete", "move", "batch_move", "organize"];
+
+/// Tools whose entire effect is to contact the human, and which therefore can
+/// never be gated behind contacting the human.
+///
+/// `ask_user` is not idempotent (asking twice asks twice), so the `Ask` rule
+/// below would gate it — meaning that to put a question to the user, the model
+/// must first ask the user for permission to ask a question. Circular by
+/// construction, and it buys no safety: the tool touches nothing outside the
+/// conversation. Worse, the extra prompt is pure noise, and noise is what
+/// trains a user to approve without reading — which is how a confirmation gate
+/// stops being a safety mechanism.
+///
+/// Deliberately NOT solved by adding `ask_user` to
+/// [`crate::tools::retry::IDEMPOTENT_BUILTIN_TOOLS`]: that list answers "is it
+/// safe to auto-retry after a transient failure?", and auto-retrying a question
+/// means prompting the human twice. "Safe to retry" and "needs no approval" are
+/// two different questions; collapsing them into one field is a coupling that
+/// bites the next person who edits either.
+///
+/// Name-keyed, like [`is_destructive`]'s curated set, and for the same reason:
+/// Aleph itself defines this tool, so its name IS a contract. Nothing here may
+/// touch the user's system.
+const HUMAN_CONTACT_TOOLS: &[&str] = &["ask_user"];
 
 /// Execution permission tier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
@@ -62,77 +126,58 @@ impl ExecTier {
         }
     }
 
-    /// Project the tier onto the tool-permission axis.
+    /// This tier's verdict on a tool with these declared facts.
     ///
-    /// Override keys are globs wherever a family exists (`*_delete`,
-    /// `mcp__*`, …) — [`ToolPermissionsConfig::resolve`] matches them, so new
-    /// tools joining a family are covered without touching this table.
+    /// `None` = the tier has nothing to say; the caller falls back to the
+    /// configured `default`. The tier never *widens* a permission — it only
+    /// raises tools to `Ask`.
     #[must_use]
-    pub fn expand(self) -> ToolPermissionsConfig {
-        let ask = |keys: &[&str]| ToolPermissionsConfig {
-            default: PermissionAction::Allow,
-            overrides: keys
-                .iter()
-                .map(|k| ((*k).to_string(), PermissionAction::Ask))
-                .collect(),
-        };
-        match self {
-            Self::Ask => ask(&[
-                // Code / command execution.
-                "bash",
-                "code_exec",
-                "apply_patch",
-                "automation",
-                "desktop",
-                "desktop_browser_operator",
-                // Filesystem mutation.
-                "file_write",
-                "file_edit",
-                "file_ops",
-                // Irreversible.
-                "*_delete",
-                "team_disband",
-                // Credentials.
-                "vault_*",
-                // Control plane / mutating management.
-                "*_manage",
-                "*_create",
-                "*_install",
-                "self_config",
-                // Remote execution on cluster nodes.
-                "node_invoke",
-                "node_invoke_many",
-                "node_file",
-                // Outbound side effects.
-                "*_send",
-                // External servers — arbitrary, unaudited side effects.
-                "mcp__*",
-            ]),
-            Self::Auto => ask(&["*_delete", "team_disband", "vault_*"]),
-            Self::Full => ToolPermissionsConfig::default(),
+    pub fn rule_for(self, facts: ToolFacts<'_>) -> Option<PermissionAction> {
+        // Contacting the human is never gated behind contacting the human.
+        if HUMAN_CONTACT_TOOLS.contains(&facts.name) {
+            return None;
         }
+        let asks = match self {
+            // Not idempotent = mutating. Destructive is folded in so a tool
+            // that lies about idempotency but declares itself destructive
+            // still stops.
+            Self::Ask => !facts.idempotent || is_destructive(facts),
+            Self::Auto => is_destructive(facts),
+            Self::Full => false,
+        };
+        asks.then_some(PermissionAction::Ask)
     }
 
-    /// Effective global permission layer: this tier's preset with the explicit
-    /// `[policies.tool_permissions]` block layered on top.
+    /// `true` when this *call* must ask because of its arguments, whatever the
+    /// name-keyed rules said. See [`DESTRUCTIVE_FILE_OPS`].
     ///
-    /// Explicit entries REPLACE the preset's (they are not merged
-    /// most-restrictive-wins): an operator who spells out a tool by name has
-    /// made a deliberate decision, and that is what makes a Panel "advanced
-    /// overrides" section coherent — otherwise an override could only ever
-    /// tighten what the tier already decided.
+    /// Only `Auto` needs it: `Ask` already gates `file_ops` wholesale (it is
+    /// not idempotent) and `Full` never asks.
     #[must_use]
-    pub fn overlay(self, explicit: &ToolPermissionsConfig) -> ToolPermissionsConfig {
-        let mut cfg = self.expand();
-        cfg.default = explicit.default;
-        cfg.overrides.extend(
-            explicit
-                .overrides
-                .iter()
-                .map(|(name, action)| (name.clone(), *action)),
-        );
-        cfg
+    pub fn asks_for_arguments(self, name: &str, input: &Value) -> bool {
+        if self != Self::Auto || name != "file_ops" {
+            return false;
+        }
+        input
+            .get("operation")
+            .and_then(Value::as_str)
+            .is_some_and(|op| DESTRUCTIVE_FILE_OPS.contains(&op))
     }
+}
+
+/// The `Auto` tier's guarded tail: irreversible operations.
+///
+/// Irreversibility is not a property any tool declares, so unlike "mutating"
+/// it cannot be inverted out of an existing allowlist. What we do have is the
+/// server-declared destructive bit (`requires_approval`, an MCP server's
+/// `destructiveHint` — free coverage of destructive MCP tools) plus a small
+/// curated set of builtin families whose name *is* their contract, because
+/// Aleph itself defines them.
+fn is_destructive(facts: ToolFacts<'_>) -> bool {
+    facts.requires_approval
+        || facts.name.ends_with("_delete")
+        || facts.name == "team_disband"
+        || facts.name.starts_with("vault_")
 }
 
 /// A tier as presented to a user surface (Panel / CLI / bot). Rendering the
@@ -151,12 +196,12 @@ pub const fn builtin_tiers() -> &'static [TierPreset] {
         TierPreset {
             id: "ask",
             label: "Ask 请求",
-            description: "每个会改动系统的工具调用（执行命令、写文件、删除、凭据、MCP）都先征求同意；只读工具照常运行。\nEvery mutating tool call asks first; read-only tools still run freely.",
+            description: "每个会改动系统的工具调用（执行命令、写文件、删除、凭据、MCP、浏览器）都先征求同意；只读工具照常运行。\nEvery mutating tool call asks first; read-only tools still run freely.",
         },
         TierPreset {
             id: "auto",
             label: "Auto 自动",
-            description: "工具自动运行，只有不可逆的操作（删除、凭据写入、解散团队）才征求同意。默认档位。\nTools run automatically; only irreversible operations ask first. The default.",
+            description: "工具自动运行，只有不可逆的操作（删除文件、凭据写入、解散团队、MCP 破坏性工具）才征求同意。默认档位。\nTools run automatically; only irreversible operations ask first. The default.",
         },
         TierPreset {
             id: "full",
@@ -170,17 +215,42 @@ pub const fn builtin_tiers() -> &'static [TierPreset] {
 mod tests {
     use super::*;
     use crate::sandbox::command_policy::{CommandPolicy, EnforcementMode};
+    use serde_json::json;
+
+    /// Facts as the chokepoint would build them for a tool nobody declared
+    /// anything about — an MCP tool, a browser tool, a tool shipped tomorrow.
+    fn unknown(name: &str) -> ToolFacts<'_> {
+        ToolFacts {
+            name,
+            idempotent: false,
+            requires_approval: false,
+        }
+    }
+
+    /// Facts for a builtin, read from the same allowlist the chokepoint reads.
+    fn builtin(name: &str) -> ToolFacts<'_> {
+        ToolFacts {
+            name,
+            idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
+            requires_approval: false,
+        }
+    }
 
     #[test]
     fn full_tier_leaves_the_command_policy_hardline_floor_intact() {
-        // THE invariant of the tier system: a tier is a projection onto the
-        // TOOL permission axis only. `Full` widens that axis to the maximum
-        // (default Allow, zero overrides) and still cannot reach the sandbox
-        // command-policy hardline — fork bombs, `rm -rf /`, device wipes stay
-        // blocked under every tier and every enforcement mode.
-        let full = ExecTier::Full.expand();
-        assert_eq!(full.default, PermissionAction::Allow);
-        assert!(full.overrides.is_empty());
+        // THE invariant of the tier system: a tier is a rule on the TOOL
+        // permission axis only. `Full` opens that axis to the maximum (it never
+        // asks for anything) and still cannot reach the sandbox command-policy
+        // hardline — fork bombs, `rm -rf /`, device wipes stay blocked under
+        // every tier and every enforcement mode.
+        for facts in [
+            unknown("bash"),
+            builtin("bash"),
+            unknown("github__delete_repo"),
+        ] {
+            assert_eq!(ExecTier::Full.rule_for(facts), None);
+        }
+        assert!(!ExecTier::Full.asks_for_arguments("file_ops", &json!({"operation": "delete"})));
 
         for enforcement in [
             EnforcementMode::Block,
@@ -203,47 +273,146 @@ mod tests {
     }
 
     #[test]
-    fn ask_tier_asks_for_mutators_and_allows_readers() {
-        let cfg = ExecTier::Ask.expand();
-        assert_eq!(cfg.resolve("bash"), PermissionAction::Ask);
-        assert_eq!(cfg.resolve("file_write"), PermissionAction::Ask);
-        assert_eq!(cfg.resolve("agent_delete"), PermissionAction::Ask);
-        assert_eq!(cfg.resolve("vault_store"), PermissionAction::Ask);
-        assert_eq!(cfg.resolve("mcp__github_write"), PermissionAction::Ask);
-        // Read-only surface stays open so the model can still investigate.
-        assert_eq!(cfg.resolve("file_read"), PermissionAction::Allow);
-        assert_eq!(cfg.resolve("search"), PermissionAction::Allow);
-        assert_eq!(cfg.resolve("memory_search"), PermissionAction::Allow);
+    fn ask_tier_asks_for_every_non_idempotent_tool() {
+        let ask = ExecTier::Ask;
+        // Builtins that mutate.
+        for name in ["bash", "file_write", "file_ops", "system", "self_config"] {
+            assert_eq!(
+                ask.rule_for(builtin(name)),
+                Some(PermissionAction::Ask),
+                "`{name}` mutates and must ask under Ask"
+            );
+        }
+        // The families a name-glob table missed: MCP tools are registered as
+        // `{server_id}__{tool}`, browser tools as `browser_*`.
+        for name in [
+            "github__create_issue",
+            "slack__send_message",
+            "browser_evaluate",
+        ] {
+            assert_eq!(
+                ask.rule_for(unknown(name)),
+                Some(PermissionAction::Ask),
+                "`{name}` must ask under Ask"
+            );
+        }
+    }
+
+    #[test]
+    fn ask_tier_is_fail_closed_for_unknown_tools() {
+        // A tool shipped tomorrow declares nothing → non-idempotent → asks.
+        assert_eq!(
+            ExecTier::Ask.rule_for(unknown("brand_new_tool")),
+            Some(PermissionAction::Ask)
+        );
+    }
+
+    #[test]
+    fn ask_tier_leaves_the_read_only_surface_open() {
+        for name in [
+            "search",
+            "memory_search",
+            "web_fetch",
+            "list_tools",
+            "recall_context",
+        ] {
+            assert_eq!(
+                ExecTier::Ask.rule_for(builtin(name)),
+                None,
+                "`{name}` is a declared pure read and must stay allowed under Ask"
+            );
+        }
+    }
+
+    /// `ask_user` is non-idempotent, so the Ask rule would gate it — forcing
+    /// the model to ask the user for permission to ask the user something.
+    /// The exemption exists to break that circle, and must not widen: a tool
+    /// that touches the system still asks, under every tier.
+    #[test]
+    fn human_contact_is_never_gated_behind_human_contact() {
+        for tier in [ExecTier::Ask, ExecTier::Auto, ExecTier::Full] {
+            assert_eq!(
+                tier.rule_for(builtin("ask_user")),
+                None,
+                "{tier:?} must not gate `ask_user` behind an approval prompt"
+            );
+        }
+
+        // The exemption is one name, not a hole: everything that reaches the
+        // user's system still asks under Ask.
+        for name in [
+            "bash",
+            "file_ops",
+            "browser_evaluate",
+            "github__delete_repo",
+        ] {
+            assert_eq!(
+                ExecTier::Ask.rule_for(unknown(name)),
+                Some(PermissionAction::Ask),
+                "`{name}` touches the system and must still ask under Ask"
+            );
+        }
     }
 
     #[test]
     fn auto_tier_only_guards_the_destructive_tail() {
-        let cfg = ExecTier::Auto.expand();
-        assert_eq!(cfg.resolve("bash"), PermissionAction::Allow);
-        assert_eq!(cfg.resolve("file_write"), PermissionAction::Allow);
-        assert_eq!(cfg.resolve("agent_delete"), PermissionAction::Ask);
-        assert_eq!(cfg.resolve("team_disband"), PermissionAction::Ask);
-        assert_eq!(cfg.resolve("vault_store"), PermissionAction::Ask);
+        let auto = ExecTier::Auto;
+        assert_eq!(auto.rule_for(builtin("bash")), None);
+        assert_eq!(auto.rule_for(builtin("file_write")), None);
+        assert_eq!(auto.rule_for(builtin("search")), None);
+        assert_eq!(
+            auto.rule_for(builtin("agent_delete")),
+            Some(PermissionAction::Ask)
+        );
+        assert_eq!(
+            auto.rule_for(builtin("team_disband")),
+            Some(PermissionAction::Ask)
+        );
+        assert_eq!(
+            auto.rule_for(builtin("vault_store")),
+            Some(PermissionAction::Ask)
+        );
     }
 
     #[test]
-    fn explicit_overrides_win_over_the_tier_preset() {
-        let explicit = ToolPermissionsConfig {
-            default: PermissionAction::Allow,
-            overrides: [
-                ("bash".to_string(), PermissionAction::Allow),
-                ("search".to_string(), PermissionAction::Deny),
-            ]
-            .into_iter()
-            .collect(),
+    fn auto_tier_guards_server_declared_destructive_mcp_tools() {
+        // `requires_approval` is where an MCP server's `destructiveHint` lands.
+        let destructive = ToolFacts {
+            name: "github__delete_repo",
+            idempotent: false,
+            requires_approval: true,
         };
-        let cfg = ExecTier::Ask.overlay(&explicit);
-        // Explicit allow beats the tier's Ask...
-        assert_eq!(cfg.resolve("bash"), PermissionAction::Allow);
-        // ...and an explicit deny lands on a tool the tier left alone.
-        assert_eq!(cfg.resolve("search"), PermissionAction::Deny);
-        // Untouched preset entries survive.
-        assert_eq!(cfg.resolve("file_write"), PermissionAction::Ask);
+        assert_eq!(
+            ExecTier::Auto.rule_for(destructive),
+            Some(PermissionAction::Ask)
+        );
+        // A non-destructive MCP tool runs freely under Auto — that is the tier.
+        assert_eq!(
+            ExecTier::Auto.rule_for(unknown("github__create_issue")),
+            None
+        );
+    }
+
+    #[test]
+    fn auto_tier_asks_for_destructive_file_ops_arguments() {
+        let auto = ExecTier::Auto;
+        // The name alone says nothing — `file_ops` is not destructive per se.
+        assert_eq!(auto.rule_for(builtin("file_ops")), None);
+        for op in ["delete", "move", "batch_move", "organize"] {
+            assert!(
+                auto.asks_for_arguments("file_ops", &json!({"operation": op, "path": "/tmp/x"})),
+                "file_ops `{op}` destroys or relocates data and must ask under Auto"
+            );
+        }
+        for op in ["list", "search", "stats", "copy", "mkdir"] {
+            assert!(
+                !auto.asks_for_arguments("file_ops", &json!({"operation": op, "path": "/tmp/x"}))
+            );
+        }
+        // Malformed / missing operation: the tool itself rejects it, no ask.
+        assert!(!auto.asks_for_arguments("file_ops", &json!({})));
+        // Other tools are unaffected by the argument filter.
+        assert!(!auto.asks_for_arguments("bash", &json!({"operation": "delete"})));
     }
 
     #[test]

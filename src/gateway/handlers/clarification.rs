@@ -82,10 +82,11 @@ async fn handle_resolve(
         Err(e) => return e,
     };
 
-    // `has_pending` first, exactly as `try_intercept_hitl` does: it rejects an
-    // expired entry, which bare `resolve` would otherwise report as handled.
-    let resolved = manager.has_pending(&params.session_key).await
-        && manager.resolve(&params.session_key, &params.reply).await;
+    // `resolve` is the single truth: it reports `false` unless a waiter was
+    // actually unblocked with this reply. The client MUST honour that — a
+    // `false` means its Enter-hijack was stale and the text is still an
+    // unsent message, not an answer.
+    let resolved = manager.resolve(&params.session_key, &params.reply).await;
 
     JsonRpcResponse::success(request.id, json!(ClarificationResolveResponse { resolved }))
 }

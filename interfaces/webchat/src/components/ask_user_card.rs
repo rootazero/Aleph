@@ -23,14 +23,23 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 /// Post `reply` back for `session_key` and drop the question from the pending
-/// list on success. Optimistic removal keeps the card responsive; the run's
-/// settle path (`events::clear_pending_ask`) is the catch-all behind it.
+/// list once it is over. `resolved == false` means nobody was waiting any more
+/// (expired / superseded / run cancelled) — the question is just as dead, so
+/// the card goes either way. The `clarification_ended` frame is the authority
+/// behind this optimistic removal.
 fn answer(dashboard: DashboardState, session_key: String, reply: String) {
     spawn_local(async move {
         match ClarificationApi::resolve(&dashboard, &session_key, &reply).await {
-            Ok(()) => dashboard
-                .pending_clarifications
-                .update(|l| l.retain(|x| x.session_key != session_key)),
+            Ok(resolved) => {
+                if !resolved {
+                    web_sys::console::warn_1(
+                        &"Question was no longer pending — answer discarded".into(),
+                    );
+                }
+                dashboard
+                    .pending_clarifications
+                    .update(|l| l.retain(|x| x.session_key != session_key));
+            }
             Err(e) => {
                 web_sys::console::warn_1(&format!("Failed to answer question: {e:?}").into());
             }

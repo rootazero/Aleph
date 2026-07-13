@@ -22,6 +22,11 @@ struct PendingItem {
     options: Vec<String>,
 }
 
+#[derive(Deserialize)]
+struct ResolveResp {
+    resolved: bool,
+}
+
 impl ClarificationApi {
     /// List the questions core is currently parked on.
     ///
@@ -51,16 +56,22 @@ impl ClarificationApi {
     /// 1-based number picks that option, anything else is free text. The panel
     /// sends the index string for a choice click — the same payload Telegram's
     /// `clarify:<idx>` button produces — and never interprets it itself (R4).
+    ///
+    /// Returns whether a waiter was actually unblocked. `false` = the question
+    /// was already gone (expired / superseded / run cancelled), so the reply
+    /// answered nobody — the caller must NOT treat the text as consumed.
     pub async fn resolve(
         state: &DashboardState,
         session_key: &str,
         reply: &str,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let params = serde_json::json!({
             "session_key": session_key,
             "reply": reply,
         });
-        state.rpc_call("clarification.resolve", params).await?;
-        Ok(())
+        let result = state.rpc_call("clarification.resolve", params).await?;
+        let resp: ResolveResp = serde_json::from_value(result)
+            .map_err(|e| format!("Failed to parse clarification.resolve: {e}"))?;
+        Ok(resp.resolved)
     }
 }

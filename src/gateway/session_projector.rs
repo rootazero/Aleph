@@ -29,7 +29,7 @@ use crate::gateway::session_store::types::MessageRecord;
 use crate::gateway::session_store::SessionStore;
 use crate::session::events::{SessionEvent, SessionEventRecord, TurnId};
 use crate::session::observer::SessionEventObserver;
-use crate::session::projection::project_row;
+use crate::session::projection::{project_row, row_id};
 use crate::session::service::SessionId;
 
 /// Capacity of the internal mpsc channel between the observer and the drain task.
@@ -70,9 +70,35 @@ impl MessageProjector {
     }
 }
 
+/// True when this event was retired (`chat.clear` / `chat.rewind`) after it was
+/// enqueued — the drain is asynchronous, so a queued event can be retired
+/// *before* it reaches `messages`, and writing it then would silently un-clear
+/// the conversation the user just cleared.
+///
+/// Fails closed: an unreadable event log is reported as retired, so the failure
+/// mode is a missing projection row (best-effort display, back-filled by
+/// `ProjectionReconciler`) rather than resurrected content.
+async fn event_retired(id: &SessionId, seq: u64) -> bool {
+    match crate::session::store::is_event_retired(id, seq).await {
+        Ok(retired) => retired,
+        Err(e) => {
+            tracing::warn!(
+                session = ?id,
+                seq,
+                error = %e,
+                "projector: retirement check failed; skipping row (fail-closed)"
+            );
+            true
+        }
+    }
+}
+
 /// Project one session event into `store` — the single source of projection
 /// truth shared by the live drain (`materialized_through = None`) and the
 /// boot-time `ProjectionReconciler` (`materialized_through = Some(watermark)`).
+///
+/// A row-producing event whose seq has been RETIRED is suppressed the same way,
+/// so a clear/rewind that races the drain queue cannot re-materialise.
 ///
 /// When `rec.seq <= materialized_through`, a row-producing event still advances
 /// the accumulator but its WRITE is suppressed: that row is already in the
@@ -90,7 +116,8 @@ pub(crate) async fn project_event(
     materialized_through: Option<u64>,
 ) {
     let key = id.to_key_string();
-    let suppress = materialized_through.is_some_and(|w| rec.seq <= w);
+    let suppress =
+        materialized_through.is_some_and(|w| rec.seq <= w) || event_retired(id, rec.seq).await;
     match &rec.event {
         SessionEvent::LlmCallStarted {
             turn_id,
@@ -125,7 +152,7 @@ pub(crate) async fn project_event(
                 .append_message(
                     id,
                     MessageRecord {
-                        id: format!("{key}:{}", rec.seq),
+                        id: row_id(&key, rec.seq),
                         role: "assistant".into(),
                         content: content.text.clone(),
                         timestamp: rec.created_at_ms,
@@ -179,7 +206,7 @@ pub(crate) async fn project_event(
                     .append_message(
                         id,
                         MessageRecord {
-                            id: format!("{key}:{}", rec.seq),
+                            id: row_id(&key, rec.seq),
                             role: row.role,
                             content: row.text,
                             timestamp: rec.created_at_ms,
@@ -494,6 +521,48 @@ mod tests {
             msgs.iter()
                 .any(|m| m.role == "tool" && m.tool_name.as_deref() == Some("bash_exec")),
             "missing tool row with tool_name=bash_exec"
+        );
+    }
+
+    /// A turn is appended to the SSOT, the user clears it, and only *then* does
+    /// the async drain reach those events. Before the write-time retirement
+    /// check they were written into `messages` anyway — the clear silently
+    /// un-clearing itself in the transcript milliseconds later.
+    #[tokio::test]
+    async fn clear_before_the_drain_lands_writes_no_rows() {
+        use crate::session::store::SessionEventStore;
+
+        let events = crate::session::store::install_test_event_store();
+        let temp = tempdir().unwrap();
+        let config = SessionManagerConfig {
+            db_path: temp.path().join("clear_race.db"),
+            max_messages: 10_000,
+            compaction_keep: 5_000,
+            ..Default::default()
+        };
+        let manager = SessionManager::new(config).unwrap();
+        let id = SessionId::ephemeral("clear-race");
+        manager.get_or_create(&id).await.unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(manager);
+
+        let tid = uuid::Uuid::new_v4();
+        let turn: [(EventSeq, SessionEvent); 2] = [(1, user_msg(tid)), (2, assistant_msg(tid))];
+        for (seq, ev) in &turn {
+            events.append(&id, *seq, ev, 0).await.unwrap();
+        }
+
+        // `chat.clear` retires the log while the events are still queued.
+        events.retire_from(&id, 1).await.unwrap();
+
+        // The drain now reaches them.
+        let mut accums = TurnAccums::new();
+        for (seq, ev) in &turn {
+            project_event(&store, &mut accums, &id, &rec(*seq, ev.clone()), None).await;
+        }
+
+        assert!(
+            store.get_history(&id, None).await.unwrap().is_empty(),
+            "a retired event must not be materialised by a late drain"
         );
     }
 

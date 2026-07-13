@@ -232,8 +232,7 @@ pub use crate::mcp::{
 // =============================================================================
 
 pub use crate::exec::{
-    analyze_shell_command, match_allowlist, ApprovalRequest, ExecApprovalManager, PendingApproval,
-    SecurityKernel,
+    analyze_shell_command, ApprovalRequest, ExecApprovalManager, PendingApproval, SecurityKernel,
 };
 
 // =============================================================================

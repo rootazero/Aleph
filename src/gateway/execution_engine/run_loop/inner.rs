@@ -208,9 +208,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        // Effective tool permission policy for this turn.
+        // Effective execution tier + explicit tool permission policy for this
+        // turn. Two inputs to one enforcement chokepoint
+        // (`ScopedToolService::permission_for`): the explicit policy decides the
+        // tools it names, the tier decides everything else from each tool's
+        // declared metadata.
         //
-        // Tier resolution (the user-facing dial), then projection:
+        // Tier resolution (the user-facing dial):
         //   1. global `[policies.exec_tier]`, read LIVE from the shared config
         //      (not a boot snapshot) so a tier change takes effect on the very
         //      next tool call with no restart;
@@ -222,15 +226,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         //   3. clamped down for untrusted (`Chat`) channels, which must never
         //      run at Full with nobody at the keyboard.
         //
-        // The resolved tier is projected onto tool permissions and overlaid
-        // with explicit `[policies.tool_permissions]` entries (which win — a
-        // named tool is a deliberate operator decision). That global layer is
-        // then merged with the agent's override and the originating channel's
-        // override (stamped into metadata by the inbound router — absent for
-        // Panel / CLI / cron turns); most restrictive wins at both layers.
-        // `None` when everything is all-default so the ScopedToolService hot
-        // path stays a no-op.
-        let tool_permissions = {
+        // Explicit policy: global `[policies.tool_permissions]` merged with the
+        // agent's override and the originating channel's override (stamped into
+        // metadata by the inbound router — absent for Panel / CLI / cron turns);
+        // most restrictive wins at both layers. `None` when everything is
+        // all-default so the ScopedToolService hot path stays a no-op.
+        let (exec_tier, tool_permissions) = {
             use crate::config::types::policies::ToolPermissionsConfig;
             let (global_tier, explicit) = match self.app_config.as_ref() {
                 Some(cfg) => {
@@ -254,10 +255,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             {
                 tier = crate::gateway::channel_policy::clamp_tier_for_channel(level, tier);
             }
-            let mut merged = ToolPermissionsConfig::merge(
-                &tier.overlay(&explicit),
-                &agent.config().tool_permissions(),
-            );
+            let mut merged =
+                ToolPermissionsConfig::merge(&explicit, &agent.config().tool_permissions());
             if let Some(raw) = request
                 .metadata
                 .get(super::super::CHANNEL_TOOL_PERMISSIONS_KEY)
@@ -275,15 +274,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
             let is_all_default = merged.default == crate::extension::PermissionAction::Allow
                 && merged.overrides.is_empty();
-            (!is_all_default).then(|| {
-                info!(
-                    run_id = run_id,
-                    default = ?merged.default,
-                    overrides = merged.overrides.len(),
-                    "Tool permission policy active for this turn"
-                );
-                merged
-            })
+            info!(
+                run_id = run_id,
+                exec_tier = tier.id(),
+                default = ?merged.default,
+                overrides = merged.overrides.len(),
+                "Execution permissions resolved for this turn"
+            );
+            (tier, (!is_all_default).then_some(merged))
         };
         let _max_loops = agent.config().max_loops as usize;
         let token_budget = agent.config().max_tokens.unwrap_or(500_000);
@@ -748,6 +746,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     hook_executor.clone(),
                     hook_session_id.clone(),
                     tool_permissions.clone(),
+                    exec_tier,
                     unattended,
                     &self.config.core_tools,
                     self.config.truncate_tool_descriptions,
@@ -971,6 +970,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 hook_executor.clone(),
                 hook_session_id.clone(),
                 tool_permissions.clone(),
+                exec_tier,
                 unattended,
                 &self.config.core_tools,
                 self.config.truncate_tool_descriptions,

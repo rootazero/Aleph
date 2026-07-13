@@ -424,21 +424,6 @@ fn apply_run_cost(chat: ChatState, run_id: &str, summary: &serde_json::Value) {
     );
 }
 
-/// Drop the pending question owned by `chat`'s conversation, if any.
-///
-/// Called when a run settles: whatever `ask_user` it was parked on is over
-/// (answered, superseded, or timed out), so its card must not linger — and must
-/// not keep the composer's Enter key routed at a clarification nobody is
-/// waiting on. Answering also removes the entry optimistically (`AskUserCard`),
-/// so this is the catch-all for every other way a question dies.
-fn clear_pending_ask(dash: &DashboardState, chat: ChatState) {
-    let Some(session_key) = chat.session_key.get_untracked() else {
-        return;
-    };
-    dash.pending_clarifications
-        .update(|list| list.retain(|p| p.session_key != session_key));
-}
-
 /// Resolve which conversation's `ChatState` one run event should land on, and
 /// maintain running/route bookkeeping. Returns the target `ChatState` plus
 /// whether the resolved conversation is the active (foreground) one — callers
@@ -516,6 +501,20 @@ pub fn subscribe_run_events(
                 .lock()
                 .map(|runs| runs.contains(run_id))
                 .unwrap_or(false);
+
+        // `clarification_ended`: the terminal twin of `ask_user`, and the only
+        // signal that a question is over (answered, superseded, expired, run
+        // cancelled). Dropping the entry removes the card and releases the
+        // composer's Enter hijack — in every window, including the ones that
+        // never saw the answer. Keyed by session and carries no run_id, so it
+        // must be handled before the run_id guard below.
+        if event_type == "clarification_ended" {
+            if let Some(session_key) = data.get("session_key").and_then(|s| s.as_str()) {
+                dash.pending_clarifications
+                    .update(|list| list.retain(|p| p.session_key != session_key));
+            }
+            return;
+        }
 
         // Guard: most events require a valid run_id to associate with a message
         if run_id.is_empty() && event_type != "reasoning" {
@@ -677,7 +676,6 @@ pub fn subscribe_run_events(
             }
             "run_complete" => {
                 chat.complete_run(run_id);
-                clear_pending_ask(&dash, chat);
                 // Unpin only affects the foreground detail pane — a
                 // background run finishing must not clear the user's
                 // manual pin on whatever they're currently viewing.
@@ -721,7 +719,6 @@ pub fn subscribe_run_events(
                     .and_then(|e| e.as_str())
                     .unwrap_or("Unknown error");
                 chat.fail_run(run_id, error);
-                clear_pending_ask(&dash, chat);
                 if is_foreground {
                     workspace.end_follow();
                 }

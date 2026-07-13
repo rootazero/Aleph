@@ -104,6 +104,18 @@ pub enum GatewayEventFrame {
         question: String,
         options: Vec<String>,
     },
+    /// Terminal twin of [`Self::AskUser`]: the question on `session_key` is
+    /// over and nothing is parked on an answer any more.
+    ///
+    /// Without it every consumer has to guess when a question ended — the card
+    /// outlives the question, a second Panel window keeps hijacking Enter, and
+    /// a reply typed after the timeout is swallowed. Keyed by session (not run)
+    /// for the same reason `AskUser` is: the clarification registry is
+    /// per-session and the answer is routed by session.
+    ClarificationEnded {
+        session_key: String,
+        outcome: ClarificationOutcome,
+    },
     ReasoningBlock {
         run_id: String,
         seq: u64,
@@ -186,6 +198,14 @@ pub enum GatewayEventFrame {
         session_key: String,
         channel_id: String,
         conversation_id: String,
+        /// Harness tool-call id (`ToolStart.tool_id`) this approval gates, when
+        /// the approval was raised from the tool-dispatch chokepoint. Clients
+        /// key `tool_id → approval` on it; pairing an approval to a tool row by
+        /// position is wrong the moment two tool calls run concurrently, since
+        /// `exec.approvals.pending` is an unordered map. `None` for approvals
+        /// with no owning tool call (cluster node approvals, raw exec commands).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_call_id: Option<String>,
     },
     ApprovalResolved {
         approval_id: String,
@@ -258,6 +278,18 @@ pub enum GatewayEventFrame {
         title: String,
         body: String,
     },
+}
+
+/// How a clarification ended, carried on [`GatewayEventFrame::ClarificationEnded`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClarificationOutcome {
+    /// The user answered; the parked `ask_user` was unblocked with the reply.
+    Resolved,
+    /// Nobody can answer any more (run aborted, no transport, superseded).
+    Cancelled,
+    /// The question outlived its timeout without an answer.
+    Expired,
 }
 
 /// Tagging value for the panel so it can pick the right local action
@@ -468,6 +500,7 @@ impl GatewayEventFrame {
             Self::RunComplete { .. } => "agent.run.complete",
             Self::RunError { .. } => "agent.run.error",
             Self::AskUser { .. } => "agent.ask.user",
+            Self::ClarificationEnded { .. } => "agent.clarification.ended",
             Self::ReasoningBlock { .. } => "agent.reasoning.block",
             Self::UncertaintySignal { .. } => "agent.uncertainty",
             Self::ModelResolved { .. } => "agent.model.resolved",
@@ -518,6 +551,7 @@ impl GatewayEventFrame {
             Self::RunComplete { .. } => Some("stream.run_complete"),
             Self::RunError { .. } => Some("stream.run_error"),
             Self::AskUser { .. } => Some("stream.ask_user"),
+            Self::ClarificationEnded { .. } => Some("stream.clarification_ended"),
             Self::ReasoningBlock { .. } => Some("stream.reasoning_block"),
             Self::UncertaintySignal { .. } => Some("stream.uncertainty_signal"),
             Self::ModelResolved { .. } => Some("stream.model_resolved"),
@@ -575,6 +609,48 @@ mod tests {
         assert_eq!(v["context_tokens"], 42_000);
         assert_eq!(v["context_window"], 200_000);
         assert_eq!(v["total_tokens"], 55_000);
+    }
+
+    /// Panel contract for the terminal clarification frame: it rides the same
+    /// `stream.*` delivery as `stream.ask_user` (its opening twin) and is keyed
+    /// by the session key the Panel answered on.
+    #[test]
+    fn clarification_ended_wire_shape() {
+        let f = GatewayEventFrame::ClarificationEnded {
+            session_key: "agent:main|conv-1".into(),
+            outcome: ClarificationOutcome::Expired,
+        };
+        assert_eq!(f.stream_method(), Some("stream.clarification_ended"));
+        assert_eq!(f.topic_name(), "agent.clarification.ended");
+        let v = serde_json::to_value(&f).unwrap();
+        assert_eq!(v["type"], "clarification_ended");
+        assert_eq!(v["session_key"], "agent:main|conv-1");
+        assert_eq!(v["outcome"], "expired");
+    }
+
+    /// The approval → tool-row pairing key. Absent when the approval has no
+    /// owning tool call, so the field must not serialize as `null`.
+    #[test]
+    fn approval_requested_carries_tool_call_id() {
+        let f = GatewayEventFrame::ApprovalRequested {
+            approval_id: "a1".into(),
+            session_key: "s1".into(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            tool_call_id: Some("toolu_01".into()),
+        };
+        let v = serde_json::to_value(&f).unwrap();
+        assert_eq!(v["tool_call_id"], "toolu_01");
+
+        let f = GatewayEventFrame::ApprovalRequested {
+            approval_id: "a2".into(),
+            session_key: "s1".into(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            tool_call_id: None,
+        };
+        let v = serde_json::to_value(&f).unwrap();
+        assert!(v.get("tool_call_id").is_none());
     }
 
     #[test]
