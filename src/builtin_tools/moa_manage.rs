@@ -19,7 +19,7 @@ use tokio::sync::RwLock;
 
 use super::{notify_tool_result, notify_tool_start};
 use crate::config::patcher::ConfigPatcher;
-use crate::config::{default_advisor_timeout_secs, Config, MoaFanout, MoaPreset, MoaSlot, MoaToml};
+use crate::config::{default_advisor_timeout_secs, Config, MoaFanout, MoaPreset, MoaSlot};
 use crate::error::Result;
 use crate::providers::moa::get_moa_config;
 use crate::providers::session_moa_handle::{clear_session_moa, get_session_moa};
@@ -628,6 +628,7 @@ impl AlephTool for MoaManageTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MoaToml;
     use crate::providers::session_moa_handle::set_session_moa;
     use crate::routing::session_key::SessionKey;
     use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};

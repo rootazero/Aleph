@@ -30,6 +30,7 @@ fn exe_path() -> Result<PathBuf, Box<dyn Error>> {
     Ok(std::env::current_exe()?)
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn home() -> Result<PathBuf, Box<dyn Error>> {
     dirs::home_dir().ok_or_else(|| "could not resolve home directory".into())
 }
