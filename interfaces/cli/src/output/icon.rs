@@ -60,9 +60,16 @@ glyph!(arrow, "▸", ">");
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // These tests mutate process-global env vars (ALEPH_ASCII / LC_ALL / LANG).
+    // cargo runs them concurrently in one binary, so serialise to stop one
+    // test's `set_var` from racing another's `detect_unicode()` read.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn aleph_ascii_env_forces_ascii() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("ALEPH_ASCII", "1");
         assert!(!detect_unicode());
         std::env::remove_var("ALEPH_ASCII");
@@ -70,6 +77,7 @@ mod tests {
 
     #[test]
     fn aleph_ascii_disabled_returns_unicode() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("ALEPH_ASCII", "0");
         assert!(detect_unicode());
         std::env::remove_var("ALEPH_ASCII");
@@ -77,6 +85,7 @@ mod tests {
 
     #[test]
     fn posix_locale_forces_ascii() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Each Rust test shares process env; isolate by setting then clearing
         // every var the function consults.
         let saved: Vec<_> = ["LC_ALL", "LC_CTYPE", "LANG", "ALEPH_ASCII"]
@@ -99,6 +108,7 @@ mod tests {
 
     #[test]
     fn utf8_locale_returns_unicode() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved: Vec<_> = ["LC_ALL", "LC_CTYPE", "LANG", "ALEPH_ASCII"]
             .iter()
             .map(|k| (*k, std::env::var(k).ok()))

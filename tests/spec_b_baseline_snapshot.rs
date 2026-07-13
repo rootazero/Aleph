@@ -314,5 +314,11 @@ async fn note_retrieval_default_behaviour_baseline() {
     }
 
     let expected = std::fs::read_to_string(snapshot_path).unwrap();
-    assert_eq!(actual, expected, "Note-retrieval baseline drifted!");
+    // The golden file may be checked out with CRLF on Windows (git autocrlf);
+    // the snapshot is line-ending agnostic, so normalise before comparing.
+    assert_eq!(
+        actual,
+        expected.replace("\r\n", "\n"),
+        "Note-retrieval baseline drifted!"
+    );
 }

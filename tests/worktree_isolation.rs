@@ -347,12 +347,15 @@ async fn h_t5_create_and_cleanup_within_perf_budget() {
     let t1 = std::time::Instant::now();
     h.cleanup().await.expect("cleanup");
     let cleanup_ms = t1.elapsed().as_millis();
+    // Windows worktree ops (git worktree add + Defender on-access scans) run
+    // far slower than POSIX; widen the budget there, keep the tight CI guard on Unix.
+    let (create_budget, cleanup_budget) = if cfg!(windows) { (8000, 4000) } else { (800, 400) };
     assert!(
-        create_ms < 800,
-        "create took {create_ms}ms, budget 200ms (4× CI headroom)"
+        create_ms < create_budget,
+        "create took {create_ms}ms, budget {create_budget}ms"
     );
     assert!(
-        cleanup_ms < 400,
-        "cleanup took {cleanup_ms}ms, budget 100ms (4× CI headroom)"
+        cleanup_ms < cleanup_budget,
+        "cleanup took {cleanup_ms}ms, budget {cleanup_budget}ms"
     );
 }
