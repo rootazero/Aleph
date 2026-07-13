@@ -13,14 +13,14 @@
 
 mod builder;
 mod dispatch;
-mod traits;
 mod progressive_disclosure;
+mod traits;
 
 #[cfg(test)]
 mod tests;
 
-pub use traits::{ToolDefinitionRewriter, ToolHookDecorator};
 pub use progressive_disclosure::ProgressiveDisclosureRewriter;
+pub use traits::{ToolDefinitionRewriter, ToolHookDecorator};
 
 use std::collections::BTreeSet;
 
@@ -67,9 +67,7 @@ pub struct ScopedToolService {
     /// Session identifier surfaced into `HookContext` for extension hooks
     /// (env var `SESSION_ID`, log correlation). Empty string when unset.
     pub(super) hook_session_id: String,
-    /// Tool names that require user confirmation before they execute.
-    pub(super) confirm_tools: BTreeSet<String>,
-    /// Transport used to obtain that confirmation. `None` = no approval
+    /// Transport used to obtain user confirmation. `None` = no approval
     /// channel wired, so confirm-required tools fail closed (denied).
     pub(super) approval_requester: Option<Arc<dyn ApprovalRequester>>,
     /// Operator-targeted approval requester for config-tier tools (Phase 2b
@@ -305,10 +303,7 @@ impl ToolService for ScopedToolService {
         if !self.is_allowed(name) {
             return ConcurrencyClaim::global();
         }
-        if self.confirm_tools.contains(name)
-            || self.inner.requires_confirmation(name)
-            || self.is_permission_ask(name)
-        {
+        if self.inner.requires_confirmation(name) || self.is_permission_ask(name) {
             return ConcurrencyClaim::global();
         }
         self.inner

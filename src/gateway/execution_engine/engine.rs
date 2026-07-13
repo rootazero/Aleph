@@ -64,8 +64,11 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) compression_service: Option<Arc<crate::memory::compression::CompressionService>>,
     /// Memory context provider for SQLite-backed prompt augmentation
     pub(super) memory_context_provider: Option<Arc<crate::thinker::MemoryContextProvider>>,
-    /// Global tool permission policy
-    pub(super) global_tool_permissions: crate::config::types::policies::ToolPermissionsConfig,
+    /// Live app config handle. Read once per turn (not snapshotted at boot) so
+    /// an `[policies.exec_tier]` / `[policies.tool_permissions]` change takes
+    /// effect on the very next tool call without a restart. `None` in tests /
+    /// non-gateway contexts → the global permission layer is all-default.
+    pub(super) app_config: Option<Arc<RwLock<crate::Config>>>,
     /// Session compactor for hierarchical session summarization
     pub(super) session_compactor: Option<Arc<crate::memory::session_compactor::SessionCompactor>>,
     /// Session manager for auto-topic generation
@@ -146,7 +149,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             memory_backend,
             compression_service: None,
             memory_context_provider: None,
-            global_tool_permissions: Default::default(),
+            app_config: None,
             session_compactor: None,
             session_manager: None,
             event_bus: None,
@@ -252,13 +255,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         self
     }
 
-    /// Set global tool permission policy.
+    /// Share the live app-config handle so each turn resolves the current
+    /// execution tier / tool permissions instead of a boot snapshot.
     #[must_use]
-    pub fn with_global_tool_permissions(
-        mut self,
-        permissions: crate::config::types::policies::ToolPermissionsConfig,
-    ) -> Self {
-        self.global_tool_permissions = permissions;
+    pub fn with_app_config(mut self, config: Arc<RwLock<crate::Config>>) -> Self {
+        self.app_config = Some(config);
         self
     }
 

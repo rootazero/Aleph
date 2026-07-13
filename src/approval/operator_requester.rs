@@ -46,6 +46,17 @@ impl OperatorApprovalRequester {
     pub const fn new(manager: Arc<ExecApprovalManager>, event_bus: Arc<GatewayEventBus>) -> Self {
         Self { manager, event_bus }
     }
+
+    /// Whether an approval published on the event bus can reach anyone at all.
+    ///
+    /// A nonzero subscriber count does not prove a human is watching — a stale
+    /// or purely internal subscriber still fails closed, via the approval
+    /// timeout. A ZERO count proves the opposite: nobody can receive the card,
+    /// so callers deny immediately instead of parking for the full timeout.
+    #[must_use]
+    pub fn can_reach_operator(&self) -> bool {
+        self.event_bus.subscriber_count() > 0
+    }
 }
 
 #[async_trait]

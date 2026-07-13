@@ -20,9 +20,7 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 
 use alephcore::routing::session_key::SessionKey;
-use alephcore::sandbox::exec_approval::{
-    ApprovalConfig, ApprovalGate, ApprovalOutcome, ApprovalRequester,
-};
+use alephcore::sandbox::exec_approval::{ApprovalGate, ApprovalOutcome, ApprovalRequester};
 use alephcore::sandbox::rate_limit::SandboxRateLimitConfig;
 use alephcore::sandbox::{
     build_sandbox, NetworkPolicy, OsSandboxDriverTrait, OsSandboxProfile, Sandbox,
@@ -173,10 +171,9 @@ fn build_test_sandbox(
     let (driver, run_count, last_mem, last_net) = RecordingDriver::new();
     let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver;
     let (requester, calls) = FixedRequester::new(outcome);
-    let gate = Arc::new(ApprovalGate::new(
-        ApprovalConfig::default(),
-        Some(Arc::from(requester) as Arc<dyn ApprovalRequester>),
-    ));
+    let gate = Arc::new(ApprovalGate::new(Some(
+        Arc::from(requester) as Arc<dyn ApprovalRequester>
+    )));
     let shell_security = alephcore::ShellSecurityConfig::default();
     let sandbox = build_sandbox(
         &cfg,

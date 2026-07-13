@@ -30,7 +30,6 @@ pub enum ActionType {
     /// Write/mutate a personal-information store (Calendar, Reminders, Notes,
     /// Contacts) via the PIM tool.
     PimWrite,
-    ShellExec,
 }
 
 impl fmt::Display for ActionType {
@@ -47,7 +46,6 @@ impl fmt::Display for ActionType {
             Self::DesktopLaunchApp => "desktop launch app",
             Self::DesktopAutomation => "desktop automation script",
             Self::PimWrite => "personal-information write",
-            Self::ShellExec => "shell exec",
         };
         write!(f, "{s}")
     }

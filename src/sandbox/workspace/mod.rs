@@ -425,7 +425,6 @@ mod tests {
     use crate::sandbox::capabilities::NetworkPolicy;
     use crate::sandbox::driver::OsSandboxProfile;
     use crate::sandbox::exec_approval::gate::ApprovalRequester;
-    use crate::sandbox::exec_approval::types::ApprovalConfig;
     use crate::sync_primitives::Mutex;
 
     /// A no-op driver for tests — avoids invoking the real macOS sandbox-exec.
@@ -668,14 +667,13 @@ mod tests {
 
     fn build_gate_auto_deny() -> Arc<ApprovalGate> {
         // No requester → ApprovalGate::request_approval_for_tool returns Denied.
-        Arc::new(ApprovalGate::new(ApprovalConfig::default(), None))
+        Arc::new(ApprovalGate::new(None))
     }
 
     fn build_gate_with(outcome: ApprovalOutcome) -> Arc<ApprovalGate> {
-        Arc::new(ApprovalGate::new(
-            ApprovalConfig::default(),
-            Some(Arc::new(FixedRequester::new(outcome))),
-        ))
+        Arc::new(ApprovalGate::new(Some(Arc::new(FixedRequester::new(
+            outcome,
+        )))))
     }
 
     fn build_sandbox(
@@ -894,10 +892,7 @@ mod tests {
         let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver.clone();
         let requester = FixedRequester::new(ApprovalOutcome::Approved);
         let calls = requester.calls.clone();
-        let gate = Arc::new(ApprovalGate::new(
-            ApprovalConfig::default(),
-            Some(Arc::new(requester)),
-        ));
+        let gate = Arc::new(ApprovalGate::new(Some(Arc::new(requester))));
         let sandbox = build_sandbox(&tmp, driver_trait, gate, SandboxHooks::new());
         let elevated = SandboxCapabilities {
             network: NetworkPolicy::AllowAll,
@@ -1309,7 +1304,6 @@ mod scrub_integration_tests {
     use super::*;
     use crate::sandbox::driver::OsSandboxProfile;
     use crate::sandbox::exec_approval::gate::ApprovalGate;
-    use crate::sandbox::exec_approval::types::ApprovalConfig;
     use crate::sandbox::hooks::SandboxHooks;
     use std::path::Path;
 
@@ -1370,7 +1364,7 @@ mod scrub_integration_tests {
             stdout_payload,
             stderr_payload,
         });
-        let gate = Arc::new(ApprovalGate::new(ApprovalConfig::default(), None));
+        let gate = Arc::new(ApprovalGate::new(None));
         WorkspaceSandbox::new(tmp.path().to_path_buf(), driver, gate, SandboxHooks::new())
     }
 

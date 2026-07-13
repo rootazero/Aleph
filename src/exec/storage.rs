@@ -230,11 +230,10 @@ mod tests {
     fn test_save_and_load() {
         let (_dir, storage) = temp_storage();
 
-        let mut config = ExecApprovalsFile::default();
-        config.defaults = Some(super::super::config::ExecDefaults {
-            security: Some(super::super::config::ExecSecurity::Allowlist),
-            ..Default::default()
-        });
+        let config = ExecApprovalsFile {
+            version: 2,
+            ..ExecApprovalsFile::default()
+        };
 
         // First save (no base hash needed for unchecked)
         let hash1 = storage.save_unchecked(&config).unwrap();
@@ -242,7 +241,7 @@ mod tests {
 
         // Load and verify
         let loaded = storage.load().unwrap();
-        assert!(loaded.config.defaults.is_some());
+        assert_eq!(loaded.config.version, 2);
         assert_eq!(loaded.hash, hash1);
     }
 

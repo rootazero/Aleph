@@ -25,7 +25,6 @@ use alephcore::gateway::protocol::JsonRpcResponse;
 use alephcore::routing::session_key::SessionKey;
 use alephcore::sandbox::config::SandboxConfig;
 use alephcore::sandbox::exec_approval::gate::ApprovalGate;
-use alephcore::sandbox::exec_approval::types::ApprovalConfig;
 use alephcore::sandbox::factory::build_sandbox;
 use alephcore::sandbox::platforms::create_platform_driver_from_config;
 use alephcore::sandbox::rate_limit::SandboxRateLimitConfig;
@@ -276,10 +275,7 @@ fn build_command_table(name: &str) -> (CommandTable, ApprovalSlot) {
     let driver = create_platform_driver_from_config(&cfg);
     let slot: ApprovalSlot = Arc::new(RwLock::new(None));
     let requester = Arc::new(CenterApprovalRequester::new(slot.clone()));
-    let gate = Arc::new(ApprovalGate::new(
-        ApprovalConfig::default(),
-        Some(requester),
-    ));
+    let gate = Arc::new(ApprovalGate::new(Some(requester)));
     let sandbox = build_sandbox(
         &cfg,
         driver,
@@ -552,7 +548,10 @@ mod tests {
         match parse_connect_verdict(&reconnect).expect("a verdict") {
             ConnectVerdict::Registered { node_id, persist } => {
                 assert_eq!(node_id, "uuid-123");
-                assert!(!persist, "an unchanged id must not rewrite the identity file");
+                assert!(
+                    !persist,
+                    "an unchanged id must not rewrite the identity file"
+                );
             }
             ConnectVerdict::Deregistered => panic!("must be registered"),
         }
@@ -560,8 +559,7 @@ mod tests {
 
     #[test]
     fn connect_verdict_detects_deregistration() {
-        let kicked =
-            json!({"result": {"node": {"node_id": "uuid-123", "status": "deregistered"}}});
+        let kicked = json!({"result": {"node": {"node_id": "uuid-123", "status": "deregistered"}}});
         assert!(matches!(
             parse_connect_verdict(&kicked),
             Some(ConnectVerdict::Deregistered)

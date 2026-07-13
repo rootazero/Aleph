@@ -35,7 +35,6 @@ impl ScopedToolService {
             hook_decorator: None,
             hook_executor: None,
             hook_session_id: String::new(),
-            confirm_tools: BTreeSet::new(),
             approval_requester: None,
             config_approval_requester: None,
             turn_context: None,
@@ -143,18 +142,14 @@ impl ScopedToolService {
         self
     }
 
-    /// Require user confirmation for the named tools before they execute.
+    /// Wire the transport that obtains user confirmation.
     ///
-    /// When a tool in `confirm_tools` is invoked, `execute()` first routes a
-    /// confirmation request through `requester`; the tool runs only on an
-    /// `Approved` outcome. With no requester wired, confirm-required tools
-    /// fail closed.
-    pub fn with_confirmation(
-        mut self,
-        confirm_tools: BTreeSet<String>,
-        requester: Arc<dyn ApprovalRequester>,
-    ) -> Self {
-        self.confirm_tools = confirm_tools;
+    /// When a confirm-gated tool is invoked — one declaring
+    /// `LoopTool::requires_confirmation()`, or one the merged permission policy
+    /// resolves to `Ask` — `execute()` first routes a confirmation request
+    /// through `requester`; the tool runs only on an `Approved` outcome. With
+    /// no requester wired, confirm-gated tools fail closed.
+    pub fn with_confirmation(mut self, requester: Arc<dyn ApprovalRequester>) -> Self {
         self.approval_requester = Some(requester);
         self
     }

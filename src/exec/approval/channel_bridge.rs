@@ -460,7 +460,10 @@ impl ChannelApprovalBridge {
                 segments: vec![],
                 chains: None,
             },
-            agent_id: String::new(),
+            // Single source for the issuing agent (`audit_identity`); the
+            // context string it also builds is redundant here — the approval
+            // card renders `command` + `reason`.
+            agent_id: crate::approval::audit_identity("tool", tool_name, reason).0,
             session_key: record_session_key,
             reason: Some(reason.to_string()),
         };
@@ -528,6 +531,19 @@ impl ChannelApprovalBridge {
                 ApprovalOutcome::Timeout
             }
         }
+    }
+
+    /// 该通道当前是否可投递审批（已在 `ChannelRegistry` 注册）。
+    ///
+    /// Panel 回合携带 `gui:chat` —— 一个从不注册为外部通道的伪 channel id，
+    /// 所以 `deliver_routed` 恒返回 `None`。调用方据此在通道不可达时改走
+    /// operator 事件总线，而不是直接拒绝。
+    pub async fn can_deliver(&self, channel_id: &ChannelId) -> bool {
+        #[cfg(test)]
+        if self.test_outcome_override.is_some() {
+            return true;
+        }
+        self.registry.get(channel_id).await.is_some()
     }
 
     /// 按结构化 `channel_id` 投递审批提示。返回 `Some(true)` 已投递、

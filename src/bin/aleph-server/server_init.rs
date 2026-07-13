@@ -76,32 +76,10 @@ where
     P: alephcore::thinker::ProviderRegistry + 'static,
     R: alephcore::executor::ToolRegistry + 'static,
 {
+    use alephcore::gateway::handlers::agent::{build_run_request, AgentRunParams};
     use alephcore::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS};
-    use alephcore::gateway::RunRequest;
-    use serde::{Deserialize, Serialize};
+    use serde::Serialize;
     use serde_json::{json, Value};
-
-    // Deserialized from JSON-RPC params; fields read via serde
-    #[derive(Debug, Clone, Deserialize)]
-    struct AgentRunParams {
-        pub input: String,
-        #[serde(default)]
-        pub session_key: Option<String>,
-        #[serde(default)]
-        pub channel: Option<String>,
-        #[serde(default)]
-        pub peer_id: Option<String>,
-        #[serde(default = "default_stream")]
-        #[allow(dead_code)] // deserialized request param, not yet wired
-        pub stream: bool,
-        /// Optional absolute project root for per-run `workspace_override`.
-        #[serde(default)]
-        pub project_root: Option<String>,
-    }
-
-    const fn default_stream() -> bool {
-        true
-    }
 
     /// Result of agent.run request
     #[derive(Debug, Clone, Serialize)]
@@ -174,9 +152,6 @@ where
         }
     };
 
-    let channel_id = params.channel.as_deref().unwrap_or("panel");
-    let peer_id = params.peer_id.as_deref().unwrap_or("local");
-
     // Create emitter for streaming events, respecting output_mode config
     let output_mode = {
         let cfg = app_config.read().await;
@@ -189,51 +164,17 @@ where
         output_mode,
     ));
 
-    // Create run request with channel/peer metadata for agent management tools
-    let mut metadata = std::collections::HashMap::new();
-    metadata.insert("channel_id".to_string(), channel_id.to_string());
-    metadata.insert("sender_id".to_string(), peer_id.to_string());
-
-    let workspace_override = match params.project_root.as_deref() {
-        Some(raw) => {
-            let path = std::path::PathBuf::from(raw);
-            if !path.is_absolute() {
-                return alephcore::gateway::JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("project_root must be absolute: {raw}"),
-                );
+    // The RunRequest (metadata, project_root gate, attachments, model
+    // override, voice pin) is built by the one shared builder both this real
+    // engine path and the Simulated-fallback `AgentRunManager::start_run`
+    // call — see `gateway::handlers::agent::build_run_request`.
+    let run_request =
+        match build_run_request(run_id.clone(), &session_key, params, Some(&app_config)).await {
+            Ok(r) => r,
+            Err(e) => {
+                return alephcore::gateway::JsonRpcResponse::error(request.id, INVALID_PARAMS, e);
             }
-            let is_dir = tokio::fs::metadata(&path)
-                .await
-                .map(|m| m.is_dir())
-                .unwrap_or(false);
-            if !is_dir {
-                return alephcore::gateway::JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("project_root is not a directory: {raw}"),
-                );
-            }
-            metadata.insert("project_root".to_string(), path.display().to_string());
-            Some(path)
-        }
-        None => None,
-    };
-
-    let run_request = RunRequest {
-        run_id: run_id.clone(),
-        input: params.input.clone(),
-        session_key: session_key.clone(),
-        timeout_secs: None,
-        metadata,
-        attachments: Vec::new(),
-        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-        sandbox_override: None,
-        workspace_override,
-        max_iterations_override: None,
-        model_override: None,
-    };
+        };
 
     // Spawn execution task
     let engine_clone = engine.clone();
@@ -295,10 +236,9 @@ where
     P: alephcore::thinker::ProviderRegistry + 'static,
     R: alephcore::executor::ToolRegistry + 'static,
 {
-    use alephcore::gateway::handlers::agent::apply_moa_selector_semantics;
+    use alephcore::gateway::handlers::agent::{build_run_request, AgentRunParams};
     use alephcore::gateway::handlers::chat::SendParams;
     use alephcore::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS};
-    use alephcore::gateway::RunRequest;
     use serde::Serialize;
     use serde_json::{json, Value};
 
@@ -371,9 +311,6 @@ where
         }
     };
 
-    let channel_id = params.channel.as_deref().unwrap_or("panel");
-    let peer_id = "local"; // Panel doesn't have per-user peer IDs
-
     // Create emitter for streaming events, respecting output_mode config
     let output_mode = {
         let cfg = app_config.read().await;
@@ -386,51 +323,45 @@ where
         output_mode,
     ));
 
-    // Create run request with channel/peer metadata for agent management tools
-    let mut metadata = std::collections::HashMap::new();
-    metadata.insert("channel_id".to_string(), channel_id.to_string());
-    metadata.insert("sender_id".to_string(), peer_id.to_string());
-
-    // Inject user locale for downstream i18n
+    // `chat.send` is `agent.run` with a `message` field: project it onto the
+    // canonical params and let the one shared builder produce the RunRequest,
+    // so attachments, the model picker, the voice pin, the project_root gate
+    // and the surface/authorization metadata are honored identically on this
+    // real-`ExecutionEngine` path and on the Simulated-fallback
+    // `AgentRunManager::start_run`. Every one of those was previously dropped
+    // here (`attachments: Vec::new()`, `model_override: None`, no
+    // `platform` / `caller_role` / `conversation_id`).
+    let run_params = AgentRunParams {
+        input: params.message.clone(),
+        session_key: params.session_key,
+        channel: params.channel,
+        peer_id: None, // Panel has no per-user peer IDs
+        stream: params.stream,
+        thinking: params.thinking,
+        attachments: params.attachments,
+        agent_id: params.agent_id,
+        project_root: params.project_root,
+        model_override: params.model_override,
+        voice_input: params.voice_input,
+    };
+    let mut run_request = match build_run_request(
+        run_id.clone(),
+        &session_key,
+        run_params,
+        Some(&app_config),
+    )
+    .await
     {
-        let cfg = app_config.read().await;
-        let lang = cfg.general.language.as_deref().unwrap_or("zh");
-        metadata.insert("locale".to_string(), lang.to_string());
-    }
-
-    // Resolve optional project_root → workspace_override. Rejected if the
-    // path is not absolute or not an existing directory so downstream code
-    // can trust the override.
-    let project_root_for_run = match params.project_root.as_deref() {
-        Some(raw) => {
-            let path = std::path::PathBuf::from(raw);
-            if !path.is_absolute() {
-                return alephcore::gateway::JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("project_root must be absolute: {raw}"),
-                );
-            }
-            let is_dir = tokio::fs::metadata(&path)
-                .await
-                .map(|m| m.is_dir())
-                .unwrap_or(false);
-            if !is_dir {
-                return alephcore::gateway::JsonRpcResponse::error(
-                    request.id,
-                    INVALID_PARAMS,
-                    format!("project_root is not a directory: {raw}"),
-                );
-            }
-            metadata.insert("project_root".to_string(), path.display().to_string());
-            Some(path)
+        Ok(r) => r,
+        Err(e) => {
+            return alephcore::gateway::JsonRpcResponse::error(request.id, INVALID_PARAMS, e);
         }
-        None => None,
     };
 
     // Slash command detection: resolve via CommandParser and emit the
     // source-aware mode JSON (preserves Skill instructions / Custom system
-    // prompt / MCP server name so the fast path can act on them).
+    // prompt / MCP server name so the fast path can act on them). `chat.send`
+    // only — the inbound router does this for channel turns.
     if params.message.trim().starts_with('/') {
         if let Some(ref parser) = command_parser {
             let slash_text = params.message.trim();
@@ -443,7 +374,7 @@ where
                         parsed.command_name,
                         parsed.arguments
                     );
-                    metadata.insert(
+                    run_request.metadata.insert(
                         alephcore::gateway::inbound_router::SLASH_COMMAND_MODE_KEY.to_string(),
                         mode_json,
                     );
@@ -451,33 +382,6 @@ where
             }
         }
     }
-
-    // Round-2 Task 18 fix (E3): this real-`ExecutionEngine` path previously
-    // never intercepted the panel model picker's explicit "moa" pick — only
-    // the Simulated-fallback `AgentRunManager::start_run` did (see the
-    // sibling call site + doc comment on `apply_moa_selector_semantics`), so
-    // picking "moa" from the Panel silently did nothing in any real
-    // deployment (any provider configured). Apply the same interception here
-    // on the raw explicit override, discarding the returned value: this path
-    // has no voice-pin merge (never reads `params.voice_input`) and has never
-    // honored `model_override` for ordinary model picks (pre-existing,
-    // round-1 finding — `model_override: None` below is unchanged); only the
-    // MoA arm/clear side effect on the session is wired up by this fix.
-    let _ = apply_moa_selector_semantics(&session_key_str, params.model_override);
-
-    let run_request = RunRequest {
-        run_id: run_id.clone(),
-        input: params.message.clone(),
-        session_key: session_key.clone(),
-        timeout_secs: None,
-        metadata,
-        attachments: Vec::new(),
-        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-        sandbox_override: None,
-        workspace_override: project_root_for_run.clone(),
-        max_iterations_override: None,
-        model_override: None,
-    };
 
     // Spawn execution task
     let engine_clone = engine.clone();

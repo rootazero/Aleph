@@ -190,17 +190,6 @@ impl AgentRunManager {
         let session_key_str = session_key.to_key_string();
         let accepted_at = chrono::Utc::now().to_rfc3339();
 
-        // Record voice mode for this session BEFORE the run spawns, so prompt
-        // assembly (`VoiceModeLayer` via the harness bridge) sees it on THIS
-        // turn. Same registry the channel inbound path writes
-        // (`inbound_router::executor`); channel sessions use distinct keys, so
-        // the unconditional per-turn recompute here cannot clobber them.
-        crate::gateway::voice::session_mode::set(
-            &session_key_str,
-            params.voice_input,
-            params.voice_input,
-        );
-
         // Create run state
         let run_state = RunState {
             run_id: run_id.clone(),
@@ -250,143 +239,21 @@ impl AgentRunManager {
             }
         };
 
-        let mut metadata = HashMap::new();
-        metadata.insert("channel_id".to_string(), params.channel.unwrap_or_default());
-        metadata.insert("sender_id".to_string(), "websocket".to_string());
-        // The Panel is a WebRich surface. Stamp `platform=webchat` so the
-        // run-loop (`run_loop::inner`) derives a WebRich InteractionManifest.
-        // Without it `metadata["platform"]` is absent → the manifest is `None`
-        // → `prompt_build` falls back to the `Background` paradigm, whose
-        // `SilentReply` capability makes `ProtocolTokensLayer` teach the model
-        // `ALEPH_SILENT_COMPLETE`. The model then emits that literal token as a
-        // silent completion and it leaks verbatim into the chat bubble — the
-        // interactive path has no protocol-token suppression (only cron's
-        // `deliverable_text` strips it). Mirrors the team-broadcast
-        // (`member_run_metadata`) and channel-inbound paths that already tag
-        // platform; this direct Panel-run path was the one that missed it.
-        metadata.insert("platform".to_string(), "webchat".to_string());
-        if let Some(peer_id) = &params.peer_id {
-            metadata.insert("peer_id".to_string(), peer_id.clone());
-        }
+        let request = build_run_request(
+            run_id.clone(),
+            &session_key,
+            params,
+            self.app_config.as_ref(),
+        )
+        .await?;
 
-        // Stamp the originating connection's authorization role (set by the
-        // gateway dispatch loop via CALLER_ROLE) so the tool-dispatch tier gate
-        // can reject config-mutating tools for chat-tier devices. Covers BOTH
-        // chat.send and agent.run since both reach here via start_run in the
-        // same task. Absent for non-gateway runs (cron/internal) and for the
-        // local no-auth daemon → the gate treats those as trusted.
-        if let Some(role) = crate::gateway::caller_identity::current_caller_role() {
-            metadata.insert("caller_role".to_string(), role);
-        }
-
-        // Validate and resolve optional project_root. We refuse anything that
-        // isn't an existing absolute directory so the rest of the engine can
-        // assume the override is safe to chdir/scan into.
-        let workspace_override = match params.project_root.as_deref() {
-            Some(raw) => {
-                // Layer-2 (config tier) gate: choosing/creating a working
-                // directory is a config-tier capability. A chat-tier caller
-                // (remote Panel paired at "chat", or an external channel stamped
-                // "guest") is locked to its default workspace and may not pick an
-                // arbitrary project_root. Absent role (trusted local/internal
-                // run) and "operator" pass — mirrors
-                // `TurnContext::caller_is_operator`.
-                //
-                // Desktop App: the local Panel runs over loopback. Allow a
-                // project_root override from any loopback connection regardless
-                // of pairing tier — on the desktop the local operator IS the
-                // user. Remote LAN connections (non-loopback, chat-tier) stay
-                // gated, so opening `[gateway] host = "0.0.0.0"` does not hand
-                // arbitrary working-directory selection to every LAN device.
-                let role = crate::gateway::caller_identity::current_caller_role();
-                let is_config_tier = !matches!(role.as_deref(), Some(r) if r != "operator");
-                let is_loopback = crate::gateway::caller_identity::current_caller_is_loopback();
-                if !is_config_tier && !is_loopback {
-                    return Err(format!(
-                        "choosing a working directory requires config-tier authorization \
-                         or a local (loopback) connection; this connection is paired at \
-                         chat level from a remote address (project_root: {raw})"
-                    ));
-                }
-                let path = std::path::PathBuf::from(raw);
-                if !path.is_absolute() {
-                    return Err(format!("project_root must be absolute: {raw}"));
-                }
-                if !path.is_dir() {
-                    return Err(format!("project_root is not a directory: {raw}"));
-                }
-                metadata.insert("project_root".to_string(), path.display().to_string());
-                Some(path)
-            }
-            None => None,
-        };
-
-        // Capture the originating surface before `metadata` is moved into the
-        // request — used below to decide cross-surface reply fan-out.
-        let current_channel = metadata.get("channel_id").cloned().unwrap_or_default();
-
-        // Convert RPC attachments (base64 payload from chat.send / agent.run)
-        // into channel attachments so the engine's media processor sees them.
-        // Previously this was hardcoded to `vec![]`, silently dropping every
-        // attachment sent from the Panel. Undecodable entries are skipped with
-        // a warning rather than failing the whole run.
-        let attachments: Vec<crate::gateway::channel::Attachment> = params
-            .attachments
-            .iter()
-            .filter_map(|a| match BASE64.decode(a.data.as_bytes()) {
-                Ok(bytes) => Some(crate::gateway::channel::Attachment {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    mime_type: a.mime_type.clone(),
-                    filename: Some(a.name.clone()),
-                    size: Some(bytes.len() as u64),
-                    url: None,
-                    path: None,
-                    data: Some(bytes),
-                }),
-                Err(e) => {
-                    error!(name = %a.name, error = %e, "Dropping attachment with invalid base64 data");
-                    None
-                }
-            })
-            .collect();
-
-        // Round-2 E3: intercept the EXPLICIT picker override BEFORE the
-        // voice-pin merge below. Only a deliberate user pick may arm or
-        // clear session MoA; the voice fallback synthesizes an override
-        // from config (not user intent) and must not disturb an armed MoA
-        // session — see `apply_moa_selector_semantics`.
-        let explicit_override =
-            apply_moa_selector_semantics(&session_key_str, params.model_override);
-
-        // Voice turns may pin a low-TTFT model (config `[voice]
-        // llm_provider/llm_model`) so the spoken reply starts faster — the
-        // same pin the channel voice path applies. An explicit per-turn
-        // override from the model picker always wins.
-        let model_override = match (explicit_override, params.voice_input, &self.app_config) {
-            (Some(o), _, _) => Some(o),
-            (None, true, Some(cfg)) => {
-                let cfg = cfg.read().await;
-                crate::gateway::model_override::ModelOverride::from_voice(
-                    &cfg.voice_local.llm_provider,
-                    &cfg.voice_local.llm_model,
-                )
-            }
-            (None, _, _) => None,
-        };
-
-        let request = RunRequest {
-            run_id: run_id.clone(),
-            input: params.input.clone(),
-            session_key: session_key.clone(),
-            timeout_secs: None,
-            metadata,
-            attachments,
-            pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-            sandbox_override: None,
-            workspace_override,
-            max_iterations_override: None,
-            model_override,
-        };
+        // Capture the originating surface before `request` is moved into the
+        // spawn — used below to decide cross-surface reply fan-out.
+        let current_channel = request
+            .metadata
+            .get("channel_id")
+            .cloned()
+            .unwrap_or_default();
 
         // Primary emitter: streams to the Panel via the gateway event bus.
         // Read the global output_mode fresh per run so the live
@@ -498,6 +365,189 @@ impl AgentRunManager {
     }
 }
 
+/// Build the [`RunRequest`] for one Panel-originated turn (`agent.run` /
+/// `chat.send`).
+///
+/// Single source of truth for the whole gateway→engine hand-off: run metadata
+/// (surface / authorization / conversation routing), the `project_root` gate,
+/// base64 attachment decoding, the MoA selector semantics and the voice model
+/// pin. Both the real-`ExecutionEngine` handlers in `aleph-server`'s
+/// `server_init` and the Simulated-fallback [`AgentRunManager::start_run`] call
+/// it, so a field can never again be honored on one path and silently dropped
+/// on the other (which is exactly how Panel attachments and the model picker
+/// were lost on every real deployment).
+///
+/// `app_config` is `None` for test / host-only constructions: the locale and
+/// the `[voice]` model pin are then skipped rather than guessed.
+///
+/// Errors are user-facing strings; callers map them to their transport's error
+/// shape.
+pub async fn build_run_request(
+    run_id: String,
+    session_key: &SessionKey,
+    params: AgentRunParams,
+    app_config: Option<&Arc<RwLock<crate::Config>>>,
+) -> Result<RunRequest, String> {
+    let session_key_str = session_key.to_key_string();
+
+    // Record voice mode for this session BEFORE the run spawns, so prompt
+    // assembly (`VoiceModeLayer` via the harness bridge) sees it on THIS
+    // turn. Same registry the channel inbound path writes
+    // (`inbound_router::executor`); channel sessions use distinct keys, so
+    // the unconditional per-turn recompute here cannot clobber them.
+    crate::gateway::voice::session_mode::set(
+        &session_key_str,
+        params.voice_input,
+        params.voice_input,
+    );
+
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        "channel_id".to_string(),
+        params.channel.clone().unwrap_or_default(),
+    );
+    metadata.insert("sender_id".to_string(), "websocket".to_string());
+    // The Panel is a WebRich surface. Stamp `platform=webchat` so the
+    // run-loop (`run_loop::inner`) derives a WebRich InteractionManifest.
+    // Without it `metadata["platform"]` is absent → the manifest is `None`
+    // → `prompt_build` falls back to the `Background` paradigm, whose
+    // `SilentReply` capability makes `ProtocolTokensLayer` teach the model
+    // `ALEPH_SILENT_COMPLETE`. The model then emits that literal token as a
+    // silent completion and it leaks verbatim into the chat bubble — the
+    // interactive path has no protocol-token suppression (only cron's
+    // `deliverable_text` strips it). Mirrors the team-broadcast
+    // (`member_run_metadata`) and channel-inbound paths that already tag
+    // platform.
+    metadata.insert("platform".to_string(), "webchat".to_string());
+    // A Panel chat has no channel-side conversation id, but HITL tools
+    // (`ask_user`, approval routing) refuse to run when `conversation_id` is
+    // empty (`TurnContext::is_channel_routable`). The session key IS the
+    // Panel's conversation identity — stamp it so blocking clarification is
+    // reachable from the Panel instead of failing closed.
+    metadata.insert("conversation_id".to_string(), session_key_str.clone());
+    if let Some(peer_id) = &params.peer_id {
+        metadata.insert("peer_id".to_string(), peer_id.clone());
+    }
+
+    // Stamp the originating connection's authorization role (set by the
+    // gateway dispatch loop via CALLER_ROLE) so the tool-dispatch tier gate
+    // can reject config-mutating tools for chat-tier devices. Absent for
+    // non-gateway runs (cron/internal) and for the local no-auth daemon → the
+    // gate treats those as trusted.
+    if let Some(role) = crate::gateway::caller_identity::current_caller_role() {
+        metadata.insert("caller_role".to_string(), role);
+    }
+
+    if let Some(cfg) = app_config {
+        let cfg = cfg.read().await;
+        let lang = cfg.general.language.as_deref().unwrap_or("zh");
+        metadata.insert("locale".to_string(), lang.to_string());
+    }
+
+    // Validate and resolve optional project_root. We refuse anything that
+    // isn't an existing absolute directory so the rest of the engine can
+    // assume the override is safe to chdir/scan into.
+    let workspace_override = match params.project_root.as_deref() {
+        Some(raw) => {
+            // Layer-2 (config tier) gate: choosing/creating a working
+            // directory is a config-tier capability. A chat-tier caller
+            // (remote Panel paired at "chat", or an external channel stamped
+            // "guest") is locked to its default workspace and may not pick an
+            // arbitrary project_root. Absent role (trusted local/internal
+            // run) and "operator" pass — mirrors
+            // `TurnContext::caller_is_operator`.
+            //
+            // Desktop App: the local Panel runs over loopback. Allow a
+            // project_root override from any loopback connection regardless
+            // of pairing tier — on the desktop the local operator IS the
+            // user. Remote LAN connections (non-loopback, chat-tier) stay
+            // gated, so opening `[gateway] host = "0.0.0.0"` does not hand
+            // arbitrary working-directory selection to every LAN device.
+            let role = crate::gateway::caller_identity::current_caller_role();
+            let is_config_tier = !matches!(role.as_deref(), Some(r) if r != "operator");
+            let is_loopback = crate::gateway::caller_identity::current_caller_is_loopback();
+            if !is_config_tier && !is_loopback {
+                return Err(format!(
+                    "choosing a working directory requires config-tier authorization \
+                     or a local (loopback) connection; this connection is paired at \
+                     chat level from a remote address (project_root: {raw})"
+                ));
+            }
+            let path = std::path::PathBuf::from(raw);
+            if !path.is_absolute() {
+                return Err(format!("project_root must be absolute: {raw}"));
+            }
+            if !path.is_dir() {
+                return Err(format!("project_root is not a directory: {raw}"));
+            }
+            metadata.insert("project_root".to_string(), path.display().to_string());
+            Some(path)
+        }
+        None => None,
+    };
+
+    // Convert RPC attachments (base64 payload from chat.send / agent.run)
+    // into channel attachments so the engine's media processor sees them.
+    // Undecodable entries are skipped with a warning rather than failing the
+    // whole run.
+    let attachments: Vec<crate::gateway::channel::Attachment> = params
+        .attachments
+        .iter()
+        .filter_map(|a| match BASE64.decode(a.data.as_bytes()) {
+            Ok(bytes) => Some(crate::gateway::channel::Attachment {
+                id: uuid::Uuid::new_v4().to_string(),
+                mime_type: a.mime_type.clone(),
+                filename: Some(a.name.clone()),
+                size: Some(bytes.len() as u64),
+                url: None,
+                path: None,
+                data: Some(bytes),
+            }),
+            Err(e) => {
+                error!(name = %a.name, error = %e, "Dropping attachment with invalid base64 data");
+                None
+            }
+        })
+        .collect();
+
+    // Round-2 E3: intercept the EXPLICIT picker override BEFORE the voice-pin
+    // merge below. Only a deliberate user pick may arm or clear session MoA;
+    // the voice fallback synthesizes an override from config (not user intent)
+    // and must not disturb an armed MoA session — see
+    // `apply_moa_selector_semantics`.
+    let explicit_override = apply_moa_selector_semantics(&session_key_str, params.model_override);
+
+    // Voice turns may pin a low-TTFT model (config `[voice]
+    // llm_provider/llm_model`) so the spoken reply starts faster — the same pin
+    // the channel voice path applies. An explicit per-turn override from the
+    // model picker always wins.
+    let model_override = match (explicit_override, params.voice_input, app_config) {
+        (Some(o), _, _) => Some(o),
+        (None, true, Some(cfg)) => {
+            let cfg = cfg.read().await;
+            crate::gateway::model_override::ModelOverride::from_voice(
+                &cfg.voice_local.llm_provider,
+                &cfg.voice_local.llm_model,
+            )
+        }
+        (None, _, _) => None,
+    };
+
+    Ok(RunRequest {
+        run_id,
+        input: params.input,
+        session_key: session_key.clone(),
+        timeout_secs: None,
+        metadata,
+        attachments,
+        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        sandbox_override: None,
+        workspace_override,
+        max_iterations_override: None,
+        model_override,
+    })
+}
+
 /// Round-2 E3: a picker selection of the "moa" pseudo-provider arms session
 /// MoA (sticky) instead of riding as a per-turn model override. Returns the
 /// override that should continue down the run path (None when consumed).
@@ -510,20 +560,11 @@ impl AgentRunManager {
 /// merged in. A synthesized override is config-derived, not user intent —
 /// it must never clear an armed MoA session.
 ///
-/// Two call sites, both on the `chat.send`/`agent.run` picker-override path
-/// (the `select_model` tool's own `"moa:<preset>"` pick is a SEPARATE, inline
-/// arm/clear in `select_model.rs` — this function does not back it):
-/// - [`AgentRunManager::start_run`] above — the Simulated-fallback engine
-///   (registered when no provider is configured).
-/// - `handle_chat_send_with_engine` (`src/bin/aleph-server/server_init.rs`)
-///   — the real `ExecutionEngine` path used by any real deployment (Task 18
-///   fix; previously this path never called this function, so a Panel "moa"
-///   pick silently did nothing whenever a provider was configured).
-///
-/// `pub` (not `pub(crate)`): the second call site lives in the `aleph-server`
-/// binary crate, a separate compilation unit from this `alephcore` lib
-/// crate, so crate-private visibility would not reach it.
-pub fn apply_moa_selector_semantics(
+/// Single call site: [`build_run_request`], which every `chat.send` /
+/// `agent.run` path funnels through. (The `select_model` tool's own
+/// `"moa:<preset>"` pick is a SEPARATE, inline arm/clear in `select_model.rs`
+/// — this function does not back it.)
+pub(crate) fn apply_moa_selector_semantics(
     session_key: &str,
     model_override: Option<crate::gateway::model_override::ModelOverride>,
 ) -> Option<crate::gateway::model_override::ModelOverride> {
@@ -646,34 +687,6 @@ pub async fn handle_list(request: JsonRpcRequest, router: Arc<AgentRouter>) -> J
 // Extended Agent Handlers (for remove-ffi migration)
 // ============================================================================
 
-/// Parameters for agent.confirmPlan
-#[derive(Debug, Deserialize)]
-pub(crate) struct ConfirmPlanParams {
-    /// Plan ID to confirm/reject
-    pub plan_id: String,
-    /// Whether to confirm (true) or reject (false)
-    pub confirmed: bool,
-}
-
-/// Handle agent.confirmPlan RPC request
-///
-/// Confirms or rejects a task plan that requires user approval.
-pub async fn handle_confirm_plan(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: ConfirmPlanParams = match parse_params(&request) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-
-    // TODO: Forward to active agent instance
-    info!(
-        plan_id = %params.plan_id,
-        confirmed = params.confirmed,
-        "Plan confirmation received"
-    );
-
-    JsonRpcResponse::success(request.id, json!({ "ok": true }))
-}
-
 /// Parameters for agent.respondToInput
 #[derive(Debug, Deserialize)]
 pub(crate) struct RespondToInputParams {
@@ -700,37 +713,6 @@ pub async fn handle_respond_to_input(request: JsonRpcRequest) -> JsonRpcResponse
     );
 
     JsonRpcResponse::success(request.id, json!({ "ok": true }))
-}
-
-/// Parameters for agent.generateTitle
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-pub(crate) struct GenerateTitleParams {
-    /// User's input message
-    pub user_input: String,
-    /// AI's response
-    pub ai_response: String,
-}
-
-/// Handle agent.generateTitle RPC request
-///
-/// Generates a title for a conversation based on the first exchange.
-pub async fn handle_generate_title(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: GenerateTitleParams = match parse_params(&request) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-
-    // Generate a simple title from user input
-    // TODO: Use AI to generate a better title
-    let title = if params.user_input.chars().count() > 50 {
-        let truncated: String = params.user_input.chars().take(47).collect();
-        format!("{truncated}...")
-    } else {
-        params.user_input.clone()
-    };
-
-    JsonRpcResponse::success(request.id, json!({ "title": title }))
 }
 
 #[cfg(test)]
@@ -1051,6 +1033,78 @@ mod tests {
         ));
     }
 
+    /// REGRESSION (bugs #2/#9): the real `chat.send` handler used to build its
+    /// own RunRequest with `attachments: Vec::new()` / `model_override: None`
+    /// and no surface metadata. Both handlers now go through
+    /// `build_run_request`, so one assertion covers both: attachments are
+    /// base64-decoded, the picker's model override rides through, and the turn
+    /// is stamped with `platform` (else the Background paradigm leaks
+    /// `ALEPH_SILENT_COMPLETE` into chat), `caller_role` (else the config-tier
+    /// tool gate can never fire) and `conversation_id` (else `ask_user` is
+    /// unroutable).
+    #[tokio::test]
+    async fn build_run_request_carries_attachments_override_and_identity() {
+        use crate::gateway::model_override::ModelOverride;
+
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            input: "describe this".to_string(),
+            session_key: None,
+            channel: Some("gui:chat".to_string()),
+            peer_id: None,
+            stream: true,
+            thinking: None,
+            attachments: vec![Attachment {
+                name: "shot.png".to_string(),
+                mime_type: "image/png".to_string(),
+                data: BASE64.encode(b"png-bytes"),
+            }],
+            agent_id: None,
+            project_root: None,
+            model_override: Some(ModelOverride::Qualified {
+                provider: "anthropic".to_string(),
+                model: "claude-opus-4-8".to_string(),
+            }),
+            voice_input: false,
+        };
+
+        let request = crate::gateway::caller_identity::CALLER_ROLE
+            .scope(
+                Some("guest".to_string()),
+                build_run_request("run-1".to_string(), &session_key, params, None),
+            )
+            .await
+            .expect("build_run_request");
+
+        assert_eq!(request.attachments.len(), 1);
+        assert_eq!(
+            request.attachments[0].data.as_deref(),
+            Some(&b"png-bytes"[..]),
+            "attachments must be base64-decoded, not dropped"
+        );
+        assert_eq!(
+            request.model_override,
+            Some(ModelOverride::Qualified {
+                provider: "anthropic".to_string(),
+                model: "claude-opus-4-8".to_string(),
+            }),
+            "the chat-window model picker must be honored"
+        );
+        assert_eq!(
+            request.metadata.get("platform").map(String::as_str),
+            Some("webchat")
+        );
+        assert_eq!(
+            request.metadata.get("caller_role").map(String::as_str),
+            Some("guest")
+        );
+        assert_eq!(
+            request.metadata.get("conversation_id").map(String::as_str),
+            Some(session_key.to_key_string().as_str()),
+            "ask_user / approval routing refuse a turn with an empty conversation_id"
+        );
+    }
+
     #[tokio::test]
     async fn test_run_status() {
         let router = Arc::new(AgentRouter::new());
@@ -1242,11 +1296,7 @@ mod tests {
         let key = "test:moa:selector";
         // Prime a session model pick — arming MoA must clear it (Task 15
         // selector-slot exclusivity, set-then-clear ordering).
-        crate::providers::session_model_handle::set_session_model(
-            key,
-            None,
-            "gpt-5".to_string(),
-        );
+        crate::providers::session_model_handle::set_session_model(key, None, "gpt-5".to_string());
         let out = apply_moa_selector_semantics(
             key,
             Some(ModelOverride::Qualified {
@@ -1322,7 +1372,10 @@ mod tests {
                 model: "ghost".into(),
             }),
         );
-        assert!(out.is_none(), "override is still consumed (not passed through)");
+        assert!(
+            out.is_none(),
+            "override is still consumed (not passed through)"
+        );
         assert!(
             crate::providers::session_moa_handle::get_session_moa(key).is_none(),
             "unknown preset must not arm the session"

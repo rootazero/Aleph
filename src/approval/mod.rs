@@ -155,7 +155,7 @@ mod tests {
         let policy = make_policy(
             vec![
                 (ActionType::BrowserNavigate, DefaultDecision::Allow),
-                (ActionType::ShellExec, DefaultDecision::Deny),
+                (ActionType::DesktopAutomation, DefaultDecision::Deny),
                 (ActionType::DesktopClick, DefaultDecision::Ask),
             ],
             vec![],
@@ -167,7 +167,7 @@ mod tests {
         assert_eq!(policy.check(&req).await, ApprovalDecision::Allow);
 
         // Deny
-        let req = make_request(ActionType::ShellExec, "rm -rf /");
+        let req = make_request(ActionType::DesktopAutomation, "rm -rf /");
         assert!(matches!(
             policy.check(&req).await,
             ApprovalDecision::Deny { .. }
@@ -208,7 +208,7 @@ mod tests {
                 (ActionType::DesktopLaunchApp, "com.apple.*"),
             ],
             vec![
-                (ActionType::ShellExec, "rm -rf **"),
+                (ActionType::DesktopAutomation, "rm -rf **"),
                 (ActionType::BrowserNavigate, "*://malicious.com/*"),
             ],
         );
@@ -224,8 +224,8 @@ mod tests {
         let req = make_request(ActionType::DesktopLaunchApp, "com.apple.TextEdit");
         assert_eq!(policy.check(&req).await, ApprovalDecision::Allow);
 
-        // Shell blocklist wildcard
-        let req = make_request(ActionType::ShellExec, "rm -rf /important");
+        // Automation-script blocklist wildcard
+        let req = make_request(ActionType::DesktopAutomation, "rm -rf /important");
         assert!(matches!(
             policy.check(&req).await,
             ApprovalDecision::Deny { .. }
@@ -261,13 +261,6 @@ mod tests {
 
         let req = make_request(ActionType::DesktopLaunchApp, "com.apple.Safari");
         assert_eq!(policy.check(&req).await, ApprovalDecision::Allow);
-
-        // ShellExec remains denied even in the permissive default.
-        let req = make_request(ActionType::ShellExec, "ls");
-        assert!(matches!(
-            policy.check(&req).await,
-            ApprovalDecision::Deny { .. }
-        ));
     }
 
     // -----------------------------------------------------------------------
@@ -297,7 +290,6 @@ mod tests {
             ActionType::DesktopLaunchApp,
             ActionType::DesktopAutomation,
             ActionType::PimWrite,
-            ActionType::ShellExec,
         ];
 
         for action in all {
@@ -321,14 +313,14 @@ mod tests {
                 "desktop_type": "ask",
                 "desktop_key_combo": "ask",
                 "desktop_launch_app": "ask",
-                "shell_exec": "deny"
+                "desktop_automation": "deny"
             },
             "allowlist": [
                 { "type": "browser_navigate", "pattern": "https://*.github.com/*" },
                 { "type": "desktop_launch_app", "pattern": "com.apple.*" }
             ],
             "blocklist": [
-                { "type": "shell_exec", "pattern": "rm -rf *" },
+                { "type": "desktop_automation", "pattern": "do shell script*" },
                 { "type": "browser_navigate", "pattern": "*://malicious.com/*" }
             ]
         }"#;
@@ -339,7 +331,7 @@ mod tests {
         assert_eq!(config.allowlist.len(), 2);
         assert_eq!(config.blocklist.len(), 2);
         assert_eq!(
-            config.defaults.get(&ActionType::ShellExec).unwrap(),
+            config.defaults.get(&ActionType::DesktopAutomation).unwrap(),
             &DefaultDecision::Deny
         );
     }
@@ -365,7 +357,7 @@ mod tests {
     #[test]
     fn test_invalid_default_value_rejected_by_serde() {
         let json =
-            r#"{"version":1,"defaults":{"shell_exec":"Deny"},"allowlist":[],"blocklist":[]}"#;
+            r#"{"version":1,"defaults":{"desktop_click":"Deny"},"allowlist":[],"blocklist":[]}"#;
         let result: Result<PolicyConfig, _> = serde_json::from_str(json);
         assert!(result.is_err(), "Serde should reject capitalized 'Deny'");
     }
@@ -373,7 +365,6 @@ mod tests {
     #[test]
     fn test_action_type_display() {
         assert_eq!(ActionType::BrowserNavigate.to_string(), "browser navigate");
-        assert_eq!(ActionType::ShellExec.to_string(), "shell exec");
         assert_eq!(
             ActionType::DesktopLaunchApp.to_string(),
             "desktop launch app"

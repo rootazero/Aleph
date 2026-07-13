@@ -187,16 +187,13 @@ impl ScopedToolService {
 
         // Confirmation gate: tools flagged `requires_confirmation` must be
         // approved by the user before they run. Fails closed when no approval
-        // transport is wired. A tool is gated when it appears in the
-        // operator-override `confirm_tools` set, when the tool itself
-        // declares `LoopTool::requires_confirmation()` — the per-tool,
+        // transport is wired. A tool is gated when it declares
+        // `LoopTool::requires_confirmation()` — the per-tool,
         // declaration-driven seam that lets builtin / MCP / extension / skill
         // tools opt into approval without being hard-coded gateway-side — or
-        // when the merged permission policy resolves to `Ask` for this tool.
-        if self.confirm_tools.contains(name)
-            || self.inner.requires_confirmation(name)
-            || self.is_permission_ask(name)
-        {
+        // when the merged permission policy resolves to `Ask` for this tool
+        // (the mechanism the Ask exec tier projects onto).
+        if self.inner.requires_confirmation(name) || self.is_permission_ask(name) {
             match &self.approval_requester {
                 Some(requester) => {
                     let reason = format!("Tool `{name}` requires your confirmation to run.");
@@ -205,8 +202,10 @@ impl ScopedToolService {
                         return Err(ToolError::Execution {
                             name: name.to_string(),
                             cause: format!(
-                                "User did not approve running `{name}` ({:?}).{hint} \
-                                 Do not retry; ask the user how to proceed.",
+                                "The user did not approve running `{name}` ({:?}). Do not retry \
+                                 this call, do not rewrite it, and do not attempt to achieve the \
+                                 same result by other means.{hint} Ask the user what they would \
+                                 like to do instead.",
                                 denial.outcome
                             ),
                         });
@@ -384,6 +383,11 @@ impl ScopedToolService {
                 tool = %name,
                 "unattended run: auto-denied confirm-gated tool (no human to approve)"
             );
+            self.record_approval_decision(
+                name,
+                Some("auto-denied: unattended run, no human available to approve"),
+            )
+            .await;
             return Err(ConfirmDenial {
                 outcome: ApprovalOutcome::Denied,
                 hint: Some(
@@ -424,6 +428,8 @@ impl ScopedToolService {
                     "confirmation auto-denied by denial ledger: {}",
                     reason_kind.agent_hint()
                 );
+                self.record_approval_decision(name, Some(reason_kind.agent_hint()))
+                    .await;
                 // Surface the ledger's reason to the model (not just the log)
                 // so the circuit breaker actually breaks the loop.
                 return Err(ConfirmDenial {
@@ -483,6 +489,11 @@ impl ScopedToolService {
                     }
                 }
             }
+            self.record_approval_decision(
+                name,
+                Some(&format!("user did not approve ({outcome:?})")),
+            )
+            .await;
             // Carry the same hint on the *first* live denial too, so the agent
             // is told to change approach immediately rather than looping into
             // the auto-deny path above.
@@ -498,7 +509,82 @@ impl ScopedToolService {
                 session_memory::global().remember(key, name);
             }
         }
+        self.record_approval_decision(name, None).await;
         Ok(())
+    }
+
+    /// Persist this gate's decision into the session event log (the SSOT the
+    /// model replays). Without it an agent never learns that the user already
+    /// refused an action and simply asks again.
+    ///
+    /// `ToolService` dispatch carries no call identity, so the correlation ids
+    /// are recovered from the newest `ToolCallRequested` for this tool: the
+    /// harness emits that event immediately before dispatching, and every
+    /// confirm-gated tool claims `ConcurrencyClaim::global()` (never batched),
+    /// so the newest request for `name` is this call.
+    ///
+    /// Only decision points reach here — never the session-memory short-circuit
+    /// — so the event-log scan stays off the hot path. Best-effort: a failed
+    /// emit is logged, never allowed to overturn a decision the user has made.
+    async fn record_approval_decision(&self, name: &str, denial_reason: Option<&str>) {
+        use crate::session::events::{now_ms, ApprovalSource, SessionEvent};
+
+        let Some(turn) = self.turn_context.as_ref() else {
+            return;
+        };
+        let Some(session_svc) = crate::session::service::global_session_service() else {
+            return;
+        };
+        let session_id = &turn.session_key;
+
+        let events = match session_svc.get_events(session_id, None, None).await {
+            Ok(events) => events,
+            Err(e) => {
+                tracing::warn!(
+                    tool = %name,
+                    error = ?e,
+                    "failed to read session events — approval decision not persisted"
+                );
+                return;
+            }
+        };
+        let Some((turn_id, call_id)) = events.iter().rev().find_map(|rec| match &rec.event {
+            SessionEvent::ToolCallRequested {
+                turn_id,
+                call_id,
+                name: requested,
+                ..
+            } if requested == name => Some((*turn_id, call_id.clone())),
+            _ => None,
+        }) else {
+            tracing::debug!(
+                tool = %name,
+                "no ToolCallRequested to correlate — approval decision not persisted"
+            );
+            return;
+        };
+
+        let event = match denial_reason {
+            Some(reason) => SessionEvent::ToolCallDenied {
+                turn_id,
+                call_id,
+                reason: reason.to_string(),
+                at: now_ms(),
+            },
+            None => SessionEvent::ToolCallApproved {
+                turn_id,
+                call_id,
+                by: ApprovalSource::User,
+                at: now_ms(),
+            },
+        };
+        if let Err(e) = session_svc.emit_event(session_id, event).await {
+            tracing::warn!(
+                tool = %name,
+                error = ?e,
+                "failed to persist tool approval decision to the session log"
+            );
+        }
     }
 
     /// Fire `BeforeToolCall` interceptors. Returns the (possibly rewritten)

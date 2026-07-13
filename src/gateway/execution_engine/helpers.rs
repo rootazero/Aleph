@@ -47,8 +47,9 @@ pub struct RunContextOccupancy {
 ///
 /// The harness's `seed_session` replays each turn as the corresponding session
 /// event before emitting the trailing user prompt. Only text content survives
-/// this conversion today — multimodal blocks (images, `tool_calls`) are carried
-/// separately via the `Multimodal(Vec<MessageContent>)` variant.
+/// this conversion — a turn carrying attachments goes through
+/// `FlowInput::Multimodal` instead, which seeds the new user message with its
+/// image blocks (see `run_loop::inner`).
 ///
 /// `prompt` is the fresh user message that triggered this run.
 #[must_use]

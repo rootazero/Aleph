@@ -254,8 +254,7 @@ impl ConfigApprovalPolicy {
 
     /// Permissive fallback used when **no** policy file exists.
     ///
-    /// Every action type defaults to [`ApprovalDecision::Allow`] except
-    /// [`ActionType::ShellExec`], which stays [`ApprovalDecision::Deny`].
+    /// Every action type defaults to [`ApprovalDecision::Allow`].
     ///
     /// This is the production no-config default: the tools that hold an
     /// `ApprovalPolicy` (`DesktopTool`, `PimTool`, `AutomationTool`) emit
@@ -276,7 +275,6 @@ impl ConfigApprovalPolicy {
         defaults.insert(ActionType::DesktopLaunchApp, DefaultDecision::Allow);
         defaults.insert(ActionType::DesktopAutomation, DefaultDecision::Allow);
         defaults.insert(ActionType::PimWrite, DefaultDecision::Allow);
-        defaults.insert(ActionType::ShellExec, DefaultDecision::Deny);
 
         Self::new(PolicyConfig {
             version: 1,
@@ -292,7 +290,6 @@ impl Default for ConfigApprovalPolicy {
     /// - Browser navigate/click/type → Allow
     /// - Browser evaluate → Ask
     /// - Desktop actions → Ask
-    /// - Shell exec → Deny
     fn default() -> Self {
         let mut defaults = HashMap::new();
         defaults.insert(ActionType::BrowserNavigate, DefaultDecision::Allow);
@@ -306,7 +303,6 @@ impl Default for ConfigApprovalPolicy {
         defaults.insert(ActionType::DesktopLaunchApp, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopAutomation, DefaultDecision::Ask);
         defaults.insert(ActionType::PimWrite, DefaultDecision::Ask);
-        defaults.insert(ActionType::ShellExec, DefaultDecision::Deny);
 
         Self::new(PolicyConfig {
             version: 1,

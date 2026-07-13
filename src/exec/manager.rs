@@ -745,17 +745,14 @@ mod tests {
 
         // Modify and save
         let mut config = loaded.config.clone();
-        config.defaults = Some(super::super::config::ExecDefaults {
-            security: Some(super::super::config::ExecSecurity::Allowlist),
-            ..Default::default()
-        });
+        config.version = 2;
 
         let new_hash = manager.set_config(config, &loaded.hash).unwrap();
         assert_ne!(new_hash, loaded.hash);
 
         // Verify cache updated
         let reloaded = manager.get_config().unwrap();
-        assert!(reloaded.config.defaults.is_some());
+        assert_eq!(reloaded.config.version, 2);
     }
 
     #[test]

@@ -1,7 +1,6 @@
 //! Command execution security module.
 //!
 //! Provides secure shell command execution with:
-//! - Three-level security model (deny/allowlist/full)
 //! - Quote-aware shell command parsing
 //! - Allowlist pattern matching
 //! - File-based persistence with optimistic locking
@@ -28,8 +27,8 @@ pub mod storage;
 pub use allowlist::match_allowlist;
 pub use analysis::CommandAnalysis;
 pub use bridge::ApprovalBridge;
-pub use config::{ExecApprovalsFile, ExecAsk, ExecSecurity, ResolvedExecConfig};
-pub use decision::{decide_exec_approval, ApprovalDecision, ApprovalRequest, ExecContext};
+pub use config::ExecApprovalsFile;
+pub use decision::ApprovalRequest;
 pub use kernel::SecurityKernel;
 pub use manager::{ExecApprovalManager, PendingApproval};
 pub use masker::SecretMasker;

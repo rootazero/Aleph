@@ -1102,7 +1102,7 @@ async fn execute_with_cancel_runs_to_completion_when_token_never_fires() {
 
 // -------------------------------------------------------------------------
 // Per-tool confirmation gate — `LoopTool::requires_confirmation()` honored
-// by the dispatch gate independently of the static `confirm_tools` set.
+// by the dispatch gate.
 // -------------------------------------------------------------------------
 
 /// A tool that declares itself confirmation-required without being in any
@@ -1177,10 +1177,10 @@ async fn declared_confirmation_tool_runs_when_approved() {
         outcome: crate::sandbox::exec_approval::gate::ApprovalOutcome::Approved,
         calls: AtomicUsize::new(0),
     });
-    // Empty static `confirm_tools` set — gating comes solely from the tool's
-    // own `requires_confirmation()` declaration.
+    // Gating comes solely from the tool's own `requires_confirmation()`
+    // declaration.
     let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
-        .with_confirmation(BTreeSet::new(), StdArc::clone(&requester) as _);
+        .with_confirmation(StdArc::clone(&requester) as _);
 
     let out = svc
         .execute("danger", json!({}))
@@ -1221,7 +1221,7 @@ async fn session_grant_skips_reprompt_within_session() {
     });
     let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
         .with_turn_context(turn_ctx("agent-session-grant"))
-        .with_confirmation(BTreeSet::new(), StdArc::clone(&requester) as _);
+        .with_confirmation(StdArc::clone(&requester) as _);
 
     svc.execute("danger", json!({})).await.expect("first runs");
     svc.execute("danger", json!({})).await.expect("second runs");
@@ -1242,7 +1242,7 @@ async fn one_shot_approval_reprompts_each_call() {
     });
     let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
         .with_turn_context(turn_ctx("agent-one-shot"))
-        .with_confirmation(BTreeSet::new(), StdArc::clone(&requester) as _);
+        .with_confirmation(StdArc::clone(&requester) as _);
 
     svc.execute("danger", json!({})).await.expect("first runs");
     svc.execute("danger", json!({})).await.expect("second runs");
@@ -1261,7 +1261,7 @@ async fn declared_confirmation_tool_blocked_when_denied() {
         calls: AtomicUsize::new(0),
     });
     let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
-        .with_confirmation(BTreeSet::new(), StdArc::clone(&requester) as _);
+        .with_confirmation(StdArc::clone(&requester) as _);
 
     match svc.execute("danger", json!({})).await {
         Err(ToolError::Execution { name, .. }) => assert_eq!(name, "danger"),
@@ -1610,7 +1610,7 @@ async fn ask_tool_routes_through_confirmation_gate() {
             PermissionAction::Allow,
             &[("alpha", PermissionAction::Ask)],
         ))
-        .with_confirmation(BTreeSet::new(), StdArc::clone(&requester) as _);
+        .with_confirmation(StdArc::clone(&requester) as _);
     svc.execute("alpha", json!({}))
         .await
         .expect("approved Ask tool runs");

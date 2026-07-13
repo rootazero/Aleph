@@ -51,12 +51,27 @@ pub async fn handle_reset_db(
                 }
             };
 
+            // Retire the SSOT event log before the `messages` projection —
+            // same ordering rationale as `chat.clear`: resetting only the
+            // projection leaves the model replaying the cleared conversation.
+            let retired = match crate::session::store::retire_live_events(&session_key, 1).await {
+                Ok(n) => n,
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INTERNAL_ERROR,
+                        format!("Failed to reset session event log: {e}"),
+                    );
+                }
+            };
+
             match manager.reset_session(&session_key).await {
                 Ok(reset) => JsonRpcResponse::success(
                     request.id,
                     json!({
                         "session_key": key_str,
-                        "reset": reset,
+                        "reset": reset || retired > 0,
+                        "events_retired": retired,
                     }),
                 ),
                 Err(e) => JsonRpcResponse::error(
