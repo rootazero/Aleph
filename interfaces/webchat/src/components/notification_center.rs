@@ -10,16 +10,15 @@
 //! sits BELOW the boot/service gates (which take over the whole screen) so
 //! a runtime disconnect still blanks the bell.
 
-use crate::api::ExecApprovalApi;
+use crate::components::approval_card::ApprovalCard;
 use crate::components::sidebar::AlertLevel;
 use crate::context::DashboardState;
-use crate::i18n::{t, t_string, use_i18n};
+use crate::i18n::{t_string, use_i18n};
 use crate::state::notifications::{
     unread_count, visible_alerts, NotificationsState, PendingApprovalView,
 };
 use leptos::ev::keydown;
 use leptos::prelude::*;
-use leptos::task::spawn_local;
 
 #[component]
 #[must_use]
@@ -147,91 +146,9 @@ pub fn NotificationCenter() -> impl IntoView {
                             view! {
                                 <ul class="divide-y divide-border">
                                     {approvals.into_iter().map(|a: PendingApprovalView| {
-                                        let i18n = use_i18n();
-                                        let id_once = a.id.clone();
-                                        let id_session = a.id.clone();
-                                        let id_deny = a.id.clone();
-                                        let command = a.command.clone();
-                                        let agent_id = a.agent_id.clone();
-                                        let secs = (a.remaining_ms / 1000).to_string();
                                         view! {
                                             <li class="px-4 py-3">
-                                                <div class="text-sm font-medium text-text-primary">
-                                                    {t!(i18n, notifications.approval_header)}
-                                                </div>
-                                                <div class="font-mono text-sm my-1 text-primary">
-                                                    {command}
-                                                </div>
-                                                <div class="text-xs text-text-secondary">
-                                                    {t!(i18n, notifications.approval_requested_by)} ": " {agent_id}
-                                                </div>
-                                                <div class="text-xs text-text-tertiary mt-0.5">
-                                                    {t!(i18n, notifications.approval_expires)} " " {secs} "s"
-                                                </div>
-                                                <div class="flex gap-2 mt-2">
-                                                    <button
-                                                        type="button"
-                                                        class="flex-1 py-1.5 rounded bg-primary hover:bg-primary-hover text-white text-xs font-semibold transition-colors"
-                                                        on:click=move |_| {
-                                                            let id = id_once.clone();
-                                                            spawn_local(async move {
-                                                                match ExecApprovalApi::resolve(&dashboard, id.clone(), "allow-once"
-                                                                ).await {
-                                                                    Ok(_) => {
-                                                                        dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
-                                                                    }
-                                                                    Err(e) => {
-                                                                        web_sys::console::warn_1(&format!("Failed to resolve approval (allow-once): {e:?}").into());
-                                                                    }
-                                                                }
-                                                            });
-                                                        }
-                                                    >
-                                                        {t!(i18n, notifications.approval_allow_once)}
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        class="flex-1 py-1.5 rounded bg-surface-raised hover:bg-surface-sunken text-text-primary text-xs border border-border transition-colors"
-                                                        on:click=move |_| {
-                                                            let id = id_session.clone();
-                                                            spawn_local(async move {
-                                                                match ExecApprovalApi::resolve(
-                                                                    &dashboard, id.clone(), "allow-session"
-                                                                ).await {
-                                                                    Ok(_) => {
-                                                                        dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
-                                                                    }
-                                                                    Err(e) => {
-                                                                        web_sys::console::warn_1(&format!("Failed to resolve approval (allow-session): {e:?}").into());
-                                                                    }
-                                                                }
-                                                            });
-                                                        }
-                                                    >
-                                                        {t!(i18n, notifications.approval_allow_session)}
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        class="flex-1 py-1.5 rounded bg-surface-sunken hover:bg-surface-raised text-text-secondary text-xs transition-colors"
-                                                        on:click=move |_| {
-                                                            let id = id_deny.clone();
-                                                            spawn_local(async move {
-                                                                match ExecApprovalApi::resolve(
-                                                                    &dashboard, id.clone(), "deny"
-                                                                ).await {
-                                                                    Ok(_) => {
-                                                                        dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
-                                                                    }
-                                                                    Err(e) => {
-                                                                        web_sys::console::warn_1(&format!("Failed to resolve approval (deny): {e:?}").into());
-                                                                    }
-                                                                }
-                                                            });
-                                                        }
-                                                    >
-                                                        {t!(i18n, notifications.approval_deny)}
-                                                    </button>
-                                                </div>
+                                                <ApprovalCard approval=a />
                                             </li>
                                         }
                                     }).collect::<Vec<_>>()}

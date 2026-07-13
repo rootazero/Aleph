@@ -145,6 +145,7 @@ mod tests {
         let f = GatewayEventFrame::AskUser {
             run_id: "r1".to_string(),
             seq: 1,
+            session_key: "sess-1".to_string(),
             question: "Delete it?".to_string(),
             options: vec![],
         };
@@ -159,6 +160,7 @@ mod tests {
         let f = GatewayEventFrame::AskUser {
             run_id: "r1".to_string(),
             seq: 1,
+            session_key: "sess-1".to_string(),
             question: "   ".to_string(),
             options: vec![],
         };
@@ -220,6 +222,7 @@ mod tests {
         let f = GatewayEventFrame::AskUser {
             run_id: "r1".to_string(),
             seq: 1,
+            session_key: "sess-1".to_string(),
             question: "Proceed?".to_string(),
             options: vec![],
         };

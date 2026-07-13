@@ -81,6 +81,45 @@ pub fn PhoneComposer() -> impl IntoView {
         });
     };
 
+    // The question this conversation is parked on, if any. The card itself is
+    // rendered by the shared `MessageList`; the composer only has to make sure
+    // Enter reaches it instead of the queue.
+    let pending_ask = Memo::new(move |_| {
+        crate::state::notifications::pending_ask_for_session(
+            &dashboard.pending_clarifications.get(),
+            chat.session_key.get().as_deref(),
+        )
+        .cloned()
+    });
+
+    // Answer a pending `ask_user` with the current draft. Returns `true` when a
+    // question was pending — the caller must then NOT fall through to send/queue.
+    // Same rule every channel enforces in `inbound_router::try_intercept_hitl`:
+    // while a clarification is pending, whatever the user sends IS the answer.
+    // Queueing it instead would strand the parked tool until its timeout — the
+    // turn cannot reach another boundary to drain the queue at.
+    let answer_pending_ask = move || -> bool {
+        let Some(ask) = pending_ask.get_untracked() else {
+            return false;
+        };
+        let reply = input_text.get_untracked().trim().to_string();
+        if reply.is_empty() {
+            return true;
+        }
+        input_text.set(String::new());
+        chat.push_user_message(&reply);
+        let dash = dashboard;
+        spawn_local(async move {
+            match crate::api::ClarificationApi::resolve(&dash, &ask.session_key, &reply).await {
+                Ok(()) => dash
+                    .pending_clarifications
+                    .update(|l| l.retain(|p| p.session_key != ask.session_key)),
+                Err(e) => chat.set_send_error(ChatSendError::classify(e)),
+            }
+        });
+        true
+    };
+
     // Queue a follow-up while a run is active → it becomes a ghost bubble.
     // No client-side prompt-injection guard (server is the authority).
     let enqueue = move || {
@@ -201,9 +240,13 @@ pub fn PhoneComposer() -> impl IntoView {
     });
 
     // Enter sends (idle) or queues (running); Shift+Enter inserts a newline.
+    // A pending question outranks both — the turn is blocked on the answer.
     let on_keydown = move |ev: leptos::ev::KeyboardEvent| {
         if ev.key() == "Enter" && !ev.shift_key() {
             ev.prevent_default();
+            if answer_pending_ask() {
+                return;
+            }
             if running() {
                 enqueue();
             } else {
@@ -225,7 +268,10 @@ pub fn PhoneComposer() -> impl IntoView {
             {move || if running() {
                 view! {
                     <div style="flex:none; display:flex; align-items:flex-end; gap:8px;">
-                        <Show when=move || has_draft.get()>
+                        // Withdrawn while a question is pending: the turn cannot
+                        // reach another boundary until it is answered, so a
+                        // queued draft would sit behind the parked tool.
+                        <Show when=move || has_draft.get() && pending_ask.get().is_none()>
                             <button
                                 on:click=move |_| enqueue()
                                 style="flex:none; width:38px; height:38px; border:0; border-radius:9999px; background:var(--color-surface-raised); color:var(--color-text-secondary); cursor:pointer; display:flex; align-items:center; justify-content:center;"

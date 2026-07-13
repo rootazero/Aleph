@@ -115,10 +115,16 @@ pub(super) fn register_common_handlers(
         async move { chat_handlers::handle_history(req, manager).await }
     });
 
-    let sm_clear = session_store;
+    let sm_clear = session_store.clone();
     server.handlers_mut().register("chat.clear", move |req| {
         let manager = sm_clear.clone();
         async move { chat_handlers::handle_clear(req, manager).await }
+    });
+
+    let sm_rewind = session_store;
+    server.handlers_mut().register("chat.rewind", move |req| {
+        let manager = sm_rewind.clone();
+        async move { chat_handlers::handle_rewind(req, manager).await }
     });
 
     // agent.respondToInput is stateless (no context args)

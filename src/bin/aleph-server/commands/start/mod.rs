@@ -2368,7 +2368,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     //     `ScopedToolService.with_confirmation` `requires_confirmation` seam
     //     (`set_confirmation_requester`, HITL P3).
     //   • Clarification manager — registered for HITL P4 `ask_user`, injected
-    //     into `BuiltinToolRegistry` via the cell set up at agent boot.
+    //     into `BuiltinToolRegistry` via the cell set up at agent boot, and
+    //     shared with the `clarification.*` RPC handlers (the Panel's only way
+    //     to answer — its traffic never traverses the inbound router).
     let clarification_manager = Arc::new(alephcore::clarification::ClarificationManager::new());
     {
         use alephcore::approval::adapters::ChannelApprovalBridgeAdapter;
@@ -2378,6 +2380,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         alephcore::gateway::handlers::exec_approvals::register_handlers(
             server.handlers_mut(),
             exec_approval_manager.clone(),
+        );
+
+        // clarification.* RPC handlers — same `Arc` the `ask_user` tool parks on.
+        alephcore::gateway::handlers::clarification::register_handlers(
+            server.handlers_mut(),
+            clarification_manager.clone(),
         );
 
         use alephcore::approval::adapters::FallbackApprovalRequester;
@@ -2395,19 +2403,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             event_bus.clone(),
         ));
 
-        // P1: sandbox capability escalations reach the user via the channel.
-        approval_gate.set_requester(channel_adapter.clone());
-        // P3: confirm-gated tools prompt on the originating channel, falling back
-        // to the operator when there is none — Panel turns carry the `gui:chat`
-        // pseudo-channel, which is never registered, so the channel transport
-        // alone would deny every Panel approval without ever asking.
-        let confirmation_requester: Arc<
-            dyn alephcore::sandbox::exec_approval::gate::ApprovalRequester,
-        > = Arc::new(FallbackApprovalRequester::new(
-            channel_adapter,
-            operator_requester.clone(),
-        ));
-        alephcore::gateway::execution_engine::set_confirmation_requester(confirmation_requester);
+        // Both human-approval paths — sandbox capability escalation (P1) and
+        // confirm-gated tools (P3) — share one transport: prompt on the
+        // originating channel, fall back to the operator when there is none.
+        // Panel turns carry the `gui:chat` pseudo-channel, which is never
+        // registered, so the channel transport alone would deny every Panel
+        // approval without ever asking.
+        let human_requester: Arc<dyn alephcore::sandbox::exec_approval::gate::ApprovalRequester> =
+            Arc::new(FallbackApprovalRequester::new(
+                channel_adapter,
+                operator_requester.clone(),
+            ));
+        approval_gate.set_requester(human_requester.clone());
+        alephcore::gateway::execution_engine::set_confirmation_requester(human_requester);
 
         // Phase 2b: operator-targeted approval for config-tier tools. A chat-tier
         // remote device calling a config tool suspends here until an operator

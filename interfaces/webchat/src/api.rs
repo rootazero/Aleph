@@ -17,6 +17,7 @@ pub mod cluster;
 // Split submodules
 pub mod acp;
 pub mod browser;
+pub mod clarification;
 pub mod config;
 pub mod discord;
 pub mod embedding;
@@ -47,6 +48,7 @@ pub mod workspace;
 // Re-export all public types for backward compatibility (crate::api::Foo)
 pub use acp::*;
 pub use browser::*;
+pub use clarification::*;
 pub use config::*;
 pub use discord::*;
 pub use embedding::*;

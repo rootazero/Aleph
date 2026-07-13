@@ -1,8 +1,9 @@
 //! Maps Gateway streaming events (run.*) to `ChatState` mutations.
 
-use super::state::{ChatState, ContextUsage, ModelInfo, ProviderRetryNotice};
+use super::state::{ChatState, ContextUsage, ModelInfo, ProviderRetryNotice, RunCost};
 use crate::context::{DashboardState, GatewayEvent};
 use crate::state::layout::WorkspaceState;
+use crate::state::notifications::PendingAskView;
 use crate::state::sessions::SessionMap;
 use leptos::prelude::*;
 use std::collections::HashSet;
@@ -384,6 +385,60 @@ fn apply_context_gauge(chat: ChatState, summary: &serde_json::Value) {
     }
 }
 
+/// Project the run's cost + token split from the `run_complete` summary onto
+/// the assistant bubble's meta line. Core prices the run (`estimated_cost_usd`
+/// / `cost_status`) and splits the tokens (`token_breakdown`); the panel only
+/// renders (R4). No-op when the summary carries neither a price nor a token
+/// total — a cost-less run must show nothing, not "$0.00".
+fn apply_run_cost(chat: ChatState, run_id: &str, summary: &serde_json::Value) {
+    let usd = summary
+        .get("estimated_cost_usd")
+        .and_then(serde_json::Value::as_f64);
+    let status = summary
+        .get("cost_status")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let total_tokens = summary
+        .get("total_tokens")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let breakdown = summary.get("token_breakdown");
+    let field = |k: &str| {
+        breakdown
+            .and_then(|b| b.get(k))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
+    if usd.is_none() && total_tokens == 0 {
+        return;
+    }
+    chat.set_run_cost(
+        run_id,
+        RunCost {
+            usd,
+            status,
+            total_tokens,
+            input_tokens: field("input"),
+            output_tokens: field("output"),
+        },
+    );
+}
+
+/// Drop the pending question owned by `chat`'s conversation, if any.
+///
+/// Called when a run settles: whatever `ask_user` it was parked on is over
+/// (answered, superseded, or timed out), so its card must not linger — and must
+/// not keep the composer's Enter key routed at a clarification nobody is
+/// waiting on. Answering also removes the entry optimistically (`AskUserCard`),
+/// so this is the catch-all for every other way a question dies.
+fn clear_pending_ask(dash: &DashboardState, chat: ChatState) {
+    let Some(session_key) = chat.session_key.get_untracked() else {
+        return;
+    };
+    dash.pending_clarifications
+        .update(|list| list.retain(|p| p.session_key != session_key));
+}
+
 /// Resolve which conversation's `ChatState` one run event should land on, and
 /// maintain running/route bookkeeping. Returns the target `ChatState` plus
 /// whether the resolved conversation is the active (foreground) one — callers
@@ -464,6 +519,41 @@ pub fn subscribe_run_events(
 
         // Guard: most events require a valid run_id to associate with a message
         if run_id.is_empty() && event_type != "reasoning" {
+            return;
+        }
+
+        // `ask_user`: the agent is parked on a question. Handled before
+        // `resolve_target` because the pending list is keyed by session, not by
+        // conversation — the card must appear even for a run this client never
+        // bound (a reconnect, another surface's run). The frame carries the
+        // clarification key; the panel stores it and posts it straight back.
+        if event_type == "ask_user" {
+            let Some(session_key) = data.get("session_key").and_then(|s| s.as_str()) else {
+                return;
+            };
+            let ask = PendingAskView {
+                session_key: session_key.to_string(),
+                question: data
+                    .get("question")
+                    .and_then(|q| q.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                options: data
+                    .get("options")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|opts| {
+                        opts.iter()
+                            .filter_map(|o| o.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            };
+            // One question per session, core-side (a second `ask_user`
+            // supersedes the first) — mirror that here instead of stacking.
+            dash.pending_clarifications.update(|list| {
+                list.retain(|p| p.session_key != ask.session_key);
+                list.push(ask);
+            });
             return;
         }
 
@@ -587,6 +677,7 @@ pub fn subscribe_run_events(
             }
             "run_complete" => {
                 chat.complete_run(run_id);
+                clear_pending_ask(&dash, chat);
                 // Unpin only affects the foreground detail pane — a
                 // background run finishing must not clear the user's
                 // manual pin on whatever they're currently viewing.
@@ -611,6 +702,9 @@ pub fn subscribe_run_events(
                 // run-cumulative `total_tokens` rides along for the tooltip.
                 if let Some(summary) = data.get("summary") {
                     apply_context_gauge(chat, summary);
+                    // Cost + token split for the bubble's meta line — the same
+                    // summary already carries them, nothing else reads them yet.
+                    apply_run_cost(chat, run_id, summary);
                 }
                 // Voice loop: if the mic button registered this run, speak the
                 // final reply via the core TTS path → endpoint playback.
@@ -627,6 +721,7 @@ pub fn subscribe_run_events(
                     .and_then(|e| e.as_str())
                     .unwrap_or("Unknown error");
                 chat.fail_run(run_id, error);
+                clear_pending_ask(&dash, chat);
                 if is_foreground {
                     workspace.end_follow();
                 }

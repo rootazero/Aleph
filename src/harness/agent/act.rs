@@ -514,7 +514,8 @@ impl AgentHarness {
                 // Live "done" event for the memo-hit (no re-execution but the
                 // model observed a result). Keeps the broadcast stream's
                 // ToolStart↔ToolEnd symmetry intact for deduplicated calls.
-                callback.on_tool_call_done(&call.id, Some(&output_value), None);
+                // 0 ms — nothing was executed (mirrors the trace event below).
+                callback.on_tool_call_done(&call.id, Some(&output_value), None, 0);
                 self.emit(
                     || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                         iteration,
@@ -619,8 +620,7 @@ impl AgentHarness {
                         session_id, turn_id, &call, synthetic, started, iteration, callback,
                     )
                     .await;
-                    let pending_ids: Vec<String> =
-                        tool_iter.by_ref().map(|c| c.id).collect();
+                    let pending_ids: Vec<String> = tool_iter.by_ref().map(|c| c.id).collect();
                     if !pending_ids.is_empty() {
                         self.close_unexecuted_tool_uses(
                             session_id,
@@ -1180,7 +1180,7 @@ impl AgentHarness {
         // tool that produces a `ToolCallCompleted` persistence trace so the
         // broadcast stream emits a `ToolCallDone` → `StreamEvent::ToolEnd`.
         // Without it the live stream shows tool starts with no ends.
-        callback.on_tool_call_done(&call.id, Some(&output_value), None);
+        callback.on_tool_call_done(&call.id, Some(&output_value), None, dur_ms);
         self.emit(
             || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                 iteration,
@@ -1268,7 +1268,7 @@ impl AgentHarness {
         // so the broadcast stream emits `ToolCallDone` → `StreamEvent::ToolEnd`
         // with the error body. Fired before the persistence trace, mirroring
         // the success path.
-        callback.on_tool_call_done(&call.id, None, Some(&error_msg));
+        callback.on_tool_call_done(&call.id, None, Some(&error_msg), dur_ms);
         self.emit(
             || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                 iteration,

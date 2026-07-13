@@ -28,6 +28,7 @@
 
 use super::{ClarificationRequest, ClarificationResult, ClarificationType};
 use crate::sync_primitives::{Arc, AsyncRwLock};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
@@ -37,6 +38,20 @@ use tokio::sync::oneshot;
 /// Generous on purpose: users type thoughtful answers, unlike a yes/no
 /// approval. Mirrors hermes-agent's 600s `clarify` timeout.
 pub const DEFAULT_CLARIFY_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// One outstanding question, as a client needs to render and answer it.
+///
+/// Carries the same three fields as the `AskUser` frame minus the run id: the
+/// registry is keyed by session, and the reply is posted back on `session_key`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PendingClarification {
+    /// Key to pass back to [`ClarificationManager::resolve`].
+    pub session_key: String,
+    /// The rendered question.
+    pub question: String,
+    /// Choice labels; empty for an open-ended (text) question.
+    pub options: Vec<String>,
+}
 
 /// A clarification awaiting the user's reply.
 struct PendingEntry {
@@ -113,6 +128,31 @@ impl ClarificationManager {
             .await
             .get(session_key)
             .is_some_and(|e| !e.is_expired())
+    }
+
+    /// Snapshot every live pending clarification.
+    ///
+    /// The clarification twin of [`ExecApprovalManager::list_pending`]: the
+    /// `AskUser` frame is a one-shot push, so a Panel that connects (or
+    /// reloads) mid-question would otherwise never learn a question is
+    /// outstanding and would strand the parked tool until its timeout.
+    pub async fn list_pending(&self) -> Vec<PendingClarification> {
+        self.pending
+            .read()
+            .await
+            .iter()
+            .filter(|(_, e)| !e.is_expired())
+            .map(|(session_key, e)| PendingClarification {
+                session_key: session_key.clone(),
+                question: e.request.prompt.clone(),
+                options: e
+                    .request
+                    .options
+                    .as_ref()
+                    .map(|opts| opts.iter().map(|o| o.label.clone()).collect())
+                    .unwrap_or_default(),
+            })
+            .collect()
     }
 
     /// Resolve the pending clarification for `session_key` from the user's

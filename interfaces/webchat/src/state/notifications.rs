@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 /// inline allow-once / allow-session / deny buttons. Sourced from the
 /// `exec.approvals.pending` RPC (the `approval.**` events are sparse — they only
 /// trigger a refetch). Display-only.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PendingApprovalView {
     /// Approval request id (passed to `exec.approval.resolve`).
     pub id: String,
@@ -31,8 +31,56 @@ pub struct PendingApprovalView {
     pub command: String,
     /// The requesting agent id.
     pub agent_id: String,
-    /// Milliseconds until the approval times out.
-    pub remaining_ms: u64,
+    /// Session the requesting turn belongs to. Scopes the inline chat card to
+    /// the conversation that is actually waiting.
+    pub session_key: String,
+    /// Why the tool asked (server-supplied escalation context).
+    pub reason: Option<String>,
+    /// Absolute epoch-ms deadline, derived at fetch time from the server's
+    /// `remaining_ms` snapshot. Absolute (not a duration) so the card can count
+    /// down against the shared 1s clock instead of freezing at fetch time.
+    pub expires_at_ms: i64,
+}
+
+impl PendingApprovalView {
+    /// Whole seconds left before this approval times out. Clamped at 0 — an
+    /// expired-but-not-yet-refetched row must never render a negative countdown.
+    #[must_use]
+    pub const fn remaining_secs(&self, now_ms: i64) -> i64 {
+        let remaining = self.expires_at_ms - now_ms;
+        if remaining < 0 {
+            0
+        } else {
+            remaining / 1000
+        }
+    }
+}
+
+/// A question the agent is parked on (`ask_user`), rendered as an inline card
+/// in the conversation that is waiting. Sourced from the `stream.ask_user`
+/// frame (live) and `clarification.pending` (connect / reload). Display-only —
+/// the reply is posted straight back to `clarification.resolve` on
+/// `session_key`; the panel interprets nothing (R4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingAskView {
+    /// Clarification registry key the answer is posted back on.
+    pub session_key: String,
+    /// The question as core rendered it.
+    pub question: String,
+    /// Choice labels. Empty = open-ended, so the card offers a text field.
+    pub options: Vec<String>,
+}
+
+/// The question `session_key` is waiting on, if any. One question is pending
+/// per session at most (a second `ask_user` supersedes the first, core-side),
+/// so the first match is the answer.
+#[must_use]
+pub fn pending_ask_for_session<'a>(
+    pending: &'a [PendingAskView],
+    session_key: Option<&str>,
+) -> Option<&'a PendingAskView> {
+    let session_key = session_key?;
+    pending.iter().find(|p| p.session_key == session_key)
 }
 
 /// Per-window notification UI state. Provided once in `app.rs`, consumed by
@@ -113,6 +161,44 @@ pub fn unread_count(alerts: &HashMap<String, SystemAlert>, dismissed: &HashSet<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn approval_countdown_ticks_down_and_clamps_at_zero() {
+        let a = PendingApprovalView {
+            id: "a1".to_string(),
+            command: "bash".to_string(),
+            agent_id: "main".to_string(),
+            session_key: "gui:chat:main".to_string(),
+            reason: None,
+            expires_at_ms: 60_000,
+        };
+        assert_eq!(a.remaining_secs(0), 60);
+        assert_eq!(a.remaining_secs(30_500), 29);
+        // Past the deadline the row is stale, not negative.
+        assert_eq!(a.remaining_secs(90_000), 0);
+    }
+
+    fn ask(session: &str) -> PendingAskView {
+        PendingAskView {
+            session_key: session.to_string(),
+            question: "Deploy where?".to_string(),
+            options: vec!["staging".to_string()],
+        }
+    }
+
+    #[test]
+    fn pending_ask_is_scoped_to_the_waiting_conversation() {
+        let pending = vec![ask("other"), ask("mine")];
+        assert_eq!(
+            pending_ask_for_session(&pending, Some("mine")).map(|p| p.session_key.as_str()),
+            Some("mine")
+        );
+        // Another conversation's question must not render here — nor claim this
+        // composer's Enter key.
+        assert!(pending_ask_for_session(&pending, Some("nobody")).is_none());
+        // A conversation with no session key yet cannot own a question.
+        assert!(pending_ask_for_session(&pending, None).is_none());
+    }
 
     fn mk(key: &str, level: AlertLevel) -> SystemAlert {
         SystemAlert {

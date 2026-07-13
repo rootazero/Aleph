@@ -24,16 +24,30 @@ struct PendingRecord {
     id: String,
     command: String,
     agent_id: String,
+    /// Session the requesting turn belongs to — lets the chat timeline attach
+    /// the approval to the tool row of the conversation that is waiting.
+    #[serde(default)]
+    session_key: String,
+    /// Why the approval was requested. Server-supplied; without it the
+    /// operator only ever sees a bare tool name.
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 impl ExecApprovalApi {
     /// List pending operator approvals (the source of truth for the cards).
+    ///
+    /// `remaining_ms` is a server-side snapshot taken at fetch time, so it is
+    /// converted here into an absolute `expires_at_ms` deadline. A render-time
+    /// snapshot can only ever print a frozen "expires in Ns"; an absolute
+    /// deadline lets the card count down against the shared 1s clock.
     pub async fn list_pending(state: &DashboardState) -> Result<Vec<PendingApprovalView>, String> {
         let result = state
             .rpc_call("exec.approvals.pending", serde_json::Value::Null)
             .await?;
         let resp: PendingListResp = serde_json::from_value(result)
             .map_err(|e| format!("Failed to parse pending approvals: {e}"))?;
+        let now = crate::views::chat::timeline::now_millis();
         Ok(resp
             .pending
             .into_iter()
@@ -41,7 +55,9 @@ impl ExecApprovalApi {
                 id: p.record.id,
                 command: p.record.command,
                 agent_id: p.record.agent_id,
-                remaining_ms: p.remaining_ms,
+                session_key: p.record.session_key,
+                reason: p.record.reason,
+                expires_at_ms: now + p.remaining_ms as i64,
             })
             .collect())
     }

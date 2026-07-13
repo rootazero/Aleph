@@ -8,8 +8,23 @@ use std::collections::HashMap;
 
 // -- Types --
 
+/// One selectable execution-permission tier, exactly as Core defines it
+/// (`builtin_tiers()`). Labels and descriptions are never authored here — the
+/// Panel, CLI and bots must render the identical three.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TierPreset {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolPermissionsResponse {
+    /// Active tier id (`ask` / `auto` / `full`).
+    pub exec_tier: String,
+    /// Selectable tiers, ordered least → most permissive.
+    #[serde(default)]
+    pub tiers: Vec<TierPreset>,
     pub default: String,
     #[serde(default)]
     pub overrides: HashMap<String, String>,
@@ -25,6 +40,22 @@ impl ToolPermissionsApi {
     pub async fn get_global(state: &DashboardState) -> Result<ToolPermissionsResponse, String> {
         let result = state
             .rpc_call("config.get_tool_permissions", Value::Null)
+            .await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+
+    /// Set the execution tier. Partial update — the advanced per-tool overrides
+    /// are left untouched. Returns the whole permission surface so the caller
+    /// re-renders straight from Core.
+    pub async fn set_exec_tier(
+        state: &DashboardState,
+        tier_id: &str,
+    ) -> Result<ToolPermissionsResponse, String> {
+        let result = state
+            .rpc_call(
+                "config.update_tool_permissions",
+                json!({ "exec_tier": tier_id }),
+            )
             .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }

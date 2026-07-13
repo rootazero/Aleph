@@ -271,6 +271,11 @@ pub(crate) fn MessageList() -> impl IntoView {
                                     </div>
                                 </Show>
                             </Show>
+                            // The question the agent is parked on (`ask_user`).
+                            // Tail of the stream: it is always the newest thing
+                            // that happened, and the turn cannot advance until
+                            // it is answered.
+                            <PendingAskCard />
                             // Pending follow-up ghosts — bottom of the stream,
                             // above the composer; flow into the transcript on
                             // insert. Replaces the old chip strip.
@@ -296,6 +301,35 @@ pub(crate) fn MessageList() -> impl IntoView {
                 </button>
             </Show>
         </div>
+    }
+}
+
+/// The `ask_user` question this conversation is waiting on, if any.
+///
+/// Its own component so the card appears *reactively*: the question lands mid-
+/// turn, long after the transcript around it was rendered. Reading
+/// `DashboardState::pending_clarifications` here re-runs the lookup whenever the
+/// pending list changes — including when the question is answered, which is what
+/// makes the card go away again.
+#[component]
+fn PendingAskCard() -> impl IntoView {
+    let chat = expect_context::<ChatState>();
+    let dashboard = use_context::<crate::context::DashboardState>();
+
+    let pending = Memo::new(move |_| {
+        dashboard.and_then(|d| {
+            crate::state::notifications::pending_ask_for_session(
+                &d.pending_clarifications.get(),
+                chat.session_key.get().as_deref(),
+            )
+            .cloned()
+        })
+    });
+
+    view! {
+        {move || pending.get().map(|ask| view! {
+            <crate::components::ask_user_card::AskUserCard ask=ask />
+        })}
     }
 }
 
@@ -452,6 +486,51 @@ fn DaySeparator(label: String) -> impl IntoView {
     }
 }
 
+/// A bubble's tool rows, each with the approval card it is blocked on (if any).
+///
+/// Its own component because the approval must appear *reactively*: an approval
+/// request lands well after the tool row was rendered, so a match computed once
+/// while building the bubble would never show up. Reading
+/// `DashboardState::pending_approvals` here re-runs the match whenever the
+/// pending list changes — including when the approval is resolved (from this
+/// card or from the bell), which is what makes the card disappear again.
+#[component]
+fn ToolCallsBlock(run_id: String, tools: Vec<super::state::ToolCallEntry>) -> impl IntoView {
+    let chat = expect_context::<ChatState>();
+    let dashboard = use_context::<crate::context::DashboardState>();
+
+    let tools_for_match = tools.clone();
+    let approvals = Memo::new(move |_| match dashboard {
+        Some(d) => super::tool_approvals::match_tool_approvals(
+            &tools_for_match,
+            chat.session_key.get().as_deref(),
+            &d.pending_approvals.get(),
+        ),
+        None => HashMap::new(),
+    });
+
+    view! {
+        <div class="mb-2 flex flex-col gap-1">
+            {tools.into_iter().map(|tc| {
+                let run_id = run_id.clone();
+                let tool_id = tc.tool_id.clone();
+                view! {
+                    <ToolCard
+                        run_id=run_id
+                        tool_id=tc.tool_id.clone()
+                        tool_name=tc.tool_name
+                    />
+                    // Inline permission prompt for the call this row is waiting
+                    // on — resolved through the same RPC the bell uses.
+                    {move || approvals.get().get(&tool_id).cloned().map(|a| view! {
+                        <crate::components::approval_card::ApprovalCard approval=a />
+                    })}
+                }
+            }).collect::<Vec<_>>()}
+        </div>
+    }
+}
+
 /// Single message bubble. `clock` is a pre-resolved "HH:MM" label (empty for
 /// undated/legacy rows) shown in the hover action bar.
 #[component]
@@ -489,26 +568,11 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     let bubble_class = bubble_style.to_string();
 
     let message_run_id = run_id_from_message_id(&message.id);
+    let run_for_cost = message_run_id.clone();
 
-    let tool_calls_view = if has_tools {
-        let tools = message.tool_calls.clone();
-        let run_for_cards = message_run_id;
-        Some(view! {
-            <div class="mb-2 flex flex-col gap-1">
-                {tools.into_iter().map(|tc| {
-                    view! {
-                        <ToolCard
-                            run_id=run_for_cards.clone()
-                            tool_id=tc.tool_id.clone()
-                            tool_name=tc.tool_name
-                        />
-                    }
-                }).collect::<Vec<_>>()}
-            </div>
-        })
-    } else {
-        None
-    };
+    let tool_calls_view = has_tools.then(|| {
+        view! { <ToolCallsBlock run_id=message_run_id tools=message.tool_calls.clone() /> }
+    });
 
     let content = message.content.clone();
     // Stable key for the typewriter reveal clock — survives the per-token
@@ -554,6 +618,42 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     // Reach for ChatState so the retry button can pulse the composer
     // without prop-drilling a callback through MessageList → MessageBubble.
     let chat = expect_context::<ChatState>();
+
+    // Cost + tokens for the run that produced this bubble (`run_complete`'s
+    // summary; core does the pricing, we render it). Reactive — the summary
+    // lands after the bubble mounts. Nothing renders for user bubbles, for runs
+    // still in flight, or for a run core could not price: an absent figure is
+    // honest, "$0.00" is not. `≈` whenever `cost_status != complete`, so a
+    // partially-priced run is never passed off as exact.
+    let cost_view = (!is_user).then(|| {
+        move || {
+            let cost = chat.run_costs.with(|m| m.get(&run_for_cost).cloned())?;
+            let money = cost.cost_label();
+            let tokens = cost.tokens_label();
+            if money.is_none() && tokens.is_none() {
+                return None;
+            }
+            let title = format!(
+                "input {} · output {} · total {} tokens{}",
+                cost.input_tokens,
+                cost.output_tokens,
+                cost.total_tokens,
+                if cost.is_exact() {
+                    String::new()
+                } else {
+                    format!(" · cost {}", cost.status.as_deref().unwrap_or("unknown"))
+                }
+            );
+            Some(view! {
+                <div class="mt-1 text-[10px] leading-tight font-mono text-text-tertiary
+                            flex items-center gap-1.5 tabular-nums"
+                     title=title>
+                    {money}
+                    {tokens.map(|t| view! { <span class="opacity-70">{t}</span> })}
+                </div>
+            })
+        }
+    });
 
     // Team chat: Layout A — avatar disc outside the bubble + agent name above.
     // Only when message.agent_id is Some (team message). Zero regression on the
@@ -685,6 +785,7 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
                                 <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming />
                                 {error_view}
                                 {model_view}
+                                {cost_view}
                             </div>
                         </div>
                     </div>
@@ -708,6 +809,7 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
                         }}
                         {error_view}
                         {model_view}
+                        {cost_view}
                     </div>
                 }.into_any()
             }}

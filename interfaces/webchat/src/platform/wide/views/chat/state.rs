@@ -185,6 +185,60 @@ pub struct ModelInfo {
     pub original_model: Option<String>,
 }
 
+/// What a completed run cost, projected from `run_complete`'s summary. Core
+/// computes both the money and the token split (R4 — the panel only renders).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RunCost {
+    /// Estimated spend in USD. `None` when core could not price the run at all.
+    #[serde(default)]
+    pub usd: Option<f64>,
+    /// Core's `cost_status`: "complete" | "partial_missing_price" | "unknown".
+    /// Anything other than "complete" must be rendered as an approximation —
+    /// presenting a partial estimate as exact is a lie about money.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Run-cumulative token total.
+    #[serde(default)]
+    pub total_tokens: u64,
+    /// Prompt/completion split from `token_breakdown`, for the hover title.
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+}
+
+impl RunCost {
+    /// True when core priced the run in full. Anything else renders with a `≈`.
+    #[must_use]
+    pub fn is_exact(&self) -> bool {
+        self.status.as_deref() == Some("complete")
+    }
+
+    /// The meta-line money label, or `None` when the run carries no price.
+    /// Sub-cent runs still get a figure (4 decimals) — "$0.00" reads as free.
+    #[must_use]
+    pub fn cost_label(&self) -> Option<String> {
+        let usd = self.usd?;
+        let sigil = if self.is_exact() { "" } else { "≈" };
+        if usd >= 0.01 {
+            Some(format!("{sigil}${usd:.2}"))
+        } else {
+            Some(format!("{sigil}${usd:.4}"))
+        }
+    }
+
+    /// Compact token label ("12.3k tok"). `None` when core reported no tokens
+    /// (a cached/aborted turn) — rendering "0 tok" reads as broken.
+    #[must_use]
+    pub fn tokens_label(&self) -> Option<String> {
+        match self.total_tokens {
+            0 => None,
+            n if n < 1000 => Some(format!("{n} tok")),
+            n => Some(format!("{:.1}k tok", n as f64 / 1000.0)),
+        }
+    }
+}
+
 /// A rendered chat message (user or assistant).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {
@@ -393,6 +447,23 @@ pub struct ChatState {
     /// `SessionSnapshot`; `restore_from` consumes it right after the snapshot
     /// restore so the externally-requested model wins.
     pub pending_model_override: RwSignal<Option<crate::api::providers::ModelOverride>>,
+    /// What each completed run cost, keyed by `run_id`. Projected from
+    /// `run_complete`'s summary and read by the assistant bubble's meta line.
+    /// Keyed on the run rather than stamped on [`ChatMessage`] because the same
+    /// run's cost is looked up from whichever bubble ended up carrying its final
+    /// answer. Session-scoped → rides along in [`SessionSnapshot`].
+    pub run_costs: RwSignal<std::collections::HashMap<String, RunCost>>,
+    /// Per-session execution tier override (`"ask"` | `"auto"` | `"full"`).
+    /// `None` = follow the global tier. Mirrors what core persists under
+    /// `SessionIdentityMeta.custom["exec_tier"]`; the composer's tier pill owns
+    /// reads/writes. Session-scoped → rides along in [`SessionSnapshot`].
+    pub session_exec_tier: RwSignal<Option<String>>,
+    /// A tier selected before the chat view finished activating its session.
+    /// Parked here for exactly the reason [`Self::pending_model_override`]
+    /// exists: `restore_from` would otherwise overwrite `session_exec_tier` from
+    /// the (stale) snapshot and silently drop the user's choice. Ephemeral: NOT
+    /// in `SessionSnapshot`; consumed by `restore_from` right after the restore.
+    pub pending_exec_tier: RwSignal<Option<String>>,
     /// Run IDs whose final assistant reply should be spoken aloud — the
     /// voice-loop turns started from the composer mic button. `events.rs` pops
     /// each on `run_complete` and plays its TTS audio. Ephemeral, like
@@ -457,6 +528,9 @@ impl ChatState {
             active_project_name: RwSignal::new(None),
             selected_model: RwSignal::new(None),
             pending_model_override: RwSignal::new(None),
+            run_costs: RwSignal::new(std::collections::HashMap::new()),
+            session_exec_tier: RwSignal::new(None),
+            pending_exec_tier: RwSignal::new(None),
             voice_run_ids: RwSignal::new(Vec::new()),
             provider_retry: RwSignal::new(None),
             next_msg_id: RwSignal::new(0),
@@ -839,6 +913,13 @@ impl ChatState {
         });
     }
 
+    /// Record what a completed run cost (projected from `run_complete`).
+    pub fn set_run_cost(&self, run_id: &str, cost: RunCost) {
+        self.run_costs.update(|m| {
+            m.insert(run_id.to_string(), cost);
+        });
+    }
+
     /// Finalize current run (mark message as not streaming).
     pub fn complete_run(&self, run_id: &str) {
         let target_id = format!("assistant-{run_id}");
@@ -944,6 +1025,10 @@ impl ChatState {
         self.strip_open.set(std::collections::HashMap::new());
         self.plan.set(None);
         self.context_usage.set(None);
+        self.run_costs.set(std::collections::HashMap::new());
+        // A fresh conversation carries no session tier — it follows the global
+        // one until the user picks otherwise.
+        self.session_exec_tier.set(None);
     }
 
     /// Clear session state but keep `agent_id` (for new chat within same agent).
@@ -961,6 +1046,8 @@ impl ChatState {
         self.strip_open.set(std::collections::HashMap::new());
         self.plan.set(None);
         self.context_usage.set(None);
+        self.run_costs.set(std::collections::HashMap::new());
+        self.session_exec_tier.set(None);
         // agent_id is intentionally preserved
     }
 
@@ -990,6 +1077,8 @@ impl ChatState {
             selected_model: self.selected_model.get_untracked(),
             next_msg_id: self.next_msg_id.get_untracked(),
             context_usage: self.context_usage.get_untracked(),
+            run_costs: self.run_costs.get_untracked(),
+            session_exec_tier: self.session_exec_tier.get_untracked(),
         }
     }
 
@@ -1014,6 +1103,14 @@ impl ChatState {
         if let Some(mo) = self.pending_model_override.get_untracked() {
             self.selected_model.set(Some(mo));
             self.pending_model_override.set(None);
+        }
+        self.run_costs.set(snap.run_costs);
+        self.session_exec_tier.set(snap.session_exec_tier);
+        // Same rescue as `pending_model_override`: a tier picked before this
+        // restore ran wins over the snapshot's (stale) value, then is consumed.
+        if let Some(tier) = self.pending_exec_tier.get_untracked() {
+            self.session_exec_tier.set(Some(tier));
+            self.pending_exec_tier.set(None);
         }
         self.next_msg_id.set(snap.next_msg_id);
         // Carried in the snapshot so the occupancy gauge survives a tab swap
@@ -1047,6 +1144,10 @@ pub struct SessionSnapshot {
     /// Last completed turn's context-window occupancy, so the gauge survives a
     /// tab swap instead of blanking until the next turn finishes.
     pub context_usage: Option<ContextUsage>,
+    /// Per-run cost, so the meta line survives a tab swap.
+    pub run_costs: std::collections::HashMap<String, RunCost>,
+    /// This session's execution-tier override (`None` = follow the global tier).
+    pub session_exec_tier: Option<String>,
 }
 
 #[cfg(test)]
@@ -1555,5 +1656,57 @@ mod tool_timestamp_tests {
                 .map(|t| (t.started_at_ms, t.status.clone()))
         });
         assert_eq!(after.map(|(s, _)| s), Some(started));
+    }
+}
+
+#[cfg(test)]
+mod run_cost_tests {
+    use super::*;
+
+    fn cost(usd: Option<f64>, status: &str, total: u64) -> RunCost {
+        RunCost {
+            usd,
+            status: Some(status.to_string()),
+            total_tokens: total,
+            input_tokens: 0,
+            output_tokens: 0,
+        }
+    }
+
+    #[test]
+    fn a_fully_priced_run_renders_an_exact_figure() {
+        let c = cost(Some(0.1234), "complete", 12_345);
+        assert!(c.is_exact());
+        assert_eq!(c.cost_label().as_deref(), Some("$0.12"));
+        assert_eq!(c.tokens_label().as_deref(), Some("12.3k tok"));
+    }
+
+    #[test]
+    fn a_partially_priced_run_is_never_passed_off_as_exact() {
+        // THE contract: core could not price every model in the run, so the
+        // figure must read as an approximation.
+        let c = cost(Some(0.5), "partial_missing_price", 900);
+        assert!(!c.is_exact());
+        assert_eq!(c.cost_label().as_deref(), Some("≈$0.50"));
+        assert_eq!(c.tokens_label().as_deref(), Some("900 tok"));
+        assert!(!cost(Some(0.5), "unknown", 1).is_exact());
+    }
+
+    #[test]
+    fn sub_cent_runs_keep_four_decimals() {
+        // "$0.00" reads as free; a cheap run is not a free one.
+        assert_eq!(
+            cost(Some(0.0034), "complete", 10).cost_label().as_deref(),
+            Some("$0.0034")
+        );
+    }
+
+    #[test]
+    fn absent_price_or_zero_tokens_render_nothing() {
+        // Rendering "$0.00" / "0 tok" for an unpriced or cached turn reads as
+        // broken, so both labels stay absent.
+        let c = cost(None, "unknown", 0);
+        assert!(c.cost_label().is_none());
+        assert!(c.tokens_label().is_none());
     }
 }

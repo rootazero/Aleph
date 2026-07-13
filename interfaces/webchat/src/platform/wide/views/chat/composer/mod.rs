@@ -233,6 +233,49 @@ pub(super) fn InputArea() -> impl IntoView {
         });
     };
 
+    // The question this conversation is parked on, if any.
+    let pending_ask = Memo::new(move |_| {
+        crate::state::notifications::pending_ask_for_session(
+            &dashboard.pending_clarifications.get(),
+            chat.session_key.get().as_deref(),
+        )
+        .cloned()
+    });
+
+    // Answer a pending `ask_user` with the current draft. Returns `true` when a
+    // question was pending — the caller must then NOT fall through to the send /
+    // queue path.
+    //
+    // This is the composer's half of the rule every channel already enforces in
+    // `inbound_router::try_intercept_hitl`: while a clarification is pending,
+    // whatever the user sends IS the answer. Without it the draft would be
+    // queued behind a turn that can never reach its next boundary — the parked
+    // tool would sit there until it timed out, and the user would have no way to
+    // reach it except aborting the run.
+    let answer_pending_ask = move || -> bool {
+        let Some(ask) = pending_ask.get_untracked() else {
+            return false;
+        };
+        let reply = input_text.get_untracked().trim().to_string();
+        // A question IS pending, so consume the keystroke either way — an empty
+        // draft simply isn't an answer.
+        if reply.is_empty() {
+            return true;
+        }
+        input_text.set(String::new());
+        chat.push_user_message(&reply);
+        let dash = dashboard;
+        spawn_local(async move {
+            match crate::api::ClarificationApi::resolve(&dash, &ask.session_key, &reply).await {
+                Ok(()) => dash
+                    .pending_clarifications
+                    .update(|l| l.retain(|p| p.session_key != ask.session_key)),
+                Err(e) => chat.set_send_error(ChatSendError::classify(e)),
+            }
+        });
+        true
+    };
+
     // Queue a follow-up while a run is active instead of sending it now.
     // Runs the same client-side injection guard as `send_message` so a
     // blocked prompt never enters the queue, then stashes the draft on
@@ -706,6 +749,11 @@ pub(super) fn InputArea() -> impl IntoView {
                     }
                 }
                 ev.prevent_default();
+                // A pending question owns the send key — the turn is blocked on
+                // the answer, so queueing the draft would strand it.
+                if answer_pending_ask() {
+                    return;
+                }
                 // While a run is active, Enter queues the follow-up instead
                 // of sending (there is no live send slot until it settles).
                 if chat.active_run_id.get_untracked().is_some() {
@@ -934,6 +982,8 @@ pub(super) fn InputArea() -> impl IntoView {
                         // with the attach paperclip. Dropdowns still flip upward.
                         <ProjectMenu />
                         <crate::components::model_picker::ModelPicker />
+                        // Per-session tool-execution tier (Ask / Auto / Full).
+                        <crate::views::chat::exec_tier_picker::ExecTierPicker />
                         // Live context-window gauge (self-hides until first usage).
                         <super::context_gauge::ContextGauge />
 
@@ -985,7 +1035,11 @@ pub(super) fn InputArea() -> impl IntoView {
 
                             // Queue button — only while a run is active. Lets the user
                             // line up a follow-up that auto-sends when the turn settles.
-                            <Show when=move || chat.active_run_id.get().is_some()>
+                            // Withdrawn while a question is pending: the turn cannot
+                            // reach another boundary until it is answered, so a queued
+                            // draft would just sit there behind the parked tool.
+                            <Show when=move || chat.active_run_id.get().is_some()
+                                               && pending_ask.get().is_none()>
                                 <button
                                     class="w-8 h-8 rounded-full bg-surface-sunken text-text-secondary
                                            flex items-center justify-center hover:bg-surface-raised

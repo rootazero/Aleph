@@ -1,6 +1,6 @@
 use crate::api::ExecApprovalApi;
 use crate::components::sidebar::SystemAlert;
-use crate::state::notifications::PendingApprovalView;
+use crate::state::notifications::{PendingApprovalView, PendingAskView};
 use futures::channel::{mpsc, oneshot};
 use futures::{FutureExt, StreamExt};
 use gloo_timers::future::TimeoutFuture;
@@ -306,6 +306,14 @@ pub struct DashboardState {
     /// Approval subscription ID for cleanup.
     approval_subscription_id: StoredValue<Option<usize>>,
 
+    /// Questions the agent is parked on (`ask_user`), rendered as inline cards
+    /// in the conversation that is waiting. Pushed live by the `stream.ask_user`
+    /// frame (`views::chat::events`) and seeded from `clarification.pending`
+    /// when the chat surface mounts, so a reload mid-question still finds the
+    /// blocked tool. Lives here — not on `ChatState` — because a question can
+    /// belong to a background conversation whose `ChatState` isn't mounted.
+    pub pending_clarifications: RwSignal<Vec<PendingAskView>>,
+
     /// Feature flag: enable radial (TheBrain-style) navigation in the Canvas view.
     /// Initialized from localStorage; mutated by the Settings panel toggle.
     pub canvas_radial_navigation: RwSignal<bool>,
@@ -444,6 +452,7 @@ impl DashboardState {
             alert_subscription_id: StoredValue::new(None),
             pending_approvals: RwSignal::new(Vec::new()),
             approval_subscription_id: StoredValue::new(None),
+            pending_clarifications: RwSignal::new(Vec::new()),
             canvas_radial_navigation: RwSignal::new(
                 crate::api::settings::load_canvas_radial_navigation(),
             ),

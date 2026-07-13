@@ -282,6 +282,7 @@ impl HarnessCallback for CapturingCallback {
         id: &str,
         _result: Option<&serde_json::Value>,
         error: Option<&str>,
+        _duration_ms: u64,
     ) {
         self.tool_done.push((id.to_string(), error.is_some()));
     }

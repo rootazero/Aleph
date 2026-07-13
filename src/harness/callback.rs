@@ -34,12 +34,15 @@ pub trait HarnessCallback: Send {
     /// Invoked when a tool call begins. `id` pairs with `on_tool_call_done`.
     fn on_tool_call_start(&mut self, _id: &str, _name: &str, _args: &serde_json::Value) {}
 
-    /// Invoked when a tool call finishes. `result` and `error` are mutually exclusive.
+    /// Invoked when a tool call finishes. `result` and `error` are mutually
+    /// exclusive. `duration_ms` is the tool's measured wall-clock execution
+    /// time (0 for a within-batch memo hit, which re-executes nothing).
     fn on_tool_call_done(
         &mut self,
         _id: &str,
         _result: Option<&serde_json::Value>,
         _error: Option<&str>,
+        _duration_ms: u64,
     ) {
     }
 

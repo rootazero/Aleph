@@ -12,7 +12,7 @@ use tokio::sync::broadcast;
 /// * `on_reasoning(text)` → `FlowStreamEvent::Reasoning(text)`
 /// * `on_tool_call(name)` → `FlowStreamEvent::ToolCallStart { id: "legacy", name, args: null }`
 /// * `on_tool_call_start(id, name, args)` → `FlowStreamEvent::ToolCallStart { id, name, args }`
-/// * `on_tool_call_done(id, result, error)` → `FlowStreamEvent::ToolCallDone { id, result, error }`
+/// * `on_tool_call_done(id, result, error, duration_ms)` → `FlowStreamEvent::ToolCallDone { id, result, error, duration_ms }`
 /// * `on_context_usage(tokens, total)` → `FlowStreamEvent::ContextGauge
 ///   { context_tokens, context_window, total_tokens }` (window pre-resolved
 ///   at construction; suppressed when either side is 0)
@@ -76,11 +76,13 @@ impl HarnessCallback for BroadcastCallback {
         id: &str,
         result: Option<&serde_json::Value>,
         error: Option<&str>,
+        duration_ms: u64,
     ) {
         let _ = self.tx.send(FlowStreamEvent::ToolCallDone {
             id: id.to_string(),
             result: result.cloned(),
             error: error.map(|s| s.to_string()),
+            duration_ms,
         });
     }
 

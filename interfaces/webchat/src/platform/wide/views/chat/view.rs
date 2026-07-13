@@ -79,6 +79,17 @@ pub fn ChatView() -> impl IntoView {
         if let Err(e) = dash_for_sub.subscribe_topic("stream.*").await {
             web_sys::console::error_1(&format!("Failed to subscribe stream events: {e}").into());
         }
+        // `stream.ask_user` is a one-shot push, so a panel that reloads (or
+        // connects late) while the agent is parked on a question would never
+        // see it — and the parked tool would sit blocked until it timed out.
+        // Seed from the authoritative registry, exactly as the approval card
+        // seeds from `exec.approvals.pending`.
+        match crate::api::ClarificationApi::list_pending(&dash_for_sub).await {
+            Ok(list) => dash_for_sub.pending_clarifications.set(list),
+            Err(e) => web_sys::console::error_1(
+                &format!("Failed to load pending clarifications: {e}").into(),
+            ),
+        }
     });
 
     // Subscribe team.* topic (backend fan-out for team chat events).

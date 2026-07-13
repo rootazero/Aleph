@@ -97,6 +97,10 @@ pub enum GatewayEventFrame {
     AskUser {
         run_id: String,
         seq: u64,
+        /// Clarification registry key — the value a client must pass back to
+        /// `clarification.resolve` to unblock the parked `ask_user` tool. The
+        /// frame carries it because the reply is routed by session, not by run.
+        session_key: String,
         question: String,
         options: Vec<String>,
     },
@@ -389,11 +393,13 @@ impl From<StreamEvent> for GatewayEventFrame {
             StreamEvent::AskUser {
                 run_id,
                 seq,
+                session_key,
                 question,
                 options,
             } => Self::AskUser {
                 run_id,
                 seq,
+                session_key,
                 question,
                 options,
             },
