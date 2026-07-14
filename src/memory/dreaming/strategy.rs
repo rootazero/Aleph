@@ -17,33 +17,17 @@ pub enum DreamStrategy {
     Conserve,
 }
 
-impl DreamStrategy {
-    /// Ordered list of stage names this strategy will execute.
-    #[must_use]
-    pub fn stage_names(&self) -> Vec<&'static str> {
-        match self {
-            Self::Consolidate => vec![
-                "note_lint",
-                "note_review",
-                "note_consolidate",
-                "feedback_distill",
-                "note_drift",
-                "index_refresher",
-                "note_decay",
-                "skill_lifecycle",
-            ],
-            Self::Synthesize => vec![
-                "note_lint",
-                "note_review",
-                "note_consolidate",
-                "note_synthesis",
-                "skill_distill",
-                "daily_digest",
-            ],
-            Self::Conserve => vec!["note_lint", "note_review", "index_refresher"],
-        }
-    }
-}
+// NOTE: there is deliberately no `stage_names()` here. One used to exist as a
+// hand-maintained second source of truth, with zero production consumers and
+// three tests that locked its drift in place. It had drifted badly — its
+// Synthesize list omitted `feedback_distill` even though `DreamPipeline::from_strategy`
+// builds that stage on BOTH the Consolidate and Synthesize paths, and its
+// Consolidate list omitted co_recall_edges / graph_recompute / note_weave /
+// mention_weave / goal_lessons_promote entirely. Anyone asking "when does
+// feedback_distill actually run?" read it and got the wrong answer.
+//
+// The pipeline is the only source of truth. If a name list is ever needed again,
+// derive it: `DreamPipeline::from_strategy(..).stages.iter().map(|s| s.name())`.
 
 impl std::fmt::Display for DreamStrategy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -58,46 +42,6 @@ impl std::fmt::Display for DreamStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn consolidate_stages() {
-        let names = DreamStrategy::Consolidate.stage_names();
-        assert_eq!(
-            names,
-            vec![
-                "note_lint",
-                "note_review",
-                "note_consolidate",
-                "feedback_distill",
-                "note_drift",
-                "index_refresher",
-                "note_decay",
-                "skill_lifecycle",
-            ]
-        );
-    }
-
-    #[test]
-    fn synthesize_stages() {
-        let names = DreamStrategy::Synthesize.stage_names();
-        assert_eq!(
-            names,
-            vec![
-                "note_lint",
-                "note_review",
-                "note_consolidate",
-                "note_synthesis",
-                "skill_distill",
-                "daily_digest"
-            ]
-        );
-    }
-
-    #[test]
-    fn conserve_stages() {
-        let names = DreamStrategy::Conserve.stage_names();
-        assert_eq!(names, vec!["note_lint", "note_review", "index_refresher"]);
-    }
 
     #[test]
     fn display_roundtrip() {

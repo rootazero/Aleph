@@ -40,6 +40,37 @@ pub struct FeedbackDistillStage {
     pub lookback: usize,
 }
 
+/// Is this correction a standing directive that must not wait for a quorum?
+///
+/// High/Critical are the severities the model reserves for rules that should
+/// override its defaults or that are outright redlines (safety / privacy /
+/// correctness) — see `flag_user_correction`'s severity docs.
+fn is_urgent_correction(raw: &RawMemory) -> bool {
+    matches!(
+        &raw.source,
+        RawMemorySource::Correction { severity, .. }
+            if severity.eq_ignore_ascii_case("high") || severity.eq_ignore_ascii_case("critical")
+    )
+}
+
+/// How many of `corrections` (sorted by `created_at` ASC) this cycle may consume
+/// without splitting a group that shares one `created_at` second.
+///
+/// Returns at least `max_per_cycle` when that many rows exist, extending past it
+/// only as far as the end of the group the cut landed in. Splitting such a group
+/// would let the watermark (a strict `created_at >`) skip the rows after the cut
+/// forever.
+fn batch_end_on_timestamp_boundary(corrections: &[RawMemory], max_per_cycle: usize) -> usize {
+    if max_per_cycle == 0 || corrections.len() <= max_per_cycle {
+        return corrections.len();
+    }
+    let boundary = corrections[max_per_cycle - 1].created_at;
+    corrections
+        .iter()
+        .position(|c| c.created_at > boundary)
+        .unwrap_or(corrections.len())
+}
+
 impl Default for FeedbackDistillStage {
     fn default() -> Self {
         Self {
@@ -101,7 +132,17 @@ impl DreamStage for FeedbackDistillStage {
             return Ok(ctx);
         }
 
-        if corrections.len() < self.min_candidates {
+        // The count gate is severity-blind on its own, which lets it withhold the
+        // one class of correction that most needs to land. "Never commit without
+        // asking me first" is a standing directive the model flags as
+        // `severity=critical` (verbatim the tool's own documented example) — but a
+        // lone critical correction sat below `min_candidates` (default 3) and was
+        // never distilled until two unrelated corrections happened to accumulate.
+        // Meanwhile the always-on FeedbackFloor only surfaces High/Critical
+        // *feedback notes*, so the exact class of rule the floor exists to carry
+        // was the class the gate could defer indefinitely. High/Critical bypass it.
+        let has_urgent = corrections.iter().any(is_urgent_correction);
+        if corrections.len() < self.min_candidates && !has_urgent {
             tracing::debug!(
                 count = corrections.len(),
                 min = self.min_candidates,
@@ -118,7 +159,19 @@ impl DreamStage for FeedbackDistillStage {
         // (default 50) rows but only emitted `max_per_cycle` (default 3) actions
         // advanced the watermark past all 50, silently dropping the ~47
         // corrections the LLM never saw (surfaced != distilled).
-        corrections.truncate(self.max_per_cycle);
+        //
+        // But the cut must never fall INSIDE a group of corrections sharing one
+        // `created_at`. Timestamps are second-granular and the watermark is a
+        // strict `created_at > watermark`, so advancing it into the middle of a
+        // tie makes every row after the cut permanently unfetchable — a user
+        // correction silently lost forever, with no log line. (Reachable whenever
+        // an assistant turn emits parallel `flag_user_correction` calls, or the
+        // user corrects twice in one second.) Extend the batch to the end of the
+        // tied group instead; it stays bounded by `lookback`, the query's limit.
+        corrections.truncate(batch_end_on_timestamp_boundary(
+            &corrections,
+            self.max_per_cycle,
+        ));
 
         // Existing feedback-notes act as candidates so the LLM can choose
         // Strengthen/Supersede instead of always emitting New.
@@ -424,6 +477,81 @@ mod tests {
     #[test]
     fn stage_name() {
         assert_eq!(FeedbackDistillStage::default().name(), "feedback_distill");
+    }
+
+    fn at(id: &str, severity: &str, created_at: i64) -> RawMemory {
+        let mut r = fake_correction(id, &format!("correction {id}"), severity);
+        r.created_at = created_at;
+        r
+    }
+
+    /// The batch cut must never land inside a group of corrections sharing one
+    /// `created_at` second. The watermark advances to `max(created_at)` of the
+    /// consumed batch and the next fetch is a strict `created_at > watermark`, so
+    /// splitting a tie makes the rows after the cut permanently unfetchable — a
+    /// user correction silently lost forever.
+    ///
+    /// Reachable whenever one assistant turn emits parallel `flag_user_correction`
+    /// calls, or the user corrects twice inside one second.
+    #[test]
+    fn batch_cut_never_splits_a_group_sharing_one_created_at_second() {
+        // Four corrections, all landing in the same wall-clock second T.
+        let t = 1_700_000_000;
+        let batch = vec![
+            at("c1", "med", t),
+            at("c2", "med", t),
+            at("c3", "med", t),
+            at("c4", "med", t),
+        ];
+
+        let end = batch_end_on_timestamp_boundary(&batch, 3);
+
+        assert_eq!(
+            end, 4,
+            "with max_per_cycle=3 a naive truncate(3) would consume c1..c3, advance the \
+             watermark to T, and c4 (also at T) could never be fetched again — it must be \
+             pulled into this batch instead"
+        );
+
+        // And the watermark this batch would commit does not skip anything.
+        let watermark = batch[..end].iter().map(|c| c.created_at).max().unwrap();
+        assert!(
+            !batch
+                .iter()
+                .any(|c| c.created_at <= watermark && !batch[..end].iter().any(|k| k.id == c.id)),
+            "no correction may be left behind at or below the committed watermark"
+        );
+    }
+
+    /// The extension is only as far as the end of the tied group — a clean
+    /// boundary still cuts at `max_per_cycle`.
+    #[test]
+    fn batch_cut_stops_at_max_per_cycle_on_a_clean_timestamp_boundary() {
+        let batch = vec![
+            at("c1", "med", 100),
+            at("c2", "med", 101),
+            at("c3", "med", 102),
+            at("c4", "med", 103),
+        ];
+        assert_eq!(batch_end_on_timestamp_boundary(&batch, 3), 3);
+        // Smaller-than-cap batches are consumed whole.
+        assert_eq!(batch_end_on_timestamp_boundary(&batch[..2], 3), 2);
+    }
+
+    /// A lone Critical correction ("never commit without asking me first") is a
+    /// standing directive. It must not sit undistilled below `min_candidates`
+    /// waiting for two unrelated corrections to accumulate.
+    #[test]
+    fn high_and_critical_corrections_bypass_the_min_candidates_quorum() {
+        assert!(is_urgent_correction(&at("c1", "critical", 100)));
+        assert!(is_urgent_correction(&at("c1", "high", 100)));
+        assert!(is_urgent_correction(&at("c1", "CRITICAL", 100)));
+        assert!(!is_urgent_correction(&at("c1", "med", 100)));
+        assert!(!is_urgent_correction(&at("c1", "low", 100)));
+
+        // A single critical row trips the bypass; a single med row does not.
+        assert!([at("c1", "critical", 100)].iter().any(is_urgent_correction));
+        assert!(![at("c1", "med", 100)].iter().any(is_urgent_correction));
     }
 
     #[test]
