@@ -48,8 +48,13 @@ pub fn render_chat_area(frame: &mut Frame, state: &AppState, area: Rect) {
         let start = total_lines.saturating_sub(visible_height);
         all_lines.get(start..).unwrap_or(&[])
     } else {
-        // scroll_offset = how many lines from the bottom we've scrolled up
-        let end = total_lines.saturating_sub(state.scroll_offset);
+        // scroll_offset = how many lines from the bottom we've scrolled up.
+        // Clamp it to the renderable range so a large offset (Home maps to
+        // usize::MAX/2, or held PageUp) can never push the whole window
+        // off-screen and blank the chat.
+        let max_offset = total_lines.saturating_sub(visible_height);
+        let offset = state.scroll_offset.min(max_offset);
+        let end = total_lines.saturating_sub(offset);
         let start = end.saturating_sub(visible_height);
         all_lines.get(start..end).unwrap_or(&[])
     };
@@ -85,7 +90,7 @@ fn build_all_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
                 );
             }
             ChatMessage::System { content } => {
-                render_system_message(content, &mut lines);
+                render_system_message(content, width, &mut lines);
             }
         }
         // Add a blank line between messages
@@ -222,12 +227,30 @@ fn render_assistant_message(
 }
 
 /// Render a system message with yellow text and indentation.
-fn render_system_message(content: &str, lines: &mut Vec<Line<'static>>) {
+///
+/// System content is frequently multi-line (e.g. `/help`, `/usage`, `/replay`
+/// output joined with `\n`) and individual lines may be wider than the pane.
+/// ratatui does not treat an embedded `\n` inside a `Span` as a row break, and
+/// the chat scroll window counts *logical* `Line`s — so emitting the whole
+/// message as one `Span` both mis-renders it and desyncs the scroll height from
+/// the physical rows, which clips the newest content off-screen. Split on `\n`
+/// and wrap each physical line to the content width so every emitted `Line` is
+/// `<= width` and the logical-line window matches the rendered rows.
+fn render_system_message(content: &str, width: u16, lines: &mut Vec<Line<'static>>) {
     let style = Style::default().fg(DEFAULT_THEME.system);
-    lines.push(Line::from(vec![
-        Span::styled("  ", style),
-        Span::styled(content.to_string(), style),
-    ]));
+    let content_width = (width.saturating_sub(2)).max(1) as usize; // account for "  " indent
+    for raw_line in content.split('\n') {
+        if raw_line.is_empty() {
+            lines.push(Line::from(vec![Span::styled("  ", style)]));
+            continue;
+        }
+        for wrapped in textwrap::wrap(raw_line, content_width) {
+            lines.push(Line::from(vec![
+                Span::styled("  ", style),
+                Span::styled(wrapped.into_owned(), style),
+            ]));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -311,6 +334,36 @@ mod tests {
         let lines = build_all_lines(&state, 0);
         // Should not panic, may produce empty or minimal output
         let _ = lines;
+    }
+
+    #[test]
+    fn system_message_splits_and_wraps() {
+        let mut state = AppState::new("test".into(), "claude".into());
+        // Multi-line content with a line wider than the pane.
+        let long = "x".repeat(60);
+        state.add_system_message(format!("line one\n{long}"));
+
+        let mut lines = Vec::new();
+        // Render just the system messages via build_all_lines at a narrow width.
+        let all = build_all_lines(&state, 20);
+        lines.extend(all);
+
+        // No rendered Line may contain an embedded newline (would mis-render and
+        // desync the scroll height).
+        for line in &lines {
+            for span in &line.spans {
+                assert!(
+                    !span.content.as_ref().contains('\n'),
+                    "system message span must not contain an embedded newline"
+                );
+            }
+        }
+        // The 60-char line at width 20 must have wrapped to multiple rows.
+        let x_rows = lines
+            .iter()
+            .filter(|l| l.spans.iter().any(|s| s.content.as_ref().contains('x')))
+            .count();
+        assert!(x_rows > 1, "long system line should wrap to > 1 row");
     }
 
     #[test]

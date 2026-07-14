@@ -319,10 +319,23 @@ fn render_code_block(lang: &str, lines: &[String], width: usize, result: &mut Ve
     let top = format!("\u{250c}\u{2500}{}{}", label, "\u{2500}".repeat(dash_count));
     result.push(Line::from(Span::styled(top, border_style)));
 
-    // Code lines
+    // Code lines. Wrap each to the inner width (minus the "│ " gutter) so a long
+    // code line becomes multiple physical rows instead of overflowing the pane.
+    // The chat scroll window is computed from the logical line count, so an
+    // unbounded row here would desync the height and clip the newest content.
+    let code_wrap_width = inner_width.saturating_sub(2).max(1);
     for code_line in lines {
-        let display = format!("\u{2502} {code_line}");
-        result.push(Line::from(Span::styled(display, code_style)));
+        if code_line.is_empty() {
+            result.push(Line::from(Span::styled(
+                "\u{2502} ".to_string(),
+                code_style,
+            )));
+            continue;
+        }
+        for wrapped in textwrap::wrap(code_line, code_wrap_width) {
+            let display = format!("\u{2502} {wrapped}");
+            result.push(Line::from(Span::styled(display, code_style)));
+        }
     }
 
     // Bottom border: └──────────────
@@ -330,35 +343,78 @@ fn render_code_block(lang: &str, lines: &[String], width: usize, result: &mut Ve
     result.push(Line::from(Span::styled(bottom, border_style)));
 }
 
-/// Wrap a line of spans if total visual width exceeds the given width.
+/// Wrap a line of spans if total visual width exceeds the given width,
+/// preserving each span's style across the wrap boundaries.
 ///
-/// Simple v1: flattens spans to plain text, wraps, and returns new lines.
-/// Inline formatting is lost on wrapped continuation lines (acceptable for v1).
+/// The concatenated plain text is wrapped with `textwrap`; each resulting row is
+/// mapped back to a byte range in the plain text and the styled spans are
+/// re-sliced against that range, so bold/italic/inline-code/link styling (and
+/// the colored bullet/quote prefix) survive on every wrapped row — including
+/// spans that straddle a wrap boundary, which are split with their style carried
+/// to both halves.
 fn wrap_line_spans(spans: &[Span<'static>], width: usize) -> Vec<Line<'static>> {
     if width == 0 || spans.is_empty() {
         return vec![Line::from(spans.to_vec())];
     }
 
-    // Calculate total visual width
+    // Fast path: fits on one line — keep the styled spans intact.
     let total_width: usize = spans
         .iter()
         .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
         .sum();
-
     if total_width <= width {
         return vec![Line::from(spans.to_vec())];
     }
 
-    // Flatten to plain text for wrapping
-    let plain: String = spans.iter().map(|s| s.content.as_ref()).collect();
+    // Build the concatenated plain text plus a parallel map of
+    // (byte_start, byte_end, style) segments so every byte offset in `plain`
+    // can be traced back to its originating span's style.
+    let mut plain = String::new();
+    let mut segments: Vec<(usize, usize, Style)> = Vec::with_capacity(spans.len());
+    for span in spans {
+        let start = plain.len();
+        plain.push_str(span.content.as_ref());
+        let end = plain.len();
+        if end > start {
+            segments.push((start, end, span.style));
+        }
+    }
 
-    // Use textwrap to wrap the text
+    // Wrap, then map each row back to its byte range in `plain` and re-slice the
+    // styled segments. textwrap may drop the whitespace it broke on, so locate
+    // each row's content starting at/after a running cursor rather than assuming
+    // the rows are byte-adjacent.
     let wrapped = textwrap::wrap(&plain, width);
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(wrapped.len());
+    let mut cursor = 0usize;
+    for row in &wrapped {
+        let row = row.as_ref();
+        let row_start = plain[cursor..].find(row).map_or(cursor, |off| cursor + off);
+        let row_end = row_start + row.len();
+        cursor = row_end;
 
-    wrapped
-        .into_iter()
-        .map(|cow| Line::from(Span::raw(cow.into_owned())))
-        .collect()
+        let mut row_spans: Vec<Span<'static>> = Vec::new();
+        for (seg_start, seg_end, style) in &segments {
+            let lo = (*seg_start).max(row_start);
+            let hi = (*seg_end).min(row_end);
+            if lo < hi {
+                if let Some(text) = plain.get(lo..hi) {
+                    if !text.is_empty() {
+                        row_spans.push(Span::styled(text.to_string(), *style));
+                    }
+                }
+            }
+        }
+        if row_spans.is_empty() {
+            row_spans.push(Span::raw(row.to_string()));
+        }
+        lines.push(Line::from(row_spans));
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(spans.to_vec()));
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -518,6 +574,24 @@ mod tests {
             "100-char text at width=40 should wrap to > 1 line, got {}",
             lines.len()
         );
+    }
+
+    #[test]
+    fn wrapped_lines_preserve_styling() {
+        // A bold run long enough to wrap at width 40 must keep BOLD on every row.
+        let input = format!("**{}**", "bold ".repeat(20));
+        let lines = markdown_to_lines(&input, 40);
+        assert!(
+            lines.len() > 1,
+            "long bold text should wrap to > 1 line, got {}",
+            lines.len()
+        );
+        for (i, line) in lines.iter().enumerate() {
+            assert!(
+                has_modifier(line, Modifier::BOLD),
+                "row {i} lost BOLD styling after wrapping"
+            );
+        }
     }
 
     #[test]

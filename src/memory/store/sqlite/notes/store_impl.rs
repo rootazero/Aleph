@@ -149,7 +149,14 @@ impl NoteStore for SqliteMemoryBackend {
         // Existing edges: to_note -> (to_raw, relation, confidence, resolved_by, status, label).
         let existing: HashMap<
             String,
-            (String, Option<String>, f32, Option<String>, String, Option<String>),
+            (
+                String,
+                Option<String>,
+                f32,
+                Option<String>,
+                String,
+                Option<String>,
+            ),
         > = {
             let mut stmt = conn
                 .prepare(
@@ -171,9 +178,14 @@ impl NoteStore for SqliteMemoryBackend {
                 })
                 .map_err(|e| AlephError::config(format!("index_note links scan: {e}")))?;
             rows.filter_map(|r| r.ok())
-                .map(|(to_note, to_raw, relation, conf, resolved_by, status, label)| {
-                    (to_note, (to_raw, relation, conf, resolved_by, status, label))
-                })
+                .map(
+                    |(to_note, to_raw, relation, conf, resolved_by, status, label)| {
+                        (
+                            to_note,
+                            (to_raw, relation, conf, resolved_by, status, label),
+                        )
+                    },
+                )
                 .collect()
         };
 
@@ -191,16 +203,40 @@ impl NoteStore for SqliteMemoryBackend {
 
         // UPSERT new or changed targets; skip unchanged rows (no write storm).
         for (to_note, d) in &desired {
-            let unchanged = existing.get(to_note).is_some_and(
-                |(er, erel, econf, eresolved, estatus, elabel)| {
-                    er == &d.to_raw
-                        && erel == &d.relation
-                        && (econf - d.confidence).abs() < f32::EPSILON
-                        && eresolved.as_deref() == d.resolved_by
-                        && estatus.as_str() == d.status
-                        && elabel.as_deref() == d.label.as_deref()
-                },
-            );
+            let prior = existing.get(to_note);
+
+            // `relation` is DB-only enrichment OWNED BY THE DREAM STAGES, not by
+            // markdown: `NoteWeave` stamps 'semantic' / 'related' / '<keyword>' via
+            // `add_link_with_relation`, and nothing writes those to frontmatter. But
+            // `desired` is rebuilt from markdown, where a body wikilink carries no
+            // relation at all — so it came back as `None`, and writing that `None`
+            // straight through NULLed every label the weave had stamped.
+            //
+            // That fired on the next re-index of the source note for ANY reason:
+            // NoteDecay's per-cycle frontmatter patch, an ingest `append_to_note`, a
+            // panel edit — and even inside NoteWeave's own loop, where writing a
+            // second pair for the same peer re-indexed it and wiped the relation
+            // stamped moments earlier. There is no re-stamp path (NoteWeave only
+            // visits orphans, and by then the note has links), so the labels were
+            // gone for good and the graph silently degraded to untyped edges.
+            //
+            // Markdown is the source of truth for the EDGE, not for its LABEL. When
+            // markdown says nothing (`None`), keep what is already there. An explicit
+            // frontmatter `relations:` entry still wins, because it sets
+            // `relation: Some(..)` when `desired` is built above.
+            let relation = match (&d.relation, prior.and_then(|(_, rel, ..)| rel.as_ref())) {
+                (None, Some(kept)) => Some(kept.clone()),
+                (from_markdown, _) => from_markdown.clone(),
+            };
+
+            let unchanged = prior.is_some_and(|(er, erel, econf, eresolved, estatus, elabel)| {
+                er == &d.to_raw
+                    && erel == &relation
+                    && (econf - d.confidence).abs() < f32::EPSILON
+                    && eresolved.as_deref() == d.resolved_by
+                    && estatus.as_str() == d.status
+                    && elabel.as_deref() == d.label.as_deref()
+            });
             if unchanged {
                 continue;
             }
@@ -213,7 +249,7 @@ impl NoteStore for SqliteMemoryBackend {
                                confidence = excluded.confidence, resolved_by = excluded.resolved_by, \
                                status = excluded.status, label = excluded.label",
                 params![
-                    agent_id, path, to_note, d.to_raw, d.relation, d.confidence, d.resolved_by,
+                    agent_id, path, to_note, d.to_raw, relation, d.confidence, d.resolved_by,
                     d.status, d.label
                 ],
             )
@@ -403,11 +439,8 @@ impl NoteStore for SqliteMemoryBackend {
                 )
                 .map_err(|e| AlephError::config(format!("remove_note_index {table}: {e}")))?;
             }
-            tx.execute(
-                "DELETE FROM notes_vec_map WHERE rowid = ?1",
-                params![rowid],
-            )
-            .map_err(|e| AlephError::config(format!("remove_note_index vec map: {e}")))?;
+            tx.execute("DELETE FROM notes_vec_map WHERE rowid = ?1", params![rowid])
+                .map_err(|e| AlephError::config(format!("remove_note_index vec map: {e}")))?;
         }
 
         tx.commit()
@@ -892,11 +925,8 @@ impl NoteStore for SqliteMemoryBackend {
                 )
                 .map_err(|e| AlephError::config(format!("prune_orphan_vectors {table}: {e}")))?;
             }
-            tx.execute(
-                "DELETE FROM notes_vec_map WHERE rowid = ?1",
-                params![rowid],
-            )
-            .map_err(|e| AlephError::config(format!("prune_orphan_vectors map: {e}")))?;
+            tx.execute("DELETE FROM notes_vec_map WHERE rowid = ?1", params![rowid])
+                .map_err(|e| AlephError::config(format!("prune_orphan_vectors map: {e}")))?;
         }
 
         tx.commit()
@@ -1458,7 +1488,13 @@ impl NoteStore for SqliteMemoryBackend {
                    (agent_id, from_note, to_note, to_raw, relation, confidence, status) \
                  VALUES (?1, ?2, ?3, ?3, ?4, ?5, 'active') \
                  ON CONFLICT(agent_id, from_note, to_note) DO NOTHING",
-                params![agent_id, from, to, CO_RECALLED_RELATION, f64::from(*confidence)],
+                params![
+                    agent_id,
+                    from,
+                    to,
+                    CO_RECALLED_RELATION,
+                    f64::from(*confidence)
+                ],
             )
             .map_err(|e| AlephError::config(format!("replace_co_recall_links insert: {e}")))?;
         }

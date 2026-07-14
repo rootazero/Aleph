@@ -57,6 +57,19 @@ const MAX_WEAVE_PER_CYCLE: usize = 10;
 /// real content to mine instead of just the filename.
 const BODY_SUMMARY_CHARS: usize = 800;
 
+/// Max orphans fed to one batched keyword-extraction call.
+///
+/// Only per-note body length was capped before, never the note COUNT — so the
+/// entire vault was re-serialized into a single prompt every Consolidate cycle
+/// just to write at most `MAX_WEAVE_PER_CYCLE` links. Comfortably above that
+/// budget (many orphans yield no usable pair), and the remainder is simply
+/// picked up next cycle.
+const MAX_ORPHANS_PER_EXTRACTION: usize = 60;
+
+/// Max non-orphan peers fed to the same call. Peers are title-only, so they are
+/// far cheaper than orphans; this mirrors `MentionWeave`'s per-cycle cap.
+const MAX_PEERS_PER_EXTRACTION: usize = 200;
+
 /// Embedding nearest-neighbours fetched per unplaced orphan.
 const SEMANTIC_NEIGHBORS: usize = 4;
 
@@ -191,16 +204,64 @@ impl DreamStage for NoteWeaveStage {
                 orphan_bodies.insert(path.clone(), strip_frontmatter(&body).to_string());
             }
         }
-        let inputs: Vec<NoteForExtraction> = orphans
+        // Bound the batch. `orphans` and `others` are both unbounded (the `isolated`
+        // insight, and `list_notes` with no SQL LIMIT), and every one of them was
+        // serialized into a SINGLE prompt — each orphan carrying up to
+        // BODY_SUMMARY_CHARS of body — to emit at most MAX_WEAVE_PER_CYCLE links.
+        // A vault of 300 orphans + 700 notes meant a ~60k-token prompt every
+        // Consolidate cycle; past the model's context window it errored
+        // deterministically, and (via the bare `?` below) took the whole dream
+        // pipeline down with it, every cycle, forever. Cap the inputs like
+        // MentionWeave caps its own (MAX_MENTIONS_PER_CYCLE).
+        let orphan_batch: Vec<String> = orphans
             .iter()
-            .chain(others.iter())
+            .take(MAX_ORPHANS_PER_EXTRACTION)
+            .cloned()
+            .collect();
+        let peer_batch: Vec<&String> = others.iter().take(MAX_PEERS_PER_EXTRACTION).collect();
+        if orphans.len() > orphan_batch.len() || others.len() > peer_batch.len() {
+            info!(
+                orphans_total = orphans.len(),
+                orphans_sent = orphan_batch.len(),
+                peers_total = others.len(),
+                peers_sent = peer_batch.len(),
+                "NoteWeave: capped keyword-extraction batch; the remainder is picked up next cycle"
+            );
+        }
+
+        let inputs: Vec<NoteForExtraction> = orphan_batch
+            .iter()
+            .chain(peer_batch.into_iter())
             .map(|path| build_extraction_input(path, orphan_bodies.get(path).map(String::as_str)))
             .collect();
-        let keywords = extract_keywords(ctx.provider.as_ref(), &inputs).await?;
+
+        // Keyword extraction is ONE of three complementary signals (keyword →
+        // semantic → structural), and this stage's contract is that linking is an
+        // enhancement that must never block the cycle — every other fallible call
+        // here is `.ok()`-guarded. This bare `?` was the one hole: a transient
+        // network blip or an oversized prompt propagated out of the stage and
+        // aborted the whole Consolidate run, so MentionWeave, NoteDecay,
+        // SkillLifecycle and GoalLessonsPromote never executed and note maintenance
+        // silently stopped. Degrade instead, and let the semantic + structural
+        // fallbacks still place the orphans.
+        let keywords = match extract_keywords(ctx.provider.as_ref(), &inputs).await {
+            Ok(k) => k,
+            // Exhausted provider (429/403) IS a deliberate cycle abort — every
+            // later LLM stage would fail identically, and the daemon must not
+            // hammer it. See `is_provider_exhausted` and the `rate_limit_aborts`
+            // test. (This arm only became reachable once `extract_keywords` stopped
+            // flattening the error variant into `AlephError::other`.)
+            Err(e) if super::is_provider_exhausted(&e) => return Err(e),
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "NoteWeave: keyword extraction failed; falling back to semantic + structural weaving"
+                );
+                Vec::new()
+            }
+        };
         if keywords.is_empty() {
-            info!("NoteWeave: no keywords extracted");
-            ctx.report.notes_woven = 0;
-            return Ok(ctx);
+            info!("NoteWeave: no keywords extracted; relying on semantic + structural fallbacks");
         }
 
         // --- Phase 3: pairing. Two complementary orphan-touching sources:

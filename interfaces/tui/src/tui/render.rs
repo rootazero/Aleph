@@ -14,6 +14,7 @@ use crate::tui::widgets::{
     command_palette::render_command_palette,
     dialog::render_dialog,
     input_area::{input_height, InputWidget},
+    session_picker::render_session_picker,
     status_bar::StatusBar,
 };
 
@@ -64,6 +65,9 @@ pub fn render(frame: &mut Frame, state: &AppState, textarea: &TextArea) {
     // Overlays (rendered last, on top)
     if let Some(palette) = &state.palette {
         render_command_palette(frame, palette, input_area);
+    }
+    if let Some(picker) = &state.session_picker {
+        render_session_picker(frame, picker, input_area);
     }
     if let Some(dialog) = &state.dialog {
         render_dialog(frame, dialog, frame.area());

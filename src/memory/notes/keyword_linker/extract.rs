@@ -44,10 +44,15 @@ pub async fn extract_keywords(
         user.push('\n');
     }
     let msgs = [UnifiedMessage::user(&user)];
+    // Propagate the provider's error VARIANT unchanged. This used to flatten every
+    // failure into `AlephError::other(...)`, which erased the type — and callers
+    // classify on the type: `dreaming::stages::is_provider_exhausted` matches only
+    // `RateLimitError | AuthenticationError`, so a real 429/403 arriving here as
+    // `other` was mistaken for a transient blip (and, conversely, callers could not
+    // tell a transient blip from an exhausted provider at all).
     let resp = provider
         .process(RequestPayload::new(&msgs).with_system(Some(SYSTEM)))
-        .await
-        .map_err(|e| AlephError::other(format!("keyword extract LLM: {e}")))?;
+        .await?;
     let Some(json) = extract_json_robust(&resp.text_content()) else {
         warn!("keyword extract: no JSON in response; returning empty");
         return Ok(vec![]);

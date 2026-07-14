@@ -485,6 +485,19 @@ method reference, error envelope, and debugging procedures.
 interfaces/webchat/          # Web-based chat interface (Leptos/WASM panel)
 ```
 
+### Terminal Interface (TUI)
+
+```
+interfaces/tui/              # Full-screen terminal chat (ratatui + crossterm)
+```
+
+A thin, remote client: it speaks JSON-RPC to the Gateway over a WebSocket via
+`aleph-client` + `aleph-protocol` and **must not depend on alephcore** (enforced
+in its `Cargo.toml`). Like the CLI it holds no agent/tools/memory in-process —
+it is a pure I/O interface (redline R4): user input → JSON-RPC request, and
+`StreamEvent`s → rendered output. See
+[FEATURE_LOCATOR.md](FEATURE_LOCATOR.md) §5.13 for the file-level map.
+
 ---
 
 ## Identity Context Flow

@@ -81,6 +81,14 @@ pub enum Action {
     // -- Dialog response --
     /// Respond to an `AskUser` dialog
     RespondToDialog { run_id: String, choice: String },
+
+    // -- Session picker --
+    /// Move session-picker selection up
+    SessionPickerUp,
+    /// Move session-picker selection down
+    SessionPickerDown,
+    /// Confirm the selected session and switch to it
+    SessionPickerConfirm,
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +102,7 @@ pub enum Focus {
     Chat,
     CommandPalette,
     Dialog,
+    SessionPicker,
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +174,26 @@ pub struct PaletteState {
     pub namespace_stack: Vec<String>,
 }
 
+/// A single browsable session in the resume/switch picker.
+#[derive(Debug, Clone)]
+pub struct SessionEntry {
+    /// The session key used by `chat.history` / to re-point the session.
+    pub key: String,
+    /// Human-facing label (name + message count, or the key as fallback).
+    pub label: String,
+}
+
+/// State for the session resume/switch picker overlay. Populated from
+/// `sessions.list`; confirming an entry loads `chat.history` and switches.
+#[derive(Debug, Clone)]
+pub struct SessionPickerState {
+    pub input: String,
+    pub entries: Vec<SessionEntry>,
+    /// Indices into `entries` surviving the current input filter.
+    pub filtered: Vec<usize>,
+    pub selected: usize,
+}
+
 // ---------------------------------------------------------------------------
 // AppState
 // ---------------------------------------------------------------------------
@@ -205,6 +234,7 @@ pub struct AppState {
     pub focus: Focus,
     pub dialog: Option<DialogState>,
     pub palette: Option<PaletteState>,
+    pub session_picker: Option<SessionPickerState>,
 
     // -- Control --
     pub ctrl_c_count: u8,
@@ -243,6 +273,7 @@ impl AppState {
             focus: Focus::Input,
             dialog: None,
             palette: None,
+            session_picker: None,
 
             ctrl_c_count: 0,
             spinner_frame: 0,
@@ -453,11 +484,53 @@ impl AppState {
         true
     }
 
-    /// Close any open overlay (palette or dialog) and return focus to input.
+    /// Close any open overlay (palette, dialog, or session picker) and return
+    /// focus to input.
     pub fn close_overlay(&mut self) {
         self.palette = None;
         self.dialog = None;
+        self.session_picker = None;
         self.focus = Focus::Input;
+    }
+
+    // -- Session picker -------------------------------------------------
+
+    /// Open the session picker with entries fetched from `sessions.list`.
+    pub fn open_session_picker(&mut self, entries: Vec<SessionEntry>) {
+        let filtered = (0..entries.len()).collect();
+        self.session_picker = Some(SessionPickerState {
+            input: String::new(),
+            entries,
+            filtered,
+            selected: 0,
+        });
+        self.focus = Focus::SessionPicker;
+    }
+
+    /// Recompute the session picker's filtered index list from its input text.
+    pub fn recompute_session_filter(&mut self) {
+        if let Some(picker) = &mut self.session_picker {
+            let filter = picker.input.to_lowercase();
+            picker.filtered = picker
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| {
+                    filter.is_empty()
+                        || e.label.to_lowercase().contains(&filter)
+                        || e.key.to_lowercase().contains(&filter)
+                })
+                .map(|(i, _)| i)
+                .collect();
+            picker.selected = 0;
+        }
+    }
+
+    /// The session key currently highlighted in the picker, if any.
+    pub fn selected_session_key(&self) -> Option<String> {
+        let picker = self.session_picker.as_ref()?;
+        let idx = *picker.filtered.get(picker.selected)?;
+        picker.entries.get(idx).map(|e| e.key.clone())
     }
 
     /// Show an `AskUser` dialog.
@@ -472,7 +545,7 @@ impl AppState {
     }
 
     /// Switch to a different session and reset transient chat/run UI state.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// The caller then appends the fetched `chat.history` transcript.
     pub fn switch_session(&mut self, session_key: &str) {
         self.session_key = session_key.to_string();
         self.messages.clear();

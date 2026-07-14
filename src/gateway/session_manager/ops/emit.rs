@@ -150,7 +150,7 @@ pub(crate) fn emit_session_end_raw_with_registry(
             // above, holding the synchronously-acquired guard (dropped at task
             // end → wakes any `await_ready` waiter for this agent).
             if let Some((guard, flush_agent, cs)) = flush {
-                crate::memory::flush::session_end_flush(guard, flush_agent, cs).await;
+                crate::memory::flush::flush_agent_memory(guard, flush_agent, cs).await;
             }
         });
     } else {

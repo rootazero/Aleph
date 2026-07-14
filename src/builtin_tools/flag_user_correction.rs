@@ -115,12 +115,50 @@ impl AlephTool for FlagUserCorrectionTool {
         let raw = raw.with_path(format!("aleph://correction/{raw_memory_id}"));
 
         self.store.insert_raw_memory(&raw).await?;
+        Self::spawn_sedimentation(&self.agent_id);
 
         Ok(FlagUserCorrectionOutput {
             success: true,
             message: "Correction logged.".into(),
             raw_memory_id,
         })
+    }
+}
+
+impl FlagUserCorrectionTool {
+    /// Kick an immediate compress→link drain for this agent, off the critical path.
+    ///
+    /// The model has just made the exact judgement the old keyword `SignalDetector`
+    /// tried to guess at — *"the user corrected me"* — so this is the R7-clean place
+    /// to trigger an immediate consolidation. Previously the two were inverted: a
+    /// substring match on "不对"/"actually" compressed instantly, while the model's
+    /// own high-confidence signal just sat in `raw_memory` waiting for the next dream
+    /// cycle (hours). Now the LLM's judgement is the fast path and there is no keyword
+    /// table at all.
+    ///
+    /// The `FlushGuard` is taken SYNCHRONOUSLY, before the spawn — acquiring it inside
+    /// the task would race a follow-on session's `await_ready` (`tokio::spawn` returns
+    /// before the task is first polled, so the waiter could observe an empty registry
+    /// and silently skip the gate). Same hazard, same fix, as the session-end site.
+    ///
+    /// Fire-and-forget: the drain runs an LLM ingest call, and the turn must never
+    /// block on it.
+    fn spawn_sedimentation(agent_id: &str) {
+        // No CompressionService registered → memory isn't configured; nothing to
+        // drain into. Also keeps this a no-op in unit tests (and outside a runtime).
+        let Some(compression) = crate::thinker::memory_context_provider::session_end_compression()
+        else {
+            return;
+        };
+        let Ok(rt) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+
+        let agent = agent_id.to_string();
+        let guard = crate::memory::flush::global_registry().begin(&agent);
+        rt.spawn(async move {
+            crate::memory::flush::flush_agent_memory(guard, agent, compression).await;
+        });
     }
 }
 

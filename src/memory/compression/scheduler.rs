@@ -127,15 +127,6 @@ impl CompressionScheduler {
         self.pending_turns.fetch_add(1, Ordering::Release);
     }
 
-    /// Increment turns by specified amount (saturates at `u32::MAX`).
-    pub fn increment_turns_by(&self, count: u32) {
-        let _ = self
-            .pending_turns
-            .fetch_update(Ordering::Release, Ordering::Acquire, |current| {
-                Some(current.saturating_add(count))
-            });
-    }
-
     /// Get current pending turns count
     pub fn get_pending_turns(&self) -> u32 {
         self.pending_turns.load(Ordering::Acquire)
@@ -144,12 +135,6 @@ impl CompressionScheduler {
     /// Reset turns counter (after compression completes)
     pub fn reset_turns(&self) {
         self.pending_turns.store(0, Ordering::Release);
-    }
-
-    /// Update scheduler configuration
-    pub fn update_config(&self, config: SchedulerConfig) {
-        let mut cfg = self.config.lock().unwrap_or_else(|e| e.into_inner());
-        *cfg = config;
     }
 
     /// Get current configuration
@@ -247,7 +232,9 @@ mod tests {
     fn test_reset_turns() {
         let scheduler = CompressionScheduler::with_defaults();
 
-        scheduler.increment_turns_by(10);
+        for _ in 0..10 {
+            scheduler.increment_turns();
+        }
         assert_eq!(scheduler.get_pending_turns(), 10);
 
         scheduler.reset_turns();
