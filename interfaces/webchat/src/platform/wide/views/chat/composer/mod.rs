@@ -205,6 +205,10 @@ pub(super) fn InputArea() -> impl IntoView {
         // Per-turn model override stamped on ChatState → daemon's run
         // loop short-circuits its provider-fallback chain.
         let model_override = chat.selected_model.get();
+        // The composer's exec tier. Carried on every send, because on the FIRST
+        // send there is no session row to have written it to — and that is the
+        // turn the picker was armed for. The server stamps it onto the session.
+        let tier = chat.session_exec_tier.get();
         // Capture the conversation active at *send* time. Binding the run to
         // this (rather than to whichever tab is focused when `run_accepted`
         // arrives) is what lets the user send in A, switch to B, and still have
@@ -216,7 +220,19 @@ pub(super) fn InputArea() -> impl IntoView {
             let aid = agent_id.as_deref();
             let pr = project_root.as_deref();
             let mo = model_override.as_ref();
-            match ChatApi::send(&dash, &text, sk, api_attachments, aid, pr, mo, false).await {
+            match ChatApi::send(
+                &dash,
+                &text,
+                sk,
+                api_attachments,
+                aid,
+                pr,
+                mo,
+                tier.as_deref(),
+                false,
+            )
+            .await
+            {
                 Ok(resp) => {
                     if let Some(conv) = send_conv {
                         sessions.bind_run(&resp.run_id, conv, Some(&resp.session_key));
@@ -349,6 +365,7 @@ pub(super) fn InputArea() -> impl IntoView {
         let agent_id = chat.agent_id.get_untracked();
         let project_root = chat.active_project_root.get_untracked();
         let model_override = chat.selected_model.get_untracked();
+        let tier = chat.session_exec_tier.get_untracked();
         let dash = dashboard;
         spawn_local(async move {
             for entry in batch {
@@ -371,6 +388,7 @@ pub(super) fn InputArea() -> impl IntoView {
                     agent_id.as_deref(),
                     project_root.as_deref(),
                     model_override.as_ref(),
+                    tier.as_deref(),
                     false,
                 )
                 .await

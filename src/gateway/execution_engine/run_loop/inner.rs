@@ -243,10 +243,25 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 }
                 None => Default::default(),
             };
-            let mut tier = self
-                .session_exec_tier(&request.session_key)
-                .await
-                .unwrap_or(global_tier);
+            // Precedence: the tier this REQUEST carries (the composer's pick in
+            // a conversation whose session did not exist when it was made) >
+            // the session's stored tier > the global tier. Without the first
+            // rung, a tier picked before the first message could not govern
+            // that message — the very turn the user was arming the gate for.
+            let requested = request
+                .metadata
+                .get(crate::config::types::policies::EXEC_TIER_SESSION_KEY)
+                .map(String::as_str)
+                .and_then(crate::config::types::policies::ExecTier::from_id);
+            let stored = self.session_exec_tier(&request.session_key).await;
+            // Stamp a request-carried tier onto the session, so turns 2+ (which
+            // carry nothing) and a page reload both keep it. Same "stamped on
+            // the first message" contract as `project_root`.
+            if let Some(t) = requested.filter(|t| stored != Some(*t)) {
+                self.persist_session_exec_tier(&request.session_key, t)
+                    .await;
+            }
+            let mut tier = requested.or(stored).unwrap_or(global_tier);
             if let Some(level) = request
                 .metadata
                 .get("caller_role")
@@ -1271,6 +1286,30 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 );
                 None
             }
+        }
+    }
+
+    /// Stamp a request-carried tier onto the session, so the choice outlives
+    /// the turn that carried it (later turns send nothing; a page reload reads
+    /// the session back). Best-effort: a store failure must not fail the run —
+    /// the tier for THIS turn is already resolved and enforced either way.
+    async fn persist_session_exec_tier(
+        &self,
+        session_key: &crate::gateway::router::SessionKey,
+        tier: crate::config::types::policies::ExecTier,
+    ) {
+        use crate::config::types::policies::EXEC_TIER_SESSION_KEY;
+        use crate::gateway::session_store::types::SessionPatch;
+
+        let Some(store) = self.session_manager.as_ref() else {
+            return;
+        };
+        let patch = SessionPatch {
+            metadata: Some(serde_json::json!({ EXEC_TIER_SESSION_KEY: tier.id() })),
+            ..Default::default()
+        };
+        if let Err(e) = store.patch_session(session_key, &patch).await {
+            warn!(error = %e, tier = tier.id(), "Failed to persist session exec tier");
         }
     }
 }

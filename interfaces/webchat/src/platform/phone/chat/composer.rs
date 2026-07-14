@@ -70,6 +70,8 @@ pub fn PhoneComposer() -> impl IntoView {
                 agent_id.as_deref(),
                 project_root.as_deref(),
                 None,
+                // No tier picker on phone: the session's stored tier governs.
+                None,
                 false,
             )
             .await;
@@ -178,6 +180,8 @@ pub fn PhoneComposer() -> impl IntoView {
                     Vec::new(),
                     agent_id.as_deref(),
                     project_root.as_deref(),
+                    None,
+                    // No tier picker on phone: the session's stored tier governs.
                     None,
                     false,
                 )

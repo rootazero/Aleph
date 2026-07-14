@@ -75,6 +75,7 @@ impl ChatApi {
         agent_id: Option<&str>,
         project_root: Option<&str>,
         model_override: Option<&crate::api::providers::ModelOverride>,
+        exec_tier: Option<&str>,
         voice_input: bool,
     ) -> Result<ChatSendResponse, String> {
         let attachments_json: Vec<Value> = attachments
@@ -97,6 +98,11 @@ impl ChatApi {
             "agent_id": agent_id,
             "project_root": project_root,
             "model_override": model_override,
+            // The tier rides on the message because a brand-new conversation
+            // has no session to write it to yet — and the first turn is exactly
+            // the one the picker was armed for. The server stamps it onto the
+            // session, so later turns need not resend it.
+            "exec_tier": exec_tier,
             "voice_input": voice_input,
         });
         let result = state.rpc_call("chat.send", params).await?;

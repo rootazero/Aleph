@@ -1021,6 +1021,15 @@ impl SessionStore for FileSessionStore {
         Ok(deleted)
     }
 
+    /// `status` and `metadata` land in `identity_meta.custom`, exactly as the
+    /// sqlite backend does it (`session_manager::ops::modify::patch_session`).
+    ///
+    /// They used to be dropped here while the call still answered `Ok(true)`,
+    /// so every caller of `sessions.patch` was told a write succeeded that
+    /// never happened — and `custom` is where the per-session settings LIVE
+    /// (`exec_tier`, `project_root`). The two backends must agree: a feature
+    /// that works on sqlite and silently does nothing on file is worse than one
+    /// that fails on both, because nothing points at the backend.
     async fn patch_session(
         &self,
         key: &SessionKey,
@@ -1037,6 +1046,27 @@ impl SessionStore for FileSessionStore {
                 }
                 if let Some(provider) = &patch.model_provider {
                     meta.model_provider = Some(provider.clone());
+                }
+                if patch.status.is_some() || patch.metadata.is_some() {
+                    let mut identity = meta.identity_meta.take().unwrap_or_default();
+                    if let Some(status) = &patch.status {
+                        identity
+                            .custom
+                            .insert("status".to_string(), serde_json::json!(status));
+                    }
+                    // Merged key-by-key, nulls included — byte-for-byte what
+                    // sqlite does. A `null` is how the Panel clears a setting
+                    // ("follow the global tier"), and both readers treat a null
+                    // and an absent key alike (`custom.get(k)?.as_str()?`).
+                    // Deviating here (e.g. removing the key instead) would
+                    // reintroduce, in the opposite direction, exactly the
+                    // backend divergence this fix exists to kill.
+                    if let Some(extra) = patch.metadata.as_ref().and_then(|m| m.as_object()) {
+                        for (k, v) in extra {
+                            identity.custom.insert(k.clone(), v.clone());
+                        }
+                    }
+                    meta.identity_meta = Some(identity);
                 }
                 self.write_metadata(&key_str, &meta).await?;
                 self.emit_session_changed(&key_str, "patch", Some(&meta));
@@ -1391,5 +1421,95 @@ mod emit_tests {
             .await
             .unwrap();
         assert_eq!(rows.len(), 1, "second close must not emit again");
+    }
+}
+
+#[cfg(test)]
+mod patch_metadata_tests {
+    use super::*;
+
+    fn temp_store() -> (FileSessionStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        (FileSessionStore::new(config).expect("store"), dir)
+    }
+
+    /// `sessions.patch { metadata }` is the ONLY way the Panel persists a
+    /// per-session setting — the exec tier, the project root. This backend used
+    /// to drop the whole map on the floor and still answer `Ok(true)`, so the
+    /// Panel believed every write landed and none did. The tier feature was
+    /// dead on this backend while its unit tests passed: they fed a
+    /// hand-built metadata map straight to the READER and never went through
+    /// the write path at all.
+    #[tokio::test]
+    async fn patch_metadata_reaches_identity_custom_and_survives_a_reread() {
+        let (store, _dir) = temp_store();
+        let key = SessionKey::parse("agent:main:main:s1").expect("key");
+        store.get_or_create(&key).await.expect("create");
+
+        let patch = SessionPatch {
+            metadata: Some(serde_json::json!({ "exec_tier": "ask" })),
+            ..Default::default()
+        };
+        assert!(
+            store.patch_session(&key, &patch).await.expect("patch"),
+            "patch must report it wrote"
+        );
+
+        // Re-read THROUGH the store, not from an in-memory handle: the bug was
+        // in what got written to disk.
+        let meta = store
+            .get_metadata(&key)
+            .await
+            .expect("read")
+            .expect("session exists");
+        assert_eq!(
+            meta.identity_meta
+                .expect("identity_meta must exist after a metadata patch")
+                .custom
+                .get("exec_tier")
+                .and_then(|v| v.as_str()),
+            Some("ask"),
+            "a reported-successful patch must actually persist the key"
+        );
+    }
+
+    /// A second patch must not wipe the first: `custom` is a shared bag of
+    /// per-session settings, so merging (not replacing) is the contract — the
+    /// same one the sqlite backend keeps.
+    #[tokio::test]
+    async fn patch_metadata_merges_rather_than_replaces() {
+        let (store, _dir) = temp_store();
+        let key = SessionKey::parse("agent:main:main:s1").expect("key");
+        store.get_or_create(&key).await.expect("create");
+
+        for (k, v) in [("exec_tier", "ask"), ("project_root", "/tmp/p")] {
+            let patch = SessionPatch {
+                metadata: Some(serde_json::json!({ k: v })),
+                ..Default::default()
+            };
+            store.patch_session(&key, &patch).await.expect("patch");
+        }
+
+        let custom = store
+            .get_metadata(&key)
+            .await
+            .expect("read")
+            .expect("session")
+            .identity_meta
+            .expect("identity_meta")
+            .custom;
+        assert_eq!(
+            custom.get("exec_tier").and_then(|v| v.as_str()),
+            Some("ask"),
+            "the second patch must not have wiped the first"
+        );
+        assert_eq!(
+            custom.get("project_root").and_then(|v| v.as_str()),
+            Some("/tmp/p")
+        );
     }
 }

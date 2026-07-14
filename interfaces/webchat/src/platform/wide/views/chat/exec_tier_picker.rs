@@ -16,20 +16,19 @@
 //! 4. "Follow global" clears the override.
 //!
 //! The trap: a brand-new conversation has no `session_key` yet, so there is
-//! nothing to patch. The choice is parked KEYED BY CONVERSATION and flushed as
-//! soon as that conversation's first `chat.send` resolves a session key. Keying
-//! is the whole point — a single parked value would be applied to whichever
-//! conversation happened to be restored next, silently escalating a chat the
-//! user never touched.
+//! nothing to patch — and the FIRST turn is the one the user armed the gate
+//! for. No amount of client-side parking fixes that: the run resolves its tier
+//! when it starts, so a value written after `chat.send` returns is already too
+//! late. The tier therefore rides ON the message (`ChatApi::send`'s `exec_tier`,
+//! same shape as `project_root`), and the server stamps it onto the session it
+//! creates — which is also what makes it survive a reload.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use std::collections::HashMap;
 
 use crate::api::sessions::set_exec_tier;
 use crate::api::tool_permissions::{TierPreset, ToolPermissionsApi};
 use crate::context::DashboardState;
-use crate::state::sessions::{ConvId, SessionMap};
 use crate::views::chat::state::ChatState;
 
 /// The tier whose blast radius warrants a second click.
@@ -52,30 +51,32 @@ fn pill_label(tiers: &[TierPreset], id: &str) -> String {
 pub fn ExecTierPicker() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
-    let sessions = expect_context::<SessionMap>();
 
     let open = RwSignal::new(false);
     let tiers: RwSignal<Vec<TierPreset>> = RwSignal::new(Vec::new());
     let global_tier = RwSignal::new(String::new());
     // Tier id currently armed for the "are you sure" second click (Full only).
     let confirming: RwSignal<Option<String>> = RwSignal::new(None);
-    // Choices made in a conversation that had no session key yet, keyed by the
-    // conversation they were made in. Survives tab swaps (the composer is not
-    // remounted) and can never be applied to the wrong chat.
-    let parked: RwSignal<HashMap<ConvId, Option<String>>> = RwSignal::new(HashMap::new());
 
-    // The global tier + the three presets. Fetched once on mount: the pill's
-    // label depends on the global tier even before the popover is ever opened.
-    spawn_local(async move {
-        match ToolPermissionsApi::get_global(&dashboard).await {
-            Ok(cfg) => {
-                global_tier.set(cfg.exec_tier);
-                tiers.set(cfg.tiers);
-            }
-            Err(e) => {
-                web_sys::console::warn_1(&format!("Failed to load exec tiers: {e}").into());
-            }
+    // The global tier + the three presets. Gated on the socket being up: a bare
+    // fetch on mount races the WebSocket handshake, loses, and leaves the
+    // popover permanently empty — there is no second chance to ask. Re-runs
+    // when `is_connected` flips, so a reconnect also refreshes the presets.
+    Effect::new(move |_| {
+        if !dashboard.is_connected.get() {
+            return;
         }
+        spawn_local(async move {
+            match ToolPermissionsApi::get_global(&dashboard).await {
+                Ok(cfg) => {
+                    global_tier.set(cfg.exec_tier);
+                    tiers.set(cfg.tiers);
+                }
+                Err(e) => {
+                    web_sys::console::warn_1(&format!("Failed to load exec tiers: {e}").into());
+                }
+            }
+        });
     });
 
     // Effective tier: the session override wins over the global tier.
@@ -93,38 +94,16 @@ pub fn ExecTierPicker() -> impl IntoView {
         });
     };
 
-    // Flush the parked choice of the conversation it was made in, once that
-    // conversation's first `chat.send` resolves a session key. Re-runs on both
-    // signals, so it also fires when the user switches back to a conversation
-    // whose tier is still unflushed.
-    Effect::new(move |_| {
-        let session_key = chat.session_key.get();
-        let Some(conv) = sessions.active.get() else {
-            return;
-        };
-        let Some(session_key) = session_key else {
-            return;
-        };
-        let Some(tier) = parked.try_update(|m| m.remove(&conv)).flatten() else {
-            return;
-        };
-        persist(session_key, tier);
-    });
-
     let select = move |id: Option<String>| {
         chat.session_exec_tier.set(id.clone());
-        match chat.session_key.get_untracked() {
-            // Live session — write through; nothing to park.
-            Some(session_key) => persist(session_key, id),
-            // Brand-new conversation: hold the choice against THIS conversation
-            // until its first send resolves a session key.
-            None => {
-                if let Some(conv) = sessions.active_conv() {
-                    parked.update(|m| {
-                        m.insert(conv, id);
-                    });
-                }
-            }
+        // A live session is written through immediately. A conversation with no
+        // session key yet needs no bookkeeping here: the composer carries the
+        // tier on the send itself (`ChatApi::send`), and the server stamps it
+        // onto the session it creates. Parking the choice client-side could
+        // never have governed the first turn anyway — the run resolves its tier
+        // when it starts, and by then the parked value has not been written.
+        if let Some(session_key) = chat.session_key.get_untracked() {
+            persist(session_key, id);
         }
         confirming.set(None);
         open.set(false);

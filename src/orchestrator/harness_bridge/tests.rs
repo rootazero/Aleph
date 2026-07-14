@@ -44,8 +44,17 @@ fn broadcast_callback_fans_lifecycle_events() {
 
     cb.on_delta("hello ");
     cb.on_delta("world");
-    // Use legacy on_tool_call — fires ToolCallStart with id="legacy"
+    // `act.rs` calls BOTH callbacks for the same tool call. Only the structured
+    // one may emit: the name-only callback has no call id, and the synthetic
+    // `id: "legacy"` it used to invent produced a second, undeadable tool row
+    // (`ToolCallDone` only ever carries the real id) that nothing keyed by call
+    // id — the inline approval card — could pair against.
     cb.on_tool_call("read_file");
+    cb.on_tool_call_start(
+        "call-1",
+        "read_file",
+        &serde_json::json!({ "path": "a.rs" }),
+    );
     // on_complete is now a no-op; Complete(outcome) is emitted by
     // on_complete_with_outcome (P4).
     cb.on_complete();
@@ -55,8 +64,12 @@ fn broadcast_callback_fans_lifecycle_events() {
         received.push(ev);
     }
 
-    // 3 events: two Deltas + one ToolCallStart (on_complete is no-op)
-    assert_eq!(received.len(), 3);
+    // 3 events: two Deltas + exactly ONE ToolCallStart for the one tool call.
+    assert_eq!(
+        received.len(),
+        3,
+        "one tool call must produce exactly one ToolCallStart; got {received:?}"
+    );
     match &received[0] {
         FlowStreamEvent::Delta(s) => assert_eq!(s, "hello "),
         other => panic!("expected Delta(\"hello \"), got {other:?}"),
@@ -66,7 +79,11 @@ fn broadcast_callback_fans_lifecycle_events() {
         other => panic!("expected Delta(\"world\"), got {other:?}"),
     }
     match &received[2] {
-        FlowStreamEvent::ToolCallStart { name, .. } => assert_eq!(name, "read_file"),
+        FlowStreamEvent::ToolCallStart { id, name, args } => {
+            assert_eq!(name, "read_file");
+            assert_eq!(id, "call-1", "the emitted id must be the harness call id");
+            assert_eq!(args, &serde_json::json!({ "path": "a.rs" }));
+        }
         other => panic!("expected ToolCallStart, got {other:?}"),
     }
 }

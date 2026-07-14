@@ -53,15 +53,14 @@ impl HarnessCallback for BroadcastCallback {
         let _ = self.tx.send(FlowStreamEvent::Reasoning(text.to_string()));
     }
 
-    /// Legacy compatibility shim — fires `ToolCallStart` with a synthetic id.
-    /// Prefer `on_tool_call_start` for structured tool events.
-    fn on_tool_call(&mut self, name: &str) {
-        let _ = self.tx.send(FlowStreamEvent::ToolCallStart {
-            id: "legacy".to_string(),
-            name: name.to_string(),
-            args: serde_json::Value::Null,
-        });
-    }
+    // `on_tool_call` (the name-only callback) is deliberately NOT implemented:
+    // the trait's default is a no-op, and `act.rs` calls it immediately before
+    // `on_tool_call_start` for the SAME call. Emitting from both fired two
+    // `ToolCallStart` events per tool call — one carrying a synthetic
+    // `id: "legacy"` and null args. `ToolCallDone` only ever carries the real
+    // call id, so the synthetic row could never be completed: it stayed
+    // "running" forever, and anything keyed by call id (the inline approval
+    // card) could not pair against it.
 
     fn on_tool_call_start(&mut self, id: &str, name: &str, args: &serde_json::Value) {
         let _ = self.tx.send(FlowStreamEvent::ToolCallStart {

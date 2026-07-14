@@ -62,6 +62,11 @@ pub struct SendParams {
     /// [`crate::gateway::model_override::ModelOverride`].
     #[serde(default)]
     pub model_override: Option<crate::gateway::model_override::ModelOverride>,
+    /// Execution tier picked in the composer. Carried on the message because a
+    /// brand-new conversation has no session to write it to yet — see
+    /// [`AgentRunParams::exec_tier`].
+    #[serde(default)]
+    pub exec_tier: Option<String>,
     /// True when this message is an ASR-transcribed spoken utterance (the
     /// Panel voice loop). Forwarded to [`AgentRunParams::voice_input`] so the
     /// session gets the voice-mode prompt layer and the `[voice]` model pin.
@@ -220,6 +225,7 @@ pub async fn handle_send(
         agent_id: params.agent_id,
         project_root: params.project_root,
         model_override: params.model_override,
+        exec_tier: params.exec_tier,
         voice_input: params.voice_input,
     };
 

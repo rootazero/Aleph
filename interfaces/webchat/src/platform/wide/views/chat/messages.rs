@@ -237,7 +237,14 @@ pub(crate) fn MessageList() -> impl IntoView {
                                     }.into_any(),
                                     TimelineRow::ToolLine { run_id, tool } => view! {
                                         <div class="px-1">
-                                            <ToolCard run_id=run_id tool_id=tool.tool_id tool_name=tool.tool_name />
+                                            <ToolCard run_id=run_id tool_id=tool.tool_id.clone() tool_name=tool.tool_name />
+                                            // A live run's tool calls render HERE, not through
+                                            // `ToolCallsBlock` (that path only rebuilds tool rows
+                                            // from a message's `tool_calls`, i.e. history/replay).
+                                            // The approval prompt has to hang off this row too, or
+                                            // an `Ask`-tier turn shows "waiting for authorization"
+                                            // with nothing to authorize it WITH.
+                                            <ToolLineApproval tool_id=tool.tool_id />
                                         </div>
                                     }.into_any(),
                                     TimelineRow::ExploreGroup { key, run_id, tools, completed } => view! {
@@ -528,6 +535,32 @@ fn ToolCallsBlock(run_id: String, tools: Vec<super::state::ToolCallEntry>) -> im
                 }
             }).collect::<Vec<_>>()}
         </div>
+    }
+}
+
+/// The inline permission prompt for a LIVE tool row (`TimelineRow::ToolLine`).
+///
+/// Same pairing rule as [`ToolCallsBlock`] — by harness call id, scoped to this
+/// conversation's session — so a card can never appear under a tool call it does
+/// not belong to. Renders nothing when this call is not waiting on an approval,
+/// which is every call under the `Auto` and `Full` tiers.
+#[component]
+fn ToolLineApproval(tool_id: String) -> impl IntoView {
+    let chat = expect_context::<ChatState>();
+    let dashboard = use_context::<crate::context::DashboardState>();
+
+    let approval = Memo::new(move |_| {
+        let d = dashboard?;
+        let session_key = chat.session_key.get()?;
+        d.pending_approvals.get().into_iter().find(|p| {
+            p.session_key == session_key && p.tool_call_id.as_deref() == Some(tool_id.as_str())
+        })
+    });
+
+    view! {
+        {move || approval.get().map(|a| view! {
+            <crate::components::approval_card::ApprovalCard approval=a />
+        })}
     }
 }
 

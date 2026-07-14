@@ -71,6 +71,23 @@ pub struct AgentRunParams {
     /// [`crate::gateway::model_override::ModelOverride`].
     #[serde(default)]
     pub model_override: Option<crate::gateway::model_override::ModelOverride>,
+    /// Execution tier chosen in the composer for a conversation whose session
+    /// does not exist yet.
+    ///
+    /// The tier is normally read off the session's identity metadata, but a
+    /// brand-new conversation HAS no session until this very message creates
+    /// one — so a picker that only wrote to the session could not govern the
+    /// first turn, which is the one the user was trying to protect. Riding on
+    /// the request closes that window; the run stamps it onto the session, so
+    /// later turns (which carry nothing) and a page reload both keep it.
+    ///
+    /// Same shape as `project_root`, which solves the identical
+    /// chosen-before-the-session-exists problem. Client-supplied, and safe to
+    /// be: the tier can only tighten the gate, and `Full` from a chat-level
+    /// channel is still clamped to `Auto` by
+    /// [`crate::gateway::channel_policy::clamp_tier_for_channel`].
+    #[serde(default)]
+    pub exec_tier: Option<String>,
     /// Marks this run's user input as ASR-transcribed speech (the Panel voice
     /// loop). Wires the session voice-mode registry so `VoiceModeLayer`
     /// injects spoken-reply guidance into this turn's prompt, and applies the
@@ -486,6 +503,18 @@ pub async fn build_run_request(
         None => None,
     };
 
+    // Composer-chosen execution tier. Unknown ids are rejected rather than
+    // ignored: silently falling back to the global tier would run the turn at
+    // a WEAKER gate than the one the user believes they picked.
+    if let Some(raw) = params.exec_tier.as_deref() {
+        let tier = crate::config::types::policies::ExecTier::from_id(raw)
+            .ok_or_else(|| format!("unknown exec_tier: {raw}"))?;
+        metadata.insert(
+            crate::config::types::policies::EXEC_TIER_SESSION_KEY.to_string(),
+            tier.id().to_string(),
+        );
+    }
+
     // Convert RPC attachments (base64 payload from chat.send / agent.run)
     // into channel attachments so the engine's media processor sees them.
     // Undecodable entries are skipped with a warning rather than failing the
@@ -846,6 +875,7 @@ mod tests {
             agent_id: None,
             project_root: None,
             model_override: None,
+            exec_tier: None,
             voice_input: false,
         };
 
@@ -878,6 +908,7 @@ mod tests {
             agent_id: None,
             project_root: None,
             model_override: None,
+            exec_tier: None,
             voice_input: true,
         };
         let result = manager.start_run(voice_params).await.unwrap();
@@ -899,6 +930,7 @@ mod tests {
             agent_id: None,
             project_root: None,
             model_override: None,
+            exec_tier: None,
             voice_input: false,
         };
         let result2 = manager.start_run(typed_params).await.unwrap();
@@ -968,6 +1000,7 @@ mod tests {
             agent_id: None,
             project_root: None,
             model_override: None,
+            exec_tier: None,
             voice_input: false,
         };
         manager.start_run(params).await.expect("start_run");
@@ -1065,6 +1098,7 @@ mod tests {
                 provider: "anthropic".to_string(),
                 model: "claude-opus-4-8".to_string(),
             }),
+            exec_tier: None,
             voice_input: false,
         };
 
@@ -1105,6 +1139,73 @@ mod tests {
         );
     }
 
+    /// A minimal Panel turn — the shape `chat.send` produces before any picker
+    /// is touched.
+    fn base_params() -> AgentRunParams {
+        AgentRunParams {
+            input: "hi".to_string(),
+            session_key: None,
+            channel: Some("gui:chat".to_string()),
+            peer_id: None,
+            stream: true,
+            thinking: None,
+            attachments: vec![],
+            agent_id: None,
+            project_root: None,
+            model_override: None,
+            exec_tier: None,
+            voice_input: false,
+        }
+    }
+
+    /// The composer's tier must reach THIS turn. A conversation has no session
+    /// until its first message creates one, so a tier that only ever landed in
+    /// session metadata could not govern the first turn — the one the user
+    /// armed the gate for. It rides on the request instead.
+    #[tokio::test]
+    async fn build_run_request_carries_the_composer_exec_tier() {
+        use crate::config::types::policies::EXEC_TIER_SESSION_KEY;
+
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            exec_tier: Some("ask".to_string()),
+            ..base_params()
+        };
+
+        let request = build_run_request("run-tier".to_string(), &session_key, params, None)
+            .await
+            .expect("build_run_request");
+
+        assert_eq!(
+            request
+                .metadata
+                .get(EXEC_TIER_SESSION_KEY)
+                .map(String::as_str),
+            Some("ask"),
+            "a tier picked before the session existed must still govern this turn"
+        );
+    }
+
+    /// An unknown tier id is refused, not ignored. Dropping it would run the
+    /// turn at the GLOBAL tier — potentially weaker than the one the user
+    /// believes is armed, and silently so.
+    #[tokio::test]
+    async fn build_run_request_rejects_an_unknown_exec_tier() {
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            exec_tier: Some("yolo".to_string()),
+            ..base_params()
+        };
+
+        let err = build_run_request("run-bad".to_string(), &session_key, params, None)
+            .await
+            .expect_err("an unknown tier must not silently fall back");
+        assert!(
+            err.contains("yolo"),
+            "error should name the bad tier: {err}"
+        );
+    }
+
     #[tokio::test]
     async fn test_run_status() {
         let router = Arc::new(AgentRouter::new());
@@ -1124,6 +1225,7 @@ mod tests {
             agent_id: None,
             project_root: None,
             model_override: None,
+            exec_tier: None,
             voice_input: false,
         };
 
@@ -1155,6 +1257,7 @@ mod tests {
             agent_id: None,
             project_root: Some(std::env::temp_dir().display().to_string()),
             model_override: None,
+            exec_tier: None,
             voice_input: false,
         };
 
@@ -1186,6 +1289,7 @@ mod tests {
             agent_id: None,
             project_root: Some(std::env::temp_dir().display().to_string()),
             model_override: None,
+            exec_tier: None,
             voice_input: false,
         };
 
@@ -1220,6 +1324,7 @@ mod tests {
             agent_id: None,
             project_root: Some(std::env::temp_dir().display().to_string()),
             model_override: None,
+            exec_tier: None,
             voice_input: false,
         };
 
@@ -1450,6 +1555,7 @@ mod tests {
                 agent_id: None,
                 project_root: None,
                 model_override: None,
+                exec_tier: None,
                 voice_input,
             }
         }
