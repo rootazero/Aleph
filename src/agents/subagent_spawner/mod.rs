@@ -374,8 +374,9 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         };
         // Stage J-pre: wrap with MeteringProvider so every LLM call from this
         // subagent emits a LoopTraceEvent::ProviderUsage labelled with the
-        // subagent's agent_def.id (distinct from "root" label used at the
-        // top-level harness wrap site in orchestrator_init.rs).
+        // subagent's agent_def.id (the top-level wrap site in
+        // harness_bridge/runner_impl.rs now labels with its own `spec.agent`
+        // for the same reason).
         let llm: Arc<dyn AiProvider> = Arc::new(crate::providers::MeteringProvider::new(
             llm,
             base.trace_sink.clone(),

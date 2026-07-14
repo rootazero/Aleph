@@ -50,6 +50,9 @@ where
             max_iterations_override: None,
             // Legacy `run_flow` helper assembles no per-turn reminders.
             transient_context: None,
+            // No per-run thinking directive on this path — the provider keeps its
+            // own default, which is what every release before this field sent.
+            think_level: None,
         };
 
         let handle = orchestrator

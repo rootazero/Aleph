@@ -908,6 +908,16 @@ impl AiProvider for FailoverProvider {
             .serving_model_hint()
             .map(|c| Cow::Owned(c.into_owned()))
     }
+
+    /// `name()` returns the literal `"failover"` (this wrapper is not a
+    /// provider); the live primary is who actually serves the call and whose
+    /// key pricing must be keyed on.
+    fn serving_provider_hint(&self) -> Option<Cow<'_, str>> {
+        self.primary
+            .current()
+            .serving_provider_hint()
+            .map(|c| Cow::Owned(c.into_owned()))
+    }
 }
 
 #[cfg(test)]

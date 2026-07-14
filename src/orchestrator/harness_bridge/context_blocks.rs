@@ -37,10 +37,54 @@ pub async fn active_standing_goal(session_key: &str) -> Option<String> {
     if !goal.is_active() {
         return None;
     }
-    // Stamp the wall-clock once so the rendered deadline matches the same
-    // instant the autonomous loop's deadline check (`should_continue`) uses.
+    Some(render_goal_summary(&goal))
+}
+
+/// The wall-clock half of the goal + loop state: the live countdowns, rendered
+/// for the **transient trailing user message** rather than the system prompt.
+///
+/// This exists because of how prompt caching is keyed. The system prompt is the
+/// prefix of every message-level cache breakpoint, so a byte that changes on
+/// every run — a `Utc::now()`-derived countdown — re-keys the whole conversation
+/// prefix each turn: the growing history gets re-WRITTEN to cache (1.25× input)
+/// instead of READ (0.1×), a ~12× swing on the prompt-input component of every
+/// single turn a loop or standing goal is alive. `active_standing_goal` and
+/// `active_timer_loop` used to stamp `Utc::now()` and render `time left: 5m12s`
+/// / `next wake: in 43s` / `deadline in ~7m` straight into that prefix.
+///
+/// The information is not lost — it moves to the far side of the breakpoint,
+/// where changing bytes cost only themselves. The model still gets a live
+/// countdown every turn. Returns `None` when nothing time-varying is live.
+pub async fn live_deadline_status(session_key: &str) -> Option<String> {
+    // One clock stamp for both readers, so the goal's and the loop's countdowns
+    // describe the same instant (and match the deadline check the autonomous
+    // loop's `should_continue` performs).
     let now_ms = u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0);
-    Some(render_goal_summary(&goal, now_ms))
+    let mut lines = Vec::new();
+
+    if let Some(goal) = crate::goal::global()
+        .and_then(|store| store.get(session_key).ok().flatten())
+        .filter(crate::goal::Goal::is_active)
+    {
+        if let Some(deadline) = goal.deadline_ms {
+            lines.push(format!(
+                "standing goal: {}",
+                render_deadline(deadline, now_ms)
+            ));
+        }
+    }
+
+    if let Some(state) = crate::looping::global().and_then(|reg| reg.get_active(session_key)) {
+        let live = state.live_status(now_ms);
+        if !live.is_empty() {
+            lines.push(format!("timer loop: {}", live.join(", ")));
+        }
+    }
+
+    if lines.is_empty() {
+        return None;
+    }
+    Some(lines.join("\n"))
 }
 
 /// Fetch the session's active timer loop as a compact summary (watch prompt
@@ -54,8 +98,10 @@ pub async fn active_standing_goal(session_key: &str) -> Option<String> {
 pub async fn active_timer_loop(session_key: &str) -> Option<String> {
     let reg = crate::looping::global()?;
     let state = reg.get_active(session_key)?;
-    let now_ms = u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0);
-    Some(format!("{} ({})", state.prompt, state.human_summary(now_ms)))
+    // `stable_summary`, not `human_summary`: this lands in the system prompt,
+    // which must not carry wall-clock-derived bytes. The live countdown rides
+    // the transient tail instead — see `live_deadline_status`.
+    Some(format!("{} ({})", state.prompt, state.stable_summary()))
 }
 
 /// Fetch the session's welded Strategy for the prompt weld. Returns the
@@ -141,25 +187,28 @@ fn resolve_active_strategy(
         .flatten()
 }
 
-/// Format the active-goal summary line injected as `<standing_goal>`. Pure:
-/// takes the goal plus the current wall-clock (Unix epoch ms) so it is
-/// unit-testable without the process-global `GoalStore`. Surfaces the
-/// objective plus every structural backstop the autonomous loop enforces —
-/// token budget, wall-clock deadline, and iteration pace — so the model can
-/// pace itself against each one (R9 — intelligence in the prompt). A goal with
-/// no caps renders just `"{objective} (status=active)"`, byte-identical to the
-/// pre-deadline output for the common case.
-pub(crate) fn render_goal_summary(goal: &crate::goal::Goal, now_ms: u64) -> String {
+/// Format the active-goal summary line injected as `<standing_goal>`. Pure and
+/// **clock-free**: every byte is a function of the goal alone, so two prompt
+/// builds a minute apart are byte-identical and the conversation's cache prefix
+/// survives (see [`live_deadline_status`] for why that matters, and for where
+/// the countdown went).
+///
+/// Surfaces the objective plus the structural backstops the autonomous loop
+/// enforces — token budget, iteration pace, and *whether* a deadline exists — so
+/// the model can pace itself against each one (R9 — intelligence in the prompt).
+/// The remaining *time* is the one thing that cannot live here; it is delivered
+/// every turn on the transient tail instead, so nothing is hidden from the model.
+///
+/// The counters (`continuations_used`) do change between runs, but only when the
+/// goal actually advances — a real state change that should re-key the prefix.
+pub(crate) fn render_goal_summary(goal: &crate::goal::Goal) -> String {
     let budget = match goal.token_budget {
         Some(b) => format!(", budget={b}"),
         None => String::new(),
     };
-    // The wall-clock deadline is a hard stop the loop enforces (it Blocks the
-    // goal once exceeded), yet the model was never told it existed — surfacing
-    // the remaining time lets it triage instead of being cut off mid-thought.
     let deadline = match goal.deadline_ms {
-        Some(d) => format!(", {}", render_deadline(d, now_ms)),
-        None => String::new(),
+        Some(_) => ", deadline set",
+        None => "",
     };
     let pursuit = match goal.pursuit {
         crate::goal::PursuitMode::Active { max_iterations } => {

@@ -138,8 +138,7 @@ pub struct AgentRuntime {
     subagent_semaphore: Option<Arc<tokio::sync::Semaphore>>,
     /// B2 — shared plugin-registry handle, threaded into `SpawnerBase` for
     /// per-agent MCP scope provisioning.
-    plugin_registry:
-        Option<Arc<tokio::sync::RwLock<crate::extension::registry::PluginRegistry>>>,
+    plugin_registry: Option<Arc<tokio::sync::RwLock<crate::extension::registry::PluginRegistry>>>,
     /// Phase 3 — `provider_hint` → pinned-then-fall-through provider. An empty
     /// map (the `new()` default) means every spawn uses `provider`.
     provider_overrides: HashMap<String, Arc<dyn AiProvider>>,

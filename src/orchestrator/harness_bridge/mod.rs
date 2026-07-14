@@ -26,11 +26,11 @@ use crate::tools::service::ToolService;
 use crate::verification::VerifierChain;
 
 // Original inline submodules (files already live in this directory).
+pub(crate) mod backfill;
 mod callback;
 mod error;
 mod llm;
 mod session_seed;
-pub(crate) mod backfill;
 
 // New siblings carved out of the former single-file module.
 mod behavior_resolve;
@@ -47,7 +47,7 @@ mod tests;
 // external callers (`...::harness_bridge::X`) keep working unchanged.
 pub use context_blocks::{
     active_execution_plan, active_standing_goal, active_strategy, active_timer_loop,
-    compute_runtime_state_blocks,
+    compute_runtime_state_blocks, live_deadline_status,
 };
 // Crate-internal helpers tests reach via the parent path (`super::X`); keep
 // them addressable at the module root after the split.

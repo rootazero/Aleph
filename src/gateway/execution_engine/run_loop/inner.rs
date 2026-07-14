@@ -213,6 +213,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // consults the same resolution before it is allowed to dispatch, so the
         // two surfaces cannot enforce different rules.
         let (exec_tier, tool_permissions) = self.resolve_turn_permissions(request, &agent).await;
+        // This turn's reasoning depth (composer pill / RPC `thinking` param /
+        // the model's own `self_config` call, else whatever the session was
+        // last stamped with). `None` = send no thinking directive, which is the
+        // behaviour every release before this one shipped.
+        let think_level = self.resolve_turn_think_level(request).await;
         let _max_loops = agent.config().max_loops as usize;
         let token_budget = agent.config().max_tokens.unwrap_or(500_000);
 
@@ -1018,6 +1023,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // iteration of the enclosing `loop` (mirrors
                 // `effective_user_input.clone()`).
                 transient_context: transient_context.clone(),
+                // Reasoning depth for this turn — resolved above, forwarded to
+                // the harness bridge, and finally stamped onto every
+                // `RequestPayload` in `think.rs`.
+                think_level,
             };
 
             // Dispatch via the orchestrator

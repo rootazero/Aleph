@@ -1432,9 +1432,14 @@ mod carry_policy_metadata_tests {
             ("conversation_id", "42"),
         ]));
         assert_eq!(carried.len(), 2);
-        assert_eq!(carried.get("caller_role").map(String::as_str), Some("guest"));
         assert_eq!(
-            carried.get(CHANNEL_TOOL_PERMISSIONS_KEY).map(String::as_str),
+            carried.get("caller_role").map(String::as_str),
+            Some("guest")
+        );
+        assert_eq!(
+            carried
+                .get(CHANNEL_TOOL_PERMISSIONS_KEY)
+                .map(String::as_str),
             Some(r#"{"default":"deny"}"#)
         );
         // An unattended run must keep failing closed on approval-gated tools:

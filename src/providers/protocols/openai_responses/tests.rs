@@ -35,11 +35,17 @@ fn openai_responses_usage_deserializes_cache_and_reasoning_tokens() {
         })
         .expect("Responses Completed should emit Usage delta");
 
-    assert_eq!(usage_delta.input_tokens, 120);
+    // Fixture reports input_tokens=120 with input_tokens_details.cached_tokens=90.
+    // `input_tokens` is the TOTAL on this protocol, so the adapter normalizes to
+    // the disjoint convention the pricing layer bills against: 30 fresh + 90
+    // cached. Asserting 120 here (as this test used to) pinned the
+    // double-billing bug — see the same fix in openai_chat/sse.rs.
+    assert_eq!(usage_delta.input_tokens, 30);
     assert_eq!(usage_delta.output_tokens, 40);
     assert_eq!(usage_delta.cache_read_tokens, Some(90));
     assert_eq!(usage_delta.thinking_tokens, Some(25));
     assert_eq!(usage_delta.cache_creation_tokens, None);
+    assert_eq!(usage_delta.prompt_tokens_total(), 120);
 }
 
 #[test]

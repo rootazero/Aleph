@@ -653,7 +653,9 @@ mod tests {
         );
         // The very first inserts are the oldest → evicted; the last one stays.
         assert!(tracker.result_snapshot("rid-0").is_none());
-        assert!(tracker.result_snapshot(&format!("rid-{}", total - 1)).is_some());
+        assert!(tracker
+            .result_snapshot(&format!("rid-{}", total - 1))
+            .is_some());
     }
 
     #[test]

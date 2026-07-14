@@ -420,6 +420,13 @@ pub struct FlowRequest {
     /// session title derived from it — stays equal to the raw user input.
     /// `None` keeps the pre-feature prompt byte-identical.
     pub transient_context: Option<String>,
+    /// Reasoning depth for this run, DECLARED by the user (composer pill /
+    /// `chat.send` `thinking` param) or by the model (`self_config`) — never
+    /// inferred from the message (R7). Forwarded into `HarnessRunner::run`,
+    /// which puts it on `HarnessDeps` so every `RequestPayload` carries it.
+    /// `None` = send no thinking directive, leaving each provider on its own
+    /// default (the behaviour of every release before this field existed).
+    pub think_level: Option<crate::agents::thinking::ThinkLevel>,
 }
 
 impl std::fmt::Debug for FlowRequest {
@@ -518,6 +525,9 @@ pub trait HarnessRunner: Send + Sync {
         // project files, hook additions) merged into the transient trailing
         // recall message and never persisted. `None` = no reminder this turn.
         transient_context: Option<String>,
+        // Declared reasoning depth for this run. `None` = omit the thinking
+        // directive entirely and leave the provider on its own default.
+        think_level: Option<crate::agents::thinking::ThinkLevel>,
     ) -> Result<FlowOutcome, FlowError>;
 
     /// The guardrail registry this runner installs on its own harness, if
@@ -725,6 +735,7 @@ impl Orchestrator {
         let workspace_override = req.workspace_override.clone();
         let max_iterations_override = req.max_iterations_override;
         let transient_context = req.transient_context.clone();
+        let think_level = req.think_level;
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -762,6 +773,7 @@ impl Orchestrator {
                         workspace_override,
                         max_iterations_override,
                         transient_context,
+                        think_level,
                     ),
                 ),
             )

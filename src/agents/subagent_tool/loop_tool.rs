@@ -530,8 +530,7 @@ impl LoopTool for SubagentTool {
                     };
 
                     let batch_cancel = self.cancel_for_child_with(&cancel);
-                    let runtime =
-                        self.build_runtime(child_chain.clone(), batch_cancel.clone());
+                    let runtime = self.build_runtime(child_chain.clone(), batch_cancel.clone());
                     handles.push(tokio::spawn(async move {
                         let outcome = AssertUnwindSafe(runtime.run(runtime_config))
                             .catch_unwind()

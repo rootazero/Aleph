@@ -1,12 +1,26 @@
-//! `ToolRuntimeStateLayer` — emits `<tool_runtime_state>` XML at priority 502.
+//! `ToolRuntimeStateLayer` — emits `<tool_runtime_state>` XML at priority 1702.
 //!
-//! Sits immediately after `ToolsLayer` (500) and `HydratedToolsLayer` (501).
 //! Surfaces per-tool runtime state (depth limits, sandbox availability,
 //! "unavailable: reason" hints) so the LLM has live context that the
 //! static JSON schema can't carry. R9 in action: intelligence in the
 //! prompt, not in the wire-format schema.
+//!
+//! # Why this is Dynamic, and why it was a cache bug
+//!
+//! Its input is a snapshot of the tool catalog's `ToolHealthCache` — a mutable,
+//! 30s-TTL structure. This layer nonetheless sat at priority 502 and declared no
+//! `stability()`, so it inherited the trait default of `Stable` and rode inside
+//! the **cached prefix**. One MCP health probe flipping a tool from healthy to
+//! unhealthy therefore rewrote a byte of the cached prefix mid-session, silently
+//! invalidating the whole conversation's prompt cache — and the Anthropic
+//! adapter's own comment asserted the opposite was true.
+//!
+//! It is per-request state, so it belongs in the Dynamic suffix zone
+//! (priority >= 1700) alongside the other live-state layers, where changing
+//! bytes cost only themselves. The pipeline's `stable_layers_come_before_dynamic`
+//! invariant is what pins that zoning.
 
-use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
 pub struct ToolRuntimeStateLayer;
@@ -17,7 +31,11 @@ impl PromptLayer for ToolRuntimeStateLayer {
     }
 
     fn priority(&self) -> u32 {
-        502
+        1702
+    }
+
+    fn stability(&self) -> LayerStability {
+        LayerStability::Dynamic
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
@@ -68,9 +86,15 @@ mod tests {
         ctx
     }
 
+    /// Live tool-health state must sit in the Dynamic suffix zone (>= 1700).
+    /// At 502 with the default `Stable` it rode the CACHED prefix, so a 30s-TTL
+    /// health probe flipping a tool rewrote the cached prefix mid-session and
+    /// invalidated the whole conversation's prompt cache.
     #[test]
-    fn layer_priority_is_502() {
-        assert_eq!(ToolRuntimeStateLayer.priority(), 502);
+    fn layer_is_dynamic_and_lives_in_the_per_request_zone() {
+        assert_eq!(ToolRuntimeStateLayer.priority(), 1702);
+        assert!(ToolRuntimeStateLayer.priority() >= 1700);
+        assert_eq!(ToolRuntimeStateLayer.stability(), LayerStability::Dynamic);
     }
 
     #[test]

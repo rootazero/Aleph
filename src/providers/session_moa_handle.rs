@@ -42,7 +42,11 @@ fn map() -> &'static RwLock<HashMap<String, SessionMoaPref>> {
 pub fn set_session_moa(session_key: &str, preset: Option<String>, one_shot: bool) {
     map().write().unwrap_or_else(|e| e.into_inner()).insert(
         session_key.to_string(),
-        SessionMoaPref { preset, one_shot, restore: None },
+        SessionMoaPref {
+            preset,
+            one_shot,
+            restore: None,
+        },
     );
 }
 
@@ -58,7 +62,11 @@ pub fn set_session_moa_one_shot(session_key: &str, preset: Option<String>) {
         .map(Box::new);
     guard.insert(
         session_key.to_string(),
-        SessionMoaPref { preset, one_shot: true, restore },
+        SessionMoaPref {
+            preset,
+            one_shot: true,
+            restore,
+        },
     );
 }
 
@@ -158,12 +166,18 @@ mod tests {
         assert!(get_session_moa(key).is_none());
         // Build failed → restore: the one-shot survives for the next turn.
         restore_one_shot(key, pref.clone());
-        assert_eq!(get_session_moa(key).unwrap().preset.as_deref(), Some("deep"));
+        assert_eq!(
+            get_session_moa(key).unwrap().preset.as_deref(),
+            Some("deep")
+        );
         assert!(get_session_moa(key).unwrap().one_shot);
         // A newer activation written meanwhile must NOT be clobbered.
         set_session_moa(key, Some("newer".to_string()), false);
         restore_one_shot(key, pref);
-        assert_eq!(get_session_moa(key).unwrap().preset.as_deref(), Some("newer"));
+        assert_eq!(
+            get_session_moa(key).unwrap().preset.as_deref(),
+            Some("newer")
+        );
         clear_session_moa(key);
     }
 
@@ -203,7 +217,7 @@ mod tests {
         let key = "test:moa:f2:reinstate";
         set_session_moa(key, Some("deep".to_string()), false); // sticky
         set_session_moa_one_shot(key, None); // one-shot over sticky
-        // Slot now holds the one-shot, carrying the stashed sticky.
+                                             // Slot now holds the one-shot, carrying the stashed sticky.
         let taken = take_for_run(key).unwrap();
         assert!(taken.one_shot);
         assert!(taken.preset.is_none());

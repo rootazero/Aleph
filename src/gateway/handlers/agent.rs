@@ -518,6 +518,22 @@ pub async fn build_run_request(
         );
     }
 
+    // Caller-chosen thinking depth. The exact same argument as exec_tier above:
+    // a caller who asks for `xhigh` and silently gets the default is paying for
+    // one thing and receiving another — and reasoning tokens bill at the OUTPUT
+    // rate, so the discrepancy is expensive in both directions. This param was
+    // declared and documented on the RPC, threaded through SendParams →
+    // AgentRunParams, and then dropped on the floor here; every client that set
+    // `thinking` was being lied to.
+    if let Some(raw) = params.thinking.as_deref() {
+        let level = crate::agents::thinking::normalize_think_level(raw)
+            .ok_or_else(|| format!("unknown thinking level: {raw}"))?;
+        metadata.insert(
+            crate::agents::thinking::THINK_LEVEL_SESSION_KEY.to_string(),
+            level.id().to_string(),
+        );
+    }
+
     // Convert RPC attachments (base64 payload from chat.send / agent.run)
     // into channel attachments so the engine's media processor sees them.
     // Undecodable entries are skipped with a warning rather than failing the

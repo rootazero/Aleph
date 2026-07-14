@@ -73,14 +73,12 @@ pub fn try_build_for_run(
     sink: Option<Arc<dyn TraceSink>>,
 ) -> std::result::Result<MoaProvider, String> {
     let cfg = moa_cfg.ok_or("no [moa] section configured")?;
-    let (preset_name, preset) = cfg
-        .resolve_preset(pref.preset.as_deref())
-        .ok_or_else(|| {
-            format!(
-                "MoA preset '{}' not found (configure [moa.presets.*] or ask me to set one up)",
-                pref.preset.as_deref().unwrap_or("<default>")
-            )
-        })?;
+    let (preset_name, preset) = cfg.resolve_preset(pref.preset.as_deref()).ok_or_else(|| {
+        format!(
+            "MoA preset '{}' not found (configure [moa.presets.*] or ask me to set one up)",
+            pref.preset.as_deref().unwrap_or("<default>")
+        )
+    })?;
     let errs = cfg.validation_errors();
     if !errs.is_empty() {
         return Err(format!("[moa] config invalid: {}", errs.join("; ")));
@@ -90,13 +88,16 @@ pub fn try_build_for_run(
         // Runtime recursion guard (layer 3) — config validation already
         // rejects this, but presets can arrive through raw TOML edits.
         if slot.provider.trim().eq_ignore_ascii_case("moa") {
-            return Err(format!("slot {}:{} is recursive", slot.provider, slot.model));
+            return Err(format!(
+                "slot {}:{} is recursive",
+                slot.provider, slot.model
+            ));
         }
-        let base = named.get(&slot.provider).cloned().ok_or_else(|| {
-            format!("provider '{}' is not configured/keyed", slot.provider)
-        })?;
-        Ok(Arc::new(ModelOverrideProvider::new(base, slot.model.clone()))
-            as Arc<dyn AiProvider>)
+        let base = named
+            .get(&slot.provider)
+            .cloned()
+            .ok_or_else(|| format!("provider '{}' is not configured/keyed", slot.provider))?;
+        Ok(Arc::new(ModelOverrideProvider::new(base, slot.model.clone())) as Arc<dyn AiProvider>)
     };
 
     let mut advisors = Vec::new();
@@ -120,10 +121,7 @@ pub fn try_build_for_run(
         }
     }
     let aggregator = resolve_slot(&preset.aggregator)?;
-    let aggregator_label = format!(
-        "{}:{}",
-        preset.aggregator.provider, preset.aggregator.model
-    );
+    let aggregator_label = format!("{}:{}", preset.aggregator.provider, preset.aggregator.model);
 
     Ok(MoaProvider {
         display_name: format!("moa:{preset_name}"),
@@ -232,9 +230,7 @@ impl AiProvider for MoaProvider {
                 let guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
                 guard.as_ref().and_then(|c| match self.fanout {
                     MoaFanout::UserTurn => Some(c.outcomes.clone()),
-                    MoaFanout::PerIteration => {
-                        (c.signature == sig).then(|| c.outcomes.clone())
-                    }
+                    MoaFanout::PerIteration => (c.signature == sig).then(|| c.outcomes.clone()),
                 })
             };
 
@@ -327,8 +323,7 @@ impl AiProvider for MoaProvider {
             // 5. Guidance injection at the prompt tail (cache-stable prefix).
             let mut agg_messages = messages;
             if !outcomes.is_empty() {
-                let guidance =
-                    build_guidance(&self.preset_name, &self.aggregator_label, &outcomes);
+                let guidance = build_guidance(&self.preset_name, &self.aggregator_label, &outcomes);
                 attach_guidance(&mut agg_messages, &guidance);
             }
 
@@ -354,10 +349,7 @@ impl AiProvider for MoaProvider {
             // per-advisor MeteringProvider events).
             if let Some(mut payload) = pending_trace {
                 let (output, status) = match &agg_result {
-                    Ok(resp) => (
-                        resp.text.clone().unwrap_or_default(),
-                        "ok".to_string(),
-                    ),
+                    Ok(resp) => (resp.text.clone().unwrap_or_default(), "ok".to_string()),
                     Err(e) => (String::new(), format!("error: {e}")),
                 };
                 payload["aggregator_output"] = json!(output);
@@ -399,6 +391,10 @@ impl AiProvider for MoaProvider {
 
     fn serving_model_hint(&self) -> Option<Cow<'_, str>> {
         self.aggregator.serving_model_hint()
+    }
+
+    fn serving_provider_hint(&self) -> Option<Cow<'_, str>> {
+        self.aggregator.serving_provider_hint()
     }
 
     // as_http_provider stays the default `None` — forwarding the aggregator's
@@ -449,8 +445,12 @@ mod tests {
                 })
             })
         }
-        fn name(&self) -> &str { "counting" }
-        fn color(&self) -> &str { "#000" }
+        fn name(&self) -> &str {
+            "counting"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
     }
 
     fn make_provider(
@@ -551,9 +551,8 @@ mod tests {
         use crate::providers::mock::MockError;
         let failing: Arc<dyn AiProvider> =
             Arc::new(MockProvider::new("x").with_error(MockError::Network("down".into())));
-        let sleepy: Arc<dyn AiProvider> = Arc::new(
-            MockProvider::new("late").with_delay(Duration::from_secs(5)),
-        );
+        let sleepy: Arc<dyn AiProvider> =
+            Arc::new(MockProvider::new("late").with_delay(Duration::from_secs(5)));
         // Aggregator records what it saw via the guidance in its messages —
         // use a capturing stub.
         struct Capture(Arc<Mutex<String>>);
@@ -577,8 +576,12 @@ mod tests {
                 *self.0.lock().unwrap_or_else(|e| e.into_inner()) = joined;
                 Box::pin(async { Ok(ProviderResponse::text_only("ok".into())) })
             }
-            fn name(&self) -> &str { "capture" }
-            fn color(&self) -> &str { "#000" }
+            fn name(&self) -> &str {
+                "capture"
+            }
+            fn color(&self) -> &str {
+                "#000"
+            }
         }
         let seen = Arc::new(Mutex::new(String::new()));
         let p = make_provider(
@@ -640,7 +643,10 @@ mod tests {
         );
         let msgs = user_msgs("go");
         p.process(RequestPayload::new(&msgs)).await.unwrap();
-        let grown = vec![UnifiedMessage::user("go"), UnifiedMessage::assistant("step")];
+        let grown = vec![
+            UnifiedMessage::user("go"),
+            UnifiedMessage::assistant("step"),
+        ];
         p.process(RequestPayload::new(&grown)).await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1); // run-scoped: once only
     }
@@ -688,7 +694,10 @@ mod tests {
     #[test]
     fn parse_one_shot_command_semantics() {
         use super::super::parse_one_shot_command;
-        assert_eq!(parse_one_shot_command("/moa write a poem"), Some("write a poem"));
+        assert_eq!(
+            parse_one_shot_command("/moa write a poem"),
+            Some("write a poem")
+        );
         // Arg equal to a preset name is STILL a prompt (hermes-pinned).
         assert_eq!(parse_one_shot_command("/moa default"), Some("default"));
         assert_eq!(parse_one_shot_command("/moa"), None);
@@ -705,7 +714,11 @@ mod tests {
     fn try_build_for_run_errors() {
         use crate::providers::session_moa_handle::SessionMoaPref;
         let named: HashMap<String, Arc<dyn AiProvider>> = HashMap::new();
-        let pref = SessionMoaPref { preset: None, one_shot: false, restore: None };
+        let pref = SessionMoaPref {
+            preset: None,
+            one_shot: false,
+            restore: None,
+        };
         // No config at all.
         assert!(try_build_for_run(&pref, None, &named, None).is_err());
         // Preset references an unconfigured provider.
@@ -718,12 +731,17 @@ aggregator = { provider = "ghost", model = "n" }
         )
         .unwrap();
         let err = try_build_for_run(
-            &SessionMoaPref { preset: Some("p".into()), one_shot: false, restore: None },
+            &SessionMoaPref {
+                preset: Some("p".into()),
+                one_shot: false,
+                restore: None,
+            },
             Some(&cfg),
             &named,
             None,
         )
-        .err().unwrap();
+        .err()
+        .unwrap();
         assert!(err.contains("ghost"));
     }
 
@@ -742,7 +760,9 @@ aggregator = { provider = "ghost", model = "n" }
             MoaFanout::PerIteration,
             sink.clone(),
         );
-        p.process(RequestPayload::new(&user_msgs("go"))).await.unwrap();
+        p.process(RequestPayload::new(&user_msgs("go")))
+            .await
+            .unwrap();
 
         let events = sink.events();
         let advisors: Vec<_> = events
@@ -751,21 +771,29 @@ aggregator = { provider = "ghost", model = "n" }
             .collect();
         assert_eq!(advisors.len(), 2);
         // B2: success carries error=None, failure carries the structural reason.
-        let LoopTraceEvent::MoaAdvisor { error: e0, .. } = advisors[0] else { panic!() };
-        let LoopTraceEvent::MoaAdvisor { error: e1, .. } = advisors[1] else { panic!() };
+        let LoopTraceEvent::MoaAdvisor { error: e0, .. } = advisors[0] else {
+            panic!()
+        };
+        let LoopTraceEvent::MoaAdvisor { error: e1, .. } = advisors[1] else {
+            panic!()
+        };
         assert!(e0.is_none());
         assert!(e1.as_deref().is_some_and(|e| e.contains("boom")));
         // B4: MISS aggregating is cached=false.
-        assert!(events.iter().any(|e| matches!(
-            e,
-            LoopTraceEvent::MoaAggregating { cached: false, .. }
-        )));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, LoopTraceEvent::MoaAggregating { cached: false, .. })));
         // B1: spend advisor_count = consulted (2), billed_count = with-usage (1).
         let spend = events
             .iter()
             .find(|e| matches!(e, LoopTraceEvent::MoaAdvisorSpend { .. }))
             .expect("spend event");
-        let LoopTraceEvent::MoaAdvisorSpend { advisor_count, billed_count, .. } = spend else {
+        let LoopTraceEvent::MoaAdvisorSpend {
+            advisor_count,
+            billed_count,
+            ..
+        } = spend
+        else {
             panic!()
         };
         assert_eq!(*advisor_count, 2);
@@ -810,7 +838,9 @@ aggregator = { provider = "ghost", model = "n" }
             sink.clone(),
         );
         p.save_traces = false;
-        p.process(RequestPayload::new(&user_msgs("go"))).await.unwrap();
+        p.process(RequestPayload::new(&user_msgs("go")))
+            .await
+            .unwrap();
         assert!(!sink
             .events()
             .iter()
@@ -826,7 +856,9 @@ aggregator = { provider = "ghost", model = "n" }
             sink2.clone(),
         );
         p2.save_traces = true;
-        p2.process(RequestPayload::new(&user_msgs("go"))).await.unwrap();
+        p2.process(RequestPayload::new(&user_msgs("go")))
+            .await
+            .unwrap();
         assert!(sink2
             .events()
             .iter()
@@ -845,7 +877,9 @@ aggregator = { provider = "ghost", model = "n" }
             sink.clone(),
         );
         p.save_traces = true;
-        p.process(RequestPayload::new(&user_msgs("go"))).await.unwrap();
+        p.process(RequestPayload::new(&user_msgs("go")))
+            .await
+            .unwrap();
         let events = sink.events();
         let trace = events
             .iter()
@@ -868,8 +902,9 @@ aggregator = { provider = "ghost", model = "n" }
         let sink = RecordingSink::new();
         let adv = Arc::new(CountingProvider::new("advice"));
         let agg: Arc<dyn AiProvider> = Arc::new(
-            crate::providers::mock::MockProvider::new("unused")
-                .with_error(crate::providers::mock::MockError::Network("agg down".into())),
+            crate::providers::mock::MockProvider::new("unused").with_error(
+                crate::providers::mock::MockError::Network("agg down".into()),
+            ),
         );
         let mut p = make_provider_sinked(
             vec![(adv, "mock:a")],

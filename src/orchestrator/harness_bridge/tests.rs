@@ -598,7 +598,7 @@ fn goal_for_summary() -> crate::goal::Goal {
 fn goal_summary_no_caps_is_bare_objective() {
     let g = goal_for_summary();
     assert_eq!(
-        render_goal_summary(&g, 10_000),
+        render_goal_summary(&g),
         "Ship the deadline feature (status=active)"
     );
 }
@@ -609,18 +609,38 @@ fn goal_summary_surfaces_budget_and_iteration() {
         .with_budget(Some(5_000))
         .with_pursuit(crate::goal::PursuitMode::Active { max_iterations: 8 })
         .spent_continuation(2_000);
-    let out = render_goal_summary(&g, 0);
+    let out = render_goal_summary(&g);
     assert!(out.contains(", budget=5000"), "got: {out}");
     assert!(out.contains(", autonomous iteration 1/8"), "got: {out}");
 }
 
+/// The goal summary enters the SYSTEM PROMPT, which is the prefix of every
+/// message-level prompt-cache breakpoint. It must therefore be a pure function
+/// of the goal — no wall clock. It still tells the model a deadline EXISTS; the
+/// remaining time is delivered every turn on the transient tail message
+/// (`live_deadline_status`), where changing bytes cost only themselves.
+///
+/// This test used to assert the opposite (`", deadline in ~1h30m"` rendered into
+/// the prompt), which is precisely the bug: a countdown in the cached prefix
+/// re-keys the entire conversation history on EVERY turn — cache write (1.25x)
+/// instead of cache read (0.1x), for as long as the goal is alive.
 #[test]
-fn goal_summary_surfaces_deadline_remaining() {
-    // Deadline 90 min out from now_ms → "~1h30m".
+fn goal_summary_is_clock_free_so_the_cache_prefix_survives() {
     let now_ms = 1_000_000;
     let g = goal_for_summary().with_deadline_ms(Some(now_ms + 90 * 60 * 1_000));
-    let out = render_goal_summary(&g, now_ms);
-    assert!(out.contains(", deadline in ~1h30m"), "got: {out}");
+
+    let out = render_goal_summary(&g);
+    assert!(out.contains(", deadline set"), "got: {out}");
+    assert!(
+        !out.contains("~1h30m") && !out.contains("in ~"),
+        "no countdown may reach the cached prefix; got: {out}"
+    );
+
+    // The load-bearing property, stated directly: two builds an hour apart are
+    // byte-identical, so the prefix hash — and the whole conversation cache —
+    // survives. Nothing about `render_goal_summary` can reintroduce a clock
+    // without failing here.
+    assert_eq!(render_goal_summary(&g), out);
 }
 
 #[test]

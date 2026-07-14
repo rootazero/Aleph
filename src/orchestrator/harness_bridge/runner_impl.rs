@@ -59,6 +59,7 @@ impl HarnessRunner for AgentHarnessRunner {
         workspace_override: Option<std::path::PathBuf>,
         max_iterations_override: Option<u32>,
         transient_context: Option<String>,
+        think_level: Option<crate::agents::thinking::ThinkLevel>,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
         // before provider lookup / LLM construction). The same token is also
@@ -183,11 +184,20 @@ impl HarnessRunner for AgentHarnessRunner {
                 None => llm,
             };
         // Stage J-pre: wrap the root provider with MeteringProvider so every
-        // LLM call emits a LoopTraceEvent::ProviderUsage event labelled "root".
-        // The trace_sink is available here (per-run, passed in from the gateway)
-        // and flows into the same sink as all other harness trace events.
+        // LLM call emits a LoopTraceEvent::ProviderUsage event labelled with
+        // the agent that actually spent the tokens. The trace_sink is available
+        // here (per-run, passed in from the gateway) and flows into the same
+        // sink as all other harness trace events.
+        //
+        // This label was hardcoded to "root". Team member tasks run through
+        // THIS path too (teams/dispatcher → ExecutionEngine → orchestrator →
+        // here), so every member's spend was filed under "root" — and
+        // `aggregate_usage_by_agents` filters `agent_id IN (member ids)`, so
+        // the `teams.usage` RPC, the `team_usage` tool and the Panel Usage view
+        // found zero rows for real member spend. `spec.agent` is the same value
+        // already handed to the VESR OutcomeObserver below.
         let llm: Arc<dyn crate::providers::AiProvider> = Arc::new(
-            crate::providers::MeteringProvider::new(llm, trace_sink.clone(), "root"),
+            crate::providers::MeteringProvider::new(llm, trace_sink.clone(), spec.agent.clone()),
         );
         // Remember the provider name so transient error classification below
         // can attach it to FlowError::Transient (Gateway's outer retry loop
@@ -261,6 +271,22 @@ impl HarnessRunner for AgentHarnessRunner {
         } else {
             routing_model_id.clone()
         };
+        // Provider id that keys the cost estimate, resolved with the same
+        // precedence as `gauge_model` above. `provider_name` (= `llm.name()`)
+        // is NOT usable here: every production `llm` is a `FailoverProvider`
+        // (optionally wrapped in Metering/ModelOverride, which delegate
+        // `name()`), so it is the literal `"failover"` — a key the price table
+        // does not know, which made `pricing::estimate` return
+        // `CostStatus::Unknown` ($0.00) on EVERY run. VESR's observer already
+        // dodges this trap (routing/observer.rs: "never the FailoverProvider
+        // wrapper name"); the pricing call just never got the same treatment.
+        let cost_provider: String = routing_provider_id
+            .clone()
+            .or_else(|| {
+                llm.serving_provider_hint()
+                    .map(std::borrow::Cow::into_owned)
+            })
+            .unwrap_or_else(|| provider_name.clone());
         // Gauge denominator: authoritative per-model context window (R7 — the
         // lookup is core's, not the panel's), honoring the configured
         // per-provider override first.
@@ -424,14 +450,13 @@ impl HarnessRunner for AgentHarnessRunner {
         // model is deliberate — the aggregator is this run's actual executor;
         // the advisor-guidance uplift is not modeled separately in routing
         // experience (known, accepted attribution choice — metering is exact).
-        let (vesr_model_id, vesr_provider_id): (String, String) =
-            match &moa_aggregator_identity {
-                Some((p, m)) => (m.clone(), p.clone()),
-                None => (
-                    routing_model_id.clone(),
-                    routing_provider_id.clone().unwrap_or_default(),
-                ),
-            };
+        let (vesr_model_id, vesr_provider_id): (String, String) = match &moa_aggregator_identity {
+            Some((p, m)) => (m.clone(), p.clone()),
+            None => (
+                routing_model_id.clone(),
+                routing_provider_id.clone().unwrap_or_default(),
+            ),
+        };
         let trace_sink = match (trace_sink, self.routing_store.as_ref()) {
             (Some(parent), Some(store)) => {
                 Some(std::sync::Arc::new(crate::routing::OutcomeObserver::new(
@@ -449,7 +474,23 @@ impl HarnessRunner for AgentHarnessRunner {
         let deps = HarnessDeps {
             session: self.session_service.clone(),
             tools,
-            llm,
+            // Declared reasoning depth is stamped onto every request by wrapping
+            // the provider (same idiom as `ModelOverrideProvider` pinning the
+            // model) rather than threading it through the Think→Act loop, which
+            // R10 caps and which must carry no per-run policy.
+            //
+            // The wrap happens HERE and not earlier on purpose: `ContextCompactor`
+            // above took its own clone of the UNWRAPPED `llm` for side-channel
+            // summarization. Reasoning bills at the output rate, so stamping a
+            // user's `xhigh` onto history-compression calls would pay premium
+            // prices to shrink a transcript. Hoisting this wrap up would silently
+            // reintroduce exactly that cost.
+            llm: match think_level {
+                Some(level) => {
+                    Arc::new(crate::providers::ThinkLevelProvider::new(llm, level)) as Arc<_>
+                }
+                None => llm,
+            },
             robustness_profile,
             verifier_chain: self.verifier_chain.clone(),
             context_budget,
@@ -731,7 +772,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 None
             } else {
                 Some(crate::pricing::estimate(
-                    &provider_name,
+                    &cost_provider,
                     &gauge_model,
                     &token_breakdown,
                 ))

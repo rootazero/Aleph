@@ -9,8 +9,8 @@ pub(crate) mod activation;
 pub(crate) mod advisory_view;
 pub mod config_handle;
 pub(crate) mod fan_out;
-pub(crate) mod prompts;
 pub mod preset_store;
+pub(crate) mod prompts;
 pub mod provider;
 
 pub use config_handle::{get_moa_config, store_moa_config};

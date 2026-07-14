@@ -259,6 +259,10 @@ impl LoopState {
     /// (vs cap), any caps, the next wake for model-paced loops, and the stop
     /// reason when stopped. `now_ms` (0 = clock unavailable) turns the absolute
     /// `next_wake_ms` into a relative "in 8m".
+    ///
+    /// This is the **tool-reply** renderer (`loop_manage`), where a live
+    /// countdown is exactly what the user asked for. The *prompt* path must not
+    /// use it — see [`Self::stable_summary`].
     #[must_use]
     pub fn human_summary(&self, now_ms: u64) -> String {
         let mut parts = vec![match self.status {
@@ -293,6 +297,69 @@ impl LoopState {
             parts.push(format!("reason: {reason}"));
         }
         parts.join(", ")
+    }
+
+    /// The half of the status that does NOT move with the wall clock: status,
+    /// cadence, ticks, token budget, and whether a deadline exists at all.
+    ///
+    /// This is what may enter the SYSTEM PROMPT. Anthropic's prompt cache is
+    /// prefix-keyed and the system prompt sits ahead of every message-level
+    /// breakpoint, so a single byte that changes each run re-keys the entire
+    /// conversation prefix — the growing history, i.e. the expensive part —
+    /// forcing a full cache WRITE (1.25×) instead of a READ (0.1×) on every
+    /// turn. A `Utc::now()`-derived countdown does exactly that, unconditionally
+    /// and forever, for any session with a live loop.
+    ///
+    /// The counters here (`ticks`) do change — but only when the loop actually
+    /// advances, which is a genuine state change that *should* re-key the
+    /// prefix. That is caching working correctly, not cache thrash.
+    #[must_use]
+    pub fn stable_summary(&self) -> String {
+        let mut parts = vec![match self.status {
+            LoopStatus::Active => "Loop active".to_string(),
+            LoopStatus::Stopped => "Loop stopped".to_string(),
+        }];
+        parts.push(format!("cadence: {}", self.cadence.describe()));
+        match self.max_iterations {
+            Some(max) => parts.push(format!("ticks: {}/{max}", self.iterations_used)),
+            None => parts.push(format!("ticks: {}", self.iterations_used)),
+        }
+        if self.deadline_ms.is_some() {
+            parts.push("deadline: set".to_string());
+        }
+        if let Some(budget) = self.token_budget {
+            parts.push(format!("token budget: {budget}"));
+        }
+        parts.join(", ")
+    }
+
+    /// The half that DOES move with the wall clock — the live countdowns.
+    ///
+    /// Delivered to the model on the transient trailing user message (the same
+    /// channel `HarnessDeps::recall_context` uses), which sits on the far side
+    /// of the cache breakpoint: changing bytes there cost only themselves. The
+    /// model still sees a live countdown every turn; it just no longer bills the
+    /// whole conversation for it.
+    ///
+    /// Empty when the loop has no deadline and is not model-paced.
+    #[must_use]
+    pub fn live_status(&self, now_ms: u64) -> Vec<String> {
+        let mut parts = Vec::new();
+        if let Some(deadline) = self.deadline_ms {
+            if now_ms != 0 && deadline > now_ms {
+                parts.push(format!("time left: {}", fmt_duration_ms(deadline - now_ms)));
+            }
+        }
+        if matches!(self.cadence, Cadence::ModelPaced { .. }) {
+            match self.next_wake_ms {
+                Some(wake) if now_ms != 0 && wake > now_ms => {
+                    parts.push(format!("next wake: in {}", fmt_duration_ms(wake - now_ms)));
+                }
+                Some(_) => parts.push("next wake: due now".to_string()),
+                None => parts.push("next wake: unset (uses fallback)".to_string()),
+            }
+        }
+        parts
     }
 }
 
@@ -442,6 +509,53 @@ mod tests {
         assert!(l.over_budget(1_600), "600 spent over a 500 budget");
         // No budget → never over budget, even at u64::MAX.
         assert!(!sample().with_baseline(1_000).over_budget(u64::MAX));
+    }
+
+    /// `stable_summary` is the only renderer allowed into the system prompt, so
+    /// it must be a pure function of the loop state — feeding it two different
+    /// clocks must not change a byte. A countdown there re-keys the whole
+    /// conversation's cache prefix on every turn (write at 1.25x instead of read
+    /// at 0.1x), for as long as the loop lives.
+    #[test]
+    fn stable_summary_is_clock_free() {
+        let l = sample()
+            .with_deadline_ms(Some(10_000))
+            .with_token_budget(Some(500));
+
+        let out = l.stable_summary();
+        assert!(
+            out.contains("deadline: set"),
+            "existence, not remaining time"
+        );
+        assert!(
+            !out.contains("time left") && !out.contains("next wake"),
+            "no countdown may reach the cached prefix; got: {out}"
+        );
+        // Byte-identical regardless of when it is rendered — the whole point.
+        assert_eq!(out, l.stable_summary());
+    }
+
+    /// The countdown is not lost, only relocated: it rides the transient tail
+    /// message, on the far side of the cache breakpoint, where changing bytes
+    /// cost only themselves. The model still sees a live countdown every turn.
+    #[test]
+    fn live_status_carries_the_countdown_the_prompt_gave_up() {
+        let l = sample().with_deadline_ms(Some(10_000));
+        let live = l.live_status(4_000);
+        assert!(
+            live.iter().any(|s| s.contains("time left: 6s")),
+            "got: {live:?}"
+        );
+        // No clock available → no misleading countdown, and nothing to relocate.
+        assert!(l.live_status(0).is_empty());
+    }
+
+    /// The user-facing tool reply keeps its live countdown — `human_summary` is
+    /// unchanged by the prompt-side split.
+    #[test]
+    fn human_summary_still_renders_the_live_countdown_for_the_tool_reply() {
+        let l = sample().with_deadline_ms(Some(10_000));
+        assert!(l.human_summary(4_000).contains("time left: 6s"));
     }
 
     #[test]
