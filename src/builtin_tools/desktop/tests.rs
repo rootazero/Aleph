@@ -47,6 +47,7 @@ fn make_args(action: &str) -> DesktopArgs {
         ax_action_name: None,
         pid: None,
         observe: None,
+        force: None,
     }
 }
 
@@ -796,6 +797,7 @@ mod e2e_normalized {
             ax_action_name: None,
             pid: None,
             observe: None,
+            force: None,
         }];
 
         AlephTool::call(&tool, args).await.unwrap();
@@ -1537,5 +1539,183 @@ mod boundary_contracts {
         let data = out.data.expect("screenshot data");
         assert_eq!(data["image_base64"], FRAME);
         assert_eq!(data["coordinate_space"]["image_width"], 2);
+    }
+}
+
+/// THE security regression for the AX affordance work.
+///
+/// Three hand-written projections render AX elements into model-visible JSON —
+/// `ax::element_to_json` (desktop_ax_snapshot), `set_of_marks::build_marks`
+/// (desktop_som) and `gui_locate::ax_locate_output` (desktop_gui_locate) — plus
+/// the raw pass-through of the wire type by the three `desktop_ax_query_*`
+/// tools. A password field's `AXValue` must be incapable of reaching *any* of
+/// them: not as a `value`, not as a match `text`, and not through the ranking
+/// (the locator used to score against the raw value, which would have surfaced
+/// the secret by ordering the candidates around it).
+///
+/// If you are here because you added a fourth projection: route it through
+/// `interactable::safe_value` and add it below.
+mod secure_value_never_reaches_the_model {
+    use crate::builtin_tools::desktop::interactable::redact_secure_values;
+    use aleph_protocol::desktop_bridge::methods::ax::AxElement;
+    use aleph_protocol::desktop_bridge::methods::screen::Region;
+
+    const SECRET: &str = "correct-horse-battery-staple";
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> Region {
+        Region {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// A login form: a password box holding SECRET next to an ordinary field.
+    fn login_form() -> AxElement {
+        let mut password = AxElement {
+            role: "AXTextField".into(),
+            title: Some("Password".into()),
+            value: Some(SECRET.into()),
+            bounds: Some(rect(0.0, 40.0, 200.0, 24.0)),
+            pid: 42,
+            ..Default::default()
+        };
+        password.secure = Some(true);
+
+        let email = AxElement {
+            role: "AXTextField".into(),
+            title: Some("Email".into()),
+            value: Some("user@example.com".into()),
+            bounds: Some(rect(0.0, 0.0, 200.0, 24.0)),
+            pid: 42,
+            ..Default::default()
+        };
+
+        AxElement {
+            role: "AXWindow".into(),
+            pid: 42,
+            children: vec![email, password],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn not_in_the_ax_snapshot_projection() {
+        let (elements, _, _) =
+            crate::builtin_tools::desktop::ax::flatten_interactable(&login_form(), 200);
+        let json = serde_json::to_string(&elements).unwrap();
+        assert!(!json.contains(SECRET), "desktop_ax_snapshot leaked: {json}");
+        // The element itself is still reported — the model must know the field
+        // exists and that it is secure; it just cannot read it.
+        assert!(json.contains("Password"), "the field must stay visible");
+        assert!(json.contains("\"secure\":true"), "and be marked secure");
+        // A non-secure value in the same tree is untouched.
+        assert!(json.contains("user@example.com"));
+    }
+
+    #[test]
+    fn not_in_the_set_of_marks_projection() {
+        let root = login_form();
+        let mut collected: Vec<&AxElement> = Vec::new();
+        crate::builtin_tools::desktop::interactable::collect_interactable(&root, &mut collected);
+        let (_, elements) = crate::builtin_tools::desktop::set_of_marks::build_marks(&collected);
+        let json = serde_json::to_string(&elements).unwrap();
+        assert!(!json.contains(SECRET), "desktop_som leaked: {json}");
+        assert!(json.contains("\"secure\":true"));
+        assert!(json.contains("user@example.com"));
+    }
+
+    #[test]
+    fn not_in_the_gui_locate_projection_or_its_ranking() {
+        let root = login_form();
+
+        // (a) Searching for the secret itself must not rank the password box —
+        //     the scorer never sees the value, so there is no match at all.
+        assert!(
+            crate::builtin_tools::desktop::gui_locate::ax_locate_output(&root, SECRET, None)
+                .is_none(),
+            "a secure value must be unmatchable"
+        );
+
+        // (b) Locating the field by its label must not echo the value back.
+        let out =
+            crate::builtin_tools::desktop::gui_locate::ax_locate_output(&root, "Password", None)
+                .expect("the password field is findable by its label");
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(!json.contains(SECRET), "desktop_gui_locate leaked: {json}");
+        assert_eq!(out.data.expect("data")["secure"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn not_in_the_raw_query_pass_through() {
+        // desktop_ax_query_focused / _query_tree / _query_by_role serialize the
+        // wire type directly; they scrub it first.
+        let json = serde_json::to_string(&redact_secure_values(login_form())).unwrap();
+        assert!(!json.contains(SECRET), "raw AX query leaked: {json}");
+        assert!(json.contains("user@example.com"));
+    }
+}
+
+/// The `type_text` focus pre-flight ([`super::focus_gate`]).
+///
+/// The gate closes the hole `safety::blocked_app_reason` cannot see: that guard
+/// blocks credential *apps*, so a password box inside Safari or a `sudo` prompt
+/// in Terminal used to take synthetic keystrokes and report `{"typed": true}`.
+/// It must stay fail-open for everything it cannot judge.
+mod type_text_focus_gate {
+    use crate::builtin_tools::desktop::focus_gate::{evaluate, Gate};
+    use aleph_protocol::desktop_bridge::methods::ax::AxElement;
+
+    fn el(role: &str) -> AxElement {
+        AxElement {
+            role: role.into(),
+            pid: 1,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn refuses_a_secure_field_and_force_does_not_lift_it() {
+        let mut password = el("AXTextField");
+        password.secure = Some(true);
+        password.title = Some("Password".into());
+
+        match evaluate(Some(&password), false) {
+            Gate::Refuse(msg) => {
+                assert!(msg.contains("secure text field"), "{msg}");
+                assert!(msg.contains("not overridable"), "{msg}");
+            }
+            Gate::Allow => panic!("typing into a password box must be refused"),
+        }
+        assert!(
+            matches!(evaluate(Some(&password), true), Gate::Refuse(_)),
+            "force must not open the password refusal"
+        );
+    }
+
+    #[test]
+    fn fails_open_when_the_metadata_is_unknown() {
+        // An older helper reports no affordances at all; Electron/canvas/terminal
+        // apps legitimately focus a container that reports nothing. Refusing on
+        // silence would be the harness overruling the model (R7) — and on Linux
+        // there is no AX layer at all, which `focus_gate::check` skips outright.
+        let unknown_field = el("AXTextField");
+        assert_eq!(unknown_field.settable, None);
+        assert_eq!(evaluate(Some(&unknown_field), false), Gate::Allow);
+        assert_eq!(evaluate(Some(&el("AXWebArea")), false), Gate::Allow);
+        assert_eq!(evaluate(Some(&el("AXGroup")), false), Gate::Allow);
+    }
+
+    #[test]
+    fn refuses_when_nothing_is_focused_but_offers_the_way_out() {
+        match evaluate(None, false) {
+            Gate::Refuse(msg) => {
+                assert!(msg.contains("set_value"), "{msg}");
+                assert!(msg.contains("force:true"), "{msg}");
+            }
+            Gate::Allow => panic!("blind typing with no focus must be refused"),
+        }
+        assert_eq!(evaluate(None, true), Gate::Allow);
     }
 }

@@ -216,6 +216,14 @@ pub struct DesktopArgs {
     /// behavior.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observe: Option<String>,
+
+    /// Override the `type_text` focus pre-flight: type even when nothing holds
+    /// keyboard focus, or when the focused element reports it takes no typed
+    /// value. The escape hatch for apps whose accessibility tree lies (canvas,
+    /// terminal, some Electron shells). It does **not** override the refusal to
+    /// type into a secure/password field. Ignored by every other action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub force: Option<bool>,
 }
 
 /// A single sub-action inside a `batch` operation.
@@ -393,6 +401,11 @@ pub struct DesktopBatchAction {
     /// before invocation, mirroring `coord_space`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observe: Option<String>,
+
+    /// Override the `type_text` focus pre-flight for this sub-action. See
+    /// [`DesktopArgs::force`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub force: Option<bool>,
 }
 
 impl DesktopBatchAction {
@@ -437,6 +450,7 @@ impl DesktopBatchAction {
             ax_action_name: None,
             pid: None,
             observe: None,
+            force: None,
         }
     }
 }
@@ -483,6 +497,7 @@ impl From<&DesktopBatchAction> for DesktopArgs {
             ax_action_name: b.ax_action_name.clone(),
             pid: b.pid,
             observe: b.observe.clone(),
+            force: b.force,
         }
     }
 }

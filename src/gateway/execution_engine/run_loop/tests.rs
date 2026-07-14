@@ -274,3 +274,39 @@ fn project_skill_block_skips_dirs_without_manifest() {
     assert!(block.contains("`real` — Real Skill:"));
     assert!(!block.contains("empty-dir"));
 }
+
+// ── model_supports_vision (attachment injection gate) ────────────────────────
+
+#[test]
+fn vision_model_takes_the_image_natively() {
+    assert!(model_supports_vision("claude-fable-5", None));
+    assert!(model_supports_vision("grok-4-fast", None));
+}
+
+#[test]
+fn text_only_model_is_degraded_not_sent_an_image() {
+    // The regression this gate exists for: these catalogue entries declare
+    // `supports_vision: false`, and used to receive ContentBlock::Image anyway.
+    assert!(!model_supports_vision("deepseek-chat", None));
+    assert!(!model_supports_vision("minimax-m2.5", None));
+}
+
+#[test]
+fn serving_hint_answers_when_the_configured_id_is_unknown() {
+    // Agent model unset / custom alias → the live provider chain names the
+    // model it would actually serve, and that verdict is used.
+    assert!(!model_supports_vision("", Some("deepseek-chat")));
+    assert!(model_supports_vision("", Some("claude-fable-5")));
+    // A catalogued configured id wins; the hint is not consulted.
+    assert!(model_supports_vision("claude-fable-5", Some("deepseek-chat")));
+}
+
+#[test]
+fn unknown_capabilities_fail_open() {
+    // Neither id is in the catalogue (custom endpoint, local proxy): keep
+    // sending the image. A loud provider error beats silently blinding a model
+    // that could have seen it — see `model_supports_vision`'s doc comment.
+    assert!(model_supports_vision("my-local-proxy/v1", None));
+    assert!(model_supports_vision("", Some("some-unlisted-model")));
+    assert!(model_supports_vision("", None));
+}

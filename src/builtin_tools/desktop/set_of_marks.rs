@@ -36,7 +36,7 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-use super::interactable::{collect_interactable, usable_bounds};
+use super::interactable::{affordance_fields, collect_interactable, safe_value, usable_bounds};
 use super::types::DesktopOutput;
 
 const SOM_DEFAULT_DEPTH: u32 = 16;
@@ -66,8 +66,11 @@ pub struct DesktopSomArgs {
 }
 
 /// A single element to mark, in **screen points** (pre-scale).
+///
+/// `pub(super)` only so [`build_marks`] can be reached from the crate's desktop
+/// test module; the fields stay private to this module.
 #[derive(Debug, Clone, Copy)]
-struct Mark {
+pub(super) struct Mark {
     index: usize,
     x: f64,
     y: f64,
@@ -218,7 +221,12 @@ fn round1(v: f64) -> f64 {
 
 /// Build the `(marks, element-json)` pair for the collected elements. Centers
 /// stay in screen points so they feed straight into `desktop` click actions.
-fn build_marks(elements: &[&AxElement]) -> (Vec<Mark>, Vec<serde_json::Value>) {
+///
+/// The element JSON is the second of the three model-facing projections: like
+/// `ax::element_to_json` it reads values only through [`safe_value`] (a secure
+/// field's contents never leave the machine) and appends the element's own
+/// affordances via [`affordance_fields`].
+pub(super) fn build_marks(elements: &[&AxElement]) -> (Vec<Mark>, Vec<serde_json::Value>) {
     let mut marks = Vec::with_capacity(elements.len());
     let mut json = Vec::with_capacity(elements.len());
     for (index, el) in elements.iter().enumerate() {
@@ -237,9 +245,10 @@ fn build_marks(elements: &[&AxElement]) -> (Vec<Mark>, Vec<serde_json::Value>) {
         if let Some(name) = el.title.as_deref().filter(|s| !s.trim().is_empty()) {
             map.insert("name".into(), json!(truncate(name, SOM_TEXT_CAP)));
         }
-        if let Some(value) = el.value.as_deref().filter(|s| !s.trim().is_empty()) {
+        if let Some(value) = safe_value(el) {
             map.insert("value".into(), json!(truncate(value, SOM_TEXT_CAP)));
         }
+        map.extend(affordance_fields(el));
         json.push(serde_json::Value::Object(map));
     }
     (marks, json)
@@ -285,10 +294,14 @@ impl AlephTool for DesktopSom {
          `role`/`name`, and a ready-to-use `center` [x, y]. Decide which numbered element \
          to act on from the image, then pass that element's `center` straight to the \
          `desktop` tool's `click`/`double_click`/`hover` actions. Prefer this over a plain \
-         `screenshot` when you must point at something. Omit `pid` for the frontmost app. \
-         Available on macOS (Accessibility + Screen Recording permission required) and \
-         Windows (UI Automation); unavailable on Linux — fall back to screenshot + gui_locate \
-         there.";
+         `screenshot` when you must point at something. Entries also carry their own \
+         affordances: `actions` is that element's exact list of supported AX action names — \
+         pass one of those verbatim to `ax_action` rather than guessing; `enabled:false` means \
+         greyed out; `settable:false` means `set_value` will not take; `secure:true` marks a \
+         password field, whose value is never returned and which must not be typed into. Omit \
+         `pid` for the frontmost app. Available on macOS (Accessibility + Screen Recording \
+         permission required) and Windows (UI Automation); unavailable on Linux — fall back to \
+         screenshot + gui_locate there.";
 
     type Args = DesktopSomArgs;
     type Output = DesktopOutput;
@@ -488,10 +501,9 @@ mod tests {
         AxElement {
             role: role.to_string(),
             title: title.map(str::to_string),
-            value: None,
             bounds,
             pid: 1,
-            children: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -541,6 +553,18 @@ mod tests {
         assert_eq!(json[0]["name"], "Save");
         // center in points = top-left + size/2 = (140, 220).
         assert_eq!(json[0]["center"], json!([140.0, 220.0]));
+    }
+
+    #[test]
+    fn build_marks_surfaces_element_actions_and_greyed_state() {
+        let mut btn = leaf("AXButton", Some("Send"), Some(rect(0.0, 0.0, 40.0, 20.0)));
+        btn.enabled = Some(false);
+        btn.actions = Some(vec!["AXPress".into()]);
+        let els = [btn];
+        let refs: Vec<&AxElement> = els.iter().collect();
+        let (_, json) = build_marks(&refs);
+        assert_eq!(json[0]["enabled"], serde_json::json!(false));
+        assert_eq!(json[0]["actions"], serde_json::json!(["AXPress"]));
     }
 
     #[test]

@@ -31,7 +31,7 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-use super::interactable::INTERACTABLE_ROLES;
+use super::interactable::{affordance_fields, safe_value, INTERACTABLE_ROLES};
 use super::types::DesktopOutput;
 
 const SEARCH_MAX_DEPTH: u32 = 32;
@@ -88,7 +88,12 @@ impl AlephTool for DesktopGuiLocate {
          structured, exact bounds; (2) OCR fallback when AX has no hit (Web \
          content, custom-drawn UIs). Returns `{found, center:[x,y], width, \
          height, source:\"ax\"|\"ocr\", confidence, role?, text, candidates}`. \
-         Pass `prefer_role` (e.g. `\"AXButton\"`) to bias toward the right \
+         An AX hit also carries the element's own affordances: `actions` (the \
+         exact AX action names it supports — feed one verbatim to `ax_action` \
+         instead of guessing), `enabled:false` (greyed out), `settable:false` \
+         (value not writable), `secure:true` (password field — its value is \
+         never returned or matched on; locate it by its label). Pass \
+         `prefer_role` (e.g. `\"AXButton\"`) to bias toward the right \
          widget type when the label is ambiguous. Pass `force_ocr:true` to \
          skip AX entirely (recommended for browser content).";
 
@@ -128,10 +133,10 @@ impl AlephTool for DesktopGuiLocate {
                 };
                 match ax.query_tree(params).await {
                     Ok(Some(root)) => {
-                        let candidates =
-                            collect_ax_matches(&root, needle, args.prefer_role.as_deref());
-                        if let Some(best) = candidates.first() {
-                            return Ok(success_output_ax(best, &candidates));
+                        if let Some(out) =
+                            ax_locate_output(&root, needle, args.prefer_role.as_deref())
+                        {
+                            return Ok(out);
                         }
                     }
                     Ok(None) => { /* fall through to OCR */ }
@@ -200,6 +205,10 @@ struct AxMatch {
     width: f64,
     height: f64,
     score: f64,
+    /// The element's own affordances (`actions` / `enabled` / `settable` /
+    /// `secure`), projected by the single shared rule so a located element
+    /// answers "what can I do to it" without a second AX round-trip.
+    affordances: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Score an AX element against `needle` (already lowercased by caller).
@@ -219,6 +228,22 @@ fn score_ax_text(text: &str, needle_lc: &str) -> f64 {
     } else {
         0.0
     }
+}
+
+/// Locate `needle` in an AX tree and render the model-facing result, or `None`
+/// when nothing matched (the caller then falls through to OCR).
+///
+/// Split out of [`DesktopGuiLocate::call`] so the projection — the part that
+/// decides what element text reaches the model — is exercisable without a live
+/// desktop.
+pub(super) fn ax_locate_output(
+    root: &AxElement,
+    needle: &str,
+    prefer_role: Option<&str>,
+) -> Option<DesktopOutput> {
+    let candidates = collect_ax_matches(root, needle, prefer_role);
+    let best = candidates.first()?;
+    Some(success_output_ax(best, &candidates))
 }
 
 /// Walk the AX subtree depth-first, collecting matches sorted best-first.
@@ -251,7 +276,12 @@ fn walk_ax(
 
     if let Some(b) = bounds {
         let title_text = node.title.as_deref().unwrap_or("");
-        let value_text = node.value.as_deref().unwrap_or("");
+        // SECURITY: the value is read through the redaction accessor even here,
+        // in the *scorer*. Scoring the raw value would rank a password field by
+        // its contents, and the winning `text` is echoed back in the result —
+        // the secret would leak through the ranking itself, not just through a
+        // projection. A secure field is still locatable by its label.
+        let value_text = safe_value(node).unwrap_or("");
         let title_score = if title_text.is_empty() {
             0.0
         } else {
@@ -291,6 +321,7 @@ fn walk_ax(
                 width: b.width,
                 height: b.height,
                 score: base_score,
+                affordances: affordance_fields(node),
             });
         }
     }
@@ -300,13 +331,17 @@ fn walk_ax(
     }
 }
 
+/// Third of the three model-facing element projections (with
+/// `ax::element_to_json` and `set_of_marks::build_marks`). Values reached it
+/// only through [`safe_value`] in the scorer above; the affordances ride along
+/// so the caller can act on the located element without re-querying AX.
 fn success_output_ax(best: &AxMatch, all: &[AxMatch]) -> DesktopOutput {
     let cx = best.x + best.width / 2.0;
     let cy = best.y + best.height / 2.0;
     let candidates: Vec<serde_json::Value> = all
         .iter()
         .map(|m| {
-            json!({
+            let mut obj = json!({
                 "x": m.x,
                 "y": m.y,
                 "width": m.width,
@@ -315,24 +350,32 @@ fn success_output_ax(best: &AxMatch, all: &[AxMatch]) -> DesktopOutput {
                 "text": m.text,
                 "role": m.role,
                 "score": m.score,
-            })
+            });
+            if let Some(map) = obj.as_object_mut() {
+                map.extend(m.affordances.clone());
+            }
+            obj
         })
         .collect();
+    let mut data = json!({
+        "found": true,
+        "source": "ax",
+        "confidence": best.score,
+        "center": [cx, cy],
+        "x": best.x,
+        "y": best.y,
+        "width": best.width,
+        "height": best.height,
+        "role": best.role,
+        "text": best.text,
+        "candidates": candidates,
+    });
+    if let Some(map) = data.as_object_mut() {
+        map.extend(best.affordances.clone());
+    }
     DesktopOutput {
         success: true,
-        data: Some(json!({
-            "found": true,
-            "source": "ax",
-            "confidence": best.score,
-            "center": [cx, cy],
-            "x": best.x,
-            "y": best.y,
-            "width": best.width,
-            "height": best.height,
-            "role": best.role,
-            "text": best.text,
-            "candidates": candidates,
-        })),
+        data: Some(data),
         message: None,
     }
 }
@@ -444,33 +487,35 @@ mod tests {
             value: value.map(str::to_string),
             bounds,
             pid: 1,
-            children: Vec::new(),
+            ..Default::default()
+        }
+    }
+
+    fn window(children: Vec<AxElement>) -> AxElement {
+        AxElement {
+            role: "AXWindow".into(),
+            pid: 1,
+            children,
+            ..Default::default()
         }
     }
 
     #[test]
     fn ax_exact_title_match_beats_substring() {
-        let tree = AxElement {
-            role: "AXWindow".into(),
-            title: None,
-            value: None,
-            bounds: None,
-            pid: 1,
-            children: vec![
-                leaf(
-                    "AXButton",
-                    Some("Send Now"),
-                    None,
-                    Some(rect(0.0, 0.0, 60.0, 30.0)),
-                ),
-                leaf(
-                    "AXButton",
-                    Some("Send"),
-                    None,
-                    Some(rect(100.0, 0.0, 60.0, 30.0)),
-                ),
-            ],
-        };
+        let tree = window(vec![
+            leaf(
+                "AXButton",
+                Some("Send Now"),
+                None,
+                Some(rect(0.0, 0.0, 60.0, 30.0)),
+            ),
+            leaf(
+                "AXButton",
+                Some("Send"),
+                None,
+                Some(rect(100.0, 0.0, 60.0, 30.0)),
+            ),
+        ]);
         let matches = collect_ax_matches(&tree, "Send", None);
         assert_eq!(matches[0].text, "Send"); // exact wins over "Send Now"
         assert!(matches[0].score >= matches[1].score);
@@ -478,75 +523,95 @@ mod tests {
 
     #[test]
     fn ax_prefer_role_boosts_score() {
-        let tree = AxElement {
-            role: "AXWindow".into(),
-            title: None,
-            value: None,
-            bounds: None,
-            pid: 1,
-            children: vec![
-                leaf(
-                    "AXLink",
-                    Some("Login"),
-                    None,
-                    Some(rect(0.0, 0.0, 60.0, 30.0)),
-                ),
-                leaf(
-                    "AXButton",
-                    Some("Login"),
-                    None,
-                    Some(rect(100.0, 0.0, 60.0, 30.0)),
-                ),
-            ],
-        };
+        let tree = window(vec![
+            leaf(
+                "AXLink",
+                Some("Login"),
+                None,
+                Some(rect(0.0, 0.0, 60.0, 30.0)),
+            ),
+            leaf(
+                "AXButton",
+                Some("Login"),
+                None,
+                Some(rect(100.0, 0.0, 60.0, 30.0)),
+            ),
+        ]);
         let matches = collect_ax_matches(&tree, "Login", Some("AXButton"));
         assert_eq!(matches[0].role, "AXButton");
     }
 
     #[test]
     fn ax_static_text_penalized_vs_button() {
-        let tree = AxElement {
-            role: "AXWindow".into(),
-            title: None,
-            value: None,
-            bounds: None,
-            pid: 1,
-            children: vec![
-                leaf(
-                    "AXStaticText",
-                    Some("Save"),
-                    None,
-                    Some(rect(0.0, 0.0, 60.0, 30.0)),
-                ),
-                leaf(
-                    "AXButton",
-                    Some("Save"),
-                    None,
-                    Some(rect(100.0, 0.0, 60.0, 30.0)),
-                ),
-            ],
-        };
+        let tree = window(vec![
+            leaf(
+                "AXStaticText",
+                Some("Save"),
+                None,
+                Some(rect(0.0, 0.0, 60.0, 30.0)),
+            ),
+            leaf(
+                "AXButton",
+                Some("Save"),
+                None,
+                Some(rect(100.0, 0.0, 60.0, 30.0)),
+            ),
+        ]);
         let matches = collect_ax_matches(&tree, "Save", None);
         assert_eq!(matches[0].role, "AXButton");
     }
 
     #[test]
     fn ax_degenerate_bounds_dropped() {
-        let tree = AxElement {
-            role: "AXWindow".into(),
-            title: None,
-            value: None,
-            bounds: None,
-            pid: 1,
-            children: vec![leaf(
-                "AXButton",
-                Some("OK"),
-                None,
-                Some(rect(0.0, 0.0, 0.0, 0.0)),
-            )],
-        };
+        let tree = window(vec![leaf(
+            "AXButton",
+            Some("OK"),
+            None,
+            Some(rect(0.0, 0.0, 0.0, 0.0)),
+        )]);
         let matches = collect_ax_matches(&tree, "OK", None);
         assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn ax_match_carries_the_elements_own_actions() {
+        let mut btn = leaf("AXButton", Some("Save"), None, Some(rect(0.0, 0.0, 60.0, 30.0)));
+        btn.actions = Some(vec!["AXPress".into()]);
+        btn.enabled = Some(false);
+        let tree = window(vec![btn]);
+
+        let out = ax_locate_output(&tree, "Save", None).expect("found");
+        let data = out.data.expect("data");
+        assert_eq!(data["actions"], json!(["AXPress"]));
+        assert_eq!(data["enabled"], json!(false));
+        assert_eq!(data["candidates"][0]["actions"], json!(["AXPress"]));
+    }
+
+    #[test]
+    fn ax_scorer_never_matches_a_secure_fields_contents() {
+        // The scorer used to read `value` raw: searching for the password text
+        // would have ranked the password box first and echoed the secret back
+        // as the match `text`.
+        let mut secret = leaf(
+            "AXSecureTextField",
+            Some("Password"),
+            Some("hunter2"),
+            Some(rect(0.0, 0.0, 60.0, 30.0)),
+        );
+        secret.secure = Some(true);
+        let tree = window(vec![secret]);
+
+        assert!(
+            ax_locate_output(&tree, "hunter2", None).is_none(),
+            "a secure value must be unmatchable"
+        );
+
+        // It is still findable by its label — and the response says it is
+        // secure without ever quoting what is in it.
+        let out = ax_locate_output(&tree, "Password", None).expect("found by label");
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(!json.contains("hunter2"), "secret leaked: {json}");
+        assert_eq!(out.data.expect("data")["secure"], json!(true));
     }
 
     #[test]

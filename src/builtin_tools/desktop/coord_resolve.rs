@@ -176,6 +176,7 @@ mod tests {
             ax_action_name: None,
             pid: None,
             observe: None,
+            force: None,
         }
     }
 

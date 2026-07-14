@@ -551,6 +551,17 @@ impl super::DesktopTool {
                 }
             }
             "type_text" => {
+                // Pre-flight the focus: these keystrokes are global and land on
+                // whatever holds focus *now*, which is not necessarily what the
+                // model thinks it clicked. Fails open when the AX layer cannot
+                // say (see focus_gate) — `force:true` overrides everything but
+                // the secure-field hard block.
+                if let Some(refusal) =
+                    super::focus_gate::check(platform, args.force == Some(true)).await
+                {
+                    return Ok(Some(refusal));
+                }
+
                 // UI-TARS `type(content='…\n')` parity: a single trailing
                 // newline means "type the text, then submit". We strip it and
                 // emit an explicit Return keypress, which is reliable across
@@ -1333,7 +1344,13 @@ fn locator_from_args(args: &DesktopArgs) -> AxLocator {
 /// Convert an [`AxActionResult`] from `ax.set_value` / `ax.perform_action`
 /// into a [`DesktopOutput`], surfacing write-verification state in `message`
 /// so an unverified write is not silently reported as plain success.
-fn ax_action_output(r: AxActionResult) -> DesktopOutput {
+fn ax_action_output(mut r: AxActionResult) -> DesktopOutput {
+    // `matched` is the wire element, serialized verbatim into the result — so a
+    // write that landed on a password field would echo its contents back into
+    // the model's context. The helper already withholds `actual_preview` for a
+    // secure element; this covers the element itself.
+    r.matched = r.matched.map(super::interactable::redact_secure_values);
+
     let verified = r
         .verification
         .as_ref()

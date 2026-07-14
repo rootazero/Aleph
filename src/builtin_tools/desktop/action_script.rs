@@ -390,6 +390,9 @@ const fn blank_batch_action() -> DesktopBatchAction {
         ax_action_name: None,
         pid: None,
         observe: None,
+        // The UI-TARS action script has no syntax for it: `force` is an explicit
+        // escape hatch the model opts into per call, never a script default.
+        force: None,
     }
 }
 

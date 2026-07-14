@@ -1,4 +1,3 @@
-import ArgumentParser
 import EventKit
 import Foundation
 
@@ -7,7 +6,10 @@ import Foundation
 private let reminderStore = EKEventStore()
 
 /// Request reminders access synchronously using a semaphore.
-private func requestRemindersAccess() {
+///
+/// Safe only off the main thread — the RPC entry point parks the main thread on
+/// a semaphore, and PIM calls run on the serial PIM queue.
+private func requireRemindersAccess() throws {
     let semaphore = DispatchSemaphore(value: 0)
     var granted = false
 
@@ -29,29 +31,33 @@ private func requestRemindersAccess() {
         }
     }
     semaphore.wait()
-    if !granted {
-        printError("Reminders access denied. Grant access in System Settings > Privacy & Security > Reminders.")
+    guard granted else {
+        throw RpcError(
+            code: -32001,
+            message: "permission denied: reminders",
+            data: try encodeCodable(Perm.guide(.reminders))
+        )
     }
 }
 
 private let remFmt = iso8601Formatter()
 
-private func reminderToDict(_ reminder: EKReminder) -> [String: Any] {
-    var dict: [String: Any] = [
-        "id": reminder.calendarItemIdentifier,
-        "title": reminder.title ?? "",
-        "list_id": reminder.calendar.calendarIdentifier,
-        "completed": reminder.isCompleted,
-        "priority": reminder.priority,
-    ]
-    if let dueDateComponents = reminder.dueDateComponents,
-       let dueDate = Foundation.Calendar.current.date(from: dueDateComponents) {
-        dict["due_date"] = remFmt.string(from: dueDate)
+private func reminderToWire(_ reminder: EKReminder) -> Reminder {
+    var dueDate: String?
+    if let components = reminder.dueDateComponents,
+       let date = Foundation.Calendar.current.date(from: components) {
+        dueDate = remFmt.string(from: date)
     }
-    if let notes = reminder.notes, !notes.isEmpty {
-        dict["notes"] = notes
-    }
-    return dict
+    let notes = reminder.notes.flatMap { $0.isEmpty ? nil : $0 }
+    return Reminder(
+        id: reminder.calendarItemIdentifier,
+        title: reminder.title ?? "",
+        list_id: reminder.calendar.calendarIdentifier,
+        completed: reminder.isCompleted,
+        due_date: dueDate,
+        priority: reminder.priority,
+        notes: notes
+    )
 }
 
 /// Fetch reminders synchronously using a semaphore.
@@ -66,197 +72,157 @@ private func fetchReminders(matching predicate: NSPredicate) -> [EKReminder] {
     return results
 }
 
-extension AlephBridge {
-    struct Reminders: ParsableCommand {
-        static let configuration = CommandConfiguration(
-            abstract: "Apple Reminders operations",
-            subcommands: [List.self, Get.self, Create.self, Complete.self, Delete.self, Lists.self]
-        )
+/// Apple Reminders operations. Synchronous and blocking; call from the serial PIM
+/// queue (see `PimHandlers.swift`).
+enum RemindersCommands {
+    static func list(listId: String?, includeCompleted: Bool) throws -> RemindersListResult {
+        try requireRemindersAccess()
 
-        struct List: ParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "List reminders")
-
-            @Option(name: .long, help: "Reminder list ID")
-            var listId: String?
-
-            @Option(name: .long, help: "Include completed reminders (true/false)")
-            var includeCompleted: String?
-
-            func run() {
-                requestRemindersAccess()
-
-                var calendars: [EKCalendar]? = nil
-                if let lid = listId {
-                    if let cal = reminderStore.calendar(withIdentifier: lid) {
-                        calendars = [cal]
-                    } else {
-                        printError("Reminder list not found: \(lid)")
-                    }
-                }
-
-                let predicate: NSPredicate
-                if includeCompleted == "true" {
-                    predicate = reminderStore.predicateForReminders(in: calendars)
-                } else {
-                    predicate = reminderStore.predicateForIncompleteReminders(
-                        withDueDateStarting: nil, ending: nil, calendars: calendars
-                    )
-                }
-
-                let reminders = fetchReminders(matching: predicate)
-                let results = reminders.map { reminderToDict($0) }
-                printJSON(["reminders": results])
+        var calendars: [EKCalendar]?
+        if let lid = listId, !lid.isEmpty {
+            guard let cal = reminderStore.calendar(withIdentifier: lid) else {
+                throw RpcError(
+                    code: -32602,
+                    message: "pim.reminders.list: reminder list not found: \(lid)",
+                    data: nil
+                )
             }
+            calendars = [cal]
         }
 
-        struct Get: ParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "Get a reminder by ID")
-
-            @Option(name: .long, help: "Reminder ID")
-            var id: String
-
-            func run() {
-                requestRemindersAccess()
-
-                guard let item = reminderStore.calendarItem(withIdentifier: id) as? EKReminder else {
-                    printError("Reminder not found: \(id)")
-                }
-                printJSON(reminderToDict(item))
-            }
+        let predicate: NSPredicate
+        if includeCompleted {
+            predicate = reminderStore.predicateForReminders(in: calendars)
+        } else {
+            predicate = reminderStore.predicateForIncompleteReminders(
+                withDueDateStarting: nil, ending: nil, calendars: calendars
+            )
         }
 
-        struct Create: ParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "Create a reminder")
+        let reminders = fetchReminders(matching: predicate)
+        return RemindersListResult(reminders: reminders.map { reminderToWire($0) })
+    }
 
-            @Option(name: .long, help: "Reminder title")
-            var title: String = ""
+    static func get(id: String) throws -> Reminder {
+        try requireRemindersAccess()
 
-            @Option(name: .long, help: "Reminder list ID")
-            var listId: String?
+        guard let reminder = reminderStore.calendarItem(withIdentifier: id) as? EKReminder else {
+            throw RpcError(
+                code: -32602,
+                message: "pim.reminders.get: reminder not found: \(id)",
+                data: nil
+            )
+        }
+        return reminderToWire(reminder)
+    }
 
-            @Option(name: .long, help: "Due date (ISO 8601)")
-            var dueDate: String?
+    static func create(
+        title: String,
+        listId: String,
+        priority: Int,
+        dueDate: Date?,
+        notes: String?
+    ) throws -> RemindersCreateResult {
+        try requireRemindersAccess()
 
-            @Option(name: .long, help: "Priority (0=none, 1=high, 5=medium, 9=low)")
-            var priority: Int?
+        let reminder = EKReminder(eventStore: reminderStore)
+        reminder.title = title
 
-            @Option(name: .long, help: "Notes")
-            var notes: String?
-
-            func run() {
-                requestRemindersAccess()
-
-                let reminder = EKReminder(eventStore: reminderStore)
-                reminder.title = title
-
-                if let lid = listId, let cal = reminderStore.calendar(withIdentifier: lid) {
-                    reminder.calendar = cal
-                } else {
-                    reminder.calendar = reminderStore.defaultCalendarForNewReminders()
-                }
-
-                if let ds = dueDate, let d = parseISO8601(ds) {
-                    reminder.dueDateComponents = Foundation.Calendar.current.dateComponents(
-                        [.year, .month, .day, .hour, .minute, .second], from: d
-                    )
-                }
-
-                if let p = priority {
-                    reminder.priority = p
-                }
-
-                reminder.notes = notes
-
-                do {
-                    try reminderStore.save(reminder, commit: true)
-                } catch {
-                    printError("Failed to create reminder: \(error.localizedDescription)")
-                }
-
-                printJSON(reminderToDict(reminder))
-            }
+        // An empty or unknown list_id means "wherever new reminders go".
+        if !listId.isEmpty, let cal = reminderStore.calendar(withIdentifier: listId) {
+            reminder.calendar = cal
+        } else if let fallback = reminderStore.defaultCalendarForNewReminders() {
+            reminder.calendar = fallback
+        } else {
+            throw RpcError(
+                code: -32003,
+                message: "pim.reminders.create: no writable reminder list available",
+                data: nil
+            )
         }
 
-        struct Complete: ParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "Mark a reminder as completed or not")
+        if let dueDate = dueDate {
+            reminder.dueDateComponents = Foundation.Calendar.current.dateComponents(
+                [.year, .month, .day, .hour, .minute, .second], from: dueDate
+            )
+        }
+        reminder.priority = priority
+        reminder.notes = notes
 
-            @Option(name: .long, help: "Reminder ID")
-            var id: String
-
-            @Option(name: .long, help: "Mark as completed (true/false, default: true)")
-            var completed: String?
-
-            func run() {
-                requestRemindersAccess()
-
-                guard let reminder = reminderStore.calendarItem(withIdentifier: id) as? EKReminder else {
-                    printError("Reminder not found: \(id)")
-                }
-
-                let isCompleted = completed != "false" // default true
-                reminder.isCompleted = isCompleted
-                if isCompleted {
-                    reminder.completionDate = Date()
-                } else {
-                    reminder.completionDate = nil
-                }
-
-                do {
-                    try reminderStore.save(reminder, commit: true)
-                } catch {
-                    printError("Failed to update reminder: \(error.localizedDescription)")
-                }
-
-                printJSON(reminderToDict(reminder))
-            }
+        do {
+            try reminderStore.save(reminder, commit: true)
+        } catch {
+            throw RpcError(
+                code: -32003,
+                message: "pim.reminders.create: \(error.localizedDescription)",
+                data: nil
+            )
         }
 
-        struct Delete: ParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "Delete a reminder")
+        return RemindersCreateResult(id: reminder.calendarItemIdentifier)
+    }
 
-            @Option(name: .long, help: "Reminder ID")
-            var id: String
+    static func complete(id: String) throws {
+        try requireRemindersAccess()
 
-            func run() {
-                requestRemindersAccess()
-
-                guard let reminder = reminderStore.calendarItem(withIdentifier: id) as? EKReminder else {
-                    printError("Reminder not found: \(id)")
-                }
-
-                do {
-                    try reminderStore.remove(reminder, commit: true)
-                } catch {
-                    printError("Failed to delete reminder: \(error.localizedDescription)")
-                }
-
-                printJSON(["deleted": true, "id": id])
-            }
+        guard let reminder = reminderStore.calendarItem(withIdentifier: id) as? EKReminder else {
+            throw RpcError(
+                code: -32602,
+                message: "pim.reminders.complete: reminder not found: \(id)",
+                data: nil
+            )
         }
 
-        struct Lists: ParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "List all reminder lists")
+        reminder.isCompleted = true
+        reminder.completionDate = Date()
 
-            func run() {
-                requestRemindersAccess()
-
-                let calendars = reminderStore.calendars(for: .reminder)
-
-                // Count incomplete reminders per list
-                let results: [[String: Any]] = calendars.map { cal in
-                    let pred = reminderStore.predicateForIncompleteReminders(
-                        withDueDateStarting: nil, ending: nil, calendars: [cal]
-                    )
-                    let count = fetchReminders(matching: pred).count
-
-                    return [
-                        "id": cal.calendarIdentifier,
-                        "title": cal.title,
-                        "count": count,
-                    ]
-                }
-                printJSON(["lists": results])
-            }
+        do {
+            try reminderStore.save(reminder, commit: true)
+        } catch {
+            throw RpcError(
+                code: -32003,
+                message: "pim.reminders.complete: \(error.localizedDescription)",
+                data: nil
+            )
         }
+    }
+
+    static func delete(id: String) throws {
+        try requireRemindersAccess()
+
+        guard let reminder = reminderStore.calendarItem(withIdentifier: id) as? EKReminder else {
+            throw RpcError(
+                code: -32602,
+                message: "pim.reminders.delete: reminder not found: \(id)",
+                data: nil
+            )
+        }
+
+        do {
+            try reminderStore.remove(reminder, commit: true)
+        } catch {
+            throw RpcError(
+                code: -32003,
+                message: "pim.reminders.delete: \(error.localizedDescription)",
+                data: nil
+            )
+        }
+    }
+
+    static func lists() throws -> RemindersListsResult {
+        try requireRemindersAccess()
+
+        // `count` is the incomplete-reminder count, one fetch per list.
+        let lists = reminderStore.calendars(for: .reminder).map { cal -> ReminderList in
+            let predicate = reminderStore.predicateForIncompleteReminders(
+                withDueDateStarting: nil, ending: nil, calendars: [cal]
+            )
+            return ReminderList(
+                id: cal.calendarIdentifier,
+                title: cal.title,
+                count: fetchReminders(matching: predicate).count
+            )
+        }
+        return RemindersListsResult(lists: lists)
     }
 }

@@ -42,7 +42,10 @@ pub(super) async fn gather_post_state(
                 json!({
                     "role": el.role,
                     "title": el.title,
-                    "value": el.value.as_deref().map(|v| {
+                    // Through `safe_value`, not `el.value`: post-action state is
+                    // reported for whatever holds focus, which may well be the
+                    // password box the user just filled.
+                    "value": super::interactable::safe_value(&el).map(|v| {
                         v.chars().take(200).collect::<String>()
                     }),
                 }),

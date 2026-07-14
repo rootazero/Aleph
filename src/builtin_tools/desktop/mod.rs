@@ -5,6 +5,7 @@ mod action_script;
 mod ax;
 mod browser_operator;
 mod coord_resolve;
+mod focus_gate;
 mod gui_locate;
 mod held_inputs;
 mod interactable;
@@ -590,7 +591,7 @@ Actions:
 - hover: Move mouse to (x, y) without clicking.
 - cursor_position: Get current mouse cursor position.
 - mouse_button: Press/release mouse at (x, y). Requires press_action (press/release/click).
-- type_text: Type text at current cursor position.
+- type_text: Type text at the current keyboard focus. Blind by nature — the keystrokes go wherever focus actually is — so it is pre-flighted against the accessibility layer: it refuses when nothing is focused, or when the focused element reports that it takes no typed value, and tells you what to do instead (click the input, or use set_value). Typing into a secure/password field is always refused. If the app's accessibility tree lies (canvas, terminal, some Electron shells), pass force:true to type anyway — force does not lift the password refusal. On Linux (no accessibility layer) the pre-flight is skipped entirely.
 - key_combo: Press key combination, e.g. keys=["cmd","c"].
 - key_button: Hold or release a key/chord without auto-releasing — keys=["cmd"] plus press_action="press" (hold down) then later press_action="release". Distinct from key_combo, which presses and releases atomically. Useful for drag-with-modifier or chorded shortcuts.
 - scroll: Scroll by delta_x/delta_y PIXELS (negative = up/left), e.g. delta_y:-300 scrolls up about 300px. Pixels are quantized to whole mouse-wheel clicks (~100px each), so a delta under ~100px still moves one click and the result says how far it actually went.
@@ -609,7 +610,7 @@ Actions:
 - paste: Paste text via clipboard (Cmd+V). Better for multiline text than type_text. It goes through the user's clipboard: plain text is put back afterwards, but an image or file on the clipboard cannot be (the result says so) — use type_text when the clipboard must be preserved.
 - wait_visual: Wait until the screen settles. Polls screenshots and returns when two consecutive captures match, or after `timeout_ms` (default 5000, max 60000). Use after navigation or clicks that trigger animation. Returns `{stable: bool, polls, elapsed_ms}` — `stable=false` means timeout, not failure.
 - set_value: Set a text field's value directly via the accessibility API and VERIFY the write by reading it back — the reliable way to fill forms (multiline, non-ASCII, replacing existing content). Locate the element with role ("AXTextField") and/or element_title, optionally x/y as a nearest-center hint (honors coord_space). Requires text. Result carries verification.state = "verified" | "unverified". Prefer this over click + type_text; type_text is a blind synthetic fallback.
-- ax_action: Trigger a native accessibility action (ax_action_name, e.g. "AXPress", "AXShowMenu") on an element located the same way. More reliable than a synthetic click for buttons/menus when the app exposes AX actions. Available on macOS (AX) and Windows (UI Automation: AXPress→Invoke/Toggle/Select, AXShowMenu→Expand); Linux reports the capability as unavailable — fall back to click.
+- ax_action: Trigger a native accessibility action (ax_action_name, e.g. "AXPress", "AXShowMenu") on an element located the same way. More reliable than a synthetic click for buttons/menus when the app exposes AX actions. Do not guess the name: desktop_ax_snapshot / desktop_som / desktop_gui_locate return each element's own `actions` list — pass one of those verbatim. An element reporting `enabled:false` is greyed out; acting on it does nothing, so fix the precondition instead. Available on macOS (AX) and Windows (UI Automation: AXPress→Invoke/Toggle/Select, AXShowMenu→Expand); Linux reports the capability as unavailable — fall back to click.
 
 Held inputs — a `press` on key_button / mouse_button stays physically down on the user's keyboard and mouse until you release it, so always send the matching `release` for every key and button you pressed before you finish a step.
 
@@ -622,6 +623,7 @@ Examples:
 {"action":"clipboard_read"}
 {"action":"scroll","delta_y":-300}
 {"action":"type_text","text":"Hello"}
+{"action":"type_text","text":"Hello","force":true}
 {"action":"screen_record","duration":3.0,"fps":30}
 {"action":"screen_record","duration":5.0,"fps":30,"region":{"x":0,"y":0,"width":1280,"height":720}}
 {"action":"display_list"}
