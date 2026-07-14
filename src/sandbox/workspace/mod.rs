@@ -35,7 +35,7 @@ mod proxy;
 
 pub use path::session_workspace_dir;
 
-pub(crate) use approval::format_capability_request;
+pub(crate) use approval::{format_capability_request, format_capability_summary};
 pub(crate) use env::sandbox_env_tag;
 pub(crate) use path::{normalize_path, session_key_to_filename};
 use proxy::maybe_spawn_proxy;
@@ -142,10 +142,11 @@ impl Sandbox for WorkspaceSandbox {
             backend: self.os_driver.platform(),
             policy_tier: crate::sandbox::summary::PolicyTier::WorkspaceWrite.as_str(),
             writable_roots: vec![self.workspace_root.clone()],
-            // Default operational posture allows network; per-call
-            // capability checks may tighten this. The summary reflects the
-            // envelope, not any specific call.
-            network: crate::sandbox::summary::NetworkState::AllowAll,
+            // Honest per-call default: the baseline is `strict()` (network
+            // DENIED). Network is reachable only via an approval-gated
+            // capability escalation, so telling the model "allowed (all hosts)"
+            // here would invite it to assume egress it does not actually have.
+            network: crate::sandbox::summary::NetworkState::Denied,
             max_memory_mb: None,
         })
     }
@@ -211,15 +212,22 @@ impl Sandbox for WorkspaceSandbox {
                 // Denial ledger: a prior refusal of this exact elevation — or a
                 // session past the denial threshold — auto-denies without
                 // re-prompting (blind-retry guard + circuit breaker). The
-                // fingerprint keys on the deterministic capability-request text
-                // so the *same* elevation maps to the *same* bucket.
+                // fingerprint keys on the deterministic capability SUMMARY
+                // (`format_capability_summary` over the NORMALIZED caps) — never
+                // on `reason`, which appends the model-controlled `justification`:
+                // folding that in would let the model mint a fresh fingerprint for
+                // the same escalation just by rewording its reason, defeating this
+                // guard. Path order is neutralized by `normalized_caps`.
                 // `denial_ledger::ledger_key`, NOT `session_key_to_filename`:
                 // the latter names this session's workspace *directory*, and
                 // keying the ledger with it put this gate in a different bucket
                 // from the tool confirm gate, so neither saw the other's
                 // refusals. A filename encoder is not an identity.
                 let led_key = denial_ledger::ledger_key(&cmd.session_id);
-                let fingerprint = denial_ledger::action_fingerprint(&cmd.program, &reason);
+                let fingerprint = denial_ledger::action_fingerprint(
+                    &cmd.program,
+                    &format_capability_summary(&cmd.program, &normalized_caps),
+                );
                 if let Some(reason_kind) =
                     denial_ledger::global().is_blocked(&led_key, &fingerprint)
                 {
@@ -342,52 +350,23 @@ impl Sandbox for WorkspaceSandbox {
         // sub-call.
         drop(active_proxy);
 
-        // Byte-level secret scrub before any downstream consumer touches stdout/stderr.
-        // Whitelist is fed via SecurityContext.injected_secrets when threaded; for
-        // direct sandbox callers (no security context) this scrubs with an empty
-        // whitelist, which is the safe default.
-        let mut output_blocked: Vec<&'static str> = Vec::new();
-        if let Ok(ref mut out) = output {
-            let injected: &[crate::secrets::injection::InjectedSecret] = &[];
-            let stdout_scrub = crate::sandbox::scrub_secrets_bytes(&out.stdout, injected);
-            let stderr_scrub = crate::sandbox::scrub_secrets_bytes(&out.stderr, injected);
-            if !stdout_scrub.hits.is_empty() || !stderr_scrub.hits.is_empty() {
-                tracing::warn!(
-                    stdout_hits = ?stdout_scrub.hits,
-                    stderr_hits = ?stderr_scrub.hits,
-                    "sandbox bytes-scrub redacted secrets in command output"
-                );
-            }
-            output_blocked.extend(stdout_scrub.blocked);
-            output_blocked.extend(stderr_scrub.blocked);
-            out.stdout = stdout_scrub.bytes.into_owned();
-            out.stderr = stderr_scrub.bytes.into_owned();
-
-            // Neutralize invisible / bidirectional Unicode control characters
-            // (zero-width injection, RLO/isolate overrides) before the output
-            // reaches the model — the redline-safe, deterministic half of
-            // prompt-injection defense (OpenSquilla's "invisible character"
-            // class), distinct from the secret scrub above.
-            let (stdout_clean, n_out) = crate::sandbox::scrub::strip_unsafe_invisible(&out.stdout);
-            let (stderr_clean, n_err) = crate::sandbox::scrub::strip_unsafe_invisible(&out.stderr);
-            if n_out + n_err > 0 {
-                tracing::warn!(
-                    removed = n_out + n_err,
-                    "sandbox neutralized invisible/bidi control chars in command output"
-                );
-            }
-            out.stdout = stdout_clean.into_owned();
-            out.stderr = stderr_clean.into_owned();
-        }
+        // Command-output content floor (secret redaction + block-class gate +
+        // invisible/bidi neutralization) before any downstream consumer touches
+        // stdout/stderr. Shared with `WorktreeSandbox` via the single source of
+        // truth in `scrub::scrub_and_gate_output`, so the two execution paths
+        // cannot silently diverge on what they redact or refuse.
+        let output_blocked: Vec<&'static str> = if let Ok(ref mut out) = output {
+            crate::sandbox::scrub::scrub_and_gate_output(out)
+        } else {
+            Vec::new()
+        };
 
         // Block-class secret floor: a catastrophic secret (e.g. a PEM private
         // key) in command output is never legitimate — fail closed rather than
         // return the already-redacted output to the model. Shell-output analogue
         // of clawshell's `DlpAction::Block`, mirroring the always-on hard-filter
-        // posture of risk.rs `BLOCKED_PATTERNS` and the default command policy.
+        // posture of the default command policy.
         if !output_blocked.is_empty() {
-            output_blocked.sort_unstable();
-            output_blocked.dedup();
             tracing::warn!(
                 target: "shell_security",
                 session_id = ?cmd.session_id,
@@ -968,10 +947,12 @@ mod tests {
             .await;
         assert!(denied.is_err(), "the elevation must be refused");
 
-        // Now look it up exactly as `ScopedToolService::confirm_with_memory` would.
+        // Look it up exactly as the production elevation gate keys it: on the
+        // justification-free capability summary over the normalized caps (never
+        // `format_capability_request`, which would fold in a model justification).
         let fingerprint = denial_ledger::action_fingerprint(
             "curl",
-            &format_capability_request("curl", &elevated),
+            &format_capability_summary("curl", &elevated.normalized()),
         );
         assert_eq!(
             denial_ledger::global().is_blocked(&denial_ledger::ledger_key(&session), &fingerprint),

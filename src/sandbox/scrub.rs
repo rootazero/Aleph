@@ -147,6 +147,59 @@ pub fn strip_unsafe_invisible(bytes: &[u8]) -> (Cow<'_, [u8]>, usize) {
     (Cow::Owned(out), removed)
 }
 
+/// Apply the full command-output content floor to a finished command's
+/// stdout/stderr, in place: redact secret material, neutralize invisible/bidi
+/// control characters, and return the deduped set of **block-class** secret
+/// names detected (empty = safe). A non-empty return means catastrophic secret
+/// material was present and the caller MUST fail closed — redaction alone still
+/// returns the surrounding context to the model.
+///
+/// This is the single source of truth for the output floor, shared by every
+/// [`Sandbox`](crate::sandbox::Sandbox) implementation (`WorkspaceSandbox`,
+/// `WorktreeSandbox`). Duplicating it per execution path is exactly how a floor
+/// silently diverges — the same defect class as a bare PKCS#8 key slipping one
+/// of two secret catalogs, or a worktree subagent running with no floor at all.
+///
+/// Direct sandbox callers carry no `SecurityContext`, so the injected-secret
+/// whitelist is empty — the safe default (scrub everything).
+#[must_use]
+pub fn scrub_and_gate_output(out: &mut crate::sandbox::SandboxOutput) -> Vec<&'static str> {
+    let injected: &[InjectedSecret] = &[];
+    let stdout_scrub = scrub_secrets_bytes(&out.stdout, injected);
+    let stderr_scrub = scrub_secrets_bytes(&out.stderr, injected);
+    if !stdout_scrub.hits.is_empty() || !stderr_scrub.hits.is_empty() {
+        tracing::warn!(
+            stdout_hits = ?stdout_scrub.hits,
+            stderr_hits = ?stderr_scrub.hits,
+            "sandbox bytes-scrub redacted secrets in command output"
+        );
+    }
+    let mut blocked: Vec<&'static str> = Vec::new();
+    blocked.extend(stdout_scrub.blocked);
+    blocked.extend(stderr_scrub.blocked);
+    out.stdout = stdout_scrub.bytes.into_owned();
+    out.stderr = stderr_scrub.bytes.into_owned();
+
+    // Neutralize invisible / bidirectional Unicode control characters
+    // (zero-width injection, RLO/isolate overrides) before the output reaches
+    // the model — the redline-safe, deterministic half of prompt-injection
+    // defense, distinct from the secret scrub above.
+    let (stdout_clean, n_out) = strip_unsafe_invisible(&out.stdout);
+    let (stderr_clean, n_err) = strip_unsafe_invisible(&out.stderr);
+    if n_out + n_err > 0 {
+        tracing::warn!(
+            removed = n_out + n_err,
+            "sandbox neutralized invisible/bidi control chars in command output"
+        );
+    }
+    out.stdout = stdout_clean.into_owned();
+    out.stderr = stderr_clean.into_owned();
+
+    blocked.sort_unstable();
+    blocked.dedup();
+    blocked
+}
+
 fn is_whitelisted(slice: &[u8], injected: &[InjectedSecret]) -> bool {
     if injected.is_empty() {
         return false;

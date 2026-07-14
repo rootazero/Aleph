@@ -13,8 +13,10 @@ use serde::{Deserialize, Serialize};
 
 /// A user-defined regex pattern for command risk classification.
 ///
-/// Custom patterns are **additive** — built-in patterns remain active
-/// as a safety floor even when custom patterns are enabled.
+/// These feed the advisory `SecurityKernel` custom-pattern layer
+/// (`SecurityKernel::assess_custom`). The catastrophic hard floor is enforced
+/// separately and unconditionally by `sandbox::command_policy` — it does not
+/// depend on these patterns being configured.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CustomRiskPattern {
     /// Regex pattern to match against commands
@@ -30,11 +32,11 @@ pub struct CustomRiskPattern {
 
 /// Shell command security configuration.
 ///
-/// When `enable_custom_patterns` is `false` (default), only built-in
-/// patterns are used — behavior is identical to pre-configuration.
-///
-/// When `true`, custom patterns are evaluated *in addition to* built-ins.
-/// Built-in patterns always win (they are checked first).
+/// When `enable_custom_patterns` is `false` (default), the advisory
+/// `SecurityKernel` layer matches nothing and every command passes it through.
+/// When `true`, the custom blocked / danger patterns below are evaluated as an
+/// additional advisory layer. Either way the catastrophic hard floor
+/// (`sandbox::command_policy`) is enforced independently and cannot be disabled.
 ///
 /// # Example (aleph.toml)
 ///

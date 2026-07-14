@@ -204,18 +204,36 @@ async fn remove_worktree(repo_root: &Path, path: &Path) -> Result<(), WorktreeEr
     Ok(())
 }
 
-/// Minimal Sandbox impl for Stage H — runs commands at worktree path with
-/// `CARGO_TARGET_DIR=<worktree>/target` injected. No seatbelt, no capability
-/// enforcement (Stage H scope is workspace isolation only — see § 2.2.1
-/// Architectural Scope Lock).
+/// Minimal Sandbox impl for Stage H — runs commands at the worktree path with
+/// `CARGO_TARGET_DIR=<worktree>/target` injected. There is no OS-level process
+/// sandbox (no seatbelt/landlock — Stage H scope is workspace isolation only,
+/// see § 2.2.1 Architectural Scope Lock), but the **content floor still applies**:
+/// the catastrophic command-policy hardline (fork bomb / disk wipe) runs before
+/// exec, and the secret-scrub + block-class gate runs on output — the same
+/// undisableable floor `WorkspaceSandbox` enforces. A worktree-isolated subagent
+/// must not be able to run `rm -rf /` or leak a private key to the model just
+/// because it is off the seatbelt path.
 pub struct WorktreeSandbox {
     worktree_path: std::path::PathBuf,
+    hooks: crate::sandbox::hooks::SandboxHooks,
 }
 
 impl WorktreeSandbox {
     #[must_use]
-    pub const fn new(worktree_path: std::path::PathBuf) -> Self {
-        Self { worktree_path }
+    pub fn new(worktree_path: std::path::PathBuf) -> Self {
+        // Only the non-negotiable catastrophic floor — no tunable command policy
+        // is configured on this path. Mirrors the `hardline_only()` hook that
+        // `factory::build_sandbox` installs when the tunable policy is disabled.
+        let hooks =
+            crate::sandbox::hooks::SandboxHooks::new().with_before(std::sync::Arc::new(
+                crate::sandbox::command_policy::CommandPolicyHook::new(
+                    crate::sandbox::command_policy::CommandPolicy::hardline_only(),
+                ),
+            ));
+        Self {
+            worktree_path,
+            hooks,
+        }
     }
 }
 
@@ -235,6 +253,23 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
         &self,
         command: crate::sandbox::SandboxCommand,
     ) -> Result<crate::sandbox::SandboxOutput, crate::sandbox::SandboxError> {
+        // Catastrophic command-policy hardline floor — holds even here, where no
+        // OS sandbox is layered on. Without it a worktree-isolated subagent could
+        // run `rm -rf /` / a fork bomb directly via `tokio::process`, which the
+        // "undisableable floor holds under every tier" invariant forbids.
+        if let crate::sandbox::hooks::SandboxHookResult::Deny { reason } = self
+            .hooks
+            .run_before(&crate::sandbox::hooks::SandboxHookContext::new(
+                &command.program,
+                &command,
+            ))
+            .await
+        {
+            return Err(crate::sandbox::SandboxError::Other(format!(
+                "hook denied: {reason}"
+            )));
+        }
+
         let started = std::time::Instant::now();
 
         let mut cmd = tokio::process::Command::new(&command.program);
@@ -276,7 +311,7 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
         #[cfg(not(unix))]
         let signal: Option<i32> = None;
 
-        Ok(crate::sandbox::SandboxOutput {
+        let mut out = crate::sandbox::SandboxOutput {
             stdout: exec.stdout,
             stderr: exec.stderr,
             exit_code: exec.status.code(),
@@ -285,7 +320,20 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
             stdout_truncated_bytes: 0,
             stderr_truncated_bytes: 0,
             duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
-        })
+        };
+
+        // Same output content floor as WorkspaceSandbox (single source of truth):
+        // redact secrets, strip invisible/bidi controls, and fail closed on
+        // block-class secret material rather than return it to the model.
+        let blocked = crate::sandbox::scrub::scrub_and_gate_output(&mut out);
+        if !blocked.is_empty() {
+            return Err(crate::sandbox::SandboxError::Other(format!(
+                "command output blocked: catastrophic secret material detected ({})",
+                blocked.join(", ")
+            )));
+        }
+
+        Ok(out)
     }
 }
 
@@ -496,5 +544,62 @@ mod tests {
         );
 
         h.cleanup().await.expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn worktree_sandbox_hardline_floor_denies_catastrophic_command() {
+        // The catastrophic command-policy floor must hold on the worktree path
+        // too — a fork bomb is refused BEFORE any process spawns, so no real git
+        // worktree is needed. This is the hole R3-3 closed: WorktreeSandbox used
+        // to run `tokio::process::Command` with no hooks at all.
+        let sandbox = WorktreeSandbox::new(std::env::temp_dir());
+        let cmd = crate::sandbox::SandboxCommand {
+            session_id: crate::session::service::SessionId::main("worktree-floor-test"),
+            program: "bash".into(),
+            args: vec!["-c".into(), ":(){ :|:& };:".into()],
+            env: std::collections::HashMap::new(),
+            stdin: None,
+            cwd: None,
+            capabilities: crate::sandbox::SandboxCapabilities::default(),
+            timeout: None,
+        };
+        use crate::sandbox::Sandbox as _;
+        let err = sandbox
+            .execute(cmd)
+            .await
+            .expect_err("fork bomb must be denied by the hardline floor");
+        assert!(
+            matches!(err, crate::sandbox::SandboxError::Other(ref m) if m.contains("hook denied")),
+            "expected hardline hook denial, got {err:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn worktree_sandbox_blocks_private_key_in_output() {
+        // The block-class secret floor must hold on the worktree path: a command
+        // that dumps a PEM private-key header to stdout is refused, not returned
+        // to the model. `printf` runs in $TMPDIR (an existing dir), so no git
+        // worktree is required.
+        let sandbox = WorktreeSandbox::new(std::env::temp_dir());
+        let cmd = crate::sandbox::SandboxCommand {
+            session_id: crate::session::service::SessionId::main("worktree-secret-test"),
+            program: "printf".into(),
+            args: vec!["%s".into(), "-----BEGIN PRIVATE KEY-----".into()],
+            env: std::collections::HashMap::new(),
+            stdin: None,
+            cwd: None,
+            capabilities: crate::sandbox::SandboxCapabilities::default(),
+            timeout: None,
+        };
+        use crate::sandbox::Sandbox as _;
+        let err = sandbox
+            .execute(cmd)
+            .await
+            .expect_err("private-key output must be blocked");
+        assert!(
+            matches!(err, crate::sandbox::SandboxError::Other(ref m) if m.contains("catastrophic secret")),
+            "expected block-class refusal, got {err:?}"
+        );
     }
 }
