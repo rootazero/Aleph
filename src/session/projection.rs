@@ -99,10 +99,51 @@ pub fn project_row(event: &SessionEvent) -> Option<ProjectedRow> {
     }
 }
 
+/// Row id a projected row carries: `"{session_key}:{seq}"`, where `seq` is the
+/// source event's seq. This is the ONLY correlation between a projection row
+/// and the event it came from — there is no source-seq column in the file
+/// backend's transcript.
+#[must_use]
+pub fn row_id(session_key: &str, seq: u64) -> String {
+    format!("{session_key}:{seq}")
+}
+
+/// Inverse of [`row_id`]: recover the source event seq from a projected row id.
+///
+/// Returns `Some(seq)` only when the prefix equals `session_key` exactly, so
+/// rows that were not written by the projector (boot-time orphan notices,
+/// legacy / pre-SSOT transcripts) report `None` and are left alone by
+/// seq-scoped deletes. `session_key` may itself contain `':'`; the split is on
+/// the LAST `':'`, which is the separator [`row_id`] appended.
+#[must_use]
+pub fn parse_source_seq(id: &str, session_key: &str) -> Option<u64> {
+    let (prefix, suffix) = id.rsplit_once(':')?;
+    if prefix != session_key {
+        return None;
+    }
+    suffix.parse::<u64>().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::session::events::{now_ms, MessageContent, TurnTrigger};
+
+    #[test]
+    fn row_id_round_trips_through_parse_source_seq() {
+        let key = "agent:main:reflect";
+        let id = row_id(key, 42);
+        assert_eq!(id, "agent:main:reflect:42");
+        assert_eq!(parse_source_seq(&id, key), Some(42));
+    }
+
+    #[test]
+    fn parse_source_seq_rejects_foreign_ids() {
+        // Boot-time orphan notice / legacy rows carry no projector id.
+        assert_eq!(parse_source_seq("orphan-1", "agent:main"), None);
+        assert_eq!(parse_source_seq("other:7", "agent:main"), None);
+        assert_eq!(parse_source_seq("agent:main:xyz", "agent:main"), None);
+    }
 
     fn rec(seq: u64, ev: SessionEvent) -> SessionEventRecord {
         SessionEventRecord {

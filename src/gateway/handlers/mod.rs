@@ -29,6 +29,7 @@
 //! | chat | Chat control |
 //! | cron | Cron job management |
 //! | exec_approvals | Exec approval management |
+//! | clarification | `ask_user` clarification pending/resolve (HITL P4) |
 //! | pty | Embedded interactive terminal sessions (spawn/input/resize/close/list) |
 //! | identity | Identity/soul management |
 //! | workspace | Workspace isolation management |
@@ -47,6 +48,7 @@ pub mod browser_config;
 pub mod bundled_sync;
 pub mod channel;
 pub mod chat;
+pub mod clarification;
 pub mod clawhub;
 pub mod cluster;
 pub mod commands;

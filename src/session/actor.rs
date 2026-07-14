@@ -364,6 +364,14 @@ mod tests {
             ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError> {
                 Ok(vec![])
             }
+
+            async fn retire_from(
+                &self,
+                _id: &SessionId,
+                _from: EventSeq,
+            ) -> Result<usize, SessionError> {
+                Ok(0)
+            }
         }
 
         let store: Arc<dyn SessionEventStore> = Arc::new(CollideOnceStore {

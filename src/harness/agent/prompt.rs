@@ -74,8 +74,7 @@ pub(crate) fn build_prompt(
     // reject with HTTP 400 (hermes orphan-result stripping parity). Ids are
     // inserted when an assistant turn's surviving tool_use blocks are emitted
     // and removed when their result is consumed.
-    let mut open_tool_use_ids: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut open_tool_use_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Walk the FULL conversation in order, emitting one message per event.
     //
@@ -148,7 +147,8 @@ pub(crate) fn build_prompt(
                 } else {
                     content.text.as_str()
                 };
-                let msg = UnifiedMessage::user(text);
+                // Panel image attachments ride on `content.blocks` — replay them.
+                let msg = UnifiedMessage::user_with_attachments(text, &content.blocks);
                 // While the current assistant turn still owes tool results, this
                 // user message would split the tool_use/tool_result pairing — buffer
                 // it and re-emit once the results have all landed (below).
@@ -309,7 +309,11 @@ pub(crate) fn build_prompt(
 /// The content is preserved (the model judges its relevance — R7) but the
 /// message is no longer a structural `tool_result`, so a missing or already-
 /// consumed `tool_use` cannot make the provider reject the whole request.
-fn orphan_result_note(call_id: &str, tool_name: &str, payload: &serde_json::Value) -> UnifiedMessage {
+fn orphan_result_note(
+    call_id: &str,
+    tool_name: &str,
+    payload: &serde_json::Value,
+) -> UnifiedMessage {
     let rendered = match payload {
         serde_json::Value::String(s) => s.clone(),
         other => other.to_string(),
@@ -320,7 +324,7 @@ fn orphan_result_note(call_id: &str, tool_name: &str, payload: &serde_json::Valu
         "downgrading orphaned/duplicate tool result to plain text \
          (no matching tool_use in the rebuilt prompt)",
     );
-    UnifiedMessage::user(&format!(
+    UnifiedMessage::user(format!(
         "<system-reminder>\n\
          Orphaned result for tool call `{tool_name}` (id {call_id}) — its \
          originating tool_use is not part of this conversation view, so the \

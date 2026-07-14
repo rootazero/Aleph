@@ -315,6 +315,7 @@ impl SessionManager {
                 metadata TEXT,
                 input_tokens INTEGER DEFAULT 0,
                 output_tokens INTEGER DEFAULT 0,
+                source_seq INTEGER,
                 FOREIGN KEY (session_key) REFERENCES sessions(key) ON DELETE CASCADE
             );
 
@@ -377,6 +378,10 @@ impl SessionManager {
             ("messages", "output_tokens", "INTEGER DEFAULT 0"),
             ("messages", "tool_call_id", "TEXT"),
             ("messages", "tool_name", "TEXT"),
+            // Seq of the `session_events` event this row was projected from.
+            // NULL = not event-sourced (legacy rows, boot-time orphan notices),
+            // which is what keeps `delete_messages_from_seq` off them.
+            ("messages", "source_seq", "INTEGER"),
         ];
 
         fn is_safe_identifier(s: &str) -> bool {

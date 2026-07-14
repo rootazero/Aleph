@@ -19,7 +19,6 @@ use alephcore::sandbox::command::SandboxCommand;
 use alephcore::sandbox::config::SandboxConfig;
 use alephcore::sandbox::denial_logger::DenialLogger;
 use alephcore::sandbox::exec_approval::gate::{ApprovalGate, ApprovalOutcome, ApprovalRequester};
-use alephcore::sandbox::exec_approval::types::ApprovalConfig;
 
 /// Auto-approve every capability elevation. Used only inside the
 /// `sandbox-debug` CLI so the operator does not have to hit Enter for
@@ -52,10 +51,9 @@ pub async fn handle_sandbox_debug(
     // Debug mode auto-approves every capability elevation so the
     // operator does not get prompted for each smoke test. The real
     // daemon never wires this requester; only the debug CLI does.
-    let gate = Arc::new(ApprovalGate::new(
-        ApprovalConfig::default(),
-        Some(Arc::new(DebugAutoApprover) as Arc<dyn ApprovalRequester>),
-    ));
+    let gate = Arc::new(ApprovalGate::new(Some(
+        Arc::new(DebugAutoApprover) as Arc<dyn ApprovalRequester>
+    )));
     let sandbox = build_sandbox(
         &cfg,
         driver,

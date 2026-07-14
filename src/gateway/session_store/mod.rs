@@ -93,6 +93,31 @@ pub trait SessionStore: Send + Sync {
         let _ = (key, keep_count);
         Err(SessionStoreError::Unsupported)
     }
+
+    /// Delete every projection row materialised from a source event with
+    /// `seq >= from_seq`, and return how many rows were removed.
+    ///
+    /// This is the projection half of `chat.rewind`: `retire_from` retires the
+    /// event-log suffix, this removes the rows those events produced. Deleting
+    /// by ROW COUNT instead would be wrong — `messages` is not a 1:1 image of
+    /// the live event log (boot-time orphan notices and other writers append
+    /// rows with no source event), so a count-derived ordinal cuts the wrong
+    /// range. The correlation is the projector's row id (`"{key}:{seq}"`, see
+    /// [`crate::session::projection::parse_source_seq`]); rows with no source
+    /// seq are NOT event-sourced and are left in place.
+    ///
+    /// Default impl returns `Unsupported`, mirroring [`truncate_messages`];
+    /// production backends override it.
+    ///
+    /// [`truncate_messages`]: SessionStore::truncate_messages
+    async fn delete_messages_from_seq(
+        &self,
+        key: &SessionKey,
+        from_seq: u64,
+    ) -> Result<usize, SessionStoreError> {
+        let _ = (key, from_seq);
+        Err(SessionStoreError::Unsupported)
+    }
     async fn list_checkpoints(
         &self,
         key: &SessionKey,
@@ -380,5 +405,162 @@ mod paginate_before_tests {
     #[test]
     fn cursor_older_than_everything_yields_empty() {
         assert!(paginate_before(sample(), Some(10), Some(5)).is_empty());
+    }
+}
+
+/// `delete_messages_from_seq` — the projection half of `chat.rewind`. Both
+/// production backends must behave identically, so every case runs twice.
+#[cfg(test)]
+mod delete_from_seq_tests {
+    use super::*;
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+    use crate::session::projection::row_id;
+    use crate::sync_primitives::Arc;
+    use tempfile::TempDir;
+
+    fn key() -> SessionKey {
+        SessionKey::Main {
+            agent_id: "main".into(),
+            main_key: "main".into(),
+            epoch: 0,
+        }
+    }
+
+    /// A row the projector wrote for source event `seq`.
+    fn projected(seq: u64, role: &str, content: &str) -> MessageRecord {
+        MessageRecord {
+            id: row_id(&key().to_key_string(), seq),
+            role: role.into(),
+            content: content.into(),
+            timestamp: seq as i64,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            model: None,
+            model_provider: None,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    /// A row nobody projected — e.g. the boot-time orphan notice. This is what
+    /// makes `messages` NOT a 1:1 image of the live event log.
+    fn foreign(id: &str, ts: i64, content: &str) -> MessageRecord {
+        MessageRecord {
+            id: id.into(),
+            role: "system".into(),
+            content: content.into(),
+            timestamp: ts,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            model: None,
+            model_provider: None,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    fn file_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: temp.path().to_path_buf(),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    fn sqlite_store(temp: &TempDir) -> Arc<dyn SessionStore> {
+        Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("sessions.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    /// Seed the exact shape that breaks count-based truncation: a non-event-
+    /// sourced row wedged between two turns, so row ordinals and event seqs
+    /// disagree from that point on.
+    ///
+    /// rows: [u1(seq 1), a1(seq 2), orphan(no seq), u2(seq 3), a2(seq 4)]
+    async fn seed(store: &Arc<dyn SessionStore>) {
+        let k = key();
+        store.get_or_create(&k).await.unwrap();
+        for msg in [
+            projected(1, "user", "u1"),
+            projected(2, "assistant", "a1"),
+            foreign("orphan-1", 3, "interrupted by restart"),
+            projected(3, "user", "u2"),
+            projected(4, "assistant", "a2"),
+        ] {
+            store.append_message(&k, msg).await.unwrap();
+        }
+    }
+
+    async fn contents(store: &Arc<dyn SessionStore>) -> Vec<String> {
+        store
+            .get_history(&key(), None)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.content)
+            .collect()
+    }
+
+    /// Rewinding at the LAST event must drop exactly that one row. Count-based
+    /// truncation keeps `live_event_count == 3` rows — [u1, a1, orphan] — and
+    /// so deletes `u2`, a still-live message. This is that off-by-N.
+    async fn rewind_last_event_drops_only_its_row(store: Arc<dyn SessionStore>) {
+        seed(&store).await;
+        let removed = store.delete_messages_from_seq(&key(), 4).await.unwrap();
+        assert_eq!(removed, 1, "only a2 is projected from seq >= 4");
+        assert_eq!(
+            contents(&store).await,
+            vec!["u1", "a1", "interrupted by restart", "u2"],
+            "u2 is live and must survive; the orphan row is not event-sourced"
+        );
+    }
+
+    /// Mid-log rewind: everything projected from `seq >= 3` goes, everything
+    /// before stays, and the non-event-sourced row is untouched either way.
+    async fn rewind_mid_log_drops_the_suffix(store: Arc<dyn SessionStore>) {
+        seed(&store).await;
+        let removed = store.delete_messages_from_seq(&key(), 3).await.unwrap();
+        assert_eq!(removed, 2, "u2 + a2");
+        assert_eq!(
+            contents(&store).await,
+            vec!["u1", "a1", "interrupted by restart"]
+        );
+    }
+
+    /// A seq past the head deletes nothing (idempotent re-rewind).
+    async fn rewind_past_head_is_a_noop(store: Arc<dyn SessionStore>) {
+        seed(&store).await;
+        assert_eq!(store.delete_messages_from_seq(&key(), 99).await.unwrap(), 0);
+        assert_eq!(contents(&store).await.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn file_backend_rewind_matches_source_seq() {
+        let temp = TempDir::new().unwrap();
+        rewind_last_event_drops_only_its_row(file_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        rewind_mid_log_drops_the_suffix(file_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        rewind_past_head_is_a_noop(file_store(&temp)).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_backend_rewind_matches_source_seq() {
+        let temp = TempDir::new().unwrap();
+        rewind_last_event_drops_only_its_row(sqlite_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        rewind_mid_log_drops_the_suffix(sqlite_store(&temp)).await;
+        let temp = TempDir::new().unwrap();
+        rewind_past_head_is_a_noop(sqlite_store(&temp)).await;
     }
 }

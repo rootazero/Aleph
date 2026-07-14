@@ -80,6 +80,8 @@ impl ApprovalRequester for OperatorApprovalRequester {
             reason: (!reason.is_empty()).then(|| reason.to_string()),
         };
         let record = self.manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
+        // Pairing key for the client: which tool row this card belongs under.
+        let tool_call_id = record.tool_call_id.clone();
         // Register the pending entry BEFORE publishing the event, so an operator
         // who resolves the instant they see it cannot race ahead of
         // registration (resolve-before-register would otherwise be lost and the
@@ -94,6 +96,7 @@ impl ApprovalRequester for OperatorApprovalRequester {
                 session_key: session_key_str.clone(),
                 channel_id,
                 conversation_id,
+                tool_call_id,
             })
         {
             tracing::warn!(error = %e, "failed to publish ApprovalRequested for config approval");

@@ -30,7 +30,8 @@ use crate::extension::PermissionAction;
 /// [policies.tool_permissions.overrides]
 /// shell = "ask"          # exact tool name
 /// file_delete = "deny"   # exact tool name
-/// "mcp__*" = "ask"       # glob: every MCP-bridged tool
+/// "github__*" = "ask"    # glob: every tool of the `github` MCP server
+///                        # (MCP tools are registered as `{server_id}__{tool}`)
 /// "*_delete" = "deny"    # glob: any tool whose name ends in `_delete`
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -68,12 +69,24 @@ impl ToolPermissionsConfig {
     /// 3. The configured `default`.
     ///
     /// Exact entries always take precedence over patterns, so a config can
-    /// carve out specific allowances inside a broad pattern (e.g. `"mcp__*" =
-    /// "ask"` plus `mcp__github_read = "allow"`).
+    /// carve out specific allowances inside a broad pattern (e.g. `"github__*" =
+    /// "ask"` plus `github__list_issues = "allow"`).
     pub fn resolve(&self, tool_name: &str) -> PermissionAction {
+        self.resolve_explicit(tool_name).unwrap_or(self.default)
+    }
+
+    /// The permission an override entry *explicitly* states for `tool_name`
+    /// (steps 1–2 of [`Self::resolve`]), or `None` when no entry names it.
+    ///
+    /// Callers that layer another rule between the overrides and the `default`
+    /// — the exec tier at
+    /// [`crate::tools::scoped::ScopedToolService::permission_for`] — need to
+    /// tell "the operator decided Allow" apart from "nobody said anything and
+    /// the default is Allow".
+    pub fn resolve_explicit(&self, tool_name: &str) -> Option<PermissionAction> {
         // 1. Exact override — fast path and most specific.
         if let Some(action) = self.overrides.get(tool_name).copied() {
-            return action;
+            return Some(action);
         }
         // 2. Glob-pattern overrides; most restrictive match wins.
         let mut matched: Option<PermissionAction> = None;
@@ -85,8 +98,7 @@ impl ToolPermissionsConfig {
                 });
             }
         }
-        // 3. Default fallback.
-        matched.unwrap_or(self.default)
+        matched
     }
 
     /// Merge global and agent-level permissions into an effective config.
@@ -168,6 +180,24 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_explicit_distinguishes_silence_from_allow() {
+        let config = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [("bash".to_string(), PermissionAction::Allow)]
+                .into_iter()
+                .collect(),
+        };
+        // Named by the operator → Allow is a decision.
+        assert_eq!(
+            config.resolve_explicit("bash"),
+            Some(PermissionAction::Allow)
+        );
+        // Nobody named it → the tier gets to speak before the default does.
+        assert_eq!(config.resolve_explicit("file_write"), None);
+        assert_eq!(config.resolve("file_write"), PermissionAction::Allow);
+    }
+
+    #[test]
     fn test_resolve_uses_default() {
         let config = ToolPermissionsConfig {
             default: PermissionAction::Deny,
@@ -180,13 +210,21 @@ mod tests {
     fn test_glob_override_matches_family() {
         let config = ToolPermissionsConfig {
             default: PermissionAction::Allow,
-            overrides: [("mcp__*".to_string(), PermissionAction::Ask)]
+            overrides: [("github__*".to_string(), PermissionAction::Ask)]
                 .into_iter()
                 .collect(),
         };
-        assert_eq!(config.resolve("mcp__github"), PermissionAction::Ask);
-        assert_eq!(config.resolve("mcp__slack_send"), PermissionAction::Ask);
-        // Non-matching tools fall back to the default.
+        assert_eq!(
+            config.resolve("github__create_issue"),
+            PermissionAction::Ask
+        );
+        assert_eq!(config.resolve("github__delete_repo"), PermissionAction::Ask);
+        // Non-matching tools — including another server's tools — fall back to
+        // the default. The pattern is scoped to one server, as its key says.
+        assert_eq!(
+            config.resolve("slack__send_message"),
+            PermissionAction::Allow
+        );
         assert_eq!(config.resolve("read_file"), PermissionAction::Allow);
     }
 
@@ -196,14 +234,20 @@ mod tests {
         let config = ToolPermissionsConfig {
             default: PermissionAction::Allow,
             overrides: [
-                ("mcp__*".to_string(), PermissionAction::Ask),
-                ("mcp__github_read".to_string(), PermissionAction::Allow),
+                ("github__*".to_string(), PermissionAction::Ask),
+                ("github__list_issues".to_string(), PermissionAction::Allow),
             ]
             .into_iter()
             .collect(),
         };
-        assert_eq!(config.resolve("mcp__github_read"), PermissionAction::Allow);
-        assert_eq!(config.resolve("mcp__github_write"), PermissionAction::Ask);
+        assert_eq!(
+            config.resolve("github__list_issues"),
+            PermissionAction::Allow
+        );
+        assert_eq!(
+            config.resolve("github__create_issue"),
+            PermissionAction::Ask
+        );
     }
 
     #[test]
@@ -241,19 +285,25 @@ mod tests {
         // exactly. Most-restrictive-wins must keep it denied after merge.
         let global = ToolPermissionsConfig {
             default: PermissionAction::Allow,
-            overrides: [("mcp__*".to_string(), PermissionAction::Deny)]
+            overrides: [("github__*".to_string(), PermissionAction::Deny)]
                 .into_iter()
                 .collect(),
         };
         let agent = ToolPermissionsConfig {
             default: PermissionAction::Allow,
-            overrides: [("mcp__github".to_string(), PermissionAction::Allow)]
+            overrides: [("github__create_issue".to_string(), PermissionAction::Allow)]
                 .into_iter()
                 .collect(),
         };
         let merged = ToolPermissionsConfig::merge(&global, &agent);
-        assert_eq!(merged.resolve("mcp__github"), PermissionAction::Deny);
-        assert_eq!(merged.resolve("mcp__slack"), PermissionAction::Deny);
+        assert_eq!(
+            merged.resolve("github__create_issue"),
+            PermissionAction::Deny
+        );
+        assert_eq!(
+            merged.resolve("github__delete_repo"),
+            PermissionAction::Deny
+        );
         assert_eq!(merged.resolve("read_file"), PermissionAction::Allow);
     }
 

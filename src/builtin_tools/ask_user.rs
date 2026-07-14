@@ -9,9 +9,16 @@
 //! 1. Read the turn's `TURN_CONTEXT` for the originating channel + session.
 //! 2. Register a [`ClarificationRequest`] with the [`ClarificationManager`]
 //!    keyed by the session — *before* delivery, so a fast reply is never lost.
-//! 3. Deliver the rendered question to the channel.
-//! 4. Block on the oneshot until the inbound router routes the user's reply
-//!    back via `ClarificationManager::resolve`, or the timeout fires.
+//! 3. Deliver the rendered question — to the originating channel when one is
+//!    registered, otherwise onto the gateway event bus as a `stream.ask_user`
+//!    frame (see [`publish_to_event_bus`]).
+//! 4. Block on the oneshot until the reply arrives, or the timeout fires.
+//!
+//! Both delivery paths converge on `ClarificationManager::resolve`, keyed by
+//! the same session: a channel reply (typed text or a `clarify:<idx>` inline
+//! button) is routed there by `inbound_router::try_intercept_hitl`; the Panel's
+//! answer to the `stream.ask_user` card is routed there by the
+//! `clarification.resolve` RPC (`gateway::handlers::clarification`).
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -25,8 +32,9 @@ use crate::clarification::{
 use crate::error::{AlephError, Result};
 use crate::gateway::channel::{ChannelId, InlineButton, InlineKeyboard, OutboundMessage};
 use crate::gateway::channel_registry::ChannelRegistry;
+use crate::gateway::events::GatewayEventFrame;
 use crate::sync_primitives::Arc;
-use crate::tools::turn_context::current_turn_context;
+use crate::tools::turn_context::{current_turn_context, TurnContext};
 use crate::tools::AlephTool;
 
 // =============================================================================
@@ -116,6 +124,54 @@ pub struct AskUserOutput {
     /// the reply matched one of the choices.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_index: Option<u32>,
+}
+
+/// Publish the question on the gateway event bus as a `stream.ask_user` frame.
+///
+/// This is the producer for the `AskUser` consumer chain — the Panel renders
+/// the question inline against `run_id` and answers it with
+/// `clarification.resolve` on the frame's `session_key`, and the R5 surface
+/// router turns it into an "Aleph has a question" notification. Used when the
+/// turn's channel cannot take the question: the Panel talks to core over the
+/// `gui:chat` pseudo-channel, which is never registered in the
+/// `ChannelRegistry`.
+///
+/// Returns `false` when the question cannot be published — no bus wired (CLI
+/// subcommands, unit tests) or no gateway run to correlate against — so the
+/// caller can roll the pending clarification back instead of blocking on a
+/// reply that can never arrive.
+fn publish_to_event_bus(turn: &TurnContext, question: &str, choices: &[AskUserChoice]) -> bool {
+    if turn.run_id.is_empty() {
+        return false;
+    }
+    let Some(bus) = crate::gateway::event_emitter::gateway_event_bus() else {
+        return false;
+    };
+    if let Err(e) = bus.publish_frame(&build_ask_user_frame(turn, question, choices)) {
+        warn!(error = %e, "ask_user: failed to publish the question on the event bus");
+        return false;
+    }
+    true
+}
+
+/// Build the `AskUser` frame published by [`publish_to_event_bus`].
+fn build_ask_user_frame(
+    turn: &TurnContext,
+    question: &str,
+    choices: &[AskUserChoice],
+) -> GatewayEventFrame {
+    GatewayEventFrame::AskUser {
+        run_id: turn.run_id.clone(),
+        // The run's emitter owns the stream sequence counter and an
+        // out-of-band producer has no handle on it. Same convention as the
+        // operator approval requester's out-of-band frames.
+        seq: 0,
+        // The key `register` used above — the Panel posts its answer back
+        // against exactly this, so the two can never drift.
+        session_key: turn.session_key.to_string(),
+        question: question.to_string(),
+        options: choices.iter().map(|c| c.label().to_string()).collect(),
+    }
 }
 
 // =============================================================================
@@ -308,12 +364,20 @@ impl AlephTool for AskUserTool {
             .send(&ChannelId::new(&turn.channel_id), message)
             .await
         {
-            // Delivery failed — nobody can ever answer. Drop the registration.
-            self.clarification.cancel(&session_key).await;
-            warn!(error = %e, "ask_user: failed to deliver question to channel");
-            return Err(AlephError::tool(format!(
-                "ask_user: failed to deliver the question to the user's channel: {e}"
-            )));
+            // The Panel's `gui:chat` is a pseudo-channel that is never
+            // registered in the `ChannelRegistry`, so the channel transport
+            // alone denies every Panel question. Fall back to the gateway
+            // event bus — mirrors the approval path's channel → operator
+            // fallback (`exec::approval::FallbackApprovalRequester`).
+            if !publish_to_event_bus(&turn, question, &args.choices) {
+                // Neither transport can reach the user — nobody can ever
+                // answer. Drop the registration.
+                self.clarification.cancel(&session_key).await;
+                warn!(error = %e, "ask_user: failed to deliver question to channel");
+                return Err(AlephError::tool(format!(
+                    "ask_user: failed to deliver the question to the user's channel: {e}"
+                )));
+            }
         }
         info!(session = %session_key, "ask_user: question delivered — awaiting reply");
 
@@ -324,9 +388,12 @@ impl AlephTool for AskUserTool {
             Ok(Ok(result)) => result,
             // Sender dropped without sending — treat as cancelled.
             Ok(Err(_)) => ClarificationResult::cancelled(),
-            // Timed out — reap the stale registry entry.
+            // Timed out — reap the stale registry entry. `cleanup_expired`
+            // rather than `cancel` so the terminal frame clients receive says
+            // `expired`, matching the status returned here; the entry is past
+            // its deadline by construction (same duration, registered first).
             Err(_) => {
-                self.clarification.cancel(&session_key).await;
+                self.clarification.cleanup_expired().await;
                 ClarificationResult::timeout()
             }
         };
@@ -410,9 +477,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn errors_when_channel_delivery_fails() {
-        // Routable turn, but the registry has no such channel — delivery fails
-        // and the pending clarification is rolled back inside `call`.
+    async fn errors_when_no_transport_can_reach_the_user() {
+        // Routable turn, but the registry has no such channel AND the turn has
+        // no gateway run (`run_id` empty) to publish an `AskUser` frame
+        // against — neither transport can reach the user, so the pending
+        // clarification is rolled back inside `call` instead of blocking on a
+        // reply that can never arrive.
         let err = TURN_CONTEXT
             .scope(routable_turn(), async {
                 tool()
@@ -425,6 +495,50 @@ mod tests {
             .await
             .expect_err("delivery failure must surface as an error");
         assert!(err.to_string().contains("failed to deliver"));
+    }
+
+    /// The Panel's `gui:chat` is a pseudo-channel that is never registered, so
+    /// the channel transport can never carry a Panel question. The event-bus
+    /// frame is the producer the `AskUser` consumer chain was missing: it
+    /// carries the question + the choice labels against the run id the Panel
+    /// renders into, plus the session key the Panel posts its answer back on.
+    #[test]
+    fn ask_user_frame_carries_run_id_session_key_question_and_choice_labels() {
+        let turn = TurnContext {
+            run_id: "run-panel-1".to_string(),
+            channel_id: "gui:chat".to_string(),
+            ..routable_turn()
+        };
+        let expected_session = turn.session_key.to_string();
+        let frame = build_ask_user_frame(
+            &turn,
+            "Deploy where?",
+            &[
+                AskUserChoice::Simple("staging".to_string()),
+                AskUserChoice::Detailed {
+                    label: "production".to_string(),
+                    description: "live traffic".to_string(),
+                },
+            ],
+        );
+        match frame {
+            GatewayEventFrame::AskUser {
+                run_id,
+                session_key,
+                question,
+                options,
+                ..
+            } => {
+                assert_eq!(run_id, "run-panel-1");
+                // The key `register` used — `clarification.resolve` will not
+                // find the pending entry under any other string.
+                assert_eq!(session_key, expected_session);
+                assert_eq!(question, "Deploy where?");
+                // Labels only — the same values the clarification resolves on.
+                assert_eq!(options, vec!["staging", "production"]);
+            }
+            other => panic!("expected an AskUser frame, got {other:?}"),
+        }
     }
 
     #[test]

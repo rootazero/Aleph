@@ -109,6 +109,7 @@ fn transcribe_and_send(
                 let aid = chat.agent_id.get_untracked();
                 let pr = chat.active_project_root.get_untracked();
                 let mo = chat.selected_model.get_untracked();
+                let tier = chat.session_exec_tier.get_untracked();
                 // Bind to the conversation active at send time (I1), same as the
                 // typed-send path in `composer/mod.rs`.
                 let send_conv = sessions.active_conv();
@@ -120,6 +121,7 @@ fn transcribe_and_send(
                     aid.as_deref(),
                     pr.as_deref(),
                     mo.as_ref(),
+                    tier.as_deref(),
                     // Dictated speech: arm the voice-mode prompt layer + model pin.
                     true,
                 )

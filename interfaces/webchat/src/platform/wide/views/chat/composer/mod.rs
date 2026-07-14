@@ -205,6 +205,10 @@ pub(super) fn InputArea() -> impl IntoView {
         // Per-turn model override stamped on ChatState → daemon's run
         // loop short-circuits its provider-fallback chain.
         let model_override = chat.selected_model.get();
+        // The composer's exec tier. Carried on every send, because on the FIRST
+        // send there is no session row to have written it to — and that is the
+        // turn the picker was armed for. The server stamps it onto the session.
+        let tier = chat.session_exec_tier.get();
         // Capture the conversation active at *send* time. Binding the run to
         // this (rather than to whichever tab is focused when `run_accepted`
         // arrives) is what lets the user send in A, switch to B, and still have
@@ -216,7 +220,19 @@ pub(super) fn InputArea() -> impl IntoView {
             let aid = agent_id.as_deref();
             let pr = project_root.as_deref();
             let mo = model_override.as_ref();
-            match ChatApi::send(&dash, &text, sk, api_attachments, aid, pr, mo, false).await {
+            match ChatApi::send(
+                &dash,
+                &text,
+                sk,
+                api_attachments,
+                aid,
+                pr,
+                mo,
+                tier.as_deref(),
+                false,
+            )
+            .await
+            {
                 Ok(resp) => {
                     if let Some(conv) = send_conv {
                         sessions.bind_run(&resp.run_id, conv, Some(&resp.session_key));
@@ -232,6 +248,15 @@ pub(super) fn InputArea() -> impl IntoView {
             is_sending.set(false);
         });
     };
+
+    // The question this conversation is parked on, if any.
+    let pending_ask = Memo::new(move |_| {
+        crate::state::notifications::pending_ask_for_session(
+            &dashboard.pending_clarifications.get(),
+            chat.session_key.get().as_deref(),
+        )
+        .cloned()
+    });
 
     // Queue a follow-up while a run is active instead of sending it now.
     // Runs the same client-side injection guard as `send_message` so a
@@ -264,6 +289,63 @@ pub(super) fn InputArea() -> impl IntoView {
         current_namespace.set(None);
     };
 
+    // Answer a pending `ask_user` with the current draft. Returns `true` when a
+    // question was pending — the caller must then NOT fall through to the send /
+    // queue path.
+    //
+    // This is the composer's half of the rule every channel already enforces in
+    // `inbound_router::try_intercept_hitl`: while a clarification is pending,
+    // whatever the user sends IS the answer. Without it the draft would be
+    // queued behind a turn that can never reach its next boundary — the parked
+    // tool would sit there until it timed out, and the user would have no way to
+    // reach it except aborting the run.
+    //
+    // A stale question is the trap: core answers `resolved: false` when nobody
+    // was unblocked (expired / superseded / run cancelled). The reply is then
+    // still an unsent chat message — restore the draft and route it through the
+    // normal path instead of swallowing it.
+    let answer_pending_ask = move || -> bool {
+        let Some(ask) = pending_ask.get_untracked() else {
+            return false;
+        };
+        let reply = input_text.get_untracked().trim().to_string();
+        // A question IS pending, so consume the keystroke either way — an empty
+        // draft simply isn't an answer.
+        if reply.is_empty() {
+            return true;
+        }
+        input_text.set(String::new());
+        let dash = dashboard;
+        spawn_local(async move {
+            match crate::api::ClarificationApi::resolve(&dash, &ask.session_key, &reply).await {
+                Ok(true) => {
+                    chat.push_user_message(&reply);
+                    dash.pending_clarifications
+                        .update(|l| l.retain(|p| p.session_key != ask.session_key));
+                }
+                Ok(false) => {
+                    // The question is dead: drop it so it stops owning Enter,
+                    // put the draft back, and send it as the ordinary message it
+                    // turned out to be.
+                    dash.pending_clarifications
+                        .update(|l| l.retain(|p| p.session_key != ask.session_key));
+                    input_text.set(reply);
+                    if chat.active_run_id.get_untracked().is_some() {
+                        enqueue_message();
+                    } else {
+                        send_message();
+                    }
+                }
+                Err(e) => {
+                    // The answer never left the client — keep the draft.
+                    input_text.set(reply);
+                    chat.set_send_error(ChatSendError::classify(e));
+                }
+            }
+        });
+        true
+    };
+
     // Flush the entire prompt queue into the live run in one batch. Each prompt
     // rides the normal ChatApi::send path: while a run is active the gateway
     // Steer-injects it into the live session (picked up at the next turn
@@ -283,6 +365,7 @@ pub(super) fn InputArea() -> impl IntoView {
         let agent_id = chat.agent_id.get_untracked();
         let project_root = chat.active_project_root.get_untracked();
         let model_override = chat.selected_model.get_untracked();
+        let tier = chat.session_exec_tier.get_untracked();
         let dash = dashboard;
         spawn_local(async move {
             for entry in batch {
@@ -305,6 +388,7 @@ pub(super) fn InputArea() -> impl IntoView {
                     agent_id.as_deref(),
                     project_root.as_deref(),
                     model_override.as_ref(),
+                    tier.as_deref(),
                     false,
                 )
                 .await
@@ -706,6 +790,11 @@ pub(super) fn InputArea() -> impl IntoView {
                     }
                 }
                 ev.prevent_default();
+                // A pending question owns the send key — the turn is blocked on
+                // the answer, so queueing the draft would strand it.
+                if answer_pending_ask() {
+                    return;
+                }
                 // While a run is active, Enter queues the follow-up instead
                 // of sending (there is no live send slot until it settles).
                 if chat.active_run_id.get_untracked().is_some() {
@@ -934,6 +1023,8 @@ pub(super) fn InputArea() -> impl IntoView {
                         // with the attach paperclip. Dropdowns still flip upward.
                         <ProjectMenu />
                         <crate::components::model_picker::ModelPicker />
+                        // Per-session tool-execution tier (Ask / Auto / Full).
+                        <crate::views::chat::exec_tier_picker::ExecTierPicker />
                         // Live context-window gauge (self-hides until first usage).
                         <super::context_gauge::ContextGauge />
 
@@ -985,7 +1076,11 @@ pub(super) fn InputArea() -> impl IntoView {
 
                             // Queue button — only while a run is active. Lets the user
                             // line up a follow-up that auto-sends when the turn settles.
-                            <Show when=move || chat.active_run_id.get().is_some()>
+                            // Withdrawn while a question is pending: the turn cannot
+                            // reach another boundary until it is answered, so a queued
+                            // draft would just sit there behind the parked tool.
+                            <Show when=move || chat.active_run_id.get().is_some()
+                                               && pending_ask.get().is_none()>
                                 <button
                                     class="w-8 h-8 rounded-full bg-surface-sunken text-text-secondary
                                            flex items-center justify-center hover:bg-surface-raised

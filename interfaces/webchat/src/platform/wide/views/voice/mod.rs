@@ -799,7 +799,19 @@ async fn send_utterance(
     let sk = chat.session_key.get_untracked();
     // voice_input=true: core arms VoiceModeLayer (spoken-reply prompt style)
     // and the `[voice]` low-TTFT model pin for this session turn.
-    match ChatApi::send(&dash, &text, sk.as_deref(), vec![], None, None, None, true).await {
+    match ChatApi::send(
+        &dash,
+        &text,
+        sk.as_deref(),
+        vec![],
+        None,
+        None,
+        None,
+        None,
+        true,
+    )
+    .await
+    {
         Ok(resp) => {
             // Only arm the pipeline if no newer utterance / barge-in superseded
             // us while send was in flight.

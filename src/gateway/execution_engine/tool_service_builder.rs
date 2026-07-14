@@ -77,10 +77,13 @@ pub(super) fn mcp_tool_registry() -> Option<&'static Arc<crate::tools::ToolHandl
 ///   no extension hooks are active for this request.
 /// * `session_id` — session identifier surfaced into `HookContext` for
 ///   extension command hooks.
-/// * `tool_permissions` — merged tool permission policy for this turn
+/// * `tool_permissions` — merged EXPLICIT tool permission policy for this turn
 ///   (global `[policies.tool_permissions]` → agent override → channel
 ///   override, most restrictive wins). `None` = all-default policy; pass
 ///   `None` rather than a default config so the hot path stays a no-op.
+/// * `exec_tier` — effective execution tier (global → session → channel clamp).
+///   Decides every tool the explicit policy above does not name, from the
+///   tool's declared metadata.
 /// * `unattended` — true for an autonomous continuation run; makes the service
 ///   fail closed on confirm-gated tools (no human to approve).
 /// * `core_tools` — tool names kept at full schema (progressive tool
@@ -99,6 +102,7 @@ pub fn build_request_tool_service(
     hook_executor: Option<Arc<HookExecutor>>,
     session_id: impl Into<String>,
     tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
+    exec_tier: crate::config::types::policies::ExecTier,
     unattended: bool,
     core_tools: &[String],
     truncate_tool_descriptions: bool,
@@ -111,6 +115,7 @@ pub fn build_request_tool_service(
     if let Some(perms) = tool_permissions {
         svc = svc.with_tool_permissions(perms);
     }
+    svc = svc.with_exec_tier(exec_tier);
     svc = svc.with_unattended(unattended);
     if let Some(refresh) = tool_refresh {
         svc = svc.with_refresh(refresh);
@@ -127,16 +132,14 @@ pub fn build_request_tool_service(
     if let Some(store) = crate::tools::result_store::global_tool_result_store() {
         svc = svc.with_result_store(store);
     }
-    // Wire the confirmation seam: confirm-flagged tools route a user prompt
-    // before executing. Inert until boot installs the requester. Tools
-    // self-declare via `LoopTool::requires_confirmation()` — builtins through
-    // `RegistryToolAdapter`'s `CONFIRMATION_REQUIRED_TOOLS` list, MCP / skill
-    // tools through their own adapters — so no gateway allowlist is passed.
-    // The empty set leaves the dispatch gate to honour each tool's own
-    // declaration; the set parameter remains as an operator-override seam for
-    // runtime-injected confirm tools.
+    // Wire the confirmation seam: confirm-gated tools route a user prompt
+    // before executing. Inert until boot installs the requester. Gating is
+    // declaration-driven — `LoopTool::requires_confirmation()` (builtins
+    // through `RegistryToolAdapter`'s `CONFIRMATION_REQUIRED_TOOLS` list, MCP /
+    // skill tools through their own adapters) — or policy-driven, via an `Ask`
+    // permission in `tool_permissions`. No gateway-side name list exists.
     if let Some(requester) = CONFIRMATION_REQUESTER.get() {
-        svc = svc.with_confirmation(BTreeSet::new(), Arc::clone(requester));
+        svc = svc.with_confirmation(Arc::clone(requester));
     }
     // Phase 2b: operator-targeted approval for config-tier tools invoked by a
     // chat-tier connection. Inert until boot installs the requester (then the
@@ -199,6 +202,7 @@ mod tests {
             None,
             "",
             None,
+            crate::config::types::policies::ExecTier::Auto,
             false,
             &[],
             false,
@@ -240,6 +244,7 @@ mod tests {
             None,
             "",
             None,
+            crate::config::types::policies::ExecTier::Auto,
             false,
             &[],
             false,
@@ -247,7 +252,10 @@ mod tests {
         );
         let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
         assert!(names.contains(&"read_file".to_string()));
-        assert!(!names.contains(&"web_fetch".to_string()), "deferred tool must be dropped");
+        assert!(
+            !names.contains(&"web_fetch".to_string()),
+            "deferred tool must be dropped"
+        );
     }
 
     #[tokio::test]
@@ -266,6 +274,7 @@ mod tests {
             None,
             "",
             None,
+            crate::config::types::policies::ExecTier::Auto,
             false,
             &[],
             false,
@@ -282,22 +291,44 @@ mod tests {
     async fn off_vs_on_deferral_surface() {
         let make = || {
             let mut reg = LoopToolRegistry::new();
-            reg.register(Box::new(StubTool));   // read_file
-            reg.register(Box::new(OtherStub));  // web_fetch (stands in for an MCP tool)
+            reg.register(Box::new(StubTool)); // read_file
+            reg.register(Box::new(OtherStub)); // web_fetch (stands in for an MCP tool)
             Arc::new(reg)
         };
         // OFF: empty deferred set → both listed.
         let off = build_request_tool_service(
-            make(), BTreeSet::new(), None, None, None, None, "",
-            None, false, &[], false, BTreeSet::new(),
+            make(),
+            BTreeSet::new(),
+            None,
+            None,
+            None,
+            None,
+            "",
+            None,
+            crate::config::types::policies::ExecTier::Auto,
+            false,
+            &[],
+            false,
+            BTreeSet::new(),
         );
         let off_names: Vec<String> = off.list().await.into_iter().map(|d| d.name).collect();
         assert!(off_names.contains(&"web_fetch".to_string()));
 
         // ON: web_fetch deferred → absent from list, still describable/executable.
         let on = build_request_tool_service(
-            make(), BTreeSet::new(), None, None, None, None, "",
-            None, false, &[], false, ["web_fetch".to_string()].into_iter().collect(),
+            make(),
+            BTreeSet::new(),
+            None,
+            None,
+            None,
+            None,
+            "",
+            None,
+            crate::config::types::policies::ExecTier::Auto,
+            false,
+            &[],
+            false,
+            ["web_fetch".to_string()].into_iter().collect(),
         );
         let on_names: Vec<String> = on.list().await.into_iter().map(|d| d.name).collect();
         assert!(!on_names.contains(&"web_fetch".to_string()));
@@ -346,6 +377,7 @@ mod progressive_tests {
             None,
             "",
             None,
+            crate::config::types::policies::ExecTier::Auto,
             false,
             &["bash".to_string()],
             false, // core, truncate
@@ -353,7 +385,10 @@ mod progressive_tests {
         );
         let schema = svc.metadata_schema();
         let bash = schema.iter().find(|d| d.name == "bash").unwrap();
-        let nav = schema.iter().find(|d| d.name == "browser_navigate").unwrap();
+        let nav = schema
+            .iter()
+            .find(|d| d.name == "browser_navigate")
+            .unwrap();
         assert!(bash.parameters.get("properties").is_some()); // core kept
         assert!(nav.parameters.get("properties").is_none()); // non-core collapsed
         assert_eq!(nav.parameters["additionalProperties"], json!(true));
@@ -372,6 +407,7 @@ mod progressive_tests {
             None,
             "",
             None,
+            crate::config::types::policies::ExecTier::Auto,
             false,
             &["*".to_string()],
             false,

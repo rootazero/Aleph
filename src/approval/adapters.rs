@@ -21,14 +21,19 @@
 //!    cron, heartbeat, scheduled tools). Recovers channel from the structured
 //!    `SessionKey`.
 //!
-//! Both unset, a non-channel turn, or an unreachable channel → `Denied` with
-//! an explicit warning. Never a silent auto-approve.
+//! Both unset or a non-channel turn → `Denied` with an explicit warning. Never
+//! a silent auto-approve.
+//!
+//! A resolvable-but-unregistered channel (the Panel's `gui:chat`) is NOT a
+//! denial: [`FallbackApprovalRequester`] routes those to the operator
+//! transport instead. See its docs.
 
 use async_trait::async_trait;
 use tracing::warn;
 
 use crate::sync_primitives::Arc;
 
+use crate::approval::operator_requester::OperatorApprovalRequester;
 use crate::approval::session_route::channel_route;
 use crate::exec::approval::channel_bridge::ChannelApprovalBridge;
 use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
@@ -59,11 +64,6 @@ impl ChannelApprovalBridgeAdapter {
             approval_manager,
             timeout_ms: DEFAULT_APPROVAL_TIMEOUT_MS,
         }
-    }
-
-    /// Override the default approval timeout. Useful for tests.
-    pub const fn set_timeout_ms(&mut self, timeout_ms: u64) {
-        self.timeout_ms = timeout_ms;
     }
 
     /// Resolve `(ChannelId, ConversationId, session_key)` for the current task.
@@ -97,6 +97,61 @@ impl ChannelApprovalBridgeAdapter {
             })
             .ok()
             .flatten()
+    }
+
+    /// Whether this turn's approval prompt can actually be delivered: a channel
+    /// route resolves AND that channel is registered. False for Panel turns
+    /// (`gui:chat` is never a registered channel) and for non-channel turns.
+    pub async fn can_reach_user(&self) -> bool {
+        match Self::resolve_channel_route() {
+            Some((channel_id, _, _)) => self.bridge.can_deliver(&channel_id).await,
+            None => false,
+        }
+    }
+}
+
+/// Routes an approval to the user's channel when one is reachable, and to the
+/// server operator (event bus + `exec.approval.resolve`) when it is not.
+///
+/// The Panel is the reason this exists: its turns carry `channel_id="gui:chat"`,
+/// a pseudo-channel that is deliberately never registered, so the channel
+/// transport alone resolves every Panel approval to `Denied` without ever
+/// prompting — `ask_user` and every `requires_confirmation` / `Ask`-tier tool
+/// silently refused. Neither existing requester can cover both surfaces alone
+/// and there is no combinator, so this composite is the seam.
+///
+/// Fail-closed, but NOT fail-fast: with no channel route the approval goes to
+/// the operator and parks until the approval timeout, whose `Timeout` outcome
+/// is not an approval. There is no cheap proof that an operator is watching —
+/// the event bus only knows raw broadcast subscribers, and internal ones (the
+/// R5 router, the provider hot-reload watcher) always exist, so a subscriber
+/// count can only ever say "yes". A guard built on it would always pass, which
+/// is why the former `can_reach_operator()` was deleted rather than kept as a
+/// lie. Failing fast needs a count of AUTHORIZED GATEWAY CONNECTIONS (the only
+/// surfaces that can call `exec.approval.resolve`); wiring the presence tracker
+/// down here is the real fix.
+pub struct FallbackApprovalRequester {
+    channel: Arc<ChannelApprovalBridgeAdapter>,
+    operator: Arc<OperatorApprovalRequester>,
+}
+
+impl FallbackApprovalRequester {
+    #[must_use]
+    pub const fn new(
+        channel: Arc<ChannelApprovalBridgeAdapter>,
+        operator: Arc<OperatorApprovalRequester>,
+    ) -> Self {
+        Self { channel, operator }
+    }
+}
+
+#[async_trait]
+impl ApprovalRequester for FallbackApprovalRequester {
+    async fn request_approval(&self, tool_name: &str, reason: &str) -> ApprovalOutcome {
+        if self.channel.can_reach_user().await {
+            return self.channel.request_approval(tool_name, reason).await;
+        }
+        self.operator.request_approval(tool_name, reason).await
     }
 }
 
@@ -230,22 +285,101 @@ mod tests {
         assert_eq!(out, ApprovalOutcome::Denied);
     }
 
-    /// Negative path: routable TURN_CONTEXT but no registered channel.
-    /// Bridge's send fails → adapter must deny (not approve).
-    #[tokio::test]
-    async fn adapter_denies_when_channel_missing() {
+    /// A Panel turn: `gui:chat` resolves as a route but is never a registered
+    /// channel, so the channel transport cannot reach the user.
+    fn panel_turn() -> TurnContext {
+        TurnContext {
+            session_key: SessionKey::main("adapter-test"),
+            run_id: String::new(),
+            channel_id: "gui:chat".to_string(),
+            conversation_id: "sess-1".to_string(),
+            caller_role: None,
+        }
+    }
+
+    fn unregistered_adapter() -> Arc<ChannelApprovalBridgeAdapter> {
         use crate::gateway::channel_registry::ChannelRegistry;
+        let bridge = Arc::new(ChannelApprovalBridge::new(Arc::new(ChannelRegistry::new())));
+        Arc::new(ChannelApprovalBridgeAdapter::new(bridge, test_manager()))
+    }
 
-        let registry = Arc::new(ChannelRegistry::new());
-        let bridge = Arc::new(ChannelApprovalBridge::new(registry));
-        let mut adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager());
-        adapter.set_timeout_ms(50);
+    /// The bug this composite exists for: a Panel turn has no registered
+    /// channel, so the approval must be routed to the operator instead of
+    /// being denied without ever prompting.
+    #[tokio::test]
+    async fn falls_back_to_operator_when_channel_missing() {
+        use crate::exec::socket::ApprovalDecisionType;
+        use crate::gateway::event_bus::GatewayEventBus;
+        use crate::gateway::events::GatewayEventFrame;
 
-        let out = TURN_CONTEXT
-            .scope(routable_turn(), async {
-                adapter.request_approval("code_exec", "run ls").await
-            })
-            .await;
-        assert_eq!(out, ApprovalOutcome::Denied);
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let manager = test_manager();
+        let operator = Arc::new(OperatorApprovalRequester::new(
+            manager.clone(),
+            event_bus.clone(),
+        ));
+        let requester = FallbackApprovalRequester::new(unregistered_adapter(), operator);
+
+        // A live subscriber = an operator surface is listening.
+        let mut rx = event_bus.subscribe_typed();
+        let _string_sub = event_bus.subscribe();
+
+        let handle = tokio::spawn(async move {
+            TURN_CONTEXT
+                .scope(panel_turn(), async move {
+                    requester.request_approval("bash", "rm -rf /tmp/x").await
+                })
+                .await
+        });
+
+        // The operator resolves the card the composite published.
+        loop {
+            match rx.recv().await.expect("event bus closed") {
+                GatewayEventFrame::ApprovalRequested { approval_id, .. } => {
+                    manager.resolve(&approval_id, ApprovalDecisionType::AllowOnce, None);
+                    break;
+                }
+                _ => continue,
+            }
+        }
+        assert_eq!(handle.await.unwrap(), ApprovalOutcome::Approved);
+    }
+
+    /// Fail-closed: an unreachable channel never becomes an implicit approval.
+    /// The composite hands the call to the operator, and the operator's refusal
+    /// is what decides — the missing channel decides nothing.
+    #[tokio::test]
+    async fn operator_denial_is_honoured_when_channel_missing() {
+        use crate::exec::socket::ApprovalDecisionType;
+        use crate::gateway::event_bus::GatewayEventBus;
+        use crate::gateway::events::GatewayEventFrame;
+
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let manager = test_manager();
+        let operator = Arc::new(OperatorApprovalRequester::new(
+            manager.clone(),
+            event_bus.clone(),
+        ));
+        let requester = FallbackApprovalRequester::new(unregistered_adapter(), operator);
+        let mut rx = event_bus.subscribe_typed();
+
+        let handle = tokio::spawn(async move {
+            TURN_CONTEXT
+                .scope(panel_turn(), async move {
+                    requester.request_approval("bash", "rm -rf /tmp/x").await
+                })
+                .await
+        });
+
+        loop {
+            match rx.recv().await.expect("event bus closed") {
+                GatewayEventFrame::ApprovalRequested { approval_id, .. } => {
+                    manager.resolve(&approval_id, ApprovalDecisionType::Deny, None);
+                    break;
+                }
+                _ => continue,
+            }
+        }
+        assert_eq!(handle.await.unwrap(), ApprovalOutcome::Denied);
     }
 }

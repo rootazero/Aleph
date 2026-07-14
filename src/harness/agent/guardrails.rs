@@ -97,10 +97,11 @@ impl AgentHarness {
                 if let Err(e) = self.deps.session.emit_event(session_id, error_event).await {
                     tracing::warn!(?session_id, call_id = %call.id, ?e, "failed to persist guardrail-block ToolError");
                 }
+                let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
                 // Live "done" event for the blocked call so the broadcast
                 // stream closes its ToolStart with a matching ToolEnd (error
                 // body) instead of leaving the call pending forever.
-                callback.on_tool_call_done(&call.id, None, Some(&block_msg));
+                callback.on_tool_call_done(&call.id, None, Some(&block_msg), dur_ms);
                 self.emit(
                     || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                         iteration,
@@ -108,11 +109,7 @@ impl AgentHarness {
                             tool_id: call.id.clone(),
                             tool_name: call.name.clone(),
                             input: call.arguments.clone(),
-                            duration_ms: started
-                                .elapsed()
-                                .as_millis()
-                                .try_into()
-                                .unwrap_or(u64::MAX),
+                            duration_ms: dur_ms,
                         },
                         result: crate::tools::runtime::ToolResult::Error {
                             error: block_msg,

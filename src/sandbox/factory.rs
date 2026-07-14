@@ -148,7 +148,6 @@ mod tests {
     use super::*;
     use crate::sandbox::capabilities::SandboxCapabilities;
     use crate::sandbox::driver::OsSandboxProfile;
-    use crate::sandbox::exec_approval::types::ApprovalConfig;
     use crate::sandbox::rate_limit::SandboxRateLimitConfig;
 
     /// Minimal driver used for factory tests — never invoked because the
@@ -194,7 +193,7 @@ mod tests {
     }
 
     fn make_gate() -> Arc<ApprovalGate> {
-        Arc::new(ApprovalGate::new(ApprovalConfig::default(), None))
+        Arc::new(ApprovalGate::new(None))
     }
 
     fn make_sid() -> crate::session::service::SessionId {

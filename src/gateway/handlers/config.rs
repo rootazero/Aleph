@@ -596,9 +596,23 @@ pub async fn handle_patch_config(
 // Tool Permissions Handlers
 // ============================================================================
 
+/// Serialize the whole execution-permission surface: the tier dial, the three
+/// selectable presets, and the advanced per-tool overrides layered on top.
+/// One shape for both `config.get_tool_permissions` and the result of
+/// `config.update_tool_permissions`, so a UI renders the same state either way.
+fn exec_permissions_value(cfg: &Config) -> Result<Value, serde_json::Error> {
+    Ok(json!({
+        "exec_tier": cfg.policies.exec_tier.id(),
+        "tiers": serde_json::to_value(crate::config::types::policies::builtin_tiers())?,
+        "default": serde_json::to_value(cfg.policies.tool_permissions.default)?,
+        "overrides": serde_json::to_value(&cfg.policies.tool_permissions.overrides)?,
+    }))
+}
+
 /// Handle `config.get_tool_permissions` RPC request
 ///
-/// Returns the global tool permissions from `config.policies.tool_permissions`.
+/// Returns the execution tier, the built-in tier presets, and the global
+/// per-tool overrides from `config.policies`.
 pub async fn handle_get_tool_permissions(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
@@ -606,9 +620,7 @@ pub async fn handle_get_tool_permissions(
     debug!("Handling config.get_tool_permissions");
 
     let cfg = config.read().await;
-    let perms = &cfg.policies.tool_permissions;
-
-    match serde_json::to_value(perms) {
+    match exec_permissions_value(&cfg) {
         Ok(v) => JsonRpcResponse::success(request.id, v),
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -621,6 +633,10 @@ pub async fn handle_get_tool_permissions(
 /// Parameters for `config.update_tool_permissions`
 #[derive(Debug, Clone, Deserialize)]
 struct UpdateToolPermissionsParams {
+    /// Execution tier id (`ask` / `auto` / `full`) — optional partial update.
+    #[serde(default)]
+    pub exec_tier: Option<String>,
+
     /// Default permission level (optional partial update)
     #[serde(default)]
     pub default: Option<crate::extension::PermissionAction>,
@@ -632,7 +648,7 @@ struct UpdateToolPermissionsParams {
 
 /// Handle `config.update_tool_permissions` RPC request
 ///
-/// Partial update of `config.policies.tool_permissions`.
+/// Partial update of `config.policies.exec_tier` + `config.policies.tool_permissions`.
 /// Only provided fields are updated; omitted fields remain unchanged.
 pub async fn handle_update_tool_permissions(
     request: JsonRpcRequest,
@@ -646,9 +662,26 @@ pub async fn handle_update_tool_permissions(
         Err(e) => return e,
     };
 
+    let tier = match params.exec_tier.as_deref() {
+        Some(id) => match crate::config::types::policies::ExecTier::from_id(id) {
+            Some(t) => Some(t),
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Unknown exec_tier '{id}' (expected ask / auto / full)"),
+                )
+            }
+        },
+        None => None,
+    };
+
     let updated = {
         let mut cfg = config.write().await;
 
+        if let Some(tier) = tier {
+            cfg.policies.exec_tier = tier;
+        }
         if let Some(default) = params.default {
             cfg.policies.tool_permissions.default = default;
         }
@@ -665,11 +698,25 @@ pub async fn handle_update_tool_permissions(
             );
         }
 
-        info!("Global tool permissions updated successfully");
-        cfg.policies.tool_permissions.clone()
+        info!(
+            exec_tier = cfg.policies.exec_tier.id(),
+            "Global execution permissions updated successfully"
+        );
+        match exec_permissions_value(&cfg) {
+            Ok(v) => v,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to serialize tool permissions: {e}"),
+                )
+            }
+        }
     };
 
-    // Broadcast configuration change event
+    // Broadcast configuration change event. The execution engine reads the
+    // shared config live per turn, so the new tier already applies to the next
+    // tool call — this event only tells other surfaces to refresh.
     let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
         section: Some("policies.tool_permissions".to_string()),
         value: json!({"updated": true}),
@@ -677,14 +724,7 @@ pub async fn handle_update_tool_permissions(
     });
     let _ = event_bus.publish_json(&event);
 
-    match serde_json::to_value(&updated) {
-        Ok(v) => JsonRpcResponse::success(request.id, v),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to serialize tool permissions: {e}"),
-        ),
-    }
+    JsonRpcResponse::success(request.id, updated)
 }
 
 #[cfg(test)]

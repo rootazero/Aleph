@@ -19,6 +19,7 @@ use std::collections::HashSet;
 use crate::gateway::resume_coordinator::{classify_markers, ScanVerdict};
 use crate::gateway::session_projector::{project_event, TurnAccums};
 use crate::gateway::session_store::SessionStore;
+use crate::session::projection::parse_source_seq;
 use crate::session::service::SessionId;
 use crate::session::store::SessionEventStore;
 use crate::sync_primitives::Arc;
@@ -37,20 +38,6 @@ pub struct ReconcileReport {
     /// Sessions skipped because the transcript is non-empty but carries no
     /// parseable source seq (foreign / pre-P1 rows — never touched).
     pub skipped_legacy: usize,
-}
-
-/// Parse the source event seq embedded in a projector-written row id.
-///
-/// Projector ids have the form `"{session_key}:{seq}"`. Returns `seq` only when
-/// the prefix equals `session_key` exactly — rejecting legacy / foreign ids
-/// that carry no such suffix. `session_key` may itself contain `':'`; the split
-/// is on the LAST `':'`, which is the separator the projector appended.
-fn parse_source_seq(id: &str, session_key: &str) -> Option<u64> {
-    let (prefix, suffix) = id.rsplit_once(':')?;
-    if prefix != session_key {
-        return None;
-    }
-    suffix.parse::<u64>().ok()
 }
 
 /// Boot-time reconciler. Constructed with the durable event store and the
@@ -586,25 +573,6 @@ mod tests {
             hist.last().unwrap().content,
             "fresh reply",
             "later append is last"
-        );
-    }
-
-    #[test]
-    fn parse_source_seq_accepts_projector_ids_only() {
-        assert_eq!(
-            parse_source_seq("agent:main:reflect:42", "agent:main:reflect"),
-            Some(42)
-        );
-        assert_eq!(parse_source_seq("m-user-5", "agent:main"), None, "no colon");
-        assert_eq!(
-            parse_source_seq("other:7", "agent:main"),
-            None,
-            "prefix mismatch"
-        );
-        assert_eq!(
-            parse_source_seq("agent:main:xyz", "agent:main"),
-            None,
-            "non-numeric suffix"
         );
     }
 

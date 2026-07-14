@@ -21,6 +21,12 @@ pub use types::{
 pub use impls::{CollectingEventEmitter, DynEventEmitter, GatewayEventEmitter, NoOpEventEmitter};
 pub use instant_buffer::InstantBufferingEmitter;
 
+/// The gateway event bus injected once at boot (`team_fanout::set_team_event_bus`).
+/// The slot is not team-specific: any out-of-band producer that must reach the
+/// Panel mid-run — team fan-out, `ask_user` — publishes through it. `None` in
+/// contexts that never built a gateway (CLI subcommands, unit tests).
+pub use team_fanout::team_event_bus as gateway_event_bus;
+
 use async_trait::async_trait;
 use serde_json::Value;
 

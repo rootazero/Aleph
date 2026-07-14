@@ -66,6 +66,9 @@ pub async fn run_node_approval(
         session_key: String::new(),
         channel_id: String::new(),
         conversation_id: String::new(),
+        // A node approval belongs to no local tool row — it arrives over
+        // reverse RPC, outside any tool dispatch.
+        tool_call_id: None,
     }) {
         tracing::warn!(error = %e, "failed to publish ApprovalRequested for node approval");
     }

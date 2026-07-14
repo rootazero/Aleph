@@ -1,5 +1,5 @@
 use crate::api::agents::{AgentsApi, ToolGroupInfo};
-use crate::api::tool_permissions::ToolPermissionsApi;
+use crate::api::tool_permissions::{TierPreset, ToolPermissionsApi};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
@@ -10,6 +10,10 @@ use std::collections::HashMap;
 const ALLOW: &str = "allow";
 const ASK: &str = "ask";
 const DENY: &str = "deny";
+
+/// The one tier id that requires a second, explicit confirmation before it is
+/// applied. Every other tier is picked in one click.
+const FULL_TIER: &str = "full";
 
 #[component]
 #[must_use]
@@ -32,6 +36,16 @@ pub fn PoliciesView() -> impl IntoView {
     let tp_saving = RwSignal::new(false);
     let tp_error = RwSignal::new(Option::<String>::None);
     let tp_success = RwSignal::new(Option::<String>::None);
+
+    // Execution-permission tier state. Presets come from Core (`builtin_tiers()`),
+    // never from here.
+    let tiers = RwSignal::new(Vec::<TierPreset>::new());
+    let exec_tier = RwSignal::new(String::new());
+    // Tier awaiting an explicit second confirmation (Full only).
+    let tier_confirm = RwSignal::new(Option::<String>::None);
+    let tier_saving = RwSignal::new(false);
+    let tier_error = RwSignal::new(Option::<String>::None);
+    let tier_applied = RwSignal::new(false);
 
     // Load tool permissions + schema
     let dash = state;
@@ -74,6 +88,8 @@ pub fn PoliciesView() -> impl IntoView {
                 current.insert(t.clone(), perm);
             }
 
+            exec_tier.set(perms.exec_tier);
+            tiers.set(perms.tiers);
             default_perm.set(perms.default.clone());
             original_default.set(perms.default);
             groups.set(schema.groups);
@@ -143,6 +159,26 @@ pub fn PoliciesView() -> impl IntoView {
         tp_success.set(None);
     };
 
+    // Apply a tier. Partial update — the advanced overrides below are untouched;
+    // we re-render from whatever Core echoes back.
+    let apply_tier = move |id: String| {
+        tier_saving.set(true);
+        tier_error.set(None);
+        tier_applied.set(false);
+        spawn_local(async move {
+            match ToolPermissionsApi::set_exec_tier(&dash, &id).await {
+                Ok(resp) => {
+                    exec_tier.set(resp.exec_tier);
+                    tiers.set(resp.tiers);
+                    tier_confirm.set(None);
+                    tier_applied.set(true);
+                }
+                Err(e) => tier_error.set(Some(format!("Failed to apply tier: {e}"))),
+            }
+            tier_saving.set(false);
+        });
+    };
+
     view! {
         <div class="flex-1 px-6 pb-6 overflow-y-auto bg-surface aleph-content-top">
             <div class="max-w-2xl space-y-6">
@@ -156,12 +192,100 @@ pub fn PoliciesView() -> impl IntoView {
                     </p>
                 </div>
 
-                // Tool Permissions Section
+                // Execution Permission Tier — the headline dial. Cards are built
+                // from the presets Core ships, so every surface shows the same three.
+                <div class="space-y-3">
+                    <div>
+                        <h2 class="text-lg font-medium text-text-primary">{t!(i18n, settings.policies.exec_tier_title)}</h2>
+                        <p class="text-xs text-text-tertiary mt-1">
+                            {t!(i18n, settings.policies.exec_tier_desc)}
+                        </p>
+                    </div>
+
+                    {move || tier_error.get().map(|e| view! {
+                        <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">{e}</div>
+                    })}
+                    <Show when=move || tier_applied.get()>
+                        <div class="p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm">
+                            {t!(i18n, settings.policies.exec_tier_applied)}
+                        </div>
+                    </Show>
+
+                    {move || tiers.get().into_iter().map(|preset| {
+                        let id = preset.id.clone();
+                        let id_click = id.clone();
+                        let selected = Signal::derive(move || exec_tier.get() == id);
+                        view! {
+                            <button
+                                disabled=move || tier_saving.get()
+                                on:click=move |_| {
+                                    let id = id_click.clone();
+                                    // Full is the one tier that must be confirmed before it fires.
+                                    if id == FULL_TIER && exec_tier.get_untracked() != FULL_TIER {
+                                        tier_applied.set(false);
+                                        tier_confirm.set(Some(id));
+                                    } else {
+                                        tier_confirm.set(None);
+                                        apply_tier(id);
+                                    }
+                                }
+                                class=move || if selected.get() {
+                                    "w-full text-left p-4 rounded-xl border-2 border-primary bg-primary-subtle transition-colors disabled:opacity-50"
+                                } else {
+                                    "w-full text-left p-4 rounded-xl border border-border bg-surface-raised hover:bg-surface-sunken transition-colors disabled:opacity-50"
+                                }
+                            >
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class=move || if selected.get() {
+                                        "w-3 h-3 rounded-full bg-primary"
+                                    } else {
+                                        "w-3 h-3 rounded-full border border-border"
+                                    }></span>
+                                    <span class="text-sm font-semibold text-text-primary">{preset.label}</span>
+                                </div>
+                                <p class="text-xs text-text-secondary ml-5 whitespace-pre-line">{preset.description}</p>
+                            </button>
+                        }
+                    }).collect_view()}
+
+                    // Inline confirmation for Full — an informed choice, not an accident.
+                    {move || tier_confirm.get().map(|id| {
+                        let id_yes = id;
+                        view! {
+                            <div class="p-4 bg-danger-subtle border border-danger/30 rounded-xl space-y-2">
+                                <div class="text-sm font-semibold text-danger">
+                                    {t!(i18n, settings.policies.exec_tier_full_confirm_title)}
+                                </div>
+                                <p class="text-xs text-text-secondary">
+                                    {t!(i18n, settings.policies.exec_tier_full_confirm_body)}
+                                </p>
+                                <div class="flex gap-2 pt-1">
+                                    <button
+                                        class="px-3 py-1.5 text-xs font-medium text-white bg-danger rounded-lg hover:bg-danger/90 transition-colors disabled:opacity-50"
+                                        disabled=move || tier_saving.get()
+                                        on:click=move |_| apply_tier(id_yes.clone())
+                                    >
+                                        {t!(i18n, settings.policies.exec_tier_full_confirm_yes)}
+                                    </button>
+                                    <button
+                                        class="px-3 py-1.5 text-xs font-medium text-text-secondary bg-surface-raised border border-border rounded-lg hover:bg-surface-sunken transition-colors"
+                                        on:click=move |_| tier_confirm.set(None)
+                                    >
+                                        {t!(i18n, common.cancel)}
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    })}
+                </div>
+
+                // Tool Permissions Section — advanced overrides layered on top of
+                // the tier preset above.
                 <div class="space-y-4">
                     <div>
-                        <h2 class="text-lg font-medium text-text-primary">{t!(i18n, settings.policies.tool_permissions_title)}</h2>
+                        <h2 class="text-lg font-medium text-text-primary">{t!(i18n, settings.policies.tool_permissions_advanced)}</h2>
                         <p class="text-xs text-text-tertiary mt-1">
-                            {t!(i18n, settings.policies.tool_permissions_desc)}
+                            {t!(i18n, settings.policies.tool_permissions_advanced_desc)}
                         </p>
                     </div>
 

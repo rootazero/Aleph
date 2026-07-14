@@ -52,7 +52,6 @@ fn benchmark_sandbox_assembly(c: &mut Criterion) {
         };
         let driver = create_platform_driver();
         let approval = Arc::new(alephcore::sandbox::exec_approval::gate::ApprovalGate::new(
-            alephcore::sandbox::exec_approval::types::ApprovalConfig::default(),
             None,
         ));
         let shell_security = alephcore::ShellSecurityConfig::default();
@@ -79,7 +78,6 @@ fn benchmark_sandbox_assembly(c: &mut Criterion) {
         };
         let driver = create_platform_driver();
         let approval = Arc::new(alephcore::sandbox::exec_approval::gate::ApprovalGate::new(
-            alephcore::sandbox::exec_approval::types::ApprovalConfig::default(),
             None,
         ));
         let shell_security = alephcore::ShellSecurityConfig::default();

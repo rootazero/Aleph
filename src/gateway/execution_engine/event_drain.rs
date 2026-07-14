@@ -117,7 +117,12 @@ pub(crate) async fn emit_flow_event(
                 .await?;
         }
 
-        FlowStreamEvent::ToolCallDone { id, result, error } => {
+        FlowStreamEvent::ToolCallDone {
+            id,
+            result,
+            error,
+            duration_ms,
+        } => {
             let tool_result = if let Some(err) = error {
                 crate::gateway::event_emitter::ToolResult::error(err)
             } else {
@@ -131,7 +136,7 @@ pub(crate) async fn emit_flow_event(
                     seq,
                     tool_id: id,
                     result: tool_result,
-                    duration_ms: 0,
+                    duration_ms,
                 })
                 .await?;
         }
@@ -628,6 +633,7 @@ mod tests {
                 id: "tc-1".to_string(),
                 result: Some(serde_json::json!("results")),
                 error: None,
+                duration_ms: 137,
             },
             &emitter,
             "run-2",
@@ -640,7 +646,12 @@ mod tests {
 
         assert_eq!(events.len(), 2);
         assert!(matches!(events[0], StreamEvent::ToolStart { .. }));
-        assert!(matches!(events[1], StreamEvent::ToolEnd { .. }));
+        // The harness-measured elapsed time reaches the live tool card
+        // (previously hardcoded to 0 here, only available at RunComplete).
+        match &events[1] {
+            StreamEvent::ToolEnd { duration_ms, .. } => assert_eq!(*duration_ms, 137),
+            other => panic!("expected ToolEnd, got {other:?}"),
+        }
     }
 
     #[tokio::test]

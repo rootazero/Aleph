@@ -11,12 +11,14 @@ use crate::session::service::{SessionId, SessionService};
 /// * `Messages` — one `UserMessage` event per entry.
 /// * `History` — each turn replayed in order as the role-appropriate event,
 ///   then the `prompt` as a trailing `UserMessage`.
-/// * `Multimodal` — one `UserMessage` event per entry (each may carry
-///   non-text `blocks` that the LLM layer interprets).
+/// * `Multimodal` — a `TurnStarted` followed by one `UserMessage` event per
+///   entry (each may carry non-text `blocks` — images — that
+///   `harness::agent::prompt` replays into the provider message).
 ///
 /// Every emitted event shares a fresh `turn_id` except the trailing
-/// `UserMessage` of `History`, which also emits a `TurnStarted` event so the
-/// harness loop identifies the new user turn correctly.
+/// `UserMessage` of `History` and the `Multimodal` entries, which also emit a
+/// `TurnStarted` event so the harness loop identifies the new user turn
+/// correctly.
 pub(super) async fn seed_session(
     service: &dyn SessionService,
     session_id: &SessionId,
@@ -96,8 +98,35 @@ pub(super) async fn seed_session(
                 .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
         }
         FlowInput::Multimodal(msgs) => {
+            // Same turn framing as `History`'s trailing prompt: a multimodal
+            // turn continues an existing conversation, so it must open its own
+            // turn — otherwise `current_turn_id` inherits the PREVIOUS turn's
+            // id and this turn's assistant reply is filed under it.
+            let turn_id = uuid::Uuid::new_v4();
+            service
+                .emit_event(
+                    session_id,
+                    SessionEvent::TurnStarted {
+                        turn_id,
+                        trigger: TurnTrigger::UserMessage,
+                        at: now_ms(),
+                    },
+                )
+                .await
+                .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
             for content in msgs {
-                emit_message(service, session_id, content, true).await?;
+                service
+                    .emit_event(
+                        session_id,
+                        SessionEvent::UserMessage {
+                            turn_id,
+                            content,
+                            at: now_ms(),
+                            synthetic: false,
+                        },
+                    )
+                    .await
+                    .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
             }
         }
         FlowInput::Resume => {

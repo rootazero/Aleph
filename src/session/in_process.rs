@@ -317,6 +317,73 @@ mod tests {
         assert_eq!(events.len(), 1);
     }
 
+    /// Bug #4 regression: `chat.clear` used to wipe only the `messages`
+    /// projection, so the model kept replaying the whole event log. Retiring the
+    /// log must make the harness's real replay path — `get_events` → `build_prompt`
+    /// — come back with zero prior turns, while a message sent afterwards still
+    /// lands and is the only thing the model sees.
+    #[tokio::test]
+    async fn clearing_the_log_empties_the_harness_replay() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let svc = InProcessActorSessionService::new(store.clone());
+        let id = sample_id("clear");
+        let tid = uuid::Uuid::new_v4();
+
+        let user = |text: &str| SessionEvent::UserMessage {
+            turn_id: tid,
+            content: MessageContent {
+                text: text.to_string(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: now_ms(),
+            synthetic: false,
+        };
+
+        svc.emit_event(&id, user("my bank pin is 1234"))
+            .await
+            .unwrap();
+        svc.emit_event(
+            &id,
+            SessionEvent::AssistantMessage {
+                turn_id: tid,
+                content: MessageContent {
+                    text: "noted".into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let before = svc.get_events(&id, None, None).await.unwrap();
+        let replayed = crate::harness::agent::prompt::build_prompt(&before, before.len());
+        assert_eq!(replayed.len(), 2);
+
+        store.retire_from(&id, 1).await.unwrap();
+
+        let after = svc.get_events(&id, None, None).await.unwrap();
+        assert!(after.is_empty(), "cleared events must not replay");
+        assert!(
+            crate::harness::agent::prompt::build_prompt(&after, after.len()).is_empty(),
+            "the model must see no prior turns after a clear"
+        );
+
+        // The live actor keeps allocating past the retired seqs, and the new
+        // message is the only thing left in the prompt.
+        svc.emit_event(&id, user("what is my pin?")).await.unwrap();
+        let resumed = svc.get_events(&id, None, None).await.unwrap();
+        let prompt = crate::harness::agent::prompt::build_prompt(&resumed, resumed.len());
+        assert_eq!(prompt.len(), 1);
+        assert_eq!(resumed[0].seq, 3, "seq must advance past the retired rows");
+    }
+
     #[tokio::test]
     async fn wake_writes_session_woken_with_prior_head() {
         let svc = fresh_service().await;

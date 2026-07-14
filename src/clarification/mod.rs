@@ -32,7 +32,7 @@
 
 pub mod session;
 
-pub use session::{ClarificationManager, DEFAULT_CLARIFY_TIMEOUT};
+pub use session::{ClarificationManager, PendingClarification, DEFAULT_CLARIFY_TIMEOUT};
 
 use serde::{Deserialize, Serialize};
 

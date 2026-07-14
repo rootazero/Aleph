@@ -129,14 +129,18 @@ impl SessionManager {
             model_provider,
             None,
             None,
+            None,
         )
         .await
     }
 
-    /// Full insert — includes the two tool-tracking columns added in Task 1.
-    /// `add_message_with_meta` delegates here with `None, None`; the sqlite
+    /// Full insert — includes the two tool-tracking columns added in Task 1 and
+    /// the `source_seq` back-reference to the `session_events` event this row
+    /// was projected from (`None` for rows that are not event-sourced).
+    /// `add_message_with_meta` delegates here with `None`s; the sqlite
     /// `append_message` trait impl forwards the real values from the
-    /// `MessageRecord` so tool cards survive a Panel reload.
+    /// `MessageRecord` so tool cards survive a Panel reload and `chat.rewind`
+    /// can delete exactly the rows whose source events it retired.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn add_message_full(
         &self,
@@ -150,6 +154,7 @@ impl SessionManager {
         model_provider: Option<&str>,
         tool_call_id: Option<&str>,
         tool_name: Option<&str>,
+        source_seq: Option<i64>,
     ) -> Result<i64, SessionManagerError> {
         let key_str = key.to_key_string();
         let now = chrono::Utc::now().timestamp();
@@ -164,8 +169,8 @@ impl SessionManager {
             // Insert message
             conn.execute(
                 "INSERT INTO messages (session_key, role, content, timestamp, metadata, \
-                 input_tokens, output_tokens, tool_call_id, tool_name) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 input_tokens, output_tokens, tool_call_id, tool_name, source_seq) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     &key_str,
                     role,
@@ -175,7 +180,8 @@ impl SessionManager {
                     input_tokens,
                     output_tokens,
                     tool_call_id,
-                    tool_name
+                    tool_name,
+                    source_seq
                 ],
             )
             .map_err(|e| {

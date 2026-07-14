@@ -10,10 +10,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tracing::{debug, warn};
 
-use super::config::{AllowlistEntry, ExecApprovalsFile};
 use super::decision::ApprovalRequest;
 use super::socket::ApprovalDecisionType;
-use super::storage::{ConfigWithHash, ExecApprovalsStorage, StorageError};
 
 /// Default timeout for approval requests (2 minutes)
 pub const DEFAULT_APPROVAL_TIMEOUT_MS: u64 = 120_000;
@@ -52,6 +50,13 @@ pub struct ExecApprovalRecord {
     /// field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Harness tool-call id (`ToolStart.tool_id`) this approval gates. Lets a
+    /// client key `tool_id → approval` instead of pairing by position against
+    /// an unordered pending map — which mis-renders the card under the wrong
+    /// tool as soon as two tool calls run concurrently. `None` for approvals
+    /// raised outside tool dispatch (cluster node approvals, raw exec commands).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 impl ExecApprovalRecord {
@@ -94,6 +99,10 @@ impl ExecApprovalRecord {
             decision: None,
             resolved_by: None,
             reason: request.reason.clone(),
+            // Ambient, not a request field: the requester that builds the
+            // `ApprovalRequest` only sees `(tool_name, reason)`. The identity
+            // is scoped at the tool-dispatch chokepoint that raised the gate.
+            tool_call_id: crate::approval::current_tool_call_id(),
         }
     }
 
@@ -133,27 +142,20 @@ pub struct PendingApproval {
 /// Handles the lifecycle of approval requests:
 /// 1. Create request and wait for decision
 /// 2. Resolve with user decision
-/// 3. Update allowlist on allow-always
+///
+/// Purely in-memory: a granted approval lives for one execution
+/// (`AllowOnce`) or for the session (`AllowSession`, remembered by
+/// [`crate::sandbox::exec_approval::session_memory`]). Nothing here persists.
 pub struct ExecApprovalManager {
     pending: Arc<RwLock<HashMap<String, PendingEntry>>>,
-    storage: Arc<ExecApprovalsStorage>,
-    config_cache: Arc<RwLock<Option<ConfigWithHash>>>,
 }
 
 impl ExecApprovalManager {
-    /// Create new manager with default storage
+    /// Create new manager
     #[must_use]
     pub fn new() -> Self {
-        Self::with_storage(Arc::new(ExecApprovalsStorage::new()))
-    }
-
-    /// Create manager with custom storage
-    #[must_use]
-    pub fn with_storage(storage: Arc<ExecApprovalsStorage>) -> Self {
         Self {
             pending: Arc::new(RwLock::new(HashMap::new())),
-            storage,
-            config_cache: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -304,7 +306,7 @@ impl ExecApprovalManager {
                 return false;
             }
 
-            let decision = Self::clamp_decision(&entry.record.command, decision);
+            let decision = Self::clamp_decision(decision);
             entry.record.decision = Some(decision);
             entry.record.resolved_by = resolved_by;
             entry.record.resolved_at_ms = Some(
@@ -331,9 +333,8 @@ impl ExecApprovalManager {
     /// A channel reply (`/approve` / `/deny` or a button callback) carries no
     /// request id, so the inbound router resolves by session: the oldest live
     /// pending entry for that session is picked (FIFO). Returns the EFFECTIVE
-    /// decision applied (post risk clamp — an `AllowAlways` on a
-    /// Danger-classified command narrows to `AllowSession`), or `None` when
-    /// nothing was pending for the session.
+    /// decision applied (post clamp — a legacy `AllowAlways` narrows to
+    /// `AllowSession`), or `None` when nothing was pending for the session.
     pub fn resolve_for_session(
         &self,
         session_key: &str,
@@ -358,7 +359,7 @@ impl ExecApprovalManager {
         };
 
         if let Some(entry) = pending.get_mut(&id) {
-            let decision = Self::clamp_decision(&entry.record.command, decision);
+            let decision = Self::clamp_decision(decision);
             entry.record.decision = Some(decision);
             entry.record.resolved_by = resolved_by;
             entry.record.resolved_at_ms = Some(
@@ -377,28 +378,18 @@ impl ExecApprovalManager {
         }
     }
 
-    /// Clamp `requested` against the decision set the recorded command's
-    /// risk level permits (see [`crate::exec::allowed_decisions`]).
+    /// Clamp `requested` to a grant scope the system can actually honor.
     ///
-    /// Defense in depth for resolvers that did not render a risk-gated
-    /// button set (`/approve always` text replies, panel RPC, external
-    /// clients): a Danger-classified command must not be permanently
-    /// allowlisted in one gesture, so an unpermitted `AllowAlways`
-    /// downgrades to the session tier. An explicit human approval is never
-    /// escalated or turned into a denial here — only the persistence scope
-    /// is narrowed.
-    fn clamp_decision(command: &str, requested: ApprovalDecisionType) -> ApprovalDecisionType {
-        if requested == ApprovalDecisionType::AllowAlways {
-            let allowed = crate::exec::allowed_decisions::assess_command_decisions(command);
-            if !allowed.contains(&ApprovalDecisionType::AllowAlways) {
-                debug!(
-                    command = %command,
-                    "allow-always not permitted at this risk level — downgraded to session grant"
-                );
-                return ApprovalDecisionType::AllowSession;
-            }
+    /// No persistent allowlist exists, so `AllowAlways` cannot outlive the
+    /// process: it is a legacy wire value (old inline-keyboard callbacks,
+    /// `/approve always` text replies, external RPC clients) and resolves to
+    /// the session tier. An explicit human approval is never escalated or
+    /// turned into a denial here — only the grant scope is narrowed.
+    const fn clamp_decision(requested: ApprovalDecisionType) -> ApprovalDecisionType {
+        match requested {
+            ApprovalDecisionType::AllowAlways => ApprovalDecisionType::AllowSession,
+            other => other,
         }
-        requested
     }
 
     /// Whether `session_key` has at least one unresolved pending approval.
@@ -430,13 +421,18 @@ impl ExecApprovalManager {
         })
     }
 
-    /// List all pending approvals
+    /// List all pending approvals, oldest first.
+    ///
+    /// The backing map is unordered, so the order is imposed here: a client
+    /// that must still fall back to positional rendering (an approval with no
+    /// `tool_call_id`) at least gets a stable, meaningful sequence rather than
+    /// hash order that reshuffles between calls.
     #[must_use]
     pub fn list_pending(&self) -> Vec<PendingApproval> {
         let pending = self.pending.read().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
 
-        pending
+        let mut out: Vec<PendingApproval> = pending
             .values()
             .map(|entry| {
                 let elapsed = now.duration_since(entry.created_at);
@@ -451,120 +447,16 @@ impl ExecApprovalManager {
                     remaining_ms: remaining.as_millis() as u64,
                 }
             })
-            .collect()
-    }
-
-    /// Get current config with hash
-    pub fn get_config(&self) -> Result<ConfigWithHash, StorageError> {
-        // Try cache first
-        {
-            let cache = self.config_cache.read().unwrap_or_else(|e| e.into_inner());
-            if let Some(ref cached) = *cache {
-                return Ok(cached.clone());
-            }
-        }
-
-        // Load from storage
-        let loaded = self.storage.load()?;
-
-        // Update cache
-        {
-            let mut cache = self.config_cache.write().unwrap_or_else(|e| e.into_inner());
-            *cache = Some(loaded.clone());
-        }
-
-        Ok(loaded)
-    }
-
-    /// Set config with optimistic locking
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - New config
-    /// * `base_hash` - Hash from when config was loaded
-    ///
-    /// # Returns
-    ///
-    /// New hash after save
-    pub fn set_config(
-        &self,
-        config: ExecApprovalsFile,
-        base_hash: &str,
-    ) -> Result<String, StorageError> {
-        let new_hash = self.storage.save(&config, base_hash)?;
-
-        // Update cache
-        {
-            let mut cache = self.config_cache.write().unwrap_or_else(|e| e.into_inner());
-            *cache = Some(ConfigWithHash {
-                config,
-                hash: new_hash.clone(),
-            });
-        }
-
-        Ok(new_hash)
-    }
-
-    /// Invalidate config cache (force reload on next access)
-    pub fn invalidate_cache(&self) {
-        let mut cache = self.config_cache.write().unwrap_or_else(|e| e.into_inner());
-        *cache = None;
-    }
-
-    /// Add entry to allowlist (called on allow-always)
-    ///
-    /// # Arguments
-    ///
-    /// * `agent_id` - Agent to add allowlist for
-    /// * `pattern` - Pattern to add (executable name or resolved path)
-    /// * `command` - The command that earned the grant (audit provenance)
-    /// * `resolved_path` - Resolved executable path, if known
-    pub fn add_to_allowlist(
-        &self,
-        agent_id: &str,
-        pattern: &str,
-        command: Option<&str>,
-        resolved_path: Option<&str>,
-    ) -> Result<(), StorageError> {
-        let ConfigWithHash { mut config, hash } = self.get_config()?;
-
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-
-        // Get or create agent config
-        let agent_config = config.agents.entry(agent_id.to_string()).or_default();
-
-        // Get or create allowlist
-        let allowlist = agent_config.allowlist.get_or_insert_with(Vec::new);
-
-        // Already present: refresh usage provenance instead of duplicating.
-        if let Some(entry) = allowlist.iter_mut().find(|e| e.pattern == pattern) {
-            entry.last_used_at = Some(now_secs);
-            if command.is_some() {
-                entry.last_used_command = command.map(str::to_string);
-            }
-            if resolved_path.is_some() {
-                entry.last_resolved_path = resolved_path.map(str::to_string);
-            }
-            self.set_config(config, &hash)?;
-            return Ok(());
-        }
-
-        // Add new entry
-        allowlist.push(AllowlistEntry {
-            id: Some(uuid::Uuid::new_v4().to_string()),
-            pattern: pattern.to_string(),
-            last_used_at: Some(now_secs),
-            last_used_command: command.map(str::to_string),
-            last_resolved_path: resolved_path.map(str::to_string),
+            .collect();
+        // `id` breaks the tie: two approvals raised in the same millisecond
+        // must still come out in a fixed order across calls.
+        out.sort_by(|a, b| {
+            a.record
+                .created_at_ms
+                .cmp(&b.record.created_at_ms)
+                .then_with(|| a.record.id.cmp(&b.record.id))
         });
-
-        // Save with optimistic lock
-        self.set_config(config, &hash)?;
-
-        Ok(())
+        out
     }
 
     /// Clean up expired pending requests
@@ -603,15 +495,6 @@ impl Default for ExecApprovalManager {
 mod tests {
     use super::*;
     use crate::exec::analysis::CommandAnalysis;
-    use tempfile::TempDir;
-
-    fn temp_manager() -> (TempDir, ExecApprovalManager) {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("exec-approvals.json");
-        let storage = Arc::new(ExecApprovalsStorage::with_path(path));
-        let manager = ExecApprovalManager::with_storage(storage);
-        (dir, manager)
-    }
 
     fn mock_request() -> ApprovalRequest {
         ApprovalRequest {
@@ -632,7 +515,7 @@ mod tests {
 
     #[test]
     fn test_create_record() {
-        let (_dir, manager) = temp_manager();
+        let manager = ExecApprovalManager::new();
         let request = mock_request();
 
         let record = manager.create(&request, 60_000);
@@ -642,12 +525,54 @@ mod tests {
         assert!(record.expires_at_ms > record.created_at_ms);
     }
 
+    /// Defect D: with two tool calls in flight the client cannot pair approvals
+    /// to tool rows by position — the pending map is unordered. Each record must
+    /// carry the id of the tool call it actually gates, and `list_pending` must
+    /// come out in a stable, oldest-first order.
+    #[tokio::test]
+    async fn concurrent_approvals_carry_distinct_tool_call_ids() {
+        use crate::approval::with_tool_call_id;
+
+        let manager = ExecApprovalManager::new();
+        let mut first = mock_request();
+        first.id = "ap-a".to_string();
+        let mut second = mock_request();
+        second.id = "ap-b".to_string();
+
+        let rec_a = with_tool_call_id(Some("toolu_a".to_string()), async {
+            manager.create(&first, 60_000)
+        })
+        .await;
+        let rec_b = with_tool_call_id(Some("toolu_b".to_string()), async {
+            manager.create(&second, 60_000)
+        })
+        .await;
+        let (_ia, _rx_a, _ta) = manager.register_pending(rec_a);
+        let (_ib, _rx_b, _tb) = manager.register_pending(rec_b);
+
+        let pending = manager.list_pending();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[0].record.id, "ap-a", "oldest first, stable order");
+        assert_eq!(pending[0].record.tool_call_id.as_deref(), Some("toolu_a"));
+        assert_eq!(pending[1].record.id, "ap-b");
+        assert_eq!(pending[1].record.tool_call_id.as_deref(), Some("toolu_b"));
+    }
+
+    /// An approval raised outside tool dispatch (cluster node, raw exec command)
+    /// has no owning tool row and must say so rather than borrow a stale id.
+    #[test]
+    fn approval_outside_tool_dispatch_has_no_tool_call_id() {
+        let manager = ExecApprovalManager::new();
+        let record = manager.create(&mock_request(), 60_000);
+        assert!(record.tool_call_id.is_none());
+    }
+
     #[tokio::test]
     async fn resolve_after_register_before_await_is_not_lost() {
         // Regression: register_pending must make the entry resolvable BEFORE the
         // caller awaits, so a resolver racing right after a published
         // notification is not lost (resolve-before-register → spurious timeout).
-        let (_dir, manager) = temp_manager();
+        let manager = ExecApprovalManager::new();
         let record = manager.create(&mock_request(), 60_000);
 
         let (id, rx, timeout) = manager.register_pending(record);
@@ -662,13 +587,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_approval() {
-        let (_dir, manager) = temp_manager();
+        let manager = ExecApprovalManager::new();
         let request = mock_request();
         let record = manager.create(&request, 60_000);
         let id = record.id.clone();
 
         // Spawn wait task
-        let manager_clone = ExecApprovalManager::with_storage(manager.storage.clone());
+        let manager_clone = ExecApprovalManager::new();
         let (tx, _rx) = tokio::sync::oneshot::channel();
         manager_clone
             .pending
@@ -698,7 +623,7 @@ mod tests {
 
     #[test]
     fn test_list_pending() {
-        let (_dir, manager) = temp_manager();
+        let manager = ExecApprovalManager::new();
 
         // Add some pending
         let request1 = mock_request();
@@ -736,106 +661,35 @@ mod tests {
     }
 
     #[test]
-    fn test_config_operations() {
-        let (_dir, manager) = temp_manager();
-
-        // Get default config
-        let loaded = manager.get_config().unwrap();
-        assert_eq!(loaded.config.version, 1);
-
-        // Modify and save
-        let mut config = loaded.config.clone();
-        config.defaults = Some(super::super::config::ExecDefaults {
-            security: Some(super::super::config::ExecSecurity::Allowlist),
-            ..Default::default()
-        });
-
-        let new_hash = manager.set_config(config, &loaded.hash).unwrap();
-        assert_ne!(new_hash, loaded.hash);
-
-        // Verify cache updated
-        let reloaded = manager.get_config().unwrap();
-        assert!(reloaded.config.defaults.is_some());
-    }
-
-    #[test]
-    fn test_add_to_allowlist() {
-        let (_dir, manager) = temp_manager();
-
-        manager
-            .add_to_allowlist(
-                "main",
-                "/usr/bin/git",
-                Some("git status"),
-                Some("/usr/bin/git"),
-            )
-            .unwrap();
-
-        let config = manager.get_config().unwrap();
-        let agent = config.config.agents.get("main").unwrap();
-        let allowlist = agent.allowlist.as_ref().unwrap();
-
-        assert_eq!(allowlist.len(), 1);
-        assert_eq!(allowlist[0].pattern, "/usr/bin/git");
+    fn clamp_downgrades_allow_always_to_session() {
+        // No persistent allowlist exists, so `AllowAlways` can never mean more
+        // than a session grant — at any risk level.
         assert_eq!(
-            allowlist[0].last_used_command.as_deref(),
-            Some("git status")
-        );
-        assert_eq!(
-            allowlist[0].last_resolved_path.as_deref(),
-            Some("/usr/bin/git")
-        );
-    }
-
-    #[test]
-    fn add_to_allowlist_refreshes_existing_entry_instead_of_duplicating() {
-        let (_dir, manager) = temp_manager();
-
-        manager
-            .add_to_allowlist("main", "git", Some("git status"), None)
-            .unwrap();
-        manager
-            .add_to_allowlist("main", "git", Some("git log"), Some("/usr/bin/git"))
-            .unwrap();
-
-        let config = manager.get_config().unwrap();
-        let allowlist = config
-            .config
-            .agents
-            .get("main")
-            .unwrap()
-            .allowlist
-            .clone()
-            .unwrap();
-        assert_eq!(allowlist.len(), 1, "same pattern must not duplicate");
-        assert_eq!(allowlist[0].last_used_command.as_deref(), Some("git log"));
-        assert_eq!(
-            allowlist[0].last_resolved_path.as_deref(),
-            Some("/usr/bin/git")
-        );
-    }
-
-    #[test]
-    fn clamp_downgrades_allow_always_for_danger_command() {
-        // `rm -rf ./build` classifies Danger → allow-always is not permitted
-        // and must narrow to the session tier; explicit approvals never
-        // escalate or become denials.
-        assert_eq!(
-            ExecApprovalManager::clamp_decision(
-                "rm -rf ./build",
-                ApprovalDecisionType::AllowAlways
-            ),
+            ExecApprovalManager::clamp_decision(ApprovalDecisionType::AllowAlways),
             ApprovalDecisionType::AllowSession
         );
-        // Safe command keeps allow-always.
+        // Other decisions pass through untouched; approvals are never escalated
+        // or turned into denials here.
+        for decision in [
+            ApprovalDecisionType::AllowOnce,
+            ApprovalDecisionType::AllowSession,
+            ApprovalDecisionType::Deny,
+        ] {
+            assert_eq!(ExecApprovalManager::clamp_decision(decision), decision);
+        }
+    }
+
+    #[test]
+    fn resolve_reports_session_grant_for_allow_always() {
+        // The effective decision a resolver sees must never claim permanence.
+        let manager = ExecApprovalManager::new();
+        let record = manager.create(&mock_request(), 60_000);
+        let session_key = record.session_key.clone();
+        let (_id, _rx, _timeout) = manager.register_pending(record);
+
         assert_eq!(
-            ExecApprovalManager::clamp_decision("ls -la", ApprovalDecisionType::AllowAlways),
-            ApprovalDecisionType::AllowAlways
-        );
-        // Non-always decisions pass through untouched at every risk level.
-        assert_eq!(
-            ExecApprovalManager::clamp_decision("rm -rf /", ApprovalDecisionType::AllowOnce),
-            ApprovalDecisionType::AllowOnce
+            manager.resolve_for_session(&session_key, ApprovalDecisionType::AllowAlways, None),
+            Some(ApprovalDecisionType::AllowSession)
         );
     }
 
@@ -843,7 +697,7 @@ mod tests {
     async fn register_pending_sweeps_orphaned_expired_entries() {
         // An entry whose waiter future was dropped never reaches
         // `await_registered`'s removal; the next registration must evict it.
-        let (_dir, manager) = temp_manager();
+        let manager = ExecApprovalManager::new();
 
         let mut stale = mock_request();
         stale.id = "stale-entry".to_string();

@@ -8,7 +8,7 @@ use crate::extension::hooks::{HookContext, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 use crate::sandbox::exec_approval::{denial_ledger, session_memory};
-use crate::session::events::ToolOutput;
+use crate::session::events::{ToolOutput, TurnId};
 use crate::sync_primitives::Arc;
 use crate::tools::runtime::LoopTool;
 use crate::tools::service::ToolError;
@@ -187,15 +187,18 @@ impl ScopedToolService {
 
         // Confirmation gate: tools flagged `requires_confirmation` must be
         // approved by the user before they run. Fails closed when no approval
-        // transport is wired. A tool is gated when it appears in the
-        // operator-override `confirm_tools` set, when the tool itself
-        // declares `LoopTool::requires_confirmation()` — the per-tool,
+        // transport is wired. A tool is gated when it declares
+        // `LoopTool::requires_confirmation()` — the per-tool,
         // declaration-driven seam that lets builtin / MCP / extension / skill
         // tools opt into approval without being hard-coded gateway-side — or
-        // when the merged permission policy resolves to `Ask` for this tool.
-        if self.confirm_tools.contains(name)
-            || self.inner.requires_confirmation(name)
+        // when the merged permission policy resolves to `Ask` for this tool
+        // (the mechanism the exec tier's metadata rule feeds), or when the
+        // call's ARGUMENTS trip the tier's destructive-argument filter — the
+        // only gate that needs the input, because `file_ops` hides `delete`
+        // behind the same tool name as `list`.
+        if self.inner.requires_confirmation(name)
             || self.is_permission_ask(name)
+            || self.tier_asks_for_arguments(name, &input)
         {
             match &self.approval_requester {
                 Some(requester) => {
@@ -205,8 +208,10 @@ impl ScopedToolService {
                         return Err(ToolError::Execution {
                             name: name.to_string(),
                             cause: format!(
-                                "User did not approve running `{name}` ({:?}).{hint} \
-                                 Do not retry; ask the user how to proceed.",
+                                "The user did not approve running `{name}` ({:?}). Do not retry \
+                                 this call, do not rewrite it, and do not attempt to achieve the \
+                                 same result by other means.{hint} Ask the user what they would \
+                                 like to do instead.",
                                 denial.outcome
                             ),
                         });
@@ -336,16 +341,22 @@ impl ScopedToolService {
         result
     }
 
-    /// Stable session key for the session approval memory.
+    /// Stable session key for the session approval memory *and* the denial
+    /// ledger — the two stores are keyed identically by design, so this one
+    /// derivation serves both.
     ///
     /// Prefers the structured `SessionKey` carried by the turn context (the
     /// reliable per-conversation identity), falling back to the hook session
     /// id. Returns `None` when neither is available, which disables session
     /// memory for this call — a fail-safe so a grant is never shared across an
     /// unknown / empty session key.
+    ///
+    /// Goes through [`denial_ledger::ledger_key`] rather than calling
+    /// `to_string()` here, so this gate and the sandbox elevation gate cannot
+    /// drift into addressing different buckets of the same global map again.
     fn session_memory_key(&self) -> Option<String> {
         if let Some(tc) = &self.turn_context {
-            let key = tc.session_key.to_string();
+            let key = denial_ledger::ledger_key(&tc.session_key);
             if !key.is_empty() {
                 return Some(key);
             }
@@ -384,6 +395,11 @@ impl ScopedToolService {
                 tool = %name,
                 "unattended run: auto-denied confirm-gated tool (no human to approve)"
             );
+            self.record_approval_decision(
+                name,
+                Some("auto-denied: unattended run, no human available to approve"),
+            )
+            .await;
             return Err(ConfirmDenial {
                 outcome: ApprovalOutcome::Denied,
                 hint: Some(
@@ -424,6 +440,8 @@ impl ScopedToolService {
                     "confirmation auto-denied by denial ledger: {}",
                     reason_kind.agent_hint()
                 );
+                self.record_approval_decision(name, Some(reason_kind.agent_hint()))
+                    .await;
                 // Surface the ledger's reason to the model (not just the log)
                 // so the circuit breaker actually breaks the loop.
                 return Err(ConfirmDenial {
@@ -456,14 +474,27 @@ impl ScopedToolService {
         )
         .await;
 
-        let outcome = requester.request_approval(name, reason).await;
+        // Stamp the approval record with the tool call it gates. Requesters see
+        // only `(tool_name, reason)`, so without this the client can only pair a
+        // pending approval to a tool row by position — and `exec.approvals.pending`
+        // is an unordered map, so with two concurrent tool calls the card renders
+        // under the wrong tool and the user approves something they never read.
+        let tool_call_id = self.newest_tool_call(name).await.map(|(_, id)| id);
+        let outcome = crate::approval::with_tool_call_id(
+            tool_call_id,
+            requester.request_approval(name, reason),
+        )
+        .await;
         if !outcome.is_approved() {
             let reason_kind = match outcome {
                 ApprovalOutcome::Timeout => denial_ledger::DenialReason::Timeout,
                 _ => denial_ledger::DenialReason::UserRejected,
             };
             // Record the refusal so a blind retry of this exact intent — or a
-            // session past the threshold — is short-circuited next time.
+            // session past the threshold — is short-circuited next time. A
+            // `Timeout` reaches the ledger too but is deliberately dropped
+            // there (an expired card is not a decision), so it can neither
+            // stick nor trip the breaker — see `DenialLedger::record_denial`.
             if let Some(ref key) = mem_key {
                 let just_paused =
                     denial_ledger::global().record_denial(key, &fingerprint, reason_kind);
@@ -483,6 +514,11 @@ impl ScopedToolService {
                     }
                 }
             }
+            self.record_approval_decision(
+                name,
+                Some(&format!("user did not approve ({outcome:?})")),
+            )
+            .await;
             // Carry the same hint on the *first* live denial too, so the agent
             // is told to change approach immediately rather than looping into
             // the auto-deny path above.
@@ -498,7 +534,94 @@ impl ScopedToolService {
                 session_memory::global().remember(key, name);
             }
         }
+        self.record_approval_decision(name, None).await;
         Ok(())
+    }
+
+    /// Correlation ids of the tool call currently being dispatched for `name`.
+    ///
+    /// `ToolService` dispatch carries no call identity, so they are recovered
+    /// from the newest `ToolCallRequested` for this tool: the harness emits that
+    /// event immediately before dispatching, and every confirm-gated tool claims
+    /// `ConcurrencyClaim::global()` (never batched), so the newest request for
+    /// `name` is this call. `call_id` is the harness `call.id` — the same string
+    /// clients see as `ToolStart.tool_id`.
+    ///
+    /// Only approval decision points call this, so the event-log scan stays off
+    /// the hot path.
+    async fn newest_tool_call(&self, name: &str) -> Option<(TurnId, String)> {
+        use crate::session::events::SessionEvent;
+
+        let turn = self.turn_context.as_ref()?;
+        let session_svc = crate::session::service::global_session_service()?;
+        let events = match session_svc.get_events(&turn.session_key, None, None).await {
+            Ok(events) => events,
+            Err(e) => {
+                tracing::warn!(
+                    tool = %name,
+                    error = ?e,
+                    "failed to read session events — approval tool call not correlated"
+                );
+                return None;
+            }
+        };
+        events.iter().rev().find_map(|rec| match &rec.event {
+            SessionEvent::ToolCallRequested {
+                turn_id,
+                call_id,
+                name: requested,
+                ..
+            } if requested == name => Some((*turn_id, call_id.clone())),
+            _ => None,
+        })
+    }
+
+    /// Persist this gate's decision into the session event log (the SSOT the
+    /// model replays). Without it an agent never learns that the user already
+    /// refused an action and simply asks again.
+    ///
+    /// Best-effort: a failed emit is logged, never allowed to overturn a
+    /// decision the user has made.
+    async fn record_approval_decision(&self, name: &str, denial_reason: Option<&str>) {
+        use crate::session::events::{now_ms, ApprovalSource, SessionEvent};
+
+        let Some(turn) = self.turn_context.as_ref() else {
+            return;
+        };
+        let Some(session_svc) = crate::session::service::global_session_service() else {
+            return;
+        };
+        let session_id = &turn.session_key;
+
+        let Some((turn_id, call_id)) = self.newest_tool_call(name).await else {
+            tracing::debug!(
+                tool = %name,
+                "no ToolCallRequested to correlate — approval decision not persisted"
+            );
+            return;
+        };
+
+        let event = match denial_reason {
+            Some(reason) => SessionEvent::ToolCallDenied {
+                turn_id,
+                call_id,
+                reason: reason.to_string(),
+                at: now_ms(),
+            },
+            None => SessionEvent::ToolCallApproved {
+                turn_id,
+                call_id,
+                by: ApprovalSource::User,
+                at: now_ms(),
+            },
+        };
+        if let Err(e) = session_svc.emit_event(session_id, event).await {
+            tracing::warn!(
+                tool = %name,
+                error = ?e,
+                "failed to persist tool approval decision to the session log"
+            );
+        }
     }
 
     /// Fire `BeforeToolCall` interceptors. Returns the (possibly rewritten)

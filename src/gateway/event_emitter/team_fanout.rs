@@ -457,6 +457,7 @@ mod tests {
     /// may have already set it; asserting `is_some()` after setting is stable
     /// regardless of test execution order.
     #[test]
+    #[serial_test::serial(gateway_event_bus)]
     fn global_slot_returns_some_after_set() {
         let bus = Arc::new(GatewayEventBus::new());
         set_team_event_bus(bus);

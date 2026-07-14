@@ -145,6 +145,7 @@ mod tests {
         let f = GatewayEventFrame::AskUser {
             run_id: "r1".to_string(),
             seq: 1,
+            session_key: "sess-1".to_string(),
             question: "Delete it?".to_string(),
             options: vec![],
         };
@@ -159,6 +160,7 @@ mod tests {
         let f = GatewayEventFrame::AskUser {
             run_id: "r1".to_string(),
             seq: 1,
+            session_key: "sess-1".to_string(),
             question: "   ".to_string(),
             options: vec![],
         };
@@ -185,6 +187,7 @@ mod tests {
             session_key: String::new(),
             channel_id: String::new(),
             conversation_id: String::new(),
+            tool_call_id: None,
         };
         assert!(notification_for(&f).is_none());
     }
@@ -196,6 +199,7 @@ mod tests {
             session_key: String::new(),
             channel_id: String::new(),
             conversation_id: String::new(),
+            tool_call_id: None,
         };
         let a = approval_for(&f).expect("approval is surfaced");
         assert_eq!(a.approval_id, "a1");
@@ -220,6 +224,7 @@ mod tests {
         let f = GatewayEventFrame::AskUser {
             run_id: "r1".to_string(),
             seq: 1,
+            session_key: "sess-1".to_string(),
             question: "Proceed?".to_string(),
             options: vec![],
         };
@@ -256,6 +261,7 @@ mod tests {
             session_key: String::new(),
             channel_id: String::new(),
             conversation_id: String::new(),
+            tool_call_id: None,
         });
 
         for _ in 0..50 {

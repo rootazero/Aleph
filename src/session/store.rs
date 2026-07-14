@@ -59,7 +59,44 @@ pub trait SessionEventStore: Send + Sync + 'static {
     ) -> Result<Vec<SessionEventRecord>, SessionError>;
 
     /// Return the highest seq stored for this session, or 0 if none.
+    ///
+    /// Counts retired events too: seq is an allocation counter, and reusing a
+    /// retired seq would collide with its still-present row on the
+    /// `(session_id, seq)` primary key.
     async fn load_head_seq(&self, session_id: &SessionId) -> Result<EventSeq, SessionError>;
+
+    /// Retire every event with `seq >= from_seq`, removing it from the live
+    /// conversation. Returns how many events this call newly retired.
+    ///
+    /// Soft delete: the rows survive, so the append-only log stays intact and
+    /// seq allocation is unaffected. All readers of the live conversation
+    /// (`load_all_events`, `load_events_range`, `load_run_markers`,
+    /// `search_events`) skip retired events, so the model stops replaying them.
+    ///
+    /// Idempotent: already-retired events keep their original retirement
+    /// timestamp and are not counted again.
+    async fn retire_from(
+        &self,
+        session_id: &SessionId,
+        from_seq: EventSeq,
+    ) -> Result<usize, SessionError>;
+
+    /// True when the event at `seq` exists and has been retired.
+    ///
+    /// The `messages` projection is drained asynchronously, so an event can be
+    /// retired while it still sits in the projector's queue. The projector
+    /// re-checks here at WRITE time; without it a `clear` silently un-clears
+    /// itself in the transcript milliseconds later.
+    ///
+    /// Default `Ok(false)` — a store with no soft delete has nothing to hide.
+    async fn is_retired(
+        &self,
+        session_id: &SessionId,
+        seq: EventSeq,
+    ) -> Result<bool, SessionError> {
+        let _ = (session_id, seq);
+        Ok(false)
+    }
 
     /// Cross-session scan for resume detection. Returns, per session, that
     /// session's `RunStarted` / `RunFinished` events in `seq` order.
@@ -116,8 +153,9 @@ pub fn migrate_add_session_events(conn: &Connection) -> Result<(), AlephError> {
             AlephError::config(format!("Failed to begin session_events migration: {e}"))
         })?;
 
-    let result = conn.execute_batch(
-        r#"
+    let result = conn
+        .execute_batch(
+            r#"
         CREATE TABLE IF NOT EXISTS session_events (
             session_id   TEXT    NOT NULL,
             seq          INTEGER NOT NULL,
@@ -125,6 +163,7 @@ pub fn migrate_add_session_events(conn: &Connection) -> Result<(), AlephError> {
             event_type   TEXT    NOT NULL,
             payload_json TEXT    NOT NULL,
             created_at   INTEGER NOT NULL,
+            retired_at   INTEGER,
             PRIMARY KEY (session_id, seq)
         );
 
@@ -134,7 +173,8 @@ pub fn migrate_add_session_events(conn: &Connection) -> Result<(), AlephError> {
         CREATE INDEX IF NOT EXISTS idx_session_events_session_type
             ON session_events(session_id, event_type);
         "#,
-    );
+        )
+        .and_then(|()| add_retired_at_column(conn));
 
     if let Err(e) = result {
         let _ = conn.execute_batch("ROLLBACK TO migration_session_events");
@@ -149,6 +189,24 @@ pub fn migrate_add_session_events(conn: &Connection) -> Result<(), AlephError> {
         })?;
 
     Ok(())
+}
+
+/// Add the `retired_at` soft-delete column to a pre-existing `session_events`
+/// table. `NULL` = live; a unix-ms stamp = retired (see
+/// [`SessionEventStore::retire_from`]).
+///
+/// `SQLite` has no `ADD COLUMN IF NOT EXISTS`, so probe `pragma_table_info`
+/// first — a DB created by the current `CREATE TABLE` above already has it.
+fn add_retired_at_column(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let exists: bool = conn.query_row(
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('session_events') WHERE name = 'retired_at'",
+        [],
+        |row| row.get(0),
+    )?;
+    if exists {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE session_events ADD COLUMN retired_at INTEGER")
 }
 
 /// Create the `session_events_fts` FTS5 mirror table if missing.
@@ -203,12 +261,6 @@ impl SqliteEventStore {
         Self {
             conn: Arc::new(Mutex::new(conn)),
         }
-    }
-
-    /// Wrap an existing shared connection — for composing with other stores
-    /// that already share a `Connection`.
-    pub const fn with_shared(conn: Arc<Mutex<Connection>>) -> Self {
-        Self { conn }
     }
 }
 
@@ -291,6 +343,7 @@ impl SessionEventStore for SqliteEventStore {
                 "SELECT seq, payload_json, created_at
                  FROM session_events
                  WHERE session_id = ?1 AND seq >= ?2 AND seq <= ?3
+                   AND retired_at IS NULL
                  ORDER BY seq ASC",
             )
             .map_err(|e| SessionError::Storage(e.to_string()))?;
@@ -342,6 +395,68 @@ impl SessionEventStore for SqliteEventStore {
         Ok(head)
     }
 
+    async fn retire_from(
+        &self,
+        session_id: &SessionId,
+        from_seq: EventSeq,
+    ) -> Result<usize, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        // An out-of-range `from_seq` must not widen the range and retire events
+        // the caller never asked for — saturate high so it matches no rows.
+        let from_val = i64::try_from(from_seq).unwrap_or(i64::MAX);
+        let at = crate::session::events::now_ms();
+
+        let conn = self.conn.lock().await;
+        // `retired_at IS NULL` makes this idempotent: a second retire of the
+        // same range matches nothing and reports 0 newly-retired events.
+        let retired = conn
+            .execute(
+                "UPDATE session_events SET retired_at = ?3
+                 WHERE session_id = ?1 AND seq >= ?2 AND retired_at IS NULL",
+                params![session_key, from_val, at],
+            )
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+
+        // Drop the retired events from the BM25 mirror as well, or `recall_events`
+        // would hand the model the very content the user just cleared. The FTS
+        // table is a derived index, not the log, so a physical delete here does
+        // not violate the append-only guarantee. Unlike the best-effort insert in
+        // `append`, this failure is propagated: a half-retire that leaves cleared
+        // content searchable is exactly the leak this method exists to prevent.
+        conn.execute(
+            "DELETE FROM session_events_fts WHERE session_id = ?1 AND seq >= ?2",
+            params![session_key, from_val],
+        )
+        .map_err(|e| SessionError::Storage(e.to_string()))?;
+
+        Ok(retired)
+    }
+
+    async fn is_retired(
+        &self,
+        session_id: &SessionId,
+        seq: EventSeq,
+    ) -> Result<bool, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        let seq_i64 = i64::try_from(seq)
+            .map_err(|_| SessionError::Storage(format!("seq {seq} exceeds i64::MAX")))?;
+
+        let conn = self.conn.lock().await;
+        let retired: Option<bool> = conn
+            .query_row(
+                "SELECT retired_at IS NOT NULL FROM session_events
+                 WHERE session_id = ?1 AND seq = ?2",
+                params![session_key, seq_i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+        // An unknown seq is not retired: the projector's queue can only carry
+        // events that were appended, so this is a store the event never
+        // reached (tests, alternative store) — nothing to withhold.
+        Ok(retired.unwrap_or(false))
+    }
+
     async fn load_run_markers(
         &self,
     ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError> {
@@ -351,6 +466,7 @@ impl SessionEventStore for SqliteEventStore {
                 "SELECT session_id, seq, payload_json, created_at
                  FROM session_events
                  WHERE event_type IN ('run_started', 'run_finished')
+                   AND retired_at IS NULL
                  ORDER BY session_id, seq ASC",
             )
             .map_err(|e| SessionError::Storage(e.to_string()))?;
@@ -596,6 +712,62 @@ pub fn global_session_event_store() -> Option<Arc<dyn SessionEventStore>> {
     GLOBAL_EVENT_STORE.get().cloned()
 }
 
+/// Retire every live event at or after `from_seq` in the process-wide event log
+/// (`from_seq = 1` clears the session outright). Returns how many events this
+/// call newly retired.
+///
+/// The gateway's `messages` table is only the Panel's read projection: clearing
+/// it while the event log survives leaves the model replaying everything the
+/// user thought they had deleted. Callers that clear or rewind a conversation
+/// must come through here first.
+///
+/// `Ok(0)` when no store is installed (CLI one-shot, tests) — there is no event
+/// log, hence nothing that could still be replayed.
+pub async fn retire_live_events(
+    session_id: &SessionId,
+    from_seq: EventSeq,
+) -> Result<usize, SessionError> {
+    match global_session_event_store() {
+        Some(store) => store.retire_from(session_id, from_seq).await,
+        None => Ok(0),
+    }
+}
+
+/// The process-wide event store used by tests that need the real
+/// `retire_live_events` / `is_event_retired` path (the handlers reach the store
+/// through the `OnceLock` above, so they cannot be handed one).
+///
+/// A single shared in-memory store: `set_global_session_event_store` only ever
+/// honours the first call, so every test must install the SAME instance or the
+/// losers would silently observe a store they never wrote to. Tests keep to
+/// their own session keys.
+#[cfg(test)]
+pub(crate) fn install_test_event_store() -> Arc<SqliteEventStore> {
+    static TEST_STORE: OnceLock<Arc<SqliteEventStore>> = OnceLock::new();
+    let store = TEST_STORE
+        .get_or_init(|| {
+            let conn = Connection::open_in_memory().expect("in-memory sqlite");
+            migrate_add_session_events(&conn).expect("migrate session_events");
+            Arc::new(SqliteEventStore::new(conn))
+        })
+        .clone();
+    set_global_session_event_store(store.clone());
+    store
+}
+
+/// True when the event at `seq` has been retired in the process-wide event log.
+///
+/// Consulted by the projector before it writes a row: the drain is async, so a
+/// `clear` / `rewind` can retire an event that is still queued. `false` when no
+/// store is installed (CLI one-shot, tests) — there is no soft-delete state to
+/// respect.
+pub async fn is_event_retired(session_id: &SessionId, seq: EventSeq) -> Result<bool, SessionError> {
+    match global_session_event_store() {
+        Some(store) => store.is_retired(session_id, seq).await,
+        None => Ok(false),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -624,6 +796,7 @@ mod tests {
                 "event_type",
                 "payload_json",
                 "created_at",
+                "retired_at",
             ]
         );
 
@@ -998,6 +1171,212 @@ mod tests {
         let hits = store.search_events(&sid_a, "kangaroo", 5).await.unwrap();
         assert_eq!(hits.len(), 1, "must only see session A's event");
         assert!(hits[0].snippet.to_lowercase().contains("alpha"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Soft delete (retire_from)
+    // -----------------------------------------------------------------------
+
+    /// Clearing a conversation must make the model forget it: the replay path
+    /// (`load_all_events`) has to come back empty even though the append-only
+    /// rows are still on disk.
+    #[tokio::test]
+    async fn retire_from_start_empties_the_replay_but_keeps_the_log() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(
+                &sid,
+                1,
+                &user_message(tid, "remember the passphrase", at),
+                at,
+            )
+            .await
+            .unwrap();
+        store
+            .append(&sid, 2, &turn_started(tid, at), at)
+            .await
+            .unwrap();
+
+        assert_eq!(store.retire_from(&sid, 1).await.unwrap(), 2);
+
+        assert!(
+            store.load_all_events(&sid).await.unwrap().is_empty(),
+            "replay must see nothing after a full retire"
+        );
+        assert!(
+            store
+                .search_events(&sid, "passphrase", 5)
+                .await
+                .unwrap()
+                .is_empty(),
+            "retired content must not stay recallable via BM25 search"
+        );
+
+        // The append-only log itself survives (constitution A3).
+        let rows: i64 = {
+            let conn = store.conn.lock().await;
+            conn.query_row("SELECT COUNT(*) FROM session_events", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(rows, 2, "soft delete must not drop rows");
+    }
+
+    #[tokio::test]
+    async fn retire_from_keeps_earlier_events() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        for seq in 1..=4u64 {
+            store
+                .append(&sid, seq, &user_message(tid, &format!("msg {seq}"), at), at)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(store.retire_from(&sid, 3).await.unwrap(), 2);
+
+        let live = store.load_all_events(&sid).await.unwrap();
+        assert_eq!(live.len(), 2);
+        assert_eq!(live[0].seq, 1);
+        assert_eq!(live[1].seq, 2);
+    }
+
+    #[tokio::test]
+    async fn retire_from_is_idempotent() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(&sid, 1, &user_message(tid, "hello", at), at)
+            .await
+            .unwrap();
+
+        assert_eq!(store.retire_from(&sid, 1).await.unwrap(), 1);
+        assert_eq!(
+            store.retire_from(&sid, 1).await.unwrap(),
+            0,
+            "retiring the same range twice must be a no-op"
+        );
+        assert!(store.load_all_events(&sid).await.unwrap().is_empty());
+    }
+
+    /// Retired rows keep their seq, so the next append must land *past* them —
+    /// reusing a retired seq would collide on the `(session_id, seq)` PK.
+    #[tokio::test]
+    async fn head_seq_ignores_retirement_so_appends_do_not_collide() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(&sid, 1, &user_message(tid, "before clear", at), at)
+            .await
+            .unwrap();
+        store.retire_from(&sid, 1).await.unwrap();
+
+        assert_eq!(store.load_head_seq(&sid).await.unwrap(), 1);
+
+        store
+            .append(&sid, 2, &user_message(tid, "after clear", at), at)
+            .await
+            .unwrap();
+        let live = store.load_all_events(&sid).await.unwrap();
+        assert_eq!(live.len(), 1, "only the post-clear event is live");
+        assert_eq!(live[0].seq, 2);
+    }
+
+    #[tokio::test]
+    async fn retire_does_not_touch_other_sessions() {
+        let store = make_store();
+        let sid_a = SessionKey::ephemeral("keep-a");
+        let sid_b = SessionKey::ephemeral("clear-b");
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(&sid_a, 1, &user_message(tid, "a", at), at)
+            .await
+            .unwrap();
+        store
+            .append(&sid_b, 1, &user_message(tid, "b", at), at)
+            .await
+            .unwrap();
+
+        store.retire_from(&sid_b, 1).await.unwrap();
+
+        assert_eq!(store.load_all_events(&sid_a).await.unwrap().len(), 1);
+        assert!(store.load_all_events(&sid_b).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn retired_run_markers_are_not_resumed() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let at = now_ms();
+        store
+            .append(&sid, 1, &run_started("r1", at), at)
+            .await
+            .unwrap();
+
+        store.retire_from(&sid, 1).await.unwrap();
+
+        assert!(
+            store.load_run_markers().await.unwrap().is_empty(),
+            "a cleared session must not look like an interrupted run"
+        );
+    }
+
+    /// A database written before `retired_at` existed must migrate in place and
+    /// keep serving its rows (legacy rows read as live).
+    #[tokio::test]
+    async fn migrates_pre_existing_db_without_retired_at_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        // The pre-soft-delete schema, verbatim.
+        conn.execute_batch(
+            "CREATE TABLE session_events (
+                 session_id   TEXT    NOT NULL,
+                 seq          INTEGER NOT NULL,
+                 turn_id      TEXT,
+                 event_type   TEXT    NOT NULL,
+                 payload_json TEXT    NOT NULL,
+                 created_at   INTEGER NOT NULL,
+                 PRIMARY KEY (session_id, seq)
+             );",
+        )
+        .unwrap();
+
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        let legacy = user_message(tid, "written before the migration", at);
+        conn.execute(
+            "INSERT INTO session_events
+             (session_id, seq, turn_id, event_type, payload_json, created_at)
+             VALUES (?1, 1, ?2, 'user_message', ?3, ?4)",
+            params![
+                session_id_to_string(&sid).unwrap(),
+                tid.to_string(),
+                serde_json::to_string(&legacy).unwrap(),
+                at,
+            ],
+        )
+        .unwrap();
+
+        migrate_add_session_events(&conn).unwrap();
+        // Idempotent on an already-migrated DB.
+        migrate_add_session_events(&conn).unwrap();
+
+        let store = SqliteEventStore::new(conn);
+        let live = store.load_all_events(&sid).await.unwrap();
+        assert_eq!(live.len(), 1, "legacy rows must read back as live");
+        assert_eq!(live[0].seq, 1);
+
+        assert_eq!(store.retire_from(&sid, 1).await.unwrap(), 1);
+        assert!(store.load_all_events(&sid).await.unwrap().is_empty());
     }
 
     #[tokio::test]

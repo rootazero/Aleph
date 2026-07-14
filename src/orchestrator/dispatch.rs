@@ -49,10 +49,14 @@ pub enum FlowStreamEvent {
         args: serde_json::Value,
     },
     /// Tool call completed. `result` and `error` are mutually exclusive.
+    /// `duration_ms` is the tool's measured wall-clock execution time, so the
+    /// live `StreamEvent::ToolEnd` carries it instead of waiting for the
+    /// end-of-run `RunSummary.tool_summaries`.
     ToolCallDone {
         id: String,
         result: Option<serde_json::Value>,
         error: Option<String>,
+        duration_ms: u64,
     },
     /// Live context-window occupancy after one LLM call. Emitted once per
     /// call (`HarnessCallback::on_context_usage`) so the panel gauge tracks a

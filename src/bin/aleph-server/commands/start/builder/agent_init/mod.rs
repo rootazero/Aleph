@@ -774,7 +774,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             tools,
             Some(memory_db.clone()),
         )
-        .with_global_tool_permissions(app_config.policies.tool_permissions.clone());
+        .with_app_config(app_config_arc.clone());
         if let Some(ref state_db) = resilience_db {
             engine = engine.with_state_database(state_db.clone());
         }

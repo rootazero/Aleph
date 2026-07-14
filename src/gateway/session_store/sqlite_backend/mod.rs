@@ -145,6 +145,13 @@ impl SessionStore for SessionManager {
             .metadata
             .as_ref()
             .and_then(|v| serde_json::to_string(v).ok());
+        // This table keys rows by an autoincrement rowid, so the projector's
+        // `"{key}:{seq}"` id would otherwise be dropped on the floor — and with
+        // it the only link back to the source event. Persist the seq so a
+        // rewind can delete exactly the rows whose events it retired.
+        let source_seq =
+            crate::session::projection::parse_source_seq(&msg.id, &key.to_key_string())
+                .and_then(|seq| i64::try_from(seq).ok());
         self.add_message_full(
             key,
             &msg.role,
@@ -156,6 +163,7 @@ impl SessionStore for SessionManager {
             msg.model_provider.as_deref(),
             msg.tool_call_id.as_deref(),
             msg.tool_name.as_deref(),
+            source_seq,
         )
         .await
         .map_err(map_err)?;
@@ -375,6 +383,55 @@ impl SessionStore for SessionManager {
         })
     }
 
+    async fn delete_messages_from_seq(
+        &self,
+        key: &SessionKey,
+        from_seq: u64,
+    ) -> Result<usize, SessionStoreError> {
+        let key_str = key.to_key_string();
+        // A seq beyond i64 range can never have been stored; saturating high
+        // makes the predicate match nothing rather than wrapping into a range
+        // that deletes rows the caller never asked for.
+        let from = i64::try_from(from_seq).unwrap_or(i64::MAX);
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Lock error: {e}")))?;
+
+        // `source_seq IS NULL` rows (legacy transcripts, boot-time orphan
+        // notices) are not event-sourced and survive untouched.
+        conn.execute(
+            "DELETE FROM messages_fts WHERE rowid IN (
+                SELECT id FROM messages WHERE session_key = ? AND source_seq >= ?
+            )",
+            params![&key_str, from],
+        )
+        .ok();
+
+        let deleted = conn
+            .execute(
+                "DELETE FROM messages WHERE session_key = ? AND source_seq >= ?",
+                params![&key_str, from],
+            )
+            .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
+
+        let new_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE session_key = ?",
+                params![&key_str],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        conn.execute(
+            "UPDATE sessions SET message_count = ? WHERE key = ?",
+            params![new_count, &key_str],
+        )
+        .ok();
+
+        Ok(deleted)
+    }
+
     async fn list_checkpoints(
         &self,
         _key: &SessionKey,
@@ -544,9 +601,8 @@ impl SessionStore for SessionManager {
         metadata: &serde_json::Value,
     ) -> Result<(), SessionStoreError> {
         let key_str = key.to_key_string();
-        let metadata_json = serde_json::to_string(metadata).map_err(|e| {
-            SessionStoreError::DatabaseError(format!("serialize metadata: {e}"))
-        })?;
+        let metadata_json = serde_json::to_string(metadata)
+            .map_err(|e| SessionStoreError::DatabaseError(format!("serialize metadata: {e}")))?;
         let conn = self
             .conn
             .lock()

@@ -151,6 +151,9 @@ pub enum StreamEvent {
     AskUser {
         run_id: String,
         seq: u64,
+        /// Clarification registry key the reply must be posted back against
+        /// (`clarification.resolve`). Replies route by session, not by run.
+        session_key: String,
         question: String,
         options: Vec<String>,
     },

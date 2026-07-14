@@ -8,6 +8,8 @@
 //! - `chat.abort` - Abort message generation
 //! - `chat.history` - Get chat history
 //! - `chat.clear` - Clear chat history
+//! - `chat.rewind` - Drop the conversation from a given event seq onward
+//!   (server half of edit-and-resend; the client then calls `chat.send`)
 
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
@@ -60,6 +62,11 @@ pub struct SendParams {
     /// [`crate::gateway::model_override::ModelOverride`].
     #[serde(default)]
     pub model_override: Option<crate::gateway::model_override::ModelOverride>,
+    /// Execution tier picked in the composer. Carried on the message because a
+    /// brand-new conversation has no session to write it to yet — see
+    /// [`AgentRunParams::exec_tier`].
+    #[serde(default)]
+    pub exec_tier: Option<String>,
     /// True when this message is an ASR-transcribed spoken utterance (the
     /// Panel voice loop). Forwarded to [`AgentRunParams::voice_input`] so the
     /// session gets the voice-mode prompt layer and the `[voice]` model pin.
@@ -128,13 +135,29 @@ fn parse_before(raw: &str) -> Option<i64> {
 pub struct ClearParams {
     /// Session key to clear
     pub session_key: String,
-    /// Whether to keep system messages (default: true)
-    #[serde(default = "default_keep_system")]
-    pub keep_system: bool,
 }
 
-const fn default_keep_system() -> bool {
-    true
+/// Parameters for chat.rewind request
+#[derive(Debug, Clone, Deserialize)]
+pub struct RewindParams {
+    /// Session key to rewind
+    pub session_key: String,
+    /// First event seq to retire — INCLUSIVE. Everything with `seq >= this`
+    /// leaves the live conversation (event log) and its projected rows are
+    /// deleted from the transcript; everything with `seq < this` survives
+    /// untouched, as do transcript rows that were never projected from an event
+    /// (boot-time orphan notices, legacy rows).
+    ///
+    /// The caller passes the seq of the message it wants to REPLACE, taken from
+    /// the id that message already carries: the projector writes row ids as
+    /// `"{session_key}:{seq}"` (see
+    /// [`crate::session::projection::parse_source_seq`]). To edit-and-resend a
+    /// user message, rewind at that message's seq — it and everything after it
+    /// disappear — then `chat.send` the new text. `chat.rewind` never appends
+    /// the replacement itself.
+    ///
+    /// Must be >= 1 (the first append lands at seq 1).
+    pub seq: u64,
 }
 
 /// Params for chat.context_estimate.
@@ -202,6 +225,7 @@ pub async fn handle_send(
         agent_id: params.agent_id,
         project_root: params.project_root,
         model_override: params.model_override,
+        exec_tier: params.exec_tier,
         voice_input: params.voice_input,
     };
 
@@ -346,27 +370,110 @@ pub async fn handle_clear(
         }
     };
 
-    debug!(
-        session_key = %params.session_key,
-        keep_system = params.keep_system,
-        "Clearing chat history"
-    );
+    debug!(session_key = %params.session_key, "Clearing chat history");
 
-    // Reset the session
-    // Note: keep_system is currently not implemented in SessionManager
-    // For now, we just reset all messages
+    // Retire the event log BEFORE the projection. `reset_session` only empties
+    // the `messages` table the Panel reads; the model replays `session_events`,
+    // so clearing the projection alone would blank the screen while the model
+    // still remembers every word. Doing the SSOT first means a later failure
+    // leaves recoverable ghost rows on screen rather than a conversation the
+    // model secretly still holds.
+    let retired = match crate::session::store::retire_live_events(&session_key, 1).await {
+        Ok(n) => n,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to clear session event log: {e}"),
+            );
+        }
+    };
+
     match session_manager.reset_session(&session_key).await {
         Ok(cleared) => JsonRpcResponse::success(
             request.id,
             json!({
                 "session_key": params.session_key,
-                "cleared": cleared,
+                "cleared": cleared || retired > 0,
+                "events_retired": retired,
             }),
         ),
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
             format!("Failed to clear history: {e}"),
+        ),
+    }
+}
+
+/// Handle chat.rewind RPC request.
+///
+/// Retires every event from `seq` onward, so the live conversation ends just
+/// before it. This is the server half of edit-and-resend: the client rewinds to
+/// the message it wants to change, then sends the new text through `chat.send`
+/// as it would any other message. Rewinding does not run a turn and does not
+/// append the replacement — `chat.send` already owns that path, and appending
+/// here too would double-write the user message.
+pub async fn handle_rewind(
+    request: JsonRpcRequest,
+    session_manager: Arc<dyn SessionStore>,
+) -> JsonRpcResponse {
+    let params: RewindParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let session_key = match SessionKey::from_key_string(&params.session_key) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            );
+        }
+    };
+
+    // Seq is 1-based (the first append lands at 1); 0 would be a client bug
+    // asking to rewind past the start of the log.
+    if params.seq == 0 {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "seq must be >= 1");
+    }
+
+    debug!(session_key = %params.session_key, seq = params.seq, "Rewinding chat");
+
+    let retired = match crate::session::store::retire_live_events(&session_key, params.seq).await {
+        Ok(n) => n,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to rewind session event log: {e}"),
+            );
+        }
+    };
+
+    // Realign the Panel's projection with the shortened log by deleting the
+    // rows the retired events produced — matched by their source seq, never by
+    // row count: `messages` is not a 1:1 image of the live event log (orphan
+    // notices and other writers append rows with no source event), so a
+    // count-derived ordinal cuts the wrong range.
+    match session_manager
+        .delete_messages_from_seq(&session_key, params.seq)
+        .await
+    {
+        Ok(removed) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "session_key": params.session_key,
+                "events_retired": retired,
+                "messages_removed": removed,
+            }),
+        ),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to truncate chat history: {e}"),
         ),
     }
 }
@@ -503,24 +610,23 @@ mod tests {
     #[test]
     fn test_clear_params_deserialization() {
         let json = json!({
-            "session_key": "agent:main:main",
-            "keep_system": false
-        });
-
-        let params: ClearParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.session_key, "agent:main:main");
-        assert!(!params.keep_system);
-    }
-
-    #[test]
-    fn test_clear_params_defaults() {
-        let json = json!({
             "session_key": "agent:main:main"
         });
 
         let params: ClearParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.session_key, "agent:main:main");
-        assert!(params.keep_system); // default true
+    }
+
+    #[test]
+    fn test_rewind_params_deserialization() {
+        let json = json!({
+            "session_key": "agent:main:main",
+            "seq": 7
+        });
+
+        let params: RewindParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.session_key, "agent:main:main");
+        assert_eq!(params.seq, 7);
     }
 
     #[test]

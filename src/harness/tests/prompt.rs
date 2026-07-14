@@ -4,7 +4,7 @@
 //! pattern matching is the comparison vehicle.)
 
 use crate::harness::agent::prompt::build_prompt;
-use crate::providers::message::UnifiedMessage;
+use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::session::events::{
     now_ms, MessageContent, SessionEvent, SessionEventRecord, ToolOutput, ToolOutputMetadata,
 };
@@ -203,6 +203,50 @@ mod prop {
             }
         }
     }
+}
+
+/// REGRESSION: a Panel turn with an image attachment persists the image as a
+/// serde-encoded `ContentBlock` on the user message's `blocks` (seeded via
+/// `FlowInput::Multimodal`). The rebuilt prompt MUST carry it to the provider —
+/// the user arm used to read only `content.text`, so the image never reached
+/// the model at all.
+///
+/// Lives here rather than in `agent/prompt.rs`'s inline `mod tests` to follow
+/// the directory convention the harness is converging on (see `448ce1c03`).
+#[test]
+fn user_message_replays_persisted_image_blocks() {
+    let events = vec![record(SessionEvent::UserMessage {
+        turn_id: Uuid::new_v4(),
+        content: MessageContent {
+            text: "what is in this picture?".into(),
+            blocks: vec![serde_json::to_value(ContentBlock::Image {
+                data: "aGk=".into(),
+                mime_type: "image/png".into(),
+            })
+            .unwrap()],
+            thinking: None,
+            thinking_signature: None,
+        },
+        at: now_ms(),
+        synthetic: false,
+    })];
+
+    let out = build_prompt(&events, 0);
+    let UnifiedMessage::User { content } = &out[0] else {
+        panic!("expected a user message, got {:?}", out[0]);
+    };
+    assert!(
+        content.iter().any(
+            |b| matches!(b, ContentBlock::Text { text, .. } if text == "what is in this picture?")
+        ),
+        "the prompt text must survive alongside the image"
+    );
+    assert!(
+        content.iter().any(
+            |b| matches!(b, ContentBlock::Image { mime_type, .. } if mime_type == "image/png")
+        ),
+        "the attached image must reach the provider message"
+    );
 }
 
 /// Sanity benchmark — not an assertion; run with

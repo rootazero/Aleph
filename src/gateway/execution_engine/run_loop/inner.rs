@@ -208,20 +208,70 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        // Effective tool permission policy for this turn: global
-        // `[policies.tool_permissions]` (engine-held boot snapshot) merged with
-        // the agent's override, then with the originating channel's override
-        // (stamped into metadata by the inbound router — absent for Panel /
-        // CLI / cron turns). Most restrictive wins at every layer. `None` when
-        // everything is all-default so the ScopedToolService hot path stays a
-        // no-op — byte-identical to pre-wiring behavior for unconfigured
-        // installs.
-        let tool_permissions = {
+        // Effective execution tier + explicit tool permission policy for this
+        // turn. Two inputs to one enforcement chokepoint
+        // (`ScopedToolService::permission_for`): the explicit policy decides the
+        // tools it names, the tier decides everything else from each tool's
+        // declared metadata.
+        //
+        // Tier resolution (the user-facing dial):
+        //   1. global `[policies.exec_tier]`, read LIVE from the shared config
+        //      (not a boot snapshot) so a tier change takes effect on the very
+        //      next tool call with no restart;
+        //   2. the session's own tier (`identity_meta.custom["exec_tier"]`,
+        //      written through `sessions.patch`) REPLACES it — an explicit
+        //      per-chat choice is an explicit human decision, so a session may
+        //      raise as well as lower the tier. Safe because the undisableable
+        //      `[sandbox.command_policy]` floor holds under every tier;
+        //   3. clamped down for untrusted (`Chat`) channels, which must never
+        //      run at Full with nobody at the keyboard.
+        //
+        // Explicit policy: global `[policies.tool_permissions]` merged with the
+        // agent's override and the originating channel's override (stamped into
+        // metadata by the inbound router — absent for Panel / CLI / cron turns);
+        // most restrictive wins at both layers. `None` when everything is
+        // all-default so the ScopedToolService hot path stays a no-op.
+        let (exec_tier, tool_permissions) = {
             use crate::config::types::policies::ToolPermissionsConfig;
-            let mut merged = ToolPermissionsConfig::merge(
-                &self.global_tool_permissions,
-                &agent.config().tool_permissions(),
-            );
+            let (global_tier, explicit) = match self.app_config.as_ref() {
+                Some(cfg) => {
+                    let guard = cfg.read().await;
+                    (
+                        guard.policies.exec_tier,
+                        guard.policies.tool_permissions.clone(),
+                    )
+                }
+                None => Default::default(),
+            };
+            // Precedence: the tier this REQUEST carries (the composer's pick in
+            // a conversation whose session did not exist when it was made) >
+            // the session's stored tier > the global tier. Without the first
+            // rung, a tier picked before the first message could not govern
+            // that message — the very turn the user was arming the gate for.
+            let requested = request
+                .metadata
+                .get(crate::config::types::policies::EXEC_TIER_SESSION_KEY)
+                .map(String::as_str)
+                .and_then(crate::config::types::policies::ExecTier::from_id);
+            let stored = self.session_exec_tier(&request.session_key).await;
+            // Stamp a request-carried tier onto the session, so turns 2+ (which
+            // carry nothing) and a page reload both keep it. Same "stamped on
+            // the first message" contract as `project_root`.
+            if let Some(t) = requested.filter(|t| stored != Some(*t)) {
+                self.persist_session_exec_tier(&request.session_key, t)
+                    .await;
+            }
+            let mut tier = requested.or(stored).unwrap_or(global_tier);
+            if let Some(level) = request
+                .metadata
+                .get("caller_role")
+                .map(String::as_str)
+                .and_then(crate::gateway::channel_policy::channel_permission_level_from_role)
+            {
+                tier = crate::gateway::channel_policy::clamp_tier_for_channel(level, tier);
+            }
+            let mut merged =
+                ToolPermissionsConfig::merge(&explicit, &agent.config().tool_permissions());
             if let Some(raw) = request
                 .metadata
                 .get(super::super::CHANNEL_TOOL_PERMISSIONS_KEY)
@@ -239,15 +289,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
             let is_all_default = merged.default == crate::extension::PermissionAction::Allow
                 && merged.overrides.is_empty();
-            (!is_all_default).then(|| {
-                info!(
-                    run_id = run_id,
-                    default = ?merged.default,
-                    overrides = merged.overrides.len(),
-                    "Tool permission policy active for this turn"
-                );
-                merged
-            })
+            info!(
+                run_id = run_id,
+                exec_tier = tier.id(),
+                default = ?merged.default,
+                overrides = merged.overrides.len(),
+                "Execution permissions resolved for this turn"
+            );
+            (tier, (!is_all_default).then_some(merged))
         };
         let _max_loops = agent.config().max_loops as usize;
         let token_budget = agent.config().max_tokens.unwrap_or(500_000);
@@ -341,8 +390,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         return Ok(stop_msg);
                     }
                     for c in &hr.additional_contexts {
-                        transient_blocks
-                            .push(format!("<system-reminder>\n{}\n</system-reminder>", c.trim()));
+                        transient_blocks.push(format!(
+                            "<system-reminder>\n{}\n</system-reminder>",
+                            c.trim()
+                        ));
                     }
                 }
                 Err(e) => warn!(run_id = run_id, error = %e, "UserPromptSubmit hook failed"),
@@ -365,8 +416,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 blocks.push(skills_block);
             }
             for b in blocks {
-                transient_blocks
-                    .push(format!("<system-reminder>\n{}\n</system-reminder>", b.trim()));
+                transient_blocks.push(format!(
+                    "<system-reminder>\n{}\n</system-reminder>",
+                    b.trim()
+                ));
             }
         }
 
@@ -391,54 +444,55 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let transient_context =
             (!transient_blocks.is_empty()).then(|| transient_blocks.join("\n\n"));
 
-        // Pre-process multimodal attachments (constant across retries)
-        let multimodal_messages: Option<Vec<crate::providers::message::UnifiedMessage>> =
-            if let (false, Some(media_processor)) = (
-                request.attachments.is_empty(),
-                self.media_processor.as_ref(),
-            ) {
-                let supports_vision = true;
-                let media_blocks = media_processor
-                    .process(
-                        &request.attachments,
-                        supports_vision,
-                        &request.session_key.to_key_string(),
-                        run_id,
-                    )
-                    .await;
+        // Pre-process attachments into the content blocks that ride on this
+        // turn's user message (constant across retries). Serialized
+        // `ContentBlock`s are persisted on the seeded `UserMessage`'s
+        // `MessageContent.blocks` (via `FlowInput::Multimodal` below) and
+        // rebuilt into the provider message by `harness::agent::prompt` — that
+        // is the only path by which an image actually reaches the model.
+        // Empty when the turn carries no attachments; also the media-cache
+        // cleanup gate on every terminal branch of the retry loop below.
+        let media_blocks: Vec<serde_json::Value> = if let (false, Some(media_processor)) = (
+            request.attachments.is_empty(),
+            self.media_processor.as_ref(),
+        ) {
+            let supports_vision = true;
+            let blocks = media_processor
+                .process(
+                    &request.attachments,
+                    supports_vision,
+                    &request.session_key.to_key_string(),
+                    run_id,
+                )
+                .await;
 
-                let mut content = vec![crate::providers::message::ContentBlock::Text {
-                    text: effective_user_input.clone(),
-                    cache_control: None,
-                }];
-                content.extend(media_blocks);
+            let has_images = blocks
+                .iter()
+                .any(|b| matches!(b, crate::providers::message::ContentBlock::Image { .. }));
+            let has_transcripts = blocks.iter().any(|b| {
+                if let crate::providers::message::ContentBlock::Text { text, .. } = b {
+                    text.starts_with("[Voice message transcript]")
+                } else {
+                    false
+                }
+            });
+            tracing::info!(
+                target: "multimodal",
+                probe = "P5_inject",
+                run_id = %request.run_id,
+                content_blocks = blocks.len(),
+                has_images = has_images,
+                has_transcripts = has_transcripts,
+                "Multimodal content blocks built"
+            );
 
-                let has_images = content
-                    .iter()
-                    .any(|b| matches!(b, crate::providers::message::ContentBlock::Image { .. }));
-                let has_transcripts = content.iter().any(|b| {
-                    if let crate::providers::message::ContentBlock::Text { text, .. } = b {
-                        text.starts_with("[Voice message transcript]")
-                    } else {
-                        false
-                    }
-                });
-                tracing::info!(
-                    target: "multimodal",
-                    probe = "P5_inject",
-                    run_id = %request.run_id,
-                    content_blocks = content.len(),
-                    has_images = has_images,
-                    has_transcripts = has_transcripts,
-                    "Multimodal UnifiedMessage built"
-                );
-
-                let mut msgs = history.clone();
-                msgs.push(crate::providers::message::UnifiedMessage::user_with_content(content));
-                Some(msgs)
-            } else {
-                None
-            };
+            blocks
+                .iter()
+                .filter_map(|b| serde_json::to_value(b).ok())
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         // === Retry loop: resolve provider → build agent loop → run ===
         const MAX_FALLBACK_ATTEMPTS: usize = 3;
@@ -707,6 +761,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     hook_executor.clone(),
                     hook_session_id.clone(),
                     tool_permissions.clone(),
+                    exec_tier,
                     unattended,
                     &self.config.core_tools,
                     self.config.truncate_tool_descriptions,
@@ -930,6 +985,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 hook_executor.clone(),
                 hook_session_id.clone(),
                 tool_permissions.clone(),
+                exec_tier,
                 unattended,
                 &self.config.core_tools,
                 self.config.truncate_tool_descriptions,
@@ -977,11 +1033,26 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // harness bridge then skips seeding and replays the log.
             let flow_input = if request.metadata.get("resume").map(String::as_str) == Some("true") {
                 crate::orchestrator::FlowInput::Resume
-            } else {
+            } else if media_blocks.is_empty() {
                 super::super::helpers::history_to_flow_input(
                     history.clone(),
                     effective_user_input.clone(),
                 )
+            } else {
+                // Attachment turn: seed ONLY the new user message, carrying the
+                // media blocks. Prior turns are already in the event log —
+                // either persisted by earlier turns, or backfilled from the
+                // legacy `messages` rows just above — so, unlike
+                // `FlowInput::History`, this variant needs no empty-log replay
+                // guard and cannot duplicate history on turn 2+.
+                crate::orchestrator::FlowInput::Multimodal(vec![
+                    crate::session::events::MessageContent {
+                        text: effective_user_input.clone(),
+                        blocks: media_blocks.clone(),
+                        thinking: None,
+                        thinking_signature: None,
+                    },
+                ])
             };
 
             // Phase 4 (F4): derive the channel's InteractionManifest from
@@ -1066,7 +1137,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Ok(response) => {
                     self.provider_registry
                         .report_outcome(&resolved.provider_name, Ok(()));
-                    if multimodal_messages.is_some() {
+                    if !media_blocks.is_empty() {
                         if let Some(mp) = self.media_processor.as_ref() {
                             mp.cleanup(&request.session_key.to_key_string());
                         }
@@ -1079,7 +1150,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     return Ok(response);
                 }
                 Err(super::super::helpers::DispatchFailure::Cancelled) => {
-                    if multimodal_messages.is_some() {
+                    if !media_blocks.is_empty() {
                         if let Some(mp) = self.media_processor.as_ref() {
                             mp.cleanup(&request.session_key.to_key_string());
                         }
@@ -1146,7 +1217,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                             crate::providers::health::TransientError::ConnectionFailed,
                         )),
                     );
-                    if multimodal_messages.is_some() {
+                    if !media_blocks.is_empty() {
                         if let Some(mp) = self.media_processor.as_ref() {
                             mp.cleanup(&request.session_key.to_key_string());
                         }
@@ -1163,7 +1234,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     )));
                 }
                 Err(super::super::helpers::DispatchFailure::Fatal(msg)) => {
-                    if multimodal_messages.is_some() {
+                    if !media_blocks.is_empty() {
                         if let Some(mp) = self.media_processor.as_ref() {
                             mp.cleanup(&request.session_key.to_key_string());
                         }
@@ -1177,6 +1248,68 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     return Err(ExecutionError::Failed(msg));
                 }
             }
+        }
+    }
+
+    /// Per-session execution tier, carried in the session's identity metadata
+    /// under `custom["exec_tier"]` (same carrier as `custom["project_root"]`,
+    /// written through the existing `sessions.patch` RPC).
+    ///
+    /// A malformed or unknown value is ignored — the turn falls back to the
+    /// global tier rather than failing.
+    async fn session_exec_tier(
+        &self,
+        session_key: &crate::gateway::router::SessionKey,
+    ) -> Option<crate::config::types::policies::ExecTier> {
+        use crate::config::types::policies::{ExecTier, EXEC_TIER_SESSION_KEY};
+
+        let store = self.session_manager.as_ref()?;
+        let meta = match store.get_metadata(session_key).await {
+            Ok(meta) => meta?,
+            Err(e) => {
+                warn!(error = %e, "Failed to read session metadata — session exec tier skipped");
+                return None;
+            }
+        };
+        let raw = meta
+            .identity_meta?
+            .custom
+            .get(EXEC_TIER_SESSION_KEY)?
+            .as_str()?
+            .to_string();
+        match ExecTier::from_id(&raw) {
+            Some(tier) => Some(tier),
+            None => {
+                warn!(
+                    value = %raw,
+                    "Unknown session exec_tier — falling back to the global tier"
+                );
+                None
+            }
+        }
+    }
+
+    /// Stamp a request-carried tier onto the session, so the choice outlives
+    /// the turn that carried it (later turns send nothing; a page reload reads
+    /// the session back). Best-effort: a store failure must not fail the run —
+    /// the tier for THIS turn is already resolved and enforced either way.
+    async fn persist_session_exec_tier(
+        &self,
+        session_key: &crate::gateway::router::SessionKey,
+        tier: crate::config::types::policies::ExecTier,
+    ) {
+        use crate::config::types::policies::EXEC_TIER_SESSION_KEY;
+        use crate::gateway::session_store::types::SessionPatch;
+
+        let Some(store) = self.session_manager.as_ref() else {
+            return;
+        };
+        let patch = SessionPatch {
+            metadata: Some(serde_json::json!({ EXEC_TIER_SESSION_KEY: tier.id() })),
+            ..Default::default()
+        };
+        if let Err(e) = store.patch_session(session_key, &patch).await {
+            warn!(error = %e, tier = tier.id(), "Failed to persist session exec tier");
         }
     }
 }

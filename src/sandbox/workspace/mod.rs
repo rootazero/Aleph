@@ -213,7 +213,12 @@ impl Sandbox for WorkspaceSandbox {
                 // re-prompting (blind-retry guard + circuit breaker). The
                 // fingerprint keys on the deterministic capability-request text
                 // so the *same* elevation maps to the *same* bucket.
-                let led_key = session_key_to_filename(&cmd.session_id);
+                // `denial_ledger::ledger_key`, NOT `session_key_to_filename`:
+                // the latter names this session's workspace *directory*, and
+                // keying the ledger with it put this gate in a different bucket
+                // from the tool confirm gate, so neither saw the other's
+                // refusals. A filename encoder is not an identity.
+                let led_key = denial_ledger::ledger_key(&cmd.session_id);
                 let fingerprint = denial_ledger::action_fingerprint(&cmd.program, &reason);
                 if let Some(reason_kind) =
                     denial_ledger::global().is_blocked(&led_key, &fingerprint)
@@ -245,7 +250,9 @@ impl Sandbox for WorkspaceSandbox {
                     }
                     ApprovalOutcome::Denied | ApprovalOutcome::Timeout => {
                         // Remember the refusal so the next blind retry of this
-                        // exact elevation is short-circuited above.
+                        // exact elevation is short-circuited above. A `Timeout`
+                        // is passed but dropped by the ledger (an expired card
+                        // is not a decision) — see `DenialLedger::record_denial`.
                         let reason_kind = if matches!(outcome, ApprovalOutcome::Timeout) {
                             denial_ledger::DenialReason::Timeout
                         } else {
@@ -425,7 +432,6 @@ mod tests {
     use crate::sandbox::capabilities::NetworkPolicy;
     use crate::sandbox::driver::OsSandboxProfile;
     use crate::sandbox::exec_approval::gate::ApprovalRequester;
-    use crate::sandbox::exec_approval::types::ApprovalConfig;
     use crate::sync_primitives::Mutex;
 
     /// A no-op driver for tests — avoids invoking the real macOS sandbox-exec.
@@ -662,20 +668,41 @@ mod tests {
         }
     }
 
+    /// A session of this test's own.
+    ///
+    /// `ephemeral()` mints a fresh uuid, so every call yields a distinct key
+    /// (`agent:ws-test:ephemeral:<uuid>`) — which is the only reason these tests
+    /// can run in parallel at all: the denial ledger is process-global and keyed
+    /// by session, and its session-pause flag is sticky, so two tests sharing a
+    /// key would share a bucket and become order-dependent.
+    ///
+    /// That isolation is incidental — nothing here would fail loudly if
+    /// `ephemeral()` ever became deterministic. [`sid_is_unique_per_call`] pins
+    /// it, so the day it changes, one obvious test breaks instead of a dozen
+    /// unrelated ones flaking.
     fn sid() -> SessionId {
         crate::routing::session_key::SessionKey::ephemeral("ws-test")
     }
 
+    #[test]
+    fn sid_is_unique_per_call() {
+        assert_ne!(
+            sid().to_string(),
+            sid().to_string(),
+            "every test must own its session: the denial ledger is process-global \
+             and keyed by session, and its pause flag is sticky"
+        );
+    }
+
     fn build_gate_auto_deny() -> Arc<ApprovalGate> {
         // No requester → ApprovalGate::request_approval_for_tool returns Denied.
-        Arc::new(ApprovalGate::new(ApprovalConfig::default(), None))
+        Arc::new(ApprovalGate::new(None))
     }
 
     fn build_gate_with(outcome: ApprovalOutcome) -> Arc<ApprovalGate> {
-        Arc::new(ApprovalGate::new(
-            ApprovalConfig::default(),
-            Some(Arc::new(FixedRequester::new(outcome))),
-        ))
+        Arc::new(ApprovalGate::new(Some(Arc::new(FixedRequester::new(
+            outcome,
+        )))))
     }
 
     fn build_sandbox(
@@ -887,6 +914,64 @@ mod tests {
         );
     }
 
+    /// REGRESSION — the cross-gate one. `blind_retry_is_auto_blocked_with_ledger_hint`
+    /// above records *and* reads through this same path, so it passes under any
+    /// key encoding and cannot see the bug. This test reads back with the key the
+    /// **tool confirm gate** uses.
+    ///
+    /// The elevation gate used to key the ledger with `session_key_to_filename`
+    /// — the SHA-256 encoder that names this session's workspace *directory* —
+    /// while the confirm gate used the plain session string. Same session, two
+    /// strings that never collide, so one global map held two disjoint ledgers:
+    /// a refusal here was invisible there, and the session-wide "3 denials pause
+    /// the session" breaker really allowed 3 per *path*.
+    #[tokio::test]
+    async fn an_elevation_refusal_is_visible_to_the_tool_confirm_gate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeDriver::new());
+        let sandbox = build_sandbox(
+            &tmp,
+            driver,
+            build_gate_with(ApprovalOutcome::Denied),
+            SandboxHooks::new(),
+        );
+        let elevated = SandboxCapabilities {
+            network: NetworkPolicy::AllowAll,
+            ..SandboxCapabilities::strict()
+        };
+        // The denial ledger is process-global, so this test must not share a
+        // bucket with any other. It doesn't: `sid()` mints a fresh
+        // `agent:ws-test:ephemeral:<uuid>` per call, so every test here already
+        // owns its own session.
+        let session = sid();
+
+        let denied = sandbox
+            .execute(SandboxCommand {
+                session_id: session.clone(),
+                program: "curl".into(),
+                args: vec!["https://example.com".into()],
+                env: HashMap::new(),
+                stdin: None,
+                cwd: None,
+                capabilities: elevated.clone(),
+                timeout: None,
+            })
+            .await;
+        assert!(denied.is_err(), "the elevation must be refused");
+
+        // Now look it up exactly as `ScopedToolService::confirm_with_memory` would.
+        let fingerprint = denial_ledger::action_fingerprint(
+            "curl",
+            &format_capability_request("curl", &elevated),
+        );
+        assert_eq!(
+            denial_ledger::global().is_blocked(&denial_ledger::ledger_key(&session), &fingerprint),
+            Some(denial_ledger::DenialReason::RepeatedSameIntent),
+            "the confirm gate must see the refusal the elevation gate recorded — \
+             if this is None, the two gates are keying the ledger differently again"
+        );
+    }
+
     #[tokio::test]
     async fn approval_approved_caches_grant_for_session() {
         let tmp = tempfile::tempdir().unwrap();
@@ -894,10 +979,7 @@ mod tests {
         let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver.clone();
         let requester = FixedRequester::new(ApprovalOutcome::Approved);
         let calls = requester.calls.clone();
-        let gate = Arc::new(ApprovalGate::new(
-            ApprovalConfig::default(),
-            Some(Arc::new(requester)),
-        ));
+        let gate = Arc::new(ApprovalGate::new(Some(Arc::new(requester))));
         let sandbox = build_sandbox(&tmp, driver_trait, gate, SandboxHooks::new());
         let elevated = SandboxCapabilities {
             network: NetworkPolicy::AllowAll,
@@ -1309,7 +1391,6 @@ mod scrub_integration_tests {
     use super::*;
     use crate::sandbox::driver::OsSandboxProfile;
     use crate::sandbox::exec_approval::gate::ApprovalGate;
-    use crate::sandbox::exec_approval::types::ApprovalConfig;
     use crate::sandbox::hooks::SandboxHooks;
     use std::path::Path;
 
@@ -1370,7 +1451,7 @@ mod scrub_integration_tests {
             stdout_payload,
             stderr_payload,
         });
-        let gate = Arc::new(ApprovalGate::new(ApprovalConfig::default(), None));
+        let gate = Arc::new(ApprovalGate::new(None));
         WorkspaceSandbox::new(tmp.path().to_path_buf(), driver, gate, SandboxHooks::new())
     }
 

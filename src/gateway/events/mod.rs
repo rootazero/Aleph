@@ -1,3 +1,3 @@
 pub mod frame;
 
-pub use frame::{ChangeKind, GatewayEventFrame};
+pub use frame::{ChangeKind, ClarificationOutcome, GatewayEventFrame};

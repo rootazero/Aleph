@@ -1,6 +1,8 @@
 //! Component modules
 
 pub mod agents_sidebar;
+pub mod approval_card;
+pub mod ask_user_card;
 pub mod boot_check_gate;
 pub mod chat_sidebar;
 pub mod command_palette;

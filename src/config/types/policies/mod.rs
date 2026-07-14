@@ -28,6 +28,7 @@
 //! initial_backoff_ms = 500
 //! ```
 
+pub mod exec_tier;
 pub mod experimental;
 pub mod intent;
 pub mod keyword;
@@ -39,6 +40,7 @@ pub mod tool_permissions;
 pub mod tool_safety;
 pub mod web_fetch;
 
+pub use exec_tier::{builtin_tiers, ExecTier, ToolFacts, EXEC_TIER_SESSION_KEY};
 pub use experimental::ExperimentalPolicy;
 pub use intent::IntentDetectionPolicy;
 pub use keyword::KeywordPolicy;
@@ -91,6 +93,13 @@ pub struct PoliciesConfig {
     /// Keyword matching policy for intent detection
     #[serde(default)]
     pub keyword: KeywordPolicy,
+
+    /// Execution permission tier (Ask / Auto / Full).
+    ///
+    /// The user-facing dial. Projects onto `tool_permissions` at run time;
+    /// explicit `tool_permissions` entries win over the tier's preset.
+    #[serde(default)]
+    pub exec_tier: ExecTier,
 
     /// Tool permission levels (Allow / Ask / Deny)
     #[serde(default)]

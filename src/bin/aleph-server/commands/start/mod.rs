@@ -264,8 +264,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // `request_approval_for_tool` denies — never a silent auto-approve.
     let approval_gate = {
         use alephcore::sandbox::exec_approval::gate::ApprovalGate;
-        use alephcore::sandbox::exec_approval::types::ApprovalConfig;
-        Arc::new(ApprovalGate::new(ApprovalConfig::default(), None))
+        Arc::new(ApprovalGate::new(None))
     };
 
     let sandbox: Arc<dyn alephcore::sandbox::Sandbox> = {
@@ -2369,7 +2368,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     //     `ScopedToolService.with_confirmation` `requires_confirmation` seam
     //     (`set_confirmation_requester`, HITL P3).
     //   • Clarification manager — registered for HITL P4 `ask_user`, injected
-    //     into `BuiltinToolRegistry` via the cell set up at agent boot.
+    //     into `BuiltinToolRegistry` via the cell set up at agent boot, and
+    //     shared with the `clarification.*` RPC handlers (the Panel's only way
+    //     to answer — its traffic never traverses the inbound router).
     let clarification_manager = Arc::new(alephcore::clarification::ClarificationManager::new());
     {
         use alephcore::approval::adapters::ChannelApprovalBridgeAdapter;
@@ -2381,34 +2382,45 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             exec_approval_manager.clone(),
         );
 
-        // Single requester instance shared by P1 (sandbox) and P3 (tool confirm).
+        // clarification.* RPC handlers — same `Arc` the `ask_user` tool parks on.
+        alephcore::gateway::handlers::clarification::register_handlers(
+            server.handlers_mut(),
+            clarification_manager.clone(),
+        );
+
+        use alephcore::approval::adapters::FallbackApprovalRequester;
+        use alephcore::approval::operator_requester::OperatorApprovalRequester;
+
         let bridge = Arc::new(ChannelApprovalBridge::new(channel_registry.clone()));
-        let approval_requester: Arc<
-            dyn alephcore::sandbox::exec_approval::gate::ApprovalRequester,
-        > = Arc::new(ChannelApprovalBridgeAdapter::new(
+        let channel_adapter = Arc::new(ChannelApprovalBridgeAdapter::new(
             bridge,
             exec_approval_manager.clone(),
         ));
+        // Operator/event-bus transport: the approval card an operator-tier
+        // connection (the Panel) receives and resolves via `exec.approval.resolve`.
+        let operator_requester = Arc::new(OperatorApprovalRequester::new(
+            exec_approval_manager.clone(),
+            event_bus.clone(),
+        ));
 
-        // P1: sandbox capability escalations reach the user via this requester.
-        approval_gate.set_requester(approval_requester.clone());
-        // P3: `requires_confirmation` tools route through the same requester.
-        alephcore::gateway::execution_engine::set_confirmation_requester(approval_requester);
+        // Both human-approval paths — sandbox capability escalation (P1) and
+        // confirm-gated tools (P3) — share one transport: prompt on the
+        // originating channel, fall back to the operator when there is none.
+        // Panel turns carry the `gui:chat` pseudo-channel, which is never
+        // registered, so the channel transport alone would deny every Panel
+        // approval without ever asking.
+        let human_requester: Arc<dyn alephcore::sandbox::exec_approval::gate::ApprovalRequester> =
+            Arc::new(FallbackApprovalRequester::new(
+                channel_adapter,
+                operator_requester.clone(),
+            ));
+        approval_gate.set_requester(human_requester.clone());
+        alephcore::gateway::execution_engine::set_confirmation_requester(human_requester);
 
         // Phase 2b: operator-targeted approval for config-tier tools. A chat-tier
         // remote device calling a config tool suspends here until an operator
-        // resolves it via `exec.approval.resolve`. Distinct from the channel-backed
-        // requester above (which delivers to the requester's own channel).
-        {
-            use alephcore::approval::operator_requester::OperatorApprovalRequester;
-            let config_approver: Arc<
-                dyn alephcore::sandbox::exec_approval::gate::ApprovalRequester,
-            > = Arc::new(OperatorApprovalRequester::new(
-                exec_approval_manager.clone(),
-                event_bus.clone(),
-            ));
-            alephcore::gateway::execution_engine::set_config_approval_requester(config_approver);
-        }
+        // resolves it via `exec.approval.resolve`.
+        alephcore::gateway::execution_engine::set_config_approval_requester(operator_requester);
 
         // Phase 1 delivery surface: register the desktop shell as an addressable
         // outbound surface and spawn the core R5 router. The router applies the

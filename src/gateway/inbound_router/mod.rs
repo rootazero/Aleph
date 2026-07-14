@@ -961,9 +961,9 @@ impl InboundMessageRouter {
 
         // Approval reply: `/approve [once|session|always]` or `/deny`.
         // A bare `/approve` (or any unrecognized suffix) stays the
-        // least-privilege `AllowOnce`; `session` / `always` widen the grant
-        // scope (hermes' once/session/always tiers). The manager clamps an
-        // `always` on a Danger-classified command down to a session grant.
+        // least-privilege `AllowOnce`; `session` widens the grant to the rest
+        // of the session. `always` is accepted for backwards compatibility but
+        // the manager clamps it to a session grant — nothing persists.
         let is_approve = lower == "/approve" || lower.starts_with("/approve ");
         let is_deny = lower == "/deny" || lower.starts_with("/deny ");
         if is_approve || is_deny {
@@ -979,16 +979,17 @@ impl InboundMessageRouter {
                 } else {
                     ApprovalDecisionType::Deny
                 };
-                // Reply with the EFFECTIVE decision: the manager may clamp an
-                // `always` on a Danger-classified command to a session grant.
+                // Reply with the EFFECTIVE decision: the manager clamps an
+                // `always` to a session grant, so never promise permanence.
                 let reply = match mgr.resolve_for_session(
                     &session_key,
                     decision,
                     ctx.message.sender_name.clone(),
                 ) {
                     Some(ApprovalDecisionType::AllowOnce) => "✅ Approved (once).",
-                    Some(ApprovalDecisionType::AllowSession) => "✅ Approved for this session.",
-                    Some(ApprovalDecisionType::AllowAlways) => "✅ Approved (always).",
+                    Some(
+                        ApprovalDecisionType::AllowSession | ApprovalDecisionType::AllowAlways,
+                    ) => "✅ Approved for this session.",
                     Some(ApprovalDecisionType::Deny) => "❌ Denied.",
                     None => "Nothing is awaiting your approval right now.",
                 };
