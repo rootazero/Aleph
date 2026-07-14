@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use tauri::menu::MenuItem;
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Manager, Url, Wry};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::UpdaterExt;
 
@@ -25,6 +25,37 @@ const CHECK_INTERVAL: Duration = Duration::from_hours(6);
 /// Where to send users whose install can't self-update (Linux package
 /// installs): the GitHub releases page.
 const RELEASES_URL: &str = "https://github.com/rootazero/Aleph/releases/latest";
+
+/// Reserved shell-control paths the in-window update banner navigates to. The
+/// `on_navigation` guard (`main.rs`) intercepts and cancels these, so they
+/// never actually load — the Panel/daemon never serve the `/__aleph-shell/`
+/// prefix. Matching on the path (not the host) keeps the callback working
+/// whether the Panel is served from loopback (full app) or a remote Gateway
+/// (Panel-lite): Tauri IPC is loopback-scoped and unavailable from a remote
+/// origin, so this navigation channel is the only origin-independent one.
+const APPLY_PATH: &str = "/__aleph-shell/update/apply";
+const DISMISS_PATH: &str = "/__aleph-shell/update/dismiss";
+
+/// A banner control signal routed from the webview back to the shell via a
+/// sentinel navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateControl {
+    /// Apply the staged update and restart.
+    Apply,
+    /// Hide the banner for this session.
+    Dismiss,
+}
+
+/// Recognise a banner control link by its path. Returns `None` for ordinary
+/// Panel routes and external links, which must pass through to
+/// `external_link::route`.
+pub fn control_action(url: &Url) -> Option<UpdateControl> {
+    match url.path() {
+        APPLY_PATH => Some(UpdateControl::Apply),
+        DISMISS_PATH => Some(UpdateControl::Dismiss),
+        _ => None,
+    }
+}
 
 /// Shared update state, managed by Tauri so the background checker, the
 /// tray, and the macOS menu agree on whether an update is waiting.
@@ -321,5 +352,37 @@ mod tests {
             manual_update_label("26.5.30"),
             "Update v26.5.30 available — how to update"
         );
+    }
+
+    #[test]
+    fn control_action_recognises_the_apply_sentinel() {
+        let url = Url::parse("http://127.0.0.1:18790/__aleph-shell/update/apply").unwrap();
+        assert_eq!(control_action(&url), Some(UpdateControl::Apply));
+    }
+
+    #[test]
+    fn control_action_recognises_the_dismiss_sentinel_on_any_origin() {
+        // Remote origin (Panel-lite pointed at a LAN Gateway) must match too —
+        // control_action keys off the path, not the host.
+        let url = Url::parse("http://box.lan:9000/__aleph-shell/update/dismiss").unwrap();
+        assert_eq!(control_action(&url), Some(UpdateControl::Dismiss));
+    }
+
+    #[test]
+    fn control_action_ignores_ordinary_urls() {
+        for u in [
+            "http://127.0.0.1:18790/",
+            "http://127.0.0.1:18790/chat",
+            "https://github.com/rootazero/Aleph/releases/latest",
+            "tauri://localhost/index.html",
+        ] {
+            assert_eq!(control_action(&Url::parse(u).unwrap()), None, "{u}");
+        }
+    }
+
+    #[test]
+    fn control_action_matches_apply_even_with_query() {
+        let url = Url::parse("http://127.0.0.1:18790/__aleph-shell/update/apply?v=1").unwrap();
+        assert_eq!(control_action(&url), Some(UpdateControl::Apply));
     }
 }
