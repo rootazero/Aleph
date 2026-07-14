@@ -332,7 +332,20 @@
     "hub_view_table": "Table",
     "view_in_graph": "View in graph",
     "view_in_list": "View in list",
-    "highlight_not_in_window": "This note is outside the current window — use search to locate it."
+    "highlight_not_in_window": "This note is outside the current window — use search to locate it.",
+    "node_not_in_graph": "That note isn't in the loaded galaxy.",
+    "search_no_match": "No matches.",
+    "graph_empty": "No notes yet — talk to your agent and memories will appear here.",
+    "graph_error": "Couldn't load the graph.",
+    "graph_gl_fatal": "3D graphics stopped working. Reload the page to restore the galaxy.",
+    "retry": "Retry",
+    "edge_density": "Edge density",
+    "edge_density_hint": "Drag left for fewer links, right for every link.",
+    "fit_view": "Fit",
+    "reset_view": "Reset view",
+    "zoom_in": "Zoom in",
+    "zoom_out": "Zoom out",
+    "focus_selected": "Focus selected"
   },
   "logs": {
     "title": "Server Logs",

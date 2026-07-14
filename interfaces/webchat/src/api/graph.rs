@@ -9,12 +9,10 @@ impl GraphApi {
         state: &DashboardState,
         agent_id: &str,
         limit: usize,
-        kind_filter: Vec<String>,
     ) -> Result<GraphQueryResponse, String> {
         let params = json!({
             "agent_id": agent_id,
             "limit": limit,
-            "kind_filter": kind_filter,
         });
         let result = state.rpc_call("graph.query", params).await?;
         serde_json::from_value(result).map_err(|e| format!("Failed to parse graph.query: {e}"))

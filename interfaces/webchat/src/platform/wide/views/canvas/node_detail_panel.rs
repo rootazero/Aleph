@@ -49,6 +49,11 @@ pub fn NodeDetailPanel(
     /// Body-excerpt cache keyed by node id. Populated by this component's
     /// fetch Effect and updated optimistically on save.
     excerpts: RwSignal<HashMap<String, NodeExcerpt>>,
+    /// Galaxy-invalidation pulse: bumped after every successful note mutation
+    /// so the canvas host re-fetches the graph. Without it a deleted note's
+    /// star (and its edges) keeps rendering, and a renamed note's new id is
+    /// absent from the galaxy index — both silent, until the next agent switch.
+    graph_nonce: RwSignal<u32>,
 ) -> impl IntoView {
     let mem = expect_context::<MemoryState>();
     let state = expect_context::<DashboardState>();
@@ -95,7 +100,8 @@ pub fn NodeDetailPanel(
                 let selected = mem.selected_node.get();
                 if let Some(id) = selected {
                     if let Some(ex) = excerpts.with(|m| m.get(&id).cloned()) {
-                        view! { <DetailFor excerpt=ex excerpts=excerpts /> }.into_any()
+                        view! { <DetailFor excerpt=ex excerpts=excerpts graph_nonce=graph_nonce /> }
+                            .into_any()
                     } else {
                         view! { <DetailLoading id=id /> }.into_any()
                     }
@@ -113,6 +119,10 @@ fn DetailFor(
     /// Shared cache — updated optimistically when an edit is saved so the
     /// read view re-renders with the new content (no extra round-trip).
     excerpts: RwSignal<HashMap<String, NodeExcerpt>>,
+    /// Bumped in every mutation's Ok arm — the galaxy is rebuilt from the
+    /// server's new topology (link edges change on every body edit, and a
+    /// delete removes a star outright).
+    graph_nonce: RwSignal<u32>,
 ) -> impl IntoView {
     let mem = expect_context::<MemoryState>();
     let state = expect_context::<DashboardState>();
@@ -181,6 +191,8 @@ fn DetailFor(
                                 ex.body_markdown = content;
                             }
                         });
+                        // Body edits change wikilinks — rebuild the galaxy.
+                        graph_nonce.update(|n| *n += 1);
                         is_saving.set(false);
                         is_editing.set(false);
                     }
@@ -215,6 +227,9 @@ fn DetailFor(
                         excerpts.update(|m| {
                             m.remove(&id);
                         });
+                        // The old id is gone from the store — rebuild the galaxy
+                        // so the new id is in its index and fly-to can find it.
+                        graph_nonce.update(|n| *n += 1);
                         mem.selected_node.set(Some(new_id));
                         is_saving.set(false);
                         is_renaming.set(false);
@@ -249,6 +264,8 @@ fn DetailFor(
                         excerpts.update(|m| {
                             m.remove(&id);
                         });
+                        // The star and its edges must stop rendering.
+                        graph_nonce.update(|n| *n += 1);
                         mem.selected_node.set(None);
                         is_saving.set(false);
                     }

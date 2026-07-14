@@ -1,5 +1,5 @@
 //! Memory-mode left sidebar controls — agent selector, graph/list view toggle,
-//! search box, and the Fold (edge-density) slider, stacked top-to-bottom. Pure
+//! search box, and the edge-density slider, stacked top-to-bottom. Pure
 //! I/O: reads/writes `MemoryState` only (R4). Replaces both the former
 //! `MemoryToolbar` (which sat atop the canvas) and the old `NodeDetailPanel`
 //! sidebar instance, leaving the canvas overlay as the single node-detail surface.
@@ -159,14 +159,15 @@ pub fn MemorySidebar() -> impl IntoView {
                 </div>
             </div>
 
-            // ── Fold slider (edge-density knob; see canvas `fold_to_lod`) ──
+            // ── Edge-density slider (drives the canvas LOD; see `fold_to_lod`) ──
             <div class="px-3 pt-2 pb-3">
                 <label style="font-size:9.5px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">
-                    "Fold"
+                    {move || t_string!(i18n, memory.edge_density).to_string()}
                 </label>
                 <input
                     type="range" min="0" max="10" step="1"
                     class="w-full mt-1 accent-[#a78bfa]"
+                    title=move || t_string!(i18n, memory.edge_density_hint).to_string()
                     prop:value=move || mem.fold_threshold.get() as i32
                     on:input=move |ev| {
                         if let Ok(v) = event_target_value(&ev).parse::<usize>() {

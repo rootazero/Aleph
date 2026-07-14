@@ -6,6 +6,12 @@
 /// the ribbons can never visually detach from the stars. `phase` ∈ [0,1) is the
 /// per-node phase (see `nodes::node_phase`); `time_ms` is `u_time`. All motion
 /// is evaluated on the GPU — idle frames upload nothing.
+///
+/// CONTRACT: `gl/drift.rs` is a Rust twin of this function — CPU-side picking
+/// projects the DRIFTED position, so it has to reproduce this motion exactly.
+/// The two must be changed together, or the star you click stops being the star
+/// you hit. Do not touch DRIFT_AMP, DRIFT_OMEGA or the per-axis phase offsets in
+/// isolation.
 pub const DRIFT_GLSL: &str = r#"
 const float DRIFT_AMP = 3.0;
 const float DRIFT_TAU = 6.28318530718;
@@ -154,7 +160,11 @@ void main() {
     // Endpoint taper: thinner near both ends so the line welds into the star.
     float edge = min(t, 1.0 - t);
     float taper = mix(0.55, 1.0, smoothstep(0.0, 0.12, edge));
-    vec2 off_px = nrm * (a_corner.y * u_width * 0.5 * taper);
+    // Highlighted incident edges are 1.5x thicker, so the selected chain reads as
+    // a shape and not only as a hue. a_highlight is 0.0 on every edge when nothing
+    // is selected, so this is a no-op in the default view.
+    float width = mix(u_width, u_width * 1.5, a_highlight);
+    vec2 off_px = nrm * (a_corner.y * width * 0.5 * taper);
     cp.xy += off_px * 2.0 / u_viewport * cp.w;
     gl_Position = cp;
     v_color = mix(a_color_a, a_color_b, t);
@@ -287,6 +297,22 @@ mod tests {
         assert!(
             edge.contains("idle_drift(a_pos_b"),
             "edge must drift endpoint b"
+        );
+    }
+
+    /// The selected chain must be legible as a SHAPE, not only as a hue: the edge
+    /// vertex shader has to widen on the per-instance highlight flag rather than
+    /// use the flat `u_width` everywhere. Guards against a revert to the flat
+    /// width (which made a highlighted edge indistinguishable in a dense hairball).
+    #[test]
+    fn edge_width_lerps_on_highlight_flag() {
+        assert!(
+            EDGE_VERT.contains("mix(u_width, u_width * 1.5, a_highlight)"),
+            "highlighted edges must render thicker than the base width"
+        );
+        assert!(
+            !EDGE_VERT.contains("u_width * 0.5 * taper"),
+            "the flat-width ribbon offset must be gone"
         );
     }
 
