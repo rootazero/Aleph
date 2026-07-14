@@ -66,8 +66,7 @@ pub use audit::{
 };
 pub use cli::{LockError, LockMode, MemoryLock};
 pub use compression::{
-    CompressionPriority, CompressionScheduler, CompressionService, CompressionSignal,
-    CompressionTrigger, DetectionResult, SignalDetector, SignalKeywords,
+    CompressionScheduler, CompressionService, CompressionTrigger, SchedulerConfig,
 };
 pub use context::{
     compute_parent_path, CognitiveLayer, CompressionResult, CompressionSession, ContextAnchor,

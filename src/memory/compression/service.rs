@@ -7,7 +7,6 @@
 //! 4. Stores facts and updates compression state
 
 use super::scheduler::{CompressionScheduler, CompressionTrigger, SchedulerConfig};
-use super::signal_detector::SignalDetector;
 use crate::error::AlephError;
 use crate::memory::context::CompressionResult;
 use crate::memory::events::handler::MemoryCommandHandler;
@@ -16,6 +15,7 @@ use crate::memory::EmbeddingProvider;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::RwLock as TokioRwLock;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
@@ -70,7 +70,6 @@ pub struct CompressionService {
     database: MemoryBackend,
     scheduler: Arc<CompressionScheduler>,
     config: CompressionConfig,
-    signal_detector: SignalDetector,
     command_handler: Option<Arc<MemoryCommandHandler>>,
     compound_ingestor: Option<Arc<dyn crate::memory::notes::ingest::CompoundIngestor>>,
     compound_enabled: bool,
@@ -83,6 +82,25 @@ pub struct CompressionService {
     /// `Arc<CompressionService>` (the engine wraps the service in `Arc` before
     /// the MCP is constructed; we register the hook later from `agent_init`).
     post_hooks: TokioRwLock<Vec<Arc<dyn PostCompressionHook>>>,
+    /// Per-agent ingest lock, keyed by `workspace_id`.
+    ///
+    /// `compress_to_notes` reads the unprocessed batch, spends seconds inside an
+    /// LLM ingest call, and only marks those rows processed at the END — a
+    /// read-then-mark window with no DB-level claim (`get_unprocessed_raw_memories`
+    /// is a plain `WHERE is_processed = 0` SELECT). Several unsynchronized sites
+    /// drive one shared `Arc<CompressionService>`: the hourly background task, the
+    /// session-end flush, the turn-threshold spawn, the correction flush, and the
+    /// `memory.compress` RPC. Two runs overlapping on one agent would therefore
+    /// fetch the SAME rows and hand them to `CompoundIngestor::ingest_batch` twice
+    /// — duplicate note pages, doubled `ProfileSynthesizer` runs over one SessionEnd
+    /// digest, doubled LLM spend.
+    ///
+    /// Serializing per agent closes the window: the second caller waits, then
+    /// re-reads and finds the batch already drained. Per-agent (not global) so
+    /// unrelated agents still compress concurrently. The daemon is a singleton
+    /// (OS `flock`), so an in-process lock is sufficient — no DB claim column and
+    /// no migration.
+    ingest_locks: TokioMutex<std::collections::HashMap<String, Arc<TokioMutex<()>>>>,
 }
 
 impl CompressionService {
@@ -113,13 +131,13 @@ impl CompressionService {
             database,
             scheduler,
             config,
-            signal_detector: SignalDetector::new(),
             command_handler: None,
             compound_ingestor: None,
             compound_enabled: false,
             profile_synthesizer: None,
             extension_registry: None,
             post_hooks: TokioRwLock::new(Vec::new()),
+            ingest_locks: TokioMutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -193,6 +211,18 @@ impl CompressionService {
             agent_ids.push(crate::memory::DEFAULT_AGENT.to_string());
         }
 
+        // Consume the turn budget UP FRONT, not after the loop. The loop below
+        // propagates with `?`, so a single transient DB error used to return
+        // before the reset — leaving `pending_turns` pinned above the threshold
+        // forever. Because `record_turn_and_maybe_compress` fires on the exactly-once
+        // CROSSING (`old < threshold && new >= threshold`), a counter stuck above
+        // the threshold can never cross again: the turn-threshold trigger died
+        // permanently until some other path's compress() happened to succeed.
+        // The trigger has already fired by the time we get here, so the budget is
+        // spent whether or not this run completes.
+        self.scheduler.reset_turns();
+        self.scheduler.record_activity();
+
         let mut total = CompressionResult::empty();
         for agent_id in &agent_ids {
             let result = self.compress_default_notes(agent_id).await?;
@@ -209,9 +239,6 @@ impl CompressionService {
                 hook.on_compression_complete(agent_id).await;
             }
         }
-
-        self.scheduler.reset_turns();
-        self.scheduler.record_activity();
 
         Ok(total)
     }
@@ -236,6 +263,19 @@ impl CompressionService {
         workspace_id: &str,
     ) -> Result<CompressionResult, AlephError> {
         let start = Instant::now();
+
+        // Serialize compressions for this agent — see `ingest_locks`. Held across
+        // the fetch → LLM ingest → mark-processed window so a concurrent caller
+        // cannot read the same unprocessed rows and ingest them twice.
+        let agent_lock = {
+            let mut locks = self.ingest_locks.lock().await;
+            Arc::clone(
+                locks
+                    .entry(workspace_id.to_string())
+                    .or_insert_with(|| Arc::new(TokioMutex::new(()))),
+            )
+        };
+        let _ingest_guard = agent_lock.lock().await;
 
         // 2. Fetch unprocessed raw memories
         use crate::memory::store::raw_memory::RawMemoryStore;
@@ -468,7 +508,7 @@ impl CompressionService {
     /// Start background compression task
     ///
     /// Runs periodically and compresses unconditionally (bypasses scheduler).
-    /// The scheduler-based triggers are handled separately via `record_turn_and_check_signal()`.
+    /// The scheduler-based triggers are handled separately via `record_turn_and_maybe_compress()`.
     pub fn start_background_task(self: Arc<Self>) -> JoinHandle<()> {
         let interval_secs = self.config.background_interval_seconds;
 
@@ -508,74 +548,19 @@ impl CompressionService {
         })
     }
 
-    /// Start background compression task with external runtime
+    /// Record a conversation turn and compress once the turn threshold is crossed.
     ///
-    /// This method is used during `AlephCore` initialization when we have a runtime
-    /// but are not yet inside its context (so `tokio::spawn` won't work).
-    ///
-    /// Compresses unconditionally on each interval tick.
-    pub fn start_background_task_with_runtime(
-        self: &Arc<Self>,
-        runtime: &tokio::runtime::Runtime,
-    ) -> JoinHandle<()> {
-        let service = Arc::clone(self);
-        let interval_secs = self.config.background_interval_seconds;
-
-        runtime.spawn(async move {
-            // `tokio::time::interval` panics on a zero period; clamp a
-            // misconfigured 0 from user config to 1s instead of killing the task.
-            let mut hourly_interval =
-                interval(Duration::from_secs(u64::from(interval_secs.max(1))));
-
-            tracing::info!(
-                interval_seconds = interval_secs,
-                "Started background compression task"
-            );
-
-            loop {
-                hourly_interval.tick().await;
-
-                match service.compress().await {
-                    Ok(result) => {
-                        if result.memories_processed > 0 {
-                            tracing::info!(
-                                memories = result.memories_processed,
-                                facts = result.facts_extracted,
-                                duration_ms = result.duration_ms,
-                                "Compression completed"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Compression failed");
-                    }
-                }
-            }
-        })
-    }
-
-    /// Record user activity (for idle detection)
-    pub fn record_activity(&self) {
-        self.scheduler.record_activity();
-    }
-
-    /// Record a conversation turn (for turn threshold)
-    pub fn record_turn(&self) {
-        self.scheduler.increment_turns();
-    }
-
-    /// Record a conversation turn and trigger compression — signal-aware.
-    ///
-    /// Always counts the turn with exactly-once threshold-crossing semantics
-    /// (so the turn-threshold path keeps working). Additionally, if the user
-    /// message carries an `Immediate` signal (a correction like "不对/错了/
-    /// wrong"), compress NOW instead of waiting for the threshold. Learning
-    /// and milestone signals ride the normal turn-threshold cadence.
+    /// **Content-blind by design.** This used to also scan the user's message
+    /// against a keyword table and compress immediately on a "correction" hit —
+    /// deterministic content classification of natural language, which R7/P8
+    /// forbid (and which mis-fired on any turn containing "actually", "wrong" or
+    /// "应该是"). Deciding *"was that a correction worth remembering?"* is the
+    /// model's job: it calls `flag_user_correction`, and that tool kicks the drain
+    /// itself. What remains here is pure cadence — count turns, compress at the
+    /// threshold, look at nothing.
     ///
     /// Non-blocking: the actual compression runs in a spawned task.
-    pub fn record_turn_and_check_signal(self: &Arc<Self>, user_message: &str) {
-        let detection = self.signal_detector.detect(user_message);
-
+    pub fn record_turn_and_maybe_compress(self: &Arc<Self>) {
         // Count the turn exactly once at the threshold crossing.
         let old_turns = self
             .scheduler
@@ -583,24 +568,8 @@ impl CompressionService {
             .fetch_add(1, crate::sync_primitives::Ordering::AcqRel);
         let turns = old_turns + 1;
         let threshold = self.config.scheduler.turn_threshold;
-        let threshold_crossed = old_turns < threshold && turns >= threshold;
 
-        let immediate = detection.should_compress
-            && detection.priority == super::signal_detector::CompressionPriority::Immediate;
-
-        if immediate {
-            tracing::info!(signals = ?detection.signals, "Signal-triggered compression (immediate)");
-            let service = Arc::clone(self);
-            tokio::spawn(async move {
-                match service.compress().await {
-                    Ok(result) => tracing::info!(
-                        facts = result.facts_extracted,
-                        "Immediate compression completed (signal)"
-                    ),
-                    Err(e) => tracing::error!(error = %e, "Immediate compression failed (signal)"),
-                }
-            });
-        } else if threshold_crossed {
+        if old_turns < threshold && turns >= threshold {
             tracing::info!(
                 turns,
                 threshold,
@@ -611,7 +580,7 @@ impl CompressionService {
                 match service.check_and_compress().await {
                     Ok(Some(result)) => tracing::info!(
                         facts = result.facts_extracted,
-                        "Immediate compression completed (turn threshold)"
+                        "Compression completed (turn threshold)"
                     ),
                     Ok(None) => tracing::debug!("Compression: no action needed"),
                     Err(e) => tracing::error!(error = %e, "Compression failed (turn threshold)"),
@@ -642,6 +611,88 @@ mod tests {
     async fn create_test_service() -> (CompressionService, MemoryBackend) {
         let (service, database, _temp_dir) = create_test_service_with_tempdir().await;
         (service, database)
+    }
+
+    /// Records every batch it is handed, and dawdles inside `ingest_batch` so the
+    /// read-then-mark window is wide enough for a second caller to slip into.
+    struct RecordingIngestor {
+        ingested: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::memory::notes::ingest::CompoundIngestor for RecordingIngestor {
+        async fn ingest_batch(
+            &self,
+            _agent_id: &str,
+            raws: Vec<RawMemory>,
+            _extra_context: Option<&str>,
+        ) -> Result<crate::memory::notes::ingest::ApplyReport, AlephError> {
+            // Stand in for the multi-second LLM ingest call.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let mut seen = self.ingested.lock().unwrap_or_else(|e| e.into_inner());
+            seen.extend(raws.iter().map(|r| r.content.clone()));
+            Ok(crate::memory::notes::ingest::ApplyReport::default())
+        }
+    }
+
+    /// Two `compress_to_notes` calls for the SAME agent overlapping in time must
+    /// ingest each unprocessed raw exactly once.
+    ///
+    /// Reachable in production from five unsynchronized sites on one shared
+    /// `Arc<CompressionService>` (hourly background task, session-end flush,
+    /// turn-threshold spawn, correction flush, `memory.compress` RPC). Without the
+    /// per-agent ingest lock both callers run `WHERE is_processed = 0`, get the
+    /// identical rows (neither has marked them yet — that only happens after the
+    /// LLM call returns), and hand the same batch to the ingestor twice: duplicate
+    /// note pages and doubled LLM spend.
+    #[tokio::test]
+    async fn concurrent_compress_for_one_agent_ingests_each_raw_exactly_once() {
+        let temp_dir = tempdir().unwrap();
+        let database: Arc<crate::memory::store::SqliteMemoryBackend> =
+            Arc::new(crate::memory::store::SqliteMemoryBackend::new(temp_dir.path()).unwrap());
+
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
+            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(
+                1024,
+                "mock-model",
+            ),
+        );
+
+        let ingested = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let service = Arc::new(
+            CompressionService::new(
+                database.clone(),
+                create_mock_provider(),
+                embedder,
+                CompressionConfig::default(),
+            )
+            .with_compound_ingestor(Arc::new(RecordingIngestor {
+                ingested: Arc::clone(&ingested),
+            })),
+        );
+
+        // One aged raw, so the stop-the-bleed grace window does not defer it.
+        let mut raw = RawMemory::new(
+            "user prefers dark mode".to_string(),
+            RawMemorySource::Transcript,
+        );
+        raw.created_at = chrono::Utc::now().timestamp() - 7 * 3600;
+        database.insert_raw_memory(&raw).await.unwrap();
+
+        let (a, b) = tokio::join!(
+            service.compress_to_notes("default"),
+            service.compress_to_notes("default"),
+        );
+        a.expect("first compression succeeds");
+        b.expect("second compression succeeds");
+
+        let seen = ingested.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(
+            seen.as_slice(),
+            ["user prefers dark mode"],
+            "the raw must reach the ingestor exactly once across two concurrent \
+             compressions of the same agent (got {seen:?})"
+        );
     }
 
     async fn create_test_service_with_tempdir() -> (CompressionService, MemoryBackend, TempDir) {
@@ -677,13 +728,12 @@ mod tests {
     #[tokio::test]
     async fn test_scheduler_integration() {
         let (service, _) = create_test_service().await;
+        let service = Arc::new(service);
 
-        // Record activity
-        service.record_activity();
-
-        // Record turns
+        // Drive the PRODUCTION turn path (this used to call `record_turn`, a
+        // wrapper the live gateway never went through).
         for _ in 0..5 {
-            service.record_turn();
+            service.record_turn_and_maybe_compress();
         }
 
         let scheduler = service.get_scheduler();
@@ -972,21 +1022,27 @@ mod tests {
         assert_eq!(backend.count_unprocessed("default").await.unwrap(), 0);
     }
 
-    #[test]
-    fn correction_message_classifies_immediate() {
-        let detector = crate::memory::compression::signal_detector::SignalDetector::new();
-        let d = detector.detect("不对，我说的是 Rust");
-        assert!(d.should_compress);
-        assert_eq!(
-            d.priority,
-            crate::memory::compression::signal_detector::CompressionPriority::Immediate
-        );
-    }
+    /// The turn hook is content-blind: it counts turns and nothing else. It must
+    /// not compress before the threshold no matter what the user typed — the old
+    /// keyword detector fired an LLM ingest cycle on any message containing
+    /// "actually" / "不对" / "应该是". Deciding that a message is a correction is
+    /// the model's job (`flag_user_correction`), not a substring table's.
+    #[tokio::test]
+    async fn turn_hook_is_content_blind_and_only_fires_at_the_threshold() {
+        let (service, _db) = create_test_service().await;
+        let service = Arc::new(service);
+        let threshold = service.config.scheduler.turn_threshold;
 
-    #[test]
-    fn neutral_message_does_not_force_compression() {
-        let detector = crate::memory::compression::signal_detector::SignalDetector::new();
-        let d = detector.detect("帮我看一下这段代码");
-        assert!(!d.should_compress);
+        // Messages that the deleted keyword table would each have classified as an
+        // immediate "correction".
+        for _ in 0..(threshold - 1) {
+            service.record_turn_and_maybe_compress();
+        }
+
+        assert_eq!(
+            service.get_scheduler().get_pending_turns(),
+            threshold - 1,
+            "turns accumulate; nothing compresses before the threshold regardless of content"
+        );
     }
 }

@@ -712,11 +712,11 @@ where
                         });
                     }
                 }
-                // Record conversation turn for compression scheduling.
-                // Signal-aware: corrections compress immediately; other turns
-                // ride the turn-threshold cadence.
+                // Record conversation turn for compression scheduling. Content-blind:
+                // the turn-threshold cadence only. "Was this a correction worth
+                // remembering?" is the model's call, via flag_user_correction (R7).
                 if let Some(ref cs) = self.compression_service {
-                    cs.record_turn_and_check_signal(&request.input);
+                    cs.record_turn_and_maybe_compress();
                 }
 
                 // Async session compaction (hierarchical summarization)

@@ -1,11 +1,11 @@
 //! Real-time memory flush (Pillar 2 of the Real-time Memory spec).
 //!
-//! On session conclude, the gateway spawns an immediate, non-blocking flush:
-//! drain the agent's pending raw memories into linked Knowledge Notes via
-//! [`CompressionService::compress_to_notes`] (which keyword-links the new notes,
-//! Task 5). The flush registers itself in a [`FlushRegistry`] so a back-to-back
-//! follow-on session can `await_ready` (bounded) and recall consolidated memory,
-//! while a normal session never waits.
+//! Drain an agent's pending raw memories into linked Knowledge Notes via
+//! [`CompressionService::compress_to_notes`] (which keyword-links the new notes).
+//! Triggered on session conclude, and by `flag_user_correction` when the model
+//! judges that the user corrected it. The flush registers itself in a
+//! [`FlushRegistry`] so a back-to-back follow-on session can `await_ready`
+//! (bounded) and recall consolidated memory, while a normal session never waits.
 
 pub mod registry;
 pub use registry::{FlushGuard, FlushRegistry};
@@ -29,23 +29,30 @@ pub fn global_registry() -> FlushRegistry {
 /// from [`FlushRegistry::begin`]) for the flush duration so a follow-on session
 /// can await readiness.
 ///
-/// The guard MUST be acquired synchronously at the call site — *before* this
-/// future is spawned — so the registry entry is observable the instant the
-/// session closes. Acquiring it inside the spawned task (the previous shape)
-/// raced a back-to-back `await_ready`: `tokio::spawn` returns before the task is
-/// polled, so the waiter could observe an empty registry and silently no-op the
-/// readiness gate. Failures are logged, never propagated — a flush is
-/// best-effort consolidation, never gating.
-pub async fn session_end_flush(
+/// Two call sites, both fire-and-forget:
+/// - **session end** (`gateway::session_manager::ops::emit`) — the original Pillar 2
+///   trigger, after the SessionEnd digest row is committed.
+/// - **`flag_user_correction`** — the model judged that the user corrected it, so
+///   sediment the lesson now instead of waiting for the next dream cycle.
+///
+/// The guard MUST be acquired synchronously at each call site — *before* this
+/// future is spawned — so the registry entry is observable the instant the flush
+/// is decided on. Acquiring it inside the spawned task (the previous shape) raced
+/// a back-to-back `await_ready`: `tokio::spawn` returns before the task is polled,
+/// so the waiter could observe an empty registry and silently no-op the readiness
+/// gate. Failures are logged, never propagated — a flush is best-effort
+/// consolidation, never gating.
+pub async fn flush_agent_memory(
     guard: FlushGuard,
     agent: String,
     compression: Arc<CompressionService>,
 ) {
     let _guard = guard;
     if let Err(e) = compression.compress_to_notes(&agent).await {
-        warn!(agent = %agent, error = %e, "session_end_flush: compress_to_notes failed");
+        warn!(agent = %agent, error = %e, "flush_agent_memory: compress_to_notes failed");
     }
-    // `_guard` drops here → wakes any `await_ready` waiter for this agent.
+    // `_guard` drops here → wakes any `await_ready` waiter, once every concurrent
+    // flush for this agent has also finished.
 }
 
 #[cfg(test)]
@@ -75,11 +82,11 @@ mod tests {
         }
     }
 
-    /// `session_end_flush` must drive `compress_to_notes` to completion for the
+    /// `flush_agent_memory` must drive `compress_to_notes` to completion for the
     /// agent — draining its pending raw memory into the note pipeline — without
     /// any turn-threshold or dream-cycle gate.
     #[tokio::test]
-    async fn session_end_flush_compresses_pending_raw_into_a_note() {
+    async fn flush_agent_memory_compresses_pending_raw_into_a_note() {
         let temp_dir = tempfile::tempdir().unwrap();
         let database: Arc<SqliteMemoryBackend> =
             Arc::new(SqliteMemoryBackend::new(temp_dir.path()).unwrap());
@@ -117,12 +124,12 @@ mod tests {
 
         let reg = FlushRegistry::new();
         let guard = reg.begin("default");
-        session_end_flush(guard, "default".into(), Arc::new(service)).await;
+        flush_agent_memory(guard, "default".into(), Arc::new(service)).await;
 
         assert_eq!(
             database.count_unprocessed("default").await.unwrap(),
             0,
-            "session_end_flush must drain the agent's pending raw memory via compress_to_notes"
+            "flush_agent_memory must drain the agent's pending raw memory via compress_to_notes"
         );
     }
 }
