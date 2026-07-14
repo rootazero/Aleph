@@ -155,9 +155,8 @@ pub fn handle_control(app: &AppHandle, action: UpdateControl) {
 /// Remove the injected banner element from the current document.
 fn remove_banner(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval(
-            "var b=document.getElementById('__aleph-update-banner');if(b)b.remove();",
-        );
+        let _ =
+            window.eval("var b=document.getElementById('__aleph-update-banner');if(b)b.remove();");
     }
 }
 
