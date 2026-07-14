@@ -651,6 +651,9 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     // Reach for ChatState so the retry button can pulse the composer
     // without prop-drilling a callback through MessageList → MessageBubble.
     let chat = expect_context::<ChatState>();
+    // Optional (absent in storybook): lets the cost/token meta line open the
+    // run-meta inspector surface in the right pane. `Copy` handle.
+    let workspace = use_context::<WorkspaceState>();
 
     // Cost + tokens for the run that produced this bubble (`run_complete`'s
     // summary; core does the pricing, we render it). Reactive — the summary
@@ -677,10 +680,29 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
                     format!(" · cost {}", cost.status.as_deref().unwrap_or("unknown"))
                 }
             );
+            // Clickable → opens the RunMeta inspector surface (full token/cost/
+            // model breakdown) in the right pane. Falls back to non-interactive
+            // when WorkspaceState is absent (storybook).
+            let rid = run_for_cost.clone();
+            let clickable = workspace.is_some();
+            let cls = if clickable {
+                "mt-1 text-[10px] leading-tight font-mono text-text-tertiary \
+                 flex items-center gap-1.5 tabular-nums cursor-pointer \
+                 hover:text-text-secondary transition-colors"
+            } else {
+                "mt-1 text-[10px] leading-tight font-mono text-text-tertiary \
+                 flex items-center gap-1.5 tabular-nums"
+            };
             Some(view! {
-                <div class="mt-1 text-[10px] leading-tight font-mono text-text-tertiary
-                            flex items-center gap-1.5 tabular-nums"
-                     title=title>
+                <div class=cls
+                     title=title
+                     on:click=move |_| {
+                         if let Some(ws) = workspace {
+                             ws.inspect(crate::state::inspector::InspectorTarget::RunMeta {
+                                 run_id: rid.clone(),
+                             });
+                         }
+                     }>
                     {money}
                     {tokens.map(|t| view! { <span class="opacity-70">{t}</span> })}
                 </div>
@@ -1084,7 +1106,10 @@ fn ExploreGroupRow(
                                            text-text-tertiary hover:text-primary min-w-0"
                                     on:click=move |_| {
                                         if let Some(ws) = workspace {
-                                            ws.select_tool(run.clone(), first.clone());
+                                            ws.inspect(crate::state::inspector::InspectorTarget::Tool {
+                                                run_id: run.clone(),
+                                                tool_id: first.clone(),
+                                            });
                                         }
                                     }
                                 >

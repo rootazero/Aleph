@@ -16,6 +16,7 @@
 //! State is provided once at the app root via `provide_context`; readers
 //! `expect_context::<WorkspaceState>()` from anywhere in the tree.
 
+use super::inspector::InspectorTarget;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -107,9 +108,11 @@ pub struct WorkspaceState {
     pub files_drawer_open: RwSignal<bool>,
     /// Currently previewed file (Phase 2).
     pub selected_file: RwSignal<Option<FilePreview>>,
-    /// 详情查看器当前选中的工具 `(run_id, tool_id)`。直播时由
-    /// `follow_tool` 跟随最新开始的工具；用户点选（`select_tool`）后钉住。
-    pub selected_tool: RwSignal<Option<(String, String)>>,
+    /// 详情查看器当前选中的目标。直播时由 `follow_tool` 跟随最新开始的工具
+    /// （写入 `InspectorTarget::Tool`）；用户点选任一关键点（`inspect`）后钉住。
+    /// 从裸 `(run_id, tool_id)` 泛化为 [`InspectorTarget`]，让工具之外的关键点
+    /// （运行成本、推理、计划、未来的画布/浏览器）也能驱动右栏。
+    pub selected: RwSignal<Option<InspectorTarget>>,
     /// 用户是否钉住了选中（钉住时直播跟随不覆盖）。run 结束解除。
     pub pinned: RwSignal<bool>,
 }
@@ -132,7 +135,7 @@ impl WorkspaceState {
             unseen_activity: RwSignal::new(0),
             files_drawer_open: RwSignal::new(false),
             selected_file: RwSignal::new(None),
-            selected_tool: RwSignal::new(None),
+            selected: RwSignal::new(None),
             pinned: RwSignal::new(false),
         }
     }
@@ -204,15 +207,15 @@ impl WorkspaceState {
         self.clear_selection();
     }
 
-    /// Clear the detail-pane selection + pin. `selected_tool`/`pinned` are
-    /// global (not per-conversation), so any conversation switch that keeps
-    /// the singleton's captured payloads intact (unlike [`Self::reset`],
-    /// which wipes them for a full session reload) must still drop the
-    /// pointer left over from the outgoing conversation — otherwise the
-    /// detail pane can show another conversation's tool, and a stale pin
-    /// blocks the new foreground's live-follow.
+    /// Clear the detail-pane selection + pin. `selected`/`pinned` are global
+    /// (not per-conversation), so any conversation switch that keeps the
+    /// singleton's captured payloads intact (unlike [`Self::reset`], which
+    /// wipes them for a full session reload) must still drop the pointer left
+    /// over from the outgoing conversation — otherwise the detail pane can show
+    /// another conversation's target, and a stale pin blocks the new
+    /// foreground's live-follow.
     pub fn clear_selection(&self) {
-        self.selected_tool.set(None);
+        self.selected.set(None);
         self.pinned.set(false);
     }
 
@@ -242,17 +245,21 @@ impl WorkspaceState {
     }
 
     /// 直播跟随：未钉住时把详情面切到最新开始的工具（R5 — 工作台感）。
+    /// 只写 `InspectorTarget::Tool`，所以点选的非工具关键点（成本/推理/计划…）
+    /// 一旦钉住就不会被后续工具偷走。
     pub fn follow_tool(&self, run_id: &str, tool_id: &str) {
         if !self.pinned.get_untracked() {
-            self.selected_tool
-                .set(Some((run_id.to_string(), tool_id.to_string())));
+            self.selected.set(Some(InspectorTarget::Tool {
+                run_id: run_id.to_string(),
+                tool_id: tool_id.to_string(),
+            }));
         }
     }
 
-    /// 用户点选：选中 + 钉住 + 确保 Split 打开（聊天侧任何"→ 详情"入口都走这里）。
-    pub fn select_tool(&self, run_id: impl Into<String>, tool_id: impl Into<String>) {
-        self.selected_tool
-            .set(Some((run_id.into(), tool_id.into())));
+    /// 用户点选任一关键点：切换详情面到该目标 + 钉住 + 确保 Split 打开。
+    /// 聊天侧所有"→ 详情"入口（工具行、成本行、推理/计划头…）都走这唯一漏斗。
+    pub fn inspect(&self, target: InspectorTarget) {
+        self.selected.set(Some(target));
         self.pinned.set(true);
         if self.mode.get_untracked() != LayoutMode::Split {
             self.set_layout(LayoutMode::Split);
@@ -293,6 +300,14 @@ const fn persist_layout_mode(_mode: LayoutMode) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::inspector::InspectorTarget;
+
+    fn tool(run_id: &str, tool_id: &str) -> InspectorTarget {
+        InspectorTarget::Tool {
+            run_id: run_id.to_string(),
+            tool_id: tool_id.to_string(),
+        }
+    }
 
     fn test_ws(mode: LayoutMode) -> WorkspaceState {
         WorkspaceState {
@@ -302,7 +317,7 @@ mod tests {
             unseen_activity: RwSignal::new(0),
             files_drawer_open: RwSignal::new(false),
             selected_file: RwSignal::new(None),
-            selected_tool: RwSignal::new(None),
+            selected: RwSignal::new(None),
             pinned: RwSignal::new(false),
         }
     }
@@ -430,38 +445,51 @@ mod tests {
         owner.set();
         let ws = test_ws(LayoutMode::Split);
         ws.follow_tool("r1", "t1");
-        assert_eq!(
-            ws.selected_tool.get_untracked(),
-            Some(("r1".to_string(), "t1".to_string()))
-        );
+        assert_eq!(ws.selected.get_untracked(), Some(tool("r1", "t1")));
         // 用户点选 → 钉住
-        ws.select_tool("r1", "t2");
+        ws.inspect(tool("r1", "t2"));
         assert!(ws.pinned.get_untracked());
         // 钉住后直播跟随不再覆盖
         ws.follow_tool("r1", "t3");
-        assert_eq!(
-            ws.selected_tool.get_untracked(),
-            Some(("r1".to_string(), "t2".to_string()))
-        );
+        assert_eq!(ws.selected.get_untracked(), Some(tool("r1", "t2")));
         // run 结束解钉，选中保留
         ws.end_follow();
         assert!(!ws.pinned.get_untracked());
-        assert!(ws.selected_tool.get_untracked().is_some());
+        assert!(ws.selected.get_untracked().is_some());
         // 解钉后恢复跟随
         ws.follow_tool("r2", "t9");
-        assert_eq!(
-            ws.selected_tool.get_untracked(),
-            Some(("r2".to_string(), "t9".to_string()))
-        );
+        assert_eq!(ws.selected.get_untracked(), Some(tool("r2", "t9")));
     }
 
     #[test]
-    fn select_tool_opens_split() {
+    fn inspect_opens_split() {
         let owner = Owner::new();
         owner.set();
         let ws = test_ws(LayoutMode::ChatOnly);
-        ws.select_tool("r1", "t1");
+        ws.inspect(tool("r1", "t1"));
         assert_eq!(ws.mode.get_untracked(), LayoutMode::Split);
+    }
+
+    /// The generalization guarantee: a pinned NON-tool target (a run's cost,
+    /// reasoning, plan…) is never stolen by a live tool follow — `follow_tool`
+    /// only writes when unpinned, and `inspect` always pins.
+    #[test]
+    fn inspect_non_tool_target_survives_live_follow() {
+        let owner = Owner::new();
+        owner.set();
+        let ws = test_ws(LayoutMode::Split);
+        ws.inspect(InspectorTarget::RunMeta {
+            run_id: "r1".to_string(),
+        });
+        assert!(ws.pinned.get_untracked());
+        // A tool starts mid-run — must NOT hijack the pinned RunMeta surface.
+        ws.follow_tool("r1", "t1");
+        assert_eq!(
+            ws.selected.get_untracked(),
+            Some(InspectorTarget::RunMeta {
+                run_id: "r1".to_string()
+            })
+        );
     }
 
     #[test]
@@ -469,9 +497,9 @@ mod tests {
         let owner = Owner::new();
         owner.set();
         let ws = test_ws(LayoutMode::Split);
-        ws.select_tool("r1", "t1");
+        ws.inspect(tool("r1", "t1"));
         ws.reset();
-        assert!(ws.selected_tool.get_untracked().is_none());
+        assert!(ws.selected.get_untracked().is_none());
         assert!(!ws.pinned.get_untracked());
     }
 
@@ -484,13 +512,13 @@ mod tests {
         let owner = Owner::new();
         owner.set();
         let ws = test_ws(LayoutMode::Split);
-        ws.select_tool("r1", "t1");
+        ws.inspect(tool("r1", "t1"));
         ws.record_tool_args("r1", "t1", serde_json::json!({"q": "x"}));
         assert!(ws.pinned.get_untracked());
 
         ws.clear_selection();
 
-        assert!(ws.selected_tool.get_untracked().is_none());
+        assert!(ws.selected.get_untracked().is_none());
         assert!(!ws.pinned.get_untracked());
         // The other conversation's captured payload must survive — clearing
         // selection on tab switch is not a full reset.

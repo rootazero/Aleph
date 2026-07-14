@@ -1,5 +1,6 @@
 pub mod connection;
 pub mod hotkey;
+pub mod inspector;
 pub mod layout;
 pub mod memory;
 pub mod notifications;

@@ -416,7 +416,10 @@ pub fn ToolCard(
     let detail_label = t_string!(i18n, tool_card.to_detail).to_string();
     let on_overflow = move || {
         if let Some(ws) = workspace {
-            ws.select_tool(run_for_overflow.clone(), tid_for_overflow.clone());
+            ws.inspect(crate::state::inspector::InspectorTarget::Tool {
+                run_id: run_for_overflow.clone(),
+                tool_id: tid_for_overflow.clone(),
+            });
         }
     };
 

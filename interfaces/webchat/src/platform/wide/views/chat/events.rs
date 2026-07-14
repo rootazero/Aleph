@@ -813,7 +813,7 @@ mod projection_tests {
     /// Regression for the multi-conversation live-follow leak: a background
     /// conversation's `tool_call_started` must not steal the (single, global)
     /// `WorkspaceState` detail pane away from whatever the user is actually
-    /// viewing. `is_foreground = false` must leave `selected_tool` untouched;
+    /// viewing. `is_foreground = false` must leave `selected` untouched;
     /// `is_foreground = true` (the foreground conversation) must still follow.
     #[test]
     fn tool_call_started_follow_gated_to_foreground() {
@@ -829,7 +829,7 @@ mod projection_tests {
         // Background conversation: must not touch the shared detail pane.
         apply_trace_event(chat, ws, "run-1", &started, false);
         assert_eq!(
-            ws.selected_tool.get_untracked(),
+            ws.selected.get_untracked(),
             None,
             "background tool_call_started must not steal the detail pane"
         );
@@ -837,8 +837,11 @@ mod projection_tests {
         // Foreground conversation: live-follow still applies.
         apply_trace_event(chat, ws, "run-1", &started, true);
         assert_eq!(
-            ws.selected_tool.get_untracked(),
-            Some(("run-1".to_string(), "t1".to_string())),
+            ws.selected.get_untracked(),
+            Some(crate::state::inspector::InspectorTarget::Tool {
+                run_id: "run-1".to_string(),
+                tool_id: "t1".to_string()
+            }),
             "foreground tool_call_started still live-follows"
         );
     }

@@ -1,12 +1,13 @@
 //! Workspace pane — the right-side surface that opens when
 //! [`LayoutMode::Split`] is active.
 //!
-//! Renders a **tool detail viewer**: the single tool call currently
-//! selected in `WorkspaceState.selected_tool`, full (uncapped) args/result.
-//! Selection either live-follows the most recent tool call (`follow_tool`,
-//! see `events.rs`) or is pinned by a user click (`select_tool`, see
-//! `tool_card.rs`'s overflow row). When nothing is selected yet, shows an
-//! empty-state hint.
+//! In single-agent mode the body is the **contextual inspector**
+//! ([`crate::components::inspector::InspectorSurface`]): it routes the current
+//! `WorkspaceState.selected` ([`crate::state::inspector::InspectorTarget`]) to
+//! a dedicated surface (tool detail, run meta, reasoning, plan, …). Selection
+//! either live-follows the most recent tool call (`follow_tool`, see
+//! `events.rs`) or is pinned by a user click on any chat key point (`inspect`).
+//! In team mode the body is the 交付物/任务 tabs instead.
 
 use crate::api::fs::{DirEntry, FsApi, ReadFileResult};
 use crate::context::DashboardState;
@@ -19,7 +20,7 @@ use leptos::task::spawn_local;
 /// Workspace pane root. Renders nothing when [`LayoutMode::ChatOnly`].
 ///
 /// In team mode (`chat.team_id` is Some) shows 交付物/任务 tabs instead of the
-/// single-agent ToolDetailView + FilesDrawer.
+/// single-agent InspectorSurface + FilesDrawer.
 #[component]
 #[must_use]
 pub fn WorkspacePanel() -> impl IntoView {
@@ -49,7 +50,7 @@ pub fn WorkspacePanel() -> impl IntoView {
                     when=move || chat.team_id.get().is_some()
                     fallback=move || view! {
                         <div class="flex-1 overflow-y-auto px-4 pb-3 aleph-content-top">
-                            <ToolDetailView />
+                            <crate::components::inspector::InspectorSurface />
                         </div>
                         <FilesDrawer />
                     }
@@ -95,70 +96,6 @@ pub fn WorkspacePanel() -> impl IntoView {
                     </div>
                 </Show>
             </aside>
-    }
-}
-
-/// 详情查看器 — 右栏主体：当前选中工具的完整 args/result/diff（不封顶）。
-/// 选中来源：直播跟随（events.rs → follow_tool）或用户点选（select_tool）。
-#[component]
-fn ToolDetailView() -> impl IntoView {
-    use crate::components::tool_card::{
-        render_body, tool_headline, tool_icon, ToolKind, ToolSurface,
-    };
-    let workspace = expect_context::<WorkspaceState>();
-    let chat = expect_context::<ChatState>();
-    let i18n = use_i18n();
-
-    move || {
-        match workspace.selected_tool.get() {
-        None => view! {
-            <div class="h-full flex flex-col items-center justify-center
-                        text-center text-text-tertiary gap-3 py-12 px-6">
-                <p class="text-sm font-medium text-text-secondary">{t!(i18n, common.workspace_pane)}</p>
-                <p class="text-xs max-w-[28ch] leading-relaxed">
-                    {t!(i18n, common.workspace_detail_empty)}
-                </p>
-            </div>
-        }.into_any(),
-        Some((run_id, tool_id)) => {
-            // 名字/状态从 transcript 反查；payload 从捕获表取。
-            let entry = chat.messages.with(|msgs| {
-                msgs.iter()
-                    .flat_map(|m| m.tool_calls.iter())
-                    .find(|t| t.tool_id == tool_id)
-                    .cloned()
-            });
-            let tool_name = entry.as_ref().map(|t| t.tool_name.clone()).unwrap_or_default();
-            let status = entry.as_ref().map(|t| t.status.clone()).unwrap_or_default();
-            let duration = entry.as_ref().and_then(|t| t.duration_ms);
-            let kind = ToolKind::from_name(&tool_name);
-            let payload = workspace.get_tool_payload(&run_id, &tool_id);
-            let headline = tool_headline(kind, &payload).unwrap_or_else(|| tool_name.clone());
-            let icon = tool_icon(&tool_name, kind);
-            let status_view = match status.as_str() {
-                "running" => view! { <span class="inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span> }.into_any(),
-                "failed" => view! { <span class="text-danger text-xs">"✗"</span> }.into_any(),
-                _ => view! { <span class="text-success text-xs">"✓"</span> }.into_any(),
-            };
-            view! {
-                <div class="flex flex-col gap-2">
-                    <div class="flex items-center gap-2 pb-2 border-b border-border/60">
-                        <span class="text-base shrink-0">{icon}</span>
-                        <span class="flex-1 min-w-0 truncate text-sm text-text-primary font-medium">
-                            {headline}
-                        </span>
-                        {status_view}
-                        {duration.map(|d| view! {
-                            <span class="text-[10px] font-mono text-text-tertiary">
-                                {crate::state::run_clock::fmt_elapsed(d as i64)}
-                            </span>
-                        })}
-                    </div>
-                    {render_body(kind, &payload, ToolSurface::Detail, String::new(), || {})}
-                </div>
-            }.into_any()
-        }
-    }
     }
 }
 
