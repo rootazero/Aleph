@@ -99,9 +99,10 @@ impl ExecApprovalRecord {
             decision: None,
             resolved_by: None,
             reason: request.reason.clone(),
-            // Ambient, not a request field: the requester that builds the
-            // `ApprovalRequest` only sees `(tool_name, reason)`. The identity
-            // is scoped at the tool-dispatch chokepoint that raised the gate.
+            // Ambient, not a request field: the requester receives an
+            // `ApprovalAction` (redacted tool name, summary, cwd, analysis,
+            // reason) but no per-call id. The identity is scoped at the
+            // tool-dispatch chokepoint that raised the gate.
             tool_call_id: crate::approval::current_tool_call_id(),
         }
     }

@@ -131,13 +131,34 @@ impl ApprovalAction {
 /// distinct secrets to one placeholder, so a summary-derived key would let an
 /// "allow session" on one credential authorize a call carrying another.
 ///
-/// `serde_json` is built without `preserve_order` in this workspace, so
-/// `Value::to_string()` is `BTreeMap`-ordered and therefore canonical: the same
-/// arguments always hash to the same key, whatever order the model emitted them
-/// in.
+/// The input is *canonicalized* before hashing ([`canonical_args`]): key order
+/// is already `BTreeMap`-normalized (`serde_json` has no `preserve_order` here),
+/// and explicit `null`s are dropped. Without the latter, a model could mint a
+/// fresh fingerprint for a semantically identical call by appending a
+/// tool-ignored `"_":null` — defeating the denial ledger's blind-retry guard
+/// (a refused action re-prompts) and silently invalidating a session grant (the
+/// same action re-prompts). Only `null` is stripped, not every default: an
+/// absent optional and an explicitly-passed value are genuinely different calls,
+/// and collapsing them could let a grant on one authorize the other.
 #[must_use]
 pub fn grant_fingerprint(tool: &str, input: &Value) -> String {
-    super::denial_ledger::action_fingerprint(tool, &input.to_string())
+    super::denial_ledger::action_fingerprint(tool, &canonical_args(input).to_string())
+}
+
+/// `input` with every explicit `null` removed, recursively. Object key order is
+/// left to `serde_json`'s `BTreeMap` serialization (canonical in this
+/// workspace). A non-container value is returned unchanged.
+fn canonical_args(input: &Value) -> Value {
+    match input {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| (k.clone(), canonical_args(v)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(canonical_args).collect()),
+        other => other.clone(),
+    }
 }
 
 /// The shell command a shell-shaped tool call carries, if any.
@@ -226,6 +247,36 @@ mod tests {
     }
 
     #[test]
+    fn fingerprint_ignores_key_order_and_explicit_nulls() {
+        // Same effective call, three spellings the model might emit. All must
+        // hash to one fingerprint, or a refused/approved action re-prompts.
+        let base = grant_fingerprint("file_ops", &json!({"operation": "delete", "path": "/a"}));
+        let reordered = grant_fingerprint("file_ops", &json!({"path": "/a", "operation": "delete"}));
+        let null_padded = grant_fingerprint(
+            "file_ops",
+            &json!({"operation": "delete", "path": "/a", "destination": null}),
+        );
+        assert_eq!(base, reordered, "key order must not change the fingerprint");
+        assert_eq!(
+            base, null_padded,
+            "a tool-ignored explicit null must not mint a fresh fingerprint (denial-ledger bypass)"
+        );
+    }
+
+    #[test]
+    fn fingerprint_separates_genuinely_different_actions() {
+        // The invariant the whole action-aware refactor exists for: two
+        // different calls of the SAME tool must not share a fingerprint, or a
+        // grant on one authorizes the other.
+        let a = grant_fingerprint("file_ops", &json!({"operation": "delete", "path": "/tmp/junk"}));
+        let b = grant_fingerprint(
+            "file_ops",
+            &json!({"operation": "delete", "path": "/home/u/Documents"}),
+        );
+        assert_ne!(a, b, "distinct paths must not collide onto one grant");
+    }
+
+    #[test]
     fn file_ops_summary_names_the_operation_and_path() {
         let action = ApprovalAction::for_tool_call(
             "file_ops",
@@ -253,6 +304,40 @@ mod tests {
         assert!(
             !action.summary.contains(KEY),
             "a credential must never reach a human-visible card or a log: {}",
+            action.summary
+        );
+    }
+
+    /// The HTTP header form `Authorization: Bearer <token>` — a space after
+    /// `Bearer`, which the keyword=value masker rule cannot reach. Uses a
+    /// generic JWT (no `sk-`/`gh` prefix), so it can only pass if the
+    /// space-form bearer rule fires: the summary flows to the operator card, a
+    /// Telegram/Slack prompt, and a cluster reverse-RPC frame.
+    #[test]
+    fn http_bearer_header_is_redacted_in_summary() {
+        const TOKEN: &str =
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N";
+        let cmd = format!("curl -H 'Authorization: Bearer {TOKEN}' https://x");
+        let action = ApprovalAction::for_tool_call("bash", &json!({ "cmd": cmd }), "gated");
+        assert!(
+            !action.summary.contains(TOKEN),
+            "an HTTP bearer token must not reach a card/log/cluster frame: {}",
+            action.summary
+        );
+    }
+
+    /// `curl -u user:password` basic-auth flag — redacted whole, since the
+    /// summary is human-facing and never re-executed.
+    #[test]
+    fn curl_basic_auth_is_redacted_in_summary() {
+        let action = ApprovalAction::for_tool_call(
+            "bash",
+            &json!({ "cmd": "curl -u admin:hunter2hunter2 https://x" }),
+            "gated",
+        );
+        assert!(
+            !action.summary.contains("hunter2hunter2"),
+            "a basic-auth password must not reach a card/log: {}",
             action.summary
         );
     }
