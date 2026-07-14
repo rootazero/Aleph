@@ -259,135 +259,44 @@ operator watching it.
 
 ---
 
-## Exec Kernel
+## Exec primitives (`src/exec/`)
 
-**Location**: `src/exec/kernel.rs`
+There is **no** monolithic `ExecKernel` with a single `execute()` pipeline, and
+no separate `RiskAnalyzer` / `Allowlist` subsystem — earlier revisions of this
+doc described a design that was never built. Shell-command safety is enforced by
+two real layers documented above:
 
-Central security enforcement for shell commands:
+- **`[sandbox.command_policy]`** — the catastrophic hardline floor
+  (`src/sandbox/command_policy/`), applied before every sandboxed exec on every
+  tier. This is the only *blocking* command classifier.
+- **Exec tier + approval gate** — the metadata-driven tier
+  (`config/types/policies/exec_tier.rs`) enforced at `src/tools/scoped/`, which
+  raises the action-aware approval card via `src/sandbox/exec_approval/`.
 
-```rust
-pub struct ExecKernel {
-    parser: CommandParser,
-    analyzer: RiskAnalyzer,
-    approval_manager: ApprovalManager,
-    allowlist: Allowlist,
-    masker: OutputMasker,
-}
+`src/exec/` holds the supporting primitives these layers use — none of them
+enforce on their own:
 
-impl ExecKernel {
-    pub async fn execute(&self, command: &str) -> Result<ExecResult> {
-        // 1. Parse command
-        let parsed = self.parser.parse(command)?;
-
-        // 2. Analyze risk
-        let risk = self.analyzer.analyze(&parsed)?;
-
-        // 3. Check approval
-        let approval = self.get_approval(&parsed, &risk).await?;
-
-        if !approval.approved {
-            return Err(Error::NotApproved(approval.reason));
-        }
-
-        // 4. Execute
-        let output = self.run_command(&parsed).await?;
-
-        // 5. Mask sensitive output
-        let masked = self.masker.mask(&output);
-
-        Ok(masked)
-    }
-}
-```
+| Item | Location | Role |
+|------|----------|------|
+| `analyze_shell_command` → `CommandAnalysis` | `src/exec/parser.rs` | Parse a shell string into program/args/segments — used to *render* the approval card summary, not to gate. |
+| `SecretMasker` | `src/exec/masker.rs` | Redact secrets in a string for display (approval summaries, logs). |
+| `SecurityKernel::assess_custom` | `src/exec/kernel.rs` | Advisory-only custom-pattern layer over the user's `[security]` patterns; wired as a `SandboxBeforeHook`. Deliberately does **not** re-enforce the built-in floor. |
+| `RiskLevel {Safe, Caution, Danger, Blocked}` | `src/exec/risk.rs` | The advisory scale `assess_custom` returns. It is **not** the fictional `{Low, Medium, High, Critical}` an older doc showed. |
+| `ExecApprovalManager` | `src/exec/manager.rs` | Pending/resolve pairing for the approval gate (see below). |
 
 ---
 
-## Command Parser
+## Command analysis (approval-summary rendering)
 
-**Location**: `src/exec/parser.rs`
+**Location**: `src/exec/parser.rs` (`analyze_shell_command → CommandAnalysis`)
 
-Parse shell commands into structured form:
-
-```rust
-pub struct CommandParser;
-
-impl CommandParser {
-    pub fn parse(&self, command: &str) -> Result<ParsedCommand> {
-        // Handle pipes, redirects, subshells, etc.
-    }
-}
-
-pub struct ParsedCommand {
-    pub program: String,
-    pub args: Vec<String>,
-    pub pipes: Vec<ParsedCommand>,
-    pub redirects: Vec<Redirect>,
-    pub env: HashMap<String, String>,
-    pub is_background: bool,
-}
-
-pub struct Redirect {
-    pub fd: u32,           // 0=stdin, 1=stdout, 2=stderr
-    pub mode: RedirectMode,
-    pub target: String,
-}
-
-pub enum RedirectMode {
-    Read,     // <
-    Write,    // >
-    Append,   // >>
-}
-```
-
----
-
-## Risk Analyzer
-
-**Location**: `src/exec/risk.rs`
-
-Evaluate command risk level:
-
-```rust
-pub struct RiskAnalyzer {
-    rules: Vec<RiskRule>,
-}
-
-impl RiskAnalyzer {
-    pub fn analyze(&self, cmd: &ParsedCommand) -> RiskAssessment {
-        let mut level = RiskLevel::Low;
-        let mut reasons = vec![];
-
-        for rule in &self.rules {
-            if rule.matches(cmd) {
-                level = level.max(rule.level);
-                reasons.push(rule.description.clone());
-            }
-        }
-
-        RiskAssessment { level, reasons }
-    }
-}
-
-pub enum RiskLevel {
-    Low,       // Read-only operations
-    Medium,    // File modifications
-    High,      // System changes
-    Critical,  // Destructive operations
-}
-```
-
-### Risk Rules
-
-| Pattern | Risk Level | Description |
-|---------|------------|-------------|
-| `rm -rf *` | Critical | Recursive delete |
-| `chmod 777` | High | Permissive permissions |
-| `curl \| sh` | Critical | Remote code execution |
-| `sudo *` | High | Elevated privileges |
-| `> /etc/*` | Critical | System file overwrite |
-| `cat *` | Low | Read operation |
-| `ls *` | Low | List operation |
-| `git *` | Low | Version control |
+`analyze_shell_command` splits a shell string into its executables and segments.
+Its output feeds the **approval card summary** (so a human approving a `bash`
+call sees the real command, not just the word `bash`) — it is a rendering aid,
+not an enforcement gate. The catastrophic floor that actually refuses commands
+is `sandbox::command_policy`, whose real hardline rules
+(`command_policy/rules.rs::hardline_rules`) cover the never-legitimate shapes:
+fork bomb, bare-root `rm -rf /`, `dd`/`mkfs`/redirect to a raw block device.
 
 ---
 
@@ -460,87 +369,47 @@ pub enum ApprovalDecisionType {
 
 ---
 
-## Allowlist System
+## Command allowlist
 
-**Location**: `src/exec/allowlist.rs`
+There is **no** `src/exec/allowlist.rs` and no `exec.allowlist` / `exec.blocklist`
+config table — an older revision of this doc invented one. "Which commands run"
+is decided by the two real layers already described:
 
-```rust
-pub struct Allowlist {
-    rules: Vec<AllowRule>,
-}
+- What is **always refused**: the `[sandbox.command_policy]` hardline floor plus
+  any user `deny` in `[policies.tool_permissions]` (an explicit entry beats the
+  tier).
+- What runs **without asking**: read-only tools under the exec tier (via declared
+  `idempotent` metadata), plus anything the tier's verdict allows for the current
+  `Ask` / `Auto` / `Full` setting. There is no per-command glob allowlist with
+  `autoApprove` flags.
 
-pub struct AllowRule {
-    pub pattern: String,     // Glob pattern
-    pub args_pattern: Option<String>,
-    pub auto_approve: bool,
-}
-
-impl Allowlist {
-    pub fn is_allowed(&self, cmd: &ParsedCommand) -> bool {
-        self.rules.iter().any(|rule| rule.matches(cmd))
-    }
-}
-```
-
-### Configuration
-
-```json5
-{
-  "exec": {
-    "allowlist": [
-      // Always allow
-      { "pattern": "ls", "autoApprove": true },
-      { "pattern": "cat", "autoApprove": true },
-      { "pattern": "git", "args": "status|diff|log|branch", "autoApprove": true },
-
-      // Allow but require first-time confirmation
-      { "pattern": "npm", "args": "install|run|test" },
-      { "pattern": "cargo", "args": "build|test|run" }
-    ],
-    "blocklist": [
-      { "pattern": "rm", "args": "-rf /" },
-      { "pattern": "curl", "args": "* | sh" },
-      { "pattern": "sudo", "args": "*" }
-    ]
-  }
-}
-```
+The only command-shape allowlist in the tree is `IDEMPOTENT_BUILTIN_TOOLS`
+(`src/tools/retry.rs`), the pure-read builtins the tier treats as safe.
 
 ---
 
-## Output Masking
+## Output masking
 
-**Location**: `src/exec/masker.rs`
+**Location**: `src/exec/masker.rs` (`SecretMasker` — for displayed strings),
+`src/sandbox/scrub.rs` (`scrub_and_gate_output` — for sandbox command output).
 
-Protect sensitive data in command output:
+Two distinct paths, by consumer:
 
-```rust
-pub struct OutputMasker {
-    patterns: Vec<MaskPattern>,
-}
+- **`SecretMasker`** redacts secrets in strings shown to a human or written to
+  logs (e.g. the approval-card summary — `ApprovalAction` runs its command
+  summary through it).
+- **`sandbox::scrub::scrub_and_gate_output`** is the single source of truth for
+  a finished command's stdout/stderr: it redacts secrets at the byte level,
+  strips invisible/bidi control characters, and returns a **block-class** verdict.
+  A block-class hit (a PEM private key — `leak_detector::BLOCK_CLASS_SECRETS`)
+  makes the sandbox fail closed rather than return the surrounding context. Both
+  `WorkspaceSandbox` and `WorktreeSandbox` route their output through it, so the
+  floor cannot diverge between execution paths.
 
-impl OutputMasker {
-    pub fn mask(&self, output: &str) -> String {
-        let mut result = output.to_string();
-
-        for pattern in &self.patterns {
-            result = pattern.regex.replace_all(&result, pattern.replacement).into();
-        }
-
-        result
-    }
-}
-```
-
-### Masked Patterns
-
-| Pattern | Replacement |
-|---------|-------------|
-| API keys | `[API_KEY_REDACTED]` |
-| Passwords | `[PASSWORD_REDACTED]` |
-| AWS credentials | `[AWS_CRED_REDACTED]` |
-| Private keys | `[PRIVATE_KEY_REDACTED]` |
-| OAuth tokens | `[TOKEN_REDACTED]` |
+The secret pattern catalogs live in `src/secrets/leak_detector.rs` and
+`src/exec/secret_patterns.rs`; they are kept in sync (the private-key regex is
+`-----BEGIN[A-Z ]*PRIVATE KEY-----` in both, so bare PKCS#8 headers cannot slip
+one catalog but not the other).
 
 ---
 
@@ -629,9 +498,13 @@ impl ApprovalBridge {
 
 ### For Developers
 
-1. **Never bypass the exec kernel** - All shell execution must go through `ExecKernel`
+1. **Never bypass the one chokepoint** - Every tool that can execute must go
+   through `src/tools/scoped/` (the exec-tier + approval gate); every sandboxed
+   command through `WorkspaceSandbox` / `WorktreeSandbox` (the command-policy
+   floor + output scrub). A new surface that skips either is a bypass.
 2. **Validate inputs** - Sanitize all user-provided command arguments
-3. **Use allowlists** - Prefer allowlists over blocklists
+3. **Read declared metadata, not names** - The gate keys on `ToolFacts`
+   (`idempotent` / `requires_approval`), never a tool-name glob
 4. **Log everything** - All security decisions should be audited
 5. **Principle of least privilege** - Request minimal permissions
 
@@ -1025,7 +898,8 @@ was removed in the LAN-trust revert. For operators upgrading:
 | Gate input | name-based argv allowlist + a Starlark rules engine over the command string | hermes: 47 regex `DANGEROUS_PATTERNS` over argument content. pi: tools declare *no* risk metadata; every gate re-derives danger from regex | **metadata-driven**: `ToolFacts` read off the declared `ToolDefinition`, never the name; one argument-level filter (`file_ops`) | **aleph-superior** — do not regress toward regex-on-shell-strings |
 | Safe-read bypass | `is_known_safe_command` argv allowlist, compositional over `&& \|\| ; \|` | hermes: permanent glob `command_allowlist`. pi: patterns exist only in an example | `IDEMPOTENT_BUILTIN_TOOLS` (pure-read builtins) + MCP `readOnlyHint`; default-deny for anything unlisted | **aligned** |
 | Memory key | `{env, CANONICALIZED argv, cwd, sandbox perms}` | hermes: keys on a *pattern*, so "always" on `rm -r*` allowlists every future one. pi: no memoization at all | `grant_fingerprint(tool, canonical args)`, shared by session memory **and** the denial ledger | **gap → closed** (was: the bare tool name) |
-| Escalation / retry ladder | model-declared `SandboxPermissions` + **`ToolOrchestrator`'s harness-side retry ladder**: on `SandboxErr::Denied`, pick a recovery strategy and re-run | hermes: plugin may re-escalate into the same gate. pi: "approve-with-modification" mutates `event.input` in place, with no re-validation | Neither. Denial is terminal and is returned to the model as an instruction not to retry | **deliberately-not-ported** — see below |
+| Escalation *axis* (model-declared) | model-declared `SandboxPermissions` on the exec tool | hermes: plugin may re-escalate into the same gate | **present**: `bash_exec` / `code_exec` declare `allow_network` / `allow_subprocess` / `extra_writable_paths` + a `justification`, mapped to `SandboxCapabilities`, arbitrated by `ApprovalGate` (`format_capability_request`), and OS-enforced by the driver | **aligned** (arguably superior — it carries the justification to the approver) |
+| Escalation *retry ladder* | **`ToolOrchestrator`'s harness-side ladder**: on `SandboxErr::Denied`, pick a recovery strategy and re-run with elevated perms | pi: "approve-with-modification" mutates `event.input` in place, with no re-validation | none — denial is terminal and returned to the model to re-plan | **deliberately-not-ported** (R10 5th 不 / A2) — see below |
 | Timeout / orphans | approvals block forever; turn death drops the sender → fails closed | hermes: timeout ⇒ deny ("silence is not consent"). pi: `select` timeout returns `undefined`, so a gate written `if choice === "No"` **fails open** | 120s ⇒ refusal everywhere; timeout is *not* ledgered (an expired card is not a decision); `is_live()` evicts orphan waiters | **aleph-superior** |
 | Runtime switching UX | `/permissions` → 3 presets, session-scoped, admin-lockable | hermes: `/yolo` per session; shift-click writes it globally. pi: restrictions persist to the session transcript and survive resume | composer pill (per-session, rides the first message) + Settings→Policies (global, live per turn) | **gap → closed** (Panel lost the display on select/reload while the server kept enforcing) |
 | Unknown-tool default | MCP: an unannotated tool requires approval | hermes: documented fail-open hole in headless non-gateway contexts. pi: no metadata, so "unknown" is meaningless | fail-closed by construction: unknown ⇒ non-idempotent ⇒ mutating ⇒ `Ask` holds | **aligned** — protect by test |
@@ -1044,20 +918,44 @@ was removed in the LAN-trust revert. For operators upgrading:
   harness pick the recovery strategy for it = no.* Aleph compresses the denial
   into context and the model re-plans. A future round that "helpfully" adds a
   retry matrix is reverting an architectural decision, not fixing an omission.
-- **codex's model-declared escalation flag** is R7-compatible in principle (the
-  harness only checks a declared flag, it never classifies), but Aleph has no
-  sandbox-escalation axis for it to target — it would be a zero-consumer
-  abstraction (P6).
 - **pi's approve-with-modification** (the gate mutates `event.input` in place).
   Tempting, but pi does **no re-validation after mutation**, and Aleph has no
   consumer for a third "allow-if-rewritten" state that a tier enum cannot express.
 
+### Closed in round 3 (2026-07-14, sandbox × tier seam)
+
+- **`session_send` delegation escalation** (was critical): the delegated run
+  carried only `project_root`, so a guest channel became operator +
+  unclamped-tier by delegating. Now forwards `caller_role` from the dispatching
+  turn's `TURN_CONTEXT` and stamps `unattended` on fire-and-forget
+  (`build_sub_metadata`).
+- **`WorktreeSandbox` floor bypass**: subagent worktree isolation ran commands
+  with no hooks — the hardline command-policy floor and secret scrub never ran.
+  Now shares both (the before-hook + `scrub::scrub_and_gate_output`) with
+  `WorkspaceSandbox`.
+- **PKCS#8 block-class miss**: the private-key regex required an algorithm word,
+  so `-----BEGIN PRIVATE KEY-----` slipped the block floor. Both catalogs now use
+  `-----BEGIN[A-Z ]*PRIVATE KEY-----`.
+- **Justification poisoning the fingerprint**: the model's `justification` rode
+  into both approval fingerprints; now excluded from the key on both gates.
+- **`file_ops` on `tools.invoke`**: its destructive ops are argument-level and
+  this surface can't honor them, so `file_ops` is now on the gateway denylist.
+
 ### Still open (honest)
 
-- `tools.invoke` has no argument-level tier parity (needs an approval transport
-  on the RPC surface).
-- `sessions_send` sub-agent runs do not inherit `unattended` from a headless
-  parent — `TurnContext` has no such field, so closing it is its own slice.
+- `tools.invoke` has no *general* argument-level tier parity (needs an approval
+  transport on the RPC surface). `file_ops` — the one destructive multiplexer —
+  is now denied outright there, but the general gap remains for any future
+  argument-gated tool.
+- Wait-mode `session_send` children of a *headless* parent do not inherit the
+  parent's `unattended` (only fire-and-forget children are stamped, and
+  `TurnContext` has no parent-unattended field to propagate). Security-wise this
+  still fails closed — an un-routable child approval times out to a refusal — but
+  it is a 120s hang, not an instant deny.
+- The `FullRead` / `FullWrite` / `ProxyOnly` sandbox-policy variants and the
+  managed per-host proxy subsystem remain dead (no producer sets them); pruning
+  them is deferred (cross-platform driver match-arm surgery — track with the
+  network-proxy decision).
 - No user-editable floor under `Full` in hermes' sense (an `approvals.deny` glob
   that survives yolo). `[policies.tool_permissions]` `deny` overrides already
   cover ~80% of it, since an explicit entry beats the tier.
@@ -1080,7 +978,7 @@ was removed in the LAN-trust revert. For operators upgrading:
 | Exec Tier | `src/config/types/policies/exec_tier.rs` | Ask / Auto / Full — the rules and the one precedence composition point |
 | Approval Gate | `src/sandbox/exec_approval/` | Action-aware confirmation, grant fingerprint, denial ledger |
 | Gateway-surface denylist | `src/security/dangerous_tools.rs` | What `tools.invoke` refuses outright |
-| Exec Kernel | `src/exec/` | Shell command safety |
+| Exec primitives | `src/exec/` | Command parse for approval summaries (`analyze_shell_command`), `SecretMasker`, advisory custom-pattern `SecurityKernel` — support code, not a standalone enforcement kernel |
 
 ---
 
