@@ -109,8 +109,25 @@ pub fn scan_mentions(docs: &[MentionDoc]) -> Vec<(String, String)> {
             if target == d.path {
                 continue; // self
             }
-            if linked.iter().any(|l| l == name_norm) {
-                continue; // already a real [[link]]
+            // Already a real [[link]] — in EITHER wikilink form.
+            //
+            // This used to compare only against `name_norm`, the bare note name.
+            // But Aleph writes wikilinks in FULL-PATH form (`add_links` renders
+            // `[[category/filename]]`, and `NoteWeave` passes the resolved path), so
+            // `[[personal/news-monitoring]]` never matched the key `news-monitoring`
+            // and the guard did not fire. `body_mentions` then matched the bare name
+            // INSIDE the wikilink markup itself — '/' before it and ']' after it are
+            // both non-alphanumeric, so the word-boundary test passes — yielding a
+            // phantom "unlinked mention" for a pair that already has a real link edge.
+            //
+            // The resulting INSERT was a harmless no-op (`ON CONFLICT DO NOTHING`),
+            // but the hit was COUNTED first: it burned a slot in
+            // `MAX_MENTIONS_PER_NOTE` and in the per-cycle cap. A note with 5+
+            // path-form outgoing links therefore emitted five no-op hits and zero
+            // genuine unlinked-mention edges, every cycle, forever.
+            let target_norm = normalize_link_key(target);
+            if linked.iter().any(|l| l == name_norm || *l == target_norm) {
+                continue;
             }
             let cjk = name_norm.chars().any(is_cjk);
             if body_mentions(&body_norm, name_norm, cjk) {
@@ -143,11 +160,73 @@ mod tests {
     fn detects_ascii_mention_with_word_boundary() {
         let docs = vec![
             doc("a/rust-notes", &["rust-notes"], "body of target", &[]),
-            doc("b/diary", &["diary"], "today I reread rust-notes again", &[]),
+            doc(
+                "b/diary",
+                &["diary"],
+                "today I reread rust-notes again",
+                &[],
+            ),
         ];
         assert_eq!(
             scan_mentions(&docs),
             vec![("b/diary".to_string(), "a/rust-notes".to_string())]
+        );
+    }
+
+    /// A note that ALREADY links to the target in full-path form must not also
+    /// report an "unlinked mention" of it.
+    ///
+    /// Aleph writes wikilinks in path form (`[[category/filename]]`), so the old
+    /// bare-name-only skip guard never fired, and the bare name was then matched
+    /// inside the wikilink markup itself. The phantom row was a no-op insert, but
+    /// it was counted first and burned a slot in the per-note mention cap — a note
+    /// with 5+ path-form links produced five no-op hits and zero real mention edges.
+    #[test]
+    fn path_form_wikilink_counts_as_already_linked() {
+        let docs = vec![
+            doc("personal/news-monitoring", &["news-monitoring"], "x", &[]),
+            doc(
+                "b/diary",
+                &["diary"],
+                "Related: [[personal/news-monitoring]]",
+                &["personal/news-monitoring"],
+            ),
+        ];
+        assert!(
+            scan_mentions(&docs).is_empty(),
+            "a path-form [[link]] is a real link — it must not also count as an \
+             unlinked mention"
+        );
+    }
+
+    /// The bare-name link form still skips too (the original guard's job).
+    #[test]
+    fn bare_name_wikilink_still_counts_as_already_linked() {
+        let docs = vec![
+            doc("personal/news-monitoring", &["news-monitoring"], "x", &[]),
+            doc(
+                "b/diary",
+                &["diary"],
+                "Related: [[news-monitoring]]",
+                &["news-monitoring"],
+            ),
+        ];
+        assert!(scan_mentions(&docs).is_empty());
+    }
+
+    /// ...and a genuine unlinked mention is still detected when there is no link.
+    #[test]
+    fn genuine_unlinked_mention_survives_the_stricter_guard() {
+        let docs = vec![
+            doc("personal/news-monitoring", &["news-monitoring"], "x", &[]),
+            doc("b/diary", &["diary"], "I read news-monitoring today", &[]),
+        ];
+        assert_eq!(
+            scan_mentions(&docs),
+            vec![(
+                "b/diary".to_string(),
+                "personal/news-monitoring".to_string()
+            )]
         );
     }
 
@@ -166,7 +245,10 @@ mod tests {
             doc("a/记忆系统", &["记忆系统"], "x", &[]),
             doc("b/日记", &["日记"], "今天研究了记忆系统的检索", &[]),
         ];
-        assert_eq!(scan_mentions(&docs), vec![("b/日记".into(), "a/记忆系统".into())]);
+        assert_eq!(
+            scan_mentions(&docs),
+            vec![("b/日记".into(), "a/记忆系统".into())]
+        );
     }
 
     #[test]
@@ -177,14 +259,17 @@ mod tests {
             doc("a/rust", &["Rust"], "x", &[]),
             doc("b/日记", &["日记"], "使用Rust开发", &[]),
         ];
-        assert_eq!(scan_mentions(&docs), vec![("b/日记".into(), "a/rust".into())]);
+        assert_eq!(
+            scan_mentions(&docs),
+            vec![("b/日记".into(), "a/rust".into())]
+        );
     }
 
     #[test]
     fn short_names_never_match() {
         let docs = vec![
-            doc("a/app", &["app"], "x", &[]),          // ASCII len 3 < 4
-            doc("a/图", &["图"], "y", &[]),             // CJK len 1 < 2
+            doc("a/app", &["app"], "x", &[]), // ASCII len 3 < 4
+            doc("a/图", &["图"], "y", &[]),   // CJK len 1 < 2
             doc("b/d", &["dddd"], "the app draws a 图", &[]),
         ];
         assert!(scan_mentions(&docs).is_empty());
@@ -193,10 +278,23 @@ mod tests {
     #[test]
     fn skips_already_linked_and_self() {
         let docs = vec![
-            doc("a/rust-notes", &["rust-notes"], "rust-notes mentions itself", &[]),
-            doc("b/diary", &["diary"], "see [[rust-notes]] and rust-notes prose", &["rust-notes"]),
+            doc(
+                "a/rust-notes",
+                &["rust-notes"],
+                "rust-notes mentions itself",
+                &[],
+            ),
+            doc(
+                "b/diary",
+                &["diary"],
+                "see [[rust-notes]] and rust-notes prose",
+                &["rust-notes"],
+            ),
         ];
-        assert!(scan_mentions(&docs).is_empty(), "self + already-linked must not edge");
+        assert!(
+            scan_mentions(&docs).is_empty(),
+            "self + already-linked must not edge"
+        );
     }
 
     #[test]
@@ -206,13 +304,23 @@ mod tests {
             doc("b/notes", &["notes"], "y", &[]),
             doc("c/diary", &["diary"], "my notes about things", &[]),
         ];
-        assert!(scan_mentions(&docs).is_empty(), "duplicate name must never guess");
+        assert!(
+            scan_mentions(&docs).is_empty(),
+            "duplicate name must never guess"
+        );
     }
 
     #[test]
     fn per_note_cap_applies() {
         let mut docs: Vec<MentionDoc> = (0..8)
-            .map(|i| doc(&format!("t/target-{i:02}"), &[&format!("target-{i:02}")], "x", &[]))
+            .map(|i| {
+                doc(
+                    &format!("t/target-{i:02}"),
+                    &[&format!("target-{i:02}")],
+                    "x",
+                    &[],
+                )
+            })
             .collect();
         let body: String = (0..8).map(|i| format!("target-{i:02} ")).collect();
         docs.push(doc("s/spammy", &["spammy"], &body, &[]));
@@ -221,4 +329,3 @@ mod tests {
         assert!(hits.iter().all(|(f, _)| f == "s/spammy"));
     }
 }
-

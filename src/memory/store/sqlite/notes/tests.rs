@@ -478,7 +478,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(count, 1, "no duplicate/dangling remnant after the collision");
+        assert_eq!(
+            count, 1,
+            "no duplicate/dangling remnant after the collision"
+        );
     }
 
     #[tokio::test]
@@ -753,6 +756,86 @@ mod tests {
             rels.iter()
                 .any(|(to, rel)| to == "cat/b" && rel == "shared-topic"),
             "expected typed relation cat/a -> cat/b with 'shared-topic', got: {rels:?}"
+        );
+    }
+
+    /// A relation stamped by a dream stage must SURVIVE a re-index of the source
+    /// note. `relation` is DB-only enrichment — `NoteWeave` writes 'semantic' /
+    /// 'related' / '<keyword>' via `add_link_with_relation` and never puts it in
+    /// frontmatter — but `index_note` rebuilds its desired edge set from markdown,
+    /// where a body wikilink carries no relation. Writing that `None` back through
+    /// NULLed the label on the next re-index for any reason (NoteDecay's per-cycle
+    /// frontmatter patch, an ingest append, a panel edit, or even NoteWeave's own
+    /// next write in the same cycle), and nothing ever re-stamped it.
+    #[tokio::test]
+    async fn reindexing_a_note_preserves_relations_stamped_by_the_weave() {
+        let backend = make_backend();
+        const AGENT: &str = "default";
+
+        // Two notes, with a body wikilink a -> b (the shape NoteWeave leaves behind:
+        // `append_to_note` writes the link, then `add_link_with_relation` labels it).
+        let mut a = make_note("a", "cat");
+        a.links = vec!["cat/b".to_string()];
+        backend.index_note(&a, AGENT, "cat").await.unwrap();
+        backend
+            .index_note(&make_note("b", "cat"), AGENT, "cat")
+            .await
+            .unwrap();
+
+        backend
+            .add_link_with_relation(AGENT, "cat/a", "cat/b", "semantic")
+            .await
+            .unwrap();
+
+        // Re-index `a` for an unrelated reason (e.g. NoteDecay patching frontmatter).
+        // The markdown is unchanged and still says nothing about the relation.
+        let mut a_again = a.clone();
+        a_again.updated_at = 2000;
+        backend.index_note(&a_again, AGENT, "cat").await.unwrap();
+
+        let rels = backend.get_typed_relations("cat/a", AGENT).await.unwrap();
+        assert!(
+            rels.iter()
+                .any(|(to, rel)| to == "cat/b" && rel == "semantic"),
+            "the 'semantic' relation must survive a re-index of the source note \
+             (markdown owns the edge, the weave owns the label); got: {rels:?}"
+        );
+    }
+
+    /// ...but an explicit frontmatter `relations:` entry still wins over whatever
+    /// is in the DB — markdown remains authoritative when it actually says something.
+    #[tokio::test]
+    async fn frontmatter_relation_overrides_a_previously_stamped_one() {
+        use crate::memory::notes::Relation;
+        let backend = make_backend();
+        const AGENT: &str = "default";
+
+        let mut a = make_note("a", "cat");
+        a.links = vec!["cat/b".to_string()];
+        backend.index_note(&a, AGENT, "cat").await.unwrap();
+        backend
+            .index_note(&make_note("b", "cat"), AGENT, "cat")
+            .await
+            .unwrap();
+        backend
+            .add_link_with_relation(AGENT, "cat/a", "cat/b", "semantic")
+            .await
+            .unwrap();
+
+        // Now the note declares the relation explicitly in frontmatter.
+        let mut a_typed = a.clone();
+        a_typed.relations = vec![Relation {
+            to: "cat/b".to_string(),
+            rel_type: "contradicts".to_string(),
+            confidence: 0.9,
+        }];
+        backend.index_note(&a_typed, AGENT, "cat").await.unwrap();
+
+        let rels = backend.get_typed_relations("cat/a", AGENT).await.unwrap();
+        assert!(
+            rels.iter()
+                .any(|(to, rel)| to == "cat/b" && rel == "contradicts"),
+            "an explicit frontmatter relation must override the stamped one; got: {rels:?}"
         );
     }
 
@@ -1032,6 +1115,10 @@ mod tests {
             .unwrap();
         let map = backend.community_ids("agent1").await.unwrap();
         assert_eq!(map.get("notes/a").copied(), Some(7));
-        assert!(backend.community_ids("other-agent").await.unwrap().is_empty());
+        assert!(backend
+            .community_ids("other-agent")
+            .await
+            .unwrap()
+            .is_empty());
     }
 }
