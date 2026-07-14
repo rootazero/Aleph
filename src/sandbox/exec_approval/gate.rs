@@ -3,18 +3,27 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use super::action::ApprovalAction;
+
+/// A transport that puts an approval in front of a human and returns their
+/// decision.
+///
+/// The request carries the whole [`ApprovalAction`], not a tool name: a
+/// requester that only knows the name can only render the name, and a human who
+/// is shown `bash` has not been shown anything.
 #[async_trait]
 pub trait ApprovalRequester: Send + Sync {
-    async fn request_approval(&self, tool_name: &str, reason: &str) -> ApprovalOutcome;
+    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalOutcome;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalOutcome {
     /// Approved for this single invocation only.
     Approved,
-    /// Approved for the remainder of the session (user chose "allow always").
+    /// Approved for the remainder of the session ("allow session").
     /// Treated as approved everywhere; additionally recorded in the session
-    /// approval memory so the same tool is not re-prompted this session.
+    /// approval memory so the SAME ACTION — same tool, same arguments — is not
+    /// re-prompted this session. A different action of the same tool still asks.
     ApprovedForSession,
     Denied,
     Timeout,
@@ -27,7 +36,7 @@ impl ApprovalOutcome {
     }
 
     /// True only for a session-scoped grant — the caller should remember it so
-    /// subsequent calls to the same tool skip the prompt.
+    /// subsequent calls of the same action skip the prompt.
     #[must_use]
     pub const fn is_session_grant(&self) -> bool {
         matches!(self, Self::ApprovedForSession)
@@ -59,11 +68,7 @@ impl ApprovalGate {
         *self.requester.write().unwrap_or_else(|e| e.into_inner()) = Some(requester);
     }
 
-    pub async fn request_approval_for_tool(
-        &self,
-        tool_name: &str,
-        reason: &str,
-    ) -> ApprovalOutcome {
+    pub async fn request_approval_for_action(&self, action: &ApprovalAction) -> ApprovalOutcome {
         // Clone the Arc out of the lock and drop the guard before awaiting —
         // a std `RwLock` guard is not `Send` and must not be held across await.
         let requester = self
@@ -72,7 +77,7 @@ impl ApprovalGate {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         match requester {
-            Some(requester) => requester.request_approval(tool_name, reason).await,
+            Some(requester) => requester.request_approval(action).await,
             None => {
                 tracing::warn!("No approval requester configured, defaulting to denied");
                 ApprovalOutcome::Denied
@@ -82,17 +87,17 @@ impl ApprovalGate {
 }
 
 /// The gate is itself an [`ApprovalRequester`], delegating to its own
-/// late-bound requester via [`request_approval_for_tool`].
+/// late-bound requester via [`request_approval_for_action`].
 ///
 /// This lets one shared `ApprovalGate` (whose channel requester is wired after
 /// channels are up) serve both the sandbox escalation path and the failover
 /// route escalation (borrow-cloud) gate, without exposing the inner requester.
 ///
-/// [`request_approval_for_tool`]: ApprovalGate::request_approval_for_tool
+/// [`request_approval_for_action`]: ApprovalGate::request_approval_for_action
 #[async_trait]
 impl ApprovalRequester for ApprovalGate {
-    async fn request_approval(&self, tool_name: &str, reason: &str) -> ApprovalOutcome {
-        self.request_approval_for_tool(tool_name, reason).await
+    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalOutcome {
+        self.request_approval_for_action(action).await
     }
 }
 
@@ -115,23 +120,22 @@ mod tests {
         struct AlwaysApprove;
         #[async_trait::async_trait]
         impl ApprovalRequester for AlwaysApprove {
-            async fn request_approval(&self, _tool: &str, _reason: &str) -> ApprovalOutcome {
+            async fn request_approval(&self, _action: &ApprovalAction) -> ApprovalOutcome {
                 ApprovalOutcome::Approved
             }
         }
 
+        let action = ApprovalAction::bare("code_exec", "allow_network");
         let gate = ApprovalGate::new(None);
         // No requester wired → denied (never a silent auto-approve).
         assert_eq!(
-            gate.request_approval_for_tool("code_exec", "allow_network")
-                .await,
+            gate.request_approval_for_action(&action).await,
             ApprovalOutcome::Denied
         );
         // Once the requester is installed, escalations reach it.
         gate.set_requester(Arc::new(AlwaysApprove));
         assert_eq!(
-            gate.request_approval_for_tool("code_exec", "allow_network")
-                .await,
+            gate.request_approval_for_action(&action).await,
             ApprovalOutcome::Approved
         );
     }

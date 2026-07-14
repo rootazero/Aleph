@@ -58,13 +58,21 @@ impl AgentLoopBridge {
     /// the agent's default. A2A clients that want to address a specific
     /// folder should send an absolute path inside the request body and
     /// let the agent open it with file tools, not pre-bind the run.
+    ///
+    /// The peer on an A2A wire is a machine: there is no channel to render an
+    /// approval card on and no human to press it, so the run is marked
+    /// unattended and confirm-gated tools fail closed instead of parking on an
+    /// approval nobody can give.
     fn build_run_request(task_id: &str, input: &str) -> RunRequest {
         RunRequest {
             run_id: uuid::Uuid::new_v4().to_string(),
             input: input.to_string(),
             session_key: SessionKey::task("main", "a2a", task_id),
             timeout_secs: None,
-            metadata: HashMap::new(),
+            metadata: HashMap::from([(
+                crate::gateway::execution_engine::UNATTENDED_KEY.to_string(),
+                "true".to_string(),
+            )]),
             attachments: Vec::new(),
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             sandbox_override: None,
@@ -400,6 +408,20 @@ mod tests {
             Arc::new(TaskStore::new()),
             Arc::new(StreamHub::new()),
         )
+    }
+
+    /// The peer on an A2A wire is a machine. There is no channel to render an
+    /// approval card on and no human to press it, so a delegated run must fail
+    /// closed on confirm-gated tools rather than park on the 120 s approval
+    /// timeout for an approval that can never arrive.
+    #[test]
+    fn a_delegated_run_is_unattended() {
+        use crate::gateway::execution_engine::UNATTENDED_KEY;
+        let request = AgentLoopBridge::build_run_request("task-1", "hi");
+        assert_eq!(
+            request.metadata.get(UNATTENDED_KEY).map(String::as_str),
+            Some("true")
+        );
     }
 
     #[tokio::test]

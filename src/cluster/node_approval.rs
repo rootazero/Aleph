@@ -16,6 +16,7 @@ use serde_json::json;
 
 use crate::cluster::ReverseRpcChannel;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
+use crate::sandbox::exec_approval::ApprovalAction;
 
 /// Shared, per-connection-refreshed channel slot. `run_session` writes
 /// `Some(channel)` on connect and `None` on disconnect; the requester reads it
@@ -51,7 +52,7 @@ impl CenterApprovalRequester {
 
 #[async_trait]
 impl ApprovalRequester for CenterApprovalRequester {
-    async fn request_approval(&self, tool_name: &str, reason: &str) -> ApprovalOutcome {
+    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalOutcome {
         // Clone the channel out of the lock and drop the guard before awaiting —
         // a std RwLock guard is not Send.
         let channel = self.slot.read().unwrap_or_else(|e| e.into_inner()).clone();
@@ -59,7 +60,13 @@ impl ApprovalRequester for CenterApprovalRequester {
             tracing::warn!("node approval requested with no live center channel; denying");
             return ApprovalOutcome::Denied;
         };
-        let params = json!({ "tool": tool_name, "reason": reason });
+        // `action` carries the redacted summary the center's operator card
+        // renders — without it the operator approves a bare tool name.
+        let params = json!({
+            "tool": action.tool_name,
+            "reason": action.reason,
+            "action": action.summary,
+        });
         match channel
             .call("node.approval.request", params, NODE_APPROVAL_TIMEOUT_MS)
             .await
@@ -88,6 +95,15 @@ mod tests {
     use crate::gateway::protocol::JsonRpcResponse;
     use serde_json::Value;
     use tokio::sync::mpsc;
+
+    /// A `bash` escalation carrying its real command line.
+    fn bash_action() -> ApprovalAction {
+        ApprovalAction::for_tool_call(
+            "bash",
+            &json!({"cmd": "curl https://example.com"}),
+            "needs network",
+        )
+    }
 
     fn slot_with_channel() -> (
         ApprovalSlot,
@@ -118,7 +134,7 @@ mod tests {
         let slot: ApprovalSlot = Arc::new(RwLock::new(None));
         let requester = CenterApprovalRequester::new(slot);
         assert_eq!(
-            requester.request_approval("bash", "needs network").await,
+            requester.request_approval(&bash_action()).await,
             ApprovalOutcome::Denied
         );
     }
@@ -136,6 +152,12 @@ mod tests {
             assert_eq!(req["method"], "node.approval.request");
             assert_eq!(req["params"]["tool"], "bash");
             assert_eq!(req["params"]["reason"], "needs network");
+            // The center's operator card renders this — a bare tool name is an
+            // operator deciding blind.
+            assert_eq!(
+                req["params"]["action"],
+                "bash: curl https://example.com"
+            );
             let id = req["id"].clone();
             let resp =
                 JsonRpcResponse::success(Some(id.clone()), json!({"outcome": "approved_session"}));
@@ -143,7 +165,7 @@ mod tests {
         });
 
         assert_eq!(
-            requester.request_approval("bash", "needs network").await,
+            requester.request_approval(&bash_action()).await,
             ApprovalOutcome::ApprovedForSession
         );
     }
@@ -164,7 +186,7 @@ mod tests {
         });
 
         assert_eq!(
-            requester.request_approval("bash", "needs network").await,
+            requester.request_approval(&bash_action()).await,
             ApprovalOutcome::Denied
         );
     }
@@ -177,7 +199,7 @@ mod tests {
         let slot: ApprovalSlot = Arc::new(RwLock::new(Some(channel)));
         let requester = CenterApprovalRequester::new(slot);
         assert_eq!(
-            requester.request_approval("bash", "x").await,
+            requester.request_approval(&bash_action()).await,
             ApprovalOutcome::Denied
         );
     }

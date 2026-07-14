@@ -186,6 +186,11 @@ pub async fn execute_member_task(
 
     let session_key = SessionKey::task(agent_id, "team", task_id);
     let run_id = uuid::Uuid::new_v4().to_string();
+    // Deliberately carries no `UNATTENDED_KEY`, unlike cron / heartbeat / A2A /
+    // goal continuations: a member run has no channel, so a confirm-gated tool
+    // resolves through `OperatorApprovalRequester` to a Panel card that the user
+    // who dispatched the team can answer. The marker would auto-deny that
+    // working human-in-the-loop path.
     let metadata = {
         let mut m = HashMap::new();
         m.insert("team_id".to_string(), team_id.to_string());

@@ -1,13 +1,20 @@
 //! Session-scoped approval memory: remembers a user's "approve for the rest of
-//! this session" (`AllowAlways`) choice so a confirm-gated tool is not
-//! re-prompted on every call within the same conversation.
+//! this session" choice so the same confirm-gated ACTION is not re-prompted on
+//! every call within the same conversation.
 //!
-//! Maps codex's `ApprovalStore` (`core/src/tools/sandboxing.rs`) onto Aleph: a
-//! grant is keyed by the conversation's `SessionKey` string, so it is scoped to
-//! one session and never leaks across sessions. The store is bounded so a
-//! long-running daemon's footprint stays flat — `AllowAlways` is a deliberate,
-//! rare user action, so evicting an old session beyond the cap costs at most a
-//! re-prompt, never a wrong grant.
+//! Maps codex's `ApprovalStore` (`core/src/tools/sandboxing.rs`) onto Aleph, at
+//! codex's grain: the inner key is an ACTION fingerprint — `(tool, canonical
+//! arguments)`, see
+//! [`grant_fingerprint`](crate::sandbox::exec_approval::grant_fingerprint) —
+//! never a bare tool name. A tool-name key would make one "allow session" on
+//! `file_ops list` authorize `file_ops delete`, and one on `bash: git status`
+//! authorize arbitrary argv.
+//!
+//! The outer key is the conversation's `SessionKey` string, so a grant is
+//! scoped to one session and never leaks across sessions. The store is bounded
+//! so a long-running daemon's footprint stays flat — a session grant is a
+//! deliberate, rare user action, so evicting an old session beyond the cap
+//! costs at most a re-prompt, never a wrong grant.
 
 use crate::sync_primitives::Mutex;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -18,12 +25,13 @@ const MAX_SESSIONS: usize = 1024;
 
 #[derive(Default)]
 struct Inner {
+    /// session key → the set of granted ACTION fingerprints.
     by_session: HashMap<String, HashSet<String>>,
     /// FIFO of session keys, for bounded eviction of the oldest session.
     order: VecDeque<String>,
 }
 
-/// Process-wide record of "approve for session" tool grants, keyed by session.
+/// Process-wide record of "approve for session" action grants, keyed by session.
 pub struct SessionApprovalMemory {
     inner: Mutex<Inner>,
 }
@@ -35,17 +43,18 @@ impl SessionApprovalMemory {
         }
     }
 
-    /// True when `tool` was granted "approve for session" under `session`.
-    pub fn is_approved(&self, session: &str, tool: &str) -> bool {
+    /// True when `action` (an opaque action fingerprint) was granted "approve
+    /// for session" under `session`.
+    pub fn is_approved(&self, session: &str, action: &str) -> bool {
         let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard
             .by_session
             .get(session)
-            .is_some_and(|tools| tools.contains(tool))
+            .is_some_and(|actions| actions.contains(action))
     }
 
-    /// Remember that the user approved `tool` for the remainder of `session`.
-    pub fn remember(&self, session: &str, tool: &str) {
+    /// Remember that the user approved `action` for the remainder of `session`.
+    pub fn remember(&self, session: &str, action: &str) {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if !guard.by_session.contains_key(session) {
             // New session: enforce the bound before inserting so the map and
@@ -64,7 +73,7 @@ impl SessionApprovalMemory {
             .by_session
             .entry(session.to_string())
             .or_default()
-            .insert(tool.to_string());
+            .insert(action.to_string());
     }
 }
 

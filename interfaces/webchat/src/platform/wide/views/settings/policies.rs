@@ -1,5 +1,6 @@
 use crate::api::agents::{AgentsApi, ToolGroupInfo};
 use crate::api::tool_permissions::{TierPreset, ToolPermissionsApi};
+use crate::components::exec_tier_labels::{tier_desc, tier_label, FULL_TIER};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
@@ -10,10 +11,6 @@ use std::collections::HashMap;
 const ALLOW: &str = "allow";
 const ASK: &str = "ask";
 const DENY: &str = "deny";
-
-/// The one tier id that requires a second, explicit confirmation before it is
-/// applied. Every other tier is picked in one click.
-const FULL_TIER: &str = "full";
 
 #[component]
 #[must_use]
@@ -241,9 +238,13 @@ pub fn PoliciesView() -> impl IntoView {
                                     } else {
                                         "w-3 h-3 rounded-full border border-border"
                                     }></span>
-                                    <span class="text-sm font-semibold text-text-primary">{preset.label}</span>
+                                    <span class="text-sm font-semibold text-text-primary">
+                                        {tier_label(i18n, &preset.id)}
+                                    </span>
                                 </div>
-                                <p class="text-xs text-text-secondary ml-5 whitespace-pre-line">{preset.description}</p>
+                                <p class="text-xs text-text-secondary ml-5">
+                                    {tier_desc(i18n, &preset.id)}
+                                </p>
                             </button>
                         }
                     }).collect_view()}

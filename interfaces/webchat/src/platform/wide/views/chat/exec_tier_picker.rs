@@ -4,10 +4,11 @@
 //! "small picker in the composer" pattern):
 //! 1. Pill shows the session's *effective* tier: the session override when set,
 //!    otherwise the global tier.
-//! 2. Click opens a popover; the three tiers are fetched from
-//!    `config.get_tool_permissions` — labels and descriptions come FROM CORE
-//!    (`builtin_tiers()`), never hardcoded here (R6: one core, many channels;
-//!    R4: the panel picks an id and renders what core says about it).
+//! 2. Click opens a popover; the tier IDS and their order are fetched from
+//!    `config.get_tool_permissions` — core owns the id set and every permission
+//!    verdict behind it (R6: one core, many channels). The COPY is ours: resolved
+//!    per locale in `components::exec_tier_labels` (R4: the panel picks an id and
+//!    renders it for its reader).
 //! 3. Selecting a tier writes `SessionIdentityMeta.custom["exec_tier"]` through
 //!    the existing `sessions.patch` RPC — the same carrier as
 //!    `custom["project_root"]`. A session tier REPLACES the global tier for that
@@ -28,29 +29,17 @@ use leptos::task::spawn_local;
 
 use crate::api::sessions::set_exec_tier;
 use crate::api::tool_permissions::{TierPreset, ToolPermissionsApi};
+use crate::components::exec_tier_labels::{tier_desc, tier_label, FULL_TIER};
 use crate::context::DashboardState;
+use crate::i18n::{t, t_string, use_i18n};
 use crate::views::chat::state::ChatState;
-
-/// The tier whose blast radius warrants a second click.
-const FULL_TIER: &str = "full";
-
-/// Short pill label for a tier id — the first word of core's label
-/// ("Auto 自动" → "Auto"), so the composer chip stays compact. Falls back to
-/// the raw id when the tier is unknown to this client (forward compatibility:
-/// core may grow a fourth tier).
-fn pill_label(tiers: &[TierPreset], id: &str) -> String {
-    tiers
-        .iter()
-        .find(|t| t.id == id)
-        .and_then(|t| t.label.split_whitespace().next().map(str::to_string))
-        .unwrap_or_else(|| id.to_string())
-}
 
 #[component]
 #[must_use]
 pub fn ExecTierPicker() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    let i18n = use_i18n();
 
     let open = RwSignal::new(false);
     let tiers: RwSignal<Vec<TierPreset>> = RwSignal::new(Vec::new());
@@ -58,14 +47,8 @@ pub fn ExecTierPicker() -> impl IntoView {
     // Tier id currently armed for the "are you sure" second click (Full only).
     let confirming: RwSignal<Option<String>> = RwSignal::new(None);
 
-    // The global tier + the three presets. Gated on the socket being up: a bare
-    // fetch on mount races the WebSocket handshake, loses, and leaves the
-    // popover permanently empty — there is no second chance to ask. Re-runs
-    // when `is_connected` flips, so a reconnect also refreshes the presets.
-    Effect::new(move |_| {
-        if !dashboard.is_connected.get() {
-            return;
-        }
+    // The global tier + the selectable ids.
+    let load = move || {
         spawn_local(async move {
             match ToolPermissionsApi::get_global(&dashboard).await {
                 Ok(cfg) => {
@@ -77,6 +60,17 @@ pub fn ExecTierPicker() -> impl IntoView {
                 }
             }
         });
+    };
+
+    // Initial fetch, gated on the socket being up: a bare fetch on mount races
+    // the WebSocket handshake, loses, and leaves the popover permanently empty —
+    // there is no second chance to ask. Re-runs when `is_connected` flips, so a
+    // reconnect also refreshes.
+    Effect::new(move |_| {
+        if !dashboard.is_connected.get() {
+            return;
+        }
+        load();
     });
 
     // Effective tier: the session override wins over the global tier.
@@ -131,12 +125,23 @@ pub fn ExecTierPicker() -> impl IntoView {
     view! {
         <div class="relative">
             <button
-                on:click=move |_| open.update(|v| *v = !*v)
+                on:click=move |_| {
+                    let opening = !open.get_untracked();
+                    open.set(opening);
+                    // `MainContent` keeps the chat container mounted (it switches
+                    // modes by CSS `display`), so the connect-gated Effect above
+                    // runs once per socket — the global tier goes stale the moment
+                    // Settings writes a new one. Refetch on open: there is no
+                    // config-changed event to subscribe to.
+                    if opening {
+                        load();
+                    }
+                }
                 class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-mono
                        text-text-secondary border border-border
                        bg-surface-raised backdrop-blur-[var(--glass-blur-chrome)]
                        hover:bg-surface-sunken hover:text-text-primary transition-colors"
-                title="工具执行档位 / Tool execution tier"
+                title=move || t_string!(i18n, settings.policies.exec_tier_pill_title).to_string()
             >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
                      stroke="currentColor" stroke-width="2"
@@ -144,7 +149,7 @@ pub fn ExecTierPicker() -> impl IntoView {
                     <rect x="3" y="11" width="18" height="11" rx="2" />
                     <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                 </svg>
-                <span>{move || pill_label(&tiers.get(), &effective.get())}</span>
+                <span>{move || tier_label(i18n, &effective.get())}</span>
                 // A session override is a deliberate deviation from the global
                 // policy — mark it so it can't be mistaken for the default.
                 <Show when=move || chat.session_exec_tier.get().is_some()>
@@ -176,9 +181,11 @@ pub fn ExecTierPicker() -> impl IntoView {
                             }
                         }
                     >
-                        <span class="font-medium">"跟随全局 / Follow global"</span>
+                        <span class="font-medium">
+                            {t!(i18n, settings.policies.exec_tier_follow_global)}
+                        </span>
                         <span class="text-text-tertiary text-[10px] font-mono">
-                            {move || pill_label(&tiers.get(), &global_tier.get())}
+                            {move || tier_label(i18n, &global_tier.get())}
                         </span>
                     </button>
 
@@ -213,15 +220,14 @@ pub fn ExecTierPicker() -> impl IntoView {
                                     }
                                 >
                                     <div class="text-xs font-medium">
-                                        {tier.label.clone()}
+                                        {tier_label(i18n, &tier.id)}
                                     </div>
-                                    // Core owns the wording (R4/R6) — we render it.
-                                    <div class="text-[10px] leading-snug mt-0.5 whitespace-pre-line text-text-tertiary">
-                                        {tier.description.clone()}
+                                    <div class="text-[10px] leading-snug mt-0.5 text-text-tertiary">
+                                        {tier_desc(i18n, &tier.id)}
                                     </div>
                                     <Show when=move || is_confirming.get()>
                                         <div class="text-[10px] mt-1 font-semibold">
-                                            "再点一次确认 / Click again to confirm"
+                                            {t!(i18n, settings.policies.exec_tier_confirm_again)}
                                         </div>
                                     </Show>
                                 </button>
@@ -230,46 +236,10 @@ pub fn ExecTierPicker() -> impl IntoView {
                     />
 
                     <div class="px-2.5 pt-1 text-[10px] leading-snug text-text-tertiary border-t border-border">
-                        "沙箱命令硬底线（fork bomb / rm -rf / 抹盘）任何档位都无法关闭。"
-                        <br />
-                        "The sandbox command floor holds under every tier."
+                        {t!(i18n, settings.policies.exec_tier_floor_note)}
                     </div>
                 </div>
             </Show>
         </div>
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn tiers() -> Vec<TierPreset> {
-        vec![
-            TierPreset {
-                id: "ask".to_string(),
-                label: "Ask 请求".to_string(),
-                description: "…".to_string(),
-            },
-            TierPreset {
-                id: "auto".to_string(),
-                label: "Auto 自动".to_string(),
-                description: "…".to_string(),
-            },
-        ]
-    }
-
-    #[test]
-    fn pill_label_takes_the_first_word_of_cores_label() {
-        assert_eq!(pill_label(&tiers(), "auto"), "Auto");
-        assert_eq!(pill_label(&tiers(), "ask"), "Ask");
-    }
-
-    #[test]
-    fn unknown_tier_falls_back_to_its_id() {
-        // Core could ship a fourth tier before this client knows about it; the
-        // pill must degrade to the raw id rather than render blank.
-        assert_eq!(pill_label(&tiers(), "paranoid"), "paranoid");
-        assert_eq!(pill_label(&[], "auto"), "auto");
     }
 }

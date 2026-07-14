@@ -11,14 +11,13 @@ use std::collections::HashMap;
 
 // -- Types --
 
-/// One selectable execution-permission tier, exactly as Core defines it
-/// (`builtin_tiers()`). Labels and descriptions are never authored here — the
-/// Panel, CLI and bots must render the identical three.
+/// One selectable execution-permission tier. Core ships the id set and its
+/// order (`builtin_tiers()`) — that is the part every surface must agree on.
+/// The copy is this surface's own: resolved per locale by
+/// `components::exec_tier_labels`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TierPreset {
     pub id: String,
-    pub label: String,
-    pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,7 +86,7 @@ mod tests {
     fn response_deserializes_from_the_rpc_shape() {
         let v = json!({
             "exec_tier": "auto",
-            "tiers": [{ "id": "ask", "label": "Ask 请求", "description": "d" }],
+            "tiers": [{ "id": "ask" }],
             "default": "allow",
             "overrides": { "bash": "ask" },
         });

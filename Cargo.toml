@@ -303,10 +303,6 @@ name = "memory_benchmarks_simple"
 harness = false
 
 [[bench]]
-name = "approval_performance"
-harness = false
-
-[[bench]]
 name = "sandbox_performance"
 harness = false
 

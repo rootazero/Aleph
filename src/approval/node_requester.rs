@@ -1,8 +1,9 @@
 //! `run_node_approval` — the center-side driver for a node-initiated approval
 //! (cluster ③). Mirrors `OperatorApprovalRequester` but:
 //!   - there is no turn-context (the node has no chat conversation),
-//!   - node identity + tool + reason are encoded into the `ApprovalRequest`
-//!     `command` field, so the existing Panel card (which renders
+//!   - node identity + the node's redacted ACTION SUMMARY + reason are encoded
+//!     into the `ApprovalRequest` `command` field, so the existing Panel card
+//!     (which renders
 //!     `ExecApprovalRecord.command` after refetching `exec.approvals.pending`)
 //!     shows the node context with ZERO frontend change,
 //!   - it returns a wire outcome string instead of an `ApprovalOutcome`.
@@ -39,9 +40,14 @@ pub async fn run_node_approval(
     node_id: &str,
     node_name: &str,
     tool: &str,
+    action: &str,
     reason: &str,
 ) -> &'static str {
-    let command = format!("node '{node_name}': {tool} — {reason}");
+    // `action` is the node's redacted action summary — what will actually run.
+    // An older node sends none; fall back to the tool name rather than an empty
+    // card.
+    let shown = if action.is_empty() { tool } else { action };
+    let command = format!("node '{node_name}': {shown} — {reason}");
     let request = ApprovalRequest {
         id: uuid::Uuid::new_v4().to_string(),
         command,
@@ -129,7 +135,16 @@ mod tests {
         let mgr = manager.clone();
         let bus = event_bus.clone();
         let handle = tokio::spawn(async move {
-            run_node_approval(&mgr, &bus, "node-1", "worker", "bash", "needs network").await
+            run_node_approval(
+                &mgr,
+                &bus,
+                "node-1",
+                "worker",
+                "bash",
+                "bash: curl https://example.com",
+                "needs network",
+            )
+            .await
         });
 
         // Observe the ApprovalRequested frame, then resolve via the manager (as
@@ -157,7 +172,8 @@ mod tests {
         assert!(
             pending
                 .iter()
-                .any(|p| p.record.command == "node 'worker': bash — needs network"),
+                .any(|p| p.record.command
+                    == "node 'worker': bash: curl https://example.com — needs network"),
             "pending record must carry node-context command, got {:?}",
             pending
                 .iter()

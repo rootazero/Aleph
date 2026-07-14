@@ -89,6 +89,16 @@ pub async fn handle_list_db(
                             .and_then(|v| v.as_str())
                             .map(String::from)
                     });
+                    // Same carrier as `project_root`: the per-session exec-tier
+                    // override the run loop enforces every turn. A JSON `null`
+                    // (how "follow global" clears the override) yields `None`
+                    // here, so a cleared session reports no override.
+                    let exec_tier = m.identity_meta.as_ref().and_then(|im| {
+                        im.custom
+                            .get(crate::config::types::policies::EXEC_TIER_SESSION_KEY)
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    });
 
                     SessionInfo {
                         key: m.key,
@@ -114,6 +124,7 @@ pub async fn handle_list_db(
                         channel,
                         updated_at,
                         project_root,
+                        exec_tier,
                     }
                 })
                 .collect();
@@ -363,10 +374,76 @@ pub async fn handle_preview_db(
 
 #[cfg(test)]
 mod tests {
-    use super::{clean_derived_title, resolve_display_title};
+    use super::{clean_derived_title, handle_list_db, resolve_display_title, SessionInfo};
+    use crate::gateway::protocol::JsonRpcRequest;
+    use crate::gateway::router::SessionKey;
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig, SessionPatch};
+    use crate::gateway::session_store::SessionStore;
+    use crate::sync_primitives::Arc;
+    use serde_json::json;
 
     fn s(v: &str) -> Option<String> {
         Some(v.to_string())
+    }
+
+    /// The run loop resolves a stored `exec_tier` on every turn, so the Panel
+    /// must be able to read it back after a reload. Without this projection the
+    /// tier pill reports "follow global" for a session the server is still
+    /// gating at the pinned tier — the UI under-reporting a live security
+    /// control, in the permissive direction.
+    #[tokio::test]
+    async fn list_projects_the_session_exec_tier_override() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = SessionManager::new(SessionManagerConfig {
+            db_path: temp.path().join("tier_list.db"),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let pinned = SessionKey::from_key_string("agent:tierpinned:main").unwrap();
+        let plain = SessionKey::from_key_string("agent:tierplain:main").unwrap();
+        manager.get_or_create(&pinned).await.unwrap();
+        manager.get_or_create(&plain).await.unwrap();
+        manager
+            .patch_session(
+                &pinned,
+                &SessionPatch {
+                    metadata: Some(json!({ "exec_tier": "full" })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let store: Arc<dyn SessionStore> = Arc::new(manager);
+        let response = handle_list_db(
+            JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: "sessions.list".into(),
+                params: None,
+                id: Some(json!(1)),
+            },
+            store,
+        )
+        .await;
+        let result = response.result.expect("result");
+        let sessions: Vec<SessionInfo> =
+            serde_json::from_value(result["sessions"].clone()).expect("sessions");
+
+        let tier_of = |agent: &str| -> Option<String> {
+            sessions
+                .iter()
+                .find(|s| s.agent_id == agent)
+                .expect("session listed")
+                .exec_tier
+                .clone()
+        };
+        assert_eq!(tier_of("tierpinned"), s("full"));
+        assert_eq!(
+            tier_of("tierplain"),
+            None,
+            "a session with no override must follow the global tier"
+        );
     }
 
     #[test]
@@ -374,7 +451,11 @@ mod tests {
         // The core fix: once the async LLM topic lands, it takes precedence over
         // the raw first-message title so the sidebar shows the concise name.
         assert_eq!(
-            resolve_display_title(s("冒烟工作目录"), None, s("冒烟测试：你的当前工作目录是什么？")),
+            resolve_display_title(
+                s("冒烟工作目录"),
+                None,
+                s("冒烟测试：你的当前工作目录是什么？")
+            ),
             s("冒烟工作目录")
         );
     }
@@ -413,7 +494,11 @@ mod tests {
     fn topic_shown_even_when_derived_title_is_leaked() {
         // Old polluted sessions that already have an LLM topic still render it.
         assert_eq!(
-            resolve_display_title(None, s("创建MOA预设"), s("<system-reminder>\nWorking directory")),
+            resolve_display_title(
+                None,
+                s("创建MOA预设"),
+                s("<system-reminder>\nWorking directory")
+            ),
             s("创建MOA预设")
         );
     }

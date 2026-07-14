@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 #[cfg(unix)]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex as StdMutex;
 
 // -------------------------------------------------------------------------
 // Stubs
@@ -1133,20 +1134,42 @@ impl LoopTool for ConfirmTool {
     }
 }
 
-/// Records every approval request and returns a fixed outcome.
+/// Records every approval request (count + the actions the human was shown)
+/// and returns a fixed outcome.
 struct FakeRequester {
     outcome: crate::sandbox::exec_approval::gate::ApprovalOutcome,
     calls: AtomicUsize,
+    seen: StdMutex<Vec<crate::sandbox::exec_approval::ApprovalAction>>,
+}
+
+impl FakeRequester {
+    fn new(outcome: crate::sandbox::exec_approval::gate::ApprovalOutcome) -> Self {
+        Self {
+            outcome,
+            calls: AtomicUsize::new(0),
+            seen: StdMutex::new(Vec::new()),
+        }
+    }
+
+    /// The summaries put in front of the human, in order.
+    fn summaries(&self) -> Vec<String> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|a| a.summary.clone())
+            .collect()
+    }
 }
 
 #[async_trait::async_trait]
 impl crate::sandbox::exec_approval::gate::ApprovalRequester for FakeRequester {
     async fn request_approval(
         &self,
-        _tool_name: &str,
-        _reason: &str,
+        action: &crate::sandbox::exec_approval::ApprovalAction,
     ) -> crate::sandbox::exec_approval::gate::ApprovalOutcome {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        self.seen.lock().unwrap().push(action.clone());
         self.outcome
     }
 }
@@ -1173,10 +1196,9 @@ fn registry_reports_per_tool_requires_confirmation() {
 
 #[tokio::test]
 async fn declared_confirmation_tool_runs_when_approved() {
-    let requester = StdArc::new(FakeRequester {
-        outcome: crate::sandbox::exec_approval::gate::ApprovalOutcome::Approved,
-        calls: AtomicUsize::new(0),
-    });
+    let requester = StdArc::new(FakeRequester::new(
+        crate::sandbox::exec_approval::gate::ApprovalOutcome::Approved,
+    ));
     // Gating comes solely from the tool's own `requires_confirmation()`
     // declaration.
     let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
@@ -1225,12 +1247,11 @@ fn turn_ctx(agent: &str) -> crate::tools::turn_context::TurnContext {
 
 #[tokio::test]
 async fn session_grant_skips_reprompt_within_session() {
-    // `ApprovedForSession` (the `AllowAlways` choice) must be remembered: the
-    // first call prompts, the second is satisfied by the session memory.
-    let requester = StdArc::new(FakeRequester {
-        outcome: crate::sandbox::exec_approval::gate::ApprovalOutcome::ApprovedForSession,
-        calls: AtomicUsize::new(0),
-    });
+    // An "approve for session" must be remembered for the SAME call: the first
+    // prompts, the second (identical arguments) is satisfied by the memory.
+    let requester = StdArc::new(FakeRequester::new(
+        crate::sandbox::exec_approval::gate::ApprovalOutcome::ApprovedForSession,
+    ));
     let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
         .with_turn_context(turn_ctx("agent-session-grant"))
         .with_confirmation(StdArc::clone(&requester) as _);
@@ -1245,13 +1266,104 @@ async fn session_grant_skips_reprompt_within_session() {
     );
 }
 
+/// The invariant the action-keyed grant exists for: "allow session" grants the
+/// ACTION the user read, never the tool. Fails on a name-keyed store (1 call).
+#[tokio::test]
+async fn session_grant_does_not_carry_to_different_arguments() {
+    use crate::config::types::policies::ExecTier;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::ApprovedForSession));
+    let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Auto)
+        .with_turn_context(turn_ctx("agent-grant-per-action"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+
+    // The operator approves deleting a scratch file for the session…
+    svc.execute(
+        "file_ops",
+        json!({"operation": "delete", "path": "/tmp/junk"}),
+    )
+    .await
+    .expect("approved");
+    // …which must NOT authorize deleting their home directory.
+    svc.execute(
+        "file_ops",
+        json!({"operation": "delete", "path": "/home/u/Documents"}),
+    )
+    .await
+    .expect("approved");
+
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        2,
+        "a session grant on one action must not authorize a different action of \
+         the same tool — that is what threw away the tier's argument filter"
+    );
+}
+
+/// The card must show WHAT will run. A `reason` that only names the tool is an
+/// operator clicking "allow" on a string they cannot evaluate.
+#[tokio::test]
+async fn approval_card_carries_the_action_not_just_the_tool_name() {
+    use crate::config::types::policies::ExecTier;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Auto)
+        .with_turn_context(turn_ctx("agent-card-content"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+
+    svc.execute(
+        "file_ops",
+        json!({"operation": "delete", "path": "/home/u/Documents"}),
+    )
+    .await
+    .expect("approved");
+
+    let summaries = requester.summaries();
+    assert_eq!(summaries.len(), 1);
+    assert!(
+        summaries[0].contains("delete") && summaries[0].contains("/home/u/Documents"),
+        "the human must see the operation and the path: {}",
+        summaries[0]
+    );
+}
+
+/// Arguments reach a human-visible card and a log line — a credential in them
+/// must not.
+#[tokio::test]
+async fn secrets_in_arguments_are_redacted_before_the_human_sees_them() {
+    use crate::extension::PermissionAction;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+    const KEY: &str = "sk-ant-api03-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let svc = ScopedToolService::new(make_registry(&["alpha"]), BTreeSet::new())
+        .with_turn_context(turn_ctx("agent-redact"))
+        .with_tool_permissions(perms(
+            PermissionAction::Allow,
+            &[("alpha", PermissionAction::Ask)],
+        ))
+        .with_confirmation(StdArc::clone(&requester) as _);
+
+    svc.execute("alpha", json!({ "token": KEY }))
+        .await
+        .expect("approved");
+
+    let summaries = requester.summaries();
+    assert_eq!(summaries.len(), 1);
+    assert!(
+        !summaries[0].contains(KEY),
+        "a credential must never reach the approval card: {}",
+        summaries[0]
+    );
+}
+
 #[tokio::test]
 async fn one_shot_approval_reprompts_each_call() {
     // A plain one-shot `Approved` is NOT remembered — every call re-prompts.
-    let requester = StdArc::new(FakeRequester {
-        outcome: crate::sandbox::exec_approval::gate::ApprovalOutcome::Approved,
-        calls: AtomicUsize::new(0),
-    });
+    let requester = StdArc::new(FakeRequester::new(
+        crate::sandbox::exec_approval::gate::ApprovalOutcome::Approved,
+    ));
     let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
         .with_turn_context(turn_ctx("agent-one-shot"))
         .with_confirmation(StdArc::clone(&requester) as _);
@@ -1268,10 +1380,9 @@ async fn one_shot_approval_reprompts_each_call() {
 
 #[tokio::test]
 async fn declared_confirmation_tool_blocked_when_denied() {
-    let requester = StdArc::new(FakeRequester {
-        outcome: crate::sandbox::exec_approval::gate::ApprovalOutcome::Denied,
-        calls: AtomicUsize::new(0),
-    });
+    let requester = StdArc::new(FakeRequester::new(
+        crate::sandbox::exec_approval::gate::ApprovalOutcome::Denied,
+    ));
     let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
         .with_confirmation(StdArc::clone(&requester) as _);
 
@@ -1499,8 +1610,7 @@ struct StubApprover(crate::sandbox::exec_approval::gate::ApprovalOutcome);
 impl crate::sandbox::exec_approval::gate::ApprovalRequester for StubApprover {
     async fn request_approval(
         &self,
-        _tool: &str,
-        _reason: &str,
+        _action: &crate::sandbox::exec_approval::ApprovalAction,
     ) -> crate::sandbox::exec_approval::gate::ApprovalOutcome {
         self.0
     }
@@ -1616,10 +1726,7 @@ async fn deny_tool_execute_rejected_with_permission_denied() {
 async fn ask_tool_routes_through_confirmation_gate() {
     use crate::extension::PermissionAction;
     use crate::sandbox::exec_approval::gate::ApprovalOutcome;
-    let requester = StdArc::new(FakeRequester {
-        outcome: ApprovalOutcome::Approved,
-        calls: AtomicUsize::new(0),
-    });
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
     let svc = ScopedToolService::new(make_registry(&["alpha"]), BTreeSet::new())
         .with_turn_context(turn_ctx("agent-perm-ask"))
         .with_tool_permissions(perms(
@@ -1776,6 +1883,64 @@ fn ask_tier_leaves_declared_read_only_tools_allowed() {
     }
 }
 
+/// A registry-shaped MCP tool that declares its own idempotency, exactly as
+/// `McpRegistryTool` does from the server's `readOnlyHint` / `idempotentHint`.
+/// The builtin allowlist can never speak for a name like this.
+struct DeclaringMcpStub {
+    name: String,
+    idempotent: bool,
+}
+#[async_trait::async_trait]
+impl LoopTool for DeclaringMcpStub {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        "mcp stub"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    fn is_idempotent(&self) -> bool {
+        self.idempotent
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        LoopToolResult::Success { output: json!({}) }
+    }
+}
+
+#[test]
+fn ask_tier_honors_an_mcp_servers_read_only_declaration() {
+    use crate::config::types::policies::ExecTier;
+    use crate::extension::PermissionAction;
+    // `tool_facts` must read idempotency off the DECLARATION seam, not off the
+    // builtin name allowlist: neither of these names can ever appear there, so
+    // a name-keyed lookup answers `false` for both and the Ask tier raises a
+    // card on a pure-read docs search — the prompt fatigue that makes users
+    // abandon the tier.
+    let mut r = LoopToolRegistry::new();
+    r.register(Box::new(DeclaringMcpStub {
+        name: "docs__search".to_string(),
+        idempotent: true,
+    }));
+    r.register(Box::new(DeclaringMcpStub {
+        name: "docs__publish".to_string(),
+        idempotent: false,
+    }));
+    let svc = ScopedToolService::new(Arc::new(r), BTreeSet::new()).with_exec_tier(ExecTier::Ask);
+
+    assert_eq!(
+        svc.permission_for("docs__search"),
+        PermissionAction::Allow,
+        "a server-declared readOnlyHint must reach the tier rule"
+    );
+    assert_eq!(
+        svc.permission_for("docs__publish"),
+        PermissionAction::Ask,
+        "an MCP tool that declares nothing stays fail-closed"
+    );
+}
+
 #[test]
 fn auto_tier_only_guards_the_destructive_tail() {
     use crate::config::types::policies::ExecTier;
@@ -1827,14 +1992,69 @@ fn explicit_override_wins_over_the_tier_rule() {
     );
 }
 
+/// The tier TIGHTENS the operator's baseline; it never widens it. Before this
+/// was folded into the restrictiveness lattice the tier was consulted BEFORE
+/// the configured `default`, so its `Ask` verdict was returned first and a
+/// `default = "deny"` install silently became ask-by-default for exactly the
+/// dangerous half of the toolset — every tool the tier wanted to guard.
+///
+/// Production always wires a tier (`tool_service_builder`), so this — not the
+/// `exec_tier: None` case — is the posture a deny-by-default operator gets.
+#[tokio::test]
+async fn exec_tier_never_widens_a_deny_default() {
+    use crate::config::types::policies::ExecTier;
+    use crate::extension::PermissionAction;
+    for tier in [ExecTier::Ask, ExecTier::Auto, ExecTier::Full] {
+        let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+            .with_exec_tier(tier)
+            .with_tool_permissions(perms(
+                PermissionAction::Deny,
+                &[("search", PermissionAction::Allow)],
+            ));
+        // The destructive tail `Auto` would raise to `Ask`, and the mutating
+        // body `Ask` would raise to `Ask`, both stay DENIED.
+        for name in [
+            "agent_delete",
+            "bash",
+            "file_ops",
+            "system",
+            "github__create_issue",
+        ] {
+            assert_eq!(
+                svc.permission_for(name),
+                PermissionAction::Deny,
+                "{tier:?} must not widen a deny default for `{name}`"
+            );
+        }
+        // ...and the box still exposes exactly the explicit allow.
+        let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
+        assert_eq!(names, vec!["search".to_string()]);
+    }
+}
+
+/// An `Ask` baseline is a floor too: the tier cannot lower it back to `Allow`
+/// for the read-only tools it has nothing to say about.
+#[test]
+fn exec_tier_never_widens_an_ask_default() {
+    use crate::config::types::policies::ExecTier;
+    use crate::extension::PermissionAction;
+    let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Full)
+        .with_tool_permissions(perms(PermissionAction::Ask, &[]));
+    for name in ["search", "memory_search", "bash"] {
+        assert_eq!(
+            svc.permission_for(name),
+            PermissionAction::Ask,
+            "`{name}`: Full has nothing to say, so the operator's Ask baseline holds"
+        );
+    }
+}
+
 #[tokio::test]
 async fn auto_tier_asks_before_a_destructive_file_ops_call() {
     use crate::config::types::policies::ExecTier;
     use crate::sandbox::exec_approval::gate::ApprovalOutcome;
-    let requester = StdArc::new(FakeRequester {
-        outcome: ApprovalOutcome::Approved,
-        calls: AtomicUsize::new(0),
-    });
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
     let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
         .with_exec_tier(ExecTier::Auto)
         .with_turn_context(turn_ctx("agent-tier-fileops"))
@@ -1855,6 +2075,88 @@ async fn auto_tier_asks_before_a_destructive_file_ops_call() {
         1,
         "Auto promises irreversible operations ask first — including `file_ops` delete"
     );
+}
+
+/// A confirm-gated call must never share a parallel batch: the approval path
+/// recovers its `tool_call_id` by scanning for the newest `ToolCallRequested`
+/// for the tool NAME, so two batched `file_ops` deletes would both bind to the
+/// same id and the user would approve the command they did not read.
+#[tokio::test]
+async fn auto_tier_destructive_file_ops_never_batches() {
+    use crate::config::types::policies::ExecTier;
+    use crate::tools::concurrency::ConcurrencyClaim;
+    use crate::tools::service::ToolService;
+
+    let svc = tiered(ExecTier::Auto);
+    for op in ["delete", "move", "batch_move", "organize"] {
+        assert_eq!(
+            svc.call_concurrency_claim("file_ops", &json!({"operation": op, "path": "/tmp/a"}))
+                .await,
+            ConcurrencyClaim::global(),
+            "`file_ops {op}` asks for confirmation under Auto — it must never share a \
+             parallel batch"
+        );
+    }
+    // Non-destructive ops keep their inner claim — the fix must not
+    // over-serialize reads.
+    assert_ne!(
+        svc.call_concurrency_claim("file_ops", &json!({"operation": "list", "path": "/tmp"}))
+            .await,
+        ConcurrencyClaim::global(),
+        "a `list` is not gated and must still parallelize"
+    );
+}
+
+/// The `unattended` fail-closed gate: a run nobody is watching (cron with no
+/// origin channel, heartbeat, A2A delegation, goal/loop continuation) must
+/// auto-deny a confirm-gated tool INSTEAD of publishing an approval card into
+/// the void and parking on it until the 120 s timeout. The requester is wired
+/// and would happily approve — the point is that it is never even asked.
+#[tokio::test]
+async fn unattended_run_auto_denies_a_confirm_gated_tool_without_prompting() {
+    use crate::config::types::policies::ExecTier;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Auto)
+        .with_turn_context(turn_ctx("agent-unattended-deny"))
+        .with_confirmation(StdArc::clone(&requester) as _)
+        .with_unattended(true);
+
+    // `agent_delete` is destructive → the Auto tier raises it to `Ask`.
+    let err = svc.execute("agent_delete", json!({})).await.unwrap_err();
+    assert!(
+        matches!(err, ToolError::Execution { .. }),
+        "an unattended confirm-gated call must fail closed, got {err:?}"
+    );
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        0,
+        "no card may be raised on a run with no human to answer it"
+    );
+    // An ungated tool still runs — the marker is a confirm-gate policy, not a
+    // blanket freeze on autonomous work.
+    assert!(svc.execute("search", json!({})).await.is_ok());
+}
+
+/// The other half of the pin: the SAME gated call on an ATTENDED run does
+/// prompt. Without this, a gate that denies everything would pass the test above.
+#[tokio::test]
+async fn an_attended_run_still_prompts_for_the_same_call() {
+    use crate::config::types::policies::ExecTier;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Auto)
+        .with_turn_context(turn_ctx("agent-attended-prompt"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+
+    svc.execute("agent_delete", json!({}))
+        .await
+        .expect("approved → runs");
+    assert_eq!(requester.calls.load(Ordering::SeqCst), 1);
 }
 
 // -------------------------------------------------------------------------

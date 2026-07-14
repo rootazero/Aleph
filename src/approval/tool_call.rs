@@ -1,8 +1,9 @@
 //! The tool call an approval belongs to.
 //!
 //! An approval is raised deep inside an `ApprovalRequester` implementation,
-//! which only sees `(tool_name, reason)` — no call identity. Clients therefore
-//! had to pair a pending approval to a tool row by POSITION, against an
+//! which receives an `ApprovalAction` (the redacted action) but no call
+//! identity. Clients therefore had to pair a pending approval to a tool row by
+//! POSITION, against an
 //! unordered `exec.approvals.pending` map: with two concurrent tool calls the
 //! card renders under the wrong tool and the user approves something they never
 //! read.

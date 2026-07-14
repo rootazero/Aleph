@@ -175,7 +175,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         reason: "moa one-shot".to_string(),
                     });
                 }
-                self.execute_direct_tool(run_id, &mode, request, emitter)
+                self.execute_direct_tool(run_id, &mode, request, &agent, emitter)
                     .await
             }
 
@@ -222,11 +222,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     }
 
     /// Execute a direct tool slash command (e.g. /search, /bash).
+    ///
+    /// The fast path dispatches through the raw [`ToolRegistry`], which holds
+    /// none of the loop's gates. Anything the loop would gate must therefore
+    /// NOT run here — see [`Self::slash_gate_reason`].
     async fn execute_direct_tool<E: EventEmitter + Send + Sync + 'static>(
         &self,
         run_id: &str,
         mode: &serde_json::Value,
         request: &RunRequest,
+        agent: &AgentInstance,
         emitter: Arc<E>,
     ) -> Result<String, ExecutionError> {
         let tool_id = mode["tool_id"]
@@ -237,6 +242,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // Build tool arguments — map slash command args to the
         // correct field names for each tool's expected schema.
         let arguments = build_tool_arguments(tool_id, args_str, &request.input);
+
+        // Fail closed: a gated call leaves the fast path entirely rather than
+        // running ungated here.
+        if let Some(reason) = self
+            .slash_gate_reason(tool_id, &arguments, request, agent)
+            .await
+        {
+            return Err(ExecutionError::Fallthrough { reason });
+        }
 
         // Emit reasoning event
         let _ = emitter
@@ -292,6 +306,80 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 "Tool '{tool_id}' execution failed: {e}"
             ))),
         }
+    }
+
+    /// Why this slash call may not take the fast path, or `None` when it may.
+    ///
+    /// The fast path is the one tool-dispatch surface with no approval
+    /// transport, no `TurnContext` and no `ScopedToolService` — it calls
+    /// `ToolRegistry::execute_tool` directly. So it cannot ENFORCE the gates;
+    /// it can only decline. A gated call returns
+    /// [`ExecutionError::Fallthrough`], which routes it into the full agent
+    /// loop, where `ScopedToolService` re-evaluates it with the real tool facts
+    /// and can raise the approval card, apply the operator gate, and deny.
+    /// Capability is preserved; only the ungated shortcut is withdrawn.
+    ///
+    /// Every clause is a deterministic hard filter over declared metadata and a
+    /// static role — no message-content inspection, no intent classification.
+    async fn slash_gate_reason(
+        &self,
+        name: &str,
+        arguments: &serde_json::Value,
+        request: &RunRequest,
+        agent: &AgentInstance,
+    ) -> Option<String> {
+        use crate::config::types::policies::{effective_permission, ToolFacts};
+        use crate::extension::PermissionAction;
+
+        let (exec_tier, tool_permissions) = self.resolve_turn_permissions(request, agent).await;
+        let caller_role = request.metadata.get("caller_role").map(String::as_str);
+        let caller_is_operator = crate::tools::turn_context::role_is_operator(caller_role);
+
+        // The same facts `ScopedToolService` builds. `requires_approval` is read
+        // from the adapter's own declaration list rather than guessed: the fast
+        // path can only reach builtin and plugin tools (MCP and skill modes fall
+        // through above), and those are exactly the tools that list covers — so
+        // this is the tier's real input, not a fail-closed stand-in that would
+        // make every command fall through.
+        let facts = ToolFacts {
+            name,
+            idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
+            requires_approval: crate::security::dangerous_tools::is_confirmation_gated(name),
+        };
+        let permission = effective_permission(tool_permissions.as_ref(), Some(exec_tier), facts);
+
+        if permission != PermissionAction::Allow {
+            return Some(format!(
+                "`/{name}` resolves to {permission:?} under tier `{}`",
+                exec_tier.id()
+            ));
+        }
+        // The argument-keyed filter: `file_ops` hides `delete` behind the same
+        // name as `list`, so no name-keyed rule can see it.
+        if exec_tier.asks_for_arguments(name, arguments) {
+            return Some(format!(
+                "`/{name}` arguments trip the tier's destructive filter"
+            ));
+        }
+        // Declared `requires_confirmation` gates at EVERY tier, including Full.
+        if facts.requires_approval {
+            return Some(format!("`/{name}` requires confirmation"));
+        }
+        if !caller_is_operator {
+            // The config-tier gate (`method_authz`) and the untrusted-surface
+            // hard floor. Both are scoped to non-operator callers by their own
+            // contract — a Panel / CLI / loopback operator is never restricted
+            // here, so their `/bash` keeps its fast path.
+            if crate::gateway::method_authz::tool_requires_operator(name) {
+                return Some(format!("`/{name}` requires an operator caller"));
+            }
+            if crate::security::dangerous_tools::is_dangerous_tool(name) {
+                return Some(format!(
+                    "`/{name}` is off-limits to untrusted surfaces by default"
+                ));
+            }
+        }
+        None
     }
 }
 

@@ -957,7 +957,10 @@ impl MockApprover {
 
 #[async_trait::async_trait]
 impl ApprovalRequester for MockApprover {
-    async fn request_approval(&self, _tool: &str, _reason: &str) -> ApprovalOutcome {
+    async fn request_approval(
+        &self,
+        _action: &crate::sandbox::exec_approval::ApprovalAction,
+    ) -> ApprovalOutcome {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.approve {
             ApprovalOutcome::Approved

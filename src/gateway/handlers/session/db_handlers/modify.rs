@@ -232,6 +232,32 @@ pub async fn handle_patch_db(
         }
     };
 
+    // Both stores merge `metadata` opaquely into `identity_meta.custom`, so this
+    // is the only place an `exec_tier` written through sessions.patch can be
+    // checked. An unknown id would persist, render as an override in the Panel,
+    // and then be dropped with a warn at run time — every turn silently running
+    // at the GLOBAL tier, possibly weaker than the one the caller believes it
+    // armed. `chat.send` already refuses an unknown id (handlers/agent.rs); the
+    // two write paths must agree. `null` stays legal: it is how "follow global"
+    // clears the override.
+    if let Some(v) = params
+        .get("metadata")
+        .and_then(Value::as_object)
+        .and_then(|m| m.get(crate::config::types::policies::EXEC_TIER_SESSION_KEY))
+    {
+        let valid = v.is_null()
+            || v.as_str()
+                .and_then(crate::config::types::policies::ExecTier::from_id)
+                .is_some();
+        if !valid {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Unknown exec_tier: {v}"),
+            );
+        }
+    }
+
     let patch = crate::gateway::session_manager::SessionPatch {
         label: params
             .get("label")
@@ -583,5 +609,50 @@ mod tests {
                 .is_empty(),
             "a deleted conversation must yield nothing to FTS"
         );
+    }
+
+    /// `sessions.patch` is the tier picker's own write path. An id the run loop
+    /// cannot resolve must be refused here — otherwise it persists, the Panel
+    /// renders it as an armed override, and every turn silently runs at the
+    /// global tier. `chat.send` already refuses one; the two write paths must
+    /// agree. `null` must keep working: it is how "follow global" clears the
+    /// override.
+    #[tokio::test]
+    async fn patch_refuses_an_unknown_exec_tier_but_accepts_null_and_a_real_tier() {
+        let temp = tempdir().unwrap();
+        let manager = SessionManager::new(SessionManagerConfig {
+            db_path: temp.path().join("patch_tier.db"),
+            ..Default::default()
+        })
+        .unwrap();
+        let key = SessionKey::from_key_string("agent:tierpatch:main").unwrap();
+        manager.get_or_create(&key).await.unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(manager);
+        let key_str = key.to_key_string();
+
+        let patch = |tier: Value| JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "sessions.patch".into(),
+            params: Some(json!({
+                "session_key": key_str,
+                "metadata": { "exec_tier": tier },
+            })),
+            id: Some(json!(1)),
+        };
+
+        let rejected = handle_patch_db(patch(json!("strict")), Arc::clone(&store)).await;
+        assert!(
+            rejected.error.is_some(),
+            "an unknown tier id must not persist"
+        );
+
+        for accepted in [json!("ask"), Value::Null] {
+            let response = handle_patch_db(patch(accepted.clone()), Arc::clone(&store)).await;
+            assert!(
+                response.error.is_none(),
+                "`{accepted}` is a legal exec_tier write: {:?}",
+                response.error
+            );
+        }
     }
 }

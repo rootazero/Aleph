@@ -342,9 +342,11 @@ impl FailoverProvider {
                     "Route mode is AlwaysLocal; borrow cloud provider '{name}' \
                      for this request?"
                 );
-                gate.request_approval("__route_escalate_cloud", &reason)
-                    .await
-                    .is_approved()
+                let action = crate::sandbox::exec_approval::ApprovalAction::bare(
+                    "__route_escalate_cloud",
+                    reason,
+                );
+                gate.request_approval(&action).await.is_approved()
             }
             None => {
                 tracing::warn!(

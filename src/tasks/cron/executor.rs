@@ -167,22 +167,7 @@ async fn execute_cron_job(
     // Build prompt with cron context injected
     let prompt = build_cron_prompt(&snapshot);
 
-    // Build metadata for traceability
-    let mut metadata = HashMap::new();
-    metadata.insert("cron_job_id".to_string(), snapshot.id.clone());
-    metadata.insert(
-        "trigger_source".to_string(),
-        snapshot.trigger_source.as_str().to_string(),
-    );
-    if let Some(ref ch) = snapshot.source_channel_id {
-        metadata.insert("source_channel_id".to_string(), ch.clone());
-        // Also set channel_id so ExecutionEngine populates SessionContext.channel,
-        // which downstream tools (message, agent management) rely on.
-        metadata.insert("channel_id".to_string(), ch.clone());
-    }
-    if let Some(ref conv_id) = snapshot.source_conversation_id {
-        metadata.insert("conversation_id".to_string(), conv_id.clone());
-    }
+    let metadata = build_cron_metadata(&snapshot);
 
     let timeout_secs = snapshot.timeout_ms.map(|ms| (ms / 1000).max(1) as u64);
 
@@ -417,6 +402,50 @@ async fn execute_cron_job(
     }
 }
 
+/// Run metadata for a cron job: traceability keys, the origin route when the job
+/// has one, and the `unattended` fail-closed marker when it does not.
+///
+/// An approval prompt is deliverable only when BOTH halves of the origin route
+/// survive into the run — `TurnContext::is_channel_routable` demands a non-empty
+/// channel AND conversation before `FallbackApprovalRequester` takes the channel
+/// path. Without both, a confirm-gated tool (the default `Auto` tier already asks
+/// on `vault_*` / `*_delete` / destructive `file_ops`) publishes an approval card
+/// into the void and parks the whole job on it for the 120 s approval timeout
+/// before failing anyway — and a job with a shorter `timeout_ms` simply dies
+/// there. The marker makes that gate fail CLOSED instead: an immediate deny, with
+/// a hint the model sees and can work around in the same turn.
+///
+/// A job that DOES carry a full origin route is deliberately left unmarked: its
+/// approval is genuinely deliverable (the bridge reaches the registered channel
+/// and the user can `/approve` from Telegram), and the marker would auto-deny a
+/// human-in-the-loop path that works today.
+fn build_cron_metadata(snapshot: &JobSnapshot) -> HashMap<String, String> {
+    let mut metadata = HashMap::new();
+    metadata.insert("cron_job_id".to_string(), snapshot.id.clone());
+    metadata.insert(
+        "trigger_source".to_string(),
+        snapshot.trigger_source.as_str().to_string(),
+    );
+    if let Some(ref ch) = snapshot.source_channel_id {
+        metadata.insert("source_channel_id".to_string(), ch.clone());
+        // Also set channel_id so ExecutionEngine populates SessionContext.channel,
+        // which downstream tools (message, agent management) rely on.
+        metadata.insert("channel_id".to_string(), ch.clone());
+    }
+    if let Some(ref conv_id) = snapshot.source_conversation_id {
+        metadata.insert("conversation_id".to_string(), conv_id.clone());
+    }
+    let approval_is_routable =
+        snapshot.source_channel_id.is_some() && snapshot.source_conversation_id.is_some();
+    if !approval_is_routable {
+        metadata.insert(
+            crate::gateway::execution_engine::UNATTENDED_KEY.to_string(),
+            "true".to_string(),
+        );
+    }
+    metadata
+}
+
 /// Build the final prompt string, injecting cron context header and
 /// (if present) the previous run's `BudgetExhaustedPartialResult` carry-over.
 ///
@@ -649,6 +678,47 @@ mod tests {
         assert!(prompt.contains("[Cron Task: test-job-1]"));
         assert!(!prompt.contains("scheduled task"));
         assert!(prompt.contains("Check the weather"));
+    }
+
+    /// The wiring guard for the fail-closed marker. A clock-driven job with no
+    /// origin channel has nobody to answer an approval card, so the run must be
+    /// marked unattended — otherwise a confirm-gated tool parks the whole job on
+    /// the 120 s approval timeout.
+    #[test]
+    fn a_channelless_cron_job_runs_unattended() {
+        use crate::gateway::execution_engine::UNATTENDED_KEY;
+        let mut snapshot = make_test_snapshot();
+        snapshot.source_channel_id = None;
+        snapshot.source_conversation_id = None;
+        assert_eq!(
+            build_cron_metadata(&snapshot)
+                .get(UNATTENDED_KEY)
+                .map(String::as_str),
+            Some("true")
+        );
+
+        // Half a route is not a route: `is_channel_routable` needs both.
+        let mut half = make_test_snapshot();
+        half.source_conversation_id = None;
+        assert!(build_cron_metadata(&half).contains_key(UNATTENDED_KEY));
+    }
+
+    /// The negative half: a job with a full origin route CAN reach the user
+    /// (`/approve` from the channel), so marking it would auto-deny a working
+    /// human-in-the-loop path.
+    #[test]
+    fn a_channel_bound_cron_job_keeps_its_approval_route() {
+        use crate::gateway::execution_engine::UNATTENDED_KEY;
+        let metadata = build_cron_metadata(&make_test_snapshot());
+        assert!(!metadata.contains_key(UNATTENDED_KEY));
+        assert_eq!(
+            metadata.get("channel_id").map(String::as_str),
+            Some("discord:general")
+        );
+        assert_eq!(
+            metadata.get("conversation_id").map(String::as_str),
+            Some("123456")
+        );
     }
 
     #[test]

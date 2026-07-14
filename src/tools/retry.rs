@@ -44,8 +44,10 @@ const RETRY_DELAY: Duration = Duration::from_millis(100);
 /// state mutation). Default-deny: anything not on this list never
 /// auto-retries.
 ///
-/// Tools served via MCP / extensions remain non-idempotent by default;
-/// future work can wire per-tool metadata for MCP servers to opt in.
+/// This list covers builtins only. MCP tools declare their own idempotency
+/// through the server's `readOnlyHint` / `idempotentHint`, surfaced as
+/// `LoopTool::is_idempotent`; extensions that declare nothing stay
+/// non-idempotent.
 pub const IDEMPOTENT_BUILTIN_TOOLS: &[&str] = &[
     // Memory / recall — pure reads
     "memory_search",

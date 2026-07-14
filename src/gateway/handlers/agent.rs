@@ -82,10 +82,13 @@ pub struct AgentRunParams {
     /// later turns (which carry nothing) and a page reload both keep it.
     ///
     /// Same shape as `project_root`, which solves the identical
-    /// chosen-before-the-session-exists problem. Client-supplied, and safe to
-    /// be: the tier can only tighten the gate, and `Full` from a chat-level
-    /// channel is still clamped to `Auto` by
-    /// [`crate::gateway::channel_policy::clamp_tier_for_channel`].
+    /// chosen-before-the-session-exists problem. Client-supplied. An explicit
+    /// tier REPLACES the global one and may raise it as well as lower it — an
+    /// explicit decision by an authorized caller. Safe because the undisableable
+    /// `[sandbox.command_policy]` floor holds under every tier, and `Full` from a
+    /// chat-level channel is still clamped to `Auto` by
+    /// [`crate::gateway::channel_policy::clamp_tier_for_channel`]. Pinned by
+    /// `execution_engine::turn_permissions`'s precedence tests.
     #[serde(default)]
     pub exec_tier: Option<String>,
     /// Marks this run's user input as ASR-transcribed speech (the Panel voice

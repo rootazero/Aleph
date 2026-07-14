@@ -42,6 +42,13 @@ struct SessionEntry {
     /// `chat.active_project_root` when the session is reselected after a reload.
     #[serde(default)]
     project_root: Option<String>,
+    /// Per-session execution-tier override persisted on the session. `None` ⇒
+    /// the session follows the global tier. Restored into
+    /// `chat.session_exec_tier` on reselect: the server keeps enforcing a stored
+    /// tier across reloads, so a pill that forgot it would under-report the gate
+    /// that is actually live.
+    #[serde(default)]
+    exec_tier: Option<String>,
 }
 
 /// An agent entry returned by the backend (agents.list).
@@ -573,6 +580,20 @@ pub fn ChatSidebar() -> impl IntoView {
         });
         chat.active_project_root.set(restored_root);
         chat.active_project_name.set(restored_name);
+
+        // Same treatment for the session's exec-tier override, which
+        // `clear_session()` above nulls: the run loop resolves the STORED tier
+        // every turn, so a pill left reading "follow global" would under-report
+        // the gate the server is enforcing. Set the signal directly — going
+        // through the picker's `select` would re-issue a `sessions.patch` write
+        // on every selection.
+        chat.session_exec_tier.set(
+            sessions
+                .get_untracked()
+                .iter()
+                .find(|s| s.key == key)
+                .and_then(|s| s.exec_tier.clone()),
+        );
 
         leptos::task::spawn_local(hydrate_session_history(dash, chat, workspace, key));
     };

@@ -13,6 +13,9 @@
 //!   Act-phase parallel partition.
 //! - `requires_confirmation` ← `metadata.requires_approval` (server's
 //!   `destructiveHint`), routing through the live confirmation gate.
+//! - `is_idempotent` ← `metadata.idempotent` (server's `readOnlyHint` /
+//!   `idempotentHint`); consumed by the exec-tier permission rule, so a
+//!   read-only MCP tool stops raising a card under the `Ask` tier.
 //! - Success output is wrapped with external-content boundary markers —
 //!   MCP servers are untrusted and their tool results are a prompt-injection
 //!   surface.
@@ -37,6 +40,7 @@ pub struct McpRegistryTool {
     server_id: String,
     concurrent_safe: bool,
     requires_confirmation: bool,
+    idempotent: bool,
     handler: Arc<dyn ToolHandler>,
 }
 
@@ -63,6 +67,7 @@ impl McpRegistryTool {
             server_id,
             concurrent_safe: def.metadata.concurrent_safe,
             requires_confirmation: def.metadata.requires_approval,
+            idempotent: def.metadata.idempotent,
             handler,
         }
     }
@@ -91,6 +96,13 @@ impl LoopTool for McpRegistryTool {
 
     fn requires_confirmation(&self) -> bool {
         self.requires_confirmation
+    }
+
+    fn is_idempotent(&self) -> bool {
+        // Server-declared readOnlyHint / idempotentHint (see
+        // `ToolAnnotations::is_idempotent`). Default false: an unannotated MCP
+        // tool can mutate arbitrary external state.
+        self.idempotent
     }
 
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
@@ -216,6 +228,10 @@ mod tests {
                 metadata: ToolDefinitionMetadata {
                     concurrent_safe: self.read_only,
                     requires_approval: self.destructive,
+                    // Mirrors the real chain: `ToolAnnotations::is_idempotent`
+                    // is `idempotentHint || readOnlyHint`, carried into
+                    // metadata by `McpHandler::with_flags`.
+                    idempotent: self.read_only,
                     ..Default::default()
                 },
             }
@@ -239,6 +255,9 @@ mod tests {
         let a = adapter(FakeHandler::success());
         assert!(!a.is_concurrent_safe(&json!({})));
         assert!(!a.requires_confirmation());
+        // Fail-closed for the exec tier: a tool that declares nothing is
+        // treated as mutating, so `Ask` still stops it.
+        assert!(!a.is_idempotent());
         // Default claim derivation: not concurrent-safe → whole-world
         // exclusive — never joins a parallel group.
         assert!(matches!(
@@ -259,6 +278,19 @@ mod tests {
             a.concurrency_claim(&json!({})),
             crate::tools::concurrency::ConcurrencyClaim::Shared
         ));
+    }
+
+    #[test]
+    fn read_only_hint_reaches_the_idempotency_seam() {
+        // The `Ask` tier's rule is `!idempotent || destructive`; a read-only
+        // MCP tool must therefore answer `true` here or every docs-search /
+        // grep server raises an approval card.
+        let a = adapter(FakeHandler {
+            fail_with: None,
+            read_only: true,
+            destructive: false,
+        });
+        assert!(a.is_idempotent());
     }
 
     #[test]

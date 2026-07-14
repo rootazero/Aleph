@@ -223,33 +223,31 @@ impl ScopedToolService {
     // Helpers (shared with the trait impl in mod.rs and dispatch.rs)
     // -------------------------------------------------------------------------
 
-    /// Effective permission for `name` — the single chokepoint every
-    /// permission gate funnels through.
+    /// Effective permission for `name` — the loop's enforcement chokepoint,
+    /// which every permission gate here funnels through.
     ///
     /// Precedence, most specific first:
     /// 1. **explicit exact-name** entry in the merged [`ToolPermissionsConfig`]
     ///    — an operator who names a tool has made a deliberate decision;
     /// 2. **explicit glob** entry (same call: [`ToolPermissionsConfig::resolve_explicit`]);
-    /// 3. the **exec tier's rule**, read off the tool's declared metadata
-    ///    ([`ExecTier::rule_for`]) — never off its name;
-    /// 4. the configured `default` (`Allow` when no policy is attached).
+    /// 3. the configured `default` (`Allow` when no policy is attached),
+    ///    TIGHTENED by the exec tier's rule ([`ExecTier::rule_for`], read off the
+    ///    tool's declared metadata, never off its name). The tier can raise a
+    ///    tool to `Ask`; it can never lower a `Deny`.
+    ///
+    /// The precedence itself lives in
+    /// [`crate::config::types::policies::effective_permission`] — shared with the
+    /// gateway slash-command fast path so the two surfaces cannot drift.
     ///
     /// [`ToolPermissionsConfig`]: crate::config::types::policies::ToolPermissionsConfig
     /// [`ToolPermissionsConfig::resolve_explicit`]: crate::config::types::policies::ToolPermissionsConfig::resolve_explicit
     /// [`ExecTier::rule_for`]: crate::config::types::policies::ExecTier::rule_for
     pub(super) fn permission_for(&self, name: &str) -> crate::extension::PermissionAction {
-        if let Some(explicit) = self.explicit_permission(name) {
-            return explicit;
-        }
-        if let Some(action) = self
-            .exec_tier
-            .and_then(|tier| tier.rule_for(self.tool_facts(name)))
-        {
-            return action;
-        }
-        self.tool_permissions
-            .as_ref()
-            .map_or(crate::extension::PermissionAction::Allow, |p| p.default)
+        crate::config::types::policies::effective_permission(
+            self.tool_permissions.as_ref(),
+            self.exec_tier,
+            self.tool_facts(name),
+        )
     }
 
     /// The permission an override entry explicitly states for `name`, if any.
@@ -265,7 +263,13 @@ impl ScopedToolService {
     fn tool_facts<'a>(&self, name: &'a str) -> crate::config::types::policies::ToolFacts<'a> {
         crate::config::types::policies::ToolFacts {
             name,
-            idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
+            // The declaration seam answers for every tool that reached the
+            // registry (builtins via the allowlist, MCP via the server's
+            // hints). The name-list fallback keeps any builtin NOT routed
+            // through `RegistryToolAdapter` resolving exactly as before; a
+            // tool unknown to both stays `false`, so `Ask` is fail-closed.
+            idempotent: self.inner.is_idempotent(name)
+                || crate::tools::retry::is_idempotent_builtin_name(name),
             requires_approval: self.inner.requires_confirmation(name),
         }
     }

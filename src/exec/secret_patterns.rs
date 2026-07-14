@@ -57,6 +57,22 @@ pub fn secret_masker_patterns() -> Vec<SecretPattern> {
             replacement: "$1=***REDACTED***",
         },
         SecretPattern {
+            // HTTP header form `Authorization: Bearer <token>` — the space after
+            // `Bearer` the keyword=value rule above cannot reach. Mirrors the
+            // leak-detector `bearer_token` regex below to avoid drift, so a
+            // command carrying an `Authorization: Bearer …` header cannot leak
+            // its token into an approval summary / operator card / cluster frame.
+            regex: Regex::new(r"(?i)bearer\s+[a-zA-Z0-9\-._~+/]+=*").unwrap(),
+            replacement: "Bearer ***REDACTED***",
+        },
+        SecretPattern {
+            // `curl -u user:password` / `--user user:password` basic-auth flag.
+            // Human-facing summary only (never re-executed), so mild
+            // over-redaction of a non-secret `-u uid:gid` is acceptable.
+            regex: Regex::new(r"(?i)(-u|--user)\s+[^\s:]+:[^\s]+").unwrap(),
+            replacement: "$1 ***REDACTED***",
+        },
+        SecretPattern {
             // `[A-Z ]*` (zero-or-more, no mandatory surrounding spaces) so the
             // common PKCS#8 header `-----BEGIN PRIVATE KEY-----` (no algorithm
             // word) is redacted as well as `-----BEGIN RSA PRIVATE KEY-----`.

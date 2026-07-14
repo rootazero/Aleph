@@ -133,30 +133,27 @@ pub struct DenialLedger {
     inner: Mutex<Inner>,
 }
 
-/// Stable, dependency-free fingerprint grouping "the same denied intent".
+/// Stable fingerprint grouping "the same intent" — for the denial ledger AND,
+/// via [`grant_fingerprint`](super::action::grant_fingerprint), the positive
+/// session-grant store.
 ///
-/// FNV-1a over `tool\x1Fdetail`. A 64-bit hash is ample for intent-grouping
-/// (a collision merely makes two distinct intents share a denial bucket — it
-/// never grants anything), and avoids pulling a crypto-hash dependency into a
-/// hot, purely-internal path. `detail` should be the same deterministic string
-/// the approval prompt was built from (e.g. the capability-request text) so
-/// the *same* request maps to the *same* fingerprint across attempts.
+/// Truncated SHA-256 over `tool\x1Fdetail`. It shares the store with the grant
+/// path now, so a collision is no longer merely "two intents share a denial
+/// bucket": it would let an "approve for session" on one action authorize a
+/// *different* action that happens to collide — a privilege escalation. A
+/// second-preimage-resistant hash removes that class of risk; `sha2` + `hex`
+/// are already direct workspace deps (see `sandbox/workspace/path.rs`), so the
+/// old "avoid a crypto-hash dependency" tradeoff no longer applies. 128 bits is
+/// ample against both accidental and adversarial collision. The `0x1F`
+/// separator keeps `tool` and `detail` unambiguous.
 #[must_use]
 pub fn action_fingerprint(tool: &str, detail: &str) -> String {
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-    let sep = [0x1fu8];
-    let mut hash = FNV_OFFSET;
-    for &byte in tool
-        .as_bytes()
-        .iter()
-        .chain(sep.iter())
-        .chain(detail.as_bytes().iter())
-    {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    format!("{hash:016x}")
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(tool.as_bytes());
+    hasher.update([0x1fu8]);
+    hasher.update(detail.as_bytes());
+    hex::encode(&hasher.finalize()[..16])
 }
 
 impl DenialLedger {
@@ -306,7 +303,7 @@ mod tests {
         let c = action_fingerprint("bash_exec", "ls -la");
         assert_eq!(a, b, "same intent → same fingerprint");
         assert_ne!(a, c, "different intent → different fingerprint");
-        assert_eq!(a.len(), 16, "16 hex chars (64-bit)");
+        assert_eq!(a.len(), 32, "128-bit truncated SHA-256, hex-encoded");
     }
 
     #[test]

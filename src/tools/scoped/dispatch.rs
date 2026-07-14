@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::extension::hooks::{HookContext, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
-use crate::sandbox::exec_approval::{denial_ledger, session_memory};
+use crate::sandbox::exec_approval::{denial_ledger, session_memory, ApprovalAction};
 use crate::session::events::{ToolOutput, TurnId};
 use crate::sync_primitives::Arc;
 use crate::tools::runtime::LoopTool;
@@ -155,11 +155,17 @@ impl ScopedToolService {
                 // pre-boot) → fail closed (hard reject), never silent allow.
                 match &self.config_approval_requester {
                     Some(req) => {
-                        let reason = format!(
-                            "A chat-tier device asked to run `{name}`, which changes Aleph's own \
-                             configuration. Approve to allow this change."
+                        let action = ApprovalAction::for_tool_call(
+                            name,
+                            &input,
+                            format!(
+                                "A chat-tier device asked to run `{name}`, which changes Aleph's \
+                                 own configuration. Approve to allow this change."
+                            ),
                         );
-                        if let Err(denial) = self.confirm_with_memory(req, name, &reason).await {
+                        if let Err(denial) =
+                            self.confirm_with_memory(req, &action, &input).await
+                        {
                             return Err(ToolError::PermissionDenied {
                                 name: name.to_string(),
                                 reason: format!(
@@ -202,8 +208,13 @@ impl ScopedToolService {
         {
             match &self.approval_requester {
                 Some(requester) => {
-                    let reason = format!("Tool `{name}` requires your confirmation to run.");
-                    if let Err(denial) = self.confirm_with_memory(requester, name, &reason).await {
+                    let action = ApprovalAction::for_tool_call(
+                        name,
+                        &input,
+                        format!("Tool `{name}` requires your confirmation to run."),
+                    );
+                    if let Err(denial) = self.confirm_with_memory(requester, &action, &input).await
+                    {
                         let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
                         return Err(ToolError::Execution {
                             name: name.to_string(),
@@ -367,29 +378,43 @@ impl ScopedToolService {
         None
     }
 
-    /// Route a confirmation prompt for `name` through `requester`, consulting
+    /// Route a confirmation prompt for `action` through `requester`, consulting
     /// and updating the session approval memory.
     ///
     /// Mirrors codex's `with_cached_approval`: a prior "approve for session"
-    /// (`AllowAlways` → [`ApprovalOutcome::ApprovedForSession`]) short-circuits
-    /// the prompt for the rest of the session. Returns `Ok(())` when the call
-    /// may proceed, or `Err(outcome)` carrying the blocking outcome
-    /// (`Denied` / `Timeout`) so each caller can build its own error text.
+    /// short-circuits the prompt for the rest of the session. Returns `Ok(())`
+    /// when the call may proceed, or `Err(outcome)` carrying the blocking
+    /// outcome (`Denied` / `Timeout`) so each caller can build its own error
+    /// text.
     ///
-    /// Shared by the `confirm_tools` gate and the hook `Ask` gate so the
-    /// observer-firing + prompt + memory logic lives in exactly one place.
+    /// Both the grant and the denial are keyed on
+    /// [`grant_fingerprint`](crate::sandbox::exec_approval::grant_fingerprint)
+    /// — `(tool, canonical arguments)`, taken from `input`, never from the tool
+    /// name and never from the display `reason`. Keying on the NAME let one
+    /// "allow session" on `file_ops list` authorize `file_ops delete`, throwing
+    /// away the very distinction the tier's argument filter exists to draw.
+    /// Keying on the REASON would split the same call across gates, since each
+    /// gate writes its own prose.
+    ///
+    /// Shared by the config-tier gate, the `confirm_tools` gate and the hook
+    /// `Ask` gate, so a grant taken at one satisfies the others for the same
+    /// call and the user is never double-prompted.
     async fn confirm_with_memory(
         &self,
         requester: &Arc<dyn ApprovalRequester>,
-        name: &str,
-        reason: &str,
+        action: &ApprovalAction,
+        input: &Value,
     ) -> Result<(), ConfirmDenial> {
-        // Unattended security-tax: an autonomous continuation run has no human
-        // on the channel to approve anything. Fail closed — auto-deny any
-        // confirm-gated tool (`requires_confirmation` ∪ `Ask`-tier permission ∪
-        // operator-override `confirm_tools`, all of which funnel here) with an
-        // audit line, rather than awaiting an approval that can never arrive.
-        // Interactive turns leave `unattended = false` and are unaffected.
+        let name = action.tool_name.as_str();
+        // Unattended security-tax: this run has no human on any surface — a goal
+        // or loop continuation, a heartbeat, an A2A delegation, or a cron job
+        // with no origin channel. Fail closed — auto-deny any confirm-gated tool
+        // (`requires_confirmation` ∪ `Ask`-tier permission ∪ operator-override
+        // `confirm_tools`, all of which funnel here) with an audit line, rather
+        // than awaiting an approval that can never arrive (which parks the whole
+        // run on the 120 s approval timeout, per gated tool, before failing
+        // anyway). Interactive turns leave `unattended = false` and are
+        // unaffected.
         if self.unattended {
             tracing::warn!(
                 tool = %name,
@@ -403,7 +428,7 @@ impl ScopedToolService {
             return Err(ConfirmDenial {
                 outcome: ApprovalOutcome::Denied,
                 hint: Some(
-                    "This run is unattended (autonomous continuation) — \
+                    "This run is unattended (no human is watching it) — \
                      interactive approval is unavailable, so confirm-gated tools \
                      are auto-denied. Use a non-interactive approach, or call \
                      goal(action='update', status='blocked') to hand back to the \
@@ -414,10 +439,16 @@ impl ScopedToolService {
 
         let mem_key = self.session_memory_key();
 
-        // Session memory short-circuit: a prior session grant satisfies the
-        // confirmation without re-prompting (and without re-firing observers).
+        // One key for both stores: the grant and the refusal must name the same
+        // thing, or an approve-session cannot suppress a re-prompt it should,
+        // and a refusal cannot block the retry it should.
+        let fingerprint = crate::sandbox::exec_approval::grant_fingerprint(name, input);
+
+        // Session memory short-circuit: a prior session grant of THIS ACTION
+        // satisfies the confirmation without re-prompting (and without
+        // re-firing observers). A different call of the same tool still asks.
         if let Some(ref key) = mem_key {
-            if session_memory::global().is_approved(key, name) {
+            if session_memory::global().is_approved(key, &fingerprint) {
                 tracing::debug!(
                     tool = %name,
                     "confirmation satisfied by session approval memory"
@@ -431,7 +462,6 @@ impl ScopedToolService {
         // denial threshold — auto-refuses without re-prompting the user. This
         // is the blind-retry guard: an agent cannot wear the user down by
         // re-requesting something already refused.
-        let fingerprint = denial_ledger::action_fingerprint(name, reason);
         if let Some(ref key) = mem_key {
             if let Some(reason_kind) = denial_ledger::global().is_blocked(key, &fingerprint) {
                 tracing::info!(
@@ -453,13 +483,15 @@ impl ScopedToolService {
 
         // Fire PermissionRequest + Notification observers (best-effort,
         // observer-only) so user-facing channels can pop a toast / send an
-        // email / etc. without blocking the approval path itself.
+        // email / etc. without blocking the approval path itself. Observers see
+        // the redacted summary, never the raw arguments.
         crate::extension::hooks::fire_global_observer(
             crate::extension::HookEvent::PermissionRequest,
             &self.hook_session_id,
             vec![
                 ("TOOL_NAME", name.to_string()),
-                ("REASON", reason.to_string()),
+                ("REASON", action.reason.clone()),
+                ("ACTION", action.summary.clone()),
             ],
         )
         .await;
@@ -469,7 +501,7 @@ impl ScopedToolService {
             vec![
                 ("KIND", "permission_request".to_string()),
                 ("TOOL_NAME", name.to_string()),
-                ("MESSAGE", reason.to_string()),
+                ("MESSAGE", format!("{}\n{}", action.summary, action.reason)),
             ],
         )
         .await;
@@ -480,11 +512,9 @@ impl ScopedToolService {
         // is an unordered map, so with two concurrent tool calls the card renders
         // under the wrong tool and the user approves something they never read.
         let tool_call_id = self.newest_tool_call(name).await.map(|(_, id)| id);
-        let outcome = crate::approval::with_tool_call_id(
-            tool_call_id,
-            requester.request_approval(name, reason),
-        )
-        .await;
+        let outcome =
+            crate::approval::with_tool_call_id(tool_call_id, requester.request_approval(action))
+                .await;
         if !outcome.is_approved() {
             let reason_kind = match outcome {
                 ApprovalOutcome::Timeout => denial_ledger::DenialReason::Timeout,
@@ -528,10 +558,12 @@ impl ScopedToolService {
             });
         }
 
-        // Record a session-scoped grant so subsequent calls skip the prompt.
+        // Record a session-scoped grant so subsequent calls of THIS ACTION skip
+        // the prompt. Keyed on the action, so the grant covers exactly the call
+        // the user read and approved.
         if outcome.is_session_grant() {
             if let Some(ref key) = mem_key {
-                session_memory::global().remember(key, name);
+                session_memory::global().remember(key, &fingerprint);
             }
         }
         self.record_approval_decision(name, None).await;
@@ -542,10 +574,12 @@ impl ScopedToolService {
     ///
     /// `ToolService` dispatch carries no call identity, so they are recovered
     /// from the newest `ToolCallRequested` for this tool: the harness emits that
-    /// event immediately before dispatching, and every confirm-gated tool claims
-    /// `ConcurrencyClaim::global()` (never batched), so the newest request for
-    /// `name` is this call. `call_id` is the harness `call.id` — the same string
-    /// clients see as `ToolStart.tool_id`.
+    /// event immediately before dispatching, and all three confirm gates
+    /// (`requires_confirmation`, permission `Ask`, and the tier's argument
+    /// filter) return `ConcurrencyClaim::global()` from
+    /// [`ScopedToolService::call_concurrency_claim`], so a gated call is never
+    /// batched and the newest request for `name` IS this call. `call_id` is the
+    /// harness `call.id` — the same string clients see as `ToolStart.tool_id`.
     ///
     /// Only approval decision points call this, so the event-log scan stays off
     /// the hot path.
@@ -672,7 +706,9 @@ impl ScopedToolService {
         if let Some(PermissionDecision::Ask { reason }) = hook_result.permission_decision {
             match &self.approval_requester {
                 Some(requester) => {
-                    if let Err(denial) = self.confirm_with_memory(requester, name, &reason).await {
+                    let action = ApprovalAction::for_tool_call(name, &input, reason);
+                    if let Err(denial) = self.confirm_with_memory(requester, &action, &input).await
+                    {
                         let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
                         return Err(ToolError::Execution {
                             name: name.to_string(),

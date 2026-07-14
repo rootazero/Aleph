@@ -138,7 +138,10 @@ impl FixedRequester {
 
 #[async_trait]
 impl ApprovalRequester for FixedRequester {
-    async fn request_approval(&self, _tool_name: &str, _reason: &str) -> ApprovalOutcome {
+    async fn request_approval(
+        &self,
+        _action: &alephcore::sandbox::exec_approval::ApprovalAction,
+    ) -> ApprovalOutcome {
         *self.calls.write().await += 1;
         self.outcome
     }

@@ -9,12 +9,13 @@
 Aleph's security system provides:
 - **Permission Model**: single-tier Gateway-token auth — loopback is operator zero-config; a remote presents the shared token (or is walled). Authorized == full local-equivalent authority (see below)
 - **Tool Permission Enforcement**: Per-channel tool permissions via `ScopedToolService` — governs *what an agent may do*, orthogonal to *who may connect*
-- **Exec Approval**: Human-in-the-loop for shell commands
+- **Exec Tier**: the one user-facing dial over tool permissions — `Ask` / `Auto` / `Full`, metadata-driven, fail-closed for unknown tools (see below)
+- **Exec Approval**: Human-in-the-loop, keyed on the *action* (the actual command / arguments), not the tool name
 - **Command Analysis**: Static analysis of command risk
 - **Allowlist/Blocklist**: Fine-grained command control
 - **Output Masking**: Sensitive data protection
 
-**Location**: `src/gateway/security/` (crypto + vault: `crypto.rs`, `shared_token.rs`, `store/`, `token_readonly.rs`), `src/tools/scoped/`, `src/exec/`
+**Location**: `src/gateway/security/` (crypto + vault: `crypto.rs`, `shared_token.rs`, `store/`, `token_readonly.rs`), `src/tools/scoped/`, `src/config/types/policies/exec_tier.rs`, `src/sandbox/exec_approval/`, `src/exec/`
 
 ---
 
@@ -98,6 +99,125 @@ unchanged by the LAN-trust revert.
 
 Shell-command execution safety (risk analysis, approval, allowlist,
 output masking) is a separate subsystem — see **Exec Kernel** below.
+
+---
+
+## Exec Tier (Ask / Auto / Full)
+
+**Location**: `src/config/types/policies/exec_tier.rs` (rules + the single
+precedence composition point), `src/tools/scoped/` (enforcement),
+`src/gateway/execution_engine/turn_permissions.rs` (per-turn resolution).
+
+The exec tier is the **one user-facing dial** over tool permissions. It is not a
+second policy engine and not a second enforcement mechanism: it is a rule
+consulted at the chokepoint every tool call already funnels through, whenever no
+explicit `[policies.tool_permissions]` entry names the tool.
+
+| Tier | What it asks about | Notes |
+|------|--------------------|-------|
+| `Ask` | every mutating / side-effecting tool | read-only tools stay allowed, so the model can still investigate |
+| `Auto` *(default)* | the irreversible tail only | `*_delete`, `vault_*`, `team_disband`, an MCP server's `destructiveHint`, and `file_ops` `delete` / `move` (argument-level) |
+| `Full` | nothing | the command-policy floor still applies |
+
+### The lattice (who wins)
+
+```
+explicit [policies.tool_permissions] entry   (exact name > glob)
+        ↓  (nothing named this tool)
+configured `default`   TIGHTENED BY   the tier's verdict
+        ↓  (restrictive_min — the tier can only raise, never widen)
+[sandbox.command_policy] hardline floor      (no tier can lower it — not even Full)
+```
+
+`effective_permission(permissions, tier, facts)` is the **only** place this
+precedence exists. Both consumers — `ScopedToolService::permission_for` (the
+loop) and the gateway slash-command fast path — call it, so the two surfaces
+cannot drift apart. Consulting the tier *before* the default (the pre-2026-07-14
+shape) inverted a `default = "deny"` install into ask-by-default for exactly the
+tools the tier meant to guard.
+
+### The rules read declared metadata, never the tool's name
+
+`ToolFacts { name, idempotent, requires_approval }` is filled from the tool's own
+`ToolDefinition`:
+
+- `idempotent` ← `LoopTool::is_idempotent()` — the builtin pure-read allowlist
+  (`tools/retry.rs::IDEMPOTENT_BUILTIN_TOOLS`) or an MCP server's
+  `readOnlyHint` / `idempotentHint` (`mcp/protocol.rs::is_idempotent`).
+  Anything that declares nothing is `false`.
+- `requires_approval` ← `ToolDefinitionMetadata` (an MCP server's
+  `destructiveHint`).
+
+Hence: **not idempotent = mutating**, and **an unknown tool is non-idempotent**,
+so `Ask` is fail-closed for every tool Aleph has never heard of. A table of name
+globs cannot do this — MCP tools register as `{server_id}__{tool}`
+(`github__delete_repo`), and any glob table silently lets whole families through
+the gate it claims to hold.
+
+The one exception is argument-level: `file_ops` multiplexes `list` and `delete`
+behind a single name, so `ExecTier::asks_for_arguments` reads the `operation`
+field. That is a deterministic safety hard filter (explicitly permitted by R7),
+not a judgement about intent.
+
+### Where the tier comes from, per turn
+
+`resolve_turn_permissions` resolves it once per run: **request > session >
+global**.
+
+- **request** — the Panel composer pill sends the tier *with* the first message
+  (`chat.send`), so it governs the very turn it was armed for.
+- **session** — persisted to `identity_meta.custom["exec_tier"]` via
+  `sessions.patch` (the same carrier as `project_root`). `null` = follow global.
+  `sessions.patch` validates the value against `ExecTier::from_id`, exactly as
+  `chat.send` does.
+- **global** — `[policies] exec_tier` in config, read live per turn (no restart).
+- A **non-operator** caller (a chat-tier channel) is clamped after resolution: it
+  can tighten the tier but never raise it.
+
+### The three bypasses that were closed (do not re-open them)
+
+Every one of these was a surface that could execute a tool **without passing
+through `ScopedToolService`**. When you add a new such surface, this is the
+question to ask first.
+
+1. **Slash-command fast path** (`execution_engine/slash_command.rs`). `/bash`,
+   `/file_ops` etc. dispatched straight into `BuiltinToolRegistry` — no tier, no
+   `tool_permissions`, no `requires_confirmation`, no operator gate — and the
+   path is reachable **from channels**. Now `slash_gate_reason()` returns the
+   existing `ExecutionError::Fallthrough` for any gated call, routing it into the
+   fully-gated agent loop; ungated slash commands keep their deterministic fast
+   path.
+2. **`tools.invoke` RPC** (`gateway/handlers/tools_invoke.rs`). Its denylist
+   (`security/dangerous_tools.rs`) named 7 tools that **do not exist in this
+   repo** — it had been inert its entire life. It now names the real ones and
+   also refuses confirmation-gated tools (`is_confirmation_gated`, reading
+   `CONFIRMATION_REQUIRED_TOOLS`). *Known limitation*: argument-level asks (an
+   `Auto`-tier `file_ops delete`) are still ungated on this direct-invoke
+   surface — closing that needs an approval transport for the RPC.
+3. **Background runs** (goal / loop continuations, cron, heartbeat, a2a). A
+   continuation used to drop both `caller_role` and the channel's
+   `tool_permissions` layer — a chat-tier Telegram session escalated itself to
+   local-operator authority by continuing. `carry_policy_metadata` now forwards
+   exactly those two keys (and deliberately *not* `channel_id` /
+   `conversation_id`, which would make an unattended run's approvals look
+   deliverable).
+
+### Unattended = fail closed
+
+A run with no human attached is stamped `UNATTENDED_KEY`
+(`execution_engine/mod.rs`) at every headless producer: cron **when its approval
+is not routable** (a job carrying both a source channel and a conversation has a
+real `/approve` path — stamping it would auto-deny a working HITL flow),
+heartbeat and a2a always. `continuation_metadata` inserts the marker **last**, so
+an inherited key can never demote a continuation to attended.
+
+`ScopedToolService` then denies confirm-gated tools immediately instead of
+publishing an approval card into the void and blocking for the 120s timeout. The
+model is told the run is unattended.
+
+Teams (dispatcher / broadcast) are deliberately **not** stamped: a member run's
+approvals resolve to a Panel card, and the user who dispatched the team is the
+operator watching it.
 
 ---
 
@@ -273,59 +393,70 @@ pub enum RiskLevel {
 
 ## Approval Manager
 
-**Location**: `src/exec/manager.rs`
+**Location**: `src/exec/manager.rs` (`ExecApprovalManager` — pending/resolve
+pairing), `src/sandbox/exec_approval/` (the gate: `gate.rs`, `action.rs`,
+`session_memory.rs`, `denial_ledger.rs`).
 
-Manage approval workflows:
+The gate is **action-aware**: it is asked to approve *this call*, not *this tool*.
 
 ```rust
-pub struct ApprovalManager {
-    storage: ApprovalStorage,
-    bridge: ApprovalBridge,
+// src/sandbox/exec_approval/action.rs
+pub struct ApprovalAction {
+    pub tool_name: String,
+    pub summary: String,             // the ACTUAL call, redacted + capped
+    pub cwd: Option<String>,
+    pub analysis: Option<CommandAnalysis>,
+    pub reason: String,
 }
 
-impl ApprovalManager {
-    pub async fn get_approval(
-        &self,
-        cmd: &ParsedCommand,
-        risk: &RiskAssessment,
-    ) -> ApprovalDecision {
-        // 1. Check if already approved (session)
-        if self.storage.is_approved(cmd) {
-            return ApprovalDecision::approved();
-        }
-
-        // 2. Check allowlist
-        if self.allowlist.is_allowed(cmd) {
-            return ApprovalDecision::approved();
-        }
-
-        // 3. Check blocklist
-        if self.blocklist.is_blocked(cmd) {
-            return ApprovalDecision::denied("Command is blocked");
-        }
-
-        // 4. Request human approval
-        self.bridge.request_approval(cmd, risk).await
-    }
+// src/sandbox/exec_approval/gate.rs
+trait ApprovalRequester {
+    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalOutcome;
 }
 ```
 
-### Approval Decision
+`summary` renders what will actually happen — the command for `bash` /
+`code_exec` (fed through the real `exec::parser::analyze_shell_command`),
+`operation=delete path=…` for `file_ops`, `k=v` otherwise — then passes through
+`SecretMasker`, is newline-flattened, and is capped at 200 chars on a
+`char_indices()` boundary. **A confirmation gate that hides what it is gating
+trains the user to click Approve**, which converts the whole tier system into
+theater; every surface (Panel card, plain-text channel prompt, cluster node over
+reverse RPC) now shows the action.
+
+### Grants key on the action, not the tool
+
+`confirm_with_memory` computes `grant_fingerprint(tool, &args)` once — over the
+**raw canonical arguments**, not the redacted summary (redaction collapses
+distinct secrets to one placeholder, so a grant on one credential would cover
+another) — and uses it for **both** the session memory and the denial ledger.
+
+Consequence: "Allow for this session" authorizes **that exact call**. Under
+`Ask`, `bash` re-prompts per distinct command instead of whitelisting arbitrary
+argv after one approval (codex's `ApprovalStore` semantics). Noisier, deliberately.
+
+### Approval decision
 
 ```rust
-pub struct ApprovalDecision {
-    pub approved: bool,
-    pub reason: Option<String>,
-    pub scope: ApprovalScope,
-    pub expires_at: Option<DateTime<Utc>>,
-}
-
-pub enum ApprovalScope {
-    Once,           // This execution only
-    Session,        // Current session
-    Permanent,      // Always allow (add to allowlist)
+// src/exec/socket.rs
+pub enum ApprovalDecisionType {
+    AllowOnce,    // this call
+    AllowSession, // this call, for the rest of the session (by fingerprint)
+    AllowAlways,  // clamped to AllowSession by clamp_decision — no surface offers it
+    Deny,
 }
 ```
+
+- **Timeout ⇒ refusal.** `DEFAULT_APPROVAL_TIMEOUT_MS` = 120s;
+  `ApprovalOutcome::is_approved` excludes `Timeout`. A timeout is deliberately
+  **not** written to the denial ledger — an expired card is not a decision.
+  There is no fail-open path.
+- **Orphans cannot hijack a card.** `PendingEntry::is_live()` (not expired ∧
+  receiver not closed) filters both `resolve_for_session` and `list_pending`, so
+  a cancelled run's zombie can no longer win the `/approve` FIFO or render.
+- **Denial is terminal** for that call, and is returned to the model as an
+  in-context instruction not to retry it, rewrite it, or achieve the same result
+  by other means. Three denials trip the sticky pause in `denial_ledger.rs`.
 
 ---
 
@@ -415,113 +546,56 @@ impl OutputMasker {
 
 ## Permission System
 
-**Location**: `src/permission/`
+There is no `src/permission/` module and there never was one. Limiting *what an
+agent may do* is exactly three things, and they compose in this order:
 
-### Permission Rules
+1. **`[policies.tool_permissions]`** — per-tool `allow` / `ask` / `deny`, exact
+   name or glob, merged global → agent → channel, most-restrictive wins
+   (`src/config/types/policies/tool_permissions.rs`).
+2. **The exec tier** — `Ask` / `Auto` / `Full`, which tightens the configured
+   `default` for tools nobody named (see [Exec Tier](#exec-tier-ask--auto--full)).
+3. **`[sandbox.command_policy]`** — the hardline command floor, which no tier and
+   no permission entry can lower (`src/sandbox/command_policy/`).
 
-```rust
-pub struct PermissionRule {
-    pub resource: ResourcePattern,
-    pub action: Action,
-    pub effect: Effect,
-    pub conditions: Vec<Condition>,
-}
+All three are enforced at one chokepoint, `src/tools/scoped/` — `Deny` hides the
+tool from the model *and* refuses the call; `Ask` routes to the approval gate.
 
-pub enum Action {
-    Read,
-    Write,
-    Execute,
-    Delete,
-    All,
-}
-
-pub enum Effect {
-    Allow,
-    Deny,
-}
-
-pub struct Condition {
-    pub key: String,
-    pub operator: ConditionOperator,
-    pub value: Value,
-}
-```
-
-### Resource Patterns
-
-```
-file://~/.aleph/*          # Aleph config files
-file:///etc/*               # System files
-exec://git/*                # Git commands
-exec://npm/*                # NPM commands
-network://api.openai.com/*  # OpenAI API
-network://*.anthropic.com/* # Anthropic API
-```
-
-### Permission Manager
-
-```rust
-pub struct PermissionManager {
-    rules: Vec<PermissionRule>,
-}
-
-impl PermissionManager {
-    pub fn check(
-        &self,
-        resource: &str,
-        action: Action,
-        context: &Context,
-    ) -> PermissionResult {
-        for rule in &self.rules {
-            if rule.matches(resource, action, context) {
-                return match rule.effect {
-                    Effect::Allow => PermissionResult::Allowed,
-                    Effect::Deny => PermissionResult::Denied(rule.reason()),
-                };
-            }
-        }
-
-        // Default deny
-        PermissionResult::Denied("No matching rule")
-    }
-}
-```
+The action-type approval engine (`src/approval/`) is a separate, older axis over
+*capability domains* (desktop / browser / system / pim / automation), not tool
+names; its `Ask` hands `approval_required` back to the LLM rather than running a
+deterministic HITL gate (R7/R9).
 
 ---
 
 ## Audit Logging
 
-**Location**: `src/exec/storage.rs`
+**The live trail is the session event log.** Every approval decision at the
+enforcement chokepoint is recorded by
+`tools/scoped/dispatch.rs::record_approval_decision`, which writes
+`ToolCallApproved` / `ToolCallDenied` session events. Query it through the
+session service, alongside every other event of the run that produced it.
 
-All exec decisions are logged:
+**Deleted (2026-07-14), do not go looking for it**: `src/exec/approval/storage.rs`
++ `audit.rs` and the `aleph-server audit` CLI command. They queried three SQLite
+tables (`~/.aleph/approval_audit.db`) whose **only writers were test helpers** —
+an operator running `audit` got zeros and concluded nothing had happened, while
+the real trail sat in the session event log. That is worse than dead code.
 
-```rust
-pub struct AuditEntry {
-    pub timestamp: DateTime<Utc>,
-    pub command: String,
-    pub risk_level: RiskLevel,
-    pub decision: ApprovalDecision,
-    pub executor: String,
-    pub session_key: String,
-    pub duration_ms: u64,
-    pub exit_code: Option<i32>,
-}
-```
+Deleted in the same sweep, all zero-consumer:
+`src/exec/approval/{escalation,binding,path_canonicalize}.rs` (path-escalation,
+binding-compliance and sensitive-directory checks that nothing ever called),
+`benches/approval_performance.rs`, and
+`exec/allowed_decisions.rs::{decisions_for_risk, assess_command_decisions,
+risk_segments}`.
 
-### Audit Query
-
-```sql
-SELECT * FROM audit_log
-WHERE risk_level >= 'High'
-AND timestamp > datetime('now', '-7 days')
-ORDER BY timestamp DESC;
-```
+Security *events* (not approvals) still log through
+`src/security/audit.rs`; SSRF has its own trail (see below).
 
 ---
 
 ## IPC Security
 
-**Location**: `src/exec/ipc.rs`
+**Location**: `src/exec/bridge.rs` + `src/exec/socket.rs`
 
 Secure communication for approval requests:
 
@@ -935,6 +1009,63 @@ was removed in the LAN-trust revert. For operators upgrading:
 
 ---
 
+## Gap analysis: exec tiers vs codex / hermes-agent / pi {#exec-tier-gap-analysis}
+
+> Same convention as the **openclaw 对照映射表** in [CLUSTER.md](CLUSTER.md):
+> per-dimension verdicts, anchored to real code. **Read this before re-comparing
+> Aleph's permission model against another agent's — the comparison has been
+> done.** Verdicts: **aligned** (same shape, no action) · **aleph-superior**
+> (keep, protect by test) · **gap** (closed in the 2026-07-14 round unless said
+> otherwise) · **deliberately-not-ported** (do not "helpfully" add it).
+
+| Dimension | codex | hermes / pi | Aleph | Verdict |
+|---|---|---|---|---|
+| Policy axes | 2 live axes: `AskForApproval` × `PermissionProfile` | hermes: `approvals.mode {manual\|smart\|off}` × gate stack. pi: declined a sandbox entirely | 1 axis: `ExecTier {Ask,Auto,Full}`, orthogonal to `[sandbox.command_policy]` (an undisableable floor) | **aligned** |
+| Tier semantics | 4 approval values, but 2 of the 3 shipped presets share one — the axis that really moves is the sandbox profile | hermes: 3 modes + a HARDLINE floor under the top one. pi: 3-valued project TRUST, gating config *loading* | 3 tiers with honest semantics; the floor holds under all three | **aligned** |
+| Gate input | name-based argv allowlist + a Starlark rules engine over the command string | hermes: 47 regex `DANGEROUS_PATTERNS` over argument content. pi: tools declare *no* risk metadata; every gate re-derives danger from regex | **metadata-driven**: `ToolFacts` read off the declared `ToolDefinition`, never the name; one argument-level filter (`file_ops`) | **aleph-superior** — do not regress toward regex-on-shell-strings |
+| Safe-read bypass | `is_known_safe_command` argv allowlist, compositional over `&& \|\| ; \|` | hermes: permanent glob `command_allowlist`. pi: patterns exist only in an example | `IDEMPOTENT_BUILTIN_TOOLS` (pure-read builtins) + MCP `readOnlyHint`; default-deny for anything unlisted | **aligned** |
+| Memory key | `{env, CANONICALIZED argv, cwd, sandbox perms}` | hermes: keys on a *pattern*, so "always" on `rm -r*` allowlists every future one. pi: no memoization at all | `grant_fingerprint(tool, canonical args)`, shared by session memory **and** the denial ledger | **gap → closed** (was: the bare tool name) |
+| Escalation / retry ladder | model-declared `SandboxPermissions` + **`ToolOrchestrator`'s harness-side retry ladder**: on `SandboxErr::Denied`, pick a recovery strategy and re-run | hermes: plugin may re-escalate into the same gate. pi: "approve-with-modification" mutates `event.input` in place, with no re-validation | Neither. Denial is terminal and is returned to the model as an instruction not to retry | **deliberately-not-ported** — see below |
+| Timeout / orphans | approvals block forever; turn death drops the sender → fails closed | hermes: timeout ⇒ deny ("silence is not consent"). pi: `select` timeout returns `undefined`, so a gate written `if choice === "No"` **fails open** | 120s ⇒ refusal everywhere; timeout is *not* ledgered (an expired card is not a decision); `is_live()` evicts orphan waiters | **aleph-superior** |
+| Runtime switching UX | `/permissions` → 3 presets, session-scoped, admin-lockable | hermes: `/yolo` per session; shift-click writes it globally. pi: restrictions persist to the session transcript and survive resume | composer pill (per-session, rides the first message) + Settings→Policies (global, live per turn) | **gap → closed** (Panel lost the display on select/reload while the server kept enforcing) |
+| Unknown-tool default | MCP: an unannotated tool requires approval | hermes: documented fail-open hole in headless non-gateway contexts. pi: no metadata, so "unknown" is meaningless | fail-closed by construction: unknown ⇒ non-idempotent ⇒ mutating ⇒ `Ask` holds | **aligned** — protect by test |
+| Per-tool override | per-server *and* per-tool approval mode; two-tier memory | hermes: `approvals.deny` globs that survive yolo; per-rule grain | `[policies.tool_permissions]` exact + glob, 3-tier merge, most-restrictive-wins; explicit beats the tier | **gap → closed** (the tier used to *widen* a `default = "deny"`) |
+| Background inheritance | approval store lives on shared session services | hermes: background writes must stage; **cron gets its own axis** because "ask" is meaningless with no human attached | subagents inherit correctly; continuations now carry `caller_role` + channel permissions; headless producers stamp `unattended` ⇒ fail closed | **gap → closed** |
+| Audit trail | telemetry on the orchestrator path | hermes: observability hooks, everything redacted before display | live: `ToolCallApproved` / `ToolCallDenied` session events | **gap → closed** by deleting the dead SQLite trail that reported zeros |
+| Floor beneath the top tier | under `Never`, dangerous commands are Forbidden — **but only when the sandbox profile is Managed**; with it off, the top tier is unbounded | hermes: `HARDLINE_PATTERNS` + a user-editable `approvals.deny` floor that survives yolo | `[sandbox.command_policy]` holds under every tier including `Full` (unit-pinned); a `deny` override also beats the tier | **aligned** — better placed than codex's |
+| What the human SEES | full argv + cwd + the model's own justification | hermes: the whole command, redacted, with all findings merged into one prompt. pi: typed per-tool event | the redacted **action summary** (the command / `operation=delete path=…`), on every surface | **gap → closed** — this was the sharpest defect of round 1 |
+
+### Deliberately not ported (do not add these)
+
+- **codex's sandbox-escalation retry ladder.** On a sandbox denial, codex's
+  `ToolOrchestrator` selects a recovery strategy and re-runs with elevated
+  permissions. That is precisely R10's 5th 不 (不做错误恢复策略选择) and precisely
+  what clause **A2** forbids: *let the model see and heal the error = yes; let the
+  harness pick the recovery strategy for it = no.* Aleph compresses the denial
+  into context and the model re-plans. A future round that "helpfully" adds a
+  retry matrix is reverting an architectural decision, not fixing an omission.
+- **codex's model-declared escalation flag** is R7-compatible in principle (the
+  harness only checks a declared flag, it never classifies), but Aleph has no
+  sandbox-escalation axis for it to target — it would be a zero-consumer
+  abstraction (P6).
+- **pi's approve-with-modification** (the gate mutates `event.input` in place).
+  Tempting, but pi does **no re-validation after mutation**, and Aleph has no
+  consumer for a third "allow-if-rewritten" state that a tier enum cannot express.
+
+### Still open (honest)
+
+- `tools.invoke` has no argument-level tier parity (needs an approval transport
+  on the RPC surface).
+- `sessions_send` sub-agent runs do not inherit `unattended` from a headless
+  parent — `TurnContext` has no such field, so closing it is its own slice.
+- No user-editable floor under `Full` in hermes' sense (an `approvals.deny` glob
+  that survives yolo). `[policies.tool_permissions]` `deny` overrides already
+  cover ~80% of it, since an explicit entry beats the tier.
+- Free-text `/deny <reason>` back to the model (hermes has it; cheap, genuinely
+  better than a bare "denied").
+
+---
+
 ## Cross-Cutting Security Module Index
 
 | Module | Location | Purpose |
@@ -945,7 +1076,10 @@ was removed in the LAN-trust revert. For operators upgrading:
 | Audit Logger | `src/security/audit.rs` | Security event logging |
 | Browser Guard | `src/browser/network_policy.rs` | Browser navigation SSRF |
 | Crypto + Vault | `src/gateway/security/` | Secrets vault, shared-token crypto |
-| Tool Permissions | `src/tools/scoped/` | Per-channel tool permission merge |
+| Tool Permissions | `src/tools/scoped/` | Per-channel tool permission merge + the enforcement chokepoint |
+| Exec Tier | `src/config/types/policies/exec_tier.rs` | Ask / Auto / Full — the rules and the one precedence composition point |
+| Approval Gate | `src/sandbox/exec_approval/` | Action-aware confirmation, grant fingerprint, denial ledger |
+| Gateway-surface denylist | `src/security/dangerous_tools.rs` | What `tools.invoke` refuses outright |
 | Exec Kernel | `src/exec/` | Shell command safety |
 
 ---
@@ -1015,6 +1149,7 @@ files, every CLI subcommand annotated, no leftover
 ## See Also
 
 - [Architecture](ARCHITECTURE.md) - System overview
+- [Feature Locator](FEATURE_LOCATOR.md) - §5.2 permission hierarchy, §5.3 approval gate, §5.12 exec tier (code anchors + what was deleted)
 - [Tool System](TOOL_SYSTEM.md) - How bash_exec works
 - [Gateway](GATEWAY.md) - Security RPC methods
 - [Desktop Bridge](DESKTOP_BRIDGE.md) - Bridge isolation invariants

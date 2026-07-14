@@ -39,6 +39,7 @@ use crate::exec::approval::channel_bridge::ChannelApprovalBridge;
 use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
 use crate::gateway::channel::{ChannelId, ConversationId};
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
+use crate::sandbox::exec_approval::ApprovalAction;
 
 /// Adapts `ChannelApprovalBridge` + `ExecApprovalManager` to the
 /// `ApprovalRequester` trait.
@@ -147,20 +148,20 @@ impl FallbackApprovalRequester {
 
 #[async_trait]
 impl ApprovalRequester for FallbackApprovalRequester {
-    async fn request_approval(&self, tool_name: &str, reason: &str) -> ApprovalOutcome {
+    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalOutcome {
         if self.channel.can_reach_user().await {
-            return self.channel.request_approval(tool_name, reason).await;
+            return self.channel.request_approval(action).await;
         }
-        self.operator.request_approval(tool_name, reason).await
+        self.operator.request_approval(action).await
     }
 }
 
 #[async_trait]
 impl ApprovalRequester for ChannelApprovalBridgeAdapter {
-    async fn request_approval(&self, tool_name: &str, reason: &str) -> ApprovalOutcome {
+    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalOutcome {
         let Some((channel_id, conversation_id, session_key)) = Self::resolve_channel_route() else {
             warn!(
-                tool = %tool_name,
+                tool = %action.tool_name,
                 "ChannelApprovalBridgeAdapter: no channel route from TURN_CONTEXT \
                  or SESSION_ID — cannot route approval prompt, denying"
             );
@@ -170,8 +171,7 @@ impl ApprovalRequester for ChannelApprovalBridgeAdapter {
         self.bridge
             .request_for_tool(
                 &self.approval_manager,
-                tool_name,
-                reason,
+                action,
                 &channel_id,
                 &conversation_id,
                 &session_key,
@@ -187,6 +187,15 @@ mod tests {
     use crate::routing::session_key::{DmScope, SessionKey};
     use crate::session::with_session_scope;
     use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+    /// A `code_exec` call carrying its real code body.
+    fn code_action(code: &str) -> ApprovalAction {
+        ApprovalAction::for_tool_call(
+            "code_exec",
+            &serde_json::json!({ "language": "shell", "code": code }),
+            "needs confirmation",
+        )
+    }
 
     fn test_manager() -> Arc<ExecApprovalManager> {
         Arc::new(ExecApprovalManager::new())
@@ -215,7 +224,7 @@ mod tests {
         let adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager());
         let out = TURN_CONTEXT
             .scope(routable_turn(), async {
-                adapter.request_approval("code_exec", "run ls").await
+                adapter.request_approval(&code_action("ls")).await
             })
             .await;
         assert_eq!(out, ApprovalOutcome::Approved);
@@ -227,7 +236,7 @@ mod tests {
         let adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager());
         let out = TURN_CONTEXT
             .scope(routable_turn(), async {
-                adapter.request_approval("code_exec", "rm -rf").await
+                adapter.request_approval(&code_action("rm -rf")).await
             })
             .await;
         assert_eq!(out, ApprovalOutcome::Denied);
@@ -241,7 +250,7 @@ mod tests {
         let adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager());
         let sid = test_session_id();
         let out = with_session_scope(&sid, async {
-            adapter.request_approval("code_exec", "run ls").await
+            adapter.request_approval(&code_action("ls")).await
         })
         .await;
         assert_eq!(out, ApprovalOutcome::Approved);
@@ -257,7 +266,7 @@ mod tests {
         let adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager());
 
         // Neither task-local scoped.
-        let out = adapter.request_approval("code_exec", "run ls").await;
+        let out = adapter.request_approval(&code_action("ls")).await;
         assert_eq!(out, ApprovalOutcome::Denied);
     }
 
@@ -276,7 +285,7 @@ mod tests {
         };
         let out = TURN_CONTEXT
             .scope(non_channel_turn, async {
-                adapter.request_approval("code_exec", "run ls").await
+                adapter.request_approval(&code_action("ls")).await
             })
             .await;
         // Even with an always-approved bridge, an unroutable turn falls
@@ -327,7 +336,13 @@ mod tests {
         let handle = tokio::spawn(async move {
             TURN_CONTEXT
                 .scope(panel_turn(), async move {
-                    requester.request_approval("bash", "rm -rf /tmp/x").await
+                    requester
+                        .request_approval(&ApprovalAction::for_tool_call(
+                            "bash",
+                            &serde_json::json!({"cmd": "rm -rf /tmp/x"}),
+                            "needs confirmation",
+                        ))
+                        .await
                 })
                 .await
         });
@@ -366,7 +381,13 @@ mod tests {
         let handle = tokio::spawn(async move {
             TURN_CONTEXT
                 .scope(panel_turn(), async move {
-                    requester.request_approval("bash", "rm -rf /tmp/x").await
+                    requester
+                        .request_approval(&ApprovalAction::for_tool_call(
+                            "bash",
+                            &serde_json::json!({"cmd": "rm -rf /tmp/x"}),
+                            "needs confirmation",
+                        ))
+                        .await
                 })
                 .await
         });

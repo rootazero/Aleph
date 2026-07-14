@@ -15,12 +15,14 @@
 //! and every future tool as whatever its author picked — so any table of name
 //! globs silently lets whole families through the gate it claims to hold.
 //!
-//! The property that already declares what a tool *does* is
-//! `ToolDefinitionMetadata.idempotent`: projected from the maintained pure-read
-//! allowlist [`crate::tools::retry::IDEMPOTENT_BUILTIN_TOOLS`] for builtins and
-//! from the server's own hints for MCP tools, defaulting to `false`. Hence the
-//! rule: **a tool that is not idempotent is a mutating tool**. Unknown tools
-//! are non-idempotent, so `Ask` is fail-closed for anything new.
+//! The property that already declares what a tool *does* is idempotency, read
+//! at the enforcement chokepoint through
+//! [`crate::tools::runtime::LoopTool::is_idempotent`]: the maintained pure-read
+//! allowlist [`crate::tools::retry::IDEMPOTENT_BUILTIN_TOOLS`] for builtins, the
+//! server's own `readOnlyHint` / `idempotentHint` for MCP tools, `false` for
+//! anything that declares nothing. Hence the rule: **a tool that is not
+//! idempotent is a mutating tool**. Unknown tools are non-idempotent, so `Ask`
+//! is fail-closed for anything new.
 //!
 //! The tier axis is orthogonal to `[sandbox.command_policy]`. No tier — not
 //! even `Full` — can lower the command-policy hardline floor (fork bombs,
@@ -30,6 +32,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::tool_permissions::{restrictive_min, ToolPermissionsConfig};
 use crate::extension::PermissionAction;
 
 /// Identity-metadata custom key under which a session's per-session tier
@@ -45,9 +48,9 @@ pub struct ToolFacts<'a> {
     /// Registry name. Only consulted for the curated destructive set below,
     /// never to guess whether the tool mutates.
     pub name: &'a str,
-    /// `ToolDefinitionMetadata.idempotent` — the tool declares itself a
-    /// read-only / pure query. Everything else mutates, including every tool
-    /// Aleph has never heard of.
+    /// `LoopTool::is_idempotent` — the tool declares itself a read-only / pure
+    /// query (builtin allowlist, or an MCP server's `readOnlyHint`). Everything
+    /// else mutates, including every tool Aleph has never heard of.
     pub idempotent: bool,
     /// `ToolDefinitionMetadata.requires_approval` — for MCP tools this carries
     /// the server's `destructiveHint`.
@@ -165,6 +168,40 @@ impl ExecTier {
     }
 }
 
+/// The effective permission for a tool: the operator's explicit decision, else
+/// their configured baseline TIGHTENED by the tier.
+///
+/// Precedence, most specific first:
+/// 1. an **explicit** entry (exact name, then glob) in the merged
+///    [`ToolPermissionsConfig`] — an operator who names a tool has decided;
+/// 2. the configured `default` (`Allow` when no policy is attached), tightened
+///    by [`ExecTier::rule_for`] through the restrictiveness lattice.
+///
+/// The tier only ever tightens, which is what [`ExecTier::rule_for`]'s contract
+/// promises: it yields at most `Ask`, and `restrictive_min` keeps a `Deny`
+/// default denying. Consulting the tier *before* the default would invert a
+/// `default = "deny"` install into ask-by-default for exactly the tools the tier
+/// wanted to guard.
+///
+/// The single composition point: `ScopedToolService::permission_for` (the loop's
+/// enforcement chokepoint) and the gateway slash-command fast path both call it,
+/// so neither surface can drift into its own precedence.
+#[must_use]
+pub fn effective_permission(
+    permissions: Option<&ToolPermissionsConfig>,
+    tier: Option<ExecTier>,
+    facts: ToolFacts<'_>,
+) -> PermissionAction {
+    if let Some(explicit) = permissions.and_then(|p| p.resolve_explicit(facts.name)) {
+        return explicit;
+    }
+    let base = permissions.map_or(PermissionAction::Allow, |p| p.default);
+    match tier.and_then(|t| t.rule_for(facts)) {
+        Some(tier_action) => restrictive_min(base, tier_action),
+        None => base,
+    }
+}
+
 /// The `Auto` tier's guarded tail: irreversible operations.
 ///
 /// Irreversibility is not a property any tool declares, so unlike "mutating"
@@ -180,34 +217,26 @@ fn is_destructive(facts: ToolFacts<'_>) -> bool {
         || facts.name.starts_with("vault_")
 }
 
-/// A tier as presented to a user surface (Panel / CLI / bot). Rendering the
-/// same three everywhere keeps R6 (one core, many channels) honest.
+/// A tier as offered to a user surface (Panel / CLI / bot).
+///
+/// Core owns the tier IDENTITY — the id set, its order, and every `rule_for`
+/// verdict behind it — so every surface offers the same three choices with the
+/// same meaning (R6). It does NOT own the COPY: a label is presentation, it has
+/// to follow the reader's locale, and a surface that cannot resolve it in its
+/// own locale files is structurally unable to be localized (R4: surfaces render,
+/// core decides). Ship ids; let the surface author the words for its user.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct TierPreset {
     pub id: &'static str,
-    pub label: &'static str,
-    pub description: &'static str,
 }
 
 /// The three built-in tiers, ordered least → most permissive.
 #[must_use]
 pub const fn builtin_tiers() -> &'static [TierPreset] {
     &[
-        TierPreset {
-            id: "ask",
-            label: "Ask 请求",
-            description: "每个会改动系统的工具调用（执行命令、写文件、删除、凭据、MCP、浏览器）都先征求同意；只读工具照常运行。\nEvery mutating tool call asks first; read-only tools still run freely.",
-        },
-        TierPreset {
-            id: "auto",
-            label: "Auto 自动",
-            description: "工具自动运行，只有不可逆的操作（删除文件、凭据写入、解散团队、MCP 破坏性工具）才征求同意。默认档位。\nTools run automatically; only irreversible operations ask first. The default.",
-        },
-        TierPreset {
-            id: "full",
-            label: "Full 完全",
-            description: "从不询问。灾难性命令的硬底线（fork bomb / rm -rf / 抹盘）依然生效，任何档位都无法关闭。\nNever asks. The catastrophic command floor still holds — no tier can disable it.",
-        },
+        TierPreset { id: "ask" },
+        TierPreset { id: "auto" },
+        TierPreset { id: "full" },
     ]
 }
 

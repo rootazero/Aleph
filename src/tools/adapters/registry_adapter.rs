@@ -267,6 +267,12 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
         CONFIRMATION_REQUIRED_TOOLS.contains(&self.name.as_str())
     }
 
+    fn is_idempotent(&self) -> bool {
+        // The maintained builtin pure-read allowlist is the single source of
+        // truth for builtin idempotency; unlisted builtins stay `false`.
+        crate::tools::retry::is_idempotent_builtin_name(&self.name)
+    }
+
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
         tracing::debug!(tool = %self.name, args = %input, "Tool call raw arguments from LLM");
         // Inject default working_dir for bash/code_exec if not provided by LLM
