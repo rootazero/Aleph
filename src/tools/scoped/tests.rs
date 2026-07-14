@@ -2049,6 +2049,58 @@ async fn auto_tier_destructive_file_ops_never_batches() {
     );
 }
 
+/// The `unattended` fail-closed gate: a run nobody is watching (cron with no
+/// origin channel, heartbeat, A2A delegation, goal/loop continuation) must
+/// auto-deny a confirm-gated tool INSTEAD of publishing an approval card into
+/// the void and parking on it until the 120 s timeout. The requester is wired
+/// and would happily approve — the point is that it is never even asked.
+#[tokio::test]
+async fn unattended_run_auto_denies_a_confirm_gated_tool_without_prompting() {
+    use crate::config::types::policies::ExecTier;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Auto)
+        .with_turn_context(turn_ctx("agent-unattended-deny"))
+        .with_confirmation(StdArc::clone(&requester) as _)
+        .with_unattended(true);
+
+    // `agent_delete` is destructive → the Auto tier raises it to `Ask`.
+    let err = svc.execute("agent_delete", json!({})).await.unwrap_err();
+    assert!(
+        matches!(err, ToolError::Execution { .. }),
+        "an unattended confirm-gated call must fail closed, got {err:?}"
+    );
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        0,
+        "no card may be raised on a run with no human to answer it"
+    );
+    // An ungated tool still runs — the marker is a confirm-gate policy, not a
+    // blanket freeze on autonomous work.
+    assert!(svc.execute("search", json!({})).await.is_ok());
+}
+
+/// The other half of the pin: the SAME gated call on an ATTENDED run does
+/// prompt. Without this, a gate that denies everything would pass the test above.
+#[tokio::test]
+async fn an_attended_run_still_prompts_for_the_same_call() {
+    use crate::config::types::policies::ExecTier;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Auto)
+        .with_turn_context(turn_ctx("agent-attended-prompt"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+
+    svc.execute("agent_delete", json!({}))
+        .await
+        .expect("approved → runs");
+    assert_eq!(requester.calls.load(Ordering::SeqCst), 1);
+}
+
 // -------------------------------------------------------------------------
 // Deferred-tier exposure: dropped from list/metadata_schema, reachable via
 // describe/execute (so a model that finds the tool via `tool_search` can

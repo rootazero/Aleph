@@ -743,11 +743,16 @@ where
                 // `goal_continuation`: the clock-less sibling of the loop's
                 // `try_claim_tick` just below.
                 if let Some(cont_deps) = self.continuation_deps.get() {
+                    // Both continuation chains inherit this turn's policy inputs;
+                    // chaining is transitive, since continuation N's own post_run
+                    // reads them back out of N's metadata.
+                    let policy_meta = carry_policy_metadata(&request.metadata);
                     super::goal_continuation::post_run(
                         cont_deps,
                         &self.session_manager,
                         &request.session_key,
                         &agent,
+                        &policy_meta,
                     )
                     .await;
 
@@ -802,6 +807,7 @@ where
                                         request.session_key.clone(),
                                         session_key_str.clone(),
                                         prompt,
+                                        policy_meta.clone(),
                                         cont_deps.event_bus.clone(),
                                         Some(delay_ms),
                                         ContinuationKind::Loop { wake_ms },
@@ -974,15 +980,59 @@ pub(super) type OriginRoute = (
     String,
 );
 
+/// The policy-bearing subset of a run's metadata — the keys an autonomous
+/// continuation MUST inherit from the conversation that spawned it.
+///
+/// `caller_role` drives the channel exec-tier clamp (`turn_permissions`) and the
+/// config-tool operator gate (`tools/scoped/dispatch.rs`, via `TurnContext`);
+/// [`CHANNEL_TOOL_PERMISSIONS_KEY`] is the originating channel's tool-permission
+/// layer. Both are RESTRICTIVE inputs, and a continuation used to build its
+/// metadata from scratch — so a Chat-tier Telegram conversation clamped to `Auto`
+/// on its interactive turns spawned a goal continuation that ran at the
+/// unclamped global tier with nobody watching. Invariant: a background run is
+/// never MORE privileged than the conversation that spawned it.
+///
+/// Everything else is per-turn (locale / platform / busy-input mode / slash
+/// mode) and is deliberately dropped. `channel_id` / `conversation_id` stay out
+/// too: they are what make an approval routable, and an unattended run must keep
+/// failing closed on approval-gated tools.
+pub(super) fn carry_policy_metadata(
+    src: &std::collections::HashMap<String, String>,
+) -> std::collections::HashMap<String, String> {
+    ["caller_role", super::CHANNEL_TOOL_PERMISSIONS_KEY]
+        .iter()
+        .filter_map(|k| src.get(*k).map(|v| ((*k).to_string(), v.clone())))
+        .collect()
+}
+
+/// Metadata of an autonomous continuation run: the inherited policy layer plus
+/// the [`UNATTENDED_KEY`] marker.
+///
+/// The marker is written LAST and is therefore unconditional — an inherited key
+/// can never demote a continuation to "attended", which would let it park on an
+/// approval card that nobody is there to answer.
+///
+/// [`UNATTENDED_KEY`]: super::UNATTENDED_KEY
+fn continuation_metadata(
+    policy_meta: std::collections::HashMap<String, String>,
+) -> std::collections::HashMap<String, String> {
+    let mut m = policy_meta;
+    m.insert(super::UNATTENDED_KEY.to_string(), "true".to_string());
+    m
+}
+
 /// 入队一次自主续跑 run（同一 session、同一 agent，给定 prompt）。
 /// 被 goal 续跑（`should_continue` / gate-failure）与 loop tick 续跑共用——
 /// 消除重复的 `RunRequest` 构造与 `tokio::spawn` 样板。`kind` 路由失败处理。
+///
+/// `policy_meta` is [`carry_policy_metadata`] of the originating request.
 pub(super) fn spawn_continuation_run(
     registry: Arc<crate::gateway::agent_instance::AgentRegistry>,
     adapter: Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
     session_key: crate::routing::session_key::SessionKey,
     session_key_str: String,
     prompt: String,
+    policy_meta: std::collections::HashMap<String, String>,
     event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     delay_ms: Option<u64>,
     kind: ContinuationKind,
@@ -994,14 +1044,7 @@ pub(super) fn spawn_continuation_run(
         input: prompt.clone(),
         session_key: session_key.clone(),
         timeout_secs: None,
-        metadata: {
-            // Unattended security-tax: this autonomous run has no human on the
-            // channel to approve anything. The per-run ScopedToolService reads
-            // this marker and fails closed on confirm-gated tools.
-            let mut m = std::collections::HashMap::new();
-            m.insert("unattended".to_string(), "true".to_string());
-            m
-        },
+        metadata: continuation_metadata(policy_meta.clone()),
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override: None,
@@ -1065,8 +1108,11 @@ pub(super) fn spawn_continuation_run(
                 None => None,
             };
         // Kept for the AgentBusy retry re-spawn (the original is consumed by
-        // the emitter construction just below).
+        // the emitter construction just below). `policy_meta` must be carried
+        // too — without it the FIRST busy-retry silently drops the inherited
+        // clamp and channel permission layer.
         let retry_bus = event_bus.clone();
+        let retry_policy_meta = policy_meta;
         // G1: broadcast the continuation live (Panel + `aleph watch`) via the
         // gateway event bus when one is wired; fall back to collect-and-drop in
         // tests / non-gateway contexts so those paths stay behavior-identical.
@@ -1150,6 +1196,7 @@ pub(super) fn spawn_continuation_run(
                         session_key.clone(),
                         session_key_str.clone(),
                         prompt.clone(),
+                        retry_policy_meta.clone(),
                         retry_bus.clone(),
                         Some(delay_ms),
                         next_kind,
@@ -1354,5 +1401,91 @@ mod moa_fallthrough_input_tests {
         // Non-moa input is never rewritten.
         assert_eq!(moa_fallthrough_input("hello"), None);
         assert_eq!(moa_fallthrough_input("/moab x"), None);
+    }
+}
+
+#[cfg(test)]
+mod carry_policy_metadata_tests {
+    use super::{carry_policy_metadata, continuation_metadata};
+    use crate::gateway::execution_engine::{CHANNEL_TOOL_PERMISSIONS_KEY, UNATTENDED_KEY};
+    use std::collections::HashMap;
+
+    fn meta(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    /// The two RESTRICTIVE inputs cross into the continuation; the per-turn
+    /// keys do not. A Telegram chat-tier conversation used to spawn goal
+    /// continuations that ran unclamped because `caller_role` was dropped here.
+    #[test]
+    fn only_the_policy_bearing_keys_are_carried() {
+        let carried = carry_policy_metadata(&meta(&[
+            ("caller_role", "guest"),
+            (CHANNEL_TOOL_PERMISSIONS_KEY, r#"{"default":"deny"}"#),
+            ("locale", "zh-CN"),
+            ("platform", "telegram"),
+            ("busy_input_mode", "queue"),
+            ("channel_id", "telegram"),
+            ("conversation_id", "42"),
+        ]));
+        assert_eq!(carried.len(), 2);
+        assert_eq!(carried.get("caller_role").map(String::as_str), Some("guest"));
+        assert_eq!(
+            carried.get(CHANNEL_TOOL_PERMISSIONS_KEY).map(String::as_str),
+            Some(r#"{"default":"deny"}"#)
+        );
+        // An unattended run must keep failing closed on approval-gated tools:
+        // carrying the origin route would make its approvals look deliverable.
+        assert!(!carried.contains_key("channel_id"));
+        assert!(!carried.contains_key("conversation_id"));
+    }
+
+    /// Panel / CLI turns carry no role and no channel layer — nothing to inherit.
+    #[test]
+    fn a_panel_turn_carries_nothing() {
+        assert!(carry_policy_metadata(&meta(&[("platform", "webchat")])).is_empty());
+    }
+
+    /// The composed invariant, end to end: a Chat-tier Telegram turn's clamp and
+    /// channel permission layer reach the continuation, AND the continuation is
+    /// still unattended. This is the bug — a continuation used to build its
+    /// metadata from scratch, so a conversation clamped to `Auto` on every
+    /// interactive turn spawned a background run at the unclamped global tier.
+    #[test]
+    fn a_continuation_inherits_the_clamp_and_stays_unattended() {
+        let source = meta(&[
+            ("caller_role", "guest"),
+            (CHANNEL_TOOL_PERMISSIONS_KEY, r#"{"default":"deny"}"#),
+            ("platform", "telegram"),
+        ]);
+        let cont = continuation_metadata(carry_policy_metadata(&source));
+
+        assert_eq!(cont.get("caller_role").map(String::as_str), Some("guest"));
+        assert_eq!(
+            cont.get(CHANNEL_TOOL_PERMISSIONS_KEY).map(String::as_str),
+            Some(r#"{"default":"deny"}"#)
+        );
+        assert_eq!(cont.get(UNATTENDED_KEY).map(String::as_str), Some("true"));
+        assert_eq!(cont.len(), 3);
+    }
+
+    /// The marker is written LAST and is unconditional: a source map that somehow
+    /// carries `unattended=false` cannot demote a continuation to attended and
+    /// park it on an approval card nobody is there to answer.
+    #[test]
+    fn the_unattended_marker_cannot_be_overridden_by_an_inherited_key() {
+        // `carry_policy_metadata` does not forward the marker at all …
+        let carried = carry_policy_metadata(&meta(&[
+            (UNATTENDED_KEY, "false"),
+            ("caller_role", "operator"),
+        ]));
+        assert!(!carried.contains_key(UNATTENDED_KEY));
+
+        // … and even a policy map that does carry it loses to the insert-last.
+        let cont = continuation_metadata(meta(&[(UNATTENDED_KEY, "false")]));
+        assert_eq!(cont.get(UNATTENDED_KEY).map(String::as_str), Some("true"));
     }
 }

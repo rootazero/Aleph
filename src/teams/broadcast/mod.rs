@@ -86,6 +86,12 @@ pub fn over_depth(chain_depth: u32, max: u32) -> bool {
 /// `ALEPH_SILENT_COMPLETE` 表示"不发言"。成员于是把这个字面 token 当整条回复发出,
 /// 泄漏进 Panel 气泡和 transcript。`webchat` → `WebRich`(不含 `SilentReply`)从
 /// 源头杜绝。与所有 channel 路径 `metadata["platform"] = channel.channel_type()` 一致。
+///
+/// Deliberately NOT marked `UNATTENDED_KEY`, unlike cron / heartbeat / A2A /
+/// goal continuations: a member run carries no channel, so its approvals resolve
+/// through `OperatorApprovalRequester` to a Panel card — and the user who is
+/// talking to the team in team chat is the operator watching that Panel. Marking
+/// it would auto-deny a human-in-the-loop path that works.
 #[must_use]
 fn member_run_metadata(
     team_id: &str,

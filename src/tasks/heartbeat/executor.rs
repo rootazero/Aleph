@@ -80,6 +80,23 @@ pub trait HeartbeatExecutionAdapter: Send + Sync {
     ) -> Result<HeartbeatL2Result, String>;
 }
 
+/// Run metadata for a heartbeat beat.
+///
+/// A beat is clock-driven and carries no origin channel at all, so nobody can
+/// answer an approval card: it is marked unattended, and the per-run
+/// `ScopedToolService` then fails CLOSED on confirm-gated tools instead of
+/// parking the beat on the 120 s approval timeout (per gated tool) for an
+/// approval that can never arrive. Same reasoning as a channel-less cron job.
+fn heartbeat_run_metadata(agent_id: &str) -> HashMap<String, String> {
+    let mut metadata = HashMap::new();
+    metadata.insert("heartbeat_agent_id".to_string(), agent_id.to_string());
+    metadata.insert(
+        crate::gateway::execution_engine::UNATTENDED_KEY.to_string(),
+        "true".to_string(),
+    );
+    metadata
+}
+
 // ── DefaultHeartbeatAdapter ──────────────────────────────────────────
 
 /// Production heartbeat execution adapter that bridges to the gateway's
@@ -128,8 +145,7 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
         let task_id = format!("hb-{run_id}");
         let session_key = SessionKey::task(agent_id, "heartbeat", &task_id);
 
-        let mut metadata = HashMap::new();
-        metadata.insert("heartbeat_agent_id".to_string(), agent_id.to_string());
+        let metadata = heartbeat_run_metadata(agent_id);
 
         // System-initiated: heartbeat has no parent run, so no project
         // context to inherit. Same round-3 follow-up as cron applies if
@@ -251,6 +267,22 @@ mod tests {
             tool_id: "tool-1".into(),
             params,
         }
+    }
+
+    /// The wiring guard: a beat has no surface an approval can be delivered to,
+    /// so it must run unattended and let confirm-gated tools fail closed.
+    #[test]
+    fn a_beat_runs_unattended() {
+        use crate::gateway::execution_engine::UNATTENDED_KEY;
+        let metadata = heartbeat_run_metadata("main");
+        assert_eq!(
+            metadata.get(UNATTENDED_KEY).map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            metadata.get("heartbeat_agent_id").map(String::as_str),
+            Some("main")
+        );
     }
 
     #[test]

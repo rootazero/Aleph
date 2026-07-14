@@ -514,7 +514,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let mut allowed_names: std::collections::BTreeSet<String> =
                 allowed_tools.iter().map(|t| t.name.clone()).collect();
 
-            let unattended = request.metadata.get("unattended").map(String::as_str) == Some("true");
+            let unattended = request
+                .metadata
+                .get(crate::gateway::execution_engine::UNATTENDED_KEY)
+                .map(String::as_str)
+                == Some("true");
 
             // Collector for MCP tool names joined this request — used below to
             // build the deferred exposure tier when `defer_mcp_tools` is on.

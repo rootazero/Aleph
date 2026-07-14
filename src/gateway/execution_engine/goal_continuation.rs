@@ -19,6 +19,8 @@
 //! re-enters [`post_run`], so the pursuit chain re-establishes itself. A second
 //! boot driver would double-drive the same session.
 
+use std::collections::HashMap;
+
 use tracing::{info, warn};
 
 use super::execute::{notify_origin, spawn_continuation_run, ContinuationKind, OriginRoute};
@@ -72,11 +74,16 @@ async fn origin_of(agent: &Arc<AgentInstance>, session_key: &SessionKey) -> Opti
 /// Post-run continuation hook for the session's standing goal. Fires after every
 /// completed run (user turns included); a session with no goal, a passive goal or
 /// a terminal one costs exactly one indexed `SELECT`.
+///
+/// `policy_meta` is `execute::carry_policy_metadata` of the completing run: the
+/// continuation this hook spawns must be no more privileged than the
+/// conversation it continues.
 pub(super) async fn post_run(
     deps: &ContinuationDeps,
     session_manager: &SessionManager,
     session_key: &SessionKey,
     agent: &Arc<AgentInstance>,
+    policy_meta: &HashMap<String, String>,
 ) {
     let Some(store) = crate::goal::global() else {
         return;
@@ -120,6 +127,7 @@ pub(super) async fn post_run(
                 session_key.clone(),
                 session.clone(),
                 prompt,
+                policy_meta.clone(),
                 deps.event_bus.clone(),
                 Some(delay_ms),
                 ContinuationKind::Goal { wake_ms },
@@ -153,6 +161,7 @@ pub(super) async fn post_run(
                 &goal,
                 tokens.unwrap_or(0),
                 now,
+                policy_meta,
             )
             .await;
         }
@@ -215,6 +224,7 @@ async fn arbitrate_gate(
     goal: &crate::goal::Goal,
     tokens_now: u64,
     claim_now_ms: u64,
+    policy_meta: &HashMap<String, String>,
 ) {
     let Some(store) = crate::goal::global() else {
         return;
@@ -298,6 +308,7 @@ async fn arbitrate_gate(
                 session_key.clone(),
                 session.to_string(),
                 prompt,
+                policy_meta.clone(),
                 deps.event_bus.clone(),
                 Some(0),
                 ContinuationKind::Goal { wake_ms },

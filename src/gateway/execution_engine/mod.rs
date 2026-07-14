@@ -169,6 +169,22 @@ pub const BUSY_INPUT_MODE_KEY: &str = "busy_input_mode";
 /// the third (most specific) layer over global + agent permissions.
 pub const CHANNEL_TOOL_PERMISSIONS_KEY: &str = "channel_tool_permissions";
 
+/// Metadata key marking a run that no human is waiting on and whose approval
+/// prompts nobody can answer.
+///
+/// Two consumers, both in `run_loop::inner`: the per-run `ScopedToolService` is
+/// built `.with_unattended(true)` — confirm-gated tools then fail CLOSED
+/// (immediate deny with an actionable hint, `tools/scoped/dispatch.rs`) instead
+/// of parking on an approval card until the 120 s timeout — and the trace sink
+/// is wrapped in `UnattendedRedactingSink`.
+///
+/// Stamped by every producer of a headless run: goal/loop continuations
+/// (`execute::spawn_continuation_run`), heartbeat, A2A delegations, and cron
+/// jobs with no origin channel. A run that CAN reach a human (a channel-bound
+/// cron, a team member run resolving to the Panel operator) must NOT carry it —
+/// the marker would auto-deny a working human-in-the-loop path.
+pub const UNATTENDED_KEY: &str = "unattended";
+
 impl BusyInputMode {
     /// Wire string stored in run metadata. Inverse of [`BusyInputMode::from_wire`].
     #[must_use]

@@ -406,12 +406,15 @@ impl ScopedToolService {
         input: &Value,
     ) -> Result<(), ConfirmDenial> {
         let name = action.tool_name.as_str();
-        // Unattended security-tax: an autonomous continuation run has no human
-        // on the channel to approve anything. Fail closed — auto-deny any
-        // confirm-gated tool (`requires_confirmation` ∪ `Ask`-tier permission ∪
-        // operator-override `confirm_tools`, all of which funnel here) with an
-        // audit line, rather than awaiting an approval that can never arrive.
-        // Interactive turns leave `unattended = false` and are unaffected.
+        // Unattended security-tax: this run has no human on any surface — a goal
+        // or loop continuation, a heartbeat, an A2A delegation, or a cron job
+        // with no origin channel. Fail closed — auto-deny any confirm-gated tool
+        // (`requires_confirmation` ∪ `Ask`-tier permission ∪ operator-override
+        // `confirm_tools`, all of which funnel here) with an audit line, rather
+        // than awaiting an approval that can never arrive (which parks the whole
+        // run on the 120 s approval timeout, per gated tool, before failing
+        // anyway). Interactive turns leave `unattended = false` and are
+        // unaffected.
         if self.unattended {
             tracing::warn!(
                 tool = %name,
@@ -425,7 +428,7 @@ impl ScopedToolService {
             return Err(ConfirmDenial {
                 outcome: ApprovalOutcome::Denied,
                 hint: Some(
-                    "This run is unattended (autonomous continuation) — \
+                    "This run is unattended (no human is watching it) — \
                      interactive approval is unavailable, so confirm-gated tools \
                      are auto-denied. Use a non-interactive approach, or call \
                      goal(action='update', status='blocked') to hand back to the \
