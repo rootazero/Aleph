@@ -168,6 +168,7 @@ mod tests {
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: Some("guest".to_string()),
+            channel_tool_permissions: None,
         }
     }
 

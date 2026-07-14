@@ -144,35 +144,40 @@ impl ApprovalAction {
 /// them could let a grant on one authorize the other.
 #[must_use]
 pub fn grant_fingerprint(tool: &str, input: &Value) -> String {
-    super::denial_ledger::action_fingerprint(tool, &canonical_args(input).to_string())
+    super::denial_ledger::action_fingerprint(tool, &canonical_args(tool, input).to_string())
 }
 
 /// `input` with every explicit `null` and every advisory non-identity key
 /// (see [`is_non_identity_key`]) removed, recursively. Object key order is left
 /// to `serde_json`'s `BTreeMap` serialization (canonical in this workspace). A
 /// non-container value is returned unchanged.
-fn canonical_args(input: &Value) -> Value {
+fn canonical_args(tool: &str, input: &Value) -> Value {
     match input {
         Value::Object(map) => Value::Object(
             map.iter()
-                .filter(|(k, v)| !v.is_null() && !is_non_identity_key(k))
-                .map(|(k, v)| (k.clone(), canonical_args(v)))
+                .filter(|(k, v)| !v.is_null() && !is_non_identity_key(tool, k))
+                .map(|(k, v)| (k.clone(), canonical_args(tool, v)))
                 .collect(),
         ),
-        Value::Array(items) => Value::Array(items.iter().map(canonical_args).collect()),
+        Value::Array(items) => Value::Array(items.iter().map(|v| canonical_args(tool, v)).collect()),
         other => other.clone(),
     }
 }
 
 /// Advisory, model-controlled fields that must NOT participate in a grant /
 /// denial fingerprint. `justification` is the free-text reason a model attaches
-/// to a sandbox capability escalation (`bash_exec` / `code_exec`): it is shown
-/// to the human but is not part of the action's identity. Letting it into the
-/// fingerprint would let the model mint a fresh key on every call (defeating the
-/// denial ledger's blind-retry guard) or silently invalidate a session grant
+/// to a **sandbox capability escalation** (`bash_exec` / `code_exec`): it is
+/// shown to the human but is not part of the action's identity. Letting it into
+/// the fingerprint would let the model mint a fresh key on every call (defeating
+/// the denial ledger's blind-retry guard) or silently invalidate a session grant
 /// just by rewording it — the same defect class the `null`-strip closes.
-fn is_non_identity_key(key: &str) -> bool {
-    matches!(key, "justification")
+///
+/// Scoped to those two tools by name: an external / MCP tool Aleph does not
+/// control could carry a `justification` argument that IS identity-bearing (part
+/// of a persisted record), and stripping it there would collapse two genuinely
+/// different calls onto one grant.
+fn is_non_identity_key(tool: &str, key: &str) -> bool {
+    key == "justification" && matches!(tool, "bash_exec" | "code_exec")
 }
 
 /// The shell command a shell-shaped tool call carries, if any.
@@ -299,6 +304,23 @@ mod tests {
         );
         assert_eq!(plain, justified, "justification must not enter the fingerprint");
         assert_eq!(justified, reworded, "rewording justification must not re-key");
+    }
+
+    #[test]
+    fn fingerprint_keeps_justification_for_non_exec_tools() {
+        // For a tool Aleph does not control, a `justification` argument may be
+        // identity-bearing (part of a persisted record). Two calls differing only
+        // in that field are genuinely different actions and must NOT collapse onto
+        // one grant — the strip is scoped to bash_exec/code_exec by name.
+        let a = grant_fingerprint(
+            "external_policy_write",
+            &json!({"target": "acl", "justification": "grant read"}),
+        );
+        let b = grant_fingerprint(
+            "external_policy_write",
+            &json!({"target": "acl", "justification": "grant write"}),
+        );
+        assert_ne!(a, b, "an external tool's justification stays in the identity");
     }
 
     #[test]

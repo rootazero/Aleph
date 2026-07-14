@@ -425,6 +425,7 @@ mod tests {
             channel_id: "telegram".to_string(),
             conversation_id: "user-1".to_string(),
             caller_role: None,
+            channel_tool_permissions: None,
         }
     }
 
@@ -461,6 +462,7 @@ mod tests {
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: None,
+            channel_tool_permissions: None,
         };
         let err = TURN_CONTEXT
             .scope(non_channel_turn, async {

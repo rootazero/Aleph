@@ -207,12 +207,19 @@ async fn remove_worktree(repo_root: &Path, path: &Path) -> Result<(), WorktreeEr
 /// Minimal Sandbox impl for Stage H — runs commands at the worktree path with
 /// `CARGO_TARGET_DIR=<worktree>/target` injected. There is no OS-level process
 /// sandbox (no seatbelt/landlock — Stage H scope is workspace isolation only,
-/// see § 2.2.1 Architectural Scope Lock), but the **content floor still applies**:
-/// the catastrophic command-policy hardline (fork bomb / disk wipe) runs before
-/// exec, and the secret-scrub + block-class gate runs on output — the same
-/// undisableable floor `WorkspaceSandbox` enforces. A worktree-isolated subagent
-/// must not be able to run `rm -rf /` or leak a private key to the model just
-/// because it is off the seatbelt path.
+/// see § 2.2.1 Architectural Scope Lock).
+///
+/// **Shared floor** (so a worktree-isolated subagent is not a hole in it): the
+/// catastrophic command-policy **hardline** (fork bomb / disk wipe) runs before
+/// exec, and the secret-scrub + block-class gate (`scrub::scrub_and_gate_output`)
+/// runs on output — the same single-source-of-truth `WorkspaceSandbox` uses.
+///
+/// **NOT shared** (deliberate Stage-H scope): the operator-configurable *tunable*
+/// `[sandbox.command_policy]` Block/Warn rules and the rate limiter that
+/// `factory::build_sandbox` layers onto `WorkspaceSandbox` are not applied here —
+/// only the non-negotiable hardline is. An operator relying on a *custom* Block
+/// rule to gate a delegated subagent's commands should know it does not reach
+/// this path; the catastrophic floor does.
 pub struct WorktreeSandbox {
     worktree_path: std::path::PathBuf,
     hooks: crate::sandbox::hooks::SandboxHooks,

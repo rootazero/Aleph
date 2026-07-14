@@ -902,17 +902,24 @@ mod tests {
         );
     }
 
-    /// REGRESSION — the cross-gate one. `blind_retry_is_auto_blocked_with_ledger_hint`
+    /// REGRESSION — the session-key encoding one. `blind_retry_is_auto_blocked_with_ledger_hint`
     /// above records *and* reads through this same path, so it passes under any
-    /// key encoding and cannot see the bug. This test reads back with the key the
-    /// **tool confirm gate** uses.
+    /// key encoding and cannot see the bug. This test reconstructs the elevation
+    /// gate's ledger key from scratch — `ledger_key(session)` + the exact
+    /// capability fingerprint — and asserts the refusal is retrievable there.
     ///
     /// The elevation gate used to key the ledger with `session_key_to_filename`
     /// — the SHA-256 encoder that names this session's workspace *directory* —
-    /// while the confirm gate used the plain session string. Same session, two
-    /// strings that never collide, so one global map held two disjoint ledgers:
-    /// a refusal here was invisible there, and the session-wide "3 denials pause
-    /// the session" breaker really allowed 3 per *path*.
+    /// while the confirm gate used `ledger_key`. Same session, two strings that
+    /// never collide, so one global map held two disjoint ledgers, and the
+    /// session-wide "3 denials pause the session" breaker really allowed 3 per
+    /// *path*. Both gates now share `ledger_key(session)` for the SESSION
+    /// dimension (that shared breaker is the real cross-gate invariant). The
+    /// per-intent fingerprint stays gate-specific by design — the confirm gate
+    /// keys on `grant_fingerprint(tool, json)`, the elevation gate on the
+    /// capability summary — so this test verifies the elevation gate's own
+    /// blind-retry readback under the shared session key, not per-intent
+    /// visibility across gates.
     #[tokio::test]
     async fn an_elevation_refusal_is_visible_to_the_tool_confirm_gate() {
         let tmp = tempfile::tempdir().unwrap();

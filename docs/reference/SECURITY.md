@@ -926,9 +926,12 @@ was removed in the LAN-trust revert. For operators upgrading:
 
 - **`session_send` delegation escalation** (was critical): the delegated run
   carried only `project_root`, so a guest channel became operator +
-  unclamped-tier by delegating. Now forwards `caller_role` from the dispatching
-  turn's `TURN_CONTEXT` and stamps `unattended` on fire-and-forget
-  (`build_sub_metadata`).
+  unclamped-tier by delegating. Now forwards **both** restrictive keys the
+  `carry_policy_metadata` continuations carry — `caller_role` and the channel
+  `tool_permissions` deny layer (`CHANNEL_TOOL_PERMISSIONS_KEY`, plumbed onto
+  `TurnContext`) — and stamps `unattended` on fire-and-forget
+  (`build_sub_metadata`). Without the channel layer a guest could still bypass
+  its own `deny` override (e.g. `web_fetch = deny`) by delegating.
 - **`WorktreeSandbox` floor bypass**: subagent worktree isolation ran commands
   with no hooks — the hardline command-policy floor and secret scrub never ran.
   Now shares both (the before-hook + `scrub::scrub_and_gate_output`) with
