@@ -54,7 +54,10 @@ const SESSION_PAUSE_THRESHOLD: u32 = 3;
 pub enum DenialReason {
     /// The user explicitly rejected this action earlier in the session.
     UserRejected,
-    /// The approval request timed out (treated as a soft denial).
+    /// The approval request expired with no answer. Refuses the call *this*
+    /// turn, but is never written to the ledger — see
+    /// [`DenialLedger::record_denial`] for why a non-answer must not harden
+    /// into a refusal the user never made.
     Timeout,
     /// The exact same intent was already denied — a blind retry.
     RepeatedSameIntent,
@@ -72,7 +75,7 @@ impl DenialReason {
                 "The user already declined this exact action this session; do not re-request it — try a different approach or ask the user directly."
             }
             Self::Timeout => {
-                "A prior approval request for this exact action timed out; do not silently retry it — surface the blocker to the user."
+                "The approval request for this action expired with no answer — nobody appears to be at the keyboard. Do not silently retry it; surface the blocker to the user and stop."
             }
             Self::RepeatedSameIntent => {
                 "This exact intent was denied earlier this session and is now auto-refused. Change the plan rather than repeating the request."
@@ -166,7 +169,46 @@ impl DenialLedger {
     /// adversarial session cannot mine previously-cached results
     /// (anti-reference-bypass). The return is advisory: existing callers that
     /// ignore it are unaffected.
+    ///
+    /// # A timeout is not a denial
+    ///
+    /// [`DenialReason::Timeout`] is deliberately **not recorded**. Both stores
+    /// this ledger keeps answer questions about a *decision the user made*:
+    /// `counts` is "what did the user refuse?" (sticky, so the agent cannot
+    /// re-prompt its way around a `no`), and `total` is "how hard is this
+    /// session pushing against the gate?" (whose trip purges the offloaded
+    /// tool-result cache as an **anti-adversarial** countermeasure). An expired
+    /// approval answers neither: it is the *absence* of a decision.
+    ///
+    /// Recording it anyway produced two traps. A user who stepped away from the
+    /// desk for one gated call came back to find that intent auto-refused for
+    /// the rest of the session and never asked again — they reasonably read
+    /// that as "it stopped asking me". Three such lapses tripped the breaker
+    /// and **destroyed the session's cached tool output**, punishing inattention
+    /// with the countermeasure built for an attacker.
+    ///
+    /// Nothing is lost by dropping it: an unanswered prompt grants the agent no
+    /// capability, so there is no brute-force avenue to bound here, and an agent
+    /// looping against an absent user is already bounded by the approval timeout
+    /// itself plus the run-level turn timeout. The refusal still reaches the
+    /// model this turn, carrying [`DenialReason::Timeout::agent_hint`], which
+    /// tells it to surface the blocker rather than retry.
+    ///
+    /// The rule lives here, at the ledger, rather than at the two call sites
+    /// (the confirm gate and the sandbox elevation path) so a third caller
+    /// cannot reintroduce it by forgetting.
+    ///
+    /// [`DenialReason::Timeout::agent_hint`]: DenialReason::agent_hint
     pub fn record_denial(&self, session: &str, fingerprint: &str, reason: DenialReason) -> bool {
+        if matches!(reason, DenialReason::Timeout) {
+            tracing::info!(
+                session = %session,
+                fingerprint = %fingerprint,
+                "approval expired with no answer — not recorded as a denial \
+                 (a timeout is not a decision); the same intent stays askable"
+            );
+            return false;
+        }
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if !guard.by_session.contains_key(session) {
             // New session: enforce the bound before inserting so the map and
@@ -308,6 +350,64 @@ mod tests {
             Some(DenialReason::ThresholdExceeded),
             "pause outranks per-intent state"
         );
+    }
+
+    /// The user walked away; the card expired. That is not a `no`. When they
+    /// come back and ask for the same thing, they must be *asked*, not silently
+    /// refused — the "it stopped asking me" trap.
+    #[test]
+    fn a_timed_out_approval_never_hardens_into_a_refusal() {
+        let led = DenialLedger::new();
+        let fp = action_fingerprint("bash_exec", "echo hi");
+
+        led.record_denial("s1", &fp, DenialReason::Timeout);
+
+        assert_eq!(
+            led.is_blocked("s1", &fp),
+            None,
+            "an unanswered approval must leave the intent askable"
+        );
+        assert_eq!(led.denial_count("s1", &fp), 0);
+    }
+
+    /// The breaker's trip purges the offloaded tool-result cache as an
+    /// anti-adversarial measure. Inattention is not an attack: no number of
+    /// expired approvals may fire it.
+    #[test]
+    fn timeouts_never_trip_the_circuit_breaker() {
+        let led = DenialLedger::new();
+        for i in 0..(SESSION_PAUSE_THRESHOLD * 3) {
+            let fp = action_fingerprint("code_exec", &format!("intent-{i}"));
+            assert!(
+                !led.record_denial("s1", &fp, DenialReason::Timeout),
+                "a timeout must never report a breaker trip"
+            );
+        }
+        assert_eq!(led.session_total("s1"), 0);
+        let fresh = action_fingerprint("code_exec", "anything");
+        assert_eq!(
+            led.is_blocked("s1", &fresh),
+            None,
+            "walking away must not pause the session"
+        );
+    }
+
+    /// The other half of the contract: an explicit `no` is still sticky, and a
+    /// prior timeout on the same intent does not soften it.
+    #[test]
+    fn an_explicit_rejection_is_still_sticky_after_a_timeout() {
+        let led = DenialLedger::new();
+        let fp = action_fingerprint("bash_exec", "rm -rf /");
+
+        led.record_denial("s1", &fp, DenialReason::Timeout);
+        led.record_denial("s1", &fp, DenialReason::UserRejected);
+
+        assert_eq!(
+            led.is_blocked("s1", &fp),
+            Some(DenialReason::RepeatedSameIntent),
+            "a decided refusal must still block the blind retry"
+        );
+        assert_eq!(led.session_total("s1"), 1, "only the decision was counted");
     }
 
     #[test]

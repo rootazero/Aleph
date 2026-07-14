@@ -147,26 +147,8 @@ pub(crate) fn build_prompt(
                 } else {
                     content.text.as_str()
                 };
-                // Attachments (Panel images, voice transcripts) ride on the user
-                // message as serde-encoded `ContentBlock`s. Replay them, or a
-                // vision model never sees the image it was sent. Blocks that are
-                // neither Text nor Image are not valid in a user message.
-                let attached: Vec<ContentBlock> = content
-                    .blocks
-                    .iter()
-                    .filter_map(|raw| serde_json::from_value::<ContentBlock>(raw.clone()).ok())
-                    .filter(|b| matches!(b, ContentBlock::Image { .. } | ContentBlock::Text { .. }))
-                    .collect();
-                let msg = if attached.is_empty() {
-                    UnifiedMessage::user(text)
-                } else {
-                    let mut blocks = vec![ContentBlock::Text {
-                        text: text.to_string(),
-                        cache_control: None,
-                    }];
-                    blocks.extend(attached);
-                    UnifiedMessage::user_with_content(blocks)
-                };
+                // Panel image attachments ride on `content.blocks` — replay them.
+                let msg = UnifiedMessage::user_with_attachments(text, &content.blocks);
                 // While the current assistant turn still owes tool results, this
                 // user message would split the tool_use/tool_result pairing — buffer
                 // it and re-emit once the results have all landed (below).
@@ -512,47 +494,6 @@ mod tests {
             event,
             created_at_ms: now_ms(),
         }
-    }
-
-    /// REGRESSION: a Panel turn with an image attachment persists the image as
-    /// a serde-encoded `ContentBlock` on the user message's `blocks` (seeded via
-    /// `FlowInput::Multimodal`). The rebuilt prompt MUST carry it to the
-    /// provider — previously the user arm read only `content.text`, so the
-    /// image never reached the model at all.
-    #[test]
-    fn user_message_replays_persisted_image_blocks() {
-        let events = vec![mk_record(SessionEvent::UserMessage {
-            turn_id: uuid::Uuid::new_v4(),
-            content: MessageContent {
-                text: "what is in this picture?".into(),
-                blocks: vec![serde_json::to_value(ContentBlock::Image {
-                    data: "aGk=".into(),
-                    mime_type: "image/png".into(),
-                })
-                .unwrap()],
-                thinking: None,
-                thinking_signature: None,
-            },
-            at: now_ms(),
-            synthetic: false,
-        })];
-
-        let messages = build_prompt(&events, 0);
-        let UnifiedMessage::User { content } = &messages[0] else {
-            panic!("expected a user message, got {:?}", messages[0]);
-        };
-        assert!(
-            content
-                .iter()
-                .any(|b| matches!(b, ContentBlock::Text { text, .. } if text == "what is in this picture?")),
-            "the prompt text must survive alongside the image"
-        );
-        assert!(
-            content.iter().any(
-                |b| matches!(b, ContentBlock::Image { mime_type, .. } if mime_type == "image/png")
-            ),
-            "the attached image must reach the provider message"
-        );
     }
 
     #[test]

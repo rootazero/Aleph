@@ -107,6 +107,36 @@ impl UnifiedMessage {
         Self::User { content }
     }
 
+    /// User message from `text` plus attachments that were persisted as
+    /// serde-encoded [`ContentBlock`]s (a Panel image upload rides on the
+    /// session event's `MessageContent::blocks`).
+    ///
+    /// Blocks that fail to decode — or that decode to anything other than
+    /// `Text` / `Image` — are dropped. A user turn may carry only those two;
+    /// a `ToolCall` or `Thinking` block smuggled into it makes the provider
+    /// reject the entire request. That constraint belongs to the wire format,
+    /// so it lives beside the types it constrains rather than in whichever
+    /// caller happens to rebuild a message from storage.
+    ///
+    /// With no surviving attachment this is exactly [`Self::user`].
+    #[must_use]
+    pub fn user_with_attachments(text: impl Into<String>, blocks: &[serde_json::Value]) -> Self {
+        let attached: Vec<ContentBlock> = blocks
+            .iter()
+            .filter_map(|raw| serde_json::from_value::<ContentBlock>(raw.clone()).ok())
+            .filter(|b| matches!(b, ContentBlock::Text { .. } | ContentBlock::Image { .. }))
+            .collect();
+        if attached.is_empty() {
+            return Self::user(text);
+        }
+        let mut content = vec![ContentBlock::Text {
+            text: text.into(),
+            cache_control: None,
+        }];
+        content.extend(attached);
+        Self::User { content }
+    }
+
     /// Single text assistant message
     pub fn assistant(text: impl Into<String>) -> Self {
         Self::Assistant {
@@ -453,6 +483,47 @@ fn ensure_tool_results_present(messages: &mut Vec<UnifiedMessage>) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn user_with_attachments_keeps_text_and_image_and_drops_the_rest() {
+        let msg = UnifiedMessage::user_with_attachments(
+            "what is this?",
+            &[
+                serde_json::to_value(ContentBlock::Image {
+                    data: "aGk=".into(),
+                    mime_type: "image/png".into(),
+                })
+                .unwrap(),
+                // Illegal in a user turn — a stray tool call would make the
+                // provider reject the whole request, so it must be dropped.
+                serde_json::to_value(ContentBlock::ToolCall {
+                    id: "call_1".into(),
+                    name: "bash".into(),
+                    arguments: json!({}),
+                    thought_signature: None,
+                })
+                .unwrap(),
+                // Not a ContentBlock at all — must not panic, just vanish.
+                json!({"nonsense": true}),
+            ],
+        );
+        let UnifiedMessage::User { content } = msg else {
+            panic!("expected a user message");
+        };
+        assert_eq!(content.len(), 2, "text + image survive, nothing else");
+        assert!(matches!(&content[0], ContentBlock::Text { text, .. } if text == "what is this?"));
+        assert!(matches!(&content[1], ContentBlock::Image { .. }));
+    }
+
+    #[test]
+    fn user_with_attachments_with_no_usable_block_is_a_plain_user_message() {
+        let msg = UnifiedMessage::user_with_attachments("hi", &[]);
+        let UnifiedMessage::User { content } = msg else {
+            panic!("expected a user message");
+        };
+        assert_eq!(content.len(), 1);
+        assert!(matches!(&content[0], ContentBlock::Text { text, .. } if text == "hi"));
+    }
 
     #[test]
     fn test_user_convenience() {

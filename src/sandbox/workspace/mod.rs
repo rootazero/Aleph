@@ -245,7 +245,9 @@ impl Sandbox for WorkspaceSandbox {
                     }
                     ApprovalOutcome::Denied | ApprovalOutcome::Timeout => {
                         // Remember the refusal so the next blind retry of this
-                        // exact elevation is short-circuited above.
+                        // exact elevation is short-circuited above. A `Timeout`
+                        // is passed but dropped by the ledger (an expired card
+                        // is not a decision) — see `DenialLedger::record_denial`.
                         let reason_kind = if matches!(outcome, ApprovalOutcome::Timeout) {
                             denial_ledger::DenialReason::Timeout
                         } else {

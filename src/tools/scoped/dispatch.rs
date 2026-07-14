@@ -485,7 +485,10 @@ impl ScopedToolService {
                 _ => denial_ledger::DenialReason::UserRejected,
             };
             // Record the refusal so a blind retry of this exact intent — or a
-            // session past the threshold — is short-circuited next time.
+            // session past the threshold — is short-circuited next time. A
+            // `Timeout` reaches the ledger too but is deliberately dropped
+            // there (an expired card is not a decision), so it can neither
+            // stick nor trip the breaker — see `DenialLedger::record_denial`.
             if let Some(ref key) = mem_key {
                 let just_paused =
                     denial_ledger::global().record_denial(key, &fingerprint, reason_kind);
