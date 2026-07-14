@@ -4,10 +4,11 @@
 //! the same reason it exists: binding a per-run value onto every request is done
 //! by *wrapping* the chosen provider, not by threading the value through every
 //! call site. Here that choice is load-bearing rather than merely tidy — the
-//! only call sites are inside `src/harness/`, which R10 caps at 12 files /
-//! ~4900 lines and which must carry no per-run policy. A forwarded scalar is not
-//! cognition, but the harness is over its budget and the repo's own guidance is
-//! explicit: new code goes outside the loop. So it does.
+//! only call sites are inside `src/harness/`, which R10 caps at 12 files (the
+//! line count held by the `budget.rs` ratchet) and which must carry no per-run
+//! policy. A forwarded scalar is not cognition, but the harness is at its
+//! ratcheted ceiling and the repo's own guidance is explicit: new code goes
+//! outside the loop. So it does.
 //!
 //! # Why the main loop and not the compactor
 //!

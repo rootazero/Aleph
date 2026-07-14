@@ -56,10 +56,14 @@ file before re-investigating.
 | `mod.rs` | 33 | 20 | re-exports |
 | **Total** | **5462** | **4166** | — |
 
-R10 budget: **12 files / ~4900 LOC**. Aleph harness is currently **12 files /
-4166 prod LOC**, with **~734 LOC headroom**. The audit found no R10-violating
-authority logic (intent classify, completeness judge, similarity scoring) and
-no dead code. Every helper has documented R10 rationale; every constant
+R10 budget: the redline is the ratchet in `src/harness/tests/budget.rs`
+(`CEILING = 5043` budgeted lines today); the old "~4900 LOC" target is **retired**
+— it was a hand-count artifact (an indented `#[cfg(test)]` truncated `agent.rs`
+and hid 846 lines), not a measured floor. The `4166 / ~734 headroom` figures above
+use a **different, stripped LOC basis** and must NOT be read as the R10 number or
+as headroom under a live target — the authoritative figure is `budget.rs`'s 5043.
+The audit found no R10-violating authority logic (intent classify, completeness
+judge, similarity scoring) and no dead code. Every helper has documented R10 rationale; every constant
 (`MAX_REACTIVE_COMPACT_ATTEMPTS = 1`, `MAX_VERIFIER_VETOS = 10`,
 `GRACE_NUDGE_*`) is a single-write cap, not a policy decision.
 

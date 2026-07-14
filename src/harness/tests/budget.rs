@@ -1,9 +1,10 @@
 //! R10 budget guard — the redline that could not be checked.
 //!
-//! `src/harness/CLAUDE.md` caps this directory at **12 files / ~4900 lines**
-//! and defines the measurement precisely: *lines from the start of each file up
-//! to its first `#[cfg(test)]`* — inline tests do not count, and `tests/` (where
-//! this file lives) is outside the budget entirely.
+//! `src/harness/CLAUDE.md` caps this directory at **12 files** and holds the
+//! line count with a ratchet ([`CEILING`]), not a fixed floor. It defines the
+//! measurement precisely: *lines from the start of each file up to its first
+//! `#[cfg(test)]`* — inline tests do not count, and `tests/` (where this file
+//! lives) is outside the budget entirely.
 //!
 //! Two things were missing, and together they let the budget drift unnoticed:
 //!
@@ -24,14 +25,18 @@
 //! decoration. This test pins the measurement in code and runs it inside the
 //! gate everyone already runs (`cargo test -p alephcore --lib`).
 //!
-//! ## This is a ratchet, not the constitution
+//! ## The ratchet IS the redline (2026-07-15)
 //!
-//! [`CEILING`] is today's real, reproducible figure, so the existing debt is
-//! frozen and visible instead of compounding silently. [`TARGET`] is what R10
-//! actually asks for. Paying the gap down means *lowering* `CEILING`. Raising it
-//! is permitted, but only as a deliberate act justified in the commit — which is
-//! the entire point: the growth to 5990 happened without anyone ever having to
-//! say so.
+//! There is no separate target below [`CEILING`] anymore. The old `TARGET = 4900`
+//! was retired: it was never a measured floor, only the residue of the same
+//! hand-count bug this file exists to kill (an indented `#[cfg(test)]` truncated
+//! `agent.rs` and hid 846 lines, so ~5997 was mis-recorded as ~4900). Defending
+//! that number meant defending the bug. The honest, reproducible figure is
+//! [`CEILING`], and it *is* the redline: pay it down by *lowering* it; raising it
+//! is permitted only as a deliberate act justified in the commit against R10's
+//! three questions. That discipline — down-only without a written reason — is the
+//! whole mechanism, and it is untouched. What changed is that the loop no longer
+//! carries a phantom debt against a floor that never really existed.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -51,9 +56,6 @@ const BUDGETED: [&str; 12] = [
     "src/harness/agent/guardrails.rs",
     "src/harness/agent/prompt.rs",
 ];
-
-/// What `src/harness/CLAUDE.md` asks for. Not currently met — see [`CEILING`].
-const TARGET: usize = 4900;
 
 /// What the 12 files actually total today, under the documented measurement.
 /// Frozen, so the overrun cannot keep growing the way it grew to here.
@@ -100,7 +102,7 @@ const TARGET: usize = 4900;
 ///     placeholder — turning two calls admitted as disjoint into two concurrent
 ///     truncating writes to the same file. Any rewrite now serializes the batch.
 ///
-/// Net **−124**. The debt to R10's [`TARGET`] is now **839** lines, not 963.
+/// Net **−124**. The debt to the old 4900 target was then **839** lines, not 963.
 ///
 /// **Batch 3 (2026-07-14): 5739 → 5593.** The Act-period wall clock left the
 /// loop. It was never scaffolding: deciding *how long a tool may run* is a
@@ -124,7 +126,7 @@ const TARGET: usize = 4900;
 ///     `turn_timeout` bounds only Think.
 ///
 /// Net **−146**, all of it real deletion (the +3 is documentation of the
-/// invariant that moved). The debt to R10's [`TARGET`] is now **693** lines.
+/// invariant that moved). The debt to the old 4900 target was then **693** lines.
 ///
 /// **Batch 4 (2026-07-15): 5593 → 5037.** The two largest relocations of the
 /// campaign, and the first to remove whole *dependencies* rather than lines.
@@ -171,8 +173,14 @@ const TARGET: usize = 4900;
 ///     (policy in context, state in the harness). The slot now reads the cap.
 ///     Pinned by `the_rescue_slot_is_bounded_by_the_context_layers_cap_not_a_hardcoded_one`.
 ///
-/// Net **−550**. The debt to R10's [`TARGET`] is now **143** lines. That is the
-/// closest the loop has ever been, and it is still over. It is still over.
+/// Net **−550**, taking the loop to **5043** — the closest it had ever come to
+/// the old 4900 target, though still above it.
+///
+/// **Redline re-determination (2026-07-15).** The 4900 target is retired (see the
+/// header): it was a mismeasurement, not a measured floor, so the "143-line debt"
+/// was owed to a number that never really existed. [`CEILING`] below is now the
+/// redline itself — the honest, ratcheted figure. The discipline is unchanged: it
+/// only moves down without a written reason.
 ///
 /// Measured, not hand-counted: this test is the measurement. The number here is
 /// whatever `the_harness_line_budget_does_not_grow` prints when it fails, and
@@ -268,10 +276,10 @@ fn the_harness_line_budget_does_not_grow() {
          1. Is this scaffolding or cognition? Cognition belongs in the prompt.\n  \
          2. Will a stronger model still need it? If not, delete it.\n  \
          3. How many real consumers does it have today? Zero means withdraw it.\n\n\
-         (R10's target is {TARGET}. The harness has been over it for a long time; \
-         CEILING freezes that debt — it is not a licence to add to it. Moving \
-         inline tests to src/harness/tests/ does NOT help: they were never \
-         counted.)\n\n\
+         (CEILING is the redline itself — the honest ratcheted figure, not a floor \
+         to grow up to. Lower it when you delete; do not raise it without a written \
+         reason. Moving inline tests to src/harness/tests/ does NOT help: they were \
+         never counted.)\n\n\
          per file: {per_file:#?}"
     );
 }

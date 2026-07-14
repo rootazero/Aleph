@@ -3,7 +3,7 @@
 > 本文是根 `CLAUDE.md` R10 的本地强化，编辑本目录前必读。完整哲学见
 > [HARNESS_PHILOSOPHY.md](../../docs/reference/HARNESS_PHILOSOPHY.md)。
 
-## 硬边界：12 文件 / ~4900 行
+## 硬边界：12 文件 + 行数棘轮
 
 - 顶层 (8)：`mod.rs` / `agent.rs` / `deps.rs` / `trait_def.rs` / `callback.rs` / `chain_context.rs` / `trace.rs` / `trace_sink.rs`
 - `agent/` 子目录 (4)：`think.rs` / `act.rs` / `guardrails.rs` / `prompt.rs`
@@ -14,7 +14,9 @@
 
 **「顶层」二字是本条最重要的部分**——见下方警告。**口径现在由测试执行**：`src/harness/tests/budget.rs`（跑在 `cargo test -p alephcore --lib` 里），同时守 12 文件与行数；出现第 13 个文件或行数上涨即 FAIL。**改这里的数字就得改那里的 `CEILING`，反之亦然。**
 
-**当前测量（2026-07-15）：5043 行 — 超 ~4900 红线 143 行。**（由 `tests/budget.rs` 实测，非手算；`CEILING = 5043`）
+**当前测量（2026-07-15）：5043 行。这就是红线本身。** 由 `tests/budget.rs` 的棘轮守（`CEILING = 5043`，实测非手算，只减不增，增必答下方 3 问）。**旧的 ~4900 目标已退休**——它是一次手算口径事故（生产 `impl` 中间那个缩进 `#[cfg(test)]` 截断 `agent.rs`、静默漏计 846 行）的残值，从不是实测地板；循环不再背那个不存在的"143 行债"。红线是**棘轮机制本身**，不是某个具体数字。
+
+**单文件软性气味线（非硬门）**：任何一个文件逼近 **~800 行**，先找下沉去处（见文末"下沉去处"）再往里写，别让它继续吃行数。当前最大的三个未审计面——`agent/think.rs` 1509 / `agent/act.rs` 1120 / `agent.rs` 1037——都已越过 800，这不是 `budget.rs` 强制的门，是给人看的"该拆了"信号。
 
 > 5593 → 5043（−550）：第四轮，本战役最大的两次搬迁，也是第一次**搬走的是依赖而不只是行数**。两项都是纯搬迁，因此可接受的行为差异只有零——两份 diff 都对着 `HEAD` 逐行审过，确认为零。
 > - **−221 trace.rs（465 → 244）**：六个 `From<LoopTrace*> for aleph_protocol::AgentTrace*` 迁往 `src/gateway/trace_protocol.rs`，紧挨着它仅有的三个调用点。为一个循环根本不认识的传输层做序列化，从来就不是**循环的**脚手架。真正的战利品不是那 221 行：`rg aleph_protocol src/harness/` 现在**返回空**——Think→Act 循环不再依赖 gateway 线协议。纯切除：diff 为 0 增 221 删，搬走的函数体与原文逐字节相同。
@@ -28,7 +30,7 @@
 >
 > - **+6 `agent.rs`**：下沉暴露出一个纯搬迁本会原样保留的谎——`MAX_REACTIVE_COMPACT_ATTEMPTS` 是**装饰性的**，真正的上限是槽位里硬编码的 `compare_exchange(0, 1)`，把常量调大什么都不会发生。而 S2 之后常量在 **context 层**、槽位在 **harness**，一个被无视的 cap 就不只是脚下的雷，而是对刚建起来的那个 seam（policy 归 context，state 归 harness）的直接背叛。槽位现在真的去读那个 cap 了，并由 `the_rescue_slot_is_bounded_by_the_context_layers_cap_not_a_hardcoded_one` 钉住。
 >
-> 净 **−550**。距 R10 `TARGET` 的欠账现为 **143 行**——循环有史以来离红线最近的一次，**但仍未达标。仍然超。**
+> 净 **−550**，落到 **5043**——循环有史以来离旧的 4900 目标最近的一次。**2026-07-15 该目标已退休**（见上方状态行）：它是测量事故不是实测地板，那"143 行债"欠的是个从不存在的数。`CEILING = 5043` 现在就是红线本身，棘轮纪律不变——只减不增，增必答 3 问。
 
 > 5739 → 5593（−146）：第三轮。**Act 期墙钟离开循环**。它从来不是脚手架——"一个工具最多能跑多久"是工具自己声明的属性，harness 却拿 run 级的 `turn_timeout` 去替它判，超时还升级成 `StalledTurn` **直接杀掉整个 run**（生产受害者：人类审批慢于 120s 的那一批命令）。墙钟下沉到工具唯一收口 `src/tools/scoped/dispatch.rs::execute_inner`，且**落在所有能等人的闸门之下**；同一次超时变成模型下一轮读得到的 `ToolError::Timeout`，循环随之删掉只为跑这块表而存在的机件。
 > - **−149 act.rs**：`resolve_effective_budget`、两处 `describe()` 预算探测、两处 `tokio::time::timeout` 包裹、串行 `StalledTurn` 恢复块、并行路径的 `budgets` 向量 / `Err(elapsed)` 臂 / `first_stall`，以及 `TurnPhase` / `STALLED_CALL_CAUSE` / `budget_overrun_cause` 三个 import。`ExecOutcome` 塌回 `Result<ToolOutput, ToolError>`。
