@@ -213,7 +213,12 @@ impl Sandbox for WorkspaceSandbox {
                 // re-prompting (blind-retry guard + circuit breaker). The
                 // fingerprint keys on the deterministic capability-request text
                 // so the *same* elevation maps to the *same* bucket.
-                let led_key = session_key_to_filename(&cmd.session_id);
+                // `denial_ledger::ledger_key`, NOT `session_key_to_filename`:
+                // the latter names this session's workspace *directory*, and
+                // keying the ledger with it put this gate in a different bucket
+                // from the tool confirm gate, so neither saw the other's
+                // refusals. A filename encoder is not an identity.
+                let led_key = denial_ledger::ledger_key(&cmd.session_id);
                 let fingerprint = denial_ledger::action_fingerprint(&cmd.program, &reason);
                 if let Some(reason_kind) =
                     denial_ledger::global().is_blocked(&led_key, &fingerprint)
@@ -884,6 +889,62 @@ mod tests {
         assert!(
             reason.contains("previously denied this session") && reason.contains("auto-refused"),
             "auto-block reason must carry the RepeatedSameIntent hint; got: {reason}"
+        );
+    }
+
+    /// REGRESSION — the cross-gate one. `blind_retry_is_auto_blocked_with_ledger_hint`
+    /// above records *and* reads through this same path, so it passes under any
+    /// key encoding and cannot see the bug. This test reads back with the key the
+    /// **tool confirm gate** uses.
+    ///
+    /// The elevation gate used to key the ledger with `session_key_to_filename`
+    /// — the SHA-256 encoder that names this session's workspace *directory* —
+    /// while the confirm gate used the plain session string. Same session, two
+    /// strings that never collide, so one global map held two disjoint ledgers:
+    /// a refusal here was invisible there, and the session-wide "3 denials pause
+    /// the session" breaker really allowed 3 per *path*.
+    #[tokio::test]
+    async fn an_elevation_refusal_is_visible_to_the_tool_confirm_gate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeDriver::new());
+        let sandbox = build_sandbox(
+            &tmp,
+            driver,
+            build_gate_with(ApprovalOutcome::Denied),
+            SandboxHooks::new(),
+        );
+        let elevated = SandboxCapabilities {
+            network: NetworkPolicy::AllowAll,
+            ..SandboxCapabilities::strict()
+        };
+        // A key of this test's own: the ledger is process-global, and `sid()` is
+        // a fixed key shared with the other tests in this module.
+        let session = crate::routing::session_key::SessionKey::ephemeral("ws-cross-gate");
+
+        let denied = sandbox
+            .execute(SandboxCommand {
+                session_id: session.clone(),
+                program: "curl".into(),
+                args: vec!["https://example.com".into()],
+                env: HashMap::new(),
+                stdin: None,
+                cwd: None,
+                capabilities: elevated.clone(),
+                timeout: None,
+            })
+            .await;
+        assert!(denied.is_err(), "the elevation must be refused");
+
+        // Now look it up exactly as `ScopedToolService::confirm_with_memory` would.
+        let fingerprint = denial_ledger::action_fingerprint(
+            "curl",
+            &format_capability_request("curl", &elevated),
+        );
+        assert_eq!(
+            denial_ledger::global().is_blocked(&denial_ledger::ledger_key(&session), &fingerprint),
+            Some(denial_ledger::DenialReason::RepeatedSameIntent),
+            "the confirm gate must see the refusal the elevation gate recorded — \
+             if this is None, the two gates are keying the ledger differently again"
         );
     }
 

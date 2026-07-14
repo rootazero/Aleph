@@ -341,16 +341,22 @@ impl ScopedToolService {
         result
     }
 
-    /// Stable session key for the session approval memory.
+    /// Stable session key for the session approval memory *and* the denial
+    /// ledger — the two stores are keyed identically by design, so this one
+    /// derivation serves both.
     ///
     /// Prefers the structured `SessionKey` carried by the turn context (the
     /// reliable per-conversation identity), falling back to the hook session
     /// id. Returns `None` when neither is available, which disables session
     /// memory for this call — a fail-safe so a grant is never shared across an
     /// unknown / empty session key.
+    ///
+    /// Goes through [`denial_ledger::ledger_key`] rather than calling
+    /// `to_string()` here, so this gate and the sandbox elevation gate cannot
+    /// drift into addressing different buckets of the same global map again.
     fn session_memory_key(&self) -> Option<String> {
         if let Some(tc) = &self.turn_context {
-            let key = tc.session_key.to_string();
+            let key = denial_ledger::ledger_key(&tc.session_key);
             if !key.is_empty() {
                 return Some(key);
             }

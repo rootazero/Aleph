@@ -24,9 +24,34 @@
 //! [`session_memory::SessionApprovalMemory`] so the two stores are structural
 //! mirrors and evict identically.
 
+use crate::routing::session_key::SessionKey;
 use crate::sync_primitives::Mutex;
 use std::collections::{HashMap, VecDeque};
 use std::sync::LazyLock;
+
+/// The one way to address a session in this ledger — and in its positive twin,
+/// [`session_memory`](super::session_memory), which must share the bucket.
+///
+/// Two gates write here: the tool confirm gate
+/// (`ScopedToolService::confirm_with_memory`) and the sandbox capability
+/// elevation path (`sandbox::workspace`). They must derive the key identically,
+/// or the same session addresses two disjoint buckets of one global map — and
+/// that is exactly what happened. The sandbox path keyed the ledger with
+/// `session_key_to_filename`, the SHA-256 *filename* encoder borrowed from the
+/// workspace directory layout, while the confirm gate used the plain
+/// [`SessionKey`] string. The two strings never collide, so:
+///
+/// * a refusal at one gate was invisible to the other, and
+/// * the "3 denials pause the session" circuit breaker counted each path
+///   separately — it was really 3 per *path*, not 3 per session, which is twice
+///   the brute-force headroom the threshold was chosen to allow.
+///
+/// Deriving the key here, once, is what makes that class of drift impossible
+/// rather than merely fixed. A filename encoder is not an identity.
+#[must_use]
+pub fn ledger_key(session: &SessionKey) -> String {
+    session.to_string()
+}
 
 /// Max distinct sessions retained before FIFO eviction kicks in. Matches
 /// [`session_memory`](super::session_memory)'s bound so the two stores have an
@@ -258,14 +283,6 @@ impl DenialLedger {
         let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.by_session.get(session).map_or(0, |d| d.total)
     }
-
-    /// Forget all denials for `session` (e.g. on session end).
-    pub fn clear_session(&self, session: &str) {
-        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if guard.by_session.remove(session).is_some() {
-            guard.order.retain(|s| s != session);
-        }
-    }
 }
 
 static GLOBAL: LazyLock<DenialLedger> = LazyLock::new(DenialLedger::new);
@@ -435,14 +452,48 @@ mod tests {
         );
     }
 
+    /// REGRESSION: the sandbox capability-elevation path keyed this ledger with
+    /// `session_key_to_filename` — a SHA-256 *filename* encoder lifted from the
+    /// workspace directory layout — while the tool confirm gate used the plain
+    /// `SessionKey` string. Same session, two strings that never collide, so one
+    /// global map held two disjoint ledgers: neither gate could see the other's
+    /// refusals, and the "3 denials pause the session" breaker was really 3 per
+    /// *path*. [`ledger_key`] is now the only derivation.
     #[test]
-    fn clear_session_forgets_denials() {
+    fn cross_gate_denials_share_one_bucket_per_session() {
+        let sk = SessionKey::Main {
+            agent_id: "a1".into(),
+            main_key: "main".into(),
+            epoch: 0,
+        };
         let led = DenialLedger::new();
-        let fp = action_fingerprint("code_exec", "allow_network");
-        led.record_denial("s1", &fp, DenialReason::UserRejected);
-        led.clear_session("s1");
-        assert!(led.is_blocked("s1", &fp).is_none());
-        assert_eq!(led.session_total("s1"), 0);
+        let fp = action_fingerprint("bash", "sudo rm -rf /");
+
+        // The sandbox elevation gate refuses it...
+        led.record_denial(&ledger_key(&sk), &fp, DenialReason::UserRejected);
+
+        // ...and the tool confirm gate, keying the SAME session, must see it.
+        assert_eq!(
+            led.is_blocked(&ledger_key(&sk), &fp),
+            Some(DenialReason::RepeatedSameIntent),
+            "a refusal at one gate must be visible at the other"
+        );
+
+        // Proof the old key really did address a different bucket — this is the
+        // bug, pinned: had either gate kept the filename encoding, the lookup
+        // above would have missed and the user would have been re-prompted for
+        // something they already refused.
+        let filename_key = crate::sandbox::workspace::session_key_to_filename(&sk);
+        assert_ne!(
+            ledger_key(&sk),
+            filename_key,
+            "the filename encoding is a different string — that was the whole bug"
+        );
+        assert_eq!(
+            led.is_blocked(&filename_key, &fp),
+            None,
+            "the filename-keyed bucket is empty: the two gates never met"
+        );
     }
 
     #[test]
