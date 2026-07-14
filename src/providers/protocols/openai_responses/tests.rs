@@ -343,7 +343,10 @@ fn test_build_reasoning_emits_minimal_and_xhigh_faithfully() {
     );
     assert_eq!(request.reasoning.unwrap().effort.as_deref(), Some("low"));
 
-    // Off still omits the reasoning block entirely.
+    // `Off` sends an explicit disable — gpt-5.2's family supports "none".
+    // Omitting the block (what this test used to assert) would select the
+    // server's `medium` default, so "thinking off" bought medium reasoning and
+    // billed it at the output rate.
     let off = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::Off));
     let req_off = OpenAiResponsesProtocol::build_responses_request(
         &off,
@@ -351,7 +354,23 @@ fn test_build_reasoning_emits_minimal_and_xhigh_faithfully() {
         &ResponsesVariant::default(),
         &config,
     );
-    assert!(req_off.reasoning.is_none());
+    assert_eq!(
+        req_off.reasoning.unwrap().effort.as_deref(),
+        Some("none"),
+        "Off must disable reasoning explicitly, not fall through to the server default"
+    );
+
+    // An UNSET level is a different request: nobody chose, so the provider keeps
+    // its own default and the block is omitted. This is the byte-for-byte
+    // behaviour of every Aleph release before thinking depth was wired up.
+    let unset = RequestPayload::new(&msgs);
+    let req_unset = OpenAiResponsesProtocol::build_responses_request(
+        &unset,
+        "gpt-5.2",
+        &ResponsesVariant::default(),
+        &config,
+    );
+    assert!(req_unset.reasoning.is_none());
 }
 
 #[test]

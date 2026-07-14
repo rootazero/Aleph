@@ -367,7 +367,7 @@ impl AgentHarness {
         // unified resolver below; the parallel fast path naturally routes any
         // unrepaired/typo'd name back here (an unknown name yields a
         // conservative `Global` concurrency claim → non-parallelizable → serial).
-        let offered_defs = self.deps.tools.list().await;
+        let offered_defs = self.deps.tools.dispatchable_list().await;
         let offered_names: Vec<&str> = offered_defs.iter().map(|d| d.name.as_str()).collect();
 
         let mut tool_iter = tool_calls.into_iter();
@@ -1236,13 +1236,17 @@ impl AgentHarness {
             let defs = self.deps.tools.metadata_schema();
             let offered: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
             let candidates = crate::tools::name_repair::suggest_candidates(name, &offered, 3);
+            // Do NOT advertise a discovery tool here. This used to say "call
+            // `list_tools`" — a tool production never registers (it is gated on
+            // `BuiltinToolConfig.tool_catalog`, which is never set), so the model
+            // obediently called it, got another NotFound carrying the same
+            // advice, and burned a full round-trip per iteration on exactly the
+            // turns that were already going wrong. The live tool array is in the
+            // model's context already; the useful signal is the near-miss.
             if candidates.is_empty() {
-                " No similarly-named tool is available — call `list_tools` to see the live tool list.".to_string()
+                " No similarly-named tool is available.".to_string()
             } else {
-                format!(
-                    " Did you mean: {}? Call `list_tools` to see the live tool list.",
-                    candidates.join(", ")
-                )
+                format!(" Did you mean: {}?", candidates.join(", "))
             }
         } else {
             String::new()

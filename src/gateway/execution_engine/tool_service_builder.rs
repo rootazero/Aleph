@@ -90,8 +90,11 @@ pub(super) fn mcp_tool_registry() -> Option<&'static Arc<crate::tools::ToolHandl
 ///   disclosure). Empty or `["*"]` disables collapsing (escape hatch).
 /// * `truncate_tool_descriptions` — also truncate non-core tool descriptions
 ///   when collapsing their schema.
-/// * `deferred_tool_names` — tool names hidden from the model's initial list
-///   (populated by the deferred MCP tier when `defer_mcp_tools` is on).
+/// * `deferred` — the shared deferred tier: tools hidden from the model's
+///   initial list (populated from the MCP tool set when `defer_mcp_tools` is
+///   on). The SAME `Arc` is held by `ToolSearchTool`, which promotes tools out
+///   of it on discovery so they become callable — passing a fresh set here
+///   would silently restore the old "discoverable but uncallable" trap.
 ///   Empty set (flag off) is a no-op — byte-identical surface.
 pub fn build_request_tool_service(
     tool_registry: Arc<LoopToolRegistry>,
@@ -106,7 +109,7 @@ pub fn build_request_tool_service(
     unattended: bool,
     core_tools: &[String],
     truncate_tool_descriptions: bool,
-    deferred_tool_names: BTreeSet<String>,
+    deferred: Arc<crate::tools::scoped::DeferredTools>,
 ) -> Arc<dyn ToolService> {
     let mut svc = ScopedToolService::new(tool_registry, allowed_tools);
     if let Some(st) = subagent_tool {
@@ -157,7 +160,7 @@ pub fn build_request_tool_service(
     }
     // Deferred exposure tier: drop these names from the LLM-visible lists.
     // Empty set (defer_mcp_tools off) is a no-op — byte-identical surface.
-    svc = svc.with_deferred(deferred_tool_names);
+    svc = svc.with_deferred(deferred);
     Arc::new(svc)
 }
 
@@ -206,7 +209,7 @@ mod tests {
             false,
             &[],
             false,
-            BTreeSet::new(),
+            crate::tools::scoped::DeferredTools::empty(),
         );
         let defs = svc.list().await;
         assert!(defs.iter().any(|d| d.name == "read_file"));
@@ -234,7 +237,7 @@ mod tests {
         let mut reg = LoopToolRegistry::new();
         reg.register(Box::new(StubTool)); // read_file
         reg.register(Box::new(OtherStub)); // web_fetch
-        let deferred: BTreeSet<String> = ["web_fetch".to_string()].into_iter().collect();
+        let deferred = crate::tools::scoped::DeferredTools::new(["web_fetch".to_string()].into());
         let svc = build_request_tool_service(
             Arc::new(reg),
             BTreeSet::new(),
@@ -278,7 +281,7 @@ mod tests {
             false,
             &[],
             false,
-            BTreeSet::new(),
+            crate::tools::scoped::DeferredTools::empty(),
         );
         let defs = svc.list().await;
         assert!(
@@ -309,7 +312,7 @@ mod tests {
             false,
             &[],
             false,
-            BTreeSet::new(),
+            crate::tools::scoped::DeferredTools::empty(),
         );
         let off_names: Vec<String> = off.list().await.into_iter().map(|d| d.name).collect();
         assert!(off_names.contains(&"web_fetch".to_string()));
@@ -328,7 +331,7 @@ mod tests {
             false,
             &[],
             false,
-            ["web_fetch".to_string()].into_iter().collect(),
+            crate::tools::scoped::DeferredTools::new(["web_fetch".to_string()].into()),
         );
         let on_names: Vec<String> = on.list().await.into_iter().map(|d| d.name).collect();
         assert!(!on_names.contains(&"web_fetch".to_string()));
@@ -381,7 +384,7 @@ mod progressive_tests {
             false,
             &["bash".to_string()],
             false, // core, truncate
-            BTreeSet::new(),
+            crate::tools::scoped::DeferredTools::empty(),
         );
         let schema = svc.metadata_schema();
         let bash = schema.iter().find(|d| d.name == "bash").unwrap();
@@ -411,7 +414,7 @@ mod progressive_tests {
             false,
             &["*".to_string()],
             false,
-            BTreeSet::new(),
+            crate::tools::scoped::DeferredTools::empty(),
         );
         let nav = svc
             .metadata_schema()

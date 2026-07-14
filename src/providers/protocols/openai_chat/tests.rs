@@ -214,7 +214,17 @@ fn test_map_think_level() {
 
     // Off omits the field entirely; every other level maps faithfully so
     // gpt-5-family `minimal`/`xhigh` efforts are no longer silently collapsed.
-    assert!(OpenAiProtocol::map_think_level(&ThinkLevel::Off).is_none());
+    // `Off` emits an explicit "none", NOT an omitted field. Omitting
+    // `reasoning_effort` on a reasoning model selects the SERVER default
+    // (medium) — so the old `is_none()` assertion pinned a bug in which
+    // "thinking off" silently bought medium reasoning and billed it at the
+    // output rate. `clamp_effort` (applied by the adapter right after this call)
+    // floors "none" to the cheapest supported effort on families that cannot
+    // disable reasoning at all.
+    assert_eq!(
+        OpenAiProtocol::map_think_level(&ThinkLevel::Off).as_deref(),
+        Some("none")
+    );
     assert_eq!(
         OpenAiProtocol::map_think_level(&ThinkLevel::Minimal),
         Some("minimal".to_string())

@@ -50,7 +50,21 @@ fn test_map_think_level_level_mode() {
 
 #[test]
 fn test_map_think_level_off() {
-    assert!(GeminiProtocol::map_think_level(&ThinkLevel::Off, "gemini-3-pro").is_none());
+    // `Off` is a request, not an absence. Gemini 2.5 Flash THINKS BY DEFAULT, so
+    // emitting no `thinkingConfig` (what the old `is_none()` assertion pinned)
+    // left thinking on and billed it as output. The disable is an explicit
+    // `thinkingBudget: 0`.
+    let off_25 = GeminiProtocol::map_think_level(&ThinkLevel::Off, "gemini-2.5-flash")
+        .expect("Off must emit a config, not omit one");
+    assert_eq!(off_25.thinking_budget, Some(0));
+    assert_eq!(off_25.include_thoughts, Some(false));
+
+    // The Gemini 3+ `thinkingLevel` enum has no "off" member, so Off floors to
+    // its cheapest level rather than inventing an API constant.
+    let off_3 = GeminiProtocol::map_think_level(&ThinkLevel::Off, "gemini-3-pro")
+        .expect("Off must emit a config, not omit one");
+    assert_eq!(off_3.thinking_level.as_deref(), Some("MINIMAL"));
+    assert_eq!(off_3.include_thoughts, Some(false));
 }
 
 #[test]

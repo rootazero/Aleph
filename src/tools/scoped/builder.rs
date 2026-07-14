@@ -44,7 +44,8 @@ impl ScopedToolService {
             health: None,
             last_health_generation: std::sync::atomic::AtomicU64::new(0),
             definition_rewriters: Vec::new(),
-            deferred: BTreeSet::new(),
+            deferred: super::DeferredTools::empty(),
+            last_deferred_generation: std::sync::atomic::AtomicU64::new(0),
             tool_permissions: None,
             exec_tier: None,
             unattended: false,
@@ -90,18 +91,18 @@ impl ScopedToolService {
         self
     }
 
-    /// Set the deferred tool-name set (the "deferred" exposure tier). Deferred
-    /// tools are dropped from `list()` / `metadata_schema()` but remain
-    /// executable + describable. Empty set = no-op.
+    /// Attach the shared deferred tier. The SAME `Arc` must be handed to
+    /// `ToolSearchTool`, which shrinks it when the model discovers a tool —
+    /// that is what makes a deferred tool callable rather than merely visible.
     #[must_use]
-    pub fn with_deferred(mut self, deferred: BTreeSet<String>) -> Self {
+    pub fn with_deferred(mut self, deferred: Arc<super::DeferredTools>) -> Self {
         self.deferred = deferred;
         self
     }
 
     /// Whether `name` is in the deferred tier (dropped from LLM-visible lists).
     pub(super) fn is_deferred(&self, name: &str) -> bool {
-        self.deferred.contains(name)
+        self.deferred.is_deferred(name)
     }
 
     /// Invalidate the cached `metadata_schema()` output so the next call

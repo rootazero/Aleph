@@ -196,7 +196,17 @@ pub(crate) fn build_reasoning(
         Some(ThinkLevel::Medium) => "medium",
         Some(ThinkLevel::High) => "high",
         Some(ThinkLevel::XHigh) => "xhigh",
-        Some(ThinkLevel::Off) | None => return None,
+        // `Off` is a request ("disable reasoning"), not an absence. Omitting the
+        // block does NOT disable reasoning on a reasoning model — it selects the
+        // server default (`medium`), billed at the output rate. `"none"` is a
+        // real value on families that can disable; `clamp_effort` floors it to
+        // their cheapest effort on families that cannot. See the twin fix in
+        // `openai_chat/proto_impl.rs::map_think_level`.
+        Some(ThinkLevel::Off) => "none",
+        // No directive at all → leave the provider on its own default. This is
+        // the pre-existing behaviour for every request Aleph has ever sent, and
+        // it must stay: `None` is "nobody chose", not "someone chose off".
+        None => return None,
     };
     let clamped =
         crate::providers::protocols::openai_common::reasoning_effort::clamp_effort(model, effort)?;
@@ -564,6 +574,31 @@ mod tests {
     }
 
     // ─── build_reasoning tests ──────────────────────────────────────
+
+    /// `Off` (someone chose "no reasoning") and `None` (nobody chose anything)
+    /// are different requests and must produce different wire bytes.
+    ///
+    /// Both used to return `None` — omit the block. On a reasoning model that
+    /// does not mean "no reasoning", it means "server default", i.e. `medium`,
+    /// billed at the output rate. The one setting a cost-conscious user reaches
+    /// for was the one that silently did nothing.
+    #[test]
+    fn off_disables_reasoning_while_unset_defers_to_the_provider() {
+        // gpt-5.1 can genuinely disable reasoning: "none" is in its family table.
+        let off = build_reasoning(Some(ThinkLevel::Off), "gpt-5.1")
+            .expect("Off must emit a reasoning block");
+        assert_eq!(off.effort.as_deref(), Some("none"));
+
+        // Plain gpt-5 cannot disable, so the clamp floors "none" to its cheapest
+        // real effort rather than falling back to the server's medium default.
+        let off_undisableable =
+            build_reasoning(Some(ThinkLevel::Off), "gpt-5").expect("Off must emit a block");
+        assert_eq!(off_undisableable.effort.as_deref(), Some("minimal"));
+
+        // Nobody chose → omit the block entirely, leaving the provider on its own
+        // default. This is what every Aleph release to date has sent.
+        assert!(build_reasoning(None, "gpt-5.1").is_none());
+    }
 
     #[test]
     fn test_build_reasoning_levels() {

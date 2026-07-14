@@ -163,9 +163,7 @@ impl ScopedToolService {
                                  own configuration. Approve to allow this change."
                             ),
                         );
-                        if let Err(denial) =
-                            self.confirm_with_memory(req, &action, &input).await
-                        {
+                        if let Err(denial) = self.confirm_with_memory(req, &action, &input).await {
                             return Err(ToolError::PermissionDenied {
                                 name: name.to_string(),
                                 reason: format!(
