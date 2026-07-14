@@ -58,34 +58,54 @@ const TARGET: usize = 4900;
 /// What the 12 files actually total today, under the documented measurement.
 /// Frozen, so the overrun cannot keep growing the way it grew to here.
 ///
-/// **5997 → 5863 (2026-07-14).** Lowered — the ratchet turning the way it is
-/// supposed to. Nothing was moved to buy this: every line below is a deletion
-/// of code that had no production consumer, plus one merge of two arms that
-/// were byte-for-byte the same.
+/// **Batch 1 (2026-07-14): 5997 → 5863.** Pure deletion — dead trait (`Harness`
+/// and its default `run()`), dead callback channels (`on_complete`,
+/// `on_tool_call`), dead telemetry (`on_init_seam`), and two byte-identical
+/// arms merged. Nothing was moved to buy it.
 ///
-///   - `trait_def.rs` −56: the `Harness` trait itself, including its default
-///     `run()` loop. `AgentHarness` was the only impl and overrode `run`; the
-///     real polymorphic seams are `SessionDriver` and `Arc<dyn HarnessRunner>`.
-///     The one doctest that "proved" object-safety was the only caller.
-///   - `chain_context.rs` −21: `with_max_depth` (called only from `#[cfg(test)]`)
-///     and `Display` (called only by a test asserting its own format).
-///   - `callback.rs` −11 / `agent.rs` −5 / `act.rs` −5: the `on_complete` and
-///     `on_tool_call` callback channels. Nine emit sites in the loop, zero
-///     production listeners — every terminal consumer already rides
-///     `on_complete_with_outcome`, every tool listener `on_tool_call_start`.
-///   - `trace_sink.rs` −10: `on_init_seam`, a Stage-7 telemetry channel whose
-///     only non-forwarding subscriber lived in a test.
-///   - `think.rs` −21: the still-overflow and retry-error arms of
-///     `reactive_fit_and_retry` merged (they differed only in which error
-///     surfaced — and the still-overflow arm was silently discarding a *billed*
-///     response without accounting it), and `fire_grace_turn` folded into
-///     `fire_boundary_grace_turn` (the diminishing-returns site was the sole
-///     caller and it judged the grace turn from a stale event log).
+/// **Batch 2 (2026-07-14): 5863 → 5739.** The interesting one for honest
+/// bookkeeping: it is the first batch that *added* production code to the loop
+/// and still came out ahead. Three bug fixes and a concurrency guard cost **+21**
+/// — and they were paid for out in the open, by putting cognition where R9 says
+/// it belongs and by sinking a guardrail into the guardrail layer.
+///
+///   - **−90, wording sink.** The nine model-facing strings the loop injected
+///     (`MAX_STEPS_HINT`, `MAX_OUTPUT_TOKENS_RESUME_NUDGE`, `INTERRUPTION_NOTE`,
+///     two synthetic tool-error causes, the deferred-result reason, three
+///     interpolating note builders) moved to `src/thinker/nudges.rs`:
+///     `think.rs` −30, `prompt.rs` −36, `act.rs` −24. Prompt copy is cognition
+///     (R9); the harness is scaffolding (R10). A pure relocation — the rendered
+///     strings are byte-identical, pinned by golden tests in `nudges.rs`.
+///   - **−55, guardrail sink.** The input guardrail left the loop for
+///     `GuardrailRegistry::screen_session_input` (`agent/guardrails.rs` −40,
+///     `agent.rs` −14, `think.rs` −1). It had screened only the tail's newest
+///     user message while `build_prompt` replays the *whole* log every turn, so
+///     a sanitised secret went back on the wire in cleartext from turn 2 onward.
+///     A `Block` on a replayed message degrades to redaction: events are
+///     immutable and re-screened forever, so a symmetric block would end every
+///     future turn and brick the session permanently.
+///   - **+8, `think.rs`.** The `max_output_tokens` resume loop kept only the
+///     final continuation, so a long answer was persisted — and re-prompted —
+///     starting mid-sentence. Partials now accumulate and are concatenated
+///     *before* the output guardrail, which therefore also screens the first half.
+///   - **+11, `prompt.rs`.** `SessionEvent::SystemMessage` fell into `_ => {}`,
+///     silently erasing the `[Context Summary]` head a split child session is
+///     rebuilt from. (The plan estimated +6; rustfmt expands the match arm to 8
+///     lines and 3 more are the comment naming the bug. Recorded at its real
+///     cost, because an estimate that quietly absorbs the difference is exactly
+///     the bookkeeping this file exists to prevent.)
+///   - **+2, `act.rs`.** Parallel admission derives its disjointness proof from
+///     the model's *original* args, but PASS 1 executes the guardrail-*rewritten*
+///     ones. A PII mask collapses two distinct paths onto one `[PHONE]`
+///     placeholder — turning two calls admitted as disjoint into two concurrent
+///     truncating writes to the same file. Any rewrite now serializes the batch.
+///
+/// Net **−124**. The debt to R10's [`TARGET`] is now **839** lines, not 963.
 ///
 /// Measured, not hand-counted: this test is the measurement. The number here is
 /// whatever `the_harness_line_budget_does_not_grow` prints when it fails, and
 /// nothing else — that is the whole point of the file.
-const CEILING: usize = 5863;
+const CEILING: usize = 5739;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

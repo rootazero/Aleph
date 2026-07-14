@@ -250,6 +250,77 @@ fn user_message_replays_persisted_image_blocks() {
     );
 }
 
+fn system_msg(text: &str) -> SessionEventRecord {
+    record(SessionEvent::SystemMessage {
+        turn_id: Uuid::new_v4(),
+        content: text.to_string(),
+        at: now_ms(),
+    })
+}
+
+/// REGRESSION: `build_prompt` had no `SystemMessage` arm, so the catch-all
+/// `_ => {}` swallowed it. The split child's head is exactly this event
+/// (`context::compact::session_split::build_summary_event`), so a session that
+/// crossed the split threshold woke up with no summary AND no original task —
+/// only the orphan-result downgrade note. The OpenAI-compat gateway's client
+/// system messages went the same way.
+#[test]
+fn system_message_is_replayed() {
+    // Split-child shape: `[Context Summary]` head, then the copied fresh tail
+    // whose first ToolResult has no assistant turn to pair with.
+    let events = vec![
+        system_msg("[Context Summary]\nthe user is porting the parser to nom"),
+        tool_result("c1", json!({"ok": true})),
+    ];
+
+    let out = build_prompt(&events, 0);
+    assert_eq!(out.len(), 2, "summary + downgraded orphan result");
+    match &out[0] {
+        UnifiedMessage::User { content } => match &content[0] {
+            ContentBlock::Text { text, .. } => {
+                assert!(
+                    text.contains("[Context Summary]") && text.contains("nom"),
+                    "the split summary must reach the model, got {text:?}"
+                );
+            }
+            other => panic!("expected Text block, got {other:?}"),
+        },
+        other => panic!("expected the summary as a User message, got {other:?}"),
+    }
+}
+
+/// The system message goes through the same deferral buffer as a user message:
+/// emitted while the turn still owes tool results it would split the
+/// tool_use/tool_result pairing (HTTP 400), and a "push only when nothing is
+/// owed" shortcut would drop it — the original bug, one layer down.
+#[test]
+fn system_message_lands_after_owed_tool_results() {
+    let events = vec![
+        user_msg("port the parser"),
+        tool_call_requested("c1", "read_file"),
+        assistant_with_tool_use("c1", "read_file"),
+        system_msg("[Context Summary]\nearlier turns elided"),
+        tool_result("c1", json!({"bytes": 12})),
+    ];
+
+    let out = build_prompt(&events, 0);
+    assert_eq!(out.len(), 4);
+    assert!(matches!(out[1], UnifiedMessage::Assistant { .. }));
+    assert!(
+        matches!(out[2], UnifiedMessage::ToolResult { .. }),
+        "the result must immediately follow its tool_use"
+    );
+    match &out[3] {
+        UnifiedMessage::User { content } => match &content[0] {
+            ContentBlock::Text { text, .. } => {
+                assert!(text.contains("[Context Summary]"), "got {text:?}");
+            }
+            other => panic!("expected Text block, got {other:?}"),
+        },
+        other => panic!("expected the deferred summary last, got {other:?}"),
+    }
+}
+
 /// Sanity benchmark — not an assertion; run with
 /// `cargo test -p alephcore --lib harness::tests::prompt::perf_dispatch_overhead_documented -- --ignored --nocapture`
 /// to print timings.

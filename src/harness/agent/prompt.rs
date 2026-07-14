@@ -10,21 +10,7 @@
 
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::session::events::{RunOutcome, SessionEvent, SessionEventRecord};
-
-/// Replayed at the position of a user-cancelled run's terminal marker
-/// (codex `<turn_aborted>` parity). Without it the interruption is invisible:
-/// the cancelled run's orphan `tool_use` blocks are dropped during replay
-/// (Anthropic rejects them with HTTP 400), so the model sees a turn that
-/// simply stops and may assume its in-flight tool calls completed. Steering
-/// messages the cancelled run never answered stay in the log right before
-/// this note — the model judges whether they still apply (R7); the harness
-/// never deletes them.
-const INTERRUPTION_NOTE: &str = "<system-reminder>\n\
-    The previous run was interrupted by the user before it finished. Tool \
-    calls still in flight were aborted and produced no results — do not \
-    assume they completed. Re-evaluate any earlier unanswered instructions \
-    in light of the interruption before continuing.\n\
-    </system-reminder>";
+use crate::thinker::nudges::{orphan_tool_result_note, user_interjection_note, INTERRUPTION_NOTE};
 
 /// Build the per-turn message vector handed to the provider. Walks the
 /// session log slice and:
@@ -127,22 +113,9 @@ pub(crate) fn build_prompt(
             SessionEvent::UserMessage {
                 content, synthetic, ..
             } => {
-                // G2 (opencode parity): wrap real mid-loop user messages in
-                // `<system-reminder>` so the model recognises them as genuine
-                // user interjections rather than synthetic harness chatter.
-                // The opening user message (no assistant turn yet) and
-                // synthetic messages (verifier vetoes, MAX_STEPS hints) pass
-                // through unwrapped.
                 let wrapped;
                 let text: &str = if !*synthetic && assistant_emitted {
-                    wrapped = format!(
-                        "<system-reminder>\n\
-                         The user sent the following message:\n\
-                         {}\n\n\
-                         Please address this message and continue with your tasks.\n\
-                         </system-reminder>",
-                        content.text,
-                    );
+                    wrapped = user_interjection_note(&content.text);
                     &wrapped
                 } else {
                     content.text.as_str()
@@ -152,6 +125,17 @@ pub(crate) fn build_prompt(
                 // While the current assistant turn still owes tool results, this
                 // user message would split the tool_use/tool_result pairing — buffer
                 // it and re-emit once the results have all landed (below).
+                if expected_results.is_empty() {
+                    messages.push(msg);
+                } else {
+                    deferred_user_msgs.push(msg);
+                }
+            }
+            SessionEvent::SystemMessage { content, .. } => {
+                // Producers: session_split's `[Context Summary]` head + OpenAI-compat client
+                // system messages. Deferred like a user message; dropping it while the turn
+                // still owes tool results is the bug that erased the split child's summary.
+                let msg = UnifiedMessage::user(content.clone());
                 if expected_results.is_empty() {
                     messages.push(msg);
                 } else {
@@ -304,11 +288,8 @@ pub(crate) fn build_prompt(
     messages
 }
 
-/// Downgrade an orphaned / duplicate tool result to a plain user text note.
-///
-/// The content is preserved (the model judges its relevance — R7) but the
-/// message is no longer a structural `tool_result`, so a missing or already-
-/// consumed `tool_use` cannot make the provider reject the whole request.
+/// Downgrade an orphaned / duplicate tool result to a plain user text note
+/// (copy: `crate::thinker::nudges::orphan_tool_result_note`).
 fn orphan_result_note(
     call_id: &str,
     tool_name: &str,
@@ -324,13 +305,7 @@ fn orphan_result_note(
         "downgrading orphaned/duplicate tool result to plain text \
          (no matching tool_use in the rebuilt prompt)",
     );
-    UnifiedMessage::user(format!(
-        "<system-reminder>\n\
-         Orphaned result for tool call `{tool_name}` (id {call_id}) — its \
-         originating tool_use is not part of this conversation view, so the \
-         result is shown as plain text:\n{rendered}\n\
-         </system-reminder>",
-    ))
+    UnifiedMessage::user(orphan_tool_result_note(call_id, tool_name, &rendered))
 }
 
 /// Reconstruct one persisted assistant turn into provider content blocks.

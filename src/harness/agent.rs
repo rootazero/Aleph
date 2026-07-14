@@ -19,7 +19,7 @@
 //! Split into sub-modules:
 //!   * `think.rs` — `run_turn_internal`, `race_llm_call`, `run_verifiers`
 //!   * `act.rs` — `act`
-//!   * `guardrails.rs` — `apply_input_guardrail`, `apply_tool_call_guardrail`
+//!   * `guardrails.rs` — `apply_tool_call_guardrail`
 //!   * `prompt.rs` — `build_prompt` (sync per-turn message assembler)
 
 use crate::sync_primitives::{AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering};
@@ -62,20 +62,6 @@ pub(crate) const fn is_failure_turn(executed: usize, errors: usize) -> bool {
 /// clean turn does.
 pub(crate) const fn is_clean_turn(_executed: usize, errors: usize) -> bool {
     errors == 0
-}
-
-/// Outcome of `AgentHarness::apply_input_guardrail`. The two non-block
-/// variants both carry the (possibly mutated) events vector; the caller
-/// rebinds `events` to the returned vector before assembling the prompt.
-pub(crate) enum InputGuardrailOutcome {
-    /// Pass-through; events are unchanged.
-    Allow(Vec<crate::session::events::SessionEventRecord>),
-    /// Latest `UserMessage`'s text was rewritten in-memory only — the
-    /// session log retains the original event for audit.
-    Sanitized(Vec<crate::session::events::SessionEventRecord>),
-    /// Guardrail blocked the turn; caller emits `on_safety_block` and
-    /// returns `TurnState::Done` without invoking the LLM.
-    Blocked(String),
 }
 
 /// Stage 5b tool-call guardrail outcome. `Block` means the helper already

@@ -4,14 +4,16 @@ use std::sync::atomic::Ordering;
 
 use tokio_util::sync::CancellationToken;
 
-use super::{AgentHarness, InputGuardrailOutcome};
+use super::AgentHarness;
 use crate::context::budget::LoopDirective;
+use crate::guardrails::SessionInputScreen;
 use crate::harness::callback::HarnessCallback;
 use crate::harness::trait_def::{HarnessError, TurnState, TurnStep};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::message::UnifiedMessage;
 use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord, TurnId};
 use crate::session::service::SessionId;
+use crate::thinker::nudges::{MAX_OUTPUT_TOKENS_RESUME_NUDGE, MAX_STEPS_HINT};
 use crate::verification::{
     hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict, TOOL_HISTORY_WINDOW,
 };
@@ -52,43 +54,12 @@ impl crate::providers::DeltaSink for CallbackSink<'_> {
 /// endpoint that more retries will not fix.
 const EMPTY_RESPONSE_RETRIES: u32 = 2;
 
-/// G1 (opencode-inspired): last-step soft warning. Injected as a synthetic
-/// trailing user message wrapped in `<system-reminder>` on the LAST allowed
-/// iteration so the model uses *this* turn to emit a final summary instead
-/// of triggering the post-hoc C1 grace turn (which costs an extra LLM
-/// round-trip). C1 remains as a fail-safe for the rare case where the
-/// model ignores this hint and still emits `tool_use`.
-///
-/// Text intentionally mirrors opencode's `max-steps.txt` shape so model
-/// behaviour transfers across harnesses.
-const MAX_STEPS_HINT: &str = "<system-reminder>\n\
-CRITICAL — MAXIMUM ITERATIONS REACHED\n\n\
-This is the LAST iteration allowed for this task. Tools are effectively \
-disabled — any tool_use you emit will be discarded after one more grace \
-turn. You MUST respond with TEXT ONLY now.\n\n\
-Your response should include:\n\
-- A short statement that the iteration cap was reached\n\
-- A summary of what was accomplished so far\n\
-- Any tasks that remain incomplete\n\
-- A recommendation for what should be done next\n\
-</system-reminder>";
-
 /// Maximum re-issues of the LLM call when the provider hits
 /// `max_output_tokens` mid-stream. Mirrors claude-code's
 /// `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT` (query.ts:164). The retry appends
 /// the partial assistant output and a "resume directly" nudge so the
 /// model continues mid-thought rather than restarting.
 const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT: u32 = 3;
-
-/// Meta user message appended on each `max_output_tokens` recovery
-/// retry. Text mirrors claude-code's wording (query.ts:1226) so model
-/// behaviour transfers across harnesses. The model is expected to pick
-/// up mid-thought; "no apology, no recap" prevents wasted output tokens
-/// on regenerating context the model already produced.
-const MAX_OUTPUT_TOKENS_RESUME_NUDGE: &str =
-    "Output token limit hit. Resume directly — no apology, no recap of \
-     what you were doing. Pick up mid-thought if that is where the cut \
-     happened. Break remaining work into smaller pieces.";
 
 /// Why a grace turn is being fired. Selects the nudge text; otherwise
 /// the call path is identical.
@@ -376,26 +347,23 @@ impl AgentHarness {
             .store(events.last().map_or(0, |r| r.seq), Ordering::Relaxed);
         let tail_start = super::tail_start_index(&events);
 
-        // 1a. Stage 5a (#9): Input guardrail. Inspect the latest UserMessage
-        // in the tail. `Block` ends the turn early via `on_safety_block`;
-        // `Sanitize` rewrites the in-memory event before the prompt builder
-        // sees it (the original session-log event is left intact for audit).
-        let events: Vec<crate::session::events::SessionEventRecord> =
-            if let Some(registry) = self.deps.guardrails.as_ref() {
-                match self
-                    .apply_input_guardrail(registry, events, tail_start)
-                    .await?
-                {
-                    InputGuardrailOutcome::Allow(events) => events,
-                    InputGuardrailOutcome::Sanitized(events) => events,
-                    InputGuardrailOutcome::Blocked(reason) => {
-                        callback.on_safety_block(&reason);
-                        return Ok(TurnStep::done());
-                    }
+        // 1a. Stage 5a (#9): input guardrail. The registry screens every
+        // replayed user message, not just this turn's — `build_prompt` below
+        // walks the log from index 0, so rewriting only the tail put the
+        // original text back on the wire from turn 2 onwards. Rewrites land on
+        // the in-memory clone; the session log keeps the original for audit.
+        // Only this turn's own message can `Block` (older ones are redacted
+        // instead — see `screen_session_input`).
+        let events = match self.deps.guardrails.as_ref() {
+            Some(registry) => match registry.screen_session_input(events, tail_start).await {
+                SessionInputScreen::Pass(events) => events,
+                SessionInputScreen::Blocked(reason) => {
+                    callback.on_safety_block(&reason);
+                    return Ok(TurnStep::done());
                 }
-            } else {
-                events
-            };
+            },
+            None => events,
+        };
 
         // 2. Build the LLM request. `build_prompt` has access to the full log
         //    so it can reconstruct the preceding assistant tool_use turn and
@@ -693,10 +661,12 @@ impl AgentHarness {
         // times. The nudge text mirrors claude-code's wording so model
         // behaviour transfers across harnesses. R10-safe: pure round
         // scheduling around a specific provider failure mode, no policy.
-        // The retry pushes onto `messages` (local, never persisted to the
-        // session log). The closure `build_payload` would hold an immutable
-        // borrow that conflicts with the push; the retry inlines payload
-        // construction so the borrow is scoped to each LLM call.
+        // `messages` is local (never persisted), so each partial is ALSO kept in
+        // `carried` and concatenated with the continuation BEFORE the output
+        // guardrail below — else the persisted answer, and the next turn's prompt
+        // rebuilt from it, both start mid-sentence.
+        let mut carried = String::new();
+        let mut streamed_prefix_len = 0usize;
         let mut max_tokens_retries = 0u32;
         while matches!(
             response.stop_reason,
@@ -704,10 +674,6 @@ impl AgentHarness {
         ) && max_tokens_retries < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
         {
             max_tokens_retries += 1;
-            // The retry below replaces `response` via the non-streaming path;
-            // only the truncated partial was delta-streamed, so the surviving
-            // continuation must get the one-shot emit.
-            response_was_streamed = false;
             // Count the partial (max_output_tokens-cut) call before discarding
             // it: it billed input tokens plus the partial output the model
             // already emitted. The once-per-turn accounting below only sees
@@ -720,8 +686,15 @@ impl AgentHarness {
             );
             let partial = response.text_content();
             if !partial.trim().is_empty() {
+                carried.push_str(&partial);
                 messages.push(UnifiedMessage::assistant(partial));
             }
+            // Nothing is emitted here — a delta would bypass the Stage-5a output
+            // guardrail. A streaming primary call already sent this partial live.
+            if response_was_streamed {
+                streamed_prefix_len = carried.len();
+            }
+            response_was_streamed = false;
             messages.push(UnifiedMessage::user(MAX_OUTPUT_TOKENS_RESUME_NUDGE));
             let payload = build_request_payload(
                 self.deps.system_prompt.as_deref(),
@@ -862,7 +835,7 @@ impl AgentHarness {
 
         // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
         let turn_id = super::current_turn_id(&events);
-        let text = response.text_content();
+        let text = format!("{carried}{}", response.text_content());
 
         // 4a. Stage 5a (#9): Output guardrail. `Block` aborts the turn with a
         // terminal `HarnessError::Llm`. The decision's `class` is preserved
@@ -914,10 +887,13 @@ impl AgentHarness {
             // where streaming is suppressed so the output guardrail can sanitise
             // the final text first) keep the one-shot emit — as does a response
             // that survived from a non-streaming retry/rescue, whose text was
-            // never delta-streamed. The authoritative AssistantMessage is
-            // persisted just below.
+            // never delta-streamed — minus the `streamed_prefix_len` bytes a
+            // truncated streaming call already sent (`.get()`, not `&text[..]`: a
+            // byte index must not split a codepoint).
             if !response_was_streamed {
-                callback.on_delta(&text);
+                if let Some(rest) = text.get(streamed_prefix_len..) {
+                    callback.on_delta(rest);
+                }
             }
             self.emit(|| crate::harness::trace::LoopTraceEvent::TextEmitted {
                 iteration: iterations,
@@ -1671,13 +1647,10 @@ impl AgentHarness {
     /// Hence exactly ONE `last_assistant_has_text` check, on the fresh log.
     /// Well-behaved capped runs pay nothing.
     ///
-    /// Honest caveat: the re-read log is the RAW store, whereas the in-turn
-    /// `events` were the input guardrail's sanitised in-memory clone. So the
-    /// diminishing grace turn now also sends un-sanitised user text to the
-    /// provider. Not a new hole — all five pre-existing boundary sites already
-    /// did, same root cause as the input guardrail screening only the tail's
-    /// latest user message while `build_prompt` replays the raw log every turn —
-    /// but it is real, and gets fixed at the registry level for all six at once.
+    /// The re-read log is the RAW store, so it goes through the same registry
+    /// screen as the Think path before it becomes a prompt — otherwise every
+    /// grace site (all six funnel here) would be a hole around the input
+    /// guardrail. Nothing can end this turn, so a `Block` redacts here.
     pub(crate) async fn fire_boundary_grace_turn(
         &self,
         session_id: &SessionId,
@@ -1697,6 +1670,10 @@ impl AgentHarness {
             return; // user already has terminal text; skip.
         }
         let tail_start = super::tail_start_index(&events);
+        let events = match self.deps.guardrails.as_ref() {
+            Some(registry) => registry.redact_session_input(events).await,
+            None => events,
+        };
         let mut grace_messages = super::prompt::build_prompt(&events, tail_start);
         grace_messages.push(UnifiedMessage::user(reason.nudge()));
         // Reuse the shared payload builder so the grace call threads the same

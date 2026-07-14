@@ -84,6 +84,10 @@ use crate::harness::trait_def::{HarnessError, TurnPhase};
 use crate::providers::adapter::NativeToolCall;
 use crate::session::events::{now_ms, SessionEvent, ToolOutput, TurnId};
 use crate::session::service::SessionId;
+use crate::thinker::nudges::{
+    budget_overrun_cause, CROSS_BATCH_REFUSED_CAUSE, DEFERRED_TOOL_RESULT_REASON,
+    STALLED_CALL_CAUSE,
+};
 use tokio_util::sync::CancellationToken;
 
 /// Pick the effective wall-clock budget for a tool call. Per-tool
@@ -94,33 +98,6 @@ fn resolve_effective_budget(
     harness_fallback: Option<std::time::Duration>,
 ) -> Option<std::time::Duration> {
     per_tool.or(harness_fallback)
-}
-
-/// Synthetic `ToolError::Execution` cause emitted when cross-batch dedup
-/// refuses an identical repeat of a previously-failed `(name, args)` call.
-/// Shared by the serial and parallel dispatch paths so the two can never drift.
-const CROSS_BATCH_REFUSED_CAUSE: &str = "this exact call already failed earlier in the run; \
-     change inputs or try a different tool";
-
-/// Synthetic `ToolError` cause persisted for a call that overran the
-/// harness-wide `turn_timeout` (a run-aborting stall, not a recoverable
-/// per-tool budget). Emitted BEFORE `StalledTurn` bubbles so the turn's
-/// `tool_use` blocks keep their result pairing: without it the prompt
-/// builder drops the whole assistant turn as orphaned on the next build,
-/// erasing exactly the context the Timeout grace turn needs to salvage.
-/// Shared by the serial and parallel dispatch paths.
-const STALLED_CALL_CAUSE: &str = "aborted: exceeded the run-level turn timeout \
-     and the run is wrapping up — no result was produced";
-
-/// Build the recoverable `ToolError` cause for a per-tool wall-clock budget
-/// overrun. Shared by the serial and parallel dispatch paths so both surface
-/// byte-identical guidance — the next Think turn reacts the same way regardless
-/// of how the batch was scheduled.
-fn budget_overrun_cause(seconds: f64) -> String {
-    format!(
-        "exceeded its {seconds:.1}s wall-clock budget (slow or unresponsive \
-         source) — no result; retry, narrow the query, or switch source/tool"
-    )
 }
 
 impl AgentHarness {
@@ -302,8 +279,7 @@ impl AgentHarness {
             let output = ToolOutput {
                 value: serde_json::json!({
                     "deferred": true,
-                    "reason": "superseded by a new user message that arrived mid-turn; \
-                               re-issue this call if it is still needed",
+                    "reason": DEFERRED_TOOL_RESULT_REASON,
                 }),
                 metadata: crate::session::events::ToolOutputMetadata::default(),
             };
@@ -903,14 +879,16 @@ impl AgentHarness {
             );
         }
 
-        // PASS 1 — parallel: dispatch up to `parallelism` execute futures
-        // concurrently via `stream::iter(...).buffered(n)`. `buffered` polls
-        // at most `n` futures at a time AND yields completions in input
-        // order — semantically identical to opencode's
-        // `Effect.forEach({ concurrency: n })`. Per-call timeout is wrapped
-        // INSIDE each future so the timeout is owned by the call, not the
-        // batch.
-        let parallelism = self.deps.parallel_tool_concurrency.unwrap_or(0).max(2);
+        // PASS 1 — parallel: dispatch up to `parallelism` execute futures via
+        // `stream::iter(...).buffered(n)`, which polls at most `n` at a time AND
+        // yields completions in input order — semantically identical to opencode's
+        // `Effect.forEach({ concurrency: n })`. Per-call timeout is wrapped INSIDE
+        // each future so the timeout is owned by the call, not the batch.
+        // A guardrail rewrite changes the path set the claim was derived from, so the
+        // pre-admission disjointness proof is void: any rewrite serializes the batch.
+        let cap = self.deps.parallel_tool_concurrency.unwrap_or(0).max(2);
+        let rewritten = sanitized.iter().any(Option::is_some);
+        let parallelism = if rewritten { 1 } else { cap };
         type ExecOutcome =
             Result<Result<ToolOutput, crate::tools::service::ToolError>, std::time::Duration>;
         // Build per-original-index futures, leaving None at skipped indices
