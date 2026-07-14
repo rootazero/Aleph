@@ -103,6 +103,64 @@ fn banner_script(version: &str, self_install: bool) -> String {
         .replace("__ISRESTART__", is_restart)
 }
 
+/// Inject (or replace) the update banner in the main window's current
+/// document. No-op when nothing is staged or the main window is gone.
+pub fn show_update_banner(app: &AppHandle) {
+    let version = app
+        .state::<Updater>()
+        .staged
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let Some(version) = version else {
+        return;
+    };
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if let Err(e) = window.eval(banner_script(&version, updater_can_self_install())) {
+        tracing::debug!("could not inject the update banner: {e}");
+    }
+}
+
+/// Re-inject the banner after a Panel reload wiped the injected DOM — but only
+/// if an update is staged and the user has not dismissed it this session.
+/// Wired into `main.rs`'s `on_page_load(Finished)` handler.
+pub fn reinject_banner_if_staged(app: &AppHandle) {
+    let dismissed = *app
+        .state::<Updater>()
+        .dismissed
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if dismissed {
+        return;
+    }
+    show_update_banner(app);
+}
+
+/// Perform a banner control action routed from the `on_navigation` guard.
+pub fn handle_control(app: &AppHandle, action: UpdateControl) {
+    match action {
+        UpdateControl::Apply => apply_staged_update(app),
+        UpdateControl::Dismiss => {
+            *app.state::<Updater>()
+                .dismissed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+            remove_banner(app);
+        }
+    }
+}
+
+/// Remove the injected banner element from the current document.
+fn remove_banner(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.eval(
+            "var b=document.getElementById('__aleph-update-banner');if(b)b.remove();",
+        );
+    }
+}
+
 /// Shared update state, managed by Tauri so the background checker, the
 /// tray, and the macOS menu agree on whether an update is waiting.
 #[derive(Default)]
@@ -113,6 +171,9 @@ pub struct Updater {
     /// their builders so the checker can relabel them once an update is
     /// staged. Both surfaces stay in sync.
     update_items: Mutex<Vec<MenuItem<Wry>>>,
+    /// Session latch: set when the user dismisses the in-window banner (`×`).
+    /// In-memory only, so a fresh launch re-shows the banner (spec §5).
+    dismissed: Mutex<bool>,
 }
 
 impl Updater {
@@ -324,13 +385,15 @@ async fn check(app: &AppHandle, announce: Announce) {
     }
 }
 
-/// Record a staged update and relabel every registered update item.
+/// Record a staged update and relabel every registered update item, then
+/// surface the in-window banner.
 fn stage(app: &AppHandle, version: &str) {
     *app.state::<Updater>()
         .staged
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(version.to_string());
     relabel_update_items(app, staged_label(version));
+    show_update_banner(app);
 }
 
 /// Relabel the registered update items (tray + macOS menu) on the main
