@@ -215,34 +215,26 @@ fn is_destructive(facts: ToolFacts<'_>) -> bool {
         || facts.name.starts_with("vault_")
 }
 
-/// A tier as presented to a user surface (Panel / CLI / bot). Rendering the
-/// same three everywhere keeps R6 (one core, many channels) honest.
+/// A tier as offered to a user surface (Panel / CLI / bot).
+///
+/// Core owns the tier IDENTITY — the id set, its order, and every `rule_for`
+/// verdict behind it — so every surface offers the same three choices with the
+/// same meaning (R6). It does NOT own the COPY: a label is presentation, it has
+/// to follow the reader's locale, and a surface that cannot resolve it in its
+/// own locale files is structurally unable to be localized (R4: surfaces render,
+/// core decides). Ship ids; let the surface author the words for its user.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct TierPreset {
     pub id: &'static str,
-    pub label: &'static str,
-    pub description: &'static str,
 }
 
 /// The three built-in tiers, ordered least → most permissive.
 #[must_use]
 pub const fn builtin_tiers() -> &'static [TierPreset] {
     &[
-        TierPreset {
-            id: "ask",
-            label: "Ask 请求",
-            description: "每个会改动系统的工具调用（执行命令、写文件、删除、凭据、MCP、浏览器）都先征求同意；只读工具照常运行。\nEvery mutating tool call asks first; read-only tools still run freely.",
-        },
-        TierPreset {
-            id: "auto",
-            label: "Auto 自动",
-            description: "工具自动运行，只有不可逆的操作（删除文件、凭据写入、解散团队、MCP 破坏性工具）才征求同意。默认档位。\nTools run automatically; only irreversible operations ask first. The default.",
-        },
-        TierPreset {
-            id: "full",
-            label: "Full 完全",
-            description: "从不询问。灾难性命令的硬底线（fork bomb / rm -rf / 抹盘）依然生效，任何档位都无法关闭。\nNever asks. The catastrophic command floor still holds — no tier can disable it.",
-        },
+        TierPreset { id: "ask" },
+        TierPreset { id: "auto" },
+        TierPreset { id: "full" },
     ]
 }
 

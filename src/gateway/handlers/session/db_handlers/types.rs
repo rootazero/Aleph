@@ -58,6 +58,14 @@ pub struct SessionInfo {
     /// `active_project_root` when the session is reselected after a reload.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_root: Option<String>,
+    /// Per-session execution-tier override (`identity_meta.custom["exec_tier"]`,
+    /// written through `sessions.patch`). `None` ⇒ the session follows the global
+    /// `[policies.exec_tier]`. The run loop keeps enforcing a stored tier across
+    /// reloads, so the Panel must be able to read it back — without this carrier
+    /// the composer's tier pill silently under-reports the gate that is actually
+    /// live on the session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exec_tier: Option<String>,
 }
 
 /// Session history message.
