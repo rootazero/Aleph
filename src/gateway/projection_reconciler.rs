@@ -17,7 +17,7 @@
 use std::collections::HashSet;
 
 use crate::gateway::resume_coordinator::{classify_markers, ScanVerdict};
-use crate::gateway::session_projector::{project_event, TurnAccums};
+use crate::gateway::session_projector::project_event;
 use crate::gateway::session_store::SessionStore;
 use crate::session::projection::parse_source_seq;
 use crate::session::service::SessionId;
@@ -125,13 +125,11 @@ impl ProjectionReconciler {
 
         let watermark = seqs.iter().copied().max().unwrap_or(0);
 
-        // Replay the FULL event log (not just the tail above the watermark) so
-        // the token accumulator sees every LlmCall event of a turn that
-        // straddles the watermark. Writes are suppressed for seq <= watermark
-        // (those rows are already materialised — including any mixed/legacy
-        // rows whose ids are not projector seqs), so no duplicate rows are
-        // produced; LlmCall events never write rows, so replaying them below
-        // the watermark only feeds the accumulator.
+        // Replay the FULL event log, not just the tail above the watermark.
+        // Writes are suppressed for seq <= watermark (those rows are already
+        // materialised — including any mixed/legacy rows whose ids are not
+        // projector seqs), so no duplicate rows are produced, and the
+        // suppression check short-circuits before the per-event retirement read.
         let events = match self.event_store.load_all_events(session_id).await {
             Ok(e) => e,
             Err(e) => {
@@ -146,16 +144,8 @@ impl ProjectionReconciler {
         }
 
         let before = transcript.len();
-        let mut accums = TurnAccums::new();
         for rec in &events {
-            project_event(
-                &self.session_store,
-                &mut accums,
-                session_id,
-                rec,
-                Some(watermark),
-            )
-            .await;
+            project_event(&self.session_store, session_id, rec, Some(watermark)).await;
         }
         let after = self
             .session_store
@@ -207,8 +197,23 @@ mod tests {
         }
     }
 
+    /// An assistant message billed `tin`/`tout` — the shape `think.rs` emits,
+    /// one per LLM call.
+    fn assistant(tid: TurnId, tin: u32, tout: u32, at: i64) -> SessionEvent {
+        SessionEvent::AssistantMessage {
+            turn_id: tid,
+            content: mc("hello"),
+            usage: Some(crate::orchestrator::dispatch::TokenBreakdown {
+                input: tin,
+                output: tout,
+                ..Default::default()
+            }),
+            at,
+        }
+    }
+
     /// A minimal interrupted-run log: TurnStarted, UserMessage, RunStarted,
-    /// LlmCallStarted/Ended(tin,tout), AssistantMessage — and NO RunFinished.
+    /// AssistantMessage(tin,tout) — and NO RunFinished.
     fn interrupted_turn(tid: TurnId, tin: u32, tout: u32) -> Vec<(u64, SessionEvent)> {
         vec![
             (
@@ -236,33 +241,7 @@ mod tests {
                     project_root: None,
                 },
             ),
-            (
-                4,
-                SessionEvent::LlmCallStarted {
-                    turn_id: tid,
-                    provider: "anthropic".into(),
-                    model: "claude".into(),
-                    at: 4,
-                },
-            ),
-            (
-                5,
-                SessionEvent::LlmCallEnded {
-                    turn_id: tid,
-                    tokens_in: tin,
-                    tokens_out: tout,
-                    finish_reason: "stop".into(),
-                    at: 5,
-                },
-            ),
-            (
-                6,
-                SessionEvent::AssistantMessage {
-                    turn_id: tid,
-                    content: mc("hello"),
-                    at: 6,
-                },
-            ),
+            (6, assistant(tid, tin, tout, 6)),
         ]
     }
 
@@ -388,8 +367,6 @@ mod tests {
                     metadata: None,
                     input_tokens: 0,
                     output_tokens: 0,
-                    model: None,
-                    model_provider: None,
                     tool_call_id: None,
                     tool_name: None,
                 },
@@ -408,14 +385,16 @@ mod tests {
         assert_eq!(hist[0].id, "legacy-row-1");
     }
 
-    #[tokio::test]
-    async fn assistant_row_aggregates_multi_call_tokens() {
-        let event_store = mem_event_store();
-        let (session_store, _dir) = temp_file_store();
-        let id = SessionKey::ephemeral("recon-tokens");
-        session_store.get_or_create(&id).await.unwrap();
-        let tid = uuid::Uuid::new_v4();
-        let evs = vec![
+    /// A two-call turn (tool round-trip in the middle) produces TWO assistant
+    /// rows, each carrying its own call's tokens.
+    ///
+    /// This replaces a test that asserted ONE assistant row aggregating both
+    /// calls (15/27). That was never the shape production emits — `think.rs`
+    /// writes an `AssistantMessage` per Think step — and the aggregation it
+    /// checked was fed by `LlmCallEnded` events the test itself was the only
+    /// source of.
+    fn two_call_turn(tid: TurnId) -> Vec<(u64, SessionEvent)> {
+        vec![
             (
                 1,
                 SessionEvent::TurnStarted {
@@ -441,37 +420,19 @@ mod tests {
                     project_root: None,
                 },
             ),
-            (
-                4,
-                SessionEvent::LlmCallStarted {
-                    turn_id: tid,
-                    provider: "anthropic".into(),
-                    model: "claude".into(),
-                    at: 4,
-                },
-            ),
+            (4, assistant(tid, 10, 20, 4)),
             (
                 5,
-                SessionEvent::LlmCallEnded {
-                    turn_id: tid,
-                    tokens_in: 10,
-                    tokens_out: 20,
-                    finish_reason: "tool_use".into(),
-                    at: 5,
-                },
-            ),
-            (
-                6,
                 SessionEvent::ToolCallRequested {
                     turn_id: tid,
                     call_id: "c1".into(),
                     name: "bash_exec".into(),
                     input: serde_json::json!({"cmd":"ls"}),
-                    at: 6,
+                    at: 5,
                 },
             ),
             (
-                7,
+                6,
                 SessionEvent::ToolResult {
                     turn_id: tid,
                     call_id: "c1".into(),
@@ -479,49 +440,31 @@ mod tests {
                         value: serde_json::json!("ok"),
                         metadata: Default::default(),
                     },
-                    at: 7,
+                    at: 6,
                 },
             ),
-            (
-                8,
-                SessionEvent::LlmCallStarted {
-                    turn_id: tid,
-                    provider: "anthropic".into(),
-                    model: "claude".into(),
-                    at: 8,
-                },
-            ),
-            (
-                9,
-                SessionEvent::LlmCallEnded {
-                    turn_id: tid,
-                    tokens_in: 5,
-                    tokens_out: 7,
-                    finish_reason: "stop".into(),
-                    at: 9,
-                },
-            ),
-            (
-                10,
-                SessionEvent::AssistantMessage {
-                    turn_id: tid,
-                    content: mc("final"),
-                    at: 10,
-                },
-            ),
-        ];
-        append_all(&event_store, &id, &evs).await;
+            (7, assistant(tid, 5, 7, 7)),
+        ]
+    }
+
+    #[tokio::test]
+    async fn each_assistant_row_carries_its_own_calls_tokens() {
+        let event_store = mem_event_store();
+        let (session_store, _dir) = temp_file_store();
+        let id = SessionKey::ephemeral("recon-tokens");
+        session_store.get_or_create(&id).await.unwrap();
+        append_all(&event_store, &id, &two_call_turn(uuid::Uuid::new_v4())).await;
 
         ProjectionReconciler::new(event_store.clone(), session_store.clone())
             .reconcile_interrupted()
             .await;
 
         let hist = session_store.get_history(&id, None).await.unwrap();
-        // rows: user, tool(req), tool(res), assistant
-        assert_eq!(hist.len(), 4, "user + 2 tool rows + assistant");
-        let asst = hist.iter().find(|m| m.role == "assistant").unwrap();
-        assert_eq!(asst.input_tokens, 15, "10 + 5 across both LLM calls");
-        assert_eq!(asst.output_tokens, 27, "20 + 7 across both LLM calls");
+        assert_eq!(hist.len(), 5, "user + assistant + 2 tool rows + assistant");
+        let asst: Vec<_> = hist.iter().filter(|m| m.role == "assistant").collect();
+        assert_eq!(asst.len(), 2, "one row per LLM call");
+        assert_eq!((asst[0].input_tokens, asst[0].output_tokens), (10, 20));
+        assert_eq!((asst[1].input_tokens, asst[1].output_tokens), (5, 7));
     }
 
     #[tokio::test]
@@ -554,8 +497,6 @@ mod tests {
                     metadata: None,
                     input_tokens: 0,
                     output_tokens: 0,
-                    model: None,
-                    model_provider: None,
                     tool_call_id: None,
                     tool_name: None,
                 },
@@ -577,133 +518,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn straddling_turn_aggregates_tokens_across_watermark() {
-        // A turn with TWO LLM calls and a tool round-trip between them. The
-        // row-producing events up to the crash (user=2, tool_req=6, tool_res=7)
-        // were already flushed to the transcript; the AssistantMessage (10) was
-        // NOT. Watermark = max flushed row seq = 7, which sits BETWEEN the
-        // turn's two LlmCallEnded events (seq 5 and seq 9). The reconciler must
-        // still aggregate BOTH calls onto the back-filled assistant row.
+    async fn back_filled_row_carries_its_tokens_across_the_watermark() {
+        // A crash mid-turn: the first assistant row and both tool rows were
+        // flushed (seqs 2,4,5,6 ⇒ watermark 6); the SECOND assistant row (seq 7)
+        // was not. The back-filled row must arrive with its own call's tokens.
+        //
+        // This used to be a straddling-accumulator test — the watermark sat
+        // between the turn's two `LlmCallEnded` events and the reconciler had to
+        // replay below it to re-sum them. That whole hazard is gone: a row's
+        // tokens now ride on the very event that produces the row, so there is
+        // nothing left to carry across a watermark. What is still worth pinning
+        // is that the back-fill neither loses the tokens nor duplicates the rows
+        // already below it.
         let event_store = mem_event_store();
         let (session_store, _dir) = temp_file_store();
         let id = SessionKey::ephemeral("recon-straddle");
         session_store.get_or_create(&id).await.unwrap();
         let key = id.to_key_string();
-        let tid = uuid::Uuid::new_v4();
 
-        let evs = vec![
-            (
-                1,
-                SessionEvent::TurnStarted {
-                    turn_id: tid,
-                    trigger: TurnTrigger::UserMessage,
-                    at: 1,
-                },
-            ),
-            (
-                2,
-                SessionEvent::UserMessage {
-                    turn_id: tid,
-                    content: mc("q"),
-                    at: 2,
-                    synthetic: false,
-                },
-            ),
-            (
-                3,
-                SessionEvent::RunStarted {
-                    run_id: "r1".into(),
-                    at: 3,
-                    project_root: None,
-                },
-            ),
-            (
-                4,
-                SessionEvent::LlmCallStarted {
-                    turn_id: tid,
-                    provider: "anthropic".into(),
-                    model: "claude".into(),
-                    at: 4,
-                },
-            ),
+        append_all(&event_store, &id, &two_call_turn(uuid::Uuid::new_v4())).await;
+
+        // Simulate the partial flush: pre-materialise seqs 2, 4, 5, 6 with
+        // projector-style ids. The seq-7 assistant row is intentionally missing.
+        for (seq, role, content, tin, tout, tool_name, tool_call_id) in [
+            (2u64, "user", "q", 0i64, 0i64, None, None),
+            (4, "assistant", "hello", 10, 20, None, None),
             (
                 5,
-                SessionEvent::LlmCallEnded {
-                    turn_id: tid,
-                    tokens_in: 10,
-                    tokens_out: 20,
-                    finish_reason: "tool_use".into(),
-                    at: 5,
-                },
-            ),
-            (
-                6,
-                SessionEvent::ToolCallRequested {
-                    turn_id: tid,
-                    call_id: "c1".into(),
-                    name: "bash_exec".into(),
-                    input: serde_json::json!({"cmd":"ls"}),
-                    at: 6,
-                },
-            ),
-            (
-                7,
-                SessionEvent::ToolResult {
-                    turn_id: tid,
-                    call_id: "c1".into(),
-                    output: ToolOutput {
-                        value: serde_json::json!("ok"),
-                        metadata: Default::default(),
-                    },
-                    at: 7,
-                },
-            ),
-            (
-                8,
-                SessionEvent::LlmCallStarted {
-                    turn_id: tid,
-                    provider: "anthropic".into(),
-                    model: "claude".into(),
-                    at: 8,
-                },
-            ),
-            (
-                9,
-                SessionEvent::LlmCallEnded {
-                    turn_id: tid,
-                    tokens_in: 5,
-                    tokens_out: 7,
-                    finish_reason: "stop".into(),
-                    at: 9,
-                },
-            ),
-            (
-                10,
-                SessionEvent::AssistantMessage {
-                    turn_id: tid,
-                    content: mc("final"),
-                    at: 10,
-                },
-            ),
-        ];
-        append_all(&event_store, &id, &evs).await;
-
-        // Simulate the partial flush: pre-materialise the row-producing events
-        // up to the crash point (seqs 2, 6, 7) with projector-style ids. The
-        // assistant row (seq 10) is intentionally missing.
-        for (seq, role, content, tool_name, tool_call_id) in [
-            (2u64, "user", "q", None, None),
-            (
-                6,
                 "tool",
                 "ls",
+                0,
+                0,
                 Some("bash_exec".to_string()),
                 Some("c1".to_string()),
             ),
             (
-                7,
+                6,
                 "tool",
                 "ok",
+                0,
+                0,
                 Some("bash_exec".to_string()),
                 Some("c1".to_string()),
             ),
@@ -717,10 +571,8 @@ mod tests {
                         content: content.into(),
                         timestamp: seq as i64,
                         metadata: None,
-                        input_tokens: 0,
-                        output_tokens: 0,
-                        model: None,
-                        model_provider: None,
+                        input_tokens: tin,
+                        output_tokens: tout,
                         tool_call_id,
                         tool_name,
                     },
@@ -734,19 +586,22 @@ mod tests {
             .await;
 
         let hist = session_store.get_history(&id, None).await.unwrap();
-        let asst = hist
-            .iter()
-            .find(|m| m.role == "assistant")
-            .expect("assistant row back-filled");
         assert_eq!(
-            asst.input_tokens, 15,
-            "10 (call 1, below watermark) + 5 (call 2)"
+            hist.len(),
+            5,
+            "4 pre-flushed + 1 back-filled, no duplicates"
+        );
+        let asst: Vec<_> = hist.iter().filter(|m| m.role == "assistant").collect();
+        assert_eq!(asst.len(), 2);
+        assert_eq!(
+            (asst[0].input_tokens, asst[0].output_tokens),
+            (10, 20),
+            "row below the watermark must be left exactly as it was"
         );
         assert_eq!(
-            asst.output_tokens, 27,
-            "20 (call 1, below watermark) + 7 (call 2)"
+            (asst[1].input_tokens, asst[1].output_tokens),
+            (5, 7),
+            "back-filled row must arrive with its own call's tokens"
         );
-        // 3 pre-flushed rows + 1 back-filled assistant, no duplicates.
-        assert_eq!(hist.len(), 4, "no duplicate rows");
     }
 }

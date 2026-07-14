@@ -34,7 +34,7 @@ pub(crate) mod xml_util;
 
 use crate::sync_primitives::Arc;
 
-pub use cache::{CacheControl, CacheStrategy};
+pub use cache::CacheControl;
 pub use context::ContextAggregator;
 pub use interaction::{
     Capability, InteractionConstraints, InteractionManifest, InteractionParadigm,

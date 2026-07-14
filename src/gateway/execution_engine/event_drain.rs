@@ -765,6 +765,8 @@ mod tests {
             estimated_cost: None,
             context_tokens: 1234,
             context_window: 200_000,
+            serving_model: None,
+            serving_provider: None,
         };
 
         let summary = super::build_run_summary(&outcome);

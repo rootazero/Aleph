@@ -48,6 +48,9 @@ fn map_session_metadata(row: &rusqlite::Row) -> Result<SessionMetadata, rusqlite
         parent_session_key: row.get(15)?,
         compaction_count: row.get(16)?,
         derived_title: row.get(17).ok(),
+        // Column added later; `.ok()` + default keeps a pre-migration row (or a
+        // NULL) reading as 0.0 rather than panicking.
+        estimated_cost_usd: row.get::<_, Option<f64>>(18).ok().flatten().unwrap_or(0.0),
         ..Default::default()
     })
 }

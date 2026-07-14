@@ -586,7 +586,7 @@ where
                         .await;
                 }
 
-                let occupancy = occupancy_out.lock().ok().and_then(|g| *g);
+                let occupancy = occupancy_out.lock().ok().and_then(|g| g.clone());
                 // SSOT: the harness already emitted SessionEvent::AssistantMessage for
                 // `response` (the projector writes that row). Emit run_id + occupancy so
                 // the projector stamps them onto that row — preserving the Panel context
@@ -598,6 +598,11 @@ where
                             context_tokens: 0,
                             context_window: 0,
                             total_tokens: 0,
+                            input_tokens: 0,
+                            output_tokens: 0,
+                            cost_usd: None,
+                            model: None,
+                            model_provider: None,
                         },
                     };
                     let _ = svc
@@ -609,6 +614,11 @@ where
                                 context_tokens: occ.context_tokens,
                                 context_window: occ.context_window,
                                 total_tokens: occ.total_tokens,
+                                input_tokens: occ.input_tokens,
+                                output_tokens: occ.output_tokens,
+                                cost_usd: occ.cost_usd,
+                                model: occ.model,
+                                model_provider: occ.model_provider,
                                 at: crate::session::events::now_ms(),
                             },
                         )
@@ -1432,9 +1442,14 @@ mod carry_policy_metadata_tests {
             ("conversation_id", "42"),
         ]));
         assert_eq!(carried.len(), 2);
-        assert_eq!(carried.get("caller_role").map(String::as_str), Some("guest"));
         assert_eq!(
-            carried.get(CHANNEL_TOOL_PERMISSIONS_KEY).map(String::as_str),
+            carried.get("caller_role").map(String::as_str),
+            Some("guest")
+        );
+        assert_eq!(
+            carried
+                .get(CHANNEL_TOOL_PERMISSIONS_KEY)
+                .map(String::as_str),
             Some(r#"{"default":"deny"}"#)
         );
         // An unattended run must keep failing closed on approval-gated tools:

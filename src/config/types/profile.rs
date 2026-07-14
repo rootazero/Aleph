@@ -69,10 +69,6 @@ pub struct ProfileConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
 
-    /// Context caching strategy
-    #[serde(default)]
-    pub cache_strategy: CacheStrategy,
-
     /// History limit (max messages to retain in context)
     /// Helps control "gravity" (token accumulation)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -83,29 +79,15 @@ pub struct ProfileConfig {
     pub smart_recall: Option<SmartRecallConfig>,
 }
 
-// =============================================================================
-// CacheStrategy
-// =============================================================================
-
-/// Context caching strategy for the profile
-///
-/// Different providers have different caching mechanisms:
-/// - Anthropic: Ephemeral (`cache_control` blocks, stateless)
-/// - Gemini: Persistent (explicit cache creation, stateful)
-/// - `OpenAI`: Transparent (automatic caching)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum CacheStrategy {
-    /// Automatic: Let the system decide based on provider
-    #[default]
-    Auto,
-    /// Aggressive: Always try to cache when token count exceeds threshold
-    Aggressive,
-    /// Conservative: Only cache for very large contexts
-    Conservative,
-    /// Disabled: Never use provider-side caching
-    Disabled,
-}
+// `CacheStrategy` (auto / aggressive / conservative / disabled) lived here and
+// was read by nobody. It was worse than dead code: it is a knob a user can SET.
+// Someone writing `cache_strategy = "disabled"` in their profile believed they
+// had turned provider caching off, and nothing happened. Prompt caching is
+// decided by the protocol adapters from the model's declared capabilities
+// (`providers/protocols/anthropic/adapter.rs` places the breakpoints); there is
+// no strategy dial, so the honest thing is to stop offering one. `ProfileConfig`
+// does not `deny_unknown_fields`, so an existing config carrying the key still
+// parses — it is simply ignored, as it always effectively was.
 
 // =============================================================================
 // SmartRecallConfig
@@ -333,12 +315,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_strategy_default() {
-        let profile = ProfileConfig::default();
-        assert_eq!(profile.cache_strategy, CacheStrategy::Auto);
-    }
-
-    #[test]
     fn test_effective_model() {
         let profile = ProfileConfig::default();
         assert_eq!(profile.effective_model("claude-default"), "claude-default");
@@ -369,8 +345,9 @@ mod tests {
         assert_eq!(profile.model, Some("claude-3-5-sonnet".to_string()));
         assert_eq!(profile.tools.len(), 3);
         assert_eq!(profile.temperature, Some(0.2));
-        assert_eq!(profile.cache_strategy, CacheStrategy::Aggressive);
         assert_eq!(profile.history_limit, Some(50));
+        // The TOML above deliberately still carries `cache_strategy` — an
+        // existing user config must keep parsing after the key was removed.
     }
 
     #[test]

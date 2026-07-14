@@ -213,6 +213,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // consults the same resolution before it is allowed to dispatch, so the
         // two surfaces cannot enforce different rules.
         let (exec_tier, tool_permissions) = self.resolve_turn_permissions(request, &agent).await;
+        // This turn's reasoning depth (composer pill / RPC `thinking` param /
+        // the model's own `self_config` call, else whatever the session was
+        // last stamped with). `None` = send no thinking directive, which is the
+        // behaviour every release before this one shipped.
+        let think_level = self.resolve_turn_think_level(request).await;
         let _max_loops = agent.config().max_loops as usize;
         let token_budget = agent.config().max_tokens.unwrap_or(500_000);
 
@@ -617,13 +622,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // surfaced only via `tool_search`. Build the search corpus from the
             // pre-collapse registry snapshot (name + description + full schema)
             // and register the meta-tool. Empty when off ⇒ byte-identical.
-            let deferred_tool_names: std::collections::BTreeSet<String> =
-                if self.config.defer_mcp_tools {
-                    mcp_tool_names
-                } else {
-                    std::collections::BTreeSet::new()
-                };
-            if !deferred_tool_names.is_empty() {
+            // ONE shared handle: the ScopedToolService filters on it and
+            // `tool_search` shrinks it when the model discovers a tool. Two
+            // independent sets here would make deferred tools permanently
+            // uncallable, which is exactly the bug this replaced.
+            let deferred = if self.config.defer_mcp_tools {
+                crate::tools::scoped::DeferredTools::new(mcp_tool_names)
+            } else {
+                crate::tools::scoped::DeferredTools::empty()
+            };
+            if !deferred.is_empty() {
                 let docs: Vec<crate::tools::tool_search::ToolDoc> = loop_registry_inner
                     .tool_definitions()
                     .into_iter()
@@ -634,7 +642,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     })
                     .collect();
                 loop_registry_inner.register(Box::new(
-                    crate::tools::tool_search::ToolSearchTool::new(docs),
+                    crate::tools::tool_search::ToolSearchTool::new(docs, deferred.clone()),
                 ));
                 if !allowed_names.is_empty() {
                     allowed_names
@@ -684,7 +692,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     unattended,
                     &self.config.core_tools,
                     self.config.truncate_tool_descriptions,
-                    deferred_tool_names.clone(),
+                    deferred.clone(),
                 );
 
             // Trace sink — built before SubagentTool so it can be inherited by
@@ -908,7 +916,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 unattended,
                 &self.config.core_tools,
                 self.config.truncate_tool_descriptions,
-                deferred_tool_names.clone(),
+                deferred.clone(),
             );
 
             // Legacy backfill: a session with `messages` rows but no
@@ -1018,6 +1026,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // iteration of the enclosing `loop` (mirrors
                 // `effective_user_input.clone()`).
                 transient_context: transient_context.clone(),
+                // Reasoning depth for this turn — resolved above, forwarded to
+                // the harness bridge, and finally stamped onto every
+                // `RequestPayload` in `think.rs`.
+                think_level,
             };
 
             // Dispatch via the orchestrator

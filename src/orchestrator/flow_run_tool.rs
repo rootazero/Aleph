@@ -91,6 +91,9 @@ impl FlowRunTool {
             max_iterations_override: None,
             // Subagent sub-flows carry no gateway per-turn reminders.
             transient_context: None,
+            // No per-run thinking directive on this path — the provider keeps its
+            // own default, which is what every release before this field sent.
+            think_level: None,
         };
         let handle = self.orchestrator.dispatch(req).await?;
         let outcome = handle

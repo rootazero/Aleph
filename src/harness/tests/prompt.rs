@@ -47,6 +47,7 @@ fn assistant_with_tool_use(tool_id: &str, tool_name: &str) -> SessionEventRecord
             thinking: None,
             thinking_signature: None,
         },
+        usage: None,
         at: now_ms(),
     })
 }

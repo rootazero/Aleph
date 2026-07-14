@@ -57,7 +57,24 @@ const TARGET: usize = 4900;
 
 /// What the 12 files actually total today, under the documented measurement.
 /// Frozen, so the overrun cannot keep growing the way it grew to here.
-const CEILING: usize = 5994;
+///
+/// **5994 → 5997 (2026-07-14).** Raised deliberately. `think.rs` now stamps the
+/// billed tokens of each LLM call onto the `AssistantMessage` it produces
+/// (`usage: response.usage.as_ref().map(Into::into)`, once on the normal path
+/// and once on the grace turn) plus the doc line explaining why a
+/// retry-discarded call is accounted but never becomes a message. R10's three
+/// questions:
+///   1. *Scaffolding or cognition?* Scaffolding — copying a number the provider
+///      already reported onto the event that spent it. No decision is made.
+///   2. *Will a stronger model still need it?* Yes. Billing attribution is a
+///      property of the protocol, not of model capability.
+///   3. *How many real consumers?* Two, both pre-existing and both previously
+///      fed zeros: `messages.input_tokens` / `output_tokens` (the Panel and the
+///      `sessions` tool read them) — see `gateway::session_projector`.
+///
+/// The alternative was to keep the count flat by deleting comments, which is
+/// the bookkeeping dishonesty this file exists to prevent.
+const CEILING: usize = 5997;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

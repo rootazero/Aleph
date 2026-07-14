@@ -76,6 +76,12 @@ impl AiProvider for ModelOverrideProvider {
     fn serving_model_hint(&self) -> Option<std::borrow::Cow<'_, str>> {
         Some(std::borrow::Cow::Borrowed(self.model.as_str()))
     }
+
+    /// This wrapper pins the MODEL, not the provider — the provider is still
+    /// whoever the inner chain resolves to.
+    fn serving_provider_hint(&self) -> Option<std::borrow::Cow<'_, str>> {
+        self.inner.serving_provider_hint()
+    }
 }
 
 #[cfg(test)]

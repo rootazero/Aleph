@@ -392,21 +392,26 @@ impl TokenUsage {
     /// is `None`) or when both prompt counters are zero. `Some(0.0)` indicates an
     /// observed cold miss, distinct from "provider didn't report cache stats".
     ///
-    /// Cross-protocol semantics:
-    /// - **`OpenAI` / `DeepSeek` / Volcengine** report `prompt_tokens` as the *total*,
-    ///   with the cached subset surfaced separately. Here `input_tokens` already
-    ///   includes `cache_read_tokens`, so the denominator is `input_tokens`.
-    /// - **Anthropic** reports `input_tokens` as the *non-cached* portion only,
-    ///   alongside a disjoint `cache_read_input_tokens`. Here the denominator
-    ///   becomes `input_tokens + cache_read_tokens`.
-    /// - **Gemini** reports an overlapping `promptTokenCount` on the wire, but
-    ///   its adapter subtracts `cachedContentTokenCount` at the source (the
-    ///   pricing layer bills `input` and `cache_read` additively), so by the
-    ///   time it reaches this struct it is Anthropic-shaped (disjoint).
+    /// # Disjoint-counters invariant
     ///
-    /// The branch detects which convention applies from the magnitudes: when
-    /// `cache_read_tokens > input_tokens` the inputs are clearly disjoint
-    /// (Anthropic), otherwise they are treated as overlapping (OpenAI-family).
+    /// Every field of this struct is **disjoint**: `input_tokens` never
+    /// includes `cache_read_tokens` or `cache_creation_tokens`, so the full
+    /// prompt is always their sum. That is a *post-condition of the protocol
+    /// adapters*, not something inferred here — each adapter knows its own wire
+    /// contract and normalizes at the source:
+    ///
+    /// - **Anthropic** reports disjoint counters natively.
+    /// - **`OpenAI` / `DeepSeek` / Volcengine / Moonshot** report `prompt_tokens`
+    ///   as the *total* (cached included), so `openai_chat/sse.rs` and
+    ///   `openai_responses/mod.rs` subtract the cached portion.
+    /// - **Gemini** reports an overlapping `promptTokenCount`, so `gemini/sse.rs`
+    ///   subtracts `cachedContentTokenCount`.
+    ///
+    /// Normalizing at the source is what lets the pricing layer bill `input`,
+    /// `cache_read` and `cache_creation` additively without double-counting.
+    /// The previous code instead *guessed* the convention from the magnitudes
+    /// (`cache_read > input ⇒ Anthropic`), which silently misclassified every
+    /// Anthropic turn whose cached prefix was smaller than its fresh input.
     #[must_use]
     pub fn cache_hit_ratio(&self) -> Option<f64> {
         let cache_read = self.cache_read_tokens?;
@@ -415,14 +420,7 @@ impl TokenUsage {
             return Some(0.0);
         }
         let cache_read = u64::from(cache_read);
-        let input = u64::from(self.input_tokens);
-        let total_prompt = if cache_read > input {
-            // Anthropic shape: input excludes the cached portion.
-            input.saturating_add(cache_read)
-        } else {
-            // OpenAI / DeepSeek shape: input already includes the cached portion.
-            input
-        };
+        let total_prompt = u64::from(self.input_tokens).saturating_add(cache_read);
         if total_prompt == 0 {
             return None;
         }
@@ -438,29 +436,17 @@ impl TokenUsage {
     /// cache hit (where Anthropic reports a tiny `input_tokens`) would look like
     /// the prompt suddenly shrank tenfold.
     ///
-    /// Uses the same disjoint-vs-overlapping convention detection as
-    /// [`TokenUsage::cache_hit_ratio`]:
-    /// - **Anthropic** reports `input_tokens` as the non-cached, non-creation
-    ///   portion, with `cache_read`/`cache_creation` disjoint → sum all three.
-    /// - **`OpenAI` / `DeepSeek` / Volcengine** report `input_tokens` (prompt
-    ///   tokens) as the total already, with `cache_read` a subset → `input_tokens`.
+    /// Relies on the disjoint-counters invariant documented on
+    /// [`TokenUsage::cache_hit_ratio`]: the adapters have already normalized
+    /// every protocol so the three prompt counters never overlap. The full
+    /// prompt is therefore their sum, unconditionally.
     ///
     /// Returns 0 when the provider reported no usage (all counters zero).
     #[must_use]
     pub fn prompt_tokens_total(&self) -> u64 {
-        let input = u64::from(self.input_tokens);
-        let cache_read = u64::from(self.cache_read_tokens.unwrap_or(0));
-        let cache_creation = u64::from(self.cache_creation_tokens.unwrap_or(0));
-        if cache_read > input {
-            // Anthropic shape: input excludes the cached + creation portions.
-            input
-                .saturating_add(cache_read)
-                .saturating_add(cache_creation)
-        } else {
-            // OpenAI-family: input already includes any cache_read; creation is
-            // an Anthropic-only concept (0 here) but folded in defensively.
-            input.saturating_add(cache_creation)
-        }
+        u64::from(self.input_tokens)
+            .saturating_add(u64::from(self.cache_read_tokens.unwrap_or(0)))
+            .saturating_add(u64::from(self.cache_creation_tokens.unwrap_or(0)))
     }
 
     /// Tokens occupying the model's context window as of this call: the full
@@ -602,23 +588,17 @@ mod tests {
         assert_eq!(usage.cache_creation_tokens, Some(20));
     }
 
-    /// OpenAI / DeepSeek shape: `input_tokens` is the total prompt size and
-    /// `cache_read_tokens` is a subset. Ratio uses input as denominator.
+    /// The disjoint-counters invariant: a 100-token prompt with 80 cached
+    /// reaches this struct as `input=20, cache_read=80` on EVERY protocol —
+    /// Anthropic natively, OpenAI/Gemini because their adapters subtract at the
+    /// source. The denominator is therefore always the sum.
+    ///
+    /// The old code guessed the convention from magnitudes (`cache_read > input
+    /// ⇒ disjoint`) and had two tests here, one per "shape". The OpenAI shape
+    /// (`input=100, cache_read=80`, i.e. cached counted twice) is no longer a
+    /// state any adapter can produce.
     #[test]
-    fn cache_hit_ratio_openai_shape() {
-        let usage = TokenUsage {
-            input_tokens: 100,
-            cache_read_tokens: Some(80),
-            ..Default::default()
-        };
-        let ratio = usage.cache_hit_ratio().expect("ratio present");
-        assert!((ratio - 0.8).abs() < 1e-9, "expected 0.8, got {ratio}");
-    }
-
-    /// Anthropic shape: `input_tokens` excludes the cached portion so it can be
-    /// smaller than `cache_read_tokens`. Denominator becomes the sum.
-    #[test]
-    fn cache_hit_ratio_anthropic_shape() {
+    fn cache_hit_ratio_uses_disjoint_prompt_total() {
         let usage = TokenUsage {
             input_tokens: 20,
             cache_read_tokens: Some(80),
@@ -628,11 +608,13 @@ mod tests {
         assert!((ratio - 0.8).abs() < 1e-9, "expected 0.8, got {ratio}");
     }
 
-    /// 100% hit on OpenAI shape: input==cache_read.
+    /// 100% hit: the whole prompt came from cache, so the fresh input is 0.
+    /// (Under the old magnitude heuristic this arrived as `input == cache_read`,
+    /// which that branch could not distinguish from a 50% hit.)
     #[test]
-    fn cache_hit_ratio_full_hit_openai_shape() {
+    fn cache_hit_ratio_full_hit() {
         let usage = TokenUsage {
-            input_tokens: 100,
+            input_tokens: 0,
             cache_read_tokens: Some(100),
             ..Default::default()
         };
@@ -672,11 +654,12 @@ mod tests {
         assert_eq!(usage.cache_hit_ratio(), Some(0.0));
     }
 
-    /// OpenAI shape: prompt total == input_tokens (cache_read is a subset, not added).
+    /// A 1000-token OpenAI prompt with 800 cached arrives normalized
+    /// (`input=200, cache_read=800`) and sums back to the true prompt size.
     #[test]
-    fn prompt_tokens_total_openai_shape() {
+    fn prompt_tokens_total_normalized_openai() {
         let usage = TokenUsage {
-            input_tokens: 1000,
+            input_tokens: 200,
             cache_read_tokens: Some(800),
             ..Default::default()
         };
@@ -721,7 +704,7 @@ mod tests {
 
     #[test]
     fn context_occupancy_folds_prompt_plus_output_anthropic_shape() {
-        // Anthropic shape: input excludes cache; cache_read > input ⇒ disjoint.
+        // Anthropic reports disjoint counters natively.
         let u = TokenUsage {
             input_tokens: 100,
             output_tokens: 40,
@@ -735,17 +718,18 @@ mod tests {
     }
 
     #[test]
-    fn context_occupancy_no_double_count_openai_shape() {
-        // OpenAI shape: input already includes cache_read (cache_read <= input).
+    fn context_occupancy_no_double_count_normalized_openai() {
+        // A 1000-token OpenAI prompt with 200 cached, normalized at the adapter
+        // to disjoint counters.
         let u = TokenUsage {
-            input_tokens: 1000,
+            input_tokens: 800,
             output_tokens: 30,
             cache_read_tokens: Some(200),
             cache_creation_tokens: None,
             thinking_tokens: None,
             cost: None,
         };
-        // prompt = 1000（cache 已在内）; + output 30 = 1030
+        // prompt = 800 + 200 = 1000; + output 30 = 1030
         assert_eq!(u.context_occupancy_tokens(), 1030);
     }
 

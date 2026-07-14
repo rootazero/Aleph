@@ -214,38 +214,52 @@ impl GeminiProtocol {
     ///
     /// - Gemini 2.5 models → `thinkingBudget` (integer)
     /// - All others (Gemini 3+) → `thinkingLevel` (enum)
+    ///
+    /// # `Off` must be sent, not omitted
+    ///
+    /// This used to `return None` for `Off`, emitting no `thinkingConfig` at all.
+    /// But Gemini 2.5 Flash **thinks by default** — omitting the config does not
+    /// disable thinking, it accepts the model's default budget, which then bills
+    /// as output tokens. "Thinking off" therefore bought thinking and charged for
+    /// it. The documented disable is an explicit `thinkingBudget: 0`.
+    ///
+    /// The Gemini 3+ `thinkingLevel` enum has no "off" member, so `Off` floors to
+    /// its cheapest level instead — the same semantics `clamp_effort` applies on
+    /// the OpenAI side (disable where the family can, else the least reasoning it
+    /// offers). No API constant is invented here.
+    ///
+    /// `Off` is distinct from `think_level: None`, which never reaches this
+    /// function and leaves the provider on its own default.
     pub(super) fn map_think_level(level: &ThinkLevel, model: &str) -> Option<ThinkingConfig> {
-        if *level == ThinkLevel::Off {
-            return None;
-        }
         // Gemini 2.5 models use thinkingBudget; all others use thinkingLevel
         let use_budget = model.contains("gemini-2.5");
         if use_budget {
             let budget = match level {
+                ThinkLevel::Off => 0,
                 ThinkLevel::Minimal => 500,
                 ThinkLevel::Low => 1000,
                 ThinkLevel::Medium => 2000,
                 ThinkLevel::High => 4000,
                 ThinkLevel::XHigh => 8000,
-                ThinkLevel::Off => unreachable!(),
             };
             Some(ThinkingConfig {
                 thinking_budget: Some(budget),
                 thinking_level: None,
-                include_thoughts: Some(true),
+                // Asking for thoughts we just disabled is incoherent, and on a
+                // zero budget there are none to include.
+                include_thoughts: Some(*level != ThinkLevel::Off),
             })
         } else {
             let level_str = match level {
-                ThinkLevel::Minimal => "MINIMAL",
+                ThinkLevel::Off | ThinkLevel::Minimal => "MINIMAL",
                 ThinkLevel::Low => "LOW",
                 ThinkLevel::Medium => "MEDIUM",
                 ThinkLevel::High | ThinkLevel::XHigh => "HIGH",
-                ThinkLevel::Off => unreachable!(),
             };
             Some(ThinkingConfig {
                 thinking_budget: None,
                 thinking_level: Some(level_str.into()),
-                include_thoughts: Some(true),
+                include_thoughts: Some(*level != ThinkLevel::Off),
             })
         }
     }

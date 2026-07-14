@@ -29,7 +29,8 @@ impl SessionManager {
                 "SELECT key, agent_id, session_type, created_at, last_active_at,
                         message_count, total_tokens, auto_reset_at, state, metadata,
                         label, input_tokens, output_tokens, model, model_provider,
-                        parent_session_key, compaction_count, derived_title
+                        parent_session_key, compaction_count, derived_title,
+                        estimated_cost_usd
                  FROM sessions WHERE key = ?",
                 params![&key_str],
                 map_session_metadata,
@@ -92,53 +93,26 @@ impl SessionManager {
         })
     }
 
-    /// Add a message to a session
-    #[allow(deprecated)]
+    /// Add a message to a session.
+    ///
+    /// (There was an `add_message_with_meta` between this and `add_message_full`.
+    /// It was `#[deprecated]`, its only caller was this function, and that caller
+    /// passed `None` for every one of its five extra parameters — including the
+    /// `model` / `model_provider` pair that `add_message_full` no longer takes.)
     pub async fn add_message(
         &self,
         key: &SessionKey,
         role: &str,
         content: &str,
     ) -> Result<i64, SessionManagerError> {
-        self.add_message_with_meta(key, role, content, None, 0, 0, None, None)
+        self.add_message_full(key, role, content, None, 0, 0, None, None, None)
             .await
-    }
-
-    /// Add a message to a session with optional metadata and token tracking.
-    #[deprecated(note = "SQLite messages table is legacy; new code should use FileSessionStore")]
-    #[allow(clippy::too_many_arguments)]
-    pub async fn add_message_with_meta(
-        &self,
-        key: &SessionKey,
-        role: &str,
-        content: &str,
-        metadata: Option<&str>,
-        input_tokens: i64,
-        output_tokens: i64,
-        model: Option<&str>,
-        model_provider: Option<&str>,
-    ) -> Result<i64, SessionManagerError> {
-        self.add_message_full(
-            key,
-            role,
-            content,
-            metadata,
-            input_tokens,
-            output_tokens,
-            model,
-            model_provider,
-            None,
-            None,
-            None,
-        )
-        .await
     }
 
     /// Full insert — includes the two tool-tracking columns added in Task 1 and
     /// the `source_seq` back-reference to the `session_events` event this row
-    /// was projected from (`None` for rows that are not event-sourced).
-    /// `add_message_with_meta` delegates here with `None`s; the sqlite
-    /// `append_message` trait impl forwards the real values from the
+    /// was projected from (`None` for rows that are not event-sourced). The
+    /// sqlite `append_message` trait impl forwards the real values from the
     /// `MessageRecord` so tool cards survive a Panel reload and `chat.rewind`
     /// can delete exactly the rows whose source events it retired.
     #[allow(clippy::too_many_arguments)]
@@ -150,8 +124,6 @@ impl SessionManager {
         metadata: Option<&str>,
         input_tokens: i64,
         output_tokens: i64,
-        model: Option<&str>,
-        model_provider: Option<&str>,
         tool_call_id: Option<&str>,
         tool_name: Option<&str>,
         source_seq: Option<i64>,
@@ -209,10 +181,6 @@ impl SessionManager {
                 )
                 .unwrap_or(true);
 
-            let total_delta = input_tokens + output_tokens;
-            let model_owned = model.map(|s| s.to_string());
-            let provider_owned = model_provider.map(|s| s.to_string());
-
             let derived_title: Option<String> = if role == "user" {
                 conn.query_row(
                     "SELECT derived_title FROM sessions WHERE key = ?",
@@ -238,31 +206,28 @@ impl SessionManager {
                 None
             };
 
+            // Deliberately NOT accumulating this row's tokens onto
+            // `sessions.input_tokens` / `output_tokens` / `total_tokens`. This
+            // used to, and it was invisible only because every row's tokens were
+            // 0 (the projector's feeder event was never emitted). Now that the
+            // rows carry real per-call tokens, adding them here as well as in
+            // `update_session_usage` — which the run's `AssistantRunMeta` calls
+            // with the run's authoritative billed total — would bill the session
+            // twice for the same tokens. One writer, and it is the run's report:
+            // it also covers the calls a retry discarded before they could ever
+            // become a message row.
             let mut session_update_sql = String::from(
-                "UPDATE sessions SET last_active_at = ?, message_count = message_count + 1, input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, total_tokens = total_tokens + ?"
+                "UPDATE sessions SET last_active_at = ?, message_count = message_count + 1",
             );
             if valid_transition {
                 session_update_sql.push_str(", state = 'running'");
-            }
-            if model_owned.is_some() {
-                session_update_sql.push_str(", model = ?");
-            }
-            if provider_owned.is_some() {
-                session_update_sql.push_str(", model_provider = ?");
             }
             if derived_title.is_some() {
                 session_update_sql.push_str(", derived_title = ?");
             }
             session_update_sql.push_str(" WHERE key = ?");
 
-            let mut params: Vec<&dyn rusqlite::ToSql> =
-                vec![&now, &input_tokens, &output_tokens, &total_delta];
-            if let Some(ref m) = model_owned {
-                params.push(m);
-            }
-            if let Some(ref mp) = provider_owned {
-                params.push(mp);
-            }
+            let mut params: Vec<&dyn rusqlite::ToSql> = vec![&now];
             if let Some(ref dt) = derived_title {
                 params.push(dt);
             }
@@ -334,8 +299,6 @@ impl SessionManager {
                         .and_then(|s| serde_json::from_str(&s).ok()),
                     input_tokens: row.get(5)?,
                     output_tokens: row.get(6)?,
-                    model: None,
-                    model_provider: None,
                     tool_call_id: row.get(7)?,
                     tool_name: row.get(8)?,
                 })
@@ -409,8 +372,6 @@ impl SessionManager {
                         .and_then(|s| serde_json::from_str(&s).ok()),
                     input_tokens: row.get(5)?,
                     output_tokens: row.get(6)?,
-                    model: None,
-                    model_provider: None,
                     tool_call_id: row.get(7)?,
                     tool_name: row.get(8)?,
                 })

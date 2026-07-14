@@ -125,6 +125,22 @@ pub trait ToolService: Send + Sync + 'static {
 
     async fn list(&self) -> Vec<ToolDefinition>;
 
+    /// Every tool the model may legitimately CALL — the visible list plus the
+    /// deferred tier, which is hidden from the tool array but stays executable.
+    ///
+    /// Distinct from [`Self::list`] because tool-name repair must be judged
+    /// against what is *dispatchable*, not what is *displayed*. Building the
+    /// repairer's candidate set from `list()` meant a deferred tool's correct
+    /// name missed the Exact tier, leaving the Fuzzy tier free to silently
+    /// rewrite it into a different, resident tool — a correct call turned into
+    /// the wrong action.
+    ///
+    /// Defaults to `list()`: for services with no deferred tier the two sets are
+    /// identical.
+    async fn dispatchable_list(&self) -> Vec<ToolDefinition> {
+        self.list().await
+    }
+
     async fn describe(&self, name: &str) -> Option<ToolDefinition>;
 
     /// Return the metadata-form tool schema the LLM expects, as an `Arc`

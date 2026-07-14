@@ -676,8 +676,18 @@ fn parse_sse_event_multi(
                     .as_ref()
                     .and_then(|d| d.reasoning_tokens);
 
+                // `input_tokens` *includes* `input_tokens_details.cached_tokens`
+                // on this protocol, while Aleph's pricing bills `input` and
+                // `cache_read` additively (disjoint, Anthropic-shaped). Report
+                // the non-cached remainder as input — otherwise every cache hit
+                // is billed twice, and the error grows with cache
+                // effectiveness. Same subtraction as the Gemini adapter.
+                let input_tokens = u
+                    .input_tokens
+                    .saturating_sub(cache_read_tokens.unwrap_or(0));
+
                 out.push_back(Ok(ProviderDelta::Usage(TokenUsage {
-                    input_tokens: u.input_tokens,
+                    input_tokens,
                     output_tokens: u.output_tokens,
                     cache_read_tokens,
                     cache_creation_tokens: None, // Responses API does not surface cache-write

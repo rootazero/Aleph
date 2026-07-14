@@ -38,13 +38,67 @@ fn openai_chat_usage_deserializes_cache_and_reasoning_tokens() {
         })
         .expect("expected a ProviderDelta::Usage emission");
 
-    assert_eq!(usage_delta.input_tokens, 100);
+    // Fixture reports prompt_tokens=100 with cached_tokens=80. `prompt_tokens`
+    // is the TOTAL on this protocol, so the adapter normalizes to the disjoint
+    // convention the pricing layer bills against: 20 fresh + 80 cached.
+    // Asserting 100 here (as this test used to) pinned the double-billing bug.
+    assert_eq!(usage_delta.input_tokens, 20);
     assert_eq!(usage_delta.output_tokens, 50);
     assert_eq!(usage_delta.cache_read_tokens, Some(80));
     assert_eq!(usage_delta.thinking_tokens, Some(30));
     assert_eq!(usage_delta.cache_creation_tokens, None);
     // cost is always None on the Chat SSE path (no pricing data in stream)
     assert!(usage_delta.cost.is_none());
+}
+
+/// The regression this protects: `prompt_tokens` includes the cached subset,
+/// but `pricing::apply_rates` bills `input` and `cache_read` ADDITIVELY. If the
+/// adapter forwards `prompt_tokens` verbatim, a 90%-cached prompt is billed as
+/// 100% fresh input PLUS 90% cache-read — and the overcharge grows with cache
+/// effectiveness, so the better the cache works the more the cost report lies.
+#[test]
+fn openai_chat_usage_does_not_double_count_cached_prompt_tokens() {
+    let json_line = r#"{"id":"chatcmpl-x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":100000,"completion_tokens":200,"prompt_tokens_details":{"cached_tokens":90000}}}"#;
+    let mut collected: std::collections::VecDeque<
+        crate::providers::Result<crate::providers::ProviderDelta>,
+    > = Default::default();
+    let mut tracker = crate::providers::delta::IndexIdTracker::default();
+    super::sse::parse_chat_sse_event(json_line, &mut tracker, &mut collected);
+
+    let usage = collected
+        .iter()
+        .find_map(|res| match res {
+            Ok(crate::providers::ProviderDelta::Usage(u)) => Some(u),
+            _ => None,
+        })
+        .expect("usage delta should be emitted");
+
+    assert_eq!(usage.input_tokens, 10_000, "fresh input = prompt - cached");
+    assert_eq!(usage.cache_read_tokens, Some(90_000));
+    // The prompt total must still round-trip to the real wire figure.
+    assert_eq!(usage.prompt_tokens_total(), 100_000);
+}
+
+/// Defensive: a provider emitting an internally inconsistent payload
+/// (`cached > prompt`) must not underflow the fresh-input bucket. LiteLLM
+/// carries the same clamp for the same reason (real providers do this).
+#[test]
+fn openai_chat_usage_clamps_inconsistent_cached_over_prompt() {
+    let json_line = r#"{"id":"chatcmpl-x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":150}}}"#;
+    let mut collected: std::collections::VecDeque<
+        crate::providers::Result<crate::providers::ProviderDelta>,
+    > = Default::default();
+    let mut tracker = crate::providers::delta::IndexIdTracker::default();
+    super::sse::parse_chat_sse_event(json_line, &mut tracker, &mut collected);
+
+    let usage = collected
+        .iter()
+        .find_map(|res| match res {
+            Ok(crate::providers::ProviderDelta::Usage(u)) => Some(u),
+            _ => None,
+        })
+        .expect("usage delta should be emitted");
+    assert_eq!(usage.input_tokens, 0, "saturating floor, not underflow");
 }
 
 #[test]
@@ -91,7 +145,9 @@ fn openai_chat_usage_reads_deepseek_top_level_cache_hit_field() {
             _ => None,
         })
         .expect("usage delta should be emitted for DeepSeek-shaped payload");
-    assert_eq!(usage.input_tokens, 120);
+    // 120 total prompt, 96 of it cached ⇒ 24 fresh (DeepSeek's own
+    // `prompt_cache_miss_tokens: 24` independently confirms the subtraction).
+    assert_eq!(usage.input_tokens, 24);
     assert_eq!(usage.output_tokens, 34);
     assert_eq!(usage.cache_read_tokens, Some(96));
     assert_eq!(usage.cache_creation_tokens, None);
@@ -158,7 +214,17 @@ fn test_map_think_level() {
 
     // Off omits the field entirely; every other level maps faithfully so
     // gpt-5-family `minimal`/`xhigh` efforts are no longer silently collapsed.
-    assert!(OpenAiProtocol::map_think_level(&ThinkLevel::Off).is_none());
+    // `Off` emits an explicit "none", NOT an omitted field. Omitting
+    // `reasoning_effort` on a reasoning model selects the SERVER default
+    // (medium) — so the old `is_none()` assertion pinned a bug in which
+    // "thinking off" silently bought medium reasoning and billed it at the
+    // output rate. `clamp_effort` (applied by the adapter right after this call)
+    // floors "none" to the cheapest supported effort on families that cannot
+    // disable reasoning at all.
+    assert_eq!(
+        OpenAiProtocol::map_think_level(&ThinkLevel::Off).as_deref(),
+        Some("none")
+    );
     assert_eq!(
         OpenAiProtocol::map_think_level(&ThinkLevel::Minimal),
         Some("minimal".to_string())

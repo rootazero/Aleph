@@ -582,8 +582,6 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         | SessionEvent::UserMessage { turn_id, .. }
         | SessionEvent::AssistantMessage { turn_id, .. }
         | SessionEvent::SystemMessage { turn_id, .. }
-        | SessionEvent::LlmCallStarted { turn_id, .. }
-        | SessionEvent::LlmCallEnded { turn_id, .. }
         | SessionEvent::ToolCallRequested { turn_id, .. }
         | SessionEvent::ToolCallApproved { turn_id, .. }
         | SessionEvent::ToolCallDenied { turn_id, .. }
@@ -621,8 +619,6 @@ const fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::AssistantMessage { .. } => "assistant_message",
         SessionEvent::AssistantRunMeta { .. } => "assistant_run_meta",
         SessionEvent::SystemMessage { .. } => "system_message",
-        SessionEvent::LlmCallStarted { .. } => "llm_call_started",
-        SessionEvent::LlmCallEnded { .. } => "llm_call_ended",
         SessionEvent::ToolCallRequested { .. } => "tool_call_requested",
         SessionEvent::ToolCallApproved { .. } => "tool_call_approved",
         SessionEvent::ToolCallDenied { .. } => "tool_call_denied",

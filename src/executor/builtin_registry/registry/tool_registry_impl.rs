@@ -14,12 +14,11 @@ use std::pin::Pin;
 use serde_json::Value;
 use tracing::{debug, error, info};
 
-use crate::builtin_tools::meta_tools::{GetToolSchemaTool, ListToolsTool, SearchToolsTool};
 use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
 use crate::error::{AlephError, Result};
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::context::GatewayContext;
-use crate::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
+use crate::tool_metadata::{ToolSource, UnifiedTool};
 use crate::tools::AlephTool;
 use tokio::sync::RwLock;
 
@@ -153,29 +152,6 @@ impl ToolRegistry for BuiltinToolRegistry {
                         "Speech generation not available: no generation registry configured",
                     )
                 })?;
-                tool.call_json(arguments).await
-            }),
-
-            // Meta tools for smart tool discovery - use call_json
-            "list_tools" => Box::pin(async move {
-                let registry = self.tool_catalog.as_ref().ok_or_else(|| {
-                    AlephError::tool("list_tools not available: no tool catalog configured")
-                })?;
-                let tool = ListToolsTool::new(Arc::clone(registry));
-                tool.call_json(arguments).await
-            }),
-            "get_tool_schema" => Box::pin(async move {
-                let registry = self.tool_catalog.as_ref().ok_or_else(|| {
-                    AlephError::tool("get_tool_schema not available: no tool catalog configured")
-                })?;
-                let tool = GetToolSchemaTool::new(Arc::clone(registry));
-                tool.call_json(arguments).await
-            }),
-            "search_tools" => Box::pin(async move {
-                let registry = self.tool_catalog.as_ref().ok_or_else(|| {
-                    AlephError::tool("search_tools not available: no tool catalog configured")
-                })?;
-                let tool = SearchToolsTool::new(Arc::clone(registry));
                 tool.call_json(arguments).await
             }),
 

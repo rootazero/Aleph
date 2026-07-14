@@ -271,11 +271,6 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         name: "集群节点",
         tools: &["node_list", "node_invoke", "node_invoke_many", "node_file"],
     },
-    ToolCategory {
-        id: "tool_discovery",
-        name: "工具发现",
-        tools: &["list_tools", "get_tool_schema", "search_tools"],
-    },
 ];
 
 #[cfg(test)]

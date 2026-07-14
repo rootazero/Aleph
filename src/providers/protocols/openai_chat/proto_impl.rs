@@ -203,12 +203,28 @@ impl OpenAiProtocol {
     /// real effort values on the gpt-5 family, so collapsing them (the old
     /// behavior: `Minimal → None`, `XHigh → "high"`) silently dropped fidelity.
     /// The endpoint-level `supports_reasoning_effort` capability still strips
-    /// the whole field for backends that don't accept it; value-level
-    /// compatibility (e.g. o-series capping at `high`) is the model's concern,
-    /// consistent with the "`think_level` set ⇒ reasoning model" assumption.
+    /// the whole field for backends that don't accept it.
+    ///
+    /// # `Off` is a value, not an absence
+    ///
+    /// `Off` used to return `None`, i.e. omit `reasoning_effort` entirely. But on
+    /// a reasoning model, omitting the field does not disable reasoning — it
+    /// selects the SERVER's default, which is `medium`. So "thinking off" quietly
+    /// bought medium reasoning and billed it at the output rate: the one setting
+    /// a cost-conscious user reaches for was the one that didn't work.
+    ///
+    /// `"none"` is a real effort value on the families that can disable reasoning
+    /// (gpt-5.1 / gpt-5.2 / codex-max — see `supported_efforts`). On families that
+    /// cannot, `clamp_effort` maps it to the cheapest effort they do support
+    /// rather than to silence. Either way the caller gets the least reasoning the
+    /// model is capable of, which is what they asked for.
+    ///
+    /// The distinction that matters: `Off` (the user said "off") emits a value;
+    /// `think_level: None` (nobody said anything) never reaches here at all and
+    /// leaves the provider on its own default.
     pub(super) fn map_think_level(level: &ThinkLevel) -> Option<String> {
         match level {
-            ThinkLevel::Off => None,
+            ThinkLevel::Off => Some("none".to_string()),
             ThinkLevel::Minimal => Some("minimal".to_string()),
             ThinkLevel::Low => Some("low".to_string()),
             ThinkLevel::Medium => Some("medium".to_string()),

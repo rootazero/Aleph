@@ -72,6 +72,8 @@ where
                             thinking: None,
                             thinking_signature: None,
                         },
+                        // Slash-command reply — no LLM call, nothing billed.
+                        usage: None,
                         at: crate::session::events::now_ms(),
                     },
                 )
@@ -179,6 +181,8 @@ where
                             thinking: None,
                             thinking_signature: None,
                         },
+                        // Error echo — no LLM call, nothing billed.
+                        usage: None,
                         at: crate::session::events::now_ms(),
                     },
                 )

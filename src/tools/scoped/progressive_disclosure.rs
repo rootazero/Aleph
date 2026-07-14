@@ -24,7 +24,10 @@ fn first_sentence_head(desc: &str) -> Option<&str> {
     while let Some(rel) = desc[search_from..].find(". ") {
         let end = search_from + rel; // index of the '.'
         let head = &desc[..end];
-        let last_word = head.rsplit(|c: char| c.is_whitespace()).next().unwrap_or("");
+        let last_word = head
+            .rsplit(|c: char| c.is_whitespace())
+            .next()
+            .unwrap_or("");
         // Skip boundaries that fall right after a known abbreviation token.
         if !ABBREVS.iter().any(|a| last_word.eq_ignore_ascii_case(a)) {
             return Some(head);
@@ -46,7 +49,10 @@ impl ProgressiveDisclosureRewriter {
     /// Construct directly from a resolved core set.
     #[must_use]
     pub fn new(core: BTreeSet<String>, truncate_desc: bool) -> Self {
-        Self { core, truncate_desc }
+        Self {
+            core,
+            truncate_desc,
+        }
     }
 
     /// Whether progressive disclosure is active for this core set. False when
@@ -61,7 +67,10 @@ impl ProgressiveDisclosureRewriter {
     /// Build from config. Returns `None` (⇒ attach nothing ⇒ old behavior)
     /// when `core` is empty or contains the `"*"` wildcard sentinel.
     #[must_use]
-    pub fn from_config(core: &[String], truncate_desc: bool) -> Option<Arc<dyn ToolDefinitionRewriter>> {
+    pub fn from_config(
+        core: &[String],
+        truncate_desc: bool,
+    ) -> Option<Arc<dyn ToolDefinitionRewriter>> {
         if !Self::is_enabled(core) {
             return None;
         }
@@ -162,37 +171,58 @@ mod tests {
 
     #[test]
     fn mixed_wildcard_disables() {
-        let result = ProgressiveDisclosureRewriter::from_config(&["bash".into(), "*".into()], false);
+        let result =
+            ProgressiveDisclosureRewriter::from_config(&["bash".into(), "*".into()], false);
         assert!(result.is_none());
     }
 
     #[test]
     fn is_enabled_matches_from_config_gate() {
         assert!(!ProgressiveDisclosureRewriter::is_enabled(&[]));
-        assert!(!ProgressiveDisclosureRewriter::is_enabled(&["*".to_string()]));
-        assert!(!ProgressiveDisclosureRewriter::is_enabled(&["bash".to_string(), "*".to_string()]));
-        assert!(ProgressiveDisclosureRewriter::is_enabled(&["bash".to_string()]));
+        assert!(!ProgressiveDisclosureRewriter::is_enabled(&[
+            "*".to_string()
+        ]));
+        assert!(!ProgressiveDisclosureRewriter::is_enabled(&[
+            "bash".to_string(),
+            "*".to_string()
+        ]));
+        assert!(ProgressiveDisclosureRewriter::is_enabled(&[
+            "bash".to_string()
+        ]));
     }
 
     #[test]
     fn collapsing_shrinks_serialized_tools_by_half() {
         // 20 fat tools (schema-heavy) + 2 core.
-        let core: std::collections::BTreeSet<String> = ["bash".into(), "get_tool_schema".into()].into_iter().collect();
+        let core: std::collections::BTreeSet<String> = ["bash".into(), "get_tool_schema".into()]
+            .into_iter()
+            .collect();
         let rw = ProgressiveDisclosureRewriter::new(core.clone(), false);
         let fat_schema = json!({
             "type":"object",
             "properties": (0..12).map(|i| (format!("field_{i}"), json!({"type":"string","description":"a reasonably long description of this parameter that costs tokens"}))).collect::<serde_json::Map<_,_>>(),
         });
-        let mut defs: Vec<ToolDefinition> = (0..22).map(|i| ToolDefinition {
-            name: if i < 2 { ["bash","get_tool_schema"][i].to_string() } else { format!("tool_{i}") },
-            description: "does a thing".to_string(),
-            input_schema: fat_schema.clone(),
-            source: crate::tools::service::ToolSource::Builtin,
-            metadata: crate::tools::service::ToolDefinitionMetadata::default(),
-        }).collect();
+        let mut defs: Vec<ToolDefinition> = (0..22)
+            .map(|i| ToolDefinition {
+                name: if i < 2 {
+                    ["bash", "get_tool_schema"][i].to_string()
+                } else {
+                    format!("tool_{i}")
+                },
+                description: "does a thing".to_string(),
+                input_schema: fat_schema.clone(),
+                source: crate::tools::service::ToolSource::Builtin,
+                metadata: crate::tools::service::ToolDefinitionMetadata::default(),
+            })
+            .collect();
         let before = serde_json::to_string(&defs).unwrap().len();
-        for d in &mut defs { rw.rewrite(d); }
+        for d in &mut defs {
+            rw.rewrite(d);
+        }
         let after = serde_json::to_string(&defs).unwrap().len();
-        assert!(after * 2 < before, "expected >50% shrink, got {before} -> {after}");
+        assert!(
+            after * 2 < before,
+            "expected >50% shrink, got {before} -> {after}"
+        );
     }
 }

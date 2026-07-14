@@ -2,8 +2,6 @@
 //!
 //! All `append_*` methods that build individual prompt sections live here.
 
-use crate::tool_metadata::tool_index::HydrationResult;
-
 use super::PromptBuilder;
 use crate::thinker::context::{DisableReason, DisabledTool, EnvironmentContract};
 use crate::thinker::interaction::Capability;
@@ -61,54 +59,6 @@ impl PromptBuilder {
             prompt.push_str("## Media Generation Models\n\n");
             prompt.push_str(&models);
             prompt.push('\n');
-        }
-    }
-
-    /// Append hydrated tools from semantic retrieval
-    ///
-    /// Formats tools by hydration level:
-    /// - Full schema tools: name + description + JSON parameters
-    /// - Summary tools: name + description (use `get_tool_schema` for params)
-    /// - Indexed tools: names list only
-    ///
-    /// This enables progressive disclosure of tool information based on
-    /// semantic relevance to the user's query.
-    pub fn append_hydrated_tools(&self, prompt: &mut String, result: &HydrationResult) {
-        if result.is_empty() {
-            prompt.push_str("## Available Tools\n");
-            prompt.push_str("No semantically relevant tools found. Use `get_tool_schema` to discover tools.\n\n");
-            return;
-        }
-
-        prompt.push_str("## Available Tools\n\n");
-
-        // Full schema tools - highest relevance, include complete parameter info
-        if !result.full_schema_tools.is_empty() {
-            prompt.push_str("### Tools (full parameters)\n\n");
-            for tool in &result.full_schema_tools {
-                prompt.push_str(&format!("#### {}\n", tool.name));
-                prompt.push_str(&format!("{}\n", tool.description));
-                if let Some(schema) = tool.schema_json() {
-                    prompt.push_str(&format!("Parameters: {schema}\n"));
-                }
-                prompt.push('\n');
-            }
-        }
-
-        // Summary tools - medium relevance, description only
-        if !result.summary_tools.is_empty() {
-            prompt.push_str("### Tools (summary - call `get_tool_schema` for parameters)\n\n");
-            for tool in &result.summary_tools {
-                prompt.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
-            }
-            prompt.push('\n');
-        }
-
-        // Indexed tools - low relevance, just names
-        if !result.indexed_tool_names.is_empty() {
-            prompt.push_str("### Additional Tools (call `get_tool_schema` to use)\n\n");
-            prompt.push_str(&result.indexed_tool_names.join(", "));
-            prompt.push_str("\n\n");
         }
     }
 

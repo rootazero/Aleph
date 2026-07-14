@@ -7,12 +7,12 @@ use super::layers::{
     AgentCatalogLayer, AgentRoleLayer, ChainContextLayer, CitationStandardsLayer,
     CuratedMemoryLayer, CustomInstructionsLayer, DoctorRepairHintLayer, EnvironmentLayer,
     ExecutionPlanLayer, ExtraFilesLayer, GenerationModelsLayer, GuidelinesLayer, HeartbeatLayer,
-    HydratedToolsLayer, IdentityFilesLayer, InboundContextLayer, LanguageLayer,
-    McpInstructionsLayer, MemoryProtocolLayer, MultiStepConductLayer, OperationalGuidelinesLayer,
-    ProfileLayer, ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
+    IdentityFilesLayer, InboundContextLayer, LanguageLayer, McpInstructionsLayer,
+    MemoryProtocolLayer, MultiStepConductLayer, OperationalGuidelinesLayer, ProfileLayer,
+    ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
     RuntimeContextLayer, SecurityLayer, SessionBudgetLayer, SessionContextGuideLayer,
-    SessionResumeLayer, SkillInstructionsLayer, SkillModeLayer, SoulLayer, SpecialActionsLayer,
-    StandingGoalLayer, StrategyLayer, StrategyPointerLayer, ThinkingGuidanceLayer, TimerLoopLayer,
+    SessionResumeLayer, SkillInstructionsLayer, SoulLayer, SpecialActionsLayer, StandingGoalLayer,
+    StrategyLayer, StrategyPointerLayer, ThinkingGuidanceLayer, TimerLoopLayer,
     ToolRuntimeStateLayer, ToolUsageGrammarLayer, ToolsLayer, VoiceModeLayer,
 };
 use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};
@@ -138,14 +138,14 @@ impl PromptPipeline {
         // 3. Enforce budget — never trim the foundational layers. Each entry
         //    maps to a real registered layer (see `default_layers`): 50 soul,
         //    55 agent_role, 60 curated_memory, 75 profile, 100 role, 500 tools,
-        //    501 hydrated_tools, 600 security. The previous list carried a
-        //    phantom `1200` (no layer at that priority) and left `security`
-        //    (600) trimmable — safety guidance must survive budget pressure.
+        //    600 security. A phantom entry here protects nothing and misleads the
+        //    next reader: `1200` was one (no layer ever had that priority), and
+        //    `501` became one when `HydratedToolsLayer` was deleted.
         let refs: Vec<(u32, &str, &str)> = sections
             .iter()
             .map(|(p, n, c)| (*p, *n, c.as_str()))
             .collect();
-        let protected = &[50u32, 55, 60, 75, 100, 500, 501, 600];
+        let protected = &[50u32, 55, 60, 75, 100, 500, 600];
         let (prompt, stats) = enforce_budget(&refs, budget.max_total_chars, protected);
 
         PromptResult {
@@ -294,7 +294,6 @@ impl PromptPipeline {
             Box::new(EnvironmentLayer),
             Box::new(RuntimeCapabilitiesLayer),
             Box::new(ToolsLayer),
-            Box::new(HydratedToolsLayer),
             Box::new(ToolRuntimeStateLayer),
             Box::new(AgentCatalogLayer),
             Box::new(ToolUsageGrammarLayer),
@@ -315,7 +314,6 @@ impl PromptPipeline {
             // consumer once the harness moved to native `with_tools(...)`.
             Box::new(GuidelinesLayer),
             Box::new(ThinkingGuidanceLayer),
-            Box::new(SkillModeLayer),
             Box::new(CustomInstructionsLayer),
             Box::new(IdentityFilesLayer),
             Box::new(ExtraFilesLayer),
@@ -469,7 +467,13 @@ mod tests {
         // message; see `HarnessDeps::recall_context`).
         // → 44 (TimerLoopLayer @1753 Dynamic — re-surfaces the session's
         // active watch loop per turn, 2026-07-03).
-        assert_eq!(pipeline.layer_count(), 44);
+        // → 42: HydratedToolsLayer and SkillModeLayer deleted. Both were
+        // unreachable — HydratedToolsLayer's only `paths()` entry was the
+        // Hydration assembly path, fed by a `HydrationPipeline` with zero
+        // callers, and SkillModeLayer's gate was never true outside tests (it
+        // also mandated a legacy JSON tool envelope contradicting the native
+        // tool_use contract we actually ship).
+        assert_eq!(pipeline.layer_count(), 42);
     }
 
     #[test]
@@ -791,6 +795,10 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"session_resume"));
         assert!(dynamic_names.contains(&"mcp_instructions"));
         assert!(dynamic_names.contains(&"agent_catalog"));
+        // Live tool health is per-request state. Classified Stable (by omission)
+        // at priority 502, it rode the cached prefix and let a 30s-TTL probe flip
+        // invalidate the entire conversation's prompt cache.
+        assert!(dynamic_names.contains(&"tool_runtime_state"));
         // Phase 2 (2026-05-20): ChainContextLayer rendered subagent
         // delegation depth per request — naturally dynamic.
         assert!(dynamic_names.contains(&"chain_context"));
@@ -813,11 +821,16 @@ mod stability_tests {
         // while MemoryProtocolLayer (Dynamic since creation) landed from the
         // other side of merge b8ea7a7c8 — the two sides were individually
         // consistent, so this count silently drifted to 15 vs 16 actual.
+        // → 17: ToolRuntimeStateLayer moved from 502/Stable to 1702/Dynamic.
+        // It renders a snapshot of the 30s-TTL, mutable tool-health cache, so
+        // riding the CACHED prefix meant one MCP probe flip rewrote that prefix
+        // mid-session and invalidated the whole conversation's prompt cache. It
+        // is per-request state and now sits in the per-request zone.
         // Every name above is asserted individually; the count pins the set.
         assert_eq!(
             dynamic_names.len(),
-            16,
-            "Exactly 16 dynamic layers expected"
+            17,
+            "Exactly 17 dynamic layers expected"
         );
     }
 

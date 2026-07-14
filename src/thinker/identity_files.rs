@@ -276,8 +276,7 @@ pub fn list_identity_file_status(agent_dir: &Path) -> Vec<IdentityFileStatus> {
         .iter()
         .map(|&name| {
             let path = agent_dir.join(name);
-            let (exists, size) =
-                std::fs::metadata(&path).map_or((false, 0), |m| (true, m.len()));
+            let (exists, size) = std::fs::metadata(&path).map_or((false, 0), |m| (true, m.len()));
             IdentityFileStatus {
                 name,
                 exists,
@@ -311,9 +310,11 @@ pub fn write_identity_file(
     content: &str,
 ) -> Result<IdentityWriteOutcome, String> {
     if file_name.eq_ignore_ascii_case("MEMORY.md") {
-        return Err("MEMORY.md is owned by the curated-memory module, not the identity-file \
+        return Err(
+            "MEMORY.md is owned by the curated-memory module, not the identity-file \
                     path. Use the `remember` tool for memory edits."
-            .to_string());
+                .to_string(),
+        );
     }
     validate_identity_file_name(file_name)?;
 

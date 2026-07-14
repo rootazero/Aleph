@@ -25,7 +25,11 @@ impl PromptLayer for ProfileLayer {
         // which `IdentityFilesLayer` defers here via `HANDLED_ELSEWHERE` —
         // would vanish from every production prompt (same class of bug the
         // Role / Citation layers were fixed for).
-        &[AssemblyPath::Soul, AssemblyPath::Context, AssemblyPath::Cached]
+        &[
+            AssemblyPath::Soul,
+            AssemblyPath::Context,
+            AssemblyPath::Cached,
+        ]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         // Priority 1: workspace AGENTS.md

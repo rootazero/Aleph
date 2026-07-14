@@ -8,7 +8,6 @@ use crate::gateway::context::GatewayContext;
 use crate::generation::GenerationProviderRegistry;
 use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
-use crate::tool_metadata::ToolCatalog;
 
 /// Configuration for builtin tools
 #[derive(Clone, Default)]
@@ -19,8 +18,6 @@ pub struct BuiltinToolConfig {
     pub search_registry: Option<Arc<crate::search::SearchRegistry>>,
     /// Generation provider registry for image/video/audio generation
     pub generation_registry: Option<Arc<RwLock<GenerationProviderRegistry>>>,
-    /// Tool catalog for meta tools (smart tool discovery)
-    pub tool_catalog: Option<Arc<tokio::sync::RwLock<ToolCatalog>>>,
     /// Shared config handle for `ConfigReadTool`
     pub config: Option<Arc<tokio::sync::RwLock<Config>>>,
     /// `ConfigPatcher` for `ConfigUpdateTool`

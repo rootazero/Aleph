@@ -12,6 +12,7 @@
 //! - this module — `ScopedToolService` struct + `ToolService` trait impl
 
 mod builder;
+mod deferred;
 mod dispatch;
 mod progressive_disclosure;
 mod traits;
@@ -19,6 +20,7 @@ mod traits;
 #[cfg(test)]
 mod tests;
 
+pub use deferred::DeferredTools;
 pub use progressive_disclosure::ProgressiveDisclosureRewriter;
 pub use traits::{ToolDefinitionRewriter, ToolHookDecorator};
 
@@ -99,11 +101,20 @@ pub struct ScopedToolService {
     /// attachment order from `list()` and (on cache miss) from
     /// `metadata_schema()`. See [`ToolDefinitionRewriter`].
     pub(super) definition_rewriters: Vec<Arc<dyn ToolDefinitionRewriter>>,
-    /// Tool names dropped from `list()` / `metadata_schema()` (the "deferred"
+    /// Tools dropped from `list()` / `metadata_schema()` (the "deferred"
     /// exposure tier) but kept executable + describable. Empty = no-op.
     /// Populated at the request seam from the MCP tool set when
-    /// `[tools] defer_mcp_tools` is on. See [`ScopedToolService::with_deferred`].
-    pub(super) deferred: BTreeSet<String>,
+    /// `[tools] defer_mcp_tools` is on.
+    ///
+    /// Shared (not owned) with `ToolSearchTool`, which SHRINKS it: a tool the
+    /// model discovers via `tool_search` is promoted back into the native tool
+    /// array so it can actually be called. It used to be an immutable set, which
+    /// made every deferred tool permanently uncallable — see [`DeferredTools`].
+    pub(super) deferred: Arc<DeferredTools>,
+    /// Last `deferred.generation()` folded into `cache_generation`. Mirrors
+    /// `last_health_generation`: a discovery must invalidate the cached schema,
+    /// or the promoted tool stays absent from the array anyway.
+    pub(super) last_deferred_generation: std::sync::atomic::AtomicU64,
     /// Merged tool permission policy (global → agent → channel, most
     /// restrictive wins; see `ToolPermissionsConfig::merge`). `Deny` tools are
     /// hidden from `list()` / `describe()` and rejected at `execute()`;
@@ -198,6 +209,40 @@ impl ToolService for ScopedToolService {
         // visited.
         self.apply_definition_rewriters(&mut defs);
 
+        defs
+    }
+
+    /// `list()` plus the deferred tier: everything `execute()` would actually
+    /// dispatch. Deferred tools are hidden from the model's tool array but are
+    /// still executable, so tool-name repair must consider them — otherwise a
+    /// correct call to a deferred tool misses the Exact tier and the Fuzzy tier
+    /// rewrites it into whichever resident tool happens to look similar.
+    ///
+    /// The allow / deny / health gates still apply: those tools are not
+    /// dispatchable, and offering them to the repairer would let it "fix" a call
+    /// into something `execute()` will reject.
+    async fn dispatchable_list(&self) -> Vec<ToolDefinition> {
+        let mut defs = self.list().await;
+        if self.deferred.is_empty() {
+            return defs;
+        }
+        let visible: std::collections::BTreeSet<String> =
+            defs.iter().map(|d| d.name.clone()).collect();
+        let health_snap = self.health.as_ref().map(|h| h.snapshot());
+        for name in self.deferred.snapshot().iter() {
+            if visible.contains(name) {
+                continue;
+            }
+            if !self.is_allowed(name) || self.is_permission_denied(name) {
+                continue;
+            }
+            if health_snap.as_ref().is_some_and(|s| !s.is_healthy(name)) {
+                continue;
+            }
+            if let Some(def) = self.describe(name).await {
+                defs.push(def);
+            }
+        }
         defs
     }
 
@@ -349,6 +394,18 @@ impl ToolService for ScopedToolService {
         if let Some(health) = &self.health {
             let live_gen = health.generation();
             let prev = self.last_health_generation.swap(live_gen, Ordering::AcqRel);
+            if prev != live_gen {
+                self.cache_generation.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+
+        // Same treatment for the deferred tier: `tool_search` promoting a tool
+        // out of it must show up in the very next array the provider sees.
+        {
+            let live_gen = self.deferred.generation();
+            let prev = self
+                .last_deferred_generation
+                .swap(live_gen, Ordering::AcqRel);
             if prev != live_gen {
                 self.cache_generation.fetch_add(1, Ordering::AcqRel);
             }

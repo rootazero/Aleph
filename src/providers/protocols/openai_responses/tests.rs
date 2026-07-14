@@ -35,11 +35,17 @@ fn openai_responses_usage_deserializes_cache_and_reasoning_tokens() {
         })
         .expect("Responses Completed should emit Usage delta");
 
-    assert_eq!(usage_delta.input_tokens, 120);
+    // Fixture reports input_tokens=120 with input_tokens_details.cached_tokens=90.
+    // `input_tokens` is the TOTAL on this protocol, so the adapter normalizes to
+    // the disjoint convention the pricing layer bills against: 30 fresh + 90
+    // cached. Asserting 120 here (as this test used to) pinned the
+    // double-billing bug — see the same fix in openai_chat/sse.rs.
+    assert_eq!(usage_delta.input_tokens, 30);
     assert_eq!(usage_delta.output_tokens, 40);
     assert_eq!(usage_delta.cache_read_tokens, Some(90));
     assert_eq!(usage_delta.thinking_tokens, Some(25));
     assert_eq!(usage_delta.cache_creation_tokens, None);
+    assert_eq!(usage_delta.prompt_tokens_total(), 120);
 }
 
 #[test]
@@ -337,7 +343,10 @@ fn test_build_reasoning_emits_minimal_and_xhigh_faithfully() {
     );
     assert_eq!(request.reasoning.unwrap().effort.as_deref(), Some("low"));
 
-    // Off still omits the reasoning block entirely.
+    // `Off` sends an explicit disable — gpt-5.2's family supports "none".
+    // Omitting the block (what this test used to assert) would select the
+    // server's `medium` default, so "thinking off" bought medium reasoning and
+    // billed it at the output rate.
     let off = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::Off));
     let req_off = OpenAiResponsesProtocol::build_responses_request(
         &off,
@@ -345,7 +354,23 @@ fn test_build_reasoning_emits_minimal_and_xhigh_faithfully() {
         &ResponsesVariant::default(),
         &config,
     );
-    assert!(req_off.reasoning.is_none());
+    assert_eq!(
+        req_off.reasoning.unwrap().effort.as_deref(),
+        Some("none"),
+        "Off must disable reasoning explicitly, not fall through to the server default"
+    );
+
+    // An UNSET level is a different request: nobody chose, so the provider keeps
+    // its own default and the block is omitted. This is the byte-for-byte
+    // behaviour of every Aleph release before thinking depth was wired up.
+    let unset = RequestPayload::new(&msgs);
+    let req_unset = OpenAiResponsesProtocol::build_responses_request(
+        &unset,
+        "gpt-5.2",
+        &ResponsesVariant::default(),
+        &config,
+    );
+    assert!(req_unset.reasoning.is_none());
 }
 
 #[test]

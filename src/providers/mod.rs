@@ -100,6 +100,7 @@ pub mod route_policy;
 pub mod session_moa_handle;
 pub mod session_model_handle;
 pub mod shared;
+pub mod think_level_provider;
 
 // Re-exports
 pub use adapter::{
@@ -140,6 +141,7 @@ pub use profile_manager::{
 pub use protocols::OpenAiProtocol;
 pub use registry::ProviderRegistry;
 pub use retry::retry_with_backoff;
+pub use think_level_provider::ThinkLevelProvider;
 
 use crate::config::ProviderConfig;
 use crate::error::AlephError;
@@ -284,6 +286,19 @@ pub trait AiProvider: Send + Sync {
     /// default model. Default `None` = "unknown", callers fall back to the
     /// provider name.
     fn serving_model_hint(&self) -> Option<Cow<'_, str>> {
+        None
+    }
+
+    /// The provider id actually serving this call — the twin of
+    /// [`AiProvider::serving_model_hint`], and for the same reason.
+    ///
+    /// [`AiProvider::name`] is NOT this: on the production path `name()` walks
+    /// the decorator stack down to [`failover::FailoverProvider`] and returns
+    /// the literal `"failover"`, which is not a provider id any lookup table
+    /// knows. Pricing keyed on it silently reports `CostStatus::Unknown` (i.e.
+    /// `$0.00`) for every run. Wrappers delegate to their live primary;
+    /// `HttpProvider` reports its configured key. Default `None` = "unknown".
+    fn serving_provider_hint(&self) -> Option<Cow<'_, str>> {
         None
     }
 

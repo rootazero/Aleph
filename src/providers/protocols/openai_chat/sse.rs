@@ -40,7 +40,7 @@ pub(crate) fn parse_chat_sse_event(
     // carry `"usage": null` — `as_object()` filters those out so no spurious
     // zero-token Usage delta is emitted.
     if let Some(usage) = v.get("usage").and_then(|u| u.as_object()) {
-        let input = usage
+        let prompt_total: u32 = usage
             .get("prompt_tokens")
             .and_then(|t| t.as_u64())
             .and_then(|t| t.try_into().ok())
@@ -73,6 +73,14 @@ pub(crate) fn parse_chat_sse_event(
             .and_then(|d| d.get("reasoning_tokens"))
             .and_then(|t| t.as_u64())
             .and_then(|t| t.try_into().ok());
+        // `prompt_tokens` *includes* the cached portion on this protocol, while
+        // Aleph's pricing bills `input` and `cache_read` additively (disjoint,
+        // Anthropic-shaped). Report the non-cached remainder as input —
+        // otherwise every cache hit is billed twice, and the error grows with
+        // cache effectiveness. Same subtraction as the Gemini adapter; the
+        // saturating floor also absorbs providers that emit an internally
+        // inconsistent usage payload (cached > prompt).
+        let input = prompt_total.saturating_sub(cache_read_tokens.unwrap_or(0));
         out.push_back(Ok(ProviderDelta::Usage(TokenUsage {
             input_tokens: input,
             output_tokens: output,

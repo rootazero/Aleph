@@ -147,6 +147,7 @@ mod tests {
                 _workspace_override: Option<std::path::PathBuf>,
                 _max_iterations_override: Option<u32>,
                 _transient_context: Option<String>,
+                _think_level: Option<crate::agents::thinking::ThinkLevel>,
             ) -> Result<
                 crate::orchestrator::dispatch::FlowOutcome,
                 crate::orchestrator::errors::FlowError,

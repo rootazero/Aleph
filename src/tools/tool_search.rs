@@ -39,6 +39,7 @@ fn tokenize(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut prev_lower_or_digit = false;
+    let mut prev_cjk: Option<char> = None;
     let flush = |cur: &mut String, out: &mut Vec<String>| {
         if cur.len() >= 2 {
             out.push(cur.to_lowercase());
@@ -46,6 +47,27 @@ fn tokenize(s: &str) -> Vec<String> {
         cur.clear();
     };
     for ch in s.chars() {
+        // CJK has no spaces, and every CJK char is `is_alphanumeric()`, so the
+        // latin path below would swallow a whole phrase into ONE token: the
+        // description "发送一条消息" indexed as a single term that the query
+        // "发送消息" can never equal. BM25 scored 0.0 for every Chinese query —
+        // `tool_search` was simply dead in the user's own language.
+        //
+        // Split CJK runs into characters and also emit adjacent-character
+        // bigrams (the standard CJK IR trick: unigrams alone match too loosely,
+        // bigrams restore precision). This is a mechanical Unicode-script split
+        // — no dictionary, no segmentation model, no new dependency.
+        if is_cjk(ch) {
+            flush(&mut cur, &mut out);
+            prev_lower_or_digit = false;
+            out.push(ch.to_string());
+            if let Some(prev) = prev_cjk {
+                out.push(format!("{prev}{ch}"));
+            }
+            prev_cjk = Some(ch);
+            continue;
+        }
+        prev_cjk = None;
         if ch.is_alphanumeric() {
             if ch.is_uppercase() && prev_lower_or_digit {
                 flush(&mut cur, &mut out); // camelCase boundary
@@ -59,6 +81,19 @@ fn tokenize(s: &str) -> Vec<String> {
     }
     flush(&mut cur, &mut out);
     out
+}
+
+/// Chars that carry meaning one-per-glyph and are written without spaces, so
+/// they must be segmented rather than accumulated into a latin-style word.
+/// Covers Han (+ Extension A), Kana, Hangul, and the compatibility ideographs.
+fn is_cjk(ch: char) -> bool {
+    matches!(u32::from(ch),
+        0x3040..=0x30FF   // Hiragana + Katakana
+        | 0x3400..=0x4DBF // CJK Unified Ideographs Extension A
+        | 0x4E00..=0x9FFF // CJK Unified Ideographs
+        | 0xAC00..=0xD7AF // Hangul syllables
+        | 0xF900..=0xFAFF // CJK Compatibility Ideographs
+    )
 }
 
 /// In-memory BM25 index over the tool corpus.
@@ -145,15 +180,22 @@ impl Bm25 {
 /// Ranked discovery tool over a per-request corpus snapshot.
 pub struct ToolSearchTool {
     index: Arc<Bm25>,
+    /// The deferred tier, SHARED with the `ScopedToolService` that filters on
+    /// it. Every hit this tool returns is promoted out of it, so the tool the
+    /// model just read a schema for is actually in the native tool array on the
+    /// next turn. Without this the tool was discoverable but uncallable — see
+    /// `crate::tools::scoped::DeferredTools`.
+    deferred: Arc<crate::tools::scoped::DeferredTools>,
 }
 
 impl ToolSearchTool {
     pub const NAME: &'static str = "tool_search";
 
     #[must_use]
-    pub fn new(docs: Vec<ToolDoc>) -> Self {
+    pub fn new(docs: Vec<ToolDoc>, deferred: Arc<crate::tools::scoped::DeferredTools>) -> Self {
         Self {
             index: Arc::new(Bm25::build(docs)),
+            deferred,
         }
     }
 }
@@ -219,6 +261,20 @@ impl LoopTool for ToolSearchTool {
                 })
             })
             .collect();
+
+        // Promote every hit out of the deferred tier. This is the step that
+        // makes the whole mechanism real: the tools array handed to the provider
+        // is rebuilt from `metadata_schema()`, which filters on this exact set,
+        // so until a name leaves it the model has no `tool_use` channel to call
+        // the tool through — and this tool's own description promised it was
+        // "ready to call". Model-initiated (the model chose to search), so R10's
+        // progressive-disclosure exception holds.
+        let found: Vec<String> = hits
+            .iter()
+            .map(|(i, _)| self.index.docs[*i].name.clone())
+            .collect();
+        self.deferred.undefer(&found);
+
         ToolResult::Success {
             output: json!({ "query": query, "count": results.len(), "results": results }),
         }
@@ -256,9 +312,87 @@ mod tests {
         assert!(tokenize("getUserById").contains(&"user".to_string()));
     }
 
+    /// Every CJK char is `is_alphanumeric()` and CJK is written without spaces,
+    /// so the latin path used to accumulate a whole phrase into ONE token: a
+    /// description indexed as "发送一条消息" could never be matched by the query
+    /// "发送消息". BM25 scored 0.0 for every Chinese query — `tool_search` was
+    /// dead in the user's own language.
+    #[test]
+    fn tokenizer_segments_cjk_into_characters_and_bigrams() {
+        let toks = tokenize("发送消息");
+        assert!(toks.contains(&"发".to_string()), "unigram; got {toks:?}");
+        assert!(toks.contains(&"发送".to_string()), "bigram; got {toks:?}");
+        assert!(
+            !toks.contains(&"发送消息".to_string()),
+            "the whole phrase must NOT be one term; got {toks:?}"
+        );
+        // Mixed scripts still split on the boundary.
+        let mixed = tokenize("slack_发送");
+        assert!(mixed.contains(&"slack".to_string()));
+        assert!(mixed.contains(&"发".to_string()));
+    }
+
+    /// The end of the CJK story: a Chinese query now actually retrieves.
+    #[tokio::test]
+    async fn a_chinese_query_finds_the_tool() {
+        let docs = vec![
+            ToolDoc {
+                name: "slack_post_message".into(),
+                description: "发送一条消息到 Slack 频道".into(),
+                schema: json!({"type":"object"}),
+            },
+            ToolDoc {
+                name: "file_read".into(),
+                description: "读取磁盘上的文件内容".into(),
+                schema: json!({"type":"object"}),
+            },
+        ];
+        let t = ToolSearchTool::new(docs, crate::tools::scoped::DeferredTools::empty());
+        let out = t
+            .execute(json!({"query":"发送消息"}), CancellationToken::new())
+            .await;
+        match out {
+            ToolResult::Success { output } => {
+                let results = output["results"].as_array().unwrap();
+                assert!(!results.is_empty(), "a Chinese query must retrieve at all");
+                assert_eq!(results[0]["name"], "slack_post_message");
+            }
+            other => panic!("expected success, got {other:?}"),
+        }
+    }
+
+    /// The hit must become CALLABLE, not merely visible: `tool_search` promotes
+    /// what it returns out of the deferred tier, so the tool re-enters the native
+    /// tool array. Without this the tool's own "ready to call" description was a
+    /// lie — the model had no `tool_use` channel to reach it through.
+    #[tokio::test]
+    async fn search_promotes_its_hits_out_of_the_deferred_tier() {
+        let deferred = crate::tools::scoped::DeferredTools::new(
+            ["slack_post_message".to_string(), "file_read".to_string()].into(),
+        );
+        let t = ToolSearchTool::new(corpus(), deferred.clone());
+        assert!(deferred.is_deferred("slack_post_message"));
+
+        let _ = t
+            .execute(
+                json!({"query":"send slack message", "limit": 1}),
+                CancellationToken::new(),
+            )
+            .await;
+
+        assert!(
+            !deferred.is_deferred("slack_post_message"),
+            "the discovered tool must be promoted back into the tool array"
+        );
+        assert!(
+            deferred.is_deferred("file_read"),
+            "tools the model did not find stay deferred — the array does not blow open"
+        );
+    }
+
     #[tokio::test]
     async fn ranks_relevant_tool_first_with_schema() {
-        let t = ToolSearchTool::new(corpus());
+        let t = ToolSearchTool::new(corpus(), crate::tools::scoped::DeferredTools::empty());
         let out = t
             .execute(
                 json!({"query":"send slack message"}),
@@ -279,7 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn limit_is_respected() {
-        let t = ToolSearchTool::new(corpus());
+        let t = ToolSearchTool::new(corpus(), crate::tools::scoped::DeferredTools::empty());
         let out = t
             .execute(
                 json!({"query":"a e i o u the to in","limit":2}),
@@ -295,7 +429,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_query_errors() {
-        let t = ToolSearchTool::new(corpus());
+        let t = ToolSearchTool::new(corpus(), crate::tools::scoped::DeferredTools::empty());
         let out = t
             .execute(json!({"query":"   "}), CancellationToken::new())
             .await;
@@ -304,7 +438,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_match_returns_empty_not_error() {
-        let t = ToolSearchTool::new(corpus());
+        let t = ToolSearchTool::new(corpus(), crate::tools::scoped::DeferredTools::empty());
         let out = t
             .execute(
                 json!({"query":"zzzqqq_nonexistent_capability"}),

@@ -78,8 +78,6 @@ fn interruption_message(prompt: &str) -> MessageRecord {
         metadata: None,
         input_tokens: 0,
         output_tokens: 0,
-        model: None,
-        model_provider: None,
         tool_call_id: None,
         tool_name: None,
     }

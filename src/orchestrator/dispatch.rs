@@ -122,6 +122,14 @@ pub struct FlowOutcome {
     /// conservative fallback for unknown models. Gauge denominator. `0` only on
     /// default/test fixtures.
     pub context_window: u32,
+    /// The model that actually served this run, and the provider that served
+    /// it. Same pair the cost estimate is keyed on — never the `FailoverProvider`
+    /// wrapper name. Carried out so the session row can record which model it
+    /// last spoke to; `sessions.model` had a column, a Panel column, and no
+    /// writer that ever ran.
+    pub serving_model: Option<String>,
+    /// Provider id behind [`serving_model`](Self::serving_model).
+    pub serving_provider: Option<String>,
 }
 
 /// Loop-exit cause for an agent run. Each variant corresponds to a distinct
@@ -334,6 +342,24 @@ impl TokenBreakdown {
     }
 }
 
+impl From<&crate::providers::adapter::TokenUsage> for TokenBreakdown {
+    /// One call's usage as a breakdown of its own. The run-cumulative counter
+    /// folds these with [`TokenBreakdown::accumulate`]; this is the same fold
+    /// starting from zero, so a single call's breakdown and its contribution to
+    /// the run total are the same arithmetic by construction.
+    fn from(u: &crate::providers::adapter::TokenUsage) -> Self {
+        let mut b = Self::default();
+        b.accumulate(
+            u.input_tokens,
+            u.output_tokens,
+            u.cache_read_tokens,
+            u.cache_creation_tokens,
+            u.thinking_tokens,
+        );
+        b
+    }
+}
+
 /// One tool invocation in run order. Sourced from
 /// `LoopTraceEvent::ToolCallCompleted` — the harness already records every
 /// field; the timeline is the missing aggregation seam.
@@ -420,6 +446,13 @@ pub struct FlowRequest {
     /// session title derived from it — stays equal to the raw user input.
     /// `None` keeps the pre-feature prompt byte-identical.
     pub transient_context: Option<String>,
+    /// Reasoning depth for this run, DECLARED by the user (composer pill /
+    /// `chat.send` `thinking` param) or by the model (`self_config`) — never
+    /// inferred from the message (R7). Forwarded into `HarnessRunner::run`,
+    /// which puts it on `HarnessDeps` so every `RequestPayload` carries it.
+    /// `None` = send no thinking directive, leaving each provider on its own
+    /// default (the behaviour of every release before this field existed).
+    pub think_level: Option<crate::agents::thinking::ThinkLevel>,
 }
 
 impl std::fmt::Debug for FlowRequest {
@@ -518,6 +551,9 @@ pub trait HarnessRunner: Send + Sync {
         // project files, hook additions) merged into the transient trailing
         // recall message and never persisted. `None` = no reminder this turn.
         transient_context: Option<String>,
+        // Declared reasoning depth for this run. `None` = omit the thinking
+        // directive entirely and leave the provider on its own default.
+        think_level: Option<crate::agents::thinking::ThinkLevel>,
     ) -> Result<FlowOutcome, FlowError>;
 
     /// The guardrail registry this runner installs on its own harness, if
@@ -725,6 +761,7 @@ impl Orchestrator {
         let workspace_override = req.workspace_override.clone();
         let max_iterations_override = req.max_iterations_override;
         let transient_context = req.transient_context.clone();
+        let think_level = req.think_level;
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -762,6 +799,7 @@ impl Orchestrator {
                         workspace_override,
                         max_iterations_override,
                         transient_context,
+                        think_level,
                     ),
                 ),
             )

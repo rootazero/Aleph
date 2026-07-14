@@ -241,11 +241,15 @@ pub trait SessionStore: Send + Sync {
         key: &SessionKey,
         patch: &SessionPatch,
     ) -> Result<bool, SessionStoreError>;
+    /// Accumulate one run's usage onto the session row. `cost_usd` is that
+    /// run's priced cost (0.0 when it could not be priced). Called by
+    /// `session_projector` on `AssistantRunMeta`.
     async fn update_session_usage(
         &self,
         key: &SessionKey,
         input_tokens: i64,
         output_tokens: i64,
+        cost_usd: f64,
         model: Option<&str>,
         model_provider: Option<&str>,
     ) -> Result<(), SessionStoreError>;
@@ -361,8 +365,6 @@ mod paginate_before_tests {
             metadata: None,
             input_tokens: 0,
             output_tokens: 0,
-            model: None,
-            model_provider: None,
             tool_call_id: None,
             tool_name: None,
         }
@@ -437,8 +439,6 @@ mod delete_from_seq_tests {
             metadata: None,
             input_tokens: 0,
             output_tokens: 0,
-            model: None,
-            model_provider: None,
             tool_call_id: None,
             tool_name: None,
         }
@@ -455,8 +455,6 @@ mod delete_from_seq_tests {
             metadata: None,
             input_tokens: 0,
             output_tokens: 0,
-            model: None,
-            model_provider: None,
             tool_call_id: None,
             tool_name: None,
         }

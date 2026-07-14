@@ -81,13 +81,6 @@ impl SessionState {
                 // See UserMessage.
             }
 
-            SessionEvent::LlmCallStarted { .. } => {
-                // Observational; budget tracking happens via BudgetUpdated.
-            }
-            SessionEvent::LlmCallEnded { .. } => {
-                // Observational; budget tracking happens via BudgetUpdated.
-            }
-
             SessionEvent::ToolCallRequested { call_id, name, .. } => {
                 if let Some(turn) = self.current_turn.as_mut() {
                     turn.pending_tool_calls.insert(

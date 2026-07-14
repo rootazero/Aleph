@@ -2171,8 +2171,9 @@ async fn deferred_tools_dropped_from_list_but_still_describable_and_executable()
     let mut reg = LoopToolRegistry::new();
     reg.register(Box::new(NamedStub::new("alpha")));
     reg.register(Box::new(NamedStub::new("beta")));
-    let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
-        .with_deferred(["beta".to_string()].into_iter().collect());
+    let deferred = crate::tools::scoped::DeferredTools::new(["beta".to_string()].into());
+    let svc =
+        ScopedToolService::new(Arc::new(reg), BTreeSet::new()).with_deferred(deferred.clone());
 
     // list() and metadata_schema() omit the deferred tool.
     let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
@@ -2188,7 +2189,7 @@ async fn deferred_tools_dropped_from_list_but_still_describable_and_executable()
         .collect();
     assert!(!meta_names.contains(&"beta".to_string()));
 
-    // describe() and execute() still reach it (searched → callable).
+    // describe() and execute() still reach it.
     assert!(
         svc.describe("beta").await.is_some(),
         "deferred tool must stay describable"
@@ -2196,6 +2197,31 @@ async fn deferred_tools_dropped_from_list_but_still_describable_and_executable()
     assert!(
         svc.execute("beta", json!({})).await.is_ok(),
         "deferred tool must stay executable"
+    );
+
+    // …but describable+executable is NOT callable. The model can only invoke a
+    // tool that appears in `metadata_schema()` — that array IS the native
+    // tool_use channel. This test used to stop above, and its comment claimed
+    // "searched → callable"; nothing verified the tool ever came BACK, and
+    // nothing ever put it back. `defer_mcp_tools` shipped as a trap.
+    assert!(
+        svc.dispatchable_list()
+            .await
+            .iter()
+            .any(|d| d.name == "beta"),
+        "a deferred tool is still dispatchable, so name-repair must be able to see it"
+    );
+
+    deferred.undefer(&["beta".to_string()]);
+
+    let meta_names: Vec<String> = svc
+        .metadata_schema()
+        .iter()
+        .map(|d| d.name.clone())
+        .collect();
+    assert!(
+        meta_names.contains(&"beta".to_string()),
+        "a discovered tool must re-enter the model's tool array, or it is uncallable"
     );
 }
 

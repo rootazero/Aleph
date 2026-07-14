@@ -649,6 +649,17 @@ impl AiProvider for HttpProvider {
         }
     }
 
+    /// The leaf of the decorator stack: this provider's configured key
+    /// (`anthropic` / `deepseek` / `kimi` / …) — the id the pricing table and
+    /// the model catalog are keyed on.
+    fn serving_provider_hint(&self) -> Option<Cow<'_, str>> {
+        if self.name.is_empty() {
+            None
+        } else {
+            Some(Cow::Borrowed(self.name.as_str()))
+        }
+    }
+
     fn as_http_provider(&self) -> Option<&HttpProvider> {
         Some(self)
     }

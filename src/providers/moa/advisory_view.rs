@@ -33,10 +33,7 @@ pub(crate) fn truncate_tool_result(text: &str, budget: usize) -> String {
     }
     let half = budget / 2;
     // Byte offset AFTER the half-th char (head end boundary).
-    let head_end = text
-        .char_indices()
-        .nth(half)
-        .map_or(text.len(), |(i, _)| i);
+    let head_end = text.char_indices().nth(half).map_or(text.len(), |(i, _)| i);
     // Byte offset of the (total-half)-th char (tail start boundary).
     let tail_start = text
         .char_indices()
@@ -78,7 +75,10 @@ fn text_of(blocks: &[ContentBlock]) -> String {
 fn render_tool_calls(blocks: &[ContentBlock]) -> Vec<String> {
     let mut lines = Vec::new();
     for block in blocks {
-        if let ContentBlock::ToolCall { name, arguments, .. } = block {
+        if let ContentBlock::ToolCall {
+            name, arguments, ..
+        } = block
+        {
             let args = if arguments.is_null() {
                 String::new()
             } else {
@@ -140,9 +140,8 @@ pub(crate) fn build_advisory_view(messages: &[UnifiedMessage]) -> Vec<UnifiedMes
                     "tool result"
                 };
                 append_to_last_assistant(&mut rendered, format!("[{tag}: {result_text}]"));
-            }
-            // #[non_exhaustive]: future variants carry no advisory meaning
-            // until explicitly handled.
+            } // #[non_exhaustive]: future variants carry no advisory meaning
+              // until explicitly handled.
         }
     }
 
@@ -213,9 +212,7 @@ pub(crate) fn mark_cache_breakpoints(view: &mut [UnifiedMessage]) {
             .rev()
             .find(|b| matches!(b, ContentBlock::Text { .. }))
         {
-            *cache_control = Some(crate::providers::message::CacheControl::Ephemeral {
-                ttl: None,
-            });
+            *cache_control = Some(crate::providers::message::CacheControl::Ephemeral { ttl: None });
         }
     }
 }
@@ -228,7 +225,10 @@ mod tests {
     fn assistant_with_tool_call() -> UnifiedMessage {
         UnifiedMessage::Assistant {
             content: vec![
-                ContentBlock::Text { text: "Let me check.".to_string(), cache_control: None },
+                ContentBlock::Text {
+                    text: "Let me check.".to_string(),
+                    cache_control: None,
+                },
                 ContentBlock::ToolCall {
                     id: "c1".to_string(),
                     name: "bash".to_string(),
@@ -274,7 +274,9 @@ mod tests {
             UnifiedMessage::tool_result("c1", "bash", "boom", true),
         ];
         let view = build_advisory_view(&msgs);
-        assert!(view_texts(&view)[1].1.contains("[tool result (error): boom]"));
+        assert!(view_texts(&view)[1]
+            .1
+            .contains("[tool result (error): boom]"));
     }
 
     #[test]
@@ -317,7 +319,10 @@ mod tests {
         grown.push(UnifiedMessage::tool_result("c1", "bash", "out", false));
         let v2 = build_advisory_view(&grown);
         assert_ne!(view_signature(&v1), view_signature(&v2));
-        assert_eq!(view_signature(&v1), view_signature(&build_advisory_view(&base)));
+        assert_eq!(
+            view_signature(&v1),
+            view_signature(&build_advisory_view(&base))
+        );
     }
 
     #[test]
@@ -355,19 +360,25 @@ mod tests {
             UnifiedMessage::user("five"),
         ];
         mark_cache_breakpoints(&mut view);
-        let marked: Vec<bool> = view
-            .iter()
-            .map(|m| {
-                let content = match m {
-                    UnifiedMessage::User { content }
-                    | UnifiedMessage::Assistant { content } => content,
-                    UnifiedMessage::ToolResult { content, .. } => content,
-                };
-                content.iter().any(|b| {
-                    matches!(b, ContentBlock::Text { cache_control: Some(_), .. })
+        let marked: Vec<bool> =
+            view.iter()
+                .map(|m| {
+                    let content = match m {
+                        UnifiedMessage::User { content }
+                        | UnifiedMessage::Assistant { content } => content,
+                        UnifiedMessage::ToolResult { content, .. } => content,
+                    };
+                    content.iter().any(|b| {
+                        matches!(
+                            b,
+                            ContentBlock::Text {
+                                cache_control: Some(_),
+                                ..
+                            }
+                        )
+                    })
                 })
-            })
-            .collect();
+                .collect();
         assert_eq!(marked, vec![false, false, true, true, true]);
     }
 
@@ -375,10 +386,15 @@ mod tests {
     fn cache_breakpoints_short_view_marks_all() {
         let mut view = vec![UnifiedMessage::user("only")];
         mark_cache_breakpoints(&mut view);
-        let UnifiedMessage::User { content } = &view[0] else { panic!() };
+        let UnifiedMessage::User { content } = &view[0] else {
+            panic!()
+        };
         assert!(matches!(
             content.last(),
-            Some(ContentBlock::Text { cache_control: Some(_), .. })
+            Some(ContentBlock::Text {
+                cache_control: Some(_),
+                ..
+            })
         ));
     }
 
@@ -386,9 +402,17 @@ mod tests {
     fn image_blocks_render_placeholder_and_json_stringifies() {
         let msgs = vec![UnifiedMessage::User {
             content: vec![
-                ContentBlock::Text { text: "look at this".into(), cache_control: None },
-                ContentBlock::Image { data: "base64...".into(), mime_type: "image/png".into() },
-                ContentBlock::Json { value: json!({"k": 1}) },
+                ContentBlock::Text {
+                    text: "look at this".into(),
+                    cache_control: None,
+                },
+                ContentBlock::Image {
+                    data: "base64...".into(),
+                    mime_type: "image/png".into(),
+                },
+                ContentBlock::Json {
+                    value: json!({"k": 1}),
+                },
             ],
         }];
         let view = build_advisory_view(&msgs);
@@ -404,8 +428,14 @@ mod tests {
         let base = vec![UnifiedMessage::user("go")];
         let with_image = vec![UnifiedMessage::User {
             content: vec![
-                ContentBlock::Text { text: "go".into(), cache_control: None },
-                ContentBlock::Image { data: "d".into(), mime_type: "image/png".into() },
+                ContentBlock::Text {
+                    text: "go".into(),
+                    cache_control: None,
+                },
+                ContentBlock::Image {
+                    data: "d".into(),
+                    mime_type: "image/png".into(),
+                },
             ],
         }];
         assert_ne!(

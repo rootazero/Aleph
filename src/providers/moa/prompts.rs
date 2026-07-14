@@ -88,8 +88,14 @@ mod tests {
 
     fn outcomes() -> Vec<AdvisorOutcome> {
         vec![
-            AdvisorOutcome { label: "openai:gpt-5.5".into(), text: "advice A".into() },
-            AdvisorOutcome { label: "deepseek:v4".into(), text: "[failed: timeout]".into() },
+            AdvisorOutcome {
+                label: "openai:gpt-5.5".into(),
+                text: "advice A".into(),
+            },
+            AdvisorOutcome {
+                label: "deepseek:v4".into(),
+                text: "[failed: timeout]".into(),
+            },
         ]
     }
 
@@ -109,18 +115,19 @@ mod tests {
         let mut msgs = vec![UnifiedMessage::user("original prompt")];
         attach_guidance(&mut msgs, "GUIDE");
         assert_eq!(msgs.len(), 1);
-        let UnifiedMessage::User { content } = &msgs[0] else { panic!() };
-        let ContentBlock::Text { text, .. } = &content[0] else { panic!() };
+        let UnifiedMessage::User { content } = &msgs[0] else {
+            panic!()
+        };
+        let ContentBlock::Text { text, .. } = &content[0] else {
+            panic!()
+        };
         assert!(text.starts_with("original prompt"));
         assert!(text.ends_with("GUIDE"));
     }
 
     #[test]
     fn attach_appends_after_trailing_assistant() {
-        let mut msgs = vec![
-            UnifiedMessage::user("q"),
-            UnifiedMessage::assistant("a"),
-        ];
+        let mut msgs = vec![UnifiedMessage::user("q"), UnifiedMessage::assistant("a")];
         attach_guidance(&mut msgs, "GUIDE");
         assert_eq!(msgs.len(), 3);
         assert!(matches!(msgs.last(), Some(UnifiedMessage::User { .. })));

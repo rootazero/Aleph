@@ -367,7 +367,7 @@ impl AgentHarness {
         // unified resolver below; the parallel fast path naturally routes any
         // unrepaired/typo'd name back here (an unknown name yields a
         // conservative `Global` concurrency claim → non-parallelizable → serial).
-        let offered_defs = self.deps.tools.list().await;
+        let offered_defs = self.deps.tools.dispatchable_list().await;
         let offered_names: Vec<&str> = offered_defs.iter().map(|d| d.name.as_str()).collect();
 
         let mut tool_iter = tool_calls.into_iter();
@@ -1236,13 +1236,13 @@ impl AgentHarness {
             let defs = self.deps.tools.metadata_schema();
             let offered: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
             let candidates = crate::tools::name_repair::suggest_candidates(name, &offered, 3);
+            // Advertise no discovery tool: this said "call `list_tools`", which
+            // production never registers, so the model looped on NotFound. Its
+            // live tool array is already in context; the near-miss is the signal.
             if candidates.is_empty() {
-                " No similarly-named tool is available — call `list_tools` to see the live tool list.".to_string()
+                " No similarly-named tool is available.".to_string()
             } else {
-                format!(
-                    " Did you mean: {}? Call `list_tools` to see the live tool list.",
-                    candidates.join(", ")
-                )
+                format!(" Did you mean: {}?", candidates.join(", "))
             }
         } else {
             String::new()

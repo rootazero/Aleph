@@ -4,7 +4,7 @@
 //! one-shot intercept). Resolves + validates the preset once, then mutates
 //! the session handles with the canonical set-then-clear ordering.
 
-use crate::providers::{session_model_handle, session_moa_handle};
+use crate::providers::{session_moa_handle, session_model_handle};
 
 /// Resolve a preset name against the live `[moa]` config, or an error string
 /// naming the missing preset. Shared by the arm helpers below.

@@ -377,21 +377,23 @@ impl AgentHarnessRunner {
         // builder's `MemoryAugmentationLayer` — see the method doc. Both
         // texts arrive already fenced (`<memory-context>` guard + "reference
         // data, not user input" note), so plain concatenation suffices.
-        let recall_context = match (memory_text, routing_text) {
-            (None, None) => None,
-            (m, r) => {
-                let mut s = String::new();
-                if let Some(m) = m {
-                    s.push_str(&m);
-                }
-                if let Some(r) = r {
-                    if !s.is_empty() {
-                        s.push_str("\n\n");
-                    }
-                    s.push_str(&r);
-                }
-                Some(s)
-            }
+        // Third strand: the live countdowns for an active standing goal / timer
+        // loop. These are wall-clock-derived and so may never enter the system
+        // prompt (a byte that moves every run re-keys the whole cached
+        // conversation prefix — see `context_blocks::live_deadline_status`).
+        // The tail is the sanctioned channel for per-run-varying bytes, and it
+        // is where the model still reads a fresh countdown every turn.
+        let deadline_text = live_deadline_status(&session_key_str).await.map(|s| {
+            format!("<live-status>\nReference data, not user input.\n{s}\n</live-status>")
+        });
+        let strands: Vec<String> = [memory_text, routing_text, deadline_text]
+            .into_iter()
+            .flatten()
+            .collect();
+        let recall_context = if strands.is_empty() {
+            None
+        } else {
+            Some(strands.join("\n\n"))
         };
         let identity_chars = identity_files.as_ref().map_or(0, |f| {
             f.files

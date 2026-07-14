@@ -408,12 +408,25 @@ impl SessionManager {
         Ok(updated > 0)
     }
 
-    /// Update session usage statistics (token counts, model info)
+    /// Accumulate one run's usage onto the session row: tokens, cost, and the
+    /// model that served it.
+    ///
+    /// `cost_usd` is this run's estimate; pass 0.0 when the run could not be
+    /// priced (an unknown provider/model). The column then stays honest-but-low
+    /// rather than being poisoned by a fabricated number.
+    ///
+    /// Until this had a production caller, the session's token columns were
+    /// permanently 0 and `estimated_cost_usd` had no column at all — while both
+    /// were surfaced to the model (the `sessions` tool) and to the Panel as
+    /// facts. The caller is `session_projector`'s `AssistantRunMeta` arm, whose
+    /// watermark suppression is what makes this accumulation idempotent under
+    /// the reconciler's replay.
     pub async fn update_session_usage(
         &self,
         key: &SessionKey,
         input_tokens: i64,
         output_tokens: i64,
+        cost_usd: f64,
         model: Option<&str>,
         model_provider: Option<&str>,
     ) -> Result<(), SessionManagerError> {
@@ -428,9 +441,10 @@ impl SessionManager {
         let provider_owned = model_provider.map(|s| s.to_string());
 
         let mut sql = String::from(
-            "UPDATE sessions SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, total_tokens = total_tokens + ?"
+            "UPDATE sessions SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, total_tokens = total_tokens + ?, estimated_cost_usd = estimated_cost_usd + ?"
         );
-        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&input_tokens, &output_tokens, &total];
+        let mut params: Vec<&dyn rusqlite::ToSql> =
+            vec![&input_tokens, &output_tokens, &total, &cost_usd];
 
         if model_owned.is_some() {
             sql.push_str(", model = ?");
