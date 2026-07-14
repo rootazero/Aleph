@@ -25,7 +25,7 @@ impl InputWidget<'_> {
         };
 
         let title = if self.focused {
-            " Input (Enter=send, Shift+Enter=newline) "
+            " Input (Enter=send, \\+Enter=newline) "
         } else {
             " Input "
         };

@@ -348,6 +348,15 @@ impl AlephClient {
         Ok(result.role)
     }
 
+    /// Whether the WebSocket connection is still live.
+    ///
+    /// Reads the atomic the read loop clears when the socket drops (and that
+    /// `call()` checks before sending). A pure read of existing state — no I/O,
+    /// no server round-trip. Lets a UI reflect a disconnect even while idle.
+    pub fn is_connected(&self) -> bool {
+        self.connected.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Close the connection
     pub async fn close(&self) -> CliResult<()> {
         let mut write = self.write.lock().await;

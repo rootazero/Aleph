@@ -19,7 +19,7 @@ use std::io;
 use std::time::Duration;
 
 use crossterm::{
-    event::{KeyCode, KeyEvent, KeyModifiers},
+    event::{DisableBracketedPaste, EnableBracketedPaste, KeyCode, KeyEvent, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -52,7 +52,12 @@ pub async fn run(
     // 1. Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    // Bracketed paste lets the terminal deliver a multi-line paste as one
+    // `Event::Paste` instead of a stream of key events (each newline a bare
+    // Enter), which would otherwise auto-send the first pasted line. Unix/macOS
+    // only — crossterm's Windows console source does not emit paste events, so
+    // this is inert (but harmless) there.
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -60,7 +65,7 @@ pub async fn run(
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableBracketedPaste);
         let _ = execute!(io::stdout(), crossterm::cursor::Show);
         original_hook(info);
     }));
@@ -135,7 +140,11 @@ pub async fn run(
 
     // 6. Restore terminal (always, even on error)
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableBracketedPaste
+    )?;
     terminal.show_cursor()?;
 
     result
@@ -177,6 +186,12 @@ async fn main_loop(
             }
             Action::Tick => {
                 state.spinner_frame = state.spinner_frame.wrapping_add(1);
+                // Reflect the live connection state in the status dot even while
+                // idle (no in-flight call). The gateway-event channel never
+                // yields None on a WS drop — the client keeps an ownership anchor
+                // on the receiver — so the connection's own atomic is the only
+                // reliable disconnect signal.
+                state.is_connected = client.is_connected();
             }
 
             // -- Chat --
@@ -336,6 +351,25 @@ async fn main_loop(
                 }
                 state.close_overlay();
             }
+
+            // -- Session picker --
+            Action::SessionPickerUp => {
+                if let Some(picker) = &mut state.session_picker {
+                    if picker.selected > 0 {
+                        picker.selected -= 1;
+                    }
+                }
+            }
+            Action::SessionPickerDown => {
+                if let Some(picker) = &mut state.session_picker {
+                    if picker.selected + 1 < picker.filtered.len() {
+                        picker.selected += 1;
+                    }
+                }
+            }
+            Action::SessionPickerConfirm => {
+                confirm_session_switch(state, client).await;
+            }
         }
 
         // Check quit flag
@@ -357,10 +391,17 @@ fn handle_terminal_event(
     textarea: &mut TextArea,
     event: &event::TermEvent,
 ) -> Action {
-    match *event {
-        event::TermEvent::Key(key) => handle_key_event(state, textarea, key),
+    match event {
+        event::TermEvent::Key(key) => handle_key_event(state, textarea, *key),
         event::TermEvent::Resize => {
             // Terminal resize is handled automatically by ratatui
+            Action::None
+        }
+        event::TermEvent::Paste(text) => {
+            // Insert a bracketed paste verbatim (multi-line safe) — never route
+            // it through the Enter/send path, so a multi-line paste no longer
+            // auto-sends its first line.
+            textarea.insert_str(text);
             Action::None
         }
     }
@@ -379,6 +420,7 @@ fn handle_key_event(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
         Focus::Chat => handle_chat_key(state, key),
         Focus::CommandPalette => handle_palette_key(state, key),
         Focus::Dialog => handle_dialog_key(state, key),
+        Focus::SessionPicker => handle_session_picker_key(state, key),
     }
 }
 
@@ -425,10 +467,16 @@ fn handle_global_key(
         return Some(Action::Quit);
     }
 
-    // Esc: close overlay if any is open
+    // Esc: close the command palette (a purely local overlay). Do NOT dismiss an
+    // AskUser dialog — it is backed by a server run parked on a oneshot, so
+    // silently closing it would orphan that run with no response. Keep the
+    // dialog on screen and force the user to answer (or /stop / Ctrl+C to abort).
     if key.code == KeyCode::Esc {
-        if state.palette.is_some() || state.dialog.is_some() {
+        if state.palette.is_some() || state.session_picker.is_some() {
             return Some(Action::CloseOverlay);
+        }
+        if state.dialog.is_some() {
+            return Some(Action::None);
         }
         // If in chat focus, return to input
         if state.focus == Focus::Chat {
@@ -447,31 +495,60 @@ fn handle_global_key(
 /// Handle key events when the input area is focused.
 fn handle_input_key(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent) -> Action {
     match key.code {
-        // Enter: send message (unless Shift is held for newline)
+        // Ctrl+J: portable newline. Enhanced terminals deliver this as a
+        // distinct Char('j')+CONTROL; on terminals that collapse it to a bare
+        // Enter it simply behaves like Enter (harmless). The always-works
+        // newline is the `\`+Enter continuation handled in the Enter arm below.
+        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            textarea.insert_newline();
+            Action::None
+        }
+
+        // Enter: insert a newline (Shift/Ctrl held, or `\`-continuation) or send.
         KeyCode::Enter => {
-            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                // Shift+Enter: insert newline
-                textarea.input(Input::from(crossterm::event::Event::Key(key)));
-                Action::None
-            } else {
-                // Enter: collect text and send
-                let text: String = textarea.lines().join("\n");
-                let text = text.trim().to_string();
+            // Enhanced terminals expose Shift+Enter / Ctrl+Enter as a distinct
+            // modifier — treat either as an explicit newline.
+            if key.modifiers.contains(KeyModifiers::SHIFT)
+                || key.modifiers.contains(KeyModifiers::CONTROL)
+            {
+                textarea.insert_newline();
+                return Action::None;
+            }
 
-                if text.is_empty() {
-                    return Action::None;
-                }
+            // Portable newline for terminals that collapse every Enter to a bare
+            // '\r' (Windows Terminal, WSL, plain Terminal.app, SSH): a trailing
+            // backslash immediately left of the cursor becomes a newline instead
+            // of submitting. Mirrors the Claude Code / hermes-agent convention.
+            let (row, col) = textarea.cursor();
+            let ends_with_backslash = col > 0
+                && textarea
+                    .lines()
+                    .get(row)
+                    .and_then(|line| line.chars().nth(col - 1))
+                    == Some('\\');
+            if ends_with_backslash {
+                textarea.delete_char(); // remove the trailing '\'
+                textarea.insert_newline();
+                return Action::None;
+            }
 
-                // Clear the textarea
-                textarea.select_all();
-                textarea.delete_char();
+            // Otherwise: collect text and send.
+            let text: String = textarea.lines().join("\n");
+            let text = text.trim().to_string();
 
-                // Check if it's a slash command
-                match slash::parse_input(&text) {
-                    ParsedInput::Local(cmd) => Action::LocalCommand(cmd),
-                    ParsedInput::Gateway(cmd_text) => Action::GatewayCommand(cmd_text),
-                    ParsedInput::NotSlashCommand => Action::SendMessage(text),
-                }
+            if text.is_empty() {
+                return Action::None;
+            }
+
+            // Clear the textarea
+            textarea.select_all();
+            textarea.delete_char();
+
+            // Check if it's a slash command
+            match slash::parse_input(&text) {
+                ParsedInput::Local(cmd) => Action::LocalCommand(cmd),
+                ParsedInput::Gateway(cmd_text) => Action::GatewayCommand(cmd_text),
+                ParsedInput::NotSlashCommand => Action::SendMessage(text),
             }
         }
 
@@ -742,6 +819,39 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
     }
 }
 
+/// Handle key events when the session picker is focused.
+fn handle_session_picker_key(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Up => Action::SessionPickerUp,
+        KeyCode::Down => Action::SessionPickerDown,
+        KeyCode::Enter | KeyCode::Tab => Action::SessionPickerConfirm,
+        KeyCode::Backspace => {
+            let is_empty = state
+                .session_picker
+                .as_ref()
+                .is_none_or(|p| p.input.is_empty());
+            if is_empty {
+                // Empty filter — close the picker.
+                Action::CloseOverlay
+            } else {
+                if let Some(picker) = &mut state.session_picker {
+                    picker.input.pop();
+                }
+                state.recompute_session_filter();
+                Action::None
+            }
+        }
+        KeyCode::Char(c) => {
+            if let Some(picker) = &mut state.session_picker {
+                picker.input.push(c);
+            }
+            state.recompute_session_filter();
+            Action::None
+        }
+        _ => Action::None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Local command execution
 // ---------------------------------------------------------------------------
@@ -795,10 +905,117 @@ async fn execute_local_command(
         LocalCommand::Undo => execute_undo(state, client).await,
         LocalCommand::Retry => execute_retry(state, client).await,
         LocalCommand::Tools { mode } => execute_tools(state, mode),
+        LocalCommand::Sessions => execute_sessions(state, client).await,
     }
 
     // Ensure textarea still has focus hint after command execution
     let _ = textarea;
+}
+
+// ---------------------------------------------------------------------------
+// Session picker (browse + switch), both RPCs already exist server-side.
+// ---------------------------------------------------------------------------
+
+/// Fetch the session list and open the picker overlay.
+async fn execute_sessions(state: &mut AppState, client: &AlephClient) {
+    match client.call::<_, Value>("sessions.list", None::<()>).await {
+        Ok(result) => {
+            // Accept both {"sessions": [...]} and a bare [...] top level.
+            let rows = result
+                .get("sessions")
+                .and_then(Value::as_array)
+                .or_else(|| result.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            let entries: Vec<app::SessionEntry> =
+                rows.iter().filter_map(session_entry_from_json).collect();
+
+            if entries.is_empty() {
+                state.add_system_message("No other sessions to switch to.".to_string());
+            } else {
+                state.open_session_picker(entries);
+            }
+        }
+        Err(e) => state.add_system_message(format!("Sessions error: {e}")),
+    }
+}
+
+/// Map one `sessions.list` row into a `SessionEntry`, or `None` if it has no key.
+fn session_entry_from_json(v: &Value) -> Option<app::SessionEntry> {
+    let key = v.get("key").and_then(Value::as_str)?.to_string();
+    let name = v.get("name").and_then(Value::as_str).unwrap_or("");
+    let count = v.get("message_count").and_then(Value::as_u64);
+    let label = match (name.is_empty(), count) {
+        (false, Some(c)) => format!("{name}  ({c} msgs)"),
+        (false, None) => name.to_string(),
+        (true, Some(c)) => format!("{key}  ({c} msgs)"),
+        (true, None) => key.clone(),
+    };
+    Some(app::SessionEntry { key, label })
+}
+
+/// Confirm the highlighted session: load its history and re-point the session.
+async fn confirm_session_switch(state: &mut AppState, client: &AlephClient) {
+    let Some(key) = state.selected_session_key() else {
+        state.close_overlay();
+        return;
+    };
+    state.close_overlay();
+
+    let params = json!({ "session_key": key });
+    match client.call::<_, Value>("chat.history", Some(params)).await {
+        Ok(result) => {
+            let rows = result
+                .get("messages")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let mapped: Vec<app::ChatMessage> =
+                rows.iter().filter_map(history_message_from_json).collect();
+
+            // switch_session clears transient state + adds a "Switched" banner;
+            // then render the server transcript verbatim (no local dedup/store).
+            state.switch_session(&key);
+            for msg in mapped {
+                state.messages.push(msg);
+            }
+            state.scroll_to_bottom();
+        }
+        Err(e) => state.add_system_message(format!("History error: {e}")),
+    }
+}
+
+/// Map one `chat.history` row (`{role, content, timestamp}`) into a `ChatMessage`.
+fn history_message_from_json(v: &Value) -> Option<app::ChatMessage> {
+    let role = v.get("role").and_then(Value::as_str).unwrap_or("");
+    let content = v
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    match role {
+        "user" => Some(app::ChatMessage::User {
+            content,
+            timestamp: parse_history_timestamp(v),
+        }),
+        "assistant" => Some(app::ChatMessage::Assistant {
+            content,
+            tools: Vec::new(),
+            reasoning: None,
+            is_streaming: false,
+        }),
+        "system" => Some(app::ChatMessage::System { content }),
+        _ => None,
+    }
+}
+
+/// Best-effort RFC3339 timestamp parse, falling back to now.
+fn parse_history_timestamp(v: &Value) -> chrono::DateTime<chrono::Utc> {
+    v.get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map_or_else(chrono::Utc::now, |dt| dt.with_timezone(&chrono::Utc))
 }
 
 // ---------------------------------------------------------------------------
@@ -1104,7 +1321,9 @@ fn build_help_text(state: &AppState) -> String {
     lines.push(String::new());
     lines.push("Keyboard shortcuts:".to_string());
     lines.push("  Enter          Send message".to_string());
-    lines.push("  Shift+Enter    Insert newline".to_string());
+    lines.push("  \\ + Enter      Insert newline (portable)".to_string());
+    lines.push("  Ctrl+J         Insert newline (portable)".to_string());
+    lines.push("  Shift+Enter    Insert newline (enhanced terminals)".to_string());
     lines.push("  Ctrl+C         Cancel run / Clear input / Quit".to_string());
     lines.push("  Ctrl+D         Quit immediately".to_string());
     lines.push("  Tab            Switch focus (Input <-> Chat)".to_string());

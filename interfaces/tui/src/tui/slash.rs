@@ -72,6 +72,8 @@ pub enum LocalCommand {
     Retry,
     /// Switch tool-progress display mode (None prints the current mode)
     Tools { mode: Option<ToolProgressMode> },
+    /// Browse and switch to another session (opens the session picker)
+    Sessions,
 }
 
 /// Local command catalog: (name, description) pairs.
@@ -90,6 +92,7 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
     ("/undo", "Remove the last user+assistant turn from history"),
     ("/retry", "Undo + re-send the previous user message"),
     ("/tools", "Tool progress mode: off|new|all|verbose"),
+    ("/sessions", "Browse & switch session (alias: /resume)"),
     ("/replays", "List recent persisted trace replays"),
     ("/replay", "Load a persisted trace replay by task ID"),
     ("/help", "Show available commands"),
@@ -147,6 +150,7 @@ pub fn parse_input(input: &str) -> ParsedInput {
             };
             ParsedInput::Local(LocalCommand::Tools { mode })
         }
+        "/sessions" | "/resume" => ParsedInput::Local(LocalCommand::Sessions),
         "/replays" => ParsedInput::Local(LocalCommand::ReplayList),
         "/replay" => {
             if args.is_empty() {
@@ -226,6 +230,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_session_picker_commands() {
+        assert_eq!(
+            parse_input("/sessions"),
+            ParsedInput::Local(LocalCommand::Sessions)
+        );
+        // /resume is an accepted alias.
+        assert_eq!(
+            parse_input("/resume"),
+            ParsedInput::Local(LocalCommand::Sessions)
+        );
+        assert_eq!(
+            parse_input("/RESUME"),
+            ParsedInput::Local(LocalCommand::Sessions)
+        );
+    }
+
+    #[test]
     fn parse_tools_modes() {
         assert_eq!(
             parse_input("/tools"),
@@ -268,10 +289,6 @@ mod tests {
             ParsedInput::Gateway("/new my-session".to_string())
         );
         assert_eq!(
-            parse_input("/sessions"),
-            ParsedInput::Gateway("/sessions".to_string())
-        );
-        assert_eq!(
             parse_input("/model claude-3-opus"),
             ParsedInput::Gateway("/model claude-3-opus".to_string())
         );
@@ -308,8 +325,9 @@ mod tests {
     #[test]
     fn local_commands_returns_catalog() {
         let cmds = local_commands();
-        assert_eq!(cmds.len(), 12);
+        assert_eq!(cmds.len(), 13);
         assert!(cmds.iter().any(|(name, _)| *name == "/clear"));
+        assert!(cmds.iter().any(|(name, _)| *name == "/sessions"));
         assert!(cmds.iter().any(|(name, _)| *name == "/quit"));
         assert!(cmds.iter().any(|(name, _)| *name == "/usage"));
         assert!(cmds.iter().any(|(name, _)| *name == "/compress"));
