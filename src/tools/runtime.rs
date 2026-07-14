@@ -127,6 +127,21 @@ pub trait LoopTool: Send + Sync {
         false
     }
 
+    /// Whether re-running this tool with identical input has no observable
+    /// side effect — a declared pure read / naturally idempotent call.
+    ///
+    /// `false` by default, deliberately the OPPOSITE default of
+    /// [`is_concurrent_safe`](LoopTool::is_concurrent_safe) (which defaults to
+    /// `true`): this answer feeds the `Ask` exec tier's "not idempotent =
+    /// mutating" rule, so an unknown tool must land on the fail-closed side.
+    /// Builtins answer through `RegistryToolAdapter` (the
+    /// `IDEMPOTENT_BUILTIN_TOOLS` allowlist); MCP tools answer from the
+    /// server's own `readOnlyHint` / `idempotentHint`. Like the other two
+    /// flags, the answer is static per tool, not input-dependent.
+    fn is_idempotent(&self) -> bool {
+        false
+    }
+
     /// Per-result token budget hint used by the Layer 2 result processor.
     ///
     /// - `Some(n)` — persist this tool's outputs to disk when they exceed
@@ -285,6 +300,14 @@ impl LoopToolRegistry {
     pub fn requires_confirmation(&self, name: &str) -> bool {
         self.resolve(name)
             .is_some_and(|t| t.requires_confirmation())
+    }
+
+    /// Whether the named tool declares itself a pure read (see
+    /// [`LoopTool::is_idempotent`]). Unknown tools return `false` — the
+    /// fail-closed answer the `Ask` exec tier depends on.
+    #[must_use]
+    pub fn is_idempotent(&self, name: &str) -> bool {
+        self.resolve(name).is_some_and(|t| t.is_idempotent())
     }
 
     /// Return the per-result token budget that the named tool declared via

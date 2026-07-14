@@ -1,7 +1,6 @@
 use crate::exec::approval::parameter_binding::RequiredCapabilities;
 use crate::sandbox::capabilities::SandboxCapabilities;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 /// Trust stage for capability approval
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,28 +12,6 @@ pub enum TrustStage {
     Trial,
     /// Executed multiple times, entered silent mode
     Verified,
-}
-
-/// Reason for escalation trigger
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EscalationReason {
-    /// Parameter exceeds `custom_paths` range
-    PathOutOfScope,
-    /// Accessing sensitive directory
-    SensitiveDirectory,
-    /// Using undeclared parameter binding
-    UndeclaredBinding,
-    /// First execution (Trial stage)
-    FirstExecution,
-}
-
-/// Escalation trigger information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EscalationTrigger {
-    pub reason: EscalationReason,
-    pub requested_path: Option<PathBuf>,
-    pub approved_paths: Vec<String>,
 }
 
 /// Capability approval request
@@ -87,17 +64,6 @@ mod tests {
 
         let verified = TrustStage::Verified;
         assert!(matches!(verified, TrustStage::Verified));
-    }
-
-    #[test]
-    fn test_escalation_reason_variants() {
-        let reasons = [
-            EscalationReason::PathOutOfScope,
-            EscalationReason::SensitiveDirectory,
-            EscalationReason::UndeclaredBinding,
-            EscalationReason::FirstExecution,
-        ];
-        assert_eq!(reasons.len(), 4);
     }
 
     #[test]

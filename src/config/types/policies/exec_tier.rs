@@ -15,12 +15,14 @@
 //! and every future tool as whatever its author picked — so any table of name
 //! globs silently lets whole families through the gate it claims to hold.
 //!
-//! The property that already declares what a tool *does* is
-//! `ToolDefinitionMetadata.idempotent`: projected from the maintained pure-read
-//! allowlist [`crate::tools::retry::IDEMPOTENT_BUILTIN_TOOLS`] for builtins and
-//! from the server's own hints for MCP tools, defaulting to `false`. Hence the
-//! rule: **a tool that is not idempotent is a mutating tool**. Unknown tools
-//! are non-idempotent, so `Ask` is fail-closed for anything new.
+//! The property that already declares what a tool *does* is idempotency, read
+//! at the enforcement chokepoint through
+//! [`crate::tools::runtime::LoopTool::is_idempotent`]: the maintained pure-read
+//! allowlist [`crate::tools::retry::IDEMPOTENT_BUILTIN_TOOLS`] for builtins, the
+//! server's own `readOnlyHint` / `idempotentHint` for MCP tools, `false` for
+//! anything that declares nothing. Hence the rule: **a tool that is not
+//! idempotent is a mutating tool**. Unknown tools are non-idempotent, so `Ask`
+//! is fail-closed for anything new.
 //!
 //! The tier axis is orthogonal to `[sandbox.command_policy]`. No tier — not
 //! even `Full` — can lower the command-policy hardline floor (fork bombs,
@@ -46,9 +48,9 @@ pub struct ToolFacts<'a> {
     /// Registry name. Only consulted for the curated destructive set below,
     /// never to guess whether the tool mutates.
     pub name: &'a str,
-    /// `ToolDefinitionMetadata.idempotent` — the tool declares itself a
-    /// read-only / pure query. Everything else mutates, including every tool
-    /// Aleph has never heard of.
+    /// `LoopTool::is_idempotent` — the tool declares itself a read-only / pure
+    /// query (builtin allowlist, or an MCP server's `readOnlyHint`). Everything
+    /// else mutates, including every tool Aleph has never heard of.
     pub idempotent: bool,
     /// `ToolDefinitionMetadata.requires_approval` — for MCP tools this carries
     /// the server's `destructiveHint`.

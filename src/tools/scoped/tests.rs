@@ -1883,6 +1883,64 @@ fn ask_tier_leaves_declared_read_only_tools_allowed() {
     }
 }
 
+/// A registry-shaped MCP tool that declares its own idempotency, exactly as
+/// `McpRegistryTool` does from the server's `readOnlyHint` / `idempotentHint`.
+/// The builtin allowlist can never speak for a name like this.
+struct DeclaringMcpStub {
+    name: String,
+    idempotent: bool,
+}
+#[async_trait::async_trait]
+impl LoopTool for DeclaringMcpStub {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        "mcp stub"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    fn is_idempotent(&self) -> bool {
+        self.idempotent
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        LoopToolResult::Success { output: json!({}) }
+    }
+}
+
+#[test]
+fn ask_tier_honors_an_mcp_servers_read_only_declaration() {
+    use crate::config::types::policies::ExecTier;
+    use crate::extension::PermissionAction;
+    // `tool_facts` must read idempotency off the DECLARATION seam, not off the
+    // builtin name allowlist: neither of these names can ever appear there, so
+    // a name-keyed lookup answers `false` for both and the Ask tier raises a
+    // card on a pure-read docs search — the prompt fatigue that makes users
+    // abandon the tier.
+    let mut r = LoopToolRegistry::new();
+    r.register(Box::new(DeclaringMcpStub {
+        name: "docs__search".to_string(),
+        idempotent: true,
+    }));
+    r.register(Box::new(DeclaringMcpStub {
+        name: "docs__publish".to_string(),
+        idempotent: false,
+    }));
+    let svc = ScopedToolService::new(Arc::new(r), BTreeSet::new()).with_exec_tier(ExecTier::Ask);
+
+    assert_eq!(
+        svc.permission_for("docs__search"),
+        PermissionAction::Allow,
+        "a server-declared readOnlyHint must reach the tier rule"
+    );
+    assert_eq!(
+        svc.permission_for("docs__publish"),
+        PermissionAction::Ask,
+        "an MCP tool that declares nothing stays fail-closed"
+    );
+}
+
 #[test]
 fn auto_tier_only_guards_the_destructive_tail() {
     use crate::config::types::policies::ExecTier;

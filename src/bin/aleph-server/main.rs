@@ -59,7 +59,7 @@ mod daemon;
 mod server_init;
 
 use clap::Parser;
-use cli::{Args, AuditAction, Command, PluginAction, PluginsAction};
+use cli::{Args, Command, PluginAction, PluginsAction};
 
 /// Entry point: parse args and daemonize BEFORE starting the tokio runtime.
 ///
@@ -73,7 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the FIRST meaningful action on the `start` path. Other subcommands
     // run their own policy dispatch (see `src/cli/policy.rs` and the
     // per-handler `with_policy` / `run_no_lock` calls in
-    // `commands/{secret,plugins,gateway,audit,bootstrap_runtime}.rs`),
+    // `commands/{secret,plugins,gateway,bootstrap_runtime}.rs`),
     // so we only need to acquire here when entering the long-running
     // server.
     //
@@ -207,17 +207,6 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Command::Doctor { fix, json }) => {
             return commands::handle_doctor_command(fix, json).await;
-        }
-        Some(Command::Audit { action }) => {
-            return match action {
-                AuditAction::Tools => commands::handle_audit_tools().await,
-                AuditAction::Tool { name, limit } => {
-                    commands::handle_audit_tool(&name, limit).await
-                }
-                AuditAction::Escalations { limit } => {
-                    commands::handle_audit_escalations(limit).await
-                }
-            };
         }
         Some(Command::Plugin { action }) => {
             return match action {

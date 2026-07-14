@@ -88,12 +88,15 @@ mod tests {
     async fn pending_approval_gets_resolved() {
         let manager = Arc::new(ExecApprovalManager::new());
         let record = manager.create(&mock_request("rec-1"), 5_000);
-        let id = record.id.clone();
 
-        // 在后台任务里 wait（wait_for_decision 负责把 record 注册进 pending）
+        // register_pending is synchronous: the entry is resolvable the instant
+        // it returns, so the callback below cannot race ahead of registration.
+        let (id, rx, wait_timeout) = manager.register_pending(record);
         let m2 = manager.clone();
-        let waiter = tokio::spawn(async move { m2.wait_for_decision(record).await });
-        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        let waiter = {
+            let id = id.clone();
+            tokio::spawn(async move { m2.await_registered(id, rx, wait_timeout).await })
+        };
 
         let sink = ManagerCallbackSink::new(manager.clone());
         let out = sink

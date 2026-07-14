@@ -124,11 +124,6 @@ pub enum Command {
         #[command(subcommand)]
         action: ServiceAction,
     },
-    /// Audit tool risk and execution history
-    Audit {
-        #[command(subcommand)]
-        action: AuditAction,
-    },
     /// Manage shell-hook consent (review/approve plugin shell hooks)
     Hooks {
         #[command(subcommand)]
@@ -282,28 +277,6 @@ pub enum ServiceAction {
     Disable,
     /// Report installed / enabled / running state
     Status,
-}
-
-/// Audit subcommands
-#[derive(Subcommand, Debug)]
-pub enum AuditAction {
-    /// List all tools with risk scores
-    Tools,
-    /// Show detailed tool info and execution history
-    Tool {
-        /// Tool name to query
-        name: String,
-
-        /// Maximum number of execution records to show
-        #[arg(long, short = 'l', default_value = "10")]
-        limit: usize,
-    },
-    /// Show all escalation events
-    Escalations {
-        /// Maximum number of escalation records to show
-        #[arg(long, short = 'l', default_value = "20")]
-        limit: usize,
-    },
 }
 
 /// Shell-hook consent subcommands.
@@ -543,89 +516,6 @@ mod tests {
                 }
             }
             _ => panic!("Expected Plugins command with Disable action"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parses_audit_tools() {
-        let args = Args::try_parse_from(["aleph", "audit", "tools"]);
-        assert!(args.is_ok());
-        let args = args.unwrap();
-        match args.command {
-            Some(Command::Audit { action }) => {
-                assert!(matches!(action, AuditAction::Tools));
-            }
-            _ => panic!("Expected Audit command with Tools action"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parses_audit_tool() {
-        let args = Args::try_parse_from(["aleph", "audit", "tool", "my_tool"]);
-        assert!(args.is_ok());
-        let args = args.unwrap();
-        match args.command {
-            Some(Command::Audit { action }) => {
-                if let AuditAction::Tool { name, limit } = action {
-                    assert_eq!(name, "my_tool");
-                    assert_eq!(limit, 10); // default value
-                } else {
-                    panic!("Expected AuditAction::Tool");
-                }
-            }
-            _ => panic!("Expected Audit command with Tool action"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parses_audit_tool_with_limit() {
-        let args = Args::try_parse_from(["aleph", "audit", "tool", "my_tool", "--limit", "50"]);
-        assert!(args.is_ok());
-        let args = args.unwrap();
-        match args.command {
-            Some(Command::Audit { action }) => {
-                if let AuditAction::Tool { name, limit } = action {
-                    assert_eq!(name, "my_tool");
-                    assert_eq!(limit, 50);
-                } else {
-                    panic!("Expected AuditAction::Tool");
-                }
-            }
-            _ => panic!("Expected Audit command with Tool action"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parses_audit_escalations() {
-        let args = Args::try_parse_from(["aleph", "audit", "escalations"]);
-        assert!(args.is_ok());
-        let args = args.unwrap();
-        match args.command {
-            Some(Command::Audit { action }) => {
-                if let AuditAction::Escalations { limit } = action {
-                    assert_eq!(limit, 20); // default value
-                } else {
-                    panic!("Expected AuditAction::Escalations");
-                }
-            }
-            _ => panic!("Expected Audit command with Escalations action"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parses_audit_escalations_with_limit() {
-        let args = Args::try_parse_from(["aleph", "audit", "escalations", "-l", "100"]);
-        assert!(args.is_ok());
-        let args = args.unwrap();
-        match args.command {
-            Some(Command::Audit { action }) => {
-                if let AuditAction::Escalations { limit } = action {
-                    assert_eq!(limit, 100);
-                } else {
-                    panic!("Expected AuditAction::Escalations");
-                }
-            }
-            _ => panic!("Expected Audit command with Escalations action"),
         }
     }
 

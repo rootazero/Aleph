@@ -1,8 +1,8 @@
 //! 从结构化 `SessionKey` 解出通道投递路由 `(ChannelId, ConversationId)`。
 //!
-//! 替代 `ChannelApprovalBridge::parse_session_key` 对字符串 `session_key` 的
-//! 有损扫描 —— 后者对默认 `DmScope::PerPeer`（`agent:{a}:dm:{p}`，不含通道名）
-//! 静默返回 `None`。结构化 `SessionKey` 直接携带 `channel` 字段，无歧义。
+//! 唯一路由源。审批投递不得回退到对字符串 `session_key` 的扫描 —— 那种做法
+//! 对默认 `DmScope::PerPeer`（`agent:{a}:dm:{p}`，不含通道名）静默返回 `None`。
+//! 结构化 `SessionKey` 直接携带 `channel` 字段，无歧义。
 
 use crate::gateway::channel::{ChannelId, ConversationId};
 use crate::routing::session_key::SessionKey;

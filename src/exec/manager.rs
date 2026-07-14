@@ -193,25 +193,6 @@ impl ExecApprovalManager {
         record
     }
 
-    /// Wait for decision on an approval request
-    ///
-    /// This adds the request to pending and waits for resolution or timeout.
-    ///
-    /// # Arguments
-    ///
-    /// * `record` - The approval record to wait on
-    ///
-    /// # Returns
-    ///
-    /// The decision, or None if timed out
-    pub async fn wait_for_decision(
-        &self,
-        record: ExecApprovalRecord,
-    ) -> Option<ApprovalDecisionType> {
-        let (id, rx, timeout) = self.register_pending(record);
-        self.await_registered(id, rx, timeout).await
-    }
-
     /// Register `record` as pending and return its id + receiver + remaining
     /// timeout — WITHOUT awaiting.
     ///

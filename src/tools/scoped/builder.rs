@@ -263,7 +263,13 @@ impl ScopedToolService {
     fn tool_facts<'a>(&self, name: &'a str) -> crate::config::types::policies::ToolFacts<'a> {
         crate::config::types::policies::ToolFacts {
             name,
-            idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
+            // The declaration seam answers for every tool that reached the
+            // registry (builtins via the allowlist, MCP via the server's
+            // hints). The name-list fallback keeps any builtin NOT routed
+            // through `RegistryToolAdapter` resolving exactly as before; a
+            // tool unknown to both stays `false`, so `Ask` is fail-closed.
+            idempotent: self.inner.is_idempotent(name)
+                || crate::tools::retry::is_idempotent_builtin_name(name),
             requires_approval: self.inner.requires_confirmation(name),
         }
     }
