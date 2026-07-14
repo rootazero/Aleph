@@ -14,13 +14,13 @@
 
 use async_trait::async_trait;
 
-use crate::exec::analysis::CommandAnalysis;
 use crate::exec::decision::ApprovalRequest;
 use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
 use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::GatewayEventFrame;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
+use crate::sandbox::exec_approval::ApprovalAction;
 use crate::sync_primitives::Arc;
 
 /// Maps an `ExecApprovalManager` decision into an `ApprovalOutcome`. `None` =
@@ -50,7 +50,9 @@ impl OperatorApprovalRequester {
 
 #[async_trait]
 impl ApprovalRequester for OperatorApprovalRequester {
-    async fn request_approval(&self, tool_name: &str, reason: &str) -> ApprovalOutcome {
+    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalOutcome {
+        let tool_name = action.tool_name.as_str();
+        let reason = action.reason.as_str();
         let turn = crate::tools::turn_context::current_turn_context();
         let (session_key_str, agent_id, channel_id, conversation_id) = match &turn {
             Some(t) => (
@@ -64,19 +66,16 @@ impl ApprovalRequester for OperatorApprovalRequester {
 
         let request = ApprovalRequest {
             id: uuid::Uuid::new_v4().to_string(),
-            command: tool_name.to_string(),
-            cwd: None,
-            analysis: CommandAnalysis {
-                ok: true,
-                reason: None,
-                segments: vec![],
-                chains: None,
-            },
+            // The ACTION, not the tool name: the Panel card renders `command`
+            // verbatim, so a bare name is an operator deciding blind.
+            command: action.summary.clone(),
+            cwd: action.cwd.clone(),
+            analysis: action.analysis_for_record(),
             agent_id,
             session_key: session_key_str.clone(),
             // Carried on the pending record so the operator's resolving
             // surface (panel pending list) can show WHY the tool is gated,
-            // not just its name.
+            // not just what it does.
             reason: (!reason.is_empty()).then(|| reason.to_string()),
         };
         let record = self.manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
@@ -186,7 +185,11 @@ mod tests {
             TURN_CONTEXT
                 .scope(guest_turn("run-123"), async move {
                     requester
-                        .request_approval("set_provider", "needs config")
+                        .request_approval(&ApprovalAction::for_tool_call(
+                            "set_provider",
+                            &serde_json::json!({"provider": "openai"}),
+                            "needs config",
+                        ))
                         .await
                 })
                 .await
@@ -249,7 +252,11 @@ mod tests {
             TURN_CONTEXT
                 .scope(guest_turn(""), async move {
                     requester
-                        .request_approval("set_provider", "needs config")
+                        .request_approval(&ApprovalAction::for_tool_call(
+                            "set_provider",
+                            &serde_json::json!({"provider": "openai"}),
+                            "needs config",
+                        ))
                         .await
                 })
                 .await

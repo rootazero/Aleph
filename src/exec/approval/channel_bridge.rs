@@ -428,12 +428,10 @@ impl ChannelApprovalBridge {
     /// `/approve`/`/deny` 文本回复才能经 `resolve_for_session` 命中这条
     /// 审批（FIFO）。传空则回退为 `channel:conversation` 合成 key（仅按钮
     /// 回调可达）。
-    #[allow(clippy::too_many_arguments)]
     pub async fn request_for_tool(
         &self,
         approval_manager: &crate::exec::manager::ExecApprovalManager,
-        tool_name: &str,
-        reason: &str,
+        action: &crate::sandbox::exec_approval::ApprovalAction,
         channel_id: &ChannelId,
         conversation_id: &ConversationId,
         session_key: &str,
@@ -444,6 +442,9 @@ impl ChannelApprovalBridge {
             return outcome;
         }
 
+        let tool_name = action.tool_name.as_str();
+        let reason = action.reason.as_str();
+
         let record_session_key = if session_key.is_empty() {
             format!("{}:{}", channel_id.as_str(), conversation_id.as_str())
         } else {
@@ -452,14 +453,11 @@ impl ChannelApprovalBridge {
 
         let request = ApprovalRequest {
             id: uuid::Uuid::new_v4().to_string(),
-            command: tool_name.to_string(),
-            cwd: None,
-            analysis: crate::exec::analysis::CommandAnalysis {
-                ok: true,
-                reason: None,
-                segments: vec![],
-                chains: None,
-            },
+            // The redacted ACTION, not the bare tool name — this is the string
+            // the user reads before deciding, on every surface.
+            command: action.summary.clone(),
+            cwd: action.cwd.clone(),
+            analysis: action.analysis_for_record(),
             // Single source for the issuing agent (`audit_identity`); the
             // context string it also builds is redundant here — the approval
             // card renders `command` + `reason`.
@@ -477,7 +475,7 @@ impl ChannelApprovalBridge {
         let (record_id, rx, wait_timeout) = approval_manager.register_pending(record);
 
         match self
-            .deliver_routed(channel_id, conversation_id, tool_name, reason, &record_id)
+            .deliver_routed(channel_id, conversation_id, action, &record_id)
             .await
         {
             Some(true) => {
@@ -562,10 +560,11 @@ impl ChannelApprovalBridge {
         &self,
         channel_id: &ChannelId,
         conversation_id: &ConversationId,
-        tool_name: &str,
-        reason: &str,
+        action: &crate::sandbox::exec_approval::ApprovalAction,
         approval_id: &str,
     ) -> Option<bool> {
+        let tool_name = action.tool_name.as_str();
+        let reason = action.reason.as_str();
         let channel = self.registry.get(channel_id).await?;
         let capability = {
             let ch = channel.read().await;
@@ -573,10 +572,13 @@ impl ChannelApprovalBridge {
         };
 
         let Some(capability) = capability else {
+            // The action summary is the point of the prompt: `/approve` on a
+            // bare tool name approves whatever the model happened to pass.
             let text = format!(
-                "⚠️ 工具 `{tool_name}` 需要你的授权。\n{reason}\n\n\
+                "⚠️ 工具 `{tool_name}` 需要你的授权。\n```\n{}\n```\n{reason}\n\n\
                  回复 /approve 批准本次、/approve session 本会话内不再询问、\
-                 /deny 拒绝。"
+                 /deny 拒绝。",
+                action.summary
             );
             let ch = channel.read().await;
             return match ch
@@ -596,8 +598,8 @@ impl ChannelApprovalBridge {
         // at the session tier — offering "always" here would be a lie.
         let approval_req = crate::exec::approval::types::ApprovalRequest::Command(
             crate::exec::approval::types::CommandApprovalRequest {
-                command: tool_name.to_string(),
-                cwd: None,
+                command: action.summary.clone(),
+                cwd: action.cwd.clone(),
                 reason: Some(reason.to_string()),
                 allowed_decisions: vec![
                     ApprovalDecisionType::AllowOnce,

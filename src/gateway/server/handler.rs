@@ -399,6 +399,14 @@ async fn handle_connection(
                                             .and_then(|v| v.as_str())
                                             .unwrap_or_default()
                                             .to_string();
+                                        // Redacted action summary from the node.
+                                        // Absent (older node) ⇒ falls back to the
+                                        // tool name in `run_node_approval`.
+                                        let action = params
+                                            .get("action")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default()
+                                            .to_string();
                                         tokio::spawn(async move {
                                             let outcome = crate::approval::run_node_approval(
                                                 &manager,
@@ -406,6 +414,7 @@ async fn handle_connection(
                                                 &node_id,
                                                 &node_name,
                                                 &tool,
+                                                &action,
                                                 &reason,
                                             )
                                             .await;

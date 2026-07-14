@@ -5,7 +5,7 @@
 //! 1. resolve session workspace (lazy create dir)
 //! 2. validate cwd (None → workspace root; Some(p) must live under root)
 //! 3. capability check: within baseline → pass; else consult granted cache then
-//!    `ApprovalGate::request_approval_for_tool`
+//!    `ApprovalGate::request_approval_for_action`
 //! 4. `OsSandboxDriverTrait::profile_for`
 //! 5. `OsSandboxDriverTrait::run`
 //! 6. emit `capability_ledger` tracing audit record
@@ -236,10 +236,16 @@ impl Sandbox for WorkspaceSandbox {
                         ),
                     });
                 }
-                let outcome = self
-                    .approval_gate
-                    .request_approval_for_tool(&cmd.program, &reason)
-                    .await;
+                // The card shows the real command line (redacted), not just the
+                // program: `python` says nothing about what it is about to do
+                // with the network capability it is asking for.
+                let action = crate::sandbox::exec_approval::ApprovalAction::for_command(
+                    &cmd.program,
+                    &cmd.args,
+                    cmd.cwd.as_deref(),
+                    &reason,
+                );
+                let outcome = self.approval_gate.request_approval_for_action(&action).await;
                 match outcome {
                     // Either grant flavour elevates; this path already caches the
                     // grant per-session in `granted_elevations`, so a one-shot
@@ -662,7 +668,10 @@ mod tests {
 
     #[async_trait]
     impl ApprovalRequester for FixedRequester {
-        async fn request_approval(&self, _tool_name: &str, _reason: &str) -> ApprovalOutcome {
+        async fn request_approval(
+            &self,
+            _action: &crate::sandbox::exec_approval::ApprovalAction,
+        ) -> ApprovalOutcome {
             *self.calls.write().await += 1;
             self.outcome
         }
@@ -695,7 +704,7 @@ mod tests {
     }
 
     fn build_gate_auto_deny() -> Arc<ApprovalGate> {
-        // No requester → ApprovalGate::request_approval_for_tool returns Denied.
+        // No requester → ApprovalGate::request_approval_for_action returns Denied.
         Arc::new(ApprovalGate::new(None))
     }
 

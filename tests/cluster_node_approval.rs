@@ -18,6 +18,7 @@ use alephcore::gateway::event_bus::GatewayEventBus;
 use alephcore::gateway::events::GatewayEventFrame;
 use alephcore::gateway::protocol::JsonRpcResponse;
 use alephcore::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
+use alephcore::sandbox::exec_approval::ApprovalAction;
 use serde_json::{json, Value};
 
 /// Spawn a center that services exactly one node.approval.request frame,
@@ -36,6 +37,10 @@ fn spawn_center(
         let id = req["id"].clone();
         let tool = req["params"]["tool"].as_str().unwrap().to_string();
         let reason = req["params"]["reason"].as_str().unwrap().to_string();
+        // The action summary must cross the wire: the center's operator card
+        // renders it, and a bare tool name is an operator deciding blind.
+        let action = req["params"]["action"].as_str().unwrap().to_string();
+        assert_eq!(action, "bash: curl https://example.com");
 
         // Mock operator: resolve the pending record as soon as it is published.
         // Subscribe BEFORE `run_node_approval` publishes the frame — a broadcast
@@ -59,7 +64,7 @@ fn spawn_center(
         });
 
         let outcome = alephcore::approval::run_node_approval(
-            &manager, &event_bus, "node-1", "worker", &tool, &reason,
+            &manager, &event_bus, "node-1", "worker", &tool, &action, &reason,
         )
         .await;
         let resp = JsonRpcResponse::success(Some(id.clone()), json!({ "outcome": outcome }));
@@ -78,7 +83,12 @@ async fn run_case(decision: Option<ApprovalDecisionType>, expect: ApprovalOutcom
     let event_bus = Arc::new(GatewayEventBus::new());
     spawn_center(out_rx, pending, manager, event_bus, decision);
 
-    let outcome = requester.request_approval("bash", "needs network").await;
+    let action = ApprovalAction::for_tool_call(
+        "bash",
+        &json!({"cmd": "curl https://example.com"}),
+        "needs network",
+    );
+    let outcome = requester.request_approval(&action).await;
     assert_eq!(outcome, expect);
 }
 

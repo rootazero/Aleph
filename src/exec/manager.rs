@@ -130,6 +130,24 @@ struct PendingEntry {
     created_at: Instant,
 }
 
+impl PendingEntry {
+    /// Whether a waiter is still parked on this entry.
+    ///
+    /// A CLOSED oneshot receiver proves nobody is waiting: the only holder is
+    /// the `await_registered` future, so a closed channel means that future was
+    /// dropped — a cancelled run, an expired run deadline, or a per-call
+    /// tool-budget overrun in the confirm gate. Such an entry is a zombie: it
+    /// can never be delivered to, yet it is OLDER than any live card and would
+    /// win `resolve_for_session`'s FIFO, absorbing the user's `/approve` while
+    /// the real card silently times out. Mirrors
+    /// [`crate::clarification::session::PendingEntry::is_live`].
+    ///
+    /// Expiry is read off `record` (one wall clock), not `created_at`.
+    fn is_live(&self) -> bool {
+        !self.record.is_expired() && self.sender.as_ref().is_some_and(|s| !s.is_closed())
+    }
+}
+
 /// Pending approval info for external access
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingApproval {
@@ -331,10 +349,15 @@ impl ExecApprovalManager {
     /// Resolve the oldest unresolved approval for `session_key`.
     ///
     /// A channel reply (`/approve` / `/deny` or a button callback) carries no
-    /// request id, so the inbound router resolves by session: the oldest live
+    /// request id, so the inbound router resolves by session: the oldest LIVE
     /// pending entry for that session is picked (FIFO). Returns the EFFECTIVE
     /// decision applied (post clamp — a legacy `AllowAlways` narrows to
     /// `AllowSession`), or `None` when nothing was pending for the session.
+    ///
+    /// Liveness ([`PendingEntry::is_live`]) is what keeps the FIFO honest: a
+    /// cancelled run leaves an entry whose waiter is gone but whose `sender` is
+    /// still `Some`, and being the oldest it would otherwise win this pick and
+    /// swallow the approval meant for the card the user is actually looking at.
     pub fn resolve_for_session(
         &self,
         session_key: &str,
@@ -345,7 +368,7 @@ impl ExecApprovalManager {
 
         let target = pending
             .iter()
-            .filter(|(_, e)| e.sender.is_some() && e.record.session_key == session_key)
+            .filter(|(_, e)| e.is_live() && e.record.session_key == session_key)
             .min_by(|(id_a, e_a), (id_b, e_b)| {
                 e_a.created_at
                     .cmp(&e_b.created_at)
@@ -392,15 +415,6 @@ impl ExecApprovalManager {
         }
     }
 
-    /// Whether `session_key` has at least one unresolved pending approval.
-    #[must_use]
-    pub fn has_pending_for_session(&self, session_key: &str) -> bool {
-        let pending = self.pending.read().unwrap_or_else(|e| e.into_inner());
-        pending
-            .values()
-            .any(|e| e.sender.is_some() && e.record.session_key == session_key)
-    }
-
     /// Get snapshot of a pending approval
     #[must_use]
     pub fn get_pending(&self, id: &str) -> Option<PendingApproval> {
@@ -421,12 +435,16 @@ impl ExecApprovalManager {
         })
     }
 
-    /// List all pending approvals, oldest first.
+    /// List all LIVE pending approvals, oldest first.
     ///
     /// The backing map is unordered, so the order is imposed here: a client
     /// that must still fall back to positional rendering (an approval with no
     /// `tool_call_id`) at least gets a stable, meaningful sequence rather than
     /// hash order that reshuffles between calls.
+    ///
+    /// Entries whose waiter is gone ([`PendingEntry::is_live`]) are skipped: a
+    /// Panel that reconnects must not render a card for a cancelled run, whose
+    /// resolution can never reach anyone.
     #[must_use]
     pub fn list_pending(&self) -> Vec<PendingApproval> {
         let pending = self.pending.read().unwrap_or_else(|e| e.into_inner());
@@ -434,6 +452,7 @@ impl ExecApprovalManager {
 
         let mut out: Vec<PendingApproval> = pending
             .values()
+            .filter(|entry| entry.is_live())
             .map(|entry| {
                 let elapsed = now.duration_since(entry.created_at);
                 let timeout_ms = entry
@@ -625,39 +644,51 @@ mod tests {
     fn test_list_pending() {
         let manager = ExecApprovalManager::new();
 
-        // Add some pending
-        let request1 = mock_request();
-        let record1 = manager.create(&request1, 60_000);
-        manager
-            .pending
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(
-                record1.id.clone(),
-                PendingEntry {
-                    record: record1,
-                    sender: None,
-                    created_at: Instant::now(),
-                },
-            );
-
-        let request2 = mock_request();
-        let record2 = manager.create(&request2, 60_000);
-        manager
-            .pending
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(
-                record2.id.clone(),
-                PendingEntry {
-                    record: record2,
-                    sender: None,
-                    created_at: Instant::now(),
-                },
-            );
+        // Register through the real path and KEEP the receivers alive: an entry
+        // whose waiter is gone is a zombie and deliberately not listed.
+        let record1 = manager.create(&mock_request(), 60_000);
+        let (_id1, _rx1, _t1) = manager.register_pending(record1);
+        let record2 = manager.create(&mock_request(), 60_000);
+        let (_id2, _rx2, _t2) = manager.register_pending(record2);
 
         let pending = manager.list_pending();
         assert_eq!(pending.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn abandoned_waiter_cannot_steal_a_live_cards_session_approval() {
+        let manager = ExecApprovalManager::new();
+
+        // Run A raises a card, then is cancelled: its waiter future is dropped
+        // while the entry is still well inside its 60s deadline.
+        let mut cancelled = mock_request();
+        cancelled.id = "zombie".to_string();
+        let rec = manager.create(&cancelled, 60_000);
+        let session_key = rec.session_key.clone();
+        let (_zid, rx, _t) = manager.register_pending(rec);
+        drop(rx); // cancelled run — receiver gone, sender still Some
+
+        // Run B raises a real card on the same session.
+        let mut live = mock_request();
+        live.id = "live".to_string();
+        let rec2 = manager.create(&live, 60_000);
+        let (live_id, rx2, timeout) = manager.register_pending(rec2);
+
+        // The user types `/approve` on the channel.
+        assert_eq!(
+            manager.resolve_for_session(&session_key, ApprovalDecisionType::AllowOnce, None),
+            Some(ApprovalDecisionType::AllowOnce)
+        );
+
+        // It must reach the LIVE card, not the older zombie.
+        assert_eq!(
+            manager.await_registered(live_id, rx2, timeout).await,
+            Some(ApprovalDecisionType::AllowOnce),
+            "the live card must receive the approval; an abandoned waiter must not \
+             win the session FIFO"
+        );
+        // And the zombie must not be renderable as a card.
+        assert!(manager.list_pending().iter().all(|p| p.record.id != "zombie"));
     }
 
     #[test]

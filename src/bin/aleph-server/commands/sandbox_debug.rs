@@ -27,7 +27,10 @@ struct DebugAutoApprover;
 
 #[async_trait::async_trait]
 impl ApprovalRequester for DebugAutoApprover {
-    async fn request_approval(&self, _tool_name: &str, _reason: &str) -> ApprovalOutcome {
+    async fn request_approval(
+        &self,
+        _action: &alephcore::sandbox::exec_approval::ApprovalAction,
+    ) -> ApprovalOutcome {
         ApprovalOutcome::Approved
     }
 }

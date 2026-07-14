@@ -309,7 +309,21 @@ impl ToolService for ScopedToolService {
         if !self.is_allowed(name) {
             return ConcurrencyClaim::global();
         }
-        if self.inner.requires_confirmation(name) || self.is_permission_ask(name) {
+        // All THREE confirm gates must force exclusivity, not just the two
+        // name-keyed ones. The approval path recovers the gated call's id by
+        // scanning for the newest `ToolCallRequested` for this tool NAME
+        // (`dispatch::newest_tool_call`), which is only unambiguous when a
+        // confirm-gated call can never share a parallel batch with another call
+        // of the same tool. `tier_asks_for_arguments` is the gate keyed on the
+        // CALL's arguments (Auto-tier `file_ops` delete/move/…), and it is
+        // exactly the one whose inner claim is bounded (`Exclusive { Paths }`)
+        // and therefore batchable — two parallel deletes would otherwise stamp
+        // the same `tool_call_id` and the user would approve the command they
+        // did not read.
+        if self.inner.requires_confirmation(name)
+            || self.is_permission_ask(name)
+            || self.tier_asks_for_arguments(name, input)
+        {
             return ConcurrencyClaim::global();
         }
         self.inner
