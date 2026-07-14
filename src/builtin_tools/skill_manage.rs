@@ -895,7 +895,10 @@ mod tests {
         tool.call(archive).await.expect("archive");
         let snap = tool.system.current_snapshot().await;
         assert!(
-            !snap.prompt_xml.contains("seasonal"),
+            !snap
+                .eligible_manifests
+                .iter()
+                .any(|m| m.name() == "seasonal"),
             "archived skill must leave the prompt index"
         );
 
@@ -906,6 +909,9 @@ mod tests {
         };
         tool.call(restore).await.expect("restore");
         let snap = tool.system.current_snapshot().await;
-        assert!(snap.prompt_xml.contains("seasonal"));
+        assert!(snap
+            .eligible_manifests
+            .iter()
+            .any(|m| m.name() == "seasonal"));
     }
 }

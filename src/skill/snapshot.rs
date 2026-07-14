@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use crate::domain::skill::{SkillId, SkillManifest};
 use crate::skill::config::SkillEntryConfig;
 use crate::skill::eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
-use crate::skill::prompt::{build_skills_prompt_xml, SkillPromptBudget};
+use crate::skill::prompt::SkillPromptBudget;
 use crate::skill::registry::SkillRegistry;
 
 /// A point-in-time snapshot of skill eligibility and the pre-rendered prompt XML.
@@ -19,8 +19,6 @@ use crate::skill::registry::SkillRegistry;
 pub struct SkillSnapshot {
     /// Monotonically increasing version counter for cache invalidation.
     pub version: u64,
-    /// Pre-rendered XML fragment for system prompt injection.
-    pub prompt_xml: String,
     /// Skill IDs that passed eligibility evaluation.
     pub eligible: Vec<SkillId>,
     /// Skill IDs that failed eligibility, mapped to their reasons.
@@ -33,8 +31,14 @@ pub struct SkillSnapshot {
     /// `<available_skills>` index is rendered by `SkillInstructionsLayer`
     /// (it alone knows the active tool set for `Tool`-scope filtering); this
     /// field carries the user's `[prompt_budget]` config to that layer via
-    /// `PromptConfig`. The `prompt_xml` field above is a convenience preview
-    /// rendered with the **default** budget and is not the injected text.
+    /// `PromptConfig`.
+    ///
+    /// This struct used to also carry a `prompt_xml` field — a "convenience
+    /// preview" rendered over EVERY eligible skill on every snapshot rebuild,
+    /// with the DEFAULT budget rather than the user's configured one, and read
+    /// by nothing outside its own tests. It was a full render of the skill index
+    /// paid for on every rebuild to produce a string that was never injected and
+    /// would have been wrong if it were.
     pub prompt_budget: SkillPromptBudget,
 }
 
@@ -44,7 +48,6 @@ impl SkillSnapshot {
     pub fn empty() -> Self {
         Self {
             version: 0,
-            prompt_xml: String::new(),
             eligible: Vec::new(),
             ineligible: HashMap::new(),
             eligible_manifests: Vec::new(),
@@ -131,12 +134,8 @@ impl SkillSnapshot {
             }
         }
 
-        let model_visible: Vec<&SkillManifest> = eligible_manifests.iter().collect();
-        let prompt_xml = build_skills_prompt_xml(&model_visible);
-
         Self {
             version,
-            prompt_xml,
             eligible,
             ineligible,
             eligible_manifests,
@@ -178,7 +177,6 @@ mod tests {
     fn empty_snapshot() {
         let snap = SkillSnapshot::empty();
         assert_eq!(snap.version, 0);
-        assert!(snap.prompt_xml.is_empty());
         assert!(snap.eligible.is_empty());
         assert!(snap.ineligible.is_empty());
     }
@@ -214,8 +212,8 @@ mod tests {
         assert_eq!(snap.ineligible.len(), 1);
         assert!(snap.eligible.contains(&SkillId::new("git:commit")));
         assert!(snap.ineligible.contains_key(&SkillId::new("docker:build")));
-        assert!(!snap.prompt_xml.is_empty());
-        assert!(snap.prompt_xml.contains("git:commit"));
+        assert_eq!(snap.eligible_manifests.len(), 1);
+        assert_eq!(snap.eligible_manifests[0].name(), "git:commit");
     }
 
     #[test]
@@ -265,12 +263,13 @@ mod tests {
             &no_archived(),
         );
 
-        // All three are eligible (no eligibility constraints)
-        // But only the visible one should appear in prompt_xml
+        // All three are eligible (no eligibility constraints), but only the
+        // model-visible one reaches the prompt. `eligible_manifests` IS that
+        // set — the deleted `prompt_xml` was merely a rendering of it, so
+        // asserting on it directly tests the same thing without the middleman.
         assert_eq!(snap.eligible.len(), 3);
-        assert!(snap.prompt_xml.contains("visible:skill"));
-        assert!(!snap.prompt_xml.contains("hidden:skill"));
-        assert!(!snap.prompt_xml.contains("disabled:skill"));
+        let visible: Vec<&str> = snap.eligible_manifests.iter().map(|m| m.name()).collect();
+        assert_eq!(visible, ["visible:skill"]);
     }
 
     #[test]
@@ -340,10 +339,9 @@ mod tests {
             .get(&SkillId::new("git:commit"))
             .is_some_and(|r| r.contains(&IneligibilityReason::Disabled)));
         assert!(
-            !snap.prompt_xml.contains("git:commit"),
+            snap.eligible_manifests.is_empty(),
             "disabled skill must not leak into the injected prompt"
         );
-        assert!(snap.eligible_manifests.is_empty());
     }
 
     #[test]
@@ -377,7 +375,6 @@ mod tests {
         // ...but the scope override made it model-invisible, so it is absent
         // from both eligible_manifests and the rendered prompt.
         assert!(snap.eligible_manifests.is_empty());
-        assert!(!snap.prompt_xml.contains("git:commit"));
     }
 
     #[test]
@@ -402,11 +399,11 @@ mod tests {
         // Both remain eligible — archive is a prompt-budget decision, not
         // an eligibility one. skill_read on the dormant skill still works.
         assert_eq!(snap.eligible.len(), 2);
-        assert!(snap.prompt_xml.contains("alive:skill"));
-        assert!(
-            !snap.prompt_xml.contains("dormant:skill"),
+        let in_prompt: Vec<&str> = snap.eligible_manifests.iter().map(|m| m.name()).collect();
+        assert_eq!(
+            in_prompt,
+            ["alive:skill"],
             "archived skill must not occupy prompt budget"
         );
-        assert_eq!(snap.eligible_manifests.len(), 1);
     }
 }

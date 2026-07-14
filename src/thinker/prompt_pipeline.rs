@@ -7,12 +7,12 @@ use super::layers::{
     AgentCatalogLayer, AgentRoleLayer, ChainContextLayer, CitationStandardsLayer,
     CuratedMemoryLayer, CustomInstructionsLayer, DoctorRepairHintLayer, EnvironmentLayer,
     ExecutionPlanLayer, ExtraFilesLayer, GenerationModelsLayer, GuidelinesLayer, HeartbeatLayer,
-    IdentityFilesLayer, InboundContextLayer, LanguageLayer,
-    McpInstructionsLayer, MemoryProtocolLayer, MultiStepConductLayer, OperationalGuidelinesLayer,
-    ProfileLayer, ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
+    IdentityFilesLayer, InboundContextLayer, LanguageLayer, McpInstructionsLayer,
+    MemoryProtocolLayer, MultiStepConductLayer, OperationalGuidelinesLayer, ProfileLayer,
+    ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
     RuntimeContextLayer, SecurityLayer, SessionBudgetLayer, SessionContextGuideLayer,
-    SessionResumeLayer, SkillInstructionsLayer, SoulLayer, SpecialActionsLayer,
-    StandingGoalLayer, StrategyLayer, StrategyPointerLayer, ThinkingGuidanceLayer, TimerLoopLayer,
+    SessionResumeLayer, SkillInstructionsLayer, SoulLayer, SpecialActionsLayer, StandingGoalLayer,
+    StrategyLayer, StrategyPointerLayer, ThinkingGuidanceLayer, TimerLoopLayer,
     ToolRuntimeStateLayer, ToolUsageGrammarLayer, ToolsLayer, VoiceModeLayer,
 };
 use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};

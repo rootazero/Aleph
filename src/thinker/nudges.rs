@@ -11,7 +11,8 @@
 /// `LoopDirective::StopDiminishing` — a single tool-less LLM call framed
 /// around lack of measurable progress. Tools are also stripped at the
 /// request layer (no `.with_tools(...)`), so the model cannot loop further.
-pub const GRACE_NUDGE_DIMINISHING: &str = "You have not been making measurable progress on this task. \
+pub const GRACE_NUDGE_DIMINISHING: &str =
+    "You have not been making measurable progress on this task. \
      Stop calling tools and summarize what you have found so far for the user.";
 
 /// Ephemeral nudge for the grace turn fired when the `max_iterations`

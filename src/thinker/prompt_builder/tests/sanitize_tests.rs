@@ -134,4 +134,3 @@ fn test_sanitize_user_profile_light() {
     // Just verify it produces valid output with sanitization applied
     assert!(prompt.contains("Alice"));
 }
-

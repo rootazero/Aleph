@@ -59,9 +59,8 @@ pub fn window_char_budget(window_tokens: u64, fraction: f64, floor: usize, ceil:
     // the subsequent clamp keeps the result bounded regardless.
     // tokens → chars via the crate-wide prose ratio (single source in
     // `context::budget::pressure`), replacing the drifted local `/4` constant.
-    let scaled_chars = window_tokens as f64
-        * fraction
-        * crate::context::budget::pressure::DEFAULT_PROSE_RATIO;
+    let scaled_chars =
+        window_tokens as f64 * fraction * crate::context::budget::pressure::DEFAULT_PROSE_RATIO;
     (scaled_chars as usize).clamp(floor, ceil)
 }
 
