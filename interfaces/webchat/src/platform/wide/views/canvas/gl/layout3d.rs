@@ -15,6 +15,16 @@ const DAMPING: f32 = 0.85; // velocity damping
 const MAX_STEP: f32 = 30.0; // clamp per-step displacement
 const EPS: f32 = 0.5; // convergence threshold (max displacement)
 
+/// Simulated-annealing floor (d3-force's `alphaMin`). Below this the layout is
+/// declared settled whatever the residual displacement.
+const ALPHA_MIN: f32 = 0.001;
+/// Per-step alpha decay = `1 - ALPHA_MIN^(1/400)`, so alpha reaches ALPHA_MIN in
+/// exactly the caller's 400-step settle budget (`scene::MAX_SETTLE_STEPS`).
+/// Without it the n=500 graph is still expanding when the budget runs out
+/// (measured max_disp 6.36, 12.7x EPS) and there is no stationary extent for
+/// the camera to frame.
+const ALPHA_DECAY: f32 = 0.017_14;
+
 pub struct ForceLayout {
     n: usize,
     edges: Vec<(u32, u32)>,
@@ -22,6 +32,9 @@ pub struct ForceLayout {
     last_max_disp: f32,
     /// Per-node community id (`None` = unassigned). Same order/length as nodes.
     communities: Vec<Option<u32>>,
+    /// Annealing temperature, 1.0 → ALPHA_MIN over the settle budget. Scales
+    /// every force, so the simulation cools instead of oscillating forever.
+    alpha: f32,
 }
 
 impl ForceLayout {
@@ -36,7 +49,16 @@ impl ForceLayout {
             vel: vec![Vec3::zero(); node_count],
             last_max_disp: f32::INFINITY,
             communities: communities.to_vec(),
+            alpha: 1.0,
         }
+    }
+
+    /// Warm-start the anneal at `alpha` instead of the default 1.0. Used when a
+    /// graph is REFRESHED rather than replaced: the cloud is already settled, so
+    /// it needs to relax the links that changed, not re-expand from cold.
+    /// Clamped to `(0, 1]`.
+    pub fn set_alpha(&mut self, alpha: f32) {
+        self.alpha = alpha.clamp(ALPHA_MIN, 1.0);
     }
 
     pub fn seed(&self, ids: &[String]) -> Vec<Vec3> {
@@ -56,6 +78,9 @@ impl ForceLayout {
     }
 
     pub fn step(&mut self, pos: &mut [Vec3]) {
+        // Cool the simulation (d3-force annealing): every force is scaled by
+        // alpha, so the layout terminates by construction rather than by luck.
+        self.alpha += (0.0 - self.alpha) * ALPHA_DECAY;
         let mut force = vec![Vec3::zero(); self.n];
         // Repulsion (all pairs).
         for i in 0..self.n {
@@ -100,10 +125,10 @@ impl ForceLayout {
             }
         }
 
-        // Centering + integrate.
+        // Centering + anneal + integrate.
         let mut max_disp = 0.0_f32;
         for i in 0..self.n {
-            force[i] = force[i].sub(&pos[i].scale(CENTER_PULL));
+            force[i] = force[i].sub(&pos[i].scale(CENTER_PULL)).scale(self.alpha);
             self.vel[i] = self.vel[i].add(&force[i]).scale(DAMPING);
             let mut disp = self.vel[i];
             let dl = disp.length();
@@ -126,8 +151,11 @@ impl ForceLayout {
         e
     }
 
+    /// Settled when either the cloud has stopped moving OR the simulation has
+    /// cooled below `ALPHA_MIN` (which happens within the settle budget for any
+    /// graph size — the residual forces at that temperature are visually inert).
     pub fn converged(&self) -> bool {
-        self.last_max_disp < EPS
+        self.last_max_disp < EPS || self.alpha < ALPHA_MIN
     }
 }
 
@@ -191,6 +219,52 @@ mod tests {
         let d_edge = pos[0].sub(&pos[1]).length();
         let d_free = pos[2].sub(&pos[3]).length();
         assert!(d_edge < d_free, "edge {d_edge} should be < free {d_free}");
+    }
+
+    #[test]
+    fn alpha_decays_to_min_within_settle_budget() {
+        let ids: Vec<String> = (0..10).map(|i| format!("n{i}")).collect();
+        let mut l = ForceLayout::new(10, &line_graph(10), &vec![None; 10]);
+        let mut pos = l.seed(&ids);
+        for _ in 0..400 {
+            l.step(&mut pos);
+        }
+        assert!(l.alpha < ALPHA_MIN, "alpha={} after 400 steps", l.alpha);
+        assert!(l.converged());
+    }
+
+    #[test]
+    fn converges_at_n_500_within_budget() {
+        // The graph size the canvas actually requests (mod.rs caps at 500). On the
+        // pre-annealing layout this is the case that never settled: max_disp was
+        // still 6.36 (12.7x EPS) when the 400-step budget ran out, so the camera
+        // was framing a still-expanding cloud.
+        const N: usize = 500;
+        let ids: Vec<String> = (0..N).map(|i| format!("n{i}")).collect();
+        // A backbone plus chords: a realistic note graph, not a pathological one.
+        let mut edges: Vec<(u32, u32)> = (0..N as u32 - 1).map(|i| (i, i + 1)).collect();
+        for i in (0..N as u32).step_by(7) {
+            edges.push((i, (i + 53) % N as u32));
+        }
+        let mut l = ForceLayout::new(N, &edges, &vec![None; N]);
+        let mut pos = l.seed(&ids);
+        let mut steps = 0;
+        for _ in 0..400 {
+            l.step(&mut pos);
+            steps += 1;
+            if l.converged() {
+                break;
+            }
+        }
+        assert!(
+            l.converged(),
+            "n=500 did not converge in {steps} steps (max_disp={}, alpha={})",
+            l.last_max_disp,
+            l.alpha
+        );
+        // And the settled cloud has a finite extent for the camera to fit.
+        let r = pos.iter().map(|p| p.length()).fold(0.0_f32, f32::max);
+        assert!(r.is_finite() && r > 1.0, "degenerate extent {r}");
     }
 
     #[test]

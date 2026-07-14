@@ -18,28 +18,54 @@ pub struct OrbitCamera {
     tgt_elevation: f32,
     tgt_distance: f32,
     tgt_center: Vec3,
-    last_interaction_ms: f64,
+    /// Timestamp of the last user interaction, or `None` until the first
+    /// rendered frame seeds it. `update()` is fed the ABSOLUTE rAF timestamp
+    /// (ms since page load, not since the canvas mounted), so a 0.0 seed would
+    /// make the idle grace already expired on frame 1 and the galaxy would
+    /// auto-rotate before the user has touched anything.
+    last_interaction_ms: Option<f64>,
 }
 
 impl OrbitCamera {
     pub const MIN_DIST: f32 = 10.0;
     pub const MAX_DIST: f32 = 50000.0;
     pub const IDLE_MS: f64 = 60_000.0;
+    /// Vertical field of view (the horizontal one follows from the aspect).
     const FOVY: f32 = std::f32::consts::PI * 50.0 / 180.0;
+    /// Slack left around the fitted bounding sphere (15%).
+    pub const FIT_PADDING: f32 = 0.15;
+    /// Canonical orbit pose, restored by a Reset command.
+    pub const HOME_AZIMUTH: f32 = 0.6;
+    pub const HOME_ELEVATION: f32 = 0.35;
 
     pub fn new(distance: f32) -> Self {
         let d = distance.clamp(Self::MIN_DIST, Self::MAX_DIST);
         Self {
-            azimuth: 0.6,
-            elevation: 0.35,
+            azimuth: Self::HOME_AZIMUTH,
+            elevation: Self::HOME_ELEVATION,
             distance: d,
             center: Vec3::zero(),
-            tgt_azimuth: 0.6,
-            tgt_elevation: 0.35,
+            tgt_azimuth: Self::HOME_AZIMUTH,
+            tgt_elevation: Self::HOME_ELEVATION,
             tgt_distance: d,
             tgt_center: Vec3::zero(),
-            last_interaction_ms: 0.0,
+            last_interaction_ms: None,
         }
+    }
+
+    /// Distance at which a sphere of `radius` centred on the orbit centre exactly
+    /// fills the frustum, plus `padding` slack.
+    ///
+    /// `FOVY` is the VERTICAL fov, so the horizontal half-angle is
+    /// `atan(tan(FOVY/2) * aspect)`; the MIN of the two binds (a tall viewport
+    /// must not clip left/right, a wide one must not clip top/bottom). `sin`, not
+    /// `tan`: the frustum planes are TANGENT to the sphere, they do not cut
+    /// through its centre plane.
+    pub fn fit_distance(radius: f32, aspect: f32, padding: f32) -> f32 {
+        let half_v = Self::FOVY * 0.5;
+        let half_h = (half_v.tan() * aspect.max(0.01)).atan();
+        let half = half_v.min(half_h);
+        (radius * (1.0 + padding) / half.sin()).clamp(Self::MIN_DIST, Self::MAX_DIST)
     }
 
     pub fn orbit(&mut self, d_az: f32, d_el: f32) {
@@ -48,8 +74,30 @@ impl OrbitCamera {
         self.tgt_elevation = (self.tgt_elevation + d_el).clamp(-lim, lim);
     }
 
+    /// Set the orbit angles (damping targets only — the camera eases into them).
+    /// Used by the Reset command to restore the canonical pose.
+    pub fn set_angles(&mut self, azimuth: f32, elevation: f32) {
+        let lim = std::f32::consts::FRAC_PI_2 - 0.05;
+        self.tgt_azimuth = azimuth;
+        self.tgt_elevation = elevation.clamp(-lim, lim);
+    }
+
     pub fn zoom(&mut self, factor: f32) {
         self.tgt_distance = (self.tgt_distance * factor).clamp(Self::MIN_DIST, Self::MAX_DIST);
+    }
+
+    /// Jump the distance immediately — both the live value and its damping target,
+    /// so there is no ease-in and nothing left to converge to (the same
+    /// both-at-once move `pan_world` makes for the centre).
+    ///
+    /// Reserved for auto-fit while the force layout is still expanding: the damped
+    /// approach cannot outrun the expansion, so the content would spill past the
+    /// viewport for the first ~30 frames. Do NOT use this for user-facing camera
+    /// moves — a cut where the user expects a move reads as a glitch.
+    pub fn set_distance(&mut self, distance: f32) {
+        let d = distance.clamp(Self::MIN_DIST, Self::MAX_DIST);
+        self.distance = d;
+        self.tgt_distance = d;
     }
 
     pub fn fly_to(&mut self, target: Vec3, distance: f32) {
@@ -88,21 +136,33 @@ impl OrbitCamera {
     }
 
     pub fn note_interaction(&mut self, t_ms: f64) {
-        self.last_interaction_ms = t_ms;
+        self.last_interaction_ms = Some(t_ms);
     }
 
-    pub fn update(&mut self, t_ms: f64, _dt_ms: f32) {
-        // Idle auto-rotate (only past timeout; resets damping target).
-        if t_ms - self.last_interaction_ms > Self::IDLE_MS {
-            self.tgt_azimuth += AUTOROTATE_RAD_PER_MS * 16.0;
+    pub fn update(&mut self, t_ms: f64, dt_ms: f32) {
+        // Seed the idle clock on the FIRST RENDERED FRAME, not at construction:
+        // `t_ms` is the absolute rAF timestamp, so the grace period must start
+        // when the galaxy actually appears.
+        let last = *self.last_interaction_ms.get_or_insert(t_ms);
+        // The first frame carries dt == the absolute timestamp (Scene::last_t
+        // starts at 0.0); clamp so it can never teleport the camera.
+        let dt = dt_ms.clamp(0.0, 100.0);
+
+        // Idle auto-rotate (only past timeout; advances the damping target).
+        if t_ms - last > Self::IDLE_MS {
+            self.tgt_azimuth += AUTOROTATE_RAD_PER_MS * dt;
         }
-        // Critically-ish damped approach.
-        self.azimuth += (self.tgt_azimuth - self.azimuth) * DAMPING;
-        self.elevation += (self.tgt_elevation - self.elevation) * DAMPING;
-        self.distance += (self.tgt_distance - self.distance) * DAMPING;
+        // Frame-rate-independent exponential approach: at dt = 16 ms these are
+        // exactly the old per-frame DAMPING / FLY_RATE, and a 120 Hz display no
+        // longer damps (and flies, and spins) twice as fast as a 60 Hz one.
+        let damp = 1.0 - (1.0 - DAMPING).powf(dt / 16.0);
+        let fly = 1.0 - (1.0 - FLY_RATE).powf(dt / 16.0);
+        self.azimuth += (self.tgt_azimuth - self.azimuth) * damp;
+        self.elevation += (self.tgt_elevation - self.elevation) * damp;
+        self.distance += (self.tgt_distance - self.distance) * damp;
         self.center = self
             .center
-            .add(&self.tgt_center.sub(&self.center).scale(FLY_RATE));
+            .add(&self.tgt_center.sub(&self.center).scale(fly));
     }
 
     pub fn eye(&self) -> Vec3 {
@@ -205,5 +265,165 @@ mod tests {
         let h = 800.0;
         assert!(near.world_per_pixel(h) > 0.0);
         assert!(far.world_per_pixel(h) > near.world_per_pixel(h));
+    }
+
+    /// The 6 axis + 2 diagonal extremes of a sphere of radius `r` around the origin.
+    fn sphere_probes(r: f32) -> Vec<Vec3> {
+        let d = r / 3.0_f32.sqrt();
+        vec![
+            Vec3::new(r, 0.0, 0.0),
+            Vec3::new(-r, 0.0, 0.0),
+            Vec3::new(0.0, r, 0.0),
+            Vec3::new(0.0, -r, 0.0),
+            Vec3::new(0.0, 0.0, r),
+            Vec3::new(0.0, 0.0, -r),
+            Vec3::new(d, d, d),
+            Vec3::new(-d, -d, d),
+        ]
+    }
+
+    /// Project a world point through a view-proj into NDC. `None` if behind.
+    fn project(vp: &Mat4, p: &Vec3) -> Option<(f32, f32)> {
+        let m = vp.as_slice();
+        let cx = m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12];
+        let cy = m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13];
+        let cw = m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15];
+        if cw <= 0.0 {
+            return None;
+        }
+        Some((cx / cw, cy / cw))
+    }
+
+    /// Snap the camera onto its damping targets (the fit sets targets, not state).
+    fn settle(c: &mut OrbitCamera) {
+        c.note_interaction(0.0);
+        for _ in 0..400 {
+            c.update(0.0, 16.0);
+        }
+    }
+
+    #[test]
+    fn fit_distance_frames_bounding_sphere() {
+        for r in [50.0_f32, 500.0, 2000.0] {
+            for aspect in [0.6_f32, 1.0, 2.4] {
+                let d = OrbitCamera::fit_distance(r, aspect, OrbitCamera::FIT_PADDING);
+                let c = OrbitCamera::new(d);
+                let vp = c.view_proj(aspect);
+                for p in sphere_probes(r) {
+                    let (x, y) = project(&vp, &p).expect("probe behind camera");
+                    assert!(
+                        x.abs() <= 1.0 && y.abs() <= 1.0,
+                        "r={r} aspect={aspect} probe {:?} → ndc ({x},{y})",
+                        p
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fit_distance_is_orbit_invariant() {
+        // The property an AABB-derived fit would fail: the sphere stays framed at
+        // every orbit pose, so auto-fit does not clip the moment the user rotates.
+        let r = 800.0_f32;
+        let aspect = 1.6_f32;
+        let d = OrbitCamera::fit_distance(r, aspect, OrbitCamera::FIT_PADDING);
+        for az in [0.0_f32, 1.2, -1.2] {
+            for el in [-1.4_f32, 0.0, 1.4] {
+                let mut c = OrbitCamera::new(d);
+                c.set_angles(az, el);
+                settle(&mut c);
+                let vp = c.view_proj(aspect);
+                for p in sphere_probes(r) {
+                    let (x, y) = project(&vp, &p).expect("probe behind camera");
+                    assert!(
+                        x.abs() <= 1.0 && y.abs() <= 1.0,
+                        "az={az} el={el} probe {:?} → ndc ({x},{y})",
+                        p
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fit_distance_picks_limiting_axis() {
+        // A narrow (tall) viewport has the smaller half-angle horizontally, so it
+        // must pull back FURTHER than a wide one for the same radius.
+        let narrow = OrbitCamera::fit_distance(500.0, 0.5, OrbitCamera::FIT_PADDING);
+        let wide = OrbitCamera::fit_distance(500.0, 2.0, OrbitCamera::FIT_PADDING);
+        assert!(narrow > wide, "narrow={narrow} wide={wide}");
+        // Beyond aspect 1 the vertical fov binds, so widening further changes nothing.
+        let wider = OrbitCamera::fit_distance(500.0, 4.0, OrbitCamera::FIT_PADDING);
+        approx_eq(wider, wide);
+        // Bigger content ⇒ bigger distance.
+        assert!(
+            OrbitCamera::fit_distance(1000.0, 1.0, OrbitCamera::FIT_PADDING)
+                > OrbitCamera::fit_distance(500.0, 1.0, OrbitCamera::FIT_PADDING)
+        );
+    }
+
+    #[test]
+    fn fit_distance_clamps() {
+        assert_eq!(
+            OrbitCamera::fit_distance(0.001, 1.0, 0.15),
+            OrbitCamera::MIN_DIST
+        );
+        assert_eq!(
+            OrbitCamera::fit_distance(1.0e9, 1.0, 0.15),
+            OrbitCamera::MAX_DIST
+        );
+    }
+
+    #[test]
+    fn damping_is_frame_rate_independent() {
+        // Same wall-clock time, half the frame budget: the camera must land in
+        // the same place (it used to arrive twice as fast at 120 Hz).
+        let mut a = OrbitCamera::new(100.0);
+        let mut b = OrbitCamera::new(100.0);
+        a.fly_to(Vec3::new(50.0, 10.0, 0.0), 400.0);
+        b.fly_to(Vec3::new(50.0, 10.0, 0.0), 400.0);
+        a.orbit(0.9, 0.2);
+        b.orbit(0.9, 0.2);
+        a.note_interaction(0.0);
+        b.note_interaction(0.0);
+        for _ in 0..60 {
+            a.update(0.0, 16.0);
+        }
+        for _ in 0..120 {
+            b.update(0.0, 8.0);
+        }
+        let tol = 0.01;
+        assert!(
+            (a.distance - b.distance).abs() / a.distance < tol,
+            "distance {} vs {}",
+            a.distance,
+            b.distance
+        );
+        assert!(
+            (a.azimuth - b.azimuth).abs() < tol,
+            "azimuth {} vs {}",
+            a.azimuth,
+            b.azimuth
+        );
+        assert!(
+            a.target().sub(&b.target()).length() < tol * 50.0,
+            "center {:?} vs {:?}",
+            a.target(),
+            b.target()
+        );
+    }
+
+    #[test]
+    fn idle_rotate_not_armed_on_first_frame() {
+        // The rAF timestamp is ms since PAGE load; the Memory canvas typically
+        // first renders long after 60 s of uptime. That must not count as idle.
+        let mut c = OrbitCamera::new(800.0);
+        let az = c.azimuth;
+        c.update(600_000.0, 16.0);
+        approx_eq(c.azimuth, az);
+        // ...but the grace period still expires 60 s after that first frame.
+        c.update(600_000.0 + OrbitCamera::IDLE_MS + 100.0, 16.0);
+        assert!(c.azimuth != az);
     }
 }

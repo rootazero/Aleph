@@ -1,7 +1,14 @@
 //! FBO bloom post-processing pipeline: bright-pass → separable gaussian blur → composite.
 //!
-//! Pure-logic functions (`gaussian_weights`) are unit-tested on native target.
-//! GL-bound code (`BloomPipeline`) is verified by WASM compile gate + browser visual check.
+//! All code here is GL-bound (it needs a live `WebGl2RenderingContext`), so it is
+//! verified by the WASM compile gate + a browser visual check, not by unit tests.
+//!
+//! GPU-lifetime rule for this file: dropping a `WebGlFramebuffer` / `WebGlTexture`
+//! wrapper in Rust frees a ~40-byte JS handle, NOT the multi-MB GPU allocation
+//! behind it — that only happens on an explicit `gl.delete_*`. A `Drop` impl
+//! cannot do it either (Drop has no way to reach the GL context), so teardown is
+//! EXPLICIT: [`FboTex::delete`] / [`BloomPipeline::destroy`]. Do not "fix" this
+//! back to `Drop`.
 
 use web_sys::{
     WebGl2RenderingContext as Gl, WebGlFramebuffer, WebGlProgram, WebGlTexture,
@@ -10,31 +17,6 @@ use web_sys::{
 
 use super::context::compile_program;
 use super::shaders::{BLUR_FRAG, BRIGHT_FRAG, COMPOSITE_FRAG, FULLSCREEN_VERT};
-
-// ---------------------------------------------------------------------------
-// Pure logic: gaussian weights (unit-tested on native)
-// ---------------------------------------------------------------------------
-
-/// Returns a symmetric normalized gaussian kernel of length `2*radius+1`.
-/// The kernel sums to 1.0 and the center weight is the heaviest.
-pub fn gaussian_weights(radius: usize) -> Vec<f32> {
-    let sigma = (radius as f32 / 2.0).max(1.0);
-    let mut w: Vec<f32> = (0..=2 * radius)
-        .map(|i| {
-            let x = i as f32 - radius as f32;
-            (-(x * x) / (2.0 * sigma * sigma)).exp()
-        })
-        .collect();
-    let sum: f32 = w.iter().sum();
-    for v in &mut w {
-        *v /= sum;
-    }
-    w
-}
-
-// ---------------------------------------------------------------------------
-// GL-bound: BloomPipeline
-// ---------------------------------------------------------------------------
 
 /// One FBO + its color texture, at a given resolution.
 struct FboTex {
@@ -99,6 +81,17 @@ impl FboTex {
 
         Ok(FboTex { fbo, tex, w, h })
     }
+
+    /// Free the GPU allocations behind this FBO + texture.
+    ///
+    /// MUST be called before the `FboTex` is dropped or overwritten: Rust's
+    /// `Drop` cannot free these (it has no access to the GL context), and the
+    /// JS wrappers are far too small to create the heap pressure that would
+    /// make GC reclaim them in time. See the module doc.
+    fn delete(&self, gl: &Gl) {
+        gl.delete_framebuffer(Some(&self.fbo));
+        gl.delete_texture(Some(&self.tex));
+    }
 }
 
 /// Bloom post-processing pipeline.
@@ -158,15 +151,47 @@ impl BloomPipeline {
     }
 
     /// Resize all FBOs. Call this from `Scene::resize`.
+    ///
+    /// No-op when the dimensions are unchanged: `ResizeObserver` fires on every
+    /// layout tick, most of them with identical dimensions, and reallocating
+    /// three float FBOs for nothing is the expensive half of the old churn.
+    ///
+    /// The old FBOs/textures are explicitly deleted before the new ones are
+    /// installed — dropping them would leak the GPU memory (see module doc).
     pub fn resize(&mut self, gl: &Gl, w: i32, h: i32) -> Result<(), String> {
+        if (w, h) == (self.scene.w, self.scene.h) {
+            return Ok(());
+        }
         let hw = (w / 2).max(1);
         let hh = (h / 2).max(1);
-        self.scene = FboTex::new(gl, w, h, self.float_ext)?;
-        self.pp = [
+        let scene = FboTex::new(gl, w, h, self.float_ext)?;
+        let pp = [
             FboTex::new(gl, hw, hh, self.float_ext)?,
             FboTex::new(gl, hw, hh, self.float_ext)?,
         ];
+        // Allocation of the replacements succeeded; now the old set is safe to free.
+        self.scene.delete(gl);
+        self.pp[0].delete(gl);
+        self.pp[1].delete(gl);
+        self.scene = scene;
+        self.pp = pp;
         Ok(())
+    }
+
+    /// Free every GPU object this pipeline owns. Call once, from the canvas
+    /// teardown path, before dropping the `BloomPipeline`; the pipeline is
+    /// unusable afterwards.
+    ///
+    /// Covers the same leak class as [`FboTex::delete`] for the objects that
+    /// `resize` does NOT recreate (the three programs and the shared VAO).
+    pub fn destroy(&self, gl: &Gl) {
+        self.scene.delete(gl);
+        self.pp[0].delete(gl);
+        self.pp[1].delete(gl);
+        gl.delete_program(Some(&self.prog_bright));
+        gl.delete_program(Some(&self.prog_blur));
+        gl.delete_program(Some(&self.prog_composite));
+        gl.delete_vertex_array(Some(&self.empty_vao));
     }
 
     /// The scene FBO that the caller must bind before drawing the scene.
@@ -267,26 +292,5 @@ impl BloomPipeline {
         gl.bind_vertex_array(Some(&self.empty_vao));
         gl.draw_arrays(Gl::TRIANGLES, 0, 3);
         gl.bind_vertex_array(None);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Unit tests (native target only — no WebGL)
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn weights_sum_to_one_and_symmetric() {
-        let w = gaussian_weights(4);
-        let sum: f32 = w.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-3, "sum={sum}");
-        assert_eq!(w.len(), 9); // 2*radius+1
-        for i in 0..4 {
-            assert!((w[i] - w[8 - i]).abs() < 1e-6);
-        }
-        assert!(w[4] > w[0]); // center heaviest
     }
 }
