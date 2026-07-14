@@ -6,6 +6,7 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
+use super::preserve::{preserved_user_messages, PRESERVED_USER_TOKEN_BUDGET};
 use super::summary_utils::{
     build_summary_update_prompt, build_window_summary_prompt, latest_user_task,
     strip_analysis_block,
@@ -337,10 +338,21 @@ impl ContextCompactor {
         if let (Some(reuse), Some(sid)) = (self.summary_reuse.as_ref(), session_id) {
             let source =
                 SessionSummarySource::new(reuse.backend.clone(), sid, reuse.agent_id.clone());
+            // Captured before `try_reuse` drains the window out from under us —
+            // it owns its own drain/insert and cannot be handed the preserved
+            // turns after the fact.
+            let preserved = preserved_user_messages(
+                &messages[window_start..window_end],
+                PRESERVED_USER_TOKEN_BUDGET,
+            );
             if let Some(reuse_result) = source.try_reuse(messages, window_start, window_end).await {
                 if let Some(text) = first_message_text(&messages[window_start]) {
                     self.store_cache(window_start, cut_end, window_hash, text.to_string());
                 }
+                // Re-attach ABOVE the summary `try_reuse` just inserted — after
+                // `store_cache` has read it, since that read addresses the
+                // summary by position.
+                messages.splice(window_start..window_start, preserved);
                 tracing::info!(
                     tokens_before = reuse_result.tokens_before,
                     tokens_after = reuse_result.tokens_after,
@@ -363,16 +375,27 @@ impl ContextCompactor {
         // ("Active Task") / openclaw ("last thing the user requested").
         let token_budget = (tokens_before as f32 * self.config.target_ratio) as usize;
         let focus = latest_user_task(&messages[cut_end..]);
-        // Incremental inheritance: when the window opens with a prior
+        // Incremental inheritance: when the window carries a prior
         // `[Context Summary]` (e.g. a persisted child-session seed being
-        // re-compacted), fold the new turns into it via the "update" prompt
-        // instead of re-condensing the already-condensed head from scratch —
-        // preserving structure and avoiding paraphrase-decay across cycles.
-        let prompt = match first_message_text(&messages[window_start])
-            .and_then(strip_context_summary_prefix)
-        {
-            Some(prior) if window_start + 1 < window_end => {
-                let new_transcript = serialize_transcript(&messages[window_start + 1..window_end]);
+        // re-compacted, or a second compaction inside one turn), fold the new
+        // turns into it via the "update" prompt instead of re-condensing the
+        // already-condensed head from scratch — preserving structure and
+        // avoiding paraphrase-decay across cycles. The prior summary is located
+        // by scan, not at `window_start`: preservation re-attaches the user's
+        // verbatim turns ABOVE it, so it no longer necessarily opens the window.
+        // Everything before it is a verbatim copy of turns it already covers, so
+        // the "new turns" are exactly what follows it.
+        let prior_summary = messages[window_start..window_end]
+            .iter()
+            .enumerate()
+            .find_map(|(i, m)| {
+                first_message_text(m)
+                    .and_then(strip_context_summary_prefix)
+                    .map(|prior| (window_start + i, prior))
+            });
+        let prompt = match prior_summary {
+            Some((idx, prior)) if idx + 1 < window_end => {
+                let new_transcript = serialize_transcript(&messages[idx + 1..window_end]);
                 build_summary_update_prompt(prior, &new_transcript, token_budget, focus.as_deref())
             }
             _ => build_window_summary_prompt(&transcript, token_budget, focus.as_deref()),
@@ -395,6 +418,14 @@ impl ContextCompactor {
             Ok(Err(_)) | Err(_) => None,
         };
 
+        // The user's own turns come back verbatim above whichever summary the
+        // window collapses into (B13) — computed once here because both arms
+        // below drain the same window.
+        let preserved = preserved_user_messages(
+            &messages[window_start..window_end],
+            PRESERVED_USER_TOKEN_BUDGET,
+        );
+
         match summary {
             Some(summary) => {
                 // Success: drain old window and insert the stripped summary.
@@ -402,9 +433,9 @@ impl ContextCompactor {
                 let summary_msg = UnifiedMessage::user(summary_text.clone());
                 let tokens_after = estimate_tokens(&summary);
 
-                // Remove the compressed window and insert the summary at window_start
-                messages.drain(window_start..window_end);
-                messages.insert(window_start, summary_msg);
+                // Remove the compressed window and insert [user turns…, summary]
+                // at window_start.
+                splice_preserved(messages, window_start..window_end, preserved, summary_msg);
                 self.store_cache(window_start, window_end, window_hash, summary_text);
 
                 Ok(CompactResult {
@@ -421,8 +452,7 @@ impl ContextCompactor {
                     let summary_text = format!("[Context Summary]\n{truncated}");
                     let summary_msg = UnifiedMessage::user(summary_text.clone());
 
-                    messages.drain(window_start..window_end);
-                    messages.insert(window_start, summary_msg);
+                    splice_preserved(messages, window_start..window_end, preserved, summary_msg);
                     self.store_cache(window_start, window_end, window_hash, summary_text);
 
                     Ok(CompactResult {
@@ -493,14 +523,28 @@ impl ContextCompactor {
             .join("\n");
         let tokens_before = estimate_tokens(&window_text);
 
-        messages.drain(c.start..c.end);
-        messages.insert(c.start, UnifiedMessage::user(c.summary.clone()));
+        // The cache-reuse round must re-attach the user's turns exactly like the
+        // LLM path does (B13). CacheReuse is the STEADY state — preserving only
+        // on the summarization path would make the user's own words blink out of
+        // the prompt on every cache hit. Preserved from the region the cached
+        // summary replaces; the gap behind it still carries its user turns raw,
+        // so preserving over the gap too would duplicate them.
+        let preserved =
+            preserved_user_messages(&messages[c.start..c.end], PRESERVED_USER_TOKEN_BUDGET);
+        let summary_idx = c.start + preserved.len();
+        let inserted = preserved.len() + 1;
+        splice_preserved(
+            messages,
+            c.start..c.end,
+            preserved,
+            UnifiedMessage::user(c.summary.clone()),
+        );
 
         // Mutated coordinates: the gap between the reapplied summary and the
         // fresh tail.
-        let cut_end_m = cut_end - replaced + 1;
-        let gap_msgs = cut_end_m - (c.start + 1);
-        let gap_text: String = messages[c.start + 1..cut_end_m]
+        let cut_end_m = cut_end - replaced + inserted;
+        let gap_msgs = cut_end_m - (summary_idx + 1);
+        let gap_text: String = messages[summary_idx + 1..cut_end_m]
             .iter()
             .map(|m| m.text_content())
             .collect::<Vec<_>>()
@@ -532,7 +576,7 @@ impl ContextCompactor {
         // (hermes `previousSummary` / pi `UPDATE_SUMMARIZATION_PROMPT` parity).
         let prompt = match strip_context_summary_prefix(&c.summary) {
             Some(prior) => {
-                let gap_transcript = serialize_transcript(&messages[c.start + 1..cut_end_m]);
+                let gap_transcript = serialize_transcript(&messages[summary_idx + 1..cut_end_m]);
                 build_summary_update_prompt(prior, &gap_transcript, token_budget, focus.as_deref())
             }
             None => build_window_summary_prompt(&transcript, token_budget, focus.as_deref()),
@@ -566,8 +610,19 @@ impl ContextCompactor {
 
         let summary_text = format!("[Context Summary]\n{body}");
         let tokens_after = estimate_tokens(&summary_text);
-        messages.drain(c.start..cut_end_m);
-        messages.insert(c.start, UnifiedMessage::user(summary_text.clone()));
+        // Re-preserve over the MERGED cover: the merge folds the gap into the
+        // summary too, so the gap's own user turns must come back verbatim
+        // alongside the ones already re-attached above (they are all inside
+        // `[c.start, cut_end_m)` in mutated coordinates, and the summary sitting
+        // among them is skipped by the preserver).
+        let merged_preserved =
+            preserved_user_messages(&messages[c.start..cut_end_m], PRESERVED_USER_TOKEN_BUDGET);
+        splice_preserved(
+            messages,
+            c.start..cut_end_m,
+            merged_preserved,
+            UnifiedMessage::user(summary_text.clone()),
+        );
         self.store_cache(c.start, cut_end, extended_hash, summary_text);
 
         Ok(CompactResult {
@@ -631,6 +686,20 @@ impl ContextCompactor {
 }
 
 // === Helper functions ===
+
+/// Replace `range` with `[preserved user turns…, summary]` — the single shape
+/// every compaction drain site produces. The user's own words stay verbatim and
+/// chronological ABOVE the summary that swallows everything else, so a
+/// head-anchored window can no longer summarize the original instruction away
+/// on its very first pass.
+fn splice_preserved(
+    messages: &mut Vec<UnifiedMessage>,
+    range: std::ops::Range<usize>,
+    preserved: Vec<UnifiedMessage>,
+    summary: UnifiedMessage,
+) {
+    messages.splice(range, preserved.into_iter().chain(std::iter::once(summary)));
+}
 
 /// Advance a proposed cut index forward past any contiguous run of `ToolResult`
 /// messages so the cut never falls *between* a `ToolCall` and the result that
@@ -827,6 +896,17 @@ mod tests {
         msgs
     }
 
+    /// The single `[Context Summary]` a compaction inserts. Since B13 the
+    /// summary no longer sits at index 0 — the user's preserved turns are spliced
+    /// in above it — so tests locate it by marker, not by position.
+    fn summary_text(messages: &[UnifiedMessage]) -> String {
+        messages
+            .iter()
+            .map(UnifiedMessage::text_content)
+            .find(|t| t.starts_with("[Context Summary]"))
+            .expect("a successful compaction inserts a summary message")
+    }
+
     #[tokio::test]
     async fn compacts_when_window_available() {
         let provider = Arc::new(MockProvider::new("Summary of earlier conversation."));
@@ -838,13 +918,89 @@ mod tests {
 
         assert_eq!(result.strategy_used, CompactStrategy::LlmSummary);
         assert!(result.tokens_after < result.tokens_before);
-        // Original: 12 messages. Window = first 6 (indices 0..6).
-        // After: 1 summary + 6 fresh = 7 messages.
-        assert_eq!(messages.len(), 7);
+        // Original: 12 messages. Window = first 6 (indices 0..6), of which 3 are
+        // user turns (0/2/4). After: 3 preserved + 1 summary + 6 fresh = 10.
+        assert_eq!(messages.len(), 10);
 
-        // First message should be the summary
-        let first_text = first_message_text(&messages[0]).unwrap();
-        assert!(first_text.starts_with("[Context Summary]"));
+        // The user's own turns come back verbatim, in order, ABOVE the summary.
+        let head: Vec<String> = messages[..4]
+            .iter()
+            .map(UnifiedMessage::text_content)
+            .collect();
+        assert_eq!(head[0], "User message 0");
+        assert_eq!(head[1], "User message 2");
+        assert_eq!(head[2], "User message 4");
+        assert!(head[3].starts_with("[Context Summary]"));
+    }
+
+    #[tokio::test]
+    async fn original_instruction_survives_the_head_anchored_window_verbatim() {
+        // B13 regression: the compaction window is head-anchored, so the FIRST
+        // thing summarized away used to be the task the user actually asked for
+        // — surviving only as a ≤600-char focus hint derived from the tail.
+        let provider = Arc::new(MockProvider::new(
+            "<summary>\n## Primary Request\nsomething vague\n</summary>",
+        ));
+        let compactor = ContextCompactor::new(provider, CompactorConfig::default());
+
+        let original = "ORIGINAL: migrate the vector store to sqlite-vec, keep the API stable";
+        let mut messages = make_messages(12);
+        messages[0] = UnifiedMessage::user(original);
+
+        compactor.compact(&mut messages, 6, None).await.unwrap();
+
+        assert_eq!(
+            messages[0].text_content(),
+            original,
+            "the user's first instruction must survive compaction verbatim"
+        );
+        let summary_pos = messages
+            .iter()
+            .position(|m| m.text_content().starts_with("[Context Summary]"))
+            .expect("summary present");
+        assert!(
+            summary_pos > 0,
+            "preserved user turns are emitted chronologically, above the summary"
+        );
+    }
+
+    #[tokio::test]
+    async fn preserved_user_turns_do_not_flicker_out_on_cache_reuse_rounds() {
+        // CacheReuse is the STEADY state (the harness rebuilds the prompt every
+        // turn and the fingerprint hits). Preserving only on the summarization
+        // path would make the user's own words blink out of the prompt on every
+        // cache-hit turn.
+        let provider = Arc::new(CapturingProvider::new(
+            "<summary>\n## Primary Request\nS1\n</summary>",
+        ));
+        let compactor = ContextCompactor::new(provider.clone(), CompactorConfig::default());
+
+        let original = "ORIGINAL: migrate the vector store, keep the API stable";
+        let mut base = make_messages(12);
+        base[0] = UnifiedMessage::user(original);
+
+        let mut turn1 = base.clone();
+        compactor.compact(&mut turn1, 6, None).await.unwrap();
+        assert_eq!(turn1[0].text_content(), original);
+
+        // Turn 2: rebuilt prompt (compaction is not persisted) + a new exchange.
+        let mut turn2 = base.clone();
+        turn2.push(UnifiedMessage::assistant("new assistant turn"));
+        turn2.push(UnifiedMessage::user("new user turn"));
+        let r2 = compactor.compact(&mut turn2, 6, None).await.unwrap();
+
+        assert_eq!(r2.strategy_used, CompactStrategy::CacheReuse);
+        assert_eq!(
+            provider.call_count(),
+            1,
+            "cache reapply must not call the LLM"
+        );
+        assert_eq!(
+            turn2[0].text_content(),
+            original,
+            "the preserved instruction must survive the cache-reuse round too"
+        );
+        assert!(summary_text(&turn2).contains("S1"));
     }
 
     #[tokio::test]
@@ -858,10 +1014,12 @@ mod tests {
         let provider = Arc::new(MockProvider::new("Summary of earlier conversation."));
         let compactor = ContextCompactor::new(provider, CompactorConfig::default());
 
-        // 60 messages, fresh_tail 6 → cut_end = 54. Oldest at index 0, a newer
-        // pre-tail turn at index 45 (inside the [40..54] raw gap).
+        // 60 messages, fresh_tail 6 → cut_end = 54. Oldest at index 1 (an
+        // ASSISTANT turn — user turns are re-attached verbatim by B13 and so are
+        // never proof of what the window swallowed), a newer pre-tail turn at
+        // index 45 (inside the [40..54] raw gap).
         let mut messages = make_messages(60);
-        messages[0] = UnifiedMessage::user("OLDEST_MARKER first task");
+        messages[1] = UnifiedMessage::assistant("OLDEST_MARKER first task");
         messages[45] = UnifiedMessage::user("MIDGAP_MARKER newer pre-tail turn");
 
         let result = compactor.compact(&mut messages, 6, None).await.unwrap();
@@ -883,8 +1041,7 @@ mod tests {
             joined.contains("MIDGAP_MARKER"),
             "newer pre-tail message must ride raw (oldest-first anchoring)"
         );
-        let first_text = first_message_text(&messages[0]).unwrap();
-        assert!(first_text.starts_with("[Context Summary]"));
+        assert!(summary_text(&messages).starts_with("[Context Summary]"));
     }
 
     #[tokio::test]
@@ -921,11 +1078,10 @@ mod tests {
             result.strategy_used,
             CompactStrategy::DeterministicTruncation
         );
-        // 1 summary + 6 fresh = 7
-        assert_eq!(messages.len(), 7);
+        // 3 preserved user turns + 1 summary + 6 fresh = 10
+        assert_eq!(messages.len(), 10);
 
-        let first_text = first_message_text(&messages[0]).unwrap();
-        assert!(first_text.starts_with("[Context Summary]"));
+        assert!(summary_text(&messages).starts_with("[Context Summary]"));
     }
 
     #[tokio::test]
@@ -979,10 +1135,8 @@ mod tests {
 
         // (2) No generated summary contains the sentinel — neither the
         // in-list summary message…
-        let first_text = first_message_text(&messages[0]).unwrap();
-        assert!(first_text.starts_with("[Context Summary]"));
         assert!(
-            !first_text.contains(sentinel),
+            !summary_text(&messages).contains(sentinel),
             "summary must not swallow the transient recall tail"
         );
         // …nor the fingerprint-cache entry `store_cache` retained (the cache
@@ -1046,13 +1200,13 @@ mod tests {
             result.strategy_used,
             CompactStrategy::DeterministicTruncation
         );
-        assert_eq!(messages.len(), 7);
+        // 3 preserved user turns + 1 summary + 6 fresh = 10
+        assert_eq!(messages.len(), 10);
 
         // The inserted summary must carry the truncated window, never be empty.
-        let first_text = first_message_text(&messages[0]).unwrap();
-        assert!(first_text.starts_with("[Context Summary]"));
+        let summary = summary_text(&messages);
         assert!(
-            !first_text
+            !summary
                 .trim_start_matches("[Context Summary]")
                 .trim()
                 .is_empty(),
@@ -1233,9 +1387,7 @@ mod tests {
             1,
             "cache reapply must not call the LLM"
         );
-        let first_text = first_message_text(&turn2[0]).unwrap();
-        assert!(first_text.starts_with("[Context Summary]"));
-        assert!(first_text.contains("S1"));
+        assert!(summary_text(&turn2).contains("S1"));
     }
 
     #[tokio::test]
@@ -1268,8 +1420,7 @@ mod tests {
                 && merge_prompt.contains("## Primary Request\nmerged"),
             "merge must feed the previous summary explicitly via the update prompt; got:\n{merge_prompt}"
         );
-        let first_text = first_message_text(&turn2[0]).unwrap();
-        assert!(first_text.contains("merged"));
+        assert!(summary_text(&turn2).contains("merged"));
 
         // Turn N+1: the merged cover reapplies with zero further LLM calls.
         let mut turn3 = base.clone();
@@ -1358,9 +1509,15 @@ mod tests {
     fn select_window_end_clamps_to_hard_end_and_min_one() {
         let messages = make_messages(10);
         // hard_end below the ceiling → clamp to hard_end.
-        assert_eq!(select_window_end(&messages, 0, 4, 40, SUMMARIZER_INPUT_TOKEN_BUDGET), 4);
+        assert_eq!(
+            select_window_end(&messages, 0, 4, 40, SUMMARIZER_INPUT_TOKEN_BUDGET),
+            4
+        );
         // start == hard_end → empty, returns hard_end (caller guards).
-        assert_eq!(select_window_end(&messages, 4, 4, 40, SUMMARIZER_INPUT_TOKEN_BUDGET), 4);
+        assert_eq!(
+            select_window_end(&messages, 4, 4, 40, SUMMARIZER_INPUT_TOKEN_BUDGET),
+            4
+        );
     }
 
     #[test]
@@ -1382,7 +1539,10 @@ mod tests {
         ];
         // max_messages=2 lands the raw end on index 2 (the tool_result) → snap to 3.
         let end = select_window_end(&messages, 0, 4, 2, SUMMARIZER_INPUT_TOKEN_BUDGET);
-        assert_eq!(end, 3, "end snaps past the tool_result so [end..] has no orphan");
+        assert_eq!(
+            end, 3,
+            "end snaps past the tool_result so [end..] has no orphan"
+        );
     }
 
     #[test]

@@ -112,11 +112,47 @@ fn test_parse_sse_synthetic_tool_id_fallback() {
 
     match out.pop_front().unwrap() {
         Ok(ProviderDelta::ToolCallStart { id, .. }) => {
-            assert_eq!(id, "gemini_fc_0");
+            assert!(
+                id.starts_with("gemini_fc_0_"),
+                "synthetic id must keep its ordered prefix, got {id}"
+            );
+            assert!(
+                id.len() > "gemini_fc_0_".len(),
+                "synthetic id must carry a nonce suffix, got {id}"
+            );
         }
         other => panic!("Expected ToolCallStart, got {:?}", other),
     }
     assert_eq!(fc, 1);
+}
+
+/// Regression: the per-request `fc_counter` resets, so a bare `gemini_fc_0`
+/// repeats on every response. One user Stop leaves a tool_use with no result;
+/// `build_prompt` then matches the *next* turn's identically-named result
+/// against that orphan and replays an unpaired tool_use, which the provider
+/// rejects with a 400. Synthetic ids must therefore never collide across
+/// responses.
+#[test]
+fn test_synthetic_tool_ids_never_collide_across_responses() {
+    let data = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"search","args":{"q":"rust"}}}]},"finishReason":"FUNCTION_CALL"}]}"#;
+
+    let mint = || {
+        let mut out = VecDeque::new();
+        // Fresh counter per response — exactly what the adapter does.
+        let mut fc = 0u64;
+        parse_gemini_sse_chunk(data, &mut fc, &mut out);
+        match out.pop_front().unwrap() {
+            Ok(ProviderDelta::ToolCallStart { id, .. }) => id,
+            other => panic!("Expected ToolCallStart, got {:?}", other),
+        }
+    };
+
+    let first = mint();
+    let second = mint();
+    assert_ne!(
+        first, second,
+        "the same call index in two responses must not reuse an id"
+    );
 }
 
 #[test]

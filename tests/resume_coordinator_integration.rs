@@ -289,3 +289,123 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
     });
     assert!(abandoned, "expected a RunFinished{{Abandoned}} marker");
 }
+
+/// A Chat-tier channel's policy is a pair of RESTRICTIVE inputs, and both fail
+/// OPEN when missing: `role_is_operator(None) == true`, and an absent channel
+/// `ToolPermissionsConfig` merges no deny layer. The boot coordinator used to
+/// build a resumed run's metadata from an empty `HashMap`, so a killed daemon
+/// resurrected a guest-tier Telegram run as an unwatched **operator** with no
+/// deny layer. Re-derive both from the live channel config.
+#[tokio::test]
+async fn resumed_channel_run_reinherits_the_channels_guest_clamp_and_deny_layer() {
+    use alephcore::gateway::execution_engine::{CHANNEL_TOOL_PERMISSIONS_KEY, UNATTENDED_KEY};
+    use alephcore::gateway::inbound_router::{ChannelConfig, ChannelPolicyConfig};
+    use alephcore::routing::session_key::DmScope;
+
+    let store = store();
+    let sid = SessionKey::dm("main", "telegram", "peer-1", DmScope::PerChannelPeer);
+    seed_interrupted_run(&store, &sid).await;
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+
+    // The session was born on Telegram — the same stamp `execute` writes on a
+    // session's first inbound message, and the seam `origin_route` reads back.
+    let agent = registry
+        .get(sid.agent_id())
+        .await
+        .expect("agent registered");
+    agent.ensure_session(&sid).await;
+    agent
+        .set_session_source_channel(&sid, "telegram", Some("chat-42"))
+        .await;
+
+    // The channel's live policy, parsed from the same flat config block boot
+    // reads: Chat tier (the default) plus a deny layer.
+    let policy: ChannelPolicyConfig = serde_json::from_value(serde_json::json!({
+        "permission_level": "chat",
+        "tool_permissions": { "default": "allow", "overrides": { "bash_exec": "deny" } }
+    }))
+    .unwrap();
+    let mut channel_configs = HashMap::new();
+    channel_configs.insert(
+        "telegram".to_string(),
+        ChannelConfig {
+            permission_level: policy.permission_level,
+            tool_permissions: policy.tool_permissions,
+            ..Default::default()
+        },
+    );
+
+    let coordinator = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+    )
+    .with_channel_configs(channel_configs);
+    let report = coordinator.resume_interrupted_runs().await;
+    assert_eq!(report.resumed, 1);
+
+    let calls = calls.lock().await;
+    assert_eq!(calls.len(), 1);
+    let metadata = &calls[0].1;
+
+    assert_eq!(
+        metadata.get("caller_role").map(String::as_str),
+        Some("guest"),
+        "a resumed Chat-tier channel run must not come back as an operator"
+    );
+    let perms = metadata
+        .get(CHANNEL_TOOL_PERMISSIONS_KEY)
+        .expect("the channel deny layer must survive the restart");
+    assert!(perms.contains("bash_exec"), "{perms}");
+    // The origin route is what makes an approval deliverable, so the run stays
+    // attended (the human on the other end of Telegram can answer it).
+    assert_eq!(
+        metadata.get("channel_id").map(String::as_str),
+        Some("telegram")
+    );
+    assert_eq!(
+        metadata.get("conversation_id").map(String::as_str),
+        Some("chat-42")
+    );
+    assert!(!metadata.contains_key(UNATTENDED_KEY));
+}
+
+/// The other half of the same rule: a session with no routable origin (the
+/// Panel's `gui:chat`, or an origin conversation that was never captured) has
+/// nowhere to deliver an approval card that a boot scan's re-trigger raises.
+/// Mark it `unattended` so confirm-gated tools fail CLOSED instead of publishing
+/// into the void and parking on the 120 s approval timeout.
+#[tokio::test]
+async fn resumed_run_with_no_routable_origin_is_marked_unattended() {
+    use alephcore::gateway::execution_engine::UNATTENDED_KEY;
+
+    let store = store();
+    let sid = SessionKey::main("main");
+    seed_interrupted_run(&store, &sid).await;
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+
+    let coordinator = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+    );
+    assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
+
+    let calls = calls.lock().await;
+    let metadata = &calls[0].1;
+    assert_eq!(
+        metadata.get(UNATTENDED_KEY).map(String::as_str),
+        Some("true")
+    );
+    // No origin channel ⇒ no channel clamp to re-derive; the Panel's own
+    // operator semantics are unchanged.
+    assert!(!metadata.contains_key("caller_role"));
+}

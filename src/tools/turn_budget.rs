@@ -21,7 +21,58 @@ use crate::sync_primitives::Mutex;
 
 /// Default per-turn budget. Mirrors hermes' `MAX_TURN_BUDGET_CHARS=200_000`,
 /// converted to ~50 000 tokens at the standard ~4 chars/token ratio.
+///
+/// This is the **ceiling**, not the value: [`budget_for_window`] clamps down
+/// from it on small windows. See that function for why the bare constant is
+/// wrong on a 32k model.
 pub const DEFAULT_MAX_TURN_TOKENS: usize = 50_000;
+
+/// Fraction of the model's usable window one tool result may occupy (Layer 2).
+const RESULT_WINDOW_FRACTION: f64 = 0.15;
+
+/// Fraction of the model's usable window a whole Think→Act turn's tool results
+/// may occupy (Layer 3).
+const TURN_WINDOW_FRACTION: f64 = 0.30;
+
+/// Floor for the per-result budget. Below this a tool result is too mutilated
+/// to be worth keeping in context at all, so we stop scaling down.
+const MIN_RESULT_TOKENS: usize = 2_000;
+
+/// Floor for the per-turn budget. Same rationale as [`MIN_RESULT_TOKENS`].
+const MIN_TURN_TOKENS: usize = 4_000;
+
+/// Size the two tool-output budgets — `(per_result, per_turn)` — for a model
+/// whose usable context window is `token_budget` tokens.
+///
+/// **This is a small-window clamp-down, not "bigger models get more."** Both
+/// values clamp *up* to today's constants ([`DEFAULT_MAX_TURN_TOKENS`] and
+/// `result_processing::DEFAULT_RESULT_BUDGET_TOKENS`), so every model with a
+/// window above ~53k / ~167k tokens gets byte-for-byte the same budgets it gets
+/// today. Nothing here loosens anything.
+///
+/// What it fixes is the other end. The two limits were fixed constants that
+/// never looked at the model, and hermes — whose `MAX_TURN_BUDGET_CHARS` the
+/// per-turn constant was copied from — has since made both window-relative. On
+/// a 32k local model the old numbers are absurd: one `bash` result at 8k tokens
+/// eats a quarter of the window and lands in the compaction-protected fresh
+/// tail, while the 50k per-turn cap is 156 % of the entire window and can
+/// therefore never fire. The combination overflows the context, and on the
+/// OpenAI-compatible endpoints those small models live behind an overflow is
+/// fatal to the run rather than recoverable.
+///
+/// Pure arithmetic over a figure the config already derived — it never reads a
+/// message, so it is a static budget, not an intent filter (R10).
+#[must_use]
+pub fn budget_for_window(token_budget: u64) -> (usize, usize) {
+    let window = token_budget as f64;
+    let per_result = ((window * RESULT_WINDOW_FRACTION) as usize).clamp(
+        MIN_RESULT_TOKENS,
+        crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS,
+    );
+    let per_turn =
+        ((window * TURN_WINDOW_FRACTION) as usize).clamp(MIN_TURN_TOKENS, DEFAULT_MAX_TURN_TOKENS);
+    (per_result, per_turn)
+}
 
 // =============================================================================
 // Process-wide installer
@@ -270,5 +321,53 @@ mod tests {
         let id = tid(99);
         b.end_turn(&id);
         assert_eq!(b.cumulative(&id), 0);
+    }
+
+    // ---- window-aware budgets (B14) ----
+
+    use crate::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS;
+
+    #[test]
+    fn large_window_is_byte_for_byte_todays_constants() {
+        // The clamp is upward: a 200k-window model must see exactly the budgets
+        // it sees today, or this change is a behavior regression dressed up as a
+        // fix.
+        let (per_result, per_turn) = budget_for_window(200_000);
+        assert_eq!(per_result, DEFAULT_RESULT_BUDGET_TOKENS);
+        assert_eq!(per_turn, DEFAULT_MAX_TURN_TOKENS);
+        // 1M window: still the same ceilings, not 150k/300k.
+        assert_eq!(
+            budget_for_window(1_000_000),
+            (DEFAULT_RESULT_BUDGET_TOKENS, DEFAULT_MAX_TURN_TOKENS)
+        );
+    }
+
+    #[test]
+    fn small_window_turn_cap_can_actually_fire() {
+        // The bug: on a 16k usable window the fixed 50k per-turn cap is >3x the
+        // whole window, so Layer 3 never spills and the context overflows.
+        let window = 16_000u64;
+        let (per_result, per_turn) = budget_for_window(window);
+        assert!(
+            per_turn < window as usize,
+            "per-turn cap {per_turn} must fit inside the {window}-token window"
+        );
+        assert!(
+            per_result < DEFAULT_RESULT_BUDGET_TOKENS,
+            "per-result must clamp below the 8k constant on a small window, got {per_result}"
+        );
+        // 30 % / 15 % of 16k.
+        assert_eq!((per_result, per_turn), (2_400, 4_800));
+    }
+
+    #[test]
+    fn tiny_window_hits_the_floors_not_zero() {
+        // A mis-declared or genuinely tiny window must not scale the budgets to
+        // nothing — a 0-token result budget would truncate every tool result to
+        // an empty string.
+        let (per_result, per_turn) = budget_for_window(1_000);
+        assert_eq!(per_result, MIN_RESULT_TOKENS);
+        assert_eq!(per_turn, MIN_TURN_TOKENS);
+        assert_eq!(budget_for_window(0), (MIN_RESULT_TOKENS, MIN_TURN_TOKENS));
     }
 }

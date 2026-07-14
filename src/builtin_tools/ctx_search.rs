@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{notify_tool_result, notify_tool_start};
 use crate::error::Result;
-use crate::tools::result_store::global_tool_result_store;
+use crate::tools::result_store::{global_tool_result_store, ToolResultStore};
+use crate::tools::turn_context::current_session_key;
 use crate::tools::AlephTool;
 
 /// Default number of sections returned when `limit` is omitted.
@@ -103,6 +104,18 @@ impl AlephTool for CtxSearchTool {
                 hits: Vec::new(),
                 note: Some(note),
             });
+        };
+        // The installed store is the process-wide, unscoped handle. Narrow it to
+        // the session running this tool — the same key the two *write* seams
+        // (`build_request_tool_service`, the harness bridge) scoped their handles
+        // with, so the search looks where the offload actually landed. Reading
+        // the raw handle here would search the empty unscoped scope and silently
+        // return zero hits; searching it *unfiltered* would surface another
+        // agent's tool output. `None` (direct call outside a dispatched turn:
+        // tests, non-gateway paths) keeps the unscoped handle.
+        let store = match current_session_key() {
+            Some(session) => ToolResultStore::for_session(&store, session),
+            None => store,
         };
 
         let indexed_sections = store.indexed_sections();

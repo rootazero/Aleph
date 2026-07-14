@@ -2446,17 +2446,48 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     // Tool-result budget — install Layer 2 store + Layer 3 turn-budget
-    // singletons. The store roots at `~/.aleph/data/tool_results/global/`;
-    // per-session scoping is deferred (file names embed a UUID so concurrent
-    // sessions cannot collide). Layer 3 uses the default `MAX_TURN_TOKENS`
-    // (~50 000 = 200KB chars equivalent). Failure to create the store is
-    // not fatal — Layer 2 silently falls back to in-line truncation.
+    // singletons. The store roots at `~/.aleph/data/tool_results/global/` and is
+    // deliberately *shared*: the per-session scope now rides on the handle, and
+    // the two seams that own session context (`build_request_tool_service`, the
+    // orchestrator harness bridge) narrow it with `ToolResultStore::for_session`.
+    // Failure to create the store is not fatal — Layer 2 silently falls back to
+    // in-line truncation.
+    //
+    // Both budget layers are sized from the model's usable window rather than
+    // from fixed constants (B14). `token_budget` is the same figure the context
+    // compactor derives from provider/capabilities, so a 32k local model no
+    // longer gets an 8k-per-result / 50k-per-turn budget it cannot possibly
+    // honor. Large windows clamp back up to the historical constants, so the
+    // common case is unchanged. No `[context_budget]` → no window → constants.
+    let window_tokens = alephcore::orchestrator::build_context_budget_config(
+        &app_config_snapshot,
+        &app_config_snapshot
+            .general
+            .default_provider
+            .clone()
+            .unwrap_or_default(),
+    )
+    .map(|cb| cb.token_budget);
+    let (per_result_tokens, max_turn_tokens) = window_tokens.map_or(
+        (
+            alephcore::tools::result_processing::DEFAULT_RESULT_BUDGET_TOKENS,
+            alephcore::tools::turn_budget::DEFAULT_MAX_TURN_TOKENS,
+        ),
+        alephcore::tools::turn_budget::budget_for_window,
+    );
     match alephcore::tools::result_store::ToolResultStore::new("global") {
         Ok(store) => {
             let store = std::sync::Arc::new(store);
             alephcore::tools::result_store::set_global_tool_result_store(store);
+            // Layer 2 ceiling. Applied inside `resolve_result_budget` rather than
+            // threaded through `ToolService::execute`, whose callers sit in the
+            // over-budget `harness/agent/act.rs` (R10). Ignored when it is not
+            // actually a clamp-down — see `set_global_result_budget_ceiling`.
+            alephcore::tools::result_processing::set_global_result_budget_ceiling(
+                per_result_tokens,
+            );
             let budget = std::sync::Arc::new(alephcore::tools::turn_budget::TurnResultBudget::new(
-                alephcore::tools::turn_budget::DEFAULT_MAX_TURN_TOKENS,
+                max_turn_tokens,
             ));
             alephcore::tools::turn_budget::set_global_turn_result_budget(budget);
             // Gap B follow-up — process-wide in-flight tool-call registry.
@@ -2473,8 +2504,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             if !args.daemon {
                 println!(
                     "tool-result-budget: ToolResultStore + TurnResultBudget wired \
-                     (~/.aleph/data/tool_results/global/, max_turn_tokens={})",
-                    alephcore::tools::turn_budget::DEFAULT_MAX_TURN_TOKENS,
+                     (~/.aleph/data/tool_results/global/, session-scoped handles, \
+                     max_result_tokens={per_result_tokens}, max_turn_tokens={max_turn_tokens})"
                 );
             }
         }

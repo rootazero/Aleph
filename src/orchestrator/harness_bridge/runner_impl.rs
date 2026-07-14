@@ -471,6 +471,17 @@ impl HarnessRunner for AgentHarnessRunner {
             }
             (other, _) => other,
         };
+        // B14: the Layer-3 per-turn tool-output cap tracks the model's real
+        // window instead of hermes' since-fixed 50k constant. `token_budget` is
+        // the same provider/capability-derived figure the compactor sizes itself
+        // from (`deps_builder::context_budget`), so on a 32k local model the 50k
+        // cap — 156 % of the window, and therefore unreachable — becomes one that
+        // can actually fire. Large-window models clamp back up to the old
+        // constant and are byte-for-byte unchanged. No config → no override.
+        let windowed_turn_budget = self.context_budget_config.as_ref().map(|cfg| {
+            let (_, per_turn) = crate::tools::turn_budget::budget_for_window(cfg.token_budget);
+            Arc::new(crate::tools::turn_budget::TurnResultBudget::new(per_turn))
+        });
         let deps = HarnessDeps {
             session: self.session_service.clone(),
             tools,
@@ -513,17 +524,31 @@ impl HarnessRunner for AgentHarnessRunner {
             turn_timeout: self.turn_timeout,
             // Layer 3 turn budget + Layer 2 shared store. Prefer the
             // bridge's explicit field (set via direct injection / tests);
-            // fall back to the process-wide singleton installed at boot.
-            // `None` (no field, no singleton) keeps the legacy behavior —
-            // Layer 2 / Layer 3 are inert.
+            // then this run's window-sized budget; then the process-wide
+            // singleton installed at boot. `None` (nothing anywhere) keeps the
+            // legacy behavior — Layer 2 / Layer 3 are inert.
             turn_budget: self
                 .turn_budget
                 .clone()
+                .or(windowed_turn_budget)
                 .or_else(crate::tools::turn_budget::global_turn_result_budget),
+            // The store is process-wide; the *handle* carries the session scope
+            // (see `tools::result_store` module docs). Scoping it here is what
+            // keeps this run's Layer-3 spills out of every other live session's
+            // `ctx_search` — and out of the blast radius of their denial
+            // circuit-breaker. The key must be the wire session key, because
+            // `ctx_search` resolves its own scope from
+            // `turn_context::current_session_key()`.
             result_store: self
                 .result_store
                 .clone()
-                .or_else(crate::tools::result_store::global_tool_result_store),
+                .or_else(crate::tools::result_store::global_tool_result_store)
+                .map(|store| {
+                    crate::tools::result_store::ToolResultStore::for_session(
+                        &store,
+                        session_id.to_key_string(),
+                    )
+                }),
             session_epoch_registrar: self.session_epoch_registrar.clone(),
             // Spec 3 — per-tool-invocation signal capture. When a
             // RawMemoryStore is wired (production gateway path), every

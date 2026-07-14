@@ -600,6 +600,17 @@ pub trait HarnessRunner: Send + Sync {
         None
     }
 
+    /// B15 — the boot-time `[execution] max_iterations` this runner caps its own
+    /// Think→Act loop with. Threaded into `SubagentTool` so a child role that
+    /// declares no `max_iterations` inherits a cap instead of looping until the
+    /// spawn timeout kills it (an iteration cap yields a usable summary via the
+    /// boundary grace turn; a timeout throws the whole run away). Default `None`
+    /// leaves the spawner on `FALLBACK_MAX_ITERATIONS` — still capped, just not
+    /// the operator's configured value.
+    fn default_max_iterations(&self) -> Option<usize> {
+        None
+    }
+
     /// Estimate the context-window occupancy of this session's *next* prompt,
     /// for sessions that never ran an LLM turn (no persisted real occupancy).
     /// Deterministic token counting only — no LLM call (R7). Default `None`

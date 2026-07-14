@@ -1334,3 +1334,137 @@ async fn operator_slash_command_for_an_ungated_tool_still_fast_paths() {
     }
     assert_eq!(registry.calls(), 2);
 }
+
+/// Captures the `RunRequest` a continuation is actually dispatched with, so the
+/// inheritance contract is asserted on the real request the engine would run —
+/// not on a reconstruction of it.
+struct RecordingAdapter {
+    requests: Arc<RwLock<Vec<RunRequest>>>,
+}
+
+impl RecordingAdapter {
+    fn new() -> Self {
+        Self {
+            requests: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
+    /// The continuation is dispatched from a detached `tokio::spawn`, so poll
+    /// (bounded) instead of racing it.
+    async fn await_one(&self) -> Option<RunRequest> {
+        for _ in 0..200 {
+            if let Some(req) = self.requests.write().await.pop() {
+                return Some(req);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        None
+    }
+}
+
+#[async_trait]
+impl crate::gateway::execution_adapter::ExecutionAdapter for RecordingAdapter {
+    async fn execute(
+        &self,
+        request: RunRequest,
+        _agent: Arc<AgentInstance>,
+        _emitter: Arc<dyn EventEmitter + Send + Sync>,
+    ) -> Result<(), ExecutionError> {
+        self.requests.write().await.push(request);
+        Ok(())
+    }
+
+    async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+        Err(ExecutionError::RunNotFound(run_id.to_string()))
+    }
+
+    async fn get_status(&self, _run_id: &str) -> Option<RunStatus> {
+        None
+    }
+
+    async fn active_run_count(&self) -> usize {
+        0
+    }
+}
+
+/// A goal continuation spawned from a project-mode run must land in the SAME
+/// project. `spawn_continuation_run` used to hardcode `workspace_override: None`
+/// while every other sub-run producer (steering, team dispatch, session.send,
+/// resume) inherited it — so an unattended continuation silently dropped the
+/// project's CLAUDE.md / AGENTS.md and project skills, and its
+/// workspace_directive told the model its cwd was the agent workspace. The root
+/// is unrecoverable once lost: neither `goal` nor `looping` persists it.
+#[tokio::test]
+async fn goal_continuation_inherits_the_originating_runs_project_root() {
+    use crate::gateway::execution_adapter::ExecutionAdapter;
+    use crate::goal::{ContinuationDecision, Goal, GoalStore, PursuitMode};
+
+    let temp = tempfile::tempdir().unwrap();
+    // The goal store global is a `OnceCell` shared by the whole test binary:
+    // install ours if we win the race, then operate on whichever store actually
+    // became global — that is the one the fire-time `confirm_fire` reads.
+    crate::goal::set_global_for_test(Arc::new(
+        GoalStore::open(&temp.path().join("goals.db")).expect("goal store"),
+    ));
+    let store = crate::goal::global().expect("a goal store is installed");
+
+    let session = SessionKey::main("b10-continuation");
+    let session_str = session.to_key_string();
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    // Claim the continuation exactly as the post-run hook does: the claim is
+    // what stamps the pending wake the fire-time gate checks.
+    let now = 1_000u64;
+    store
+        .put(
+            &Goal::new(&session_str, "keep going", 0, now)
+                .with_pursuit(PursuitMode::Active { max_iterations: 5 }),
+        )
+        .unwrap();
+    let ContinuationDecision::Fire {
+        wake_ms, prompt, ..
+    } = store
+        .try_claim_continuation(&session_str, None, now, false)
+        .unwrap()
+    else {
+        panic!("an Active goal with runway must claim a continuation");
+    };
+
+    let agent = AgentInstance::new(
+        AgentInstanceConfig {
+            agent_id: session.agent_id().to_string(),
+            workspace: temp.path().join("agent-workspace"),
+            agent_dir: temp.path().join("agents"),
+            ..Default::default()
+        },
+        test_session_manager(&temp),
+    )
+    .unwrap();
+    let registry = Arc::new(crate::gateway::agent_instance::AgentRegistry::new());
+    registry.register(agent).await;
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    super::execute::spawn_continuation_run(
+        registry,
+        Arc::clone(&adapter) as Arc<dyn ExecutionAdapter>,
+        session.clone(),
+        session_str,
+        prompt,
+        HashMap::new(),
+        Some(project.clone()),
+        None,
+        None,
+        super::execute::ContinuationKind::Goal { wake_ms },
+    );
+
+    let request = adapter
+        .await_one()
+        .await
+        .expect("the claimed continuation must reach the execution adapter");
+    assert_eq!(
+        request.workspace_override,
+        Some(project),
+        "the continuation must run inside the project the goal was set in"
+    );
+}

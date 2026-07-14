@@ -239,6 +239,9 @@ mod tests {
             plugin_registry: None,
             subagent_semaphore: None,
             routing_store: None,
+            // B15 — unset here on purpose: the fallback cap must hold even when
+            // no runner default is threaded through.
+            default_max_iterations: None,
         }
     }
 
@@ -1186,5 +1189,145 @@ mod tests {
 
         let captured = provider.0.lock().unwrap().clone().expect("captured prompt");
         assert!(!captured.contains("<strategy>"));
+    }
+
+    // -- B15: the spawned loop is never left uncapped -------------------------
+
+    /// An `AgentDef` with no `max_iterations` (the built-in "default" role, and
+    /// every user role whose frontmatter omits the key) used to reach
+    /// `HarnessDeps` as `None` = *unbounded*: the child then span until the
+    /// wall-clock spawn timeout killed it and discarded the run. With the
+    /// runner's default threaded through, the cap fires instead — `hit_limit`
+    /// plus a completed run rather than `Err("Sub-agent timed out")`.
+    #[tokio::test]
+    async fn spawn_caps_capless_agent_with_runner_default() {
+        let provider: Arc<dyn AiProvider> = Arc::new(AlwaysToolCallProvider {
+            calls: AtomicUsize::new(0),
+        });
+        let mut base = make_base(provider);
+        base.default_max_iterations = Some(2);
+
+        // No `.with_max_iterations(...)` — exactly the built-in "default" role.
+        let agent = agent_with_allowed("capless", vec!["*"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "loop forever",
+            context_summary: None,
+            model: None,
+            timeout_secs: 10,
+            cancel: CancellationToken::new(),
+            isolation: None,
+            strategy: None,
+        };
+
+        let result = spawn(&base, req).await.expect("spawn ok");
+        assert!(
+            result.hit_limit,
+            "a capless AgentDef must inherit the runner's cap, not run unbounded"
+        );
+        assert_eq!(
+            result.iterations, 2,
+            "inherited cap must be the one enforced"
+        );
+    }
+
+    /// A zero cap — `[execution] max_iterations = 0` or `max_iterations: 0` in
+    /// frontmatter — must be read as "unset" and fall through, never as
+    /// `Some(0)` (which would kill every subagent after zero turns). This is the
+    /// trap `resolve_max_iterations` exists to avoid; a bare `.or(...)` here
+    /// would walk straight into it.
+    #[tokio::test]
+    async fn spawn_zero_cap_does_not_degrade_to_zero_iterations() {
+        let provider = ScriptedProvider::new(vec![
+            ProviderResponse {
+                text: None,
+                tool_calls: vec![NativeToolCall {
+                    thought_signature: None,
+                    id: "call-0".into(),
+                    name: "noop".into(),
+                    arguments: json!({}),
+                }],
+                thinking: None,
+                thinking_signature: None,
+                stop_reason: StopReason::ToolUse,
+                truncated_tool_call: None,
+                usage: None,
+            },
+            ProviderResponse::text_only("finished anyway".to_string()),
+        ]);
+        let mut base = make_base(provider);
+        base.default_max_iterations = Some(0);
+
+        let agent = agent_with_allowed("zero-capped", vec!["*"]).with_max_iterations(0);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "do a tool call then answer",
+            context_summary: None,
+            model: None,
+            timeout_secs: 10,
+            cancel: CancellationToken::new(),
+            isolation: None,
+            strategy: None,
+        };
+
+        let result = spawn(&base, req).await.expect("spawn ok");
+        assert!(
+            !result.hit_limit,
+            "a zero cap must fall through to the fallback, not cap the loop at 0"
+        );
+        assert_eq!(result.final_text.as_deref(), Some("finished anyway"));
+    }
+
+    // -- D6: subagent tool signals reach the raw-memory sink -------------------
+
+    /// Every tool a subagent runs must land in `raw_memories` as a
+    /// `ToolInvocation` row — that is what feeds the `insights.tools` RPC. The
+    /// spawner used to install a hardcoded `NoopToolSignalSink` even in
+    /// production (where `raw_memory_writer` is `Some`), so subagent tool usage
+    /// was invisible. Attribution is the sub-role's id, not the parent's.
+    #[tokio::test]
+    async fn spawn_records_tool_signals_under_sub_role_id() {
+        use crate::memory::store::raw_memory::RawMemorySource;
+
+        let provider: Arc<dyn AiProvider> = Arc::new(AlwaysToolCallProvider {
+            calls: AtomicUsize::new(0),
+        });
+        let mut base = make_base(provider);
+        let fake = Arc::new(FakeWriter::default());
+        base.raw_memory_writer =
+            Some(fake.clone() as Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>);
+        base.parent_agent_id = Some("parent-007".to_string());
+
+        let agent = AgentDef::new("tool-runner", AgentMode::SubAgent)
+            .with_allowed_tools(vec!["*".into()])
+            .with_max_iterations(1);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "call the tool",
+            context_summary: None,
+            model: None,
+            timeout_secs: 10,
+            cancel: CancellationToken::new(),
+            isolation: None,
+            strategy: None,
+        };
+
+        spawn(&base, req).await.expect("spawn ok");
+        // The sink fires from a detached task (`push_tool_invocation`).
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        let captured = fake.0.lock().await;
+        let invocation = captured
+            .iter()
+            .find(|row| matches!(row.source, RawMemorySource::ToolInvocation { .. }))
+            .expect("subagent tool call must produce a ToolInvocation raw memory row");
+        match &invocation.source {
+            RawMemorySource::ToolInvocation { tool_name, .. } => assert_eq!(tool_name, "noop"),
+            other => panic!("expected ToolInvocation, got {other:?}"),
+        }
+        assert_eq!(
+            invocation.agent_id, "tool-runner",
+            "tool signals attribute to the sub-role that ran the tool, not the parent"
+        );
     }
 }

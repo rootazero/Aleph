@@ -757,12 +757,21 @@ where
                     // chaining is transitive, since continuation N's own post_run
                     // reads them back out of N's metadata.
                     let policy_meta = carry_policy_metadata(&request.metadata);
+                    // …and this turn's project root. It is NOT recoverable later:
+                    // neither `goal` nor `looping` persists it, and
+                    // `projects::run_context` is already closed by the time this
+                    // hook runs. Without it an unattended continuation silently
+                    // drops the project's CLAUDE.md / AGENTS.md and project
+                    // skills, and its workspace_directive tells the model its cwd
+                    // is the agent workspace.
+                    let workspace = request.workspace_override.as_deref();
                     super::goal_continuation::post_run(
                         cont_deps,
                         &self.session_manager,
                         &request.session_key,
                         &agent,
                         &policy_meta,
+                        workspace,
                     )
                     .await;
 
@@ -818,6 +827,7 @@ where
                                         session_key_str.clone(),
                                         prompt,
                                         policy_meta.clone(),
+                                        request.workspace_override.clone(),
                                         cont_deps.event_bus.clone(),
                                         Some(delay_ms),
                                         ContinuationKind::Loop { wake_ms },
@@ -1035,7 +1045,13 @@ fn continuation_metadata(
 /// 被 goal 续跑（`should_continue` / gate-failure）与 loop tick 续跑共用——
 /// 消除重复的 `RunRequest` 构造与 `tokio::spawn` 样板。`kind` 路由失败处理。
 ///
-/// `policy_meta` is [`carry_policy_metadata`] of the originating request.
+/// `policy_meta` is [`carry_policy_metadata`] of the originating request;
+/// `workspace_override` is its project root (`None` = the agent's own
+/// workspace). Both are inherited, not rebuilt: a continuation must be neither
+/// more privileged NOR less situated than the conversation that spawned it —
+/// dropping the root moved the run out of the project (no project CLAUDE.md /
+/// AGENTS.md, no project skills) and told the model so in its
+/// workspace_directive.
 pub(super) fn spawn_continuation_run(
     registry: Arc<crate::gateway::agent_instance::AgentRegistry>,
     adapter: Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
@@ -1043,6 +1059,7 @@ pub(super) fn spawn_continuation_run(
     session_key_str: String,
     prompt: String,
     policy_meta: std::collections::HashMap<String, String>,
+    workspace_override: Option<std::path::PathBuf>,
     event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     delay_ms: Option<u64>,
     kind: ContinuationKind,
@@ -1058,7 +1075,7 @@ pub(super) fn spawn_continuation_run(
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override: None,
-        workspace_override: None,
+        workspace_override: workspace_override.clone(),
         max_iterations_override: None,
         model_override: None,
     };
@@ -1120,9 +1137,12 @@ pub(super) fn spawn_continuation_run(
         // Kept for the AgentBusy retry re-spawn (the original is consumed by
         // the emitter construction just below). `policy_meta` must be carried
         // too — without it the FIRST busy-retry silently drops the inherited
-        // clamp and channel permission layer.
+        // clamp and channel permission layer. Same for the project root: a
+        // busy-retried tick that rebuilds it as `None` lands outside the project
+        // just as surely as the first spawn did.
         let retry_bus = event_bus.clone();
         let retry_policy_meta = policy_meta;
+        let retry_workspace = workspace_override;
         // G1: broadcast the continuation live (Panel + `aleph watch`) via the
         // gateway event bus when one is wired; fall back to collect-and-drop in
         // tests / non-gateway contexts so those paths stay behavior-identical.
@@ -1207,6 +1227,7 @@ pub(super) fn spawn_continuation_run(
                         session_key_str.clone(),
                         prompt.clone(),
                         retry_policy_meta.clone(),
+                        retry_workspace.clone(),
                         retry_bus.clone(),
                         Some(delay_ms),
                         next_kind,

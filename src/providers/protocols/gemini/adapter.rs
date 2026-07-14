@@ -162,7 +162,7 @@ impl ProtocolAdapter for GeminiProtocol {
     /// Gemini streams complete function calls per chunk (not incremental args), so
     /// each `functionCall` part yields `ToolCallStart + ToolCallArgDelta + ToolCallEnd`
     /// in one shot. Native call IDs are used when present (Gemini 3+); synthetic
-    /// IDs (`gemini_fc_{counter}`) are generated as fallback.
+    /// IDs (`gemini_fc_{counter}_{nonce}`) are generated as fallback.
     async fn stream_deltas(
         &self,
         response: reqwest::Response,

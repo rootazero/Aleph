@@ -76,7 +76,11 @@ pub(super) fn mcp_tool_registry() -> Option<&'static Arc<crate::tools::ToolHandl
 ///   hooks around every tool dispatch. `None` (or an empty executor) means
 ///   no extension hooks are active for this request.
 /// * `session_id` — session identifier surfaced into `HookContext` for
-///   extension command hooks.
+///   extension command hooks, and the scope key stamped onto this request's
+///   `ToolResultStore` handle. Both call sites pass
+///   `request.session_key.to_key_string()`, which is exactly what
+///   `turn_context::current_session_key()` returns inside a dispatched tool —
+///   `ctx_search` relies on that equality to find what this service offloaded.
 /// * `tool_permissions` — merged EXPLICIT tool permission policy for this turn
 ///   (global `[policies.tool_permissions]` → agent override → channel
 ///   override, most restrictive wins). `None` = all-default policy; pass
@@ -111,6 +115,7 @@ pub fn build_request_tool_service(
     truncate_tool_descriptions: bool,
     deferred: Arc<crate::tools::scoped::DeferredTools>,
 ) -> Arc<dyn ToolService> {
+    let session_id: String = session_id.into();
     let mut svc = ScopedToolService::new(tool_registry, allowed_tools);
     if let Some(st) = subagent_tool {
         svc = svc.with_subagent_tool(st);
@@ -127,13 +132,23 @@ pub fn build_request_tool_service(
         svc = svc.with_turn_context(tc);
     }
     if let Some(executor) = hook_executor {
-        svc = svc.with_hook_executor(executor, session_id);
+        svc = svc.with_hook_executor(executor, session_id.clone());
     }
     // Layer 2 seam: oversized tool outputs are persisted to disk and the
     // LLM gets a marker line instead of the raw text. Inert until boot
     // installs the global store via `set_global_tool_result_store`.
+    //
+    // The installed store is process-wide; this request's handle is narrowed to
+    // its own session, so the blobs land in a per-session directory and the
+    // index rows carry a scope. Without it, `ctx_search` in one Panel tab could
+    // retrieve another tab's tool output, and the denial circuit-breaker's
+    // `purge_all` (3 refusals in ONE session) wiped every concurrent session's
+    // artifacts. Scoping the handle keeps `persist_if_large`'s signature — and
+    // therefore `harness/agent/act.rs` — untouched.
     if let Some(store) = crate::tools::result_store::global_tool_result_store() {
-        svc = svc.with_result_store(store);
+        svc = svc.with_result_store(crate::tools::result_store::ToolResultStore::for_session(
+            &store, session_id,
+        ));
     }
     // Wire the confirmation seam: confirm-gated tools route a user prompt
     // before executing. Inert until boot installs the requester. Gating is

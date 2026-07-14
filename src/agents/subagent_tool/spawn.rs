@@ -313,6 +313,9 @@ impl SubagentTool {
         if let Some(tt) = self.turn_timeout {
             runtime = runtime.with_turn_timeout(tt);
         }
+        if let Some(mi) = self.default_max_iterations {
+            runtime = runtime.with_default_max_iterations(mi);
+        }
         if !self.provider_overrides.is_empty() {
             runtime = runtime.with_provider_overrides(self.provider_overrides.clone());
         }

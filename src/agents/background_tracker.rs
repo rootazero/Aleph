@@ -23,6 +23,14 @@ const BACKGROUND_RESULT_TTL: Duration = Duration::from_secs(3600);
 /// and a parent rarely needs to poll more than a handful of recent results.
 const MAX_COMPLETED_RESULTS: usize = 256;
 
+/// B18 — how many of the running entry's most-recent progress events survive
+/// into the completed entry. The live FIFO holds 50; a completed agent only
+/// needs enough trail for the parent (and the model) to see *what the child was
+/// doing when it died*, so we keep the tail and drop the rest. Bounded on
+/// purpose: `completed` is capped at `MAX_COMPLETED_RESULTS` entries and every
+/// one of them now carries this many small structs.
+const PROGRESS_TAIL_LEN: usize = 10;
+
 /// Process-global tracker. Every `ExecutionEngine` and the `subagent.tree` RPC
 /// share this one instance, so a panel sees every background sub-agent
 /// regardless of which run spawned it (the tracker was always documented as
@@ -130,6 +138,11 @@ struct CompletedAgent {
     last_tool: Option<String>,
     /// Final activity signal, carried over.
     last_activity: Option<String>,
+    /// B18 — the tail of the running entry's progress queue. Without this the
+    /// whole trajectory died with the `RunningAgent`, so a *failed* background
+    /// exploration reached the parent as a bare error string with no evidence of
+    /// what was attempted. Negative results are kept deliberately.
+    progress_tail: Vec<SubagentProgress>,
 }
 
 /// Terminal outcome of a background subagent run.
@@ -168,6 +181,9 @@ pub struct CompletedSnapshot {
     pub task: String,
     pub duration_secs: u64,
     pub outcome: CompletedOutcome,
+    /// B18 — up to `PROGRESS_TAIL_LEN` final progress events, chronological.
+    /// The failure path folds these into the error string it hands the model.
+    pub progress_tail: Vec<SubagentProgress>,
 }
 
 /// Lightweight metadata for a still-running background subagent.
@@ -267,16 +283,25 @@ impl BackgroundAgentTracker {
             tool_count,
             last_tool,
             last_activity,
+            progress_tail,
         ) = match prior {
-            Some(agent) => (
-                now.duration_since(agent.started_at).as_secs(),
-                agent.task_description,
-                agent.meta,
-                agent.started_at_ms,
-                agent.tool_count,
-                agent.last_tool,
-                agent.last_activity,
-            ),
+            Some(agent) => {
+                // B18 — keep the last `PROGRESS_TAIL_LEN` events; the rest of the
+                // FIFO is dropped with the running entry as before.
+                let skip = agent.progress.len().saturating_sub(PROGRESS_TAIL_LEN);
+                let tail: Vec<SubagentProgress> =
+                    agent.progress.iter().skip(skip).cloned().collect();
+                (
+                    now.duration_since(agent.started_at).as_secs(),
+                    agent.task_description,
+                    agent.meta,
+                    agent.started_at_ms,
+                    agent.tool_count,
+                    agent.last_tool,
+                    agent.last_activity,
+                    tail,
+                )
+            }
             None => (
                 0,
                 String::new(),
@@ -285,6 +310,7 @@ impl BackgroundAgentTracker {
                 0,
                 None,
                 None,
+                Vec::new(),
             ),
         };
         let lifecycle = lifecycle_from_outcome(&outcome);
@@ -305,6 +331,7 @@ impl BackgroundAgentTracker {
                 tool_count,
                 last_tool,
                 last_activity,
+                progress_tail,
             },
         );
         // C1 follow-up — bound the map by count. `mark_completed` is the only
@@ -357,6 +384,7 @@ impl BackgroundAgentTracker {
             task: c.task_description.clone(),
             duration_secs: c.duration_secs,
             outcome: c.outcome.clone(),
+            progress_tail: c.progress_tail.clone(),
         })
     }
 
@@ -429,6 +457,7 @@ impl BackgroundAgentTracker {
                         task: c.task_description.clone(),
                         duration_secs: c.duration_secs,
                         outcome: c.outcome.clone(),
+                        progress_tail: c.progress_tail.clone(),
                     },
                 )
             })
@@ -528,20 +557,42 @@ impl BackgroundAgentTracker {
     }
 
     /// Return up to `limit` most-recent progress events (chronological order).
-    /// Returns empty Vec if `request_id` is unknown or already completed.
+    ///
+    /// D7 — a finished agent falls back to the tail carried into the completed
+    /// entry (`PROGRESS_TAIL_LEN` events). Before that fallback existed this
+    /// returned an empty Vec the instant `mark_completed` ran, which is exactly
+    /// when a parent polls a *failed* child. Empty Vec only for a genuinely
+    /// unknown `request_id` (never registered, or TTL-pruned).
     pub fn progress_snapshot(&self, request_id: &str, limit: usize) -> Vec<SubagentProgress> {
-        let running = self.running.read().unwrap_or_else(|e| {
+        let live = {
+            let running = self.running.read().unwrap_or_else(|e| {
+                warn!("BackgroundAgentTracker lock poisoned, recovering");
+                e.into_inner()
+            });
+            running.get(request_id).map(|agent| {
+                let start = agent.progress.len().saturating_sub(limit);
+                agent
+                    .progress
+                    .iter()
+                    .skip(start)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+        };
+        if let Some(events) = live {
+            return events;
+        }
+        let completed = self.completed.read().unwrap_or_else(|e| {
             warn!("BackgroundAgentTracker lock poisoned, recovering");
             e.into_inner()
         });
-        match running.get(request_id) {
-            Some(agent) => {
-                let total = agent.progress.len();
-                let start = total.saturating_sub(limit);
-                agent.progress.iter().skip(start).cloned().collect()
-            }
-            None => Vec::new(),
-        }
+        completed
+            .get(request_id)
+            .map(|c| {
+                let start = c.progress_tail.len().saturating_sub(limit);
+                c.progress_tail[start..].to_vec()
+            })
+            .unwrap_or_default()
     }
 
     /// Remove completed entries older than `ttl`.
@@ -783,6 +834,38 @@ mod tests {
         assert_eq!(snap.len(), 3);
         assert_eq!(snap[0].step, 2);
         assert_eq!(snap[2].step, 4);
+    }
+
+    /// B18/D7 — the trail must survive completion. It used to die with the
+    /// `RunningAgent`, so a parent polling a *failed* child got an empty
+    /// progress array and a bare error string: the negative result was lost.
+    #[test]
+    fn completed_agent_keeps_bounded_progress_tail() {
+        let tracker = BackgroundAgentTracker::new();
+        tracker.register("rid".into(), CancellationToken::new(), "explore".into());
+        for i in 0..15 {
+            tracker.push_progress("rid", fake_progress(i));
+        }
+        tracker.mark_completed("rid", CompletedOutcome::Err("boom".into()));
+
+        let snap = tracker.result_snapshot("rid").expect("completed entry");
+        assert_eq!(
+            snap.progress_tail.len(),
+            PROGRESS_TAIL_LEN,
+            "tail is bounded at PROGRESS_TAIL_LEN"
+        );
+        assert_eq!(
+            snap.progress_tail.last().unwrap().step,
+            14,
+            "the tail must end at the last thing the child did before it died"
+        );
+
+        // The reader path falls back to the completed map for a finished id.
+        let after = tracker.progress_snapshot("rid", 10);
+        assert_eq!(after.len(), PROGRESS_TAIL_LEN);
+        assert_eq!(after.last().unwrap().tool_name.as_deref(), Some("tool_14"));
+        // A never-registered id still reads empty.
+        assert!(tracker.progress_snapshot("ghost", 10).is_empty());
     }
 
     #[test]

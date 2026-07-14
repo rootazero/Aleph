@@ -360,12 +360,21 @@ impl OllamaProvider {
 
     /// Map an Ollama chat response into the unified `ProviderResponse`.
     ///
-    /// Ollama omits tool-call ids, so synthesize stable per-response ids
-    /// (`ollama_call_<n>`) — the agent loop needs them to pair the eventual
-    /// `ToolResult` back to its call.
+    /// Ollama omits tool-call ids, so synthesize them (`ollama_call_<n>_<nonce>`)
+    /// — the agent loop needs them to pair the eventual `ToolResult` back to its
+    /// call.
+    ///
+    /// The nonce is not decoration. A bare `ollama_call_0` repeats on every
+    /// response (the index restarts at 0 each time), and `build_prompt` matches
+    /// tool results by call_id *anywhere later in the log*: one user Stop leaves
+    /// a tool_use with no result, and the next turn's `ollama_call_0` result
+    /// then marks that orphan resolved — replaying an unpaired tool_use the
+    /// provider rejects with a 400. Same failure and same fix as
+    /// `promoted_{i}_{nonce}` in `harness/agent/think.rs`.
     fn build_provider_response(&self, chat: ChatResponse) -> ProviderResponse {
         let text = chat.message.content.trim().to_string();
 
+        let nonce = uuid::Uuid::new_v4().simple().to_string();
         let tool_calls: Vec<NativeToolCall> = chat
             .message
             .tool_calls
@@ -373,7 +382,7 @@ impl OllamaProvider {
             .into_iter()
             .enumerate()
             .map(|(i, tc)| NativeToolCall {
-                id: format!("ollama_call_{i}"),
+                id: format!("ollama_call_{i}_{nonce}"),
                 name: tc.function.name,
                 arguments: tc.function.arguments,
                 thought_signature: None,
@@ -826,12 +835,44 @@ mod tests {
 
         assert!(resp.has_tool_calls());
         assert_eq!(resp.tool_calls[0].name, "search");
-        assert_eq!(resp.tool_calls[0].id, "ollama_call_0");
+        assert!(
+            resp.tool_calls[0].id.starts_with("ollama_call_0_"),
+            "synthetic id must keep its ordered prefix, got {}",
+            resp.tool_calls[0].id
+        );
         assert_eq!(resp.tool_calls[0].arguments["q"], "rust");
         assert_eq!(resp.stop_reason, StopReason::ToolUse);
         let usage = resp.usage.unwrap();
         assert_eq!(usage.input_tokens, 10);
         assert_eq!(usage.output_tokens, 5);
+    }
+
+    /// Regression: the tool-call index restarts at 0 on every response, so a
+    /// bare `ollama_call_0` collides across turns. One user Stop leaves an
+    /// unpaired tool_use whose id the next turn reuses; `build_prompt` then
+    /// resolves the orphan with the new turn's result and replays a tool_use
+    /// with no matching tool_result — a provider 400.
+    #[test]
+    fn synthetic_tool_ids_never_collide_across_responses() {
+        let json = r#"{
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"function": {"name": "search", "arguments": {"q": "rust"}}}
+                ]
+            },
+            "done_reason": "stop"
+        }"#;
+        let provider = OllamaProvider::new("ollama".to_string(), create_test_config()).unwrap();
+
+        let first = provider.build_provider_response(serde_json::from_str(json).unwrap());
+        let second = provider.build_provider_response(serde_json::from_str(json).unwrap());
+
+        assert_ne!(
+            first.tool_calls[0].id, second.tool_calls[0].id,
+            "the same call index in two responses must not reuse an id"
+        );
     }
 
     #[test]

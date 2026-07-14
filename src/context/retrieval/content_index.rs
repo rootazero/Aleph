@@ -10,9 +10,10 @@
 //! log would cost 315 KB to re-read, defeating the offload.
 //!
 //! `ContentIndex` closes that gap: the offloaded text is chunked and indexed
-//! into a per-session `SQLite` FTS5 table. The model retrieves only the
-//! relevant slices via BM25 search (`ctx_search`), so a 315 KB log costs a
-//! few KB to query instead of 315 KB to re-read.
+//! into a `SQLite` FTS5 table, tagged with the owning session (every read and
+//! delete carries that scope predicate — see [`ContentIndex`]). The model
+//! retrieves only the relevant slices via BM25 search (`ctx_search`), so a
+//! 315 KB log costs a few KB to query instead of 315 KB to re-read.
 //!
 //! # Hybrid lexical retrieval (porter + trigram, fused with RRF)
 //!
@@ -94,10 +95,15 @@ pub struct SearchHit {
     pub score: f64,
 }
 
-/// FTS5-backed index over offloaded tool output. One instance per session,
-/// typically rooted at `~/.aleph/data/tool_results/<session_id>/index.db`,
-/// so it shares the [`ToolResultStore`](crate::tools::result_store) lifecycle
-/// (Drop cleanup + TTL sweep).
+/// FTS5-backed index over offloaded tool output.
+///
+/// The database is shared by every concurrent session (one `index.db` under
+/// the process's `tool_results/` root); **rows are tagged with the owning
+/// `session_id` and every read/delete is scoped by it**. The index used to be
+/// documented as "one instance per session" while boot in fact installed a
+/// single `"global"` one, so `ctx_search` could surface another agent's tool
+/// output and a purge in one session wiped every other session's rows. The
+/// scope predicate — not the file layout — is what enforces INV-ISO now.
 pub struct ContentIndex {
     conn: Mutex<Connection>,
 }
@@ -117,6 +123,7 @@ impl ContentIndex {
     }
 
     fn from_conn(conn: Connection) -> Result<Self, IndexError> {
+        drop_pre_scope_tables(&conn)?;
         // Two parallel FTS5 tables over the same chunks, fused at query time
         // (see [`Self::search`]). The default external-content-free layout
         // keeps UNINDEXED columns selectable on both, so a fused hit can be
@@ -126,16 +133,19 @@ impl ContentIndex {
         // * `chunks_tri` — `trigram`: 3-gram substring matching for partial
         //   identifiers and typos.
         //
+        // `session_id` is the isolation key: it is UNINDEXED (never tokenized,
+        // never matched by BM25) but still a real column, so it can carry the
+        // `WHERE session_id = ?` predicate every read and delete applies.
+        //
         // `IF NOT EXISTS` keeps this backward-compatible: an `index.db` written
         // by an older build (only `chunks`) simply gains an empty `chunks_tri`.
-        // Its pre-existing rows stay fully searchable via the porter side, and
-        // RRF degrades to porter-only ordering for them.
         conn.execute_batch(
             "CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
                  title,
                  body,
                  source UNINDEXED,
                  chunk_no UNINDEXED,
+                 session_id UNINDEXED,
                  tokenize = 'porter unicode61'
              );
              CREATE VIRTUAL TABLE IF NOT EXISTS chunks_tri USING fts5(
@@ -143,6 +153,7 @@ impl ContentIndex {
                  body,
                  source UNINDEXED,
                  chunk_no UNINDEXED,
+                 session_id UNINDEXED,
                  tokenize = 'trigram'
              );",
         )?;
@@ -158,13 +169,15 @@ impl ContentIndex {
     }
 
     /// Chunk `text` into ~[`DEFAULT_CHUNK_LINES`]-line sections and index them
-    /// under `source`. `title_hint` seeds synthesized titles for chunks whose
-    /// first line is blank. Returns how many sections were written plus title
-    /// previews for the first few (for the model-facing marker).
+    /// under `source`, owned by `session_id`. `title_hint` seeds synthesized
+    /// titles for chunks whose first line is blank. Returns how many sections
+    /// were written plus title previews for the first few (for the model-facing
+    /// marker).
     ///
     /// Empty / whitespace-only input writes nothing and returns 0 sections.
     pub fn index_text(
         &self,
+        session_id: &str,
         source: &str,
         title_hint: &str,
         text: &str,
@@ -186,14 +199,24 @@ impl ContentIndex {
             // by RRF fusion; a second insert under the same source (e.g. a tool
             // result replayed on retry) would otherwise produce duplicate
             // `chunk_no`s, silently merging physically distinct chunks during
-            // fusion and double-counting sections.
-            tx.execute("DELETE FROM chunks WHERE source = ?1", params![source])?;
-            tx.execute("DELETE FROM chunks_tri WHERE source = ?1", params![source])?;
+            // fusion and double-counting sections. The replace is session-scoped
+            // too — two sessions can legitimately hold the same `source` label
+            // (tool names repeat), and one must not evict the other's chunks.
+            tx.execute(
+                "DELETE FROM chunks WHERE source = ?1 AND session_id = ?2",
+                params![source, session_id],
+            )?;
+            tx.execute(
+                "DELETE FROM chunks_tri WHERE source = ?1 AND session_id = ?2",
+                params![source, session_id],
+            )?;
             let mut stmt = tx.prepare(
-                "INSERT INTO chunks (title, body, source, chunk_no) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO chunks (title, body, source, chunk_no, session_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
             )?;
             let mut stmt_tri = tx.prepare(
-                "INSERT INTO chunks_tri (title, body, source, chunk_no) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO chunks_tri (title, body, source, chunk_no, session_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
             )?;
             for (i, chunk) in chunks.iter().enumerate() {
                 let title = chunk_title(chunk, title_hint, i);
@@ -202,8 +225,8 @@ impl ContentIndex {
                 }
                 // Same chunk into both indexes; the (source, chunk_no) pair is
                 // the logical identity used to fuse the two result lists.
-                stmt.execute(params![title, chunk, source, i as i64])?;
-                stmt_tri.execute(params![title, chunk, source, i as i64])?;
+                stmt.execute(params![title, chunk, source, i as i64, session_id])?;
+                stmt_tri.execute(params![title, chunk, source, i as i64, session_id])?;
             }
         }
         tx.commit()?;
@@ -214,10 +237,14 @@ impl ContentIndex {
         })
     }
 
-    /// Hybrid lexical search over all indexed chunks. Runs the query against
-    /// both the porter-stemmed and trigram indexes, fuses the two ranked lists
-    /// with Reciprocal Rank Fusion, applies a proximity rerank for multi-term
-    /// queries, and returns up to `limit` hits, most relevant first.
+    /// Hybrid lexical search over the chunks owned by `session_id`. Runs the
+    /// query against both the porter-stemmed and trigram indexes, fuses the two
+    /// ranked lists with Reciprocal Rank Fusion, applies a proximity rerank for
+    /// multi-term queries, and returns up to `limit` hits, most relevant first.
+    ///
+    /// The `session_id` predicate is the isolation boundary: the database is
+    /// shared across concurrent sessions, so a search that omitted it would let
+    /// one agent read another agent's offloaded tool output.
     ///
     /// RRF ranks purely on list position, so it needs no score normalization
     /// across the two BM25 spaces: a chunk that ranks well on *either*
@@ -237,7 +264,12 @@ impl ContentIndex {
     /// near-ties without letting proximity override a decisive RRF lead.
     /// Single-term queries skip the pass entirely, leaving RRF order byte-for-
     /// byte unchanged.
-    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, IndexError> {
+    pub fn search(
+        &self,
+        session_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, IndexError> {
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -248,12 +280,13 @@ impl ContentIndex {
         // with; the floor keeps a small `limit` (e.g. 3) from starving it.
         let fetch = limit.saturating_mul(OVERFETCH_FACTOR).max(MIN_FETCH);
         let conn = self.lock();
-        let porter = query_index(&conn, "chunks", &match_expr, fetch)?;
+        let porter = query_index(&conn, "chunks", session_id, &match_expr, fetch)?;
         // The trigram side is best-effort: a query whose every term is shorter
         // than 3 chars matches nothing there, and a trigram quirk must never
         // fail a search the porter index already answered. Degrade to
         // porter-only on any trigram error.
-        let trigram = query_index(&conn, "chunks_tri", &match_expr, fetch).unwrap_or_default();
+        let trigram =
+            query_index(&conn, "chunks_tri", session_id, &match_expr, fetch).unwrap_or_default();
         drop(conn);
 
         let mut fused = rrf_fuse(porter, trigram);
@@ -266,31 +299,85 @@ impl ContentIndex {
         Ok(finalize(fused, limit))
     }
 
-    /// Total number of indexed chunks across all sources. Cheap; used by the
-    /// `ctx_search` tool to tell the model whether anything is indexed yet.
-    pub fn len(&self) -> Result<usize, IndexError> {
+    /// Number of chunks indexed by `session_id`, across all its sources. Cheap;
+    /// used by the `ctx_search` tool to tell the model whether anything of *its
+    /// own* is indexed yet — a global count would leak the existence of other
+    /// sessions' output.
+    pub fn len(&self, session_id: &str) -> Result<usize, IndexError> {
         let conn = self.lock();
-        let n: i64 = conn.query_row("SELECT count(*) FROM chunks", [], |r| r.get(0))?;
+        let n: i64 = conn.query_row(
+            "SELECT count(*) FROM chunks WHERE session_id = ?1",
+            params![session_id],
+            |r| r.get(0),
+        )?;
         Ok(n as usize)
     }
 
-    /// True iff no chunks are indexed.
-    pub fn is_empty(&self) -> Result<bool, IndexError> {
-        Ok(self.len()? == 0)
+    /// True iff `session_id` has no chunks indexed.
+    pub fn is_empty(&self, session_id: &str) -> Result<bool, IndexError> {
+        Ok(self.len(session_id)? == 0)
     }
 
-    /// Drop every indexed chunk from both FTS tables, leaving the schema (and
-    /// the live `SQLite` connection) intact so the index stays usable afterwards.
+    /// Drop every chunk owned by `session_id` from both FTS tables, leaving the
+    /// schema (and the live `SQLite` connection) intact so the index stays
+    /// usable afterwards.
     ///
     /// Used by the sandbox reference-bypass defense: when a session trips the
-    /// denial circuit-breaker, the offloaded-output index is wiped so the agent
-    /// cannot mine previously-cached results via `ctx_search`. Mirrors the
-    /// per-source `DELETE FROM chunks` already used by [`Self::index_text`].
-    pub fn clear(&self) -> Result<(), IndexError> {
+    /// denial circuit-breaker, *that session's* offloaded-output index is wiped
+    /// so the agent cannot mine previously-cached results via `ctx_search`. The
+    /// scope predicate is load-bearing — an unscoped `DELETE` here wiped every
+    /// concurrent session's index, leaving their `[Full output persisted: …]`
+    /// markers pointing at rows (and blobs) that no longer exist.
+    pub fn clear(&self, session_id: &str) -> Result<(), IndexError> {
         let conn = self.lock();
-        conn.execute_batch("DELETE FROM chunks; DELETE FROM chunks_tri;")?;
+        conn.execute(
+            "DELETE FROM chunks WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        conn.execute(
+            "DELETE FROM chunks_tri WHERE session_id = ?1",
+            params![session_id],
+        )?;
         Ok(())
     }
+}
+
+/// Drop `chunks` / `chunks_tri` written by a build that predates the
+/// `session_id` column.
+///
+/// FTS5 virtual tables have no `ALTER TABLE … ADD COLUMN`, so a pre-scope
+/// `index.db` cannot be upgraded in place — and every statement below would
+/// fail against it, which on the daemon's boot path means the whole retrieval
+/// layer errors out on upgrade. We therefore **recreate**: the table is dropped
+/// and rebuilt empty. Only BM25 recall over a previous process's results is
+/// lost; the offloaded `.txt` blobs those rows pointed at are untouched and
+/// still reachable through their `[Full output persisted: …]` markers.
+fn drop_pre_scope_tables(conn: &Connection) -> Result<(), IndexError> {
+    for table in ["chunks", "chunks_tri"] {
+        let exists: i64 = conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![table],
+            |r| r.get(0),
+        )?;
+        if exists == 0 {
+            continue;
+        }
+        // `prepare` is the cheapest column probe that works on a virtual table
+        // (`PRAGMA table_info` would too, but needs row parsing). It fails iff
+        // the column is absent.
+        if conn
+            .prepare(&format!("SELECT session_id FROM {table} LIMIT 0"))
+            .is_err()
+        {
+            tracing::warn!(
+                table,
+                "content index predates session scoping; recreating it empty \
+                 (offloaded blobs remain readable via their markers)"
+            );
+            conn.execute_batch(&format!("DROP TABLE {table};"))?;
+        }
+    }
+    Ok(())
 }
 
 /// Number of section titles surfaced in the offload marker preview.
@@ -347,13 +434,15 @@ struct RankedRow {
     body: String,
 }
 
-/// Run `match_expr` against one FTS5 `table` with title-weighted BM25,
-/// returning up to `fetch` rows in rank order (best first). `table` is an
-/// internal constant (`"chunks"` / `"chunks_tri"`), never user input, so
-/// interpolating it into the SQL is injection-safe.
+/// Run `match_expr` against one FTS5 `table` with title-weighted BM25, over the
+/// rows owned by `session_id` only, returning up to `fetch` rows in rank order
+/// (best first). `table` is an internal constant (`"chunks"` / `"chunks_tri"`),
+/// never user input, so interpolating it into the SQL is injection-safe;
+/// `session_id` is bound, not interpolated.
 fn query_index(
     conn: &Connection,
     table: &str,
+    session_id: &str,
     match_expr: &str,
     fetch: usize,
 ) -> Result<Vec<RankedRow>, IndexError> {
@@ -362,15 +451,15 @@ fn query_index(
                 snippet({table}, 1, '', '', ' … ', 14) AS snip,
                 body
          FROM {table}
-         WHERE {table} MATCH ?1
+         WHERE {table} MATCH ?1 AND session_id = ?2
          ORDER BY bm25({table}, {TITLE_WEIGHT})
-         LIMIT ?2"
+         LIMIT ?3"
     );
     let mut stmt = conn.prepare(&sql)?;
     // Clamp to i64 so a very large `fetch` cannot truncate to a negative
     // value, which SQLite would interpret as "no limit" (unbounded scan).
     let fetch = i64::try_from(fetch).unwrap_or(i64::MAX);
-    let rows = stmt.query_map(params![match_expr, fetch], |row| {
+    let rows = stmt.query_map(params![match_expr, session_id, fetch], |row| {
         Ok(RankedRow {
             source: row.get(0)?,
             chunk_no: row.get(1)?,
@@ -702,6 +791,9 @@ fn query_terms(query: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// Session scope every single-session test writes and reads under.
+    const SESS: &str = "agent:main:s1";
+
     fn sample_log() -> String {
         let mut s = String::new();
         for i in 0..100 {
@@ -719,14 +811,16 @@ mod tests {
     #[test]
     fn index_and_search_finds_relevant_chunk() {
         let idx = ContentIndex::open_in_memory().unwrap();
-        let out = idx.index_text("call_1", "bash", &sample_log()).unwrap();
+        let out = idx
+            .index_text(SESS, "call_1", "bash", &sample_log())
+            .unwrap();
         assert!(
             out.sections >= 5,
             "expected several chunks, got {}",
             out.sections
         );
 
-        let hits = idx.search("payment refund failed", 5).unwrap();
+        let hits = idx.search(SESS, "payment refund failed", 5).unwrap();
         assert!(!hits.is_empty(), "should find the failing-test chunk");
         assert!(
             hits[0].snippet.to_lowercase().contains("payment")
@@ -740,9 +834,10 @@ mod tests {
     #[test]
     fn search_ranks_best_match_first() {
         let idx = ContentIndex::open_in_memory().unwrap();
-        idx.index_text("call_1", "bash", &sample_log()).unwrap();
+        idx.index_text(SESS, "call_1", "bash", &sample_log())
+            .unwrap();
         // "database timeout" should surface the line-77 chunk above noise.
-        let hits = idx.search("database connection timeout", 3).unwrap();
+        let hits = idx.search(SESS, "database connection timeout", 3).unwrap();
         assert!(!hits.is_empty());
         let top = &hits[0];
         assert!(
@@ -755,27 +850,29 @@ mod tests {
     #[test]
     fn empty_text_indexes_nothing() {
         let idx = ContentIndex::open_in_memory().unwrap();
-        let out = idx.index_text("call_1", "bash", "   \n  \n").unwrap();
+        let out = idx.index_text(SESS, "call_1", "bash", "   \n  \n").unwrap();
         assert_eq!(out.sections, 0);
         assert!(out.previews.is_empty());
-        assert!(idx.is_empty().unwrap());
+        assert!(idx.is_empty(SESS).unwrap());
     }
 
     #[test]
     fn search_with_no_indexable_terms_is_empty_not_error() {
         let idx = ContentIndex::open_in_memory().unwrap();
-        idx.index_text("call_1", "bash", &sample_log()).unwrap();
-        let hits = idx.search("()[]{}!!! ---", 5).unwrap();
+        idx.index_text(SESS, "call_1", "bash", &sample_log())
+            .unwrap();
+        let hits = idx.search(SESS, "()[]{}!!! ---", 5).unwrap();
         assert!(hits.is_empty(), "punctuation-only query must not error");
     }
 
     #[test]
     fn search_tolerates_punctuation_in_query() {
         let idx = ContentIndex::open_in_memory().unwrap();
-        idx.index_text("call_1", "bash", &sample_log()).unwrap();
+        idx.index_text(SESS, "call_1", "bash", &sample_log())
+            .unwrap();
         // Raw error-style query with FTS operators — must not raise.
         let hits = idx
-            .search("ERROR: database connection timeout (30s)", 5)
+            .search(SESS, "ERROR: database connection timeout (30s)", 5)
             .unwrap();
         assert!(!hits.is_empty());
     }
@@ -783,15 +880,20 @@ mod tests {
     #[test]
     fn no_match_returns_empty() {
         let idx = ContentIndex::open_in_memory().unwrap();
-        idx.index_text("call_1", "bash", &sample_log()).unwrap();
-        let hits = idx.search("quantum chromodynamics supernova", 5).unwrap();
+        idx.index_text(SESS, "call_1", "bash", &sample_log())
+            .unwrap();
+        let hits = idx
+            .search(SESS, "quantum chromodynamics supernova", 5)
+            .unwrap();
         assert!(hits.is_empty());
     }
 
     #[test]
     fn previews_cap_at_preview_count() {
         let idx = ContentIndex::open_in_memory().unwrap();
-        let out = idx.index_text("call_1", "bash", &sample_log()).unwrap();
+        let out = idx
+            .index_text(SESS, "call_1", "bash", &sample_log())
+            .unwrap();
         assert!(out.previews.len() <= PREVIEW_COUNT);
         assert!(!out.previews.is_empty());
     }
@@ -825,12 +927,13 @@ mod tests {
         let db = dir.join("index.db");
         {
             let idx = ContentIndex::open(&db).unwrap();
-            idx.index_text("call_1", "bash", &sample_log()).unwrap();
+            idx.index_text(SESS, "call_1", "bash", &sample_log())
+                .unwrap();
         }
         // Reopen and confirm the data survived.
         let idx2 = ContentIndex::open(&db).unwrap();
-        assert!(!idx2.is_empty().unwrap());
-        let hits = idx2.search("payment refund", 3).unwrap();
+        assert!(!idx2.is_empty(SESS).unwrap());
+        let hits = idx2.search(SESS, "payment refund", 3).unwrap();
         assert!(!hits.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -843,13 +946,14 @@ mod tests {
         // surfaces the hit. This is the headline gain of the hybrid upgrade.
         let idx = ContentIndex::open_in_memory().unwrap();
         idx.index_text(
+            SESS,
             "call_1",
             "code",
             "fn getUserPaymentRefund() {\n    todo!()\n}\n",
         )
         .unwrap();
 
-        let hits = idx.search("userpayment", 5).unwrap();
+        let hits = idx.search(SESS, "userpayment", 5).unwrap();
         assert!(
             !hits.is_empty(),
             "trigram index should match the substring inside the identifier"
@@ -864,8 +968,9 @@ mod tests {
     #[test]
     fn search_limit_zero_returns_empty() {
         let idx = ContentIndex::open_in_memory().unwrap();
-        idx.index_text("call_1", "bash", &sample_log()).unwrap();
-        assert!(idx.search("payment", 0).unwrap().is_empty());
+        idx.index_text(SESS, "call_1", "bash", &sample_log())
+            .unwrap();
+        assert!(idx.search(SESS, "payment", 0).unwrap().is_empty());
     }
 
     fn row(source: &str, chunk_no: i64) -> RankedRow {
@@ -1004,9 +1109,10 @@ mod tests {
         // skipped and RRF order stands. Assert the single-term path returns a
         // stable, non-empty result across repeated calls.
         let idx = ContentIndex::open_in_memory().unwrap();
-        idx.index_text("call_1", "bash", &sample_log()).unwrap();
-        let a = idx.search("payment", 3).unwrap();
-        let b = idx.search("payment", 3).unwrap();
+        idx.index_text(SESS, "call_1", "bash", &sample_log())
+            .unwrap();
+        let a = idx.search(SESS, "payment", 3).unwrap();
+        let b = idx.search(SESS, "payment", 3).unwrap();
         assert_eq!(a.len(), b.len());
         assert!(!a.is_empty());
         for (x, y) in a.iter().zip(b.iter()) {
@@ -1034,8 +1140,8 @@ mod tests {
         for _ in 0..20 {
             text.push_str("the database connection timeout occurred here\n");
         }
-        idx.index_text("call_1", "bash", &text).unwrap();
-        let hits = idx.search("database connection timeout", 5).unwrap();
+        idx.index_text(SESS, "call_1", "bash", &text).unwrap();
+        let hits = idx.search(SESS, "database connection timeout", 5).unwrap();
         assert!(!hits.is_empty());
         assert!(
             hits[0].snippet.to_lowercase().contains("timeout")
@@ -1062,5 +1168,99 @@ mod tests {
             "\"ERROR\" OR \"db\" OR \"Timeout\""
         );
         assert!(sanitize_fts_query("()[]{}").is_none());
+    }
+
+    // ---- session scoping (INV-ISO) ----
+
+    #[test]
+    fn search_never_crosses_session_boundary() {
+        // Both sessions share one index.db (the process installs a single
+        // store). Session A must not be able to read B's offloaded output.
+        // Sentinels must be single alphanumeric tokens: `split_terms` splits on
+        // every non-alphanumeric char and OR-joins, so an underscored sentinel
+        // like `secret_from_b` would search for "secret" OR "from" OR "b" and
+        // match the *other* session's text on the shared words alone.
+        let idx = ContentIndex::open_in_memory().unwrap();
+        idx.index_text("sess-a", "call_1", "bash", "alpha secretalpha alpha\n")
+            .unwrap();
+        idx.index_text("sess-b", "call_1", "bash", "beta secretbeta beta\n")
+            .unwrap();
+
+        let a = idx.search("sess-a", "secretbeta", 5).unwrap();
+        assert!(a.is_empty(), "session A must not see B's output: {a:?}");
+        let b = idx.search("sess-b", "secretalpha", 5).unwrap();
+        assert!(b.is_empty(), "session B must not see A's output: {b:?}");
+        // Each still finds its own.
+        assert!(!idx.search("sess-a", "secretalpha", 5).unwrap().is_empty());
+        assert_eq!(idx.len("sess-a").unwrap(), 1);
+        assert_eq!(idx.len("sess-b").unwrap(), 1);
+    }
+
+    #[test]
+    fn clear_only_wipes_the_named_session() {
+        // The denial circuit-breaker calls this. Before scoping it was an
+        // unscoped `DELETE`, so one session's three refusals wiped every
+        // concurrent session's index.
+        let idx = ContentIndex::open_in_memory().unwrap();
+        idx.index_text("sess-a", "call_1", "bash", "alpha payload here\n")
+            .unwrap();
+        idx.index_text("sess-b", "call_1", "bash", "beta payload here\n")
+            .unwrap();
+
+        idx.clear("sess-a").unwrap();
+
+        assert!(idx.is_empty("sess-a").unwrap(), "A must be wiped");
+        assert_eq!(idx.len("sess-b").unwrap(), 1, "B must survive A's purge");
+        assert!(!idx.search("sess-b", "beta payload", 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn same_source_label_in_two_sessions_does_not_evict() {
+        // `index_text` replaces prior chunks for a `source`; tool names /
+        // call ids repeat across sessions, so the replace must be scoped too.
+        let idx = ContentIndex::open_in_memory().unwrap();
+        idx.index_text("sess-a", "bash", "bash", "alpha unique_a\n")
+            .unwrap();
+        idx.index_text("sess-b", "bash", "bash", "beta unique_b\n")
+            .unwrap();
+        assert_eq!(idx.len("sess-a").unwrap(), 1, "B's write must not evict A");
+        assert!(!idx.search("sess-a", "unique_a", 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn opening_a_pre_scope_index_recreates_it_instead_of_erroring() {
+        // An `index.db` from a build before the `session_id` column exists on
+        // disk after upgrade. FTS5 cannot ALTER a virtual table, so `open` must
+        // recreate it — not propagate a "no such column" error out of boot.
+        let dir = std::env::temp_dir().join("aleph_content_index_migration_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("index.db");
+        {
+            // Hand-build the legacy schema (no `session_id`) and seed a row.
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE VIRTUAL TABLE chunks USING fts5(
+                     title, body, source UNINDEXED, chunk_no UNINDEXED,
+                     tokenize = 'porter unicode61'
+                 );
+                 CREATE VIRTUAL TABLE chunks_tri USING fts5(
+                     title, body, source UNINDEXED, chunk_no UNINDEXED,
+                     tokenize = 'trigram'
+                 );
+                 INSERT INTO chunks (title, body, source, chunk_no)
+                     VALUES ('t', 'legacy body', 'call_1', 0);",
+            )
+            .unwrap();
+        }
+
+        let idx = ContentIndex::open(&db).expect("pre-scope index must not fail open");
+        // Recreated empty — the legacy rows are gone, but the store is usable
+        // and the offloaded blobs they pointed at are untouched on disk.
+        assert!(idx.is_empty(SESS).unwrap());
+        idx.index_text(SESS, "call_2", "bash", "fresh body here\n")
+            .unwrap();
+        assert!(!idx.search(SESS, "fresh body", 5).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

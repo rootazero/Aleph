@@ -354,9 +354,17 @@ impl DeltaCollector {
             .get("arguments")
             .cloned()
             .unwrap_or(Value::Object(serde_json::Map::new()));
-        // Generate a deterministic synthetic id from the tool name so the
-        // harness can correlate tool results on subsequent turns.
-        let id = format!("json_{name}");
+        // Synthesize an id with a per-response nonce. It must NOT be derived
+        // from the tool name alone: correlation goes through the persisted
+        // call_id (nothing anywhere re-derives an id from a name), while a
+        // name-keyed id repeats every time the model calls the same tool. One
+        // user Stop leaves an unpaired tool_use, and the next turn's identical
+        // `json_{name}` result marks that orphan resolved in `build_prompt` —
+        // replaying a tool_use with no tool_result, which the provider rejects
+        // with a 400. Same fix as `promoted_{i}_{nonce}` in
+        // `harness/agent/think.rs`.
+        let nonce = uuid::Uuid::new_v4().simple().to_string();
+        let id = format!("json_{name}_{nonce}");
         Some(NativeToolCall {
             id,
             name,
@@ -859,6 +867,36 @@ mod tests {
         assert!(
             resp.truncated_tool_call.is_none(),
             "salvaged args must not flag truncation"
+        );
+    }
+
+    /// Regression: the JSON-action id used to be keyed on the tool name alone,
+    /// so calling the same tool on two turns minted the same id. An interrupted
+    /// turn leaves an unpaired tool_use, and the next turn's identically-named
+    /// result resolves that orphan in `build_prompt` — replaying a tool_use
+    /// with no tool_result, which the provider rejects with a 400.
+    #[test]
+    fn test_json_tool_call_ids_never_collide_across_responses() {
+        let text = r#"{"action":{"type":"tool","tool_name":"search","arguments":{"q":"rust"}}}"#;
+
+        let mint = || {
+            let mut c = DeltaCollector::new();
+            c.push(ProviderDelta::TextDelta(text.to_string()));
+            c.push(ProviderDelta::Done(StopReason::EndTurn));
+            let resp = c.finish();
+            assert_eq!(resp.tool_calls.len(), 1);
+            resp.tool_calls[0].id.clone()
+        };
+
+        let first = mint();
+        let second = mint();
+        assert!(
+            first.starts_with("json_search_"),
+            "synthetic id must keep its name prefix, got {first}"
+        );
+        assert_ne!(
+            first, second,
+            "the same tool called on two turns must not reuse an id"
         );
     }
 

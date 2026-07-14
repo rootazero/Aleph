@@ -110,6 +110,11 @@ pub struct SubagentTool {
     /// so spawned subagents capture their own routing experience. `None` (the
     /// `new()` default) keeps subagents capture-free.
     pub(super) routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
+    /// B15 — the parent runner's boot-time `[execution] max_iterations`,
+    /// inherited by children that declare no cap of their own. `None` (the
+    /// `new()` default) still yields a capped child — the spawner falls back to
+    /// `FALLBACK_MAX_ITERATIONS` — it just isn't the operator's configured value.
+    pub(super) default_max_iterations: Option<usize>,
 }
 
 impl SubagentTool {
@@ -155,7 +160,16 @@ impl SubagentTool {
             guardrails: None,
             strategy: None,
             routing_store: None,
+            default_max_iterations: None,
         }
+    }
+
+    /// B15 — wire the parent runner's boot-time iteration cap so a spawned
+    /// child with no declared `max_iterations` inherits it.
+    #[must_use]
+    pub const fn with_default_max_iterations(mut self, max_iterations: usize) -> Self {
+        self.default_max_iterations = Some(max_iterations);
+        self
     }
 
     /// Stage 5a (#9) — wire the guardrail registry inherited by subagents.

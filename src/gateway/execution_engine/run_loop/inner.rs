@@ -848,6 +848,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 if let Some(tt) = orchestrator.harness.turn_timeout() {
                     t = t.with_turn_timeout(tt);
                 }
+                // B15 — inherit the main harness's boot-time `[execution]
+                // max_iterations` so a subagent whose role declares no cap is
+                // capped too. The main path is never uncapped; the spawn path
+                // passed `AgentDef.max_iterations` straight through, and `None`
+                // there means *unbounded* — the built-in "default" role (the
+                // landing spot when the model omits `agent_type`) declares no
+                // cap, so it ran until the spawn timeout killed it and discarded
+                // the work. `None` here (mocks / simple engine) still leaves the
+                // child capped at the spawner's fallback.
+                if let Some(mi) = orchestrator.harness.default_max_iterations() {
+                    t = t.with_default_max_iterations(mi);
+                }
                 // P3 Stage I — hand subagents the shared plugin-registry handle
                 // so a role declaring `mcp_servers:` frontmatter can provision
                 // its per-agent MCP scope (reference validation + referenced-tool
