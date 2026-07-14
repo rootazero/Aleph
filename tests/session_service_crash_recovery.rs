@@ -71,6 +71,7 @@ async fn crash_then_wake_then_continue() {
                     thinking: None,
                     thinking_signature: None,
                 },
+                usage: None,
                 at: now_ms(),
             },
         )

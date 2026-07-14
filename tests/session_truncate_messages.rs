@@ -30,8 +30,6 @@ fn record(role: &str, content: &str, input_tokens: i64, output_tokens: i64) -> M
         metadata: None,
         input_tokens,
         output_tokens,
-        model: None,
-        model_provider: None,
         tool_call_id: None,
         tool_name: None,
     }

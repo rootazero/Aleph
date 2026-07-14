@@ -139,6 +139,7 @@ impl HarnessRunner for StubHarnessRunner {
         _workspace_override: Option<std::path::PathBuf>,
         _max_iterations_override: Option<u32>,
         _transient_context: Option<String>,
+        _think_level: Option<alephcore::agents::thinking::ThinkLevel>,
     ) -> Result<FlowOutcome, FlowError> {
         let ctx = StubContext {
             session_key,
@@ -248,5 +249,6 @@ pub fn basic_request() -> FlowRequest {
         workspace_override: None,
         max_iterations_override: None,
         transient_context: None,
+        think_level: None,
     }
 }
