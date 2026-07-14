@@ -8,12 +8,11 @@ use std::pin::Pin;
 use serde_json::Value;
 use tracing::{debug, error, info};
 
-use crate::builtin_tools::meta_tools::{GetToolSchemaTool, ListToolsTool, SearchToolsTool};
 use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
 use crate::error::{AlephError, Result};
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::context::GatewayContext;
-use crate::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
+use crate::tool_metadata::{ToolSource, UnifiedTool};
 use crate::tools::AlephTool;
 use tokio::sync::RwLock;
 
@@ -131,8 +130,6 @@ pub struct BuiltinToolRegistry {
     pub(crate) flag_user_correction_tool: Option<crate::builtin_tools::FlagUserCorrectionTool>,
     /// Shared workspace handle for memory tools — written by `ExecutionEngine` after workspace resolution
     pub(crate) memory_workspace_handle: Option<Arc<RwLock<String>>>,
-    /// Tool catalog for meta tools (smart tool discovery)
-    pub(crate) tool_catalog: Option<Arc<RwLock<ToolCatalog>>>,
     /// Gateway context for sessions tools (session.list, session.send).
     /// Uses `OnceCell` for deferred injection: `BuiltinToolRegistry` is created before
     /// `ExecutionAdapter` exists, but `GatewayContext` needs `ExecutionAdapter`.

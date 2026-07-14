@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use tracing::info;
 
-use crate::builtin_tools::meta_tools::{GetToolSchemaTool, ListToolsTool, SearchToolsTool};
 use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
 use crate::builtin_tools::{
     ImageGenerateTool, MemoryBrowseTool, MemoryExploreTool, MemorySearchTool, VaultStoreTool,
@@ -237,31 +236,6 @@ impl BuiltinToolRegistry {
                     info!("Registered speech_generate tool in BuiltinToolRegistry");
                 }
             }
-        }
-
-        // Meta tools for smart tool discovery
-        if config.tool_catalog.is_some() {
-            reg(
-                tools,
-                "list_tools",
-                ListToolsTool::DESCRIPTION,
-                schema::<crate::builtin_tools::meta_tools::ListToolsArgs>("list_tools"),
-            );
-            reg(
-                tools,
-                "get_tool_schema",
-                GetToolSchemaTool::DESCRIPTION,
-                schema::<crate::builtin_tools::meta_tools::GetToolSchemaArgs>("get_tool_schema"),
-            );
-            reg(
-                tools,
-                "search_tools",
-                SearchToolsTool::DESCRIPTION,
-                schema::<crate::builtin_tools::meta_tools::SearchToolsArgs>("search_tools"),
-            );
-            info!(
-                "Registered meta tools (list_tools, search_tools, get_tool_schema) in BuiltinToolRegistry"
-            );
         }
 
         // Cron management tool (requires SharedCronService)

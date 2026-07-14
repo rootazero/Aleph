@@ -196,13 +196,6 @@ pub use crate::tool_metadata::{
     ToolSourceType, UnifiedTool, UnifiedToolInfo,
 };
 
-// Tool Index (Tool-as-Resource)
-pub use crate::tool_metadata::tool_index::{
-    HydratedTool, HydrationLevel, HydrationPipeline, HydrationPipelineConfig, HydrationResult,
-    InferredPurpose, SemanticPurposeInferrer, ToolIndexCoordinator, ToolMeta, ToolRetrieval,
-    ToolRetrievalConfig,
-};
-
 // =============================================================================
 // Extension System Exports
 // =============================================================================

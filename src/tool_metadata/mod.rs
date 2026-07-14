@@ -17,9 +17,6 @@ mod types;
 // === Risk Evaluation ===
 pub mod risk;
 
-// === Tool Index: Semantic tool retrieval ===
-pub mod tool_index;
-
 // === Re-exports: Tool Management ===
 pub use registry::ResolvedCommand;
 pub use registry::ToolCatalog;
@@ -32,13 +29,6 @@ pub use types::{
 
 // === Re-exports: Risk Evaluation ===
 pub use risk::{RiskEvaluator, RiskLevel};
-
-// === Re-exports: Tool Index (Semantic Retrieval) ===
-pub use tool_index::{
-    HydratedTool, HydrationLevel, HydrationPipeline, HydrationPipelineConfig, HydrationResult,
-    InferredPurpose, SemanticPurposeInferrer, ToolIndexCoordinator, ToolMeta, ToolRetrieval,
-    ToolRetrievalConfig,
-};
 
 #[cfg(all(test, feature = "loom"))]
 mod loom_concurrency;

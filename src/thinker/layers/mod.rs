@@ -16,7 +16,6 @@ mod runtime_capabilities;
 mod skill_instructions;
 
 // --- Behavior layers ---
-mod skill_mode;
 mod thinking_guidance;
 
 // --- Identity layer ---
@@ -103,7 +102,6 @@ pub use mcp_instructions::McpInstructionsLayer;
 pub use runtime_capabilities::RuntimeCapabilitiesLayer;
 pub use skill_instructions::SkillInstructionsLayer;
 
-pub use skill_mode::SkillModeLayer;
 pub use thinking_guidance::ThinkingGuidanceLayer;
 
 pub use agent_role::AgentRoleLayer;
@@ -111,7 +109,6 @@ pub use profile::ProfileLayer;
 pub use soul::SoulLayer;
 
 pub use tool_usage_grammar::ToolUsageGrammarLayer;
-pub use tools::HydratedToolsLayer;
 pub use tools::ToolsLayer;
 
 pub use chain_context::ChainContextLayer;

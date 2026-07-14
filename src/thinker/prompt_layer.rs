@@ -6,7 +6,6 @@ use super::inbound_context::InboundContext;
 use super::prompt_builder::PromptConfig;
 use super::prompt_mode::PromptMode;
 use crate::agents::AgentDef;
-use crate::tool_metadata::tool_index::HydrationResult;
 use crate::tools::info::ToolInfo;
 
 /// MCP server instruction metadata for prompt injection.
@@ -75,7 +74,6 @@ pub struct ExtraPromptFile {
 pub struct LayerInput<'a> {
     pub config: &'a PromptConfig,
     pub tools: Option<&'a [ToolInfo]>,
-    pub hydration: Option<&'a HydrationResult>,
     pub context: Option<&'a ResolvedContext>,
     /// Active workspace profile (`system_prompt` overlay, tool whitelist, etc.)
     pub profile: Option<&'a crate::config::ProfileConfig>,
@@ -152,32 +150,6 @@ impl<'a> LayerInput<'a> {
         Self {
             config,
             tools: Some(tools),
-            hydration: None,
-            context: None,
-            profile: None,
-            mode: PromptMode::Full,
-            inbound: None,
-            identity_files: None,
-            has_session_summaries: false,
-            agent_def: None,
-            mcp_instructions: None,
-            session_snapshot: None,
-            curated_memory_envelope: None,
-            chain_context: None,
-            behavior_name: None,
-            model_behavior_delta: None,
-            iteration_cap: None,
-            extra_files: None,
-        }
-    }
-
-    /// Input for the `Hydration` path — config + hydration result.
-    #[must_use]
-    pub const fn hydration(config: &'a PromptConfig, hydration: &'a HydrationResult) -> Self {
-        Self {
-            config,
-            tools: None,
-            hydration: Some(hydration),
             context: None,
             profile: None,
             mode: PromptMode::Full,
@@ -202,7 +174,6 @@ impl<'a> LayerInput<'a> {
         Self {
             config,
             tools: None,
-            hydration: None,
             context: Some(ctx),
             profile: None,
             mode: PromptMode::Full,

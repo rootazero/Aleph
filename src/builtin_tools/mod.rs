@@ -12,11 +12,6 @@
 //! - [`ImageGenerateTool`] - Image generation from text prompts
 //! - [`SpeechGenerateTool`] - Text-to-speech generation
 //!
-//! # Meta Tools (Smart Tool Discovery)
-//!
-//! - [`ListToolsTool`] - List available tools by category
-//! - [`GetToolSchemaTool`] - Get full JSON Schema for a specific tool
-//!
 //! # Tool Progress Callbacks
 //!
 //! This module provides a global callback mechanism for monitoring tool execution.
@@ -197,10 +192,6 @@ pub use memory_explore::{MemoryExploreArgs, MemoryExploreOutput, MemoryExploreTo
 pub use memory_reflect::{MemoryReflectArgs, MemoryReflectResult, MemoryReflectTool};
 pub use memory_search::{MemorySearchArgs, MemorySearchOutput, MemorySearchTool, PathCluster};
 pub use memory_timeline::{MemoryTimelineArgs, MemoryTimelineOutput, MemoryTimelineTool};
-pub use meta_tools::{
-    GetToolSchemaArgs, GetToolSchemaOutput, GetToolSchemaTool, ListToolsArgs, ListToolsOutput,
-    ListToolsTool, SearchToolHit, SearchToolsArgs, SearchToolsOutput, SearchToolsTool,
-};
 pub use moa_manage::{MoaManageArgs, MoaManageOutput, MoaManageTool};
 pub use node_file::{NodeFileArgs, NodeFileTool};
 pub use node_invoke::{NodeInvokeArgs, NodeInvokeTool};

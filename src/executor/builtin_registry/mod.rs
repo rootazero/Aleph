@@ -30,9 +30,7 @@ use super::ToolRegistry;
 mod tests {
     use crate::sync_primitives::Arc;
 
-    use tokio::sync::RwLock;
-
-    use crate::tool_metadata::{ToolCatalog, ToolSource};
+    use crate::tool_metadata::ToolSource;
 
     use super::*;
 
@@ -73,31 +71,6 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("Unknown tool"));
-    }
-
-    #[tokio::test]
-    async fn test_meta_tools_not_registered_without_tool_catalog() {
-        // Without tool catalog, meta tools should not be registered
-        let registry = BuiltinToolRegistry::new().await.unwrap();
-
-        assert!(registry.get_tool("list_tools").is_none());
-        assert!(registry.get_tool("search_tools").is_none());
-        assert!(registry.get_tool("get_tool_schema").is_none());
-    }
-
-    #[tokio::test]
-    async fn test_meta_tools_registered_with_tool_catalog() {
-        // With tool catalog, meta tools should be registered
-        let tool_catalog = Arc::new(RwLock::new(ToolCatalog::new()));
-        let config = BuiltinToolConfig {
-            tool_catalog: Some(tool_catalog),
-            ..Default::default()
-        };
-        let registry = BuiltinToolRegistry::with_config(config).await.unwrap();
-
-        assert!(registry.get_tool("list_tools").is_some());
-        assert!(registry.get_tool("search_tools").is_some());
-        assert!(registry.get_tool("get_tool_schema").is_some());
     }
 
     #[tokio::test]

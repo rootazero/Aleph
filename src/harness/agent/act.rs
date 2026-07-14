@@ -1236,13 +1236,9 @@ impl AgentHarness {
             let defs = self.deps.tools.metadata_schema();
             let offered: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
             let candidates = crate::tools::name_repair::suggest_candidates(name, &offered, 3);
-            // Do NOT advertise a discovery tool here. This used to say "call
-            // `list_tools`" — a tool production never registers (it is gated on
-            // `BuiltinToolConfig.tool_catalog`, which is never set), so the model
-            // obediently called it, got another NotFound carrying the same
-            // advice, and burned a full round-trip per iteration on exactly the
-            // turns that were already going wrong. The live tool array is in the
-            // model's context already; the useful signal is the near-miss.
+            // Advertise no discovery tool: this said "call `list_tools`", which
+            // production never registers, so the model looped on NotFound. Its
+            // live tool array is already in context; the near-miss is the signal.
             if candidates.is_empty() {
                 " No similarly-named tool is available.".to_string()
             } else {

@@ -10,7 +10,6 @@ mod sections;
 #[cfg(test)]
 mod tests;
 
-use crate::tool_metadata::tool_index::HydrationResult;
 use crate::tools::info::ToolInfo;
 
 use crate::agents::AgentDef;
@@ -70,10 +69,6 @@ pub struct PromptConfig {
     /// - Additional tools are listed in this index (name + summary only)
     /// - LLM can call `get_tool_schema` to get full schema for indexed tools
     pub tool_index: Option<String>,
-    /// Skill execution mode - when true, enforces strict workflow completion
-    /// The agent MUST complete all steps specified in the skill instructions
-    /// and generate all required output files before calling `complete`
-    pub skill_mode: bool,
     /// Enable thinking transparency guidance
     /// When true, adds guidance for structured reasoning output
     /// (Observation -> Analysis -> Planning -> Decision)
@@ -113,7 +108,6 @@ impl Default for PromptConfig {
             runtime_capabilities: None,
             generation_models: None,
             tool_index: None,
-            skill_mode: false,
             thinking_transparency: false,
             skill_instructions: None,
             token_budget: TokenBudget::default(),
@@ -337,22 +331,6 @@ impl PromptBuilder {
             prompt.push_str("\n</strategy>\n\n");
         }
         prompt
-    }
-
-    /// Build system prompt with hydrated tools from semantic retrieval
-    ///
-    /// This method builds a complete system prompt using `HydrationResult`
-    /// instead of the traditional `ToolInfo` array, enabling semantic tool
-    /// selection based on query relevance.
-    pub fn build_system_prompt_with_hydration(&self, hydration: &HydrationResult) -> String {
-        let input = LayerInput::hydration(&self.config, hydration)
-            .with_curated_envelope(self.curated_memory_envelope.clone())
-            .with_chain_context_opt(self.chain_context.as_ref())
-            .with_resolved_context_opt(self.resolved_context.as_ref())
-            .with_behavior_name_opt(self.behavior_name.as_deref())
-            .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref())
-            .with_iteration_cap_opt(self.iteration_cap);
-        self.pipeline.execute(AssemblyPath::Hydration, &input)
     }
 
     /// Build system prompt for a sub-agent (basic path, no soul).

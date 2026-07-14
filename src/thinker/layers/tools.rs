@@ -1,4 +1,4 @@
-//! `ToolsLayer` + `HydratedToolsLayer` — tool discovery and injection (priority 500/501)
+//! `ToolsLayer` — tool discovery and injection (priority 500)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 
@@ -69,73 +69,10 @@ impl PromptLayer for ToolsLayer {
     }
 }
 
-// ---------------------------------------------------------------------------
-// HydratedToolsLayer — Hydration path only (priority 501 to avoid ambiguity
-// with ToolsLayer, even though they are mutually exclusive by path)
-// ---------------------------------------------------------------------------
-
-pub struct HydratedToolsLayer;
-
-impl PromptLayer for HydratedToolsLayer {
-    fn name(&self) -> &'static str {
-        "hydrated_tools"
-    }
-    fn priority(&self) -> u32 {
-        501
-    }
-    fn paths(&self) -> &'static [AssemblyPath] {
-        &[AssemblyPath::Hydration]
-    }
-    fn inject(&self, output: &mut String, input: &LayerInput) {
-        let result = match input.hydration {
-            Some(h) => h,
-            None => return,
-        };
-
-        if result.is_empty() {
-            output.push_str("## Available Tools\n");
-            output.push_str("No semantically relevant tools found. Use `get_tool_schema` to discover tools.\n\n");
-            return;
-        }
-
-        output.push_str("## Available Tools\n\n");
-
-        // Full schema tools - highest relevance, include complete parameter info
-        if !result.full_schema_tools.is_empty() {
-            output.push_str("### Tools (full parameters)\n\n");
-            for tool in &result.full_schema_tools {
-                output.push_str(&format!("#### {}\n", tool.name));
-                output.push_str(&format!("{}\n", tool.description));
-                if let Some(schema) = tool.schema_json() {
-                    output.push_str(&format!("Parameters: {schema}\n"));
-                }
-                output.push('\n');
-            }
-        }
-
-        // Summary tools - medium relevance, description only
-        if !result.summary_tools.is_empty() {
-            output.push_str("### Tools (summary - call `get_tool_schema` for parameters)\n\n");
-            for tool in &result.summary_tools {
-                output.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
-            }
-            output.push('\n');
-        }
-
-        // Indexed tools - low relevance, just names
-        if !result.indexed_tool_names.is_empty() {
-            output.push_str("### Additional Tools (call `get_tool_schema` to use)\n\n");
-            output.push_str(&result.indexed_tool_names.join(", "));
-            output.push_str("\n\n");
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::thinker::prompt_builder::PromptConfig;
-    use crate::tool_metadata::tool_index::HydrationResult;
     use crate::tools::info::ToolInfo;
 
     #[test]
@@ -187,30 +124,6 @@ mod tests {
         assert!(out.contains("Additional Tools"));
         assert!(out.contains("get_tool_schema"));
         assert!(out.contains("web_search"));
-    }
-
-    #[test]
-    fn test_hydrated_tools_empty() {
-        let layer = HydratedToolsLayer;
-        let config = PromptConfig::default();
-        let hydration = HydrationResult::empty();
-        let input = LayerInput::hydration(&config, &hydration);
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-
-        assert!(out.contains("No semantically relevant tools found"));
-    }
-
-    #[test]
-    fn test_hydrated_tools_no_hydration() {
-        let layer = HydratedToolsLayer;
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let input = LayerInput::basic(&config, &tools); // no hydration
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-
-        assert!(out.is_empty());
     }
 
     #[test]
