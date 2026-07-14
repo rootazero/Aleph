@@ -3,7 +3,6 @@
 
 mod action_script;
 mod ax;
-mod browser_operator;
 mod coord_resolve;
 mod focus_gate;
 mod gui_locate;
@@ -27,9 +26,6 @@ pub use ax::{
     DesktopAxQueryByRole, DesktopAxQueryByRoleArgs, DesktopAxQueryFocused,
     DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs, DesktopAxSnapshot,
     DesktopAxSnapshotArgs,
-};
-pub use browser_operator::{
-    BrowserOperatorMode, DesktopBrowserOperator, DesktopBrowserOperatorArgs,
 };
 pub use gui_locate::{DesktopGuiLocate, DesktopGuiLocateArgs};
 pub use perm::{DesktopCheckPermissions, DesktopCheckPermissionsArgs};
@@ -664,6 +660,14 @@ accurate than estimating pixels from a screenshot — and its `app_pid` is the
 fields and buttons: they address the element directly, verify the write, and are
 likewise cursor-free. Use a screenshot only when you need to *see* visual state
 the accessibility tree cannot describe.
+
+Driving a web page? Reach for the `browser_*` tools first — they read the DOM, so
+they are faster and exact. Come back to this tool for what the DOM cannot reach:
+canvas/WebGL widgets, shadow-DOM and cross-origin frames, a page that actively
+defeats DOM automation, and anything outside the page itself (download bars, OS
+file pickers, permission sheets). `desktop_gui_locate` grounds a visible label to
+coordinates when no DOM ref exists. After any click, type or scroll, wait for the
+UI to settle (`wait_visual`, or the browser's own wait) before you read state.
 
 Actions:
 - screenshot: Capture screen as base64. Optional region: {x,y,width,height}. Pass `window_id` (from window_list) to capture ONE window instead of the display — it works even when the window is partly covered or not frontmost, and nothing else on screen leaks into the shot. A window capture's result carries a `coordinate_space` block: address points in it with `coord_space:"window"` (see Coordinate space below). Defaults to PNG; pass format/quality/max_width to re-encode (downscaling above 1920 hurts text legibility — keep max_width at 1920+ when you need to read text on screen). Oversized captures are auto-compressed to JPEG to stay within the result budget. Pass `describe:true` if you cannot see images — the result then also carries an `ocr_text` layer (and a scene `description` when a vision model is configured) so a text-only model can still read the screen and act.

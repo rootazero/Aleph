@@ -262,11 +262,6 @@ impl ToolRegistry for BuiltinToolRegistry {
             "desktop_gui_locate" => {
                 Box::pin(async move { self.desktop_gui_locate_tool.call_json(arguments).await })
             }
-            "desktop_browser_operator" => Box::pin(async move {
-                self.desktop_browser_operator_tool
-                    .call_json(arguments)
-                    .await
-            }),
             "desktop_check_permissions" => Box::pin(async move {
                 self.desktop_check_permissions_tool
                     .call_json(arguments)

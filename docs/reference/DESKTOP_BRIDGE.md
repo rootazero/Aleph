@@ -127,32 +127,67 @@ provides, without relying on version-number comparisons.
 
 ## 3. Methods
 
-Methods are grouped into five namespaces. All parameter and result types are
-defined in `shared/protocol/src/desktop_bridge/methods/`.
+Methods are grouped into seven namespaces. Parameter and result types are
+defined in `shared/protocol/src/desktop_bridge/methods/`; the handlers that
+serve them are registered in `desktop/macos/bridge/Sources/AlephBridge/RPC/`.
+The two sides are kept honest by the golden-fixture test (§7).
+
+**The tables below are the registered surface — 54 methods.** `bridge.handshake`
+advertises exactly this list as `supported_methods`, so a method absent here is
+a method the Rust client will not attempt. Two protocol constants have no
+handler and no caller: `input.clipboard_read` / `input.clipboard_write` —
+clipboard access is done in-process by the limb (`desktop/macos/src/system/
+clipboard.rs`, `NSPasteboard`), never over the bridge.
+
+There is no `window.*` namespace. Window listing, focusing, moving and app
+launch/quit run in-process in the limb (`desktop/shared/src/action/window.rs`),
+not over IPC. `screen.capture`'s `window_id` refers to the ids that path
+returns.
 
 ### bridge.* — lifecycle
 
 | Method | Purpose |
 |---|---|
-| `bridge.handshake` | Version negotiation and capability advertisement |
+| `bridge.handshake` | Version negotiation; reply carries `swift_version`, `protocol_version` and the `supported_methods` list |
 | `bridge.ping` | Liveness check; reply carries `{ "pong": true }` |
-| `bridge.shutdown` | Request graceful exit; helper flushes pending work and exits |
 
-### media.* — camera, audio, speech
+Shutdown is **not** an RPC method: the helper exits on stdin EOF (`Server.run`)
+or when its parent dies (`ParentWatch`).
 
-| Method | Permission required | Notes |
+### screen.* — capture and OCR
+
+| Method | Permission required | Purpose |
 |---|---|---|
-| `media.camera.snap` | Camera (TCC) | Returns a base64-encoded PNG |
-| `media.camera.clip` | Camera + optionally Microphone | Returns a base64-encoded MP4 |
-| `media.audio.list_devices` | None | Enumerate available input devices |
-| `media.audio.record` | Microphone (TCC) | Record from default mic; returns base64 WAV |
-| `media.speech.transcribe_file` | Speech Recognition + Microphone (TCC) | Offline on-device STT via SFSpeechRecognizer |
+| `screen.capture` | Screen Recording (TCC) | Capture a display (`display_id`, optional `region`) or ONE window (`window_id`) cropped to its frame, even when covered or not frontmost. `show_cursor` controls whether the pointer is drawn. Result carries `png_base64` + pixel `width`/`height`, plus `window_bounds` and `scale` on a window capture — those two are load-bearing: without them the crop's pixels cannot be mapped back to global click coordinates |
+| `screen.ocr` | None | Run Vision text recognition over a supplied `image_base64`; returns recognized lines with bounding boxes and confidences |
+| `screen.list_displays` | None | Enumerate displays with resolution, scale and origin |
 
-### screen.* — OCR
+### input.* — synthetic input (two delivery rails)
+
+Requires Accessibility (TCC). Every params struct takes an optional `pid`, and
+every result carries `delivery`:
+
+- `delivery: "targeted"` — the event was posted straight into that process's
+  own event queue (`CGEvent.postToPid`). The user's cursor never moves and the
+  app need not be frontmost.
+- `delivery: "global"` — the event went to the global HID tap: it physically
+  moves the user's cursor and lands wherever focus already is.
+
+`pid` is a *request* for the targeted rail, never a guarantee. The client must
+read `delivery` back rather than assume — see `ensure_targeted` in
+`desktop/macos/src/screen.rs`.
 
 | Method | Purpose |
 |---|---|
-| `screen.ocr` | Run Vision text recognition on a PNG buffer; returns a list of recognized strings |
+| `input.click` | Click at a point |
+| `input.double_click` | Double-click at a point (one event stream with an incrementing click-state, not two clicks) |
+| `input.type_text` | Type a string at the current keyboard focus |
+| `input.key_combo` | Press and release a chord atomically |
+| `input.scroll` | Scroll by a pixel delta, quantized to wheel clicks |
+| `input.drag` | Press, move, release between two points |
+| `input.hover` | Move the pointer without clicking |
+| `input.mouse_button` | Press / release / click a button without auto-release |
+| `input.cursor_position` | Read the current pointer position |
 
 ### ax.* — Accessibility tree
 
@@ -164,6 +199,10 @@ defined in `shared/protocol/src/desktop_bridge/methods/`.
 | `ax.set_value` | Accessibility (TCC) | Locate an element by stateless locator (role/title/center scoring) and write its `AXValue`, reading it back for verification |
 | `ax.perform_action` | Accessibility (TCC) | Locate an element the same way and perform a native AX action (`AXPress`, `AXShowMenu`, …) |
 
+Elements report their own `actions` list and an `enabled` flag, so a caller
+never has to guess an action name. Values of secure (password) fields are
+redacted at the handler, never crossing the IPC boundary.
+
 ### perm.* — Permission introspection
 
 | Method | Purpose |
@@ -171,6 +210,36 @@ defined in `shared/protocol/src/desktop_bridge/methods/`.
 | `perm.check` | Return TCC authorization status for a given permission kind |
 | `perm.guide` | Return a self-describing `PermissionGuide` for a kind |
 | `perm.open_settings` | Deep-link to the relevant System Settings pane |
+
+### media.* — camera, audio, speech
+
+| Method | Permission required | Notes |
+|---|---|---|
+| `media.camera.snap` | Camera (TCC) | Still frame. Returns `image_base64` — a base64-encoded **JPEG** (`quality` 0.05–1.0) — plus `width`/`height` |
+| `media.camera.clip` | Camera + Microphone if `with_audio` | Records `duration_secs`. Returns a **`file_path`** to an MP4/MOV on disk, not bytes |
+| `media.audio.list_devices` | None | Enumerate input devices (`uid`, `name`, `is_input`, `is_default`) |
+| `media.audio.record` | Microphone (TCC) | Fixed-duration record from the default mic. Returns a **`file_path`** (typically `.m4a`) + actual `duration_secs` + `format`. It does **not** return audio bytes |
+| `media.audio.record_start` | Microphone (TCC) | Open-ended push-to-talk: start recording now, stop on a later call. Backs the Panel mic button (`WKWebView`'s `getUserMedia` is blocked on unsigned macOS builds, so capture happens natively) |
+| `media.audio.record_stop` | Microphone (TCC) | Stop the active push-to-talk recording; result mirrors `media.audio.record` |
+| `media.audio.mic_meter` | Microphone (TCC) | Poll the live input level. First call lazily installs an `AVAudioEngine` tap; the helper tears it down after an idle timeout |
+| `media.speech.transcribe_file` | Speech Recognition + Microphone (TCC) | Offline on-device STT via `SFSpeechRecognizer` (Apple's hard ~60s budget) |
+
+### pim.* — Personal information (Notes, Calendar, Reminders, Contacts)
+
+Each group is served by the matching `*Commands.swift` type (AppleScript for
+Notes, EventKit for Calendar/Reminders, the Contacts framework for Contacts),
+hopped onto a serial `pimQueue`.
+
+| Group | Methods | Permission required |
+|---|---|---|
+| Notes | `pim.notes.list` · `.get` · `.create` · `.update` · `.delete` · `.folders` | Automation (AppleScript → Notes) |
+| Calendar | `pim.calendar.events` · `.get` · `.create` · `.update` · `.delete` · `.lists` | Calendars (TCC) |
+| Reminders | `pim.reminders.list` · `.get` · `.create` · `.complete` · `.delete` · `.lists` | Reminders (TCC) |
+| Contacts | `pim.contacts.search` · `.get` · `.groups` | Contacts (TCC) |
+| Mail | `pim.mail.search` · `.get` · `.folders` | — **registered but not implemented**: all three return `-32002` with an explicit message. There is no Mail command type. Read-only by design; do not add write methods without an approval gate |
+
+Contacts is **read-only**: there is no `pim.contacts.create` / `.update` /
+`.delete` on either side of the wire.
 
 ## 4. Error envelope
 
@@ -194,16 +263,23 @@ The helper always responds with a well-formed JSON-RPC error object:
 }
 ```
 
-Standard JSON-RPC error codes plus one Aleph-specific extension:
+Standard JSON-RPC error codes plus the Aleph-specific extensions. All are
+defined in `shared/protocol/src/desktop_bridge/errors.rs` — that file is the
+source of truth:
 
 | Code | Meaning |
 |---|---|
 | -32700 | Parse error — malformed JSON |
 | -32600 | Invalid request — missing required fields |
-| -32601 | Method not found |
+| -32601 | Method not found — the helper has no handler under that name |
 | -32602 | Invalid params — schema validation failed |
 | -32603 | Internal error — unexpected exception in the handler |
 | **-32001** | **Permission denied** — `data` carries a `PermissionGuide` |
+| -32002 | Not implemented — the method is registered but this platform cannot serve it (e.g. `pim.mail.*`). Distinct from -32601: the method exists, the capability does not |
+| -32003 | Platform error — a native API returned a failure |
+| -32004 | Timeout — the operation exceeded its deadline |
+| -32005 | Helper crashed — the child exited mid-call |
+| -32006 | Bridge disabled — restart budget exhausted; no further respawns |
 
 ## 5. PermissionGuide (self-describing errors)
 

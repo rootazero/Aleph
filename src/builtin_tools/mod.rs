@@ -144,11 +144,10 @@ pub use config_guide::{
 pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTool};
 pub use ctx_search::{CtxSearchArgs, CtxSearchOutput, CtxSearchTool};
 pub use desktop::{
-    BrowserOperatorMode, DesktopArgs, DesktopAxQueryByRole, DesktopAxQueryByRoleArgs,
-    DesktopAxQueryFocused, DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs,
-    DesktopAxSnapshot, DesktopAxSnapshotArgs, DesktopBrowserOperator, DesktopBrowserOperatorArgs,
-    DesktopCheckPermissions, DesktopCheckPermissionsArgs, DesktopGuiLocate, DesktopGuiLocateArgs,
-    DesktopOutput, DesktopSom, DesktopSomArgs, DesktopTool,
+    DesktopArgs, DesktopAxQueryByRole, DesktopAxQueryByRoleArgs, DesktopAxQueryFocused,
+    DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs, DesktopAxSnapshot,
+    DesktopAxSnapshotArgs, DesktopCheckPermissions, DesktopCheckPermissionsArgs, DesktopGuiLocate,
+    DesktopGuiLocateArgs, DesktopOutput, DesktopSom, DesktopSomArgs, DesktopTool,
 };
 pub use doctor::{DoctorArgs, DoctorOutput, DoctorTool};
 pub use error::ToolError;

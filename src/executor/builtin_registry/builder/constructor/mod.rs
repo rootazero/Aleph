@@ -326,7 +326,6 @@ impl BuiltinToolRegistry {
             crate::builtin_tools::DesktopSom::new().with_platform(Arc::clone(&desktop_platform));
         let desktop_gui_locate_tool = crate::builtin_tools::DesktopGuiLocate::new()
             .with_platform(Arc::clone(&desktop_platform));
-        let desktop_browser_operator_tool = crate::builtin_tools::DesktopBrowserOperator::new();
         let desktop_check_permissions_tool = crate::builtin_tools::DesktopCheckPermissions::new()
             .with_platform(Arc::clone(&desktop_platform));
 
@@ -622,7 +621,6 @@ impl BuiltinToolRegistry {
                 desktop_ax_snapshot_tool.definition(),
                 desktop_som_tool.definition(),
                 desktop_gui_locate_tool.definition(),
-                desktop_browser_operator_tool.definition(),
                 desktop_check_permissions_tool.definition(),
                 gateway_route_meta.definition(),
                 google_meet_meta.definition(),
@@ -918,7 +916,6 @@ impl BuiltinToolRegistry {
             desktop_ax_snapshot_tool,
             desktop_som_tool,
             desktop_gui_locate_tool,
-            desktop_browser_operator_tool,
             desktop_check_permissions_tool,
             pim_tool,
             system_tool,

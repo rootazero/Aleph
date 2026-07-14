@@ -85,7 +85,6 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "desktop_ax_query_by_role",
             "desktop_ax_snapshot",
             "desktop_check_permissions",
-            "desktop_browser_operator",
             "desktop_gui_locate",
             "desktop_som",
             "self_manage",

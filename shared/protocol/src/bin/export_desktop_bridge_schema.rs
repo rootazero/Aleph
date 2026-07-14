@@ -75,19 +75,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::to_value(schema_for!(methods::screen::ListDisplaysResult))?,
     );
 
-    // window.*
-    out.insert(
-        "WindowListParams",
-        serde_json::to_value(schema_for!(methods::window::ListParams))?,
-    );
-    out.insert(
-        "WindowListResult",
-        serde_json::to_value(schema_for!(methods::window::ListResult))?,
-    );
-    out.insert(
-        "WindowFocusParams",
-        serde_json::to_value(schema_for!(methods::window::FocusParams))?,
-    );
+    // window.* is deliberately absent: window listing / focusing / app launch is
+    // done in-process by the limb (`desktop/shared/src/action/window.rs`), never
+    // over the bridge, so the Swift helper has no window Codable structs to
+    // validate against.
 
     // input.*
     //

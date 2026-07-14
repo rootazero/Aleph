@@ -26,13 +26,6 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
 
 #[derive(Debug, Error)]
 pub enum AlephError {
-    /// Error occurred in hotkey listener subsystem
-    #[error("Hotkey listener error: {message}")]
-    HotkeyError {
-        message: String,
-        suggestion: Option<String>,
-    },
-
     /// Error occurred during clipboard operations
     #[error("Clipboard error: {message}")]
     ClipboardError {
@@ -217,14 +210,6 @@ pub enum AlephError {
 }
 
 impl AlephError {
-    /// Create a hotkey error with a message
-    pub fn hotkey<S: Into<String>>(msg: S) -> Self {
-        Self::HotkeyError {
-            message: msg.into(),
-            suggestion: Some("Please check Accessibility permissions in System Settings → Privacy & Security → Accessibility".to_string()),
-        }
-    }
-
     /// Create a clipboard error with a message
     pub fn clipboard<S: Into<String>>(msg: S) -> Self {
         Self::ClipboardError {
@@ -354,8 +339,7 @@ impl AlephError {
     #[must_use]
     pub fn suggestion(&self) -> Option<&str> {
         match self {
-            Self::HotkeyError { suggestion, .. }
-            | Self::ClipboardError { suggestion, .. }
+            Self::ClipboardError { suggestion, .. }
             | Self::InputSimulationError { suggestion, .. }
             | Self::CallbackError { suggestion, .. }
             | Self::ConfigError { suggestion, .. }
@@ -432,9 +416,6 @@ impl AlephError {
                 // Show the actual error message for debugging
                 // Previously we hid 5xx errors, but users need to see what went wrong
                 format!("AI service error: {message}. Please try again.")
-            }
-            Self::HotkeyError { message, .. } => {
-                format!("Hotkey error: {message}. Please check your system permissions.")
             }
             Self::ClipboardError { message, .. } => {
                 format!("Clipboard error: {message}. Please check your system permissions.")
@@ -642,7 +623,6 @@ impl AlephError {
             Self::NoProviderAvailable { .. } => ErrorClass::Recoverable,
             Self::Cancelled => ErrorClass::Recoverable,
             // Unexpected — genuine system/data/config error; treat as terminal
-            Self::HotkeyError { .. } => ErrorClass::Unexpected,
             Self::ClipboardError { .. } => ErrorClass::Unexpected,
             Self::InputSimulationError { .. } => ErrorClass::Unexpected,
             Self::CallbackError { .. } => ErrorClass::Unexpected,
@@ -743,15 +723,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_hotkey_error_creation() {
-        let err = AlephError::hotkey("test error");
-        assert!(matches!(err, AlephError::HotkeyError { .. }));
-        assert_eq!(err.to_string(), "Hotkey listener error: test error");
-        assert!(err.suggestion().is_some());
-        assert!(err.suggestion().unwrap().contains("Accessibility"));
-    }
-
-    #[test]
     fn test_clipboard_error_creation() {
         let err = AlephError::clipboard("access denied");
         assert!(matches!(err, AlephError::ClipboardError { .. }));
@@ -776,9 +747,9 @@ mod tests {
 
     #[test]
     fn test_error_debug() {
-        let err = AlephError::hotkey("test");
+        let err = AlephError::clipboard("test");
         let debug = format!("{:?}", err);
-        assert!(debug.contains("HotkeyError"));
+        assert!(debug.contains("ClipboardError"));
     }
 
     #[test]

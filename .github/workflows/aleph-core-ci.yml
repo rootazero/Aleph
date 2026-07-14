@@ -133,6 +133,23 @@ jobs:
       - name: Clippy
         run: cargo clippy -p alephcore -p aleph-desktop -- -D warnings
 
+  # The Swift half of the desktop bridge had no CI at all: `just bridge-test`
+  # exercises the wire format (golden fixtures against the committed schema.json),
+  # the codec, the router, the AX locator scoring and the click-ladder ranking —
+  # all pure logic, no TCC permissions, no GUI session, no Rust build. It was free
+  # and simply never wired up.
+  #
+  # This does NOT run the computer-use e2e suite: that one drives real CGEvents at
+  # a real window and needs Accessibility plus a logged-in desktop, so it stays
+  # `#[ignore]`d and opt-in (`just test-computer-use-e2e`).
+  swift-bridge:
+    name: Swift bridge unit tests
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run Swift bridge tests
+        run: cd desktop/macos/bridge && swift test
+
   benchmark:
     name: Benchmark
     runs-on: ubuntu-latest
