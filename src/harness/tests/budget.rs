@@ -126,10 +126,58 @@ const TARGET: usize = 4900;
 /// Net **−146**, all of it real deletion (the +3 is documentation of the
 /// invariant that moved). The debt to R10's [`TARGET`] is now **693** lines.
 ///
+/// **Batch 4 (2026-07-15): 5593 → 5037.** The two largest relocations of the
+/// campaign, and the first to remove whole *dependencies* rather than lines.
+/// Both are moves, so the only acceptable behaviour delta was zero, and both
+/// diffs were audited line-by-line against `HEAD` to prove it.
+///
+///   - **−221, `trace.rs` (465 → 244).** The six
+///     `From<LoopTrace*> for aleph_protocol::AgentTrace*` impls moved to
+///     `src/gateway/trace_protocol.rs`, next to the only three call sites that
+///     ever used them. Serialising for a transport the loop knows nothing about
+///     was never scaffolding *for the loop*. The prize is not the 221 lines:
+///     `rg aleph_protocol src/harness/` now returns **nothing**, so the
+///     Think→Act loop no longer depends on the gateway wire protocol at any
+///     level. A pure excision — the diff is 0 lines added, 221 deleted, and the
+///     moved bodies are byte-for-byte the originals.
+///   - **−335, `agent/think.rs` (1844 → 1509).** The reactive-compaction rescue
+///     cluster (`drain_context_overflow`, `try_reactive_compact_and_retry`,
+///     `reactive_fit_and_retry`, the `MAX_REACTIVE_COMPACT_ATTEMPTS` cap, and
+///     the single-caller `compact_to_fit_in_place` wrapper, deleted outright)
+///     moved to `src/context/compact/rescue.rs`. It is mechanism, not cognition:
+///     the compact-or-not decision is entirely `llm_retry::classify`'s
+///     `CompactAndRetry` verdict, produced by the providers layer. So this is not
+///     R10's fifth "不" — the harness still selects no recovery strategy — and it
+///     is not a retreat from A2: the model still sees the error and self-heals.
+///
+/// The seam is what makes it a sink rather than a shuffle: `RescueHost` is
+/// declared in the **context** layer and implemented by the harness (P4), with an
+/// associated `Fatal: From<AlephError>` so `src/context/` never names
+/// `HarnessError`. `rg "crate::harness" src/context/` returns nothing. Task 8's
+/// standing verdict — "BLOCKED: depends on private `&self` state, not
+/// parameterisable `self.deps.X` fields" — turned out to be wrong. Only five
+/// handles on run state were ever needed (LLM call, rescue slot, token
+/// accounting, trace, terminate reason), and they fit in a 52-line adapter.
+///
+/// That adapter, plus the `RescueCx` construction, is why the sink netted −335
+/// and not the −367 the plan predicted. Recorded at its real cost, as always.
+///
+///   - **+6, `agent.rs`.** The sink exposed a lie the move would otherwise have
+///     preserved: `MAX_REACTIVE_COMPACT_ATTEMPTS` was decorative. The real cap
+///     was a hardcoded `compare_exchange(0, 1)` in the slot, so raising the
+///     const would have changed nothing — and after S2 the const sits in the
+///     *context* layer while the slot sits here, which makes an ignored cap not
+///     merely a footgun but a contradiction of the seam that was just built
+///     (policy in context, state in the harness). The slot now reads the cap.
+///     Pinned by `the_rescue_slot_is_bounded_by_the_context_layers_cap_not_a_hardcoded_one`.
+///
+/// Net **−550**. The debt to R10's [`TARGET`] is now **143** lines. That is the
+/// closest the loop has ever been, and it is still over. It is still over.
+///
 /// Measured, not hand-counted: this test is the measurement. The number here is
 /// whatever `the_harness_line_budget_does_not_grow` prints when it fails, and
 /// nothing else — that is the whole point of the file.
-const CEILING: usize = 5593;
+const CEILING: usize = 5043;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

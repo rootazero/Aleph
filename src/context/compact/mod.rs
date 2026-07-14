@@ -13,6 +13,7 @@ pub mod fit;
 /// Verbatim re-attachment of the user's own turns at every compaction drain
 /// site — private to the compaction module, which owns all four of them.
 mod preserve;
+pub mod rescue;
 pub mod session_split;
 pub mod summary_utils;
 pub mod tool_aware_chunker;

@@ -186,7 +186,7 @@ pub enum TerminateReason {
     /// the rescue retry still overflowed or no compactor was wired. The
     /// `RetryVerdict::CompactAndRetry` path used to leak into
     /// `HarnessError::Llm` before this variant existed — see the wiring
-    /// in `harness::agent::think::try_reactive_compact_and_retry`.
+    /// in `context::compact::rescue::try_reactive_compact_and_retry`.
     ReactiveCompactExhausted,
     /// `CancellationToken` fired before the loop reached `Done`.
     Cancelled,

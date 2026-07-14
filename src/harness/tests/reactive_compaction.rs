@@ -1,5 +1,7 @@
 //! Tests for the reactive-compaction rescue path (Phase A — see
-//! `harness::agent::think::try_reactive_compact_and_retry`).
+//! `context::compact::rescue::try_reactive_compact_and_retry`, reached from the
+//! loop through `RescueHost`/`RescueCx`; these tests drive the whole turn, so
+//! they pin the seam end-to-end, not the algorithm in isolation).
 //!
 //! Mirrors claude-code's query.ts:1092 single-shot reactive compaction
 //! pattern. The wire was previously dead: `RetryVerdict::CompactAndRetry`
@@ -17,6 +19,7 @@ use tokio::sync::{broadcast, Mutex};
 
 use crate::context::budget::{ContextBudget, ContextBudgetConfig};
 use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
+use crate::context::compact::rescue::MAX_REACTIVE_COMPACT_ATTEMPTS;
 use crate::error::{AlephError, Result as AlephResult};
 use crate::harness::{AgentHarness, HarnessDeps, NoopHarnessCallback, TurnState};
 use crate::orchestrator::dispatch::TerminateReason;
@@ -591,6 +594,37 @@ async fn rescue_succeeds_when_compactor_wired_and_retry_returns_clean() {
 /// → surfaces `HarnessError::Llm` + `ReactiveCompactExhausted`. Bounded: floor +
 /// a single extra retry, then honest surface — the helper cannot loop forever
 /// even when nothing can shrink the prompt enough.
+/// The cap lives in the Context layer (it is the rescue *policy*); the slot
+/// lives in the harness (it is per-run *state*). The seam only means something
+/// if the slot actually reads the cap — a `compare_exchange(0, 1)` hardcoding
+/// the same number would pass every behavioural test above while making
+/// `MAX_REACTIVE_COMPACT_ATTEMPTS` decorative: raise it and nothing happens.
+#[test]
+fn the_rescue_slot_is_bounded_by_the_context_layers_cap_not_a_hardcoded_one() {
+    // The provider is never called — this exercises the slot, not a turn.
+    let deps = build_deps(
+        MockSession::new(vec![]),
+        PlainTextProvider::new("unused"),
+        Some(stub_compactor()),
+    );
+    let harness = AgentHarness::new(deps);
+
+    for reserved in 0..MAX_REACTIVE_COMPACT_ATTEMPTS {
+        assert!(
+            harness.try_reserve_reactive_compact(),
+            "slot {reserved} of {MAX_REACTIVE_COMPACT_ATTEMPTS} must be claimable",
+        );
+    }
+    assert!(
+        !harness.try_reserve_reactive_compact(),
+        "the run's LLM-compaction budget is spent; the caller must fall back to the floor",
+    );
+    assert_eq!(
+        harness.reactive_compact_attempts_for_tests(),
+        MAX_REACTIVE_COMPACT_ATTEMPTS,
+    );
+}
+
 #[tokio::test]
 async fn rescue_exhausts_when_retry_still_overflows() {
     let session = MockSession::new(vec![

@@ -184,14 +184,20 @@ impl AgentHarness {
         }
     }
 
-    /// Atomically reserve one reactive-compaction rescue slot. Returns
-    /// `true` exactly once per run (the cap is
-    /// `MAX_REACTIVE_COMPACT_ATTEMPTS = 1`); subsequent callers see `false`
-    /// and must surface the original provider error. `compare_exchange` so
-    /// concurrent paths cannot both reserve under high concurrency.
+    /// Atomically reserve a reactive-compaction rescue slot; `false` once the
+    /// run's budget is spent, and the caller must then fall back to the
+    /// deterministic floor. The slot is per-run state and lives here; the cap
+    /// is *policy* and lives with the algorithm, in
+    /// [`crate::context::compact::rescue::MAX_REACTIVE_COMPACT_ATTEMPTS`] —
+    /// this reads it rather than hardcoding the same number, because a cap the
+    /// slot ignores is a lie: raising the const would silently change nothing.
+    /// Compare-and-swap, so two concurrent paths can never both rescue.
     pub(super) fn try_reserve_reactive_compact(&self) -> bool {
         self.reactive_compact_attempts
-            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |spent| {
+                (spent < crate::context::compact::rescue::MAX_REACTIVE_COMPACT_ATTEMPTS)
+                    .then_some(spent + 1)
+            })
             .is_ok()
     }
 

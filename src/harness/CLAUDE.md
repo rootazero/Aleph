@@ -14,7 +14,21 @@
 
 **「顶层」二字是本条最重要的部分**——见下方警告。**口径现在由测试执行**：`src/harness/tests/budget.rs`（跑在 `cargo test -p alephcore --lib` 里），同时守 12 文件与行数；出现第 13 个文件或行数上涨即 FAIL。**改这里的数字就得改那里的 `CEILING`，反之亦然。**
 
-**当前测量（2026-07-14）：5593 行 — 超 ~4900 红线 693 行。**（由 `tests/budget.rs` 实测，非手算；`CEILING = 5593`）
+**当前测量（2026-07-15）：5043 行 — 超 ~4900 红线 143 行。**（由 `tests/budget.rs` 实测，非手算；`CEILING = 5043`）
+
+> 5593 → 5043（−550）：第四轮，本战役最大的两次搬迁，也是第一次**搬走的是依赖而不只是行数**。两项都是纯搬迁，因此可接受的行为差异只有零——两份 diff 都对着 `HEAD` 逐行审过，确认为零。
+> - **−221 trace.rs（465 → 244）**：六个 `From<LoopTrace*> for aleph_protocol::AgentTrace*` 迁往 `src/gateway/trace_protocol.rs`，紧挨着它仅有的三个调用点。为一个循环根本不认识的传输层做序列化，从来就不是**循环的**脚手架。真正的战利品不是那 221 行：`rg aleph_protocol src/harness/` 现在**返回空**——Think→Act 循环不再依赖 gateway 线协议。纯切除：diff 为 0 增 221 删，搬走的函数体与原文逐字节相同。
+> - **−335 agent/think.rs（1844 → 1509）**：反应式压缩救援簇（`drain_context_overflow` / `try_reactive_compact_and_retry` / `reactive_fit_and_retry` / `MAX_REACTIVE_COMPACT_ATTEMPTS` 上限，以及只有一个调用者、直接删掉的 `compact_to_fit_in_place` 包装）迁往 `src/context/compact/rescue.rs`。它是**机制不是认知**：压不压缩完全由 providers 层的 `llm_retry::classify` 给出 `CompactAndRetry` 裁决决定。故这不触犯 R10 第 5 不（harness 仍然不挑恢复策略），也不是对 A2 的倒退（模型依旧看得见错误并自愈）。
+>
+> 缝的方向决定了这是**下沉**而非**挪窝**：`RescueHost` 定义在 **context 层**、由 harness 实现（P4），关联类型 `Fatal: From<AlephError>` 使 `src/context/` 永不点名 `HarnessError`。`rg "crate::harness" src/context/` 返回空。
+>
+> **Task 8 那句挂了很久的"BLOCKED——依赖读写私有 harness 状态的 `&self` 方法，不是可参数化的 `self.deps.X` 字段"是错的。** 真正需要的只有 5 个运行态把手（LLM 调用 / 救援槽 / token 记账 / trace / 终止原因），它们装进了一个 52 行的适配器。
+>
+> 这个适配器加上 `RescueCx` 的构造，正是本次净 −335 而非计划预估 −367 的原因。**按真实成本记账**，一如既往。
+>
+> - **+6 `agent.rs`**：下沉暴露出一个纯搬迁本会原样保留的谎——`MAX_REACTIVE_COMPACT_ATTEMPTS` 是**装饰性的**，真正的上限是槽位里硬编码的 `compare_exchange(0, 1)`，把常量调大什么都不会发生。而 S2 之后常量在 **context 层**、槽位在 **harness**，一个被无视的 cap 就不只是脚下的雷，而是对刚建起来的那个 seam（policy 归 context，state 归 harness）的直接背叛。槽位现在真的去读那个 cap 了，并由 `the_rescue_slot_is_bounded_by_the_context_layers_cap_not_a_hardcoded_one` 钉住。
+>
+> 净 **−550**。距 R10 `TARGET` 的欠账现为 **143 行**——循环有史以来离红线最近的一次，**但仍未达标。仍然超。**
 
 > 5739 → 5593（−146）：第三轮。**Act 期墙钟离开循环**。它从来不是脚手架——"一个工具最多能跑多久"是工具自己声明的属性，harness 却拿 run 级的 `turn_timeout` 去替它判，超时还升级成 `StalledTurn` **直接杀掉整个 run**（生产受害者：人类审批慢于 120s 的那一批命令）。墙钟下沉到工具唯一收口 `src/tools/scoped/dispatch.rs::execute_inner`，且**落在所有能等人的闸门之下**；同一次超时变成模型下一轮读得到的 `ToolError::Timeout`，循环随之删掉只为跑这块表而存在的机件。
 > - **−149 act.rs**：`resolve_effective_budget`、两处 `describe()` 预算探测、两处 `tokio::time::timeout` 包裹、串行 `StalledTurn` 恢复块、并行路径的 `budgets` 向量 / `Err(elapsed)` 臂 / `first_stall`，以及 `TurnPhase` / `STALLED_CALL_CAUSE` / `budget_overrun_cause` 三个 import。`ExecOutcome` 塌回 `Result<ToolOutput, ToolError>`。
@@ -39,11 +53,13 @@
 
 > 唯一的自动检查曾是 `scripts/graph-audit.mjs` 的 `redline-r10` —— 它只数**文件数**（自红线写下之日起恒为 12，是唯一不会动的量），从不数行数，且未接入任何门（还需要一个生成的知识图谱产物才能跑）。
 
-Task 8 的下一步（把 `agent/think.rs` 的 `drain_context_overflow` + `try_reactive_compact_and_retry` + `reactive_fit_and_retry` 反应式压缩救援簇下沉）仍 BLOCKED——其依赖是读写私有 harness 状态的 `&self` 方法，不是可参数化的 `self.deps.X` 字段。缺口与候选下沉项详见 [HARNESS_PHILOSOPHY.md §4.1](../../docs/reference/HARNESS_PHILOSOPHY.md) 与 `.superpowers/sdd/task-8-report.md`。
+Task 8 曾把反应式压缩救援簇判为 BLOCKED（"依赖读写私有 harness 状态的 `&self` 方法"）。**2026-07-15 已下沉，那个判断是错的**——见上文第四轮。教训：**"依赖私有状态"不等于不可下沉。** 先数一数到底需要几个把手（这里是 5 个），再宣布 BLOCKED；把手能塞进一个小 trait，算法就能走。
 
 **下沉去处（新增代码先看这里，而不是塞回 harness）**：
 - Nudge / 护栏文案 → `src/thinker/nudges.rs`
 - 压缩指令派发（`LoopDirective` → 具体动作）→ `src/context/compact/directive.rs`
+- 反应式压缩救援（含 `RescueHost` / `RescueCx` 缝）→ `src/context/compact/rescue.rs`
+- Trace → 线协议 DTO 转换 → `src/gateway/trace_protocol.rs`
 
 ## 加代码前必答 3 问
 
