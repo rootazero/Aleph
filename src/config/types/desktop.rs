@@ -5,11 +5,12 @@
 //! per-OS injection point (`executor::builtin_registry::builder::constructor`)
 //! and the power capability in the binary boot path. This section only carries
 //! the **policy** knobs for the daemon-side *consumers* of those capabilities:
-//! the presence broadcaster and the mic-level meter.
+//! the presence broadcaster, the mic-level meter, and the one input-rail policy
+//! the desktop tool enforces (`allow_global_pointer`).
 //!
-//! Both inner structs are reused verbatim from `crate::tasks::*` (the modules
-//! that own the reporters) so the config layer and the consumer share one
-//! definition — no duplicated schema, no drift.
+//! The two reporter structs are reused verbatim from `crate::tasks::*` (the
+//! modules that own the reporters) so the config layer and the consumer share
+//! one definition — no duplicated schema, no drift.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,25 @@ pub struct DesktopDaemonConfig {
     /// it is opt-in.
     #[serde(default)]
     pub mic_level: MicLevelConfig,
+
+    /// Permit coordinate-space desktop actions (click / drag / scroll /
+    /// `type_text` / …) that name **no target process** and therefore run on the
+    /// global HID event tap: they physically drag the user's cursor across the
+    /// screen and only land where the target app is already frontmost.
+    ///
+    /// Default `false` — a platform that can deliver input into a single
+    /// process (`ScreenCapability::supports_targeted_input`) refuses the
+    /// intrusive path instead and tells the model to pass `app` / `pid`, or to
+    /// use `set_value` / `ax_action`. The refusal is fail-closed by design: the
+    /// tool never "tries targeted and silently falls back to global", because
+    /// picking a recovery for the model is the harness overruling it (R10) —
+    /// the error is compressed into the result and the model decides (A2).
+    ///
+    /// On a platform with **no** targeted rail (Windows, Linux today) this knob
+    /// is never consulted and behavior is unchanged: there is nothing to refuse
+    /// in favour of.
+    #[serde(default)]
+    pub allow_global_pointer: bool,
 }
 
 #[cfg(test)]
@@ -45,6 +65,22 @@ mod tests {
         // Presence reporter ships on; mic-level ships off (opt-in).
         assert!(d.presence.enabled);
         assert!(!d.mic_level.enabled);
+    }
+
+    #[test]
+    fn global_pointer_is_denied_by_default() {
+        // The intrusive rail (moves the user's real cursor, needs the app
+        // frontmost) is opt-in. Nothing about the platform is consulted here —
+        // the tool gates on supports_targeted_input(), so a platform without a
+        // background rail is unaffected by this default.
+        assert!(!DesktopDaemonConfig::default().allow_global_pointer);
+    }
+
+    #[test]
+    fn global_pointer_can_be_opted_into() {
+        let d: DesktopDaemonConfig =
+            toml::from_str("allow_global_pointer = true").expect("parse [desktop]");
+        assert!(d.allow_global_pointer);
     }
 
     #[test]

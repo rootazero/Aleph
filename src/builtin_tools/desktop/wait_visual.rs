@@ -262,9 +262,8 @@ mod tests {
     #[tokio::test]
     async fn returns_not_stable_on_timeout_when_screen_keeps_changing() {
         // Sequence cycles A,B,A,B,... — never stabilizes.
-        let screen = ScriptedScreen::new(vec![
-            FRAME_A, FRAME_B, FRAME_A, FRAME_B, FRAME_A, FRAME_B,
-        ]);
+        let screen =
+            ScriptedScreen::new(vec![FRAME_A, FRAME_B, FRAME_A, FRAME_B, FRAME_A, FRAME_B]);
         let out = run_wait_visual(&screen, Some(250), None).await;
         assert!(out.success); // timeout is a valid outcome, not an error
         let data = out.data.expect("data present");

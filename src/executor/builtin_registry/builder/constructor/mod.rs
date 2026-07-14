@@ -296,10 +296,22 @@ impl BuiltinToolRegistry {
         let approval_policy: Arc<dyn crate::approval::ApprovalPolicy> =
             Arc::new(crate::approval::ConfigApprovalPolicy::load());
 
+        // `[desktop] allow_global_pointer` — the one input-rail policy knob. Left
+        // at its default (false), a coordinate action that names no target
+        // process is refused instead of running on the global HID tap, which
+        // would drag the user's physical cursor across the screen. Only consulted
+        // on a platform that can deliver input into a single process; see
+        // `builtin_tools::desktop::native`.
+        let allow_global_pointer = match config.config {
+            Some(ref cfg) => cfg.read().await.desktop.allow_global_pointer,
+            None => false,
+        };
+
         let desktop_tool = DesktopTool::new()
             .with_platform(Arc::clone(&desktop_platform))
             .with_vision_bridge(Arc::clone(&vision_bridge))
-            .with_approval_policy(Arc::clone(&approval_policy));
+            .with_approval_policy(Arc::clone(&approval_policy))
+            .with_allow_global_pointer(allow_global_pointer);
 
         // AX query tools (macOS + Windows UIA; degrade gracefully on Linux).
         let desktop_ax_query_focused_tool = crate::builtin_tools::DesktopAxQueryFocused::new()

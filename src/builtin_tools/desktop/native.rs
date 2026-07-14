@@ -1,12 +1,39 @@
 //! Platform execution path for desktop actions.
+//!
+//! # Two input rails
+//!
+//! Every coordinate-space and keyboard action can be delivered two ways:
+//!
+//! * **targeted** — posted into one process's event queue. The user's physical
+//!   cursor never moves and the target app does not have to be frontmost. This
+//!   is the rail the AX write path (`set_value` / `ax_action`) has always had,
+//!   now available to clicks and keystrokes too.
+//! * **global** — posted to the system-wide HID event tap. It *drags the user's
+//!   real cursor across the screen* and only lands where the target app is
+//!   already frontmost.
+//!
+//! Naming a target process (`pid`, `app`, or `window_id`) selects the targeted
+//! rail. Naming none selects the global one — which, on a platform that *can*
+//! target ([`ScreenCapability::supports_targeted_input`]), is refused unless
+//! `[desktop] allow_global_pointer = true`. That refusal is deliberate and it is
+//! fail-closed: there is no "try targeted, silently fall back to global". Which
+//! rail an action ran on is a fact the model plans on, so the tool never picks
+//! the intrusive one on the model's behalf — it hands back the refusal and the
+//! way out, and the model decides (A2).
+//!
+//! A platform with no targeted rail (Windows, Linux today: the trait defaults to
+//! `NotImplemented`) is unaffected — the policy is gated on
+//! `supports_targeted_input()`, not on `cfg!`, so its behavior is unchanged.
 
 use crate::sync_primitives::Arc;
 
 use super::types::{DesktopArgs, DesktopOutput, MouseButton};
 use crate::error::Result;
+use aleph_desktop::system_types::AppInfo;
 use aleph_protocol::desktop_bridge::methods::ax::{
     AxActionResult, AxLocator, PerformActionParams, SetValueParams,
 };
+use aleph_protocol::desktop_bridge::methods::input::{DELIVERY_GLOBAL, DELIVERY_TARGETED};
 
 /// Convert tool-level `MouseButton` to desktop-level `MouseButton`.
 fn to_desktop_button(button: Option<&MouseButton>) -> aleph_desktop::MouseButton {
@@ -15,6 +42,276 @@ fn to_desktop_button(button: Option<&MouseButton>) -> aleph_desktop::MouseButton
         MouseButton::Right => aleph_desktop::MouseButton::Right,
         MouseButton::Middle => aleph_desktop::MouseButton::Middle,
     }
+}
+
+/// Which rail a synthetic input event rides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Rail {
+    /// Straight into that process's event queue. Cursor-free, background-safe.
+    Targeted(i32),
+    /// The global HID tap: moves the user's cursor, needs the app frontmost.
+    Global,
+}
+
+impl Rail {
+    /// The word the model reads out of the result.
+    ///
+    /// It always names the rail that *actually ran*. Reporting a background
+    /// action for an intrusive one would be a lie the model then plans on — and
+    /// the whole point of this rail split is that the model can tell.
+    const fn delivery(self) -> &'static str {
+        match self {
+            Self::Targeted(_) => DELIVERY_TARGETED,
+            Self::Global => DELIVERY_GLOBAL,
+        }
+    }
+}
+
+/// Actions that synthesize an input event, and therefore pick a rail.
+///
+/// A static name table, not a judgement about the message: it says which verbs
+/// put an event on a wire, nothing about intent (R7/P8).
+///
+/// `key_button` is deliberately absent: holding a key down has no targeted
+/// counterpart in the limb contract, so it stays on the global rail exactly as
+/// before. Gating it would leave the model with no way to press-and-hold at all,
+/// which is a worse answer than the honest legacy one.
+fn is_input_action(action: &str) -> bool {
+    matches!(
+        action,
+        "click"
+            | "double_click"
+            | "drag"
+            | "hover"
+            | "scroll"
+            | "mouse_button"
+            | "type_text"
+            | "key_combo"
+            | "paste"
+    )
+}
+
+/// The whole pointer policy, as a pure function of three facts.
+///
+/// Mechanical: it reads whether the platform *can* target, whether the caller
+/// *named* a process, and whether the operator has permitted the intrusive rail.
+/// It never looks at what is being clicked or typed.
+fn choose_rail(
+    supports_targeted: bool,
+    pid: Option<i32>,
+    allow_global_pointer: bool,
+    action: &str,
+) -> std::result::Result<Rail, String> {
+    if !supports_targeted {
+        // No background rail exists here (Windows / Linux today). There is
+        // nothing to refuse *in favour of*, so behavior stays exactly as it was.
+        return Ok(Rail::Global);
+    }
+    match pid {
+        Some(pid) => Ok(Rail::Targeted(pid)),
+        None if allow_global_pointer => Ok(Rail::Global),
+        None => Err(format!(
+            "{action} refused: with no target process this would run on the global input tap — \
+             it drags the user's physical cursor across the screen and only lands if the target \
+             app happens to be frontmost. Pass `app` (name or bundle id), `pid`, or `window_id` \
+             and the event is delivered into that process in the background, leaving the user's \
+             cursor where it is. For text fields and buttons, `set_value` / `ax_action` address \
+             the element directly and are more reliable still. To permit the intrusive global \
+             path anyway, set [desktop] allow_global_pointer = true."
+        )),
+    }
+}
+
+/// Resolve an app name / executable / bundle id against the running-app list.
+///
+/// String matching, not semantics: an exact (case-insensitive) hit on either
+/// field wins; otherwise a *unique* substring hit wins; an ambiguous one is
+/// handed back with the candidates rather than guessed at — picking which
+/// "Chrome" the user meant is the model's call, not the tool's (R7).
+fn match_running_app<'a>(
+    apps: &'a [AppInfo],
+    query: &str,
+) -> std::result::Result<&'a AppInfo, String> {
+    let q = query.trim().to_lowercase();
+    // Only a running app has a pid, and a pid is the entire point here.
+    let running: Vec<&AppInfo> = apps.iter().filter(|a| a.pid.is_some()).collect();
+
+    if let Some(exact) = running
+        .iter()
+        .copied()
+        .find(|a| a.name.to_lowercase() == q || a.bundle_id.to_lowercase() == q)
+    {
+        return Ok(exact);
+    }
+
+    let hits: Vec<&AppInfo> = running
+        .iter()
+        .copied()
+        .filter(|a| a.name.to_lowercase().contains(&q) || a.bundle_id.to_lowercase().contains(&q))
+        .collect();
+    match hits.as_slice() {
+        [] => Err(format!(
+            "app '{query}' is not running. Launch it first (launch_app with its bundle id), or \
+             pass a `pid` from window_list / desktop_som."
+        )),
+        [only] => Ok(*only),
+        many => {
+            let names: Vec<&str> = many.iter().map(|a| a.name.as_str()).take(8).collect();
+            Err(format!(
+                "app '{query}' matches {} running apps ({}). Name one exactly, or pass its `pid`.",
+                many.len(),
+                names.join(", ")
+            ))
+        }
+    }
+}
+
+/// The process this action is aimed at, if the caller named one.
+///
+/// Three ways to say the same thing, in order of directness: an explicit `pid`,
+/// an `app` resolved against the running-app list, or the owner of a
+/// `window_id`. `Ok(None)` means the caller named no target at all — which is
+/// what [`choose_rail`] then rules on.
+async fn resolve_target_pid(
+    platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
+    screen: &dyn aleph_desktop::ScreenCapability,
+    args: &DesktopArgs,
+) -> std::result::Result<Option<i32>, String> {
+    if let Some(pid) = args.pid {
+        return Ok(Some(pid));
+    }
+
+    if let Some(app) = args.app.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
+        let system = platform.system().ok_or_else(|| {
+            format!(
+                "cannot resolve app '{app}' to a process: this platform exposes no running-app \
+                 list. Pass `pid` instead."
+            )
+        })?;
+        let apps = system
+            .list_running_apps()
+            .await
+            .map_err(|e| format!("cannot list running apps to resolve '{app}': {e}"))?;
+        let hit = match_running_app(&apps, app)?;
+        let pid = hit
+            .pid
+            .ok_or_else(|| format!("app '{app}' reports no pid"))?;
+        return i32::try_from(pid)
+            .map(Some)
+            .map_err(|_| format!("app '{app}' has a pid ({pid}) outside the addressable range"));
+    }
+
+    if let Some(window_id) = args.window_id.map(u64::from) {
+        let windows = screen
+            .window_list()
+            .await
+            .map_err(|e| format!("cannot resolve window {window_id} to a process: {e}"))?;
+        let window = windows
+            .iter()
+            .find(|w| w.id == window_id)
+            .ok_or_else(|| format!("no window with id {window_id} is open"))?;
+        return i32::try_from(window.pid).map(Some).map_err(|_| {
+            format!(
+                "window {window_id} has a pid ({}) outside the addressable range",
+                window.pid
+            )
+        });
+    }
+
+    Ok(None)
+}
+
+/// The rail this action will ride, or the refusal that stops it before a single
+/// event is synthesized.
+///
+/// `pub(super)` because the blocked-app guard needs the same answer *before*
+/// dispatch: a targeted event never touches the frontmost app, so the guard has
+/// to look at the app the event is actually going to.
+pub(super) async fn resolve_rail(
+    allow_global_pointer: bool,
+    platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
+    screen: &dyn aleph_desktop::ScreenCapability,
+    args: &DesktopArgs,
+) -> std::result::Result<Rail, DesktopOutput> {
+    let pid = resolve_target_pid(platform, screen, args)
+        .await
+        .map_err(|message| DesktopOutput {
+            success: false,
+            data: None,
+            message: Some(super::recovery::with_hint(message)),
+        })?;
+
+    choose_rail(
+        screen.supports_targeted_input(),
+        pid,
+        allow_global_pointer,
+        &args.action,
+    )
+    .map_err(|message| DesktopOutput {
+        success: false,
+        data: None,
+        message: Some(super::recovery::with_hint(message)),
+    })
+}
+
+/// Pre-flight `type_text`'s focus, in the rail's own terms.
+///
+/// The global rail's keystrokes land on whatever the *system* focuses — exactly
+/// what [`super::focus_gate`] evaluates. The targeted rail's land inside one
+/// process, so the system-focused element is only the destination when it
+/// belongs to that process. When it does not, this gate is looking at the wrong
+/// app: refusing on it would block the background typing this rail exists for,
+/// and allowing on it would be a safety claim about an app we are not touching.
+/// So it stays silent — the module's own fail-open discipline — and the secure
+/// hard block still fires whenever the target app is the one holding focus.
+async fn focus_preflight(
+    platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
+    rail: Rail,
+    force: bool,
+) -> Option<DesktopOutput> {
+    let Rail::Targeted(pid) = rail else {
+        return super::focus_gate::check(platform, force).await;
+    };
+
+    let ax = platform.ax()?;
+    let focused = match ax.query_focused().await {
+        Ok(el) => el?,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "type_text focus pre-flight: AX query failed, allowing the keystrokes"
+            );
+            return None;
+        }
+    };
+    if focused.pid != pid {
+        return None;
+    }
+    match super::focus_gate::evaluate(Some(&focused), force) {
+        super::focus_gate::Gate::Allow => None,
+        super::focus_gate::Gate::Refuse(message) => Some(DesktopOutput {
+            success: false,
+            data: None,
+            message: Some(super::recovery::with_hint(message)),
+        }),
+    }
+}
+
+/// What a served screenshot's pixels are *of* — decides which coordinate guide
+/// travels with it.
+#[derive(Debug, Clone)]
+enum ShotSpace {
+    /// A whole display: normalized coordinates map linearly onto it.
+    FullScreen,
+    /// A crop of a display: its pixels do not map linearly onto the display, so
+    /// no guide is attached (unchanged legacy behavior).
+    Region,
+    /// One window: its pixels are relative to the window's own origin, and only
+    /// `coord_space:"window"` maps them back.
+    Window {
+        window_id: u32,
+        bounds: Option<aleph_desktop::BoundingBox>,
+    },
 }
 
 /// Build a structured validation-failure output for a known action whose
@@ -78,6 +375,40 @@ fn require_xy(args: &DesktopArgs, action: &str) -> std::result::Result<(f64, f64
         _ => Err(invalid_args(format!(
             "{action} requires numeric 'x' and 'y' coordinates"
         ))),
+    }
+}
+
+/// Extract the two points a drag is made of. Same discipline as [`require_xy`].
+fn require_drag_points(
+    args: &DesktopArgs,
+) -> std::result::Result<(f64, f64, f64, f64), DesktopOutput> {
+    match (args.start_x, args.start_y, args.end_x, args.end_y) {
+        (Some(sx), Some(sy), Some(ex), Some(ey)) => Ok((sx, sy, ex, ey)),
+        _ => Err(invalid_args(
+            "drag requires numeric 'start_x', 'start_y', 'end_x' and 'end_y'",
+        )),
+    }
+}
+
+/// Reject a request that is malformed *as a request*, before ruling on the rail
+/// that would have delivered it.
+///
+/// A coordinate action with no coordinates is broken whichever rail carries it,
+/// so the model must be told which argument is wrong — not sent away to find a
+/// `pid` only to come back and fail again on the point it never had. Ordering
+/// only, not a new refusal: both errors were already true, and the arms below
+/// still do their own extraction. This decides which of the two the model sees.
+///
+/// `scroll` is deliberately absent: its point is required on the targeted rail
+/// and optional on the global one (which scrolls at the real cursor), so only
+/// the arm that knows the rail can rule on it.
+fn reject_malformed_coordinates(args: &DesktopArgs) -> std::result::Result<(), DesktopOutput> {
+    match args.action.as_str() {
+        "click" | "double_click" | "hover" | "mouse_button" => {
+            require_xy(args, &args.action).map(|_| ())
+        }
+        "drag" => require_drag_points(args).map(|_| ()),
+        _ => Ok(()),
     }
 }
 
@@ -274,21 +605,26 @@ impl super::DesktopTool {
     /// omitted (P7). With no bridge or `want_describe == false`, the output is
     /// byte-identical to the legacy `{image_base64,width,height,format}` shape.
     ///
-    /// When `full_screen` is set (a whole-display capture, not a region crop) a
-    /// `coordinate_space` self-description is attached. A full-resolution Retina
+    /// A `coordinate_space` self-description travels with the image whenever its
+    /// pixels *can* be mapped back to the screen. A full-resolution Retina
     /// capture almost always exceeds the result-size budget and is silently
     /// downscaled before the model sees it, so a model that reads a pixel off
     /// the *served* image and replays it as a `pixel`-space click would land in
-    /// the wrong place. The guide tells the model to address points in the
-    /// served image's own pixel space via `coord_space:"normalized"` +
-    /// `coord_factors:[width,height]`; [`super::coord_resolve`] then maps those
-    /// back onto the real display at dispatch, staying correct under any
-    /// downscale or DPI scale factor. Region crops are excluded because their
-    /// pixels do not map linearly onto the full display.
+    /// the wrong place. The guide tells the model which space to address the
+    /// image in, and [`super::coord_resolve`] maps it back at dispatch:
+    ///
+    /// * [`ShotSpace::FullScreen`] → `coord_space:"normalized"` +
+    ///   `coord_factors:[width,height]`, resolved against the display.
+    /// * [`ShotSpace::Window`] → `coord_space:"window"` + `window_id` +
+    ///   `coord_factors:[width,height]`, resolved through the window's frame.
+    ///   Without this the model would replay window-relative pixels against the
+    ///   display and miss by the window's offset.
+    /// * [`ShotSpace::Region`] → no guide: a crop's pixels do not map linearly
+    ///   onto anything the caller can name (unchanged legacy behavior).
     async fn screenshot_output(
         &self,
         want_describe: bool,
-        full_screen: bool,
+        space: ShotSpace,
         image_base64: String,
         width: u32,
         height: u32,
@@ -317,22 +653,52 @@ impl super::DesktopTool {
         obj.insert("height".into(), serde_json::json!(height));
         obj.insert("format".into(), serde_json::json!(format));
 
-        if full_screen {
-            obj.insert(
-                "coordinate_space".into(),
-                serde_json::json!({
-                    "image_width": width,
-                    "image_height": height,
-                    "note": format!(
-                        "This image is {width}x{height}px and may be downscaled from the \
-                         real display. To click/drag a point you see here at image pixel \
-                         (px, py), send coord_space=\"normalized\" with \
-                         coord_factors=[{width}, {height}] and x=px, y=py — the runtime \
-                         maps it onto the real display (correct under downscale and Retina \
-                         scaling). Do NOT replay raw image pixels as pixel-space coords."
-                    ),
-                }),
-            );
+        match space {
+            ShotSpace::FullScreen => {
+                obj.insert(
+                    "coordinate_space".into(),
+                    serde_json::json!({
+                        "image_width": width,
+                        "image_height": height,
+                        "note": format!(
+                            "This image is {width}x{height}px and may be downscaled from the \
+                             real display. To click/drag a point you see here at image pixel \
+                             (px, py), send coord_space=\"normalized\" with \
+                             coord_factors=[{width}, {height}] and x=px, y=py — the runtime \
+                             maps it onto the real display (correct under downscale and Retina \
+                             scaling). Do NOT replay raw image pixels as pixel-space coords."
+                        ),
+                    }),
+                );
+            }
+            ShotSpace::Window { window_id, bounds } => {
+                let mut cs = serde_json::Map::new();
+                cs.insert("image_width".into(), serde_json::json!(width));
+                cs.insert("image_height".into(), serde_json::json!(height));
+                cs.insert("window_id".into(), serde_json::json!(window_id));
+                if let Some(b) = bounds {
+                    cs.insert(
+                        "window_bounds".into(),
+                        serde_json::json!({"x": b.x, "y": b.y, "width": b.w, "height": b.h}),
+                    );
+                }
+                cs.insert(
+                    "note".into(),
+                    serde_json::json!(format!(
+                        "This image is {width}x{height}px of WINDOW {window_id} only — its \
+                         pixels are relative to that window's top-left corner, not the \
+                         screen's. To act on a point you see here at image pixel (px, py), \
+                         send coord_space=\"window\" with window_id={window_id}, \
+                         coord_factors=[{width}, {height}] and x=px, y=py; the runtime maps it \
+                         back through the window's frame. Replaying these pixels as \
+                         pixel-space (or normalized) coords would miss by the window's offset. \
+                         Pass window_id on the action too and it is delivered into that \
+                         window's process without moving the user's cursor."
+                    )),
+                );
+                obj.insert("coordinate_space".into(), serde_json::Value::Object(cs));
+            }
+            ShotSpace::Region => {}
         }
 
         DesktopOutput {
@@ -358,6 +724,22 @@ impl super::DesktopTool {
             None => return Ok(None),
         };
 
+        // Pick the delivery rail once, before a single event is synthesized, so
+        // a refusal costs the user nothing. Non-input actions never consult the
+        // policy (and never pay for the pid lookup) — `Global` is inert for them.
+        let rail = if is_input_action(&args.action) {
+            // Args first, rail second. See `reject_malformed_coordinates`.
+            if let Err(malformed) = reject_malformed_coordinates(args) {
+                return Ok(Some(malformed));
+            }
+            match resolve_rail(self.allow_global_pointer, platform, screen, args).await {
+                Ok(rail) => rail,
+                Err(refusal) => return Ok(Some(refusal)),
+            }
+        } else {
+            Rail::Global
+        };
+
         match args.action.as_str() {
             "screenshot" => {
                 let region = match screen_region_from_args(args, "screenshot") {
@@ -371,10 +753,33 @@ impl super::DesktopTool {
                 let max_w = args.max_width;
                 let max_h = args.max_height;
                 let display_id = args.display_id;
+                let window_id = args.window_id.map(u64::from);
                 let needs_processing = fmt.is_some() || max_w.is_some() || max_h.is_some();
 
-                // Capture: specific display or primary
-                let screenshot_result = if let Some(did) = display_id {
+                // Capture: one window, a specific display, or the primary one.
+                //
+                // A window capture carries its own frame back, which is the only
+                // thing that can turn its window-relative pixels into a click —
+                // so it is kept and handed to the model, not dropped.
+                let mut window_bounds = None;
+                let screenshot_result = if let Some(wid) = window_id {
+                    if region.is_some() {
+                        return Ok(Some(invalid_args(
+                            "screenshot: `region` is a rectangle of a display and has no meaning \
+                             against `window_id` — pass one or the other. A window capture is \
+                             already cropped to the window.",
+                        )));
+                    }
+                    // `show_cursor: false` — the cursor is not UI, and a model
+                    // reading pixel coordinates should not be shown one.
+                    match screen.screenshot_window(wid, false).await {
+                        Ok(shot) => {
+                            window_bounds = shot.window_bounds;
+                            Ok(shot.image)
+                        }
+                        Err(e) => Err(e),
+                    }
+                } else if let Some(did) = display_id {
                     let region_clone = region;
                     tokio::task::spawn_blocking(move || {
                         aleph_desktop::perception::take_screenshot_display(
@@ -386,6 +791,15 @@ impl super::DesktopTool {
                     .map_err(|e| crate::error::AlephError::other(format!("task join: {e}")))?
                 } else {
                     screen.screenshot(region).await
+                };
+
+                let space = match (args.window_id, args.region.is_some()) {
+                    (Some(window_id), _) => ShotSpace::Window {
+                        window_id,
+                        bounds: window_bounds,
+                    },
+                    (None, true) => ShotSpace::Region,
+                    (None, false) => ShotSpace::FullScreen,
                 };
 
                 match screenshot_result {
@@ -455,7 +869,7 @@ impl super::DesktopTool {
                                 Ok(processed) => Ok(Some(
                                     self.screenshot_output(
                                         args.describe == Some(true),
-                                        args.region.is_none(),
+                                        space,
                                         processed.image_base64,
                                         processed.width,
                                         processed.height,
@@ -473,7 +887,7 @@ impl super::DesktopTool {
                             Ok(Some(
                                 self.screenshot_output(
                                     args.describe == Some(true),
-                                    args.region.is_none(),
+                                    space,
                                     s.image_base64,
                                     s.width,
                                     s.height,
@@ -486,7 +900,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -527,7 +943,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -537,27 +955,37 @@ impl super::DesktopTool {
                     Err(out) => return Ok(Some(out)),
                 };
                 let button = to_desktop_button(args.button.as_ref());
-                match screen.click(x, y, button).await {
+                let result = match rail {
+                    Rail::Targeted(pid) => screen.click_targeted(pid, x, y, button).await,
+                    Rail::Global => screen.click(x, y, button).await,
+                };
+                match result {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
-                        data: Some(serde_json::json!({"clicked": true, "x": x, "y": y})),
+                        data: Some(serde_json::json!({
+                            "clicked": true, "x": x, "y": y, "delivery": rail.delivery(),
+                        })),
                         message: None,
                     })),
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
             "type_text" => {
-                // Pre-flight the focus: these keystrokes are global and land on
-                // whatever holds focus *now*, which is not necessarily what the
-                // model thinks it clicked. Fails open when the AX layer cannot
-                // say (see focus_gate) — `force:true` overrides everything but
-                // the secure-field hard block.
+                // Pre-flight the focus. On the global rail these keystrokes land
+                // on whatever holds focus *now*, which is not necessarily what
+                // the model thinks it clicked; on the targeted rail they land
+                // inside the named process, so the gate is only asked about that
+                // process (see focus_preflight). Fails open when the AX layer
+                // cannot say — `force:true` overrides everything but the
+                // secure-field hard block.
                 if let Some(refusal) =
-                    super::focus_gate::check(platform, args.force == Some(true)).await
+                    focus_preflight(platform, rail, args.force == Some(true)).await
                 {
                     return Ok(Some(refusal));
                 }
@@ -569,14 +997,29 @@ impl super::DesktopTool {
                 // behaves inconsistently in single-line fields.
                 let raw = args.text.as_deref().unwrap_or("");
                 let (text, submit) = split_trailing_newline(raw);
-                match screen.type_text(text).await {
+                let typed = match rail {
+                    Rail::Targeted(pid) => screen.type_text_targeted(pid, text).await,
+                    Rail::Global => screen.type_text(text).await,
+                };
+                match typed {
                     Ok(()) => {
                         if submit {
-                            if let Err(e) = screen.key_combo(&[], "return").await {
+                            // The Return must ride the same rail as the text —
+                            // a targeted type followed by a global Return would
+                            // submit whatever the *user* has focused.
+                            let submitted = match rail {
+                                Rail::Targeted(pid) => {
+                                    screen.key_combo_targeted(pid, &[], "return").await
+                                }
+                                Rail::Global => screen.key_combo(&[], "return").await,
+                            };
+                            if let Err(e) = submitted {
                                 return Ok(Some(DesktopOutput {
                                     success: false,
                                     data: None,
-                                    message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                                    message: Some(super::recovery::with_hint(format!(
+                                        "Screen capability error: {e}"
+                                    ))),
                                 }));
                             }
                         }
@@ -586,6 +1029,7 @@ impl super::DesktopTool {
                                 "typed": true,
                                 "chars": text.chars().count(),
                                 "submitted": submit,
+                                "delivery": rail.delivery(),
                             })),
                             message: None,
                         }))
@@ -593,7 +1037,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -609,16 +1055,22 @@ impl super::DesktopTool {
                 let (modifiers, main_key) = keys.split_at(keys.len() - 1);
                 let modifiers: Vec<String> = modifiers.to_vec();
                 let key = &main_key[0];
-                match screen.key_combo(&modifiers, key).await {
+                let result = match rail {
+                    Rail::Targeted(pid) => screen.key_combo_targeted(pid, &modifiers, key).await,
+                    Rail::Global => screen.key_combo(&modifiers, key).await,
+                };
+                match result {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
-                        data: Some(serde_json::json!({"combo": keys})),
+                        data: Some(serde_json::json!({"combo": keys, "delivery": rail.delivery()})),
                         message: None,
                     })),
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -671,7 +1123,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -706,7 +1160,31 @@ impl super::DesktopTool {
                     ("right", delta_x)
                 };
                 let (clicks, quantized) = scroll_clicks(pixels);
-                match screen.scroll(direction, clicks).await {
+                let result = match rail {
+                    Rail::Targeted(pid) => {
+                        // A targeted scroll never moves the cursor, so the event
+                        // carries the only location the app can route it by:
+                        // without a point it would scroll whatever the app
+                        // decides — not what the model looked at. Refuse rather
+                        // than scroll somewhere arbitrary and report success.
+                        let (x, y) = match require_xy(args, "scroll") {
+                            Ok(xy) => xy,
+                            Err(_) => {
+                                return Ok(Some(invalid_args(
+                                    "a scroll delivered into a specific process needs `x`/`y`: \
+                                     the user's cursor never moves, so the point on the event is \
+                                     the only thing that tells the app which view to scroll. Pass \
+                                     a point inside the target (an element `center` from \
+                                     desktop_som / desktop_ax_snapshot works), or drop \
+                                     app/pid/window_id to scroll at the real cursor.",
+                                )));
+                            }
+                        };
+                        screen.scroll_targeted(pid, x, y, direction, clicks).await
+                    }
+                    Rail::Global => screen.scroll(direction, clicks).await,
+                };
+                match result {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
                         data: Some(serde_json::json!({
@@ -715,6 +1193,7 @@ impl super::DesktopTool {
                             "requested_pixels": pixels,
                             "wheel_clicks": clicks,
                             "approx_pixels_moved": f64::from(clicks) * PIXELS_PER_SCROLL_CLICK,
+                            "delivery": rail.delivery(),
                         })),
                         message: quantized.then(|| {
                             format!(
@@ -728,7 +1207,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -737,12 +1218,30 @@ impl super::DesktopTool {
                     let data: Vec<serde_json::Value> = windows
                         .iter()
                         .map(|w| {
-                            serde_json::json!({
-                                "id": w.id,
-                                "title": w.title,
-                                "owner": w.owner,
-                                "pid": w.pid,
-                            })
+                            // `bounds` / `layer` / `on_screen` are omitted rather
+                            // than defaulted when the platform did not report
+                            // them: absent means "unknown", and `layer: 0` would
+                            // otherwise read as "a normal app window".
+                            let mut obj = serde_json::Map::new();
+                            obj.insert("id".into(), serde_json::json!(w.id));
+                            obj.insert("title".into(), serde_json::json!(w.title));
+                            obj.insert("owner".into(), serde_json::json!(w.owner));
+                            obj.insert("pid".into(), serde_json::json!(w.pid));
+                            if let Some(b) = w.bounds.as_ref() {
+                                obj.insert(
+                                    "bounds".into(),
+                                    serde_json::json!({
+                                        "x": b.x, "y": b.y, "width": b.w, "height": b.h,
+                                    }),
+                                );
+                            }
+                            if let Some(layer) = w.layer {
+                                obj.insert("layer".into(), serde_json::json!(layer));
+                            }
+                            if let Some(on_screen) = w.on_screen {
+                                obj.insert("on_screen".into(), serde_json::json!(on_screen));
+                            }
+                            serde_json::Value::Object(obj)
                         })
                         .collect();
                     Ok(Some(DesktopOutput {
@@ -754,7 +1253,9 @@ impl super::DesktopTool {
                 Err(e) => Ok(Some(DesktopOutput {
                     success: false,
                     data: None,
-                    message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                    message: Some(super::recovery::with_hint(format!(
+                        "Screen capability error: {e}"
+                    ))),
                 })),
             },
             "focus_window" => {
@@ -780,7 +1281,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -808,7 +1311,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -841,7 +1346,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -865,7 +1372,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -894,7 +1403,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen recording error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen recording error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -904,38 +1415,54 @@ impl super::DesktopTool {
                     Err(out) => return Ok(Some(out)),
                 };
                 let button = to_desktop_button(args.button.as_ref());
-                match screen.double_click(x, y, button).await {
+                let result = match rail {
+                    Rail::Targeted(pid) => screen.double_click_targeted(pid, x, y, button).await,
+                    Rail::Global => screen.double_click(x, y, button).await,
+                };
+                match result {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
-                        data: Some(serde_json::json!({"double_clicked": true, "x": x, "y": y})),
+                        data: Some(serde_json::json!({
+                            "double_clicked": true, "x": x, "y": y, "delivery": rail.delivery(),
+                        })),
                         message: None,
                     })),
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
             "drag" => {
-                let (sx, sy, ex, ey) = match (args.start_x, args.start_y, args.end_x, args.end_y) {
-                    (Some(sx), Some(sy), Some(ex), Some(ey)) => (sx, sy, ex, ey),
-                    _ => {
-                        return Ok(Some(invalid_args(
-                            "drag requires numeric 'start_x', 'start_y', 'end_x' and 'end_y'",
-                        )));
-                    }
+                let (sx, sy, ex, ey) = match require_drag_points(args) {
+                    Ok(points) => points,
+                    Err(out) => return Ok(Some(out)),
                 };
-                match screen.drag(sx, sy, ex, ey, args.duration_ms).await {
+                let result = match rail {
+                    Rail::Targeted(pid) => {
+                        screen
+                            .drag_targeted(pid, sx, sy, ex, ey, args.duration_ms)
+                            .await
+                    }
+                    Rail::Global => screen.drag(sx, sy, ex, ey, args.duration_ms).await,
+                };
+                match result {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
-                        data: Some(serde_json::json!({"dragged": true})),
+                        data: Some(
+                            serde_json::json!({"dragged": true, "delivery": rail.delivery()}),
+                        ),
                         message: None,
                     })),
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -944,16 +1471,24 @@ impl super::DesktopTool {
                     Ok(xy) => xy,
                     Err(out) => return Ok(Some(out)),
                 };
-                match screen.hover(x, y).await {
+                let result = match rail {
+                    Rail::Targeted(pid) => screen.hover_targeted(pid, x, y).await,
+                    Rail::Global => screen.hover(x, y).await,
+                };
+                match result {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
-                        data: Some(serde_json::json!({"hovered": true, "x": x, "y": y})),
+                        data: Some(serde_json::json!({
+                            "hovered": true, "x": x, "y": y, "delivery": rail.delivery(),
+                        })),
                         message: None,
                     })),
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -966,7 +1501,9 @@ impl super::DesktopTool {
                 Err(e) => Ok(Some(DesktopOutput {
                     success: false,
                     data: None,
-                    message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                    message: Some(super::recovery::with_hint(format!(
+                        "Screen capability error: {e}"
+                    ))),
                 })),
             },
             "mouse_button" => {
@@ -990,7 +1527,15 @@ impl super::DesktopTool {
                     }
                 };
                 let session_id = super::held_inputs::current_session_id();
-                match screen.mouse_button(x, y, button, press_action).await {
+                let result = match rail {
+                    Rail::Targeted(pid) => {
+                        screen
+                            .mouse_button_targeted(pid, x, y, button, press_action)
+                            .await
+                    }
+                    Rail::Global => screen.mouse_button(x, y, button, press_action).await,
+                };
+                match result {
                     Ok(()) => {
                         // Same ledger discipline as key_button: a held button
                         // stays physically down on the user's mouse until it is
@@ -1007,14 +1552,18 @@ impl super::DesktopTool {
                         }
                         Ok(Some(DesktopOutput {
                             success: true,
-                            data: Some(serde_json::json!({"x": x, "y": y})),
+                            data: Some(
+                                serde_json::json!({"x": x, "y": y, "delivery": rail.delivery()}),
+                            ),
                             message: None,
                         }))
                     }
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -1038,7 +1587,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -1071,7 +1622,9 @@ impl super::DesktopTool {
                         Err(e) => DesktopOutput {
                             success: false,
                             data: None,
-                            message: Some(super::recovery::with_hint(format!("System capability error: {e}"))),
+                            message: Some(super::recovery::with_hint(format!(
+                                "System capability error: {e}"
+                            ))),
                         },
                     }));
                 }
@@ -1089,7 +1642,9 @@ impl super::DesktopTool {
                             Err(e) => Ok(Some(DesktopOutput {
                                 success: false,
                                 data: None,
-                                message: Some(super::recovery::with_hint(format!("Launch failed after quit: {e}"))),
+                                message: Some(super::recovery::with_hint(format!(
+                                    "Launch failed after quit: {e}"
+                                ))),
                             })),
                         }
                     }
@@ -1125,7 +1680,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("System capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "System capability error: {e}"
+                        ))),
                     })),
                 },
                 // No system capability wired: fall back to the text-only screen
@@ -1139,7 +1696,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 },
             },
@@ -1154,7 +1713,9 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Screen capability error: {e}"
+                        ))),
                     })),
                 }
             }
@@ -1184,7 +1745,9 @@ impl super::DesktopTool {
                 Err(e) => Ok(Some(DesktopOutput {
                     success: false,
                     data: None,
-                    message: Some(super::recovery::with_hint(format!("Screen capability error: {e}"))),
+                    message: Some(super::recovery::with_hint(format!(
+                        "Screen capability error: {e}"
+                    ))),
                 })),
             },
             "paste" => {
@@ -1200,7 +1763,9 @@ impl super::DesktopTool {
                     return Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!("Failed to write to clipboard: {e}"))),
+                        message: Some(super::recovery::with_hint(format!(
+                            "Failed to write to clipboard: {e}"
+                        ))),
                     }));
                 }
 
@@ -1210,7 +1775,12 @@ impl super::DesktopTool {
                 #[cfg(not(target_os = "macos"))]
                 let paste_modifier = "ctrl";
 
-                if let Err(e) = screen.key_combo(&[paste_modifier.into()], "v").await {
+                let modifiers = [paste_modifier.to_string()];
+                let pasted = match rail {
+                    Rail::Targeted(pid) => screen.key_combo_targeted(pid, &modifiers, "v").await,
+                    Rail::Global => screen.key_combo(&modifiers, "v").await,
+                };
+                if let Err(e) = pasted {
                     restore_clipboard(screen, &saved).await;
                     return Ok(Some(DesktopOutput {
                         success: false,
@@ -1230,6 +1800,7 @@ impl super::DesktopTool {
                         "pasted": true,
                         "chars": text.chars().count(),
                         "clipboard_restored": restored,
+                        "delivery": rail.delivery(),
                     })),
                     message: saved.unrestorable_note(),
                 }))
@@ -1274,9 +1845,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!(
-                            "set_value failed: {e}"
-                        ))),
+                        message: Some(super::recovery::with_hint(format!("set_value failed: {e}"))),
                     })),
                 }
             }
@@ -1314,9 +1883,7 @@ impl super::DesktopTool {
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(super::recovery::with_hint(format!(
-                            "ax_action failed: {e}"
-                        ))),
+                        message: Some(super::recovery::with_hint(format!("ax_action failed: {e}"))),
                     })),
                 }
             }
@@ -1511,7 +2078,14 @@ mod tests {
     async fn screenshot_output_without_bridge_is_passthrough() {
         let tool = DesktopTool::new();
         let out = tool
-            .screenshot_output(true, true, "Ymd4".into(), 100, 50, "png".into())
+            .screenshot_output(
+                true,
+                ShotSpace::FullScreen,
+                "Ymd4".into(),
+                100,
+                50,
+                "png".into(),
+            )
             .await;
         assert!(out.success);
         let data = out.data.unwrap();
@@ -1532,13 +2106,52 @@ mod tests {
     #[tokio::test]
     async fn screenshot_output_region_crop_omits_coordinate_space() {
         let tool = DesktopTool::new();
-        // A region crop (full_screen=false): normalized coords would map onto
-        // the whole display, not the crop, so the guide must be absent.
+        // A region crop: normalized coords would map onto the whole display,
+        // not the crop, so the guide must be absent.
         let out = tool
-            .screenshot_output(false, false, "Ymd4".into(), 100, 50, "png".into())
+            .screenshot_output(
+                false,
+                ShotSpace::Region,
+                "Ymd4".into(),
+                100,
+                50,
+                "png".into(),
+            )
             .await;
         let data = out.data.unwrap();
         assert!(data.get("coordinate_space").is_none());
+    }
+
+    #[tokio::test]
+    async fn screenshot_output_of_a_window_asks_for_window_coords_not_display_coords() {
+        let tool = DesktopTool::new();
+        let out = tool
+            .screenshot_output(
+                false,
+                ShotSpace::Window {
+                    window_id: 8412,
+                    bounds: Some(aleph_desktop::BoundingBox {
+                        x: 100.0,
+                        y: 60.0,
+                        w: 1200.0,
+                        h: 800.0,
+                    }),
+                },
+                "Ymd4".into(),
+                600,
+                400,
+                "png".into(),
+            )
+            .await;
+        let cs = &out.data.unwrap()["coordinate_space"];
+        assert_eq!(cs["window_id"], 8412);
+        assert_eq!(cs["image_width"], 600);
+        assert_eq!(cs["window_bounds"]["x"], 100.0);
+        // The whole point: these pixels are window-relative, so the guide must
+        // send the model to the window space — replaying them as display pixels
+        // is the miss this exists to prevent.
+        let note = cs["note"].as_str().unwrap();
+        assert!(note.contains("coord_space=\"window\""), "{note}");
     }
 
     #[tokio::test]
@@ -1549,7 +2162,14 @@ mod tests {
         let tool = DesktopTool::new().with_vision_bridge(bridge);
 
         let out = tool
-            .screenshot_output(true, true, "aW1n".into(), 10, 10, "png".into())
+            .screenshot_output(
+                true,
+                ShotSpace::FullScreen,
+                "aW1n".into(),
+                10,
+                10,
+                "png".into(),
+            )
             .await;
         let data = out.data.unwrap();
         assert_eq!(data["image_base64"], "aW1n");
@@ -1567,10 +2187,414 @@ mod tests {
 
         // want_describe=false → no augmentation even though a bridge is wired.
         let out = tool
-            .screenshot_output(false, true, "aW1n".into(), 10, 10, "png".into())
+            .screenshot_output(
+                false,
+                ShotSpace::FullScreen,
+                "aW1n".into(),
+                10,
+                10,
+                "png".into(),
+            )
             .await;
         let data = out.data.unwrap();
         assert_eq!(data["image_base64"], "aW1n");
         assert!(data.get("ocr_text").is_none());
+    }
+
+    // ── Rail policy (pure) ────────────────────────────────────────────
+
+    #[test]
+    fn a_coordinate_action_with_no_target_is_refused_when_a_background_rail_exists() {
+        // The user's decision for this wave: fail closed. The event would drag
+        // the user's physical cursor, so it does not happen by default.
+        let err = choose_rail(true, None, false, "click")
+            .expect_err("an untargeted click must not silently move the user's cursor");
+        assert!(err.contains("global input tap"), "{err}");
+        // The refusal has to be actionable — it names every way forward.
+        assert!(err.contains("`app`"), "{err}");
+        assert!(err.contains("allow_global_pointer"), "{err}");
+        assert!(err.contains("set_value"), "{err}");
+    }
+
+    #[test]
+    fn naming_a_process_routes_to_the_background_rail() {
+        assert_eq!(
+            choose_rail(true, Some(4242), false, "click").unwrap(),
+            Rail::Targeted(4242)
+        );
+    }
+
+    #[test]
+    fn the_operator_can_opt_back_into_the_intrusive_rail() {
+        assert_eq!(
+            choose_rail(true, None, true, "click").unwrap(),
+            Rail::Global
+        );
+    }
+
+    #[test]
+    fn a_platform_without_a_targeted_rail_keeps_its_legacy_behavior() {
+        // Windows / Linux today: there is nothing to refuse *in favour of*, so
+        // the untargeted global click must still go through — byte-identical to
+        // before this wave, and independent of the config knob.
+        assert_eq!(
+            choose_rail(false, None, false, "click").unwrap(),
+            Rail::Global
+        );
+        assert_eq!(
+            choose_rail(false, None, true, "type_text").unwrap(),
+            Rail::Global
+        );
+        // Even a named pid cannot conjure a rail the platform does not have.
+        assert_eq!(
+            choose_rail(false, Some(7), false, "click").unwrap(),
+            Rail::Global
+        );
+    }
+
+    #[test]
+    fn only_event_synthesizing_actions_pick_a_rail() {
+        for a in [
+            "click",
+            "double_click",
+            "drag",
+            "hover",
+            "scroll",
+            "mouse_button",
+            "type_text",
+            "key_combo",
+            "paste",
+        ] {
+            assert!(is_input_action(a), "{a} puts an event on a rail");
+        }
+        for a in [
+            "screenshot",
+            "ocr",
+            "window_list",
+            "focus_window",
+            "clipboard_read",
+            "set_value",
+            "ax_action",
+            // No targeted counterpart exists for a held key, so it stays on the
+            // legacy path rather than being refused into uselessness.
+            "key_button",
+        ] {
+            assert!(
+                !is_input_action(a),
+                "{a} must not be gated by the rail policy"
+            );
+        }
+    }
+
+    #[test]
+    fn the_delivery_reported_is_the_rail_that_ran() {
+        assert_eq!(Rail::Targeted(1).delivery(), "targeted");
+        assert_eq!(Rail::Global.delivery(), "global");
+    }
+
+    // ── app → pid resolution (pure) ───────────────────────────────────
+
+    fn app(name: &str, bundle: &str, pid: Option<u64>) -> AppInfo {
+        AppInfo {
+            name: name.into(),
+            bundle_id: bundle.into(),
+            pid,
+            is_active: false,
+        }
+    }
+
+    #[test]
+    fn app_resolves_by_exact_name_or_bundle_id_case_insensitively() {
+        let apps = [
+            app("Safari", "com.apple.Safari", Some(11)),
+            app("Notes", "com.apple.Notes", Some(22)),
+        ];
+        assert_eq!(match_running_app(&apps, "safari").unwrap().pid, Some(11));
+        assert_eq!(
+            match_running_app(&apps, "com.apple.notes").unwrap().pid,
+            Some(22)
+        );
+    }
+
+    #[test]
+    fn a_unique_substring_resolves_but_an_ambiguous_one_is_handed_back() {
+        let apps = [
+            app("Google Chrome", "com.google.Chrome", Some(1)),
+            app("Google Chrome Helper", "com.google.Chrome.helper", Some(2)),
+            app("Notes", "com.apple.Notes", Some(3)),
+        ];
+        assert_eq!(match_running_app(&apps, "notes").unwrap().pid, Some(3));
+
+        // Which "Chrome" the user meant is a judgement — the model's, not ours.
+        let err = match_running_app(&apps, "chrome").expect_err("ambiguous must not be guessed");
+        assert!(err.contains("matches 2 running apps"), "{err}");
+        assert!(err.contains("Google Chrome Helper"), "{err}");
+
+        // An exact name still wins over its own substring matches.
+        assert_eq!(
+            match_running_app(&apps, "Google Chrome").unwrap().pid,
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn an_app_that_is_not_running_names_the_way_forward() {
+        let apps = [app("Safari", "com.apple.Safari", Some(11))];
+        let err = match_running_app(&apps, "Xcode").expect_err("not running");
+        assert!(err.contains("not running"), "{err}");
+        assert!(err.contains("launch_app"), "{err}");
+    }
+
+    #[test]
+    fn an_installed_but_dead_app_has_no_pid_to_target() {
+        // list_running_apps reports pid: None for a known-but-not-running app;
+        // it must not be matched, or we would target nothing.
+        let apps = [app("Xcode", "com.apple.dt.Xcode", None)];
+        assert!(match_running_app(&apps, "Xcode").is_err());
+    }
+
+    // ── Routing: which rail the event actually reaches ────────────────
+    //
+    // The policy above is pure; these prove the dispatcher honours it — that a
+    // pid really lands on `click_targeted` and not on the global tap, and that a
+    // platform without a background rail is left exactly as it was.
+
+    mod routing {
+        use super::*;
+        use aleph_desktop::traits::{
+            AutomationCapability, MediaCapability, PermissionCapability, PimCapability,
+            PowerCapability, ScreenCapability, SystemCapability,
+        };
+        use aleph_desktop::{
+            DesktopError, DesktopPlatform, OcrResult as DOcrResult, Result as DResult,
+            ScreenRegion, Screenshot, WindowInfo,
+        };
+        use std::sync::Mutex;
+
+        /// Every event the screen was asked to deliver, and how.
+        #[derive(Default)]
+        struct Calls {
+            global: Vec<String>,
+            targeted: Vec<(i32, String)>,
+        }
+
+        struct RailScreen {
+            targeted_rail: bool,
+            calls: Arc<Mutex<Calls>>,
+        }
+
+        #[async_trait::async_trait]
+        impl ScreenCapability for RailScreen {
+            async fn screenshot(&self, _r: Option<ScreenRegion>) -> DResult<Screenshot> {
+                Err(DesktopError::NotImplemented("screenshot".into()))
+            }
+            async fn ocr(&self, _i: Option<&[u8]>) -> DResult<DOcrResult> {
+                Err(DesktopError::NotImplemented("ocr".into()))
+            }
+            async fn click(&self, _x: f64, _y: f64, _b: aleph_desktop::MouseButton) -> DResult<()> {
+                self.calls.lock().unwrap().global.push("click".into());
+                Ok(())
+            }
+            async fn type_text(&self, _t: &str) -> DResult<()> {
+                self.calls.lock().unwrap().global.push("type_text".into());
+                Ok(())
+            }
+            async fn key_combo(&self, _m: &[String], _k: &str) -> DResult<()> {
+                self.calls.lock().unwrap().global.push("key_combo".into());
+                Ok(())
+            }
+            async fn scroll(&self, _d: &str, _a: i32) -> DResult<()> {
+                self.calls.lock().unwrap().global.push("scroll".into());
+                Ok(())
+            }
+            async fn window_list(&self) -> DResult<Vec<WindowInfo>> {
+                Ok(vec![WindowInfo {
+                    id: 900,
+                    title: "Notes".into(),
+                    owner: "Notes".into(),
+                    pid: 733,
+                    ..Default::default()
+                }])
+            }
+            async fn focus_window(&self, _id: u64) -> DResult<()> {
+                Ok(())
+            }
+            async fn launch_app(&self, _n: &str) -> DResult<()> {
+                Ok(())
+            }
+
+            fn supports_targeted_input(&self) -> bool {
+                self.targeted_rail
+            }
+            async fn click_targeted(
+                &self,
+                pid: i32,
+                _x: f64,
+                _y: f64,
+                _b: aleph_desktop::MouseButton,
+            ) -> DResult<()> {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .targeted
+                    .push((pid, "click".into()));
+                Ok(())
+            }
+        }
+
+        struct RailPlatform {
+            screen: RailScreen,
+        }
+
+        impl DesktopPlatform for RailPlatform {
+            fn platform_name(&self) -> &str {
+                "rail-mock"
+            }
+            fn screen(&self) -> Option<&dyn ScreenCapability> {
+                Some(&self.screen)
+            }
+            fn pim(&self) -> Option<&dyn PimCapability> {
+                None
+            }
+            fn system(&self) -> Option<&dyn SystemCapability> {
+                None
+            }
+            fn automation(&self) -> Option<&dyn AutomationCapability> {
+                None
+            }
+            fn permission(&self) -> Option<&dyn PermissionCapability> {
+                None
+            }
+            fn media(&self) -> Option<&dyn MediaCapability> {
+                None
+            }
+            fn power(&self) -> Option<&dyn PowerCapability> {
+                None
+            }
+        }
+
+        fn fixture(
+            targeted_rail: bool,
+            allow_global_pointer: bool,
+        ) -> (
+            DesktopTool,
+            Arc<dyn aleph_desktop::DesktopPlatform>,
+            Arc<Mutex<Calls>>,
+        ) {
+            let calls = Arc::new(Mutex::new(Calls::default()));
+            let platform: Arc<dyn aleph_desktop::DesktopPlatform> = Arc::new(RailPlatform {
+                screen: RailScreen {
+                    targeted_rail,
+                    calls: Arc::clone(&calls),
+                },
+            });
+            let mut tool = DesktopTool::new().with_platform(Arc::clone(&platform));
+            tool = tool.with_allow_global_pointer(allow_global_pointer);
+            (tool, platform, calls)
+        }
+
+        fn click(extra: serde_json::Value) -> DesktopArgs {
+            let mut v = serde_json::json!({"action": "click", "x": 10.0, "y": 20.0});
+            if let (Some(base), Some(extra)) = (v.as_object_mut(), extra.as_object()) {
+                for (k, val) in extra {
+                    base.insert(k.clone(), val.clone());
+                }
+            }
+            serde_json::from_value(v).expect("valid DesktopArgs")
+        }
+
+        #[tokio::test]
+        async fn a_pid_lands_on_the_background_rail_and_never_touches_the_cursor() {
+            let (tool, platform, calls) = fixture(true, false);
+            let out = tool
+                .call_via_platform(&platform, &click(serde_json::json!({"pid": 4242})))
+                .await
+                .unwrap()
+                .expect("click is handled");
+            assert!(out.success, "{:?}", out.message);
+            assert_eq!(out.data.unwrap()["delivery"], "targeted");
+
+            let calls = calls.lock().unwrap();
+            assert_eq!(calls.targeted, vec![(4242, "click".to_string())]);
+            assert!(
+                calls.global.is_empty(),
+                "the global tap must not be touched — that is the user's cursor"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_window_id_resolves_to_its_owning_process() {
+            let (tool, platform, calls) = fixture(true, false);
+            let out = tool
+                .call_via_platform(&platform, &click(serde_json::json!({"window_id": 900})))
+                .await
+                .unwrap()
+                .expect("click is handled");
+            assert!(out.success, "{:?}", out.message);
+            assert_eq!(
+                calls.lock().unwrap().targeted,
+                vec![(733, "click".to_string())]
+            );
+        }
+
+        #[tokio::test]
+        async fn an_untargeted_click_is_refused_and_no_event_is_emitted() {
+            let (tool, platform, calls) = fixture(true, false);
+            let out = tool
+                .call_via_platform(&platform, &click(serde_json::json!({})))
+                .await
+                .unwrap()
+                .expect("click is handled");
+            assert!(!out.success);
+            assert!(
+                out.message.unwrap().contains("global input tap"),
+                "the refusal must say why"
+            );
+            let calls = calls.lock().unwrap();
+            assert!(
+                calls.global.is_empty() && calls.targeted.is_empty(),
+                "a refusal must cost the user nothing — no event at all"
+            );
+        }
+
+        #[tokio::test]
+        async fn the_operator_opt_in_restores_the_intrusive_rail() {
+            let (tool, platform, calls) = fixture(true, true);
+            let out = tool
+                .call_via_platform(&platform, &click(serde_json::json!({})))
+                .await
+                .unwrap()
+                .expect("click is handled");
+            assert!(out.success);
+            assert_eq!(out.data.unwrap()["delivery"], "global");
+            assert_eq!(calls.lock().unwrap().global, vec!["click".to_string()]);
+        }
+
+        #[tokio::test]
+        async fn a_platform_without_a_background_rail_is_byte_identical_to_before() {
+            // Windows / Linux: no targeted rail, so an untargeted click still
+            // goes out on the global path with the config knob left at its
+            // fail-closed default. Nothing about this platform changed.
+            let (tool, platform, calls) = fixture(false, false);
+            let out = tool
+                .call_via_platform(&platform, &click(serde_json::json!({})))
+                .await
+                .unwrap()
+                .expect("click is handled");
+            assert!(out.success, "{:?}", out.message);
+            assert_eq!(out.data.unwrap()["delivery"], "global");
+            assert_eq!(calls.lock().unwrap().global, vec!["click".to_string()]);
+
+            // And a pid cannot conjure a rail that does not exist: it still goes
+            // out globally rather than erroring on a NotImplemented default.
+            let (tool, platform, calls) = fixture(false, false);
+            let out = tool
+                .call_via_platform(&platform, &click(serde_json::json!({"pid": 4242})))
+                .await
+                .unwrap()
+                .expect("click is handled");
+            assert!(out.success);
+            assert_eq!(calls.lock().unwrap().global, vec!["click".to_string()]);
+        }
     }
 }

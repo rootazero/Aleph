@@ -17,6 +17,7 @@ fn make_args(action: &str) -> DesktopArgs {
         text: None,
         keys: None,
         bundle_id: None,
+        app: None,
         window_id: None,
         start_x: None,
         start_y: None,
@@ -769,6 +770,7 @@ mod e2e_normalized {
             text: None,
             keys: None,
             bundle_id: None,
+            app: None,
             window_id: None,
             start_x: None,
             start_y: None,
@@ -1215,8 +1217,8 @@ mod boundary_contracts {
     use super::*;
     use aleph_desktop::system_types::{AppInfo, ClipboardContent, SystemInfo};
     use aleph_desktop::traits::{
-        AutomationCapability, MediaCapability, PermissionCapability, PimCapability, PowerCapability,
-        ScreenCapability, SystemCapability,
+        AutomationCapability, MediaCapability, PermissionCapability, PimCapability,
+        PowerCapability, ScreenCapability, SystemCapability,
     };
     use aleph_desktop::{
         DesktopPlatform, MouseButton, OcrResult, Result as DResult, ScreenRegion, Screenshot,
@@ -1471,7 +1473,9 @@ mod boundary_contracts {
         assert_eq!(writes(&rec), vec!["hi".to_string()]);
         assert_eq!(out.data.unwrap()["clipboard_restored"], false);
 
-        let message = out.message.expect("an unrestorable clipboard must be reported");
+        let message = out
+            .message
+            .expect("an unrestorable clipboard must be reported");
         assert!(message.contains("image"), "message: {message}");
     }
 
@@ -1514,7 +1518,9 @@ mod boundary_contracts {
     async fn screenshot_refuses_a_blank_frame() {
         let (tool, _rec) = build(BLANK_FRAME, None);
 
-        let out = AlephTool::call(&tool, make_args("screenshot")).await.unwrap();
+        let out = AlephTool::call(&tool, make_args("screenshot"))
+            .await
+            .unwrap();
         assert!(
             !out.success,
             "a frame with no pixels must not be served as the screen"
@@ -1533,7 +1539,9 @@ mod boundary_contracts {
     async fn screenshot_serves_a_healthy_frame_unchanged() {
         let (tool, _rec) = build(FRAME, None);
 
-        let out = AlephTool::call(&tool, make_args("screenshot")).await.unwrap();
+        let out = AlephTool::call(&tool, make_args("screenshot"))
+            .await
+            .unwrap();
         assert!(out.success, "screenshot failed: {:?}", out.message);
 
         let data = out.data.expect("screenshot data");

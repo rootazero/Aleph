@@ -90,25 +90,82 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // input.*
+    //
+    // Results are exported too, not just params: each one now carries the
+    // `delivery` field ("targeted" | "global"), and the Swift helper's Codable
+    // structs have to agree on it or the model would be told which rail ran by
+    // a struct that cannot say.
     out.insert(
         "ClickParams",
         serde_json::to_value(schema_for!(methods::input::ClickParams))?,
+    );
+    out.insert(
+        "ClickResult",
+        serde_json::to_value(schema_for!(methods::input::ClickResult))?,
     );
     out.insert(
         "TypeTextParams",
         serde_json::to_value(schema_for!(methods::input::TypeTextParams))?,
     );
     out.insert(
+        "TypeTextResult",
+        serde_json::to_value(schema_for!(methods::input::TypeTextResult))?,
+    );
+    out.insert(
         "KeyComboParams",
         serde_json::to_value(schema_for!(methods::input::KeyComboParams))?,
+    );
+    out.insert(
+        "KeyComboResult",
+        serde_json::to_value(schema_for!(methods::input::KeyComboResult))?,
     );
     out.insert(
         "ScrollParams",
         serde_json::to_value(schema_for!(methods::input::ScrollParams))?,
     );
     out.insert(
+        "ScrollResult",
+        serde_json::to_value(schema_for!(methods::input::ScrollResult))?,
+    );
+    out.insert(
         "DragParams",
         serde_json::to_value(schema_for!(methods::input::DragParams))?,
+    );
+    out.insert(
+        "DragResult",
+        serde_json::to_value(schema_for!(methods::input::DragResult))?,
+    );
+    out.insert(
+        "HoverParams",
+        serde_json::to_value(schema_for!(methods::input::HoverParams))?,
+    );
+    out.insert(
+        "HoverResult",
+        serde_json::to_value(schema_for!(methods::input::HoverResult))?,
+    );
+    out.insert(
+        "MouseButtonParams",
+        serde_json::to_value(schema_for!(methods::input::MouseButtonParams))?,
+    );
+    out.insert(
+        "MouseButtonResult",
+        serde_json::to_value(schema_for!(methods::input::MouseButtonResult))?,
+    );
+    out.insert(
+        "CursorPositionResult",
+        serde_json::to_value(schema_for!(methods::input::CursorPositionResult))?,
+    );
+    out.insert(
+        "ClipboardReadResult",
+        serde_json::to_value(schema_for!(methods::input::ClipboardReadResult))?,
+    );
+    out.insert(
+        "ClipboardWriteParams",
+        serde_json::to_value(schema_for!(methods::input::ClipboardWriteParams))?,
+    );
+    out.insert(
+        "ClipboardWriteResult",
+        serde_json::to_value(schema_for!(methods::input::ClipboardWriteResult))?,
     );
 
     // media.camera.*

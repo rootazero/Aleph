@@ -66,6 +66,7 @@ Task {
     await registerSpeechHandlers(router)
     await registerOcrHandlers(router)
     await registerAxHandlers(router)
+    await registerInputHandlers(router)
     await registerPermHandlers(router)
     await registerScreenCaptureHandlers(router)
     await registerPimHandlers(router)

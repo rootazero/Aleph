@@ -23,6 +23,16 @@
 //! work in points. The marks are painted in **pixels** (points × scale) to
 //! land on the right spot of the Retina capture. No stateful index cache is
 //! needed: the index → center map travels in the same response.
+//!
+//! # One window, or one app
+//!
+//! With no `window_id` the marks come from a pid's **every** window while the
+//! pixels come from the primary **display** — two different things, and nothing
+//! detects it when they disagree (the app's other window is on another display,
+//! or behind something). Pass `window_id` and both halves are taken from that
+//! one window: the capture is cropped to it (occluded or not), the marks are
+//! filtered to the elements that actually lie inside its frame, and they are
+//! painted relative to the window's own origin. Same window, guaranteed.
 
 use async_trait::async_trait;
 use image::{Rgba, RgbaImage};
@@ -50,6 +60,12 @@ pub struct DesktopSomArgs {
     /// Target process id. Omit to mark the frontmost application.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
+    /// Mark exactly one window (id from `window_list`): the capture is cropped
+    /// to it and only the elements inside its frame are marked, so the numbers
+    /// and the pixels are guaranteed to be the same window. Implies that
+    /// window's owning process, so `pid` becomes unnecessary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<u64>,
     /// Maximum AX subtree depth to walk (default 16, capped at 32).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_depth: Option<u32>,
@@ -172,7 +188,18 @@ fn glyph_scale(height: u32) -> i64 {
 /// Paint numbered Set-of-Marks onto a PNG capture. Pure: decodes `png_bytes`,
 /// scales each point-space `Mark` to pixels via `scale`, draws an outline plus
 /// a numbered badge, and re-encodes to PNG. No platform access.
-fn annotate(png_bytes: &[u8], marks: &[Mark], scale: f64) -> std::result::Result<Vec<u8>, String> {
+///
+/// `origin` is the capture's top-left corner in the same global point space the
+/// marks live in: `(0, 0)` for a display capture, the window's frame origin for
+/// a window capture. Without it a window-cropped image would have every mark
+/// painted at the element's *screen* position — i.e. offset by wherever the user
+/// happens to have dragged the window.
+fn annotate(
+    png_bytes: &[u8],
+    marks: &[Mark],
+    scale: f64,
+    origin: (f64, f64),
+) -> std::result::Result<Vec<u8>, String> {
     let mut img = image::load_from_memory(png_bytes)
         .map_err(|e| format!("decode capture: {e}"))?
         .to_rgba8();
@@ -183,8 +210,8 @@ fn annotate(png_bytes: &[u8], marks: &[Mark], scale: f64) -> std::result::Result
 
     for mark in marks {
         let color = PALETTE[mark.index % PALETTE.len()];
-        let px = (mark.x * scale).round() as i64;
-        let py = (mark.y * scale).round() as i64;
+        let px = ((mark.x - origin.0) * scale).round() as i64;
+        let py = ((mark.y - origin.1) * scale).round() as i64;
         let pw = (mark.w * scale).round() as i64;
         let ph = (mark.h * scale).round() as i64;
         draw_outline(&mut img, px, py, pw, ph, thickness, color);
@@ -299,9 +326,14 @@ impl AlephTool for DesktopSom {
          pass one of those verbatim to `ax_action` rather than guessing; `enabled:false` means \
          greyed out; `settable:false` means `set_value` will not take; `secure:true` marks a \
          password field, whose value is never returned and which must not be typed into. Omit \
-         `pid` for the frontmost app. Available on macOS (Accessibility + Screen Recording \
-         permission required) and Windows (UI Automation); unavailable on Linux — fall back to \
-         screenshot + gui_locate there.";
+         `pid` for the frontmost app. Pass `window_id` (from window_list) to mark ONE window: \
+         the capture is cropped to it — it works even when the window is covered or in the \
+         background — and only the elements inside it are numbered, so the marks and the pixels \
+         are guaranteed to be the same window. Every `center` stays in screen coordinates and is \
+         ready to use as-is; pass the returned `app_pid` (or the same `window_id`) on the \
+         follow-up `desktop` action and it is delivered without moving the user's cursor. \
+         Available on macOS (Accessibility + Screen Recording permission required) and Windows \
+         (UI Automation); unavailable on Linux — fall back to screenshot + gui_locate there.";
 
     type Args = DesktopSomArgs;
     type Output = DesktopOutput;
@@ -343,14 +375,27 @@ impl AlephTool for DesktopSom {
             .unwrap_or(SOM_DEFAULT_ELEMENTS)
             .min(SOM_MAX_ELEMENTS);
 
+        // 0. One window? Then the tree query and the capture must be about that
+        //    same window — resolve it once, up front, and let it dictate both.
+        let window = match args.window_id {
+            Some(window_id) => match resolve_window(screen, window_id).await {
+                Ok(w) => Some(w),
+                Err(message) => {
+                    return Ok(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(super::recovery::with_hint(message)),
+                    });
+                }
+            },
+            None => None,
+        };
+        // A window implies its process: querying the frontmost app's tree while
+        // capturing a background window is exactly the disagreement this fixes.
+        let pid = args.pid.or_else(|| window.as_ref().map(|w| w.pid));
+
         // 1. Collect actionable elements.
-        let root = match ax
-            .query_tree(QueryTreeParams {
-                pid: args.pid,
-                max_depth,
-            })
-            .await
-        {
+        let root = match ax.query_tree(QueryTreeParams { pid, max_depth }).await {
             Ok(Some(r)) => r,
             Ok(None) => {
                 return Ok(DesktopOutput {
@@ -369,28 +414,49 @@ impl AlephTool for DesktopSom {
         };
         let mut collected: Vec<&AxElement> = Vec::new();
         collect_interactable(&root, &mut collected);
+        // Geometry, not judgement: an element of this app that does not lie
+        // inside the captured window is not in the picture, so numbering it
+        // would point the model at a mark it cannot see.
+        if let Some(w) = window.as_ref() {
+            collected.retain(|el| element_inside(el, &w.frame));
+        }
         let truncated = collected.len() > max_elements;
         collected.truncate(max_elements);
         let (marks, elements_json) = build_marks(&collected);
 
-        // 2. Capture the screen (primary display; carries the Retina scale).
-        let shot = match screen.screenshot(None).await {
-            Ok(s) => s,
-            Err(e) => {
-                return Ok(DesktopOutput {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Screen capture failed: {e}")),
-                });
-            }
+        // 2. Capture: one window (cropped, works occluded / not frontmost) or
+        //    the primary display. Both carry the Retina scale.
+        let (shot, reported_bounds) = match window.as_ref() {
+            Some(w) => match screen.screenshot_window(w.id, false).await {
+                Ok(ws) => (ws.image, ws.window_bounds),
+                Err(e) => {
+                    return Ok(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(super::recovery::with_hint(format!(
+                            "Window capture failed: {e}"
+                        ))),
+                    });
+                }
+            },
+            None => match screen.screenshot(None).await {
+                Ok(s) => (s, None),
+                Err(e) => {
+                    return Ok(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Screen capture failed: {e}")),
+                    });
+                }
+            },
         };
-        // Resolve the device pixel ratio. The macOS bridge screenshot path
-        // hard-codes scale_factor=None (DPR is not surfaced over the wire), so on
-        // a Retina display the capture is in physical pixels while AX bounds are
-        // in points — defaulting to 1.0 would paint every numbered mark at
-        // half-position, defeating the Set-of-Marks grounding. Fall back to the
-        // primary display's scale_factor from display_list() so marks land on
-        // their elements and the reported `scale_factor` is truthful.
+        // Resolve the device pixel ratio. An older helper omits it (DPR was not
+        // surfaced over the wire), so on a Retina display the capture is in
+        // physical pixels while AX bounds are in points — defaulting to 1.0 would
+        // paint every numbered mark at half-position, defeating the Set-of-Marks
+        // grounding. Fall back to the primary display's scale_factor from
+        // display_list() so marks land on their elements and the reported
+        // `scale_factor` is truthful.
         let scale = match shot.scale_factor {
             Some(s) => s,
             None => screen
@@ -408,6 +474,15 @@ impl AlephTool for DesktopSom {
         };
         let scale = scale.max(1.0);
 
+        // The capture's top-left in the global point space the marks live in.
+        // The capture is authoritative when it reports its own frame; the
+        // window_list frame is the fallback for a helper that does not.
+        let origin = match (reported_bounds.as_ref(), window.as_ref()) {
+            (Some(b), _) => (b.x, b.y),
+            (None, Some(w)) => (w.frame.x, w.frame.y),
+            (None, None) => (0.0, 0.0),
+        };
+
         // 3. Annotate off the async runtime (CPU-bound decode/draw/encode).
         use base64::Engine;
         let raw = match base64::engine::general_purpose::STANDARD.decode(&shot.image_base64) {
@@ -420,24 +495,27 @@ impl AlephTool for DesktopSom {
                 });
             }
         };
-        let annotated =
-            match tokio::task::spawn_blocking(move || annotate(&raw, &marks, scale)).await {
-                Ok(Ok(bytes)) => bytes,
-                Ok(Err(e)) => {
-                    return Ok(DesktopOutput {
-                        success: false,
-                        data: None,
-                        message: Some(format!("set-of-marks overlay failed: {e}")),
-                    });
-                }
-                Err(e) => {
-                    return Ok(DesktopOutput {
-                        success: false,
-                        data: None,
-                        message: Some(format!("overlay task join: {e}")),
-                    });
-                }
-            };
+        let annotated = match tokio::task::spawn_blocking(move || {
+            annotate(&raw, &marks, scale, origin)
+        })
+        .await
+        {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(e)) => {
+                return Ok(DesktopOutput {
+                    success: false,
+                    data: None,
+                    message: Some(format!("set-of-marks overlay failed: {e}")),
+                });
+            }
+            Err(e) => {
+                return Ok(DesktopOutput {
+                    success: false,
+                    data: None,
+                    message: Some(format!("overlay task join: {e}")),
+                });
+            }
+        };
 
         // 4. Honour format/max_width and the shared result-size budget — the
         //    same re-encoder the `screenshot` action uses.
@@ -472,22 +550,86 @@ impl AlephTool for DesktopSom {
             }
         };
 
+        let mut data = json!({
+            "image_base64": processed.image_base64,
+            "width": processed.width,
+            "height": processed.height,
+            "format": processed.format,
+            "scale_factor": scale,
+            "app_pid": root.pid,
+            "count": elements_json.len(),
+            "truncated": truncated,
+            "elements": elements_json,
+        });
+        if let (Some(w), Some(obj)) = (window.as_ref(), data.as_object_mut()) {
+            // Say what was captured. `center`s stay in the global point space
+            // either way — they are ready to click as-is, no coord_space needed.
+            obj.insert("window_id".into(), json!(w.id));
+            let frame = reported_bounds.as_ref().unwrap_or(&w.frame);
+            obj.insert(
+                "window_bounds".into(),
+                json!({"x": frame.x, "y": frame.y, "width": frame.w, "height": frame.h}),
+            );
+        }
+
         Ok(DesktopOutput {
             success: true,
-            data: Some(json!({
-                "image_base64": processed.image_base64,
-                "width": processed.width,
-                "height": processed.height,
-                "format": processed.format,
-                "scale_factor": scale,
-                "app_pid": root.pid,
-                "count": elements_json.len(),
-                "truncated": truncated,
-                "elements": elements_json,
-            })),
+            data: Some(data),
             message: None,
         })
     }
+}
+
+/// The one window a `window_id` names.
+struct TargetWindow {
+    id: u64,
+    pid: i32,
+    /// Frame in the global point space, top-left origin — the same space AX
+    /// element bounds (and clicks) live in.
+    frame: aleph_desktop::BoundingBox,
+}
+
+/// Resolve `window_id` against the live window list.
+///
+/// `Err` carries a message the model can act on: a stale id and a platform that
+/// does not report window frames are different problems with different ways out.
+async fn resolve_window(
+    screen: &dyn aleph_desktop::ScreenCapability,
+    window_id: u64,
+) -> std::result::Result<TargetWindow, String> {
+    let windows = screen
+        .window_list()
+        .await
+        .map_err(|e| format!("window_list failed: {e}"))?;
+    let window = windows
+        .iter()
+        .find(|w| w.id == window_id)
+        .ok_or_else(|| format!("no window with id {window_id} is open"))?;
+    let frame = window.bounds.ok_or_else(|| {
+        format!(
+            "window {window_id} reports no bounds on this platform, so its marks cannot be placed"
+        )
+    })?;
+    let pid = i32::try_from(window.pid)
+        .map_err(|_| format!("window {window_id} has a pid outside the addressable range"))?;
+    Ok(TargetWindow {
+        id: window_id,
+        pid,
+        frame,
+    })
+}
+
+/// Whether an element's centre lies inside the captured window's frame.
+///
+/// The centre, not the whole rect: a control clipped by the window edge is still
+/// in the picture, and a scrolled-away one is not. Pure geometry over numbers the
+/// AX layer reported — it reads nothing about what the element *is* (R7/P8).
+fn element_inside(el: &AxElement, frame: &aleph_desktop::BoundingBox) -> bool {
+    let Some((x, y, w, h)) = usable_bounds(el) else {
+        return false;
+    };
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    cx >= frame.x && cx <= frame.x + frame.w && cy >= frame.y && cy <= frame.y + frame.h
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -577,7 +719,7 @@ mod tests {
             w: 60.0,
             h: 24.0,
         }];
-        let out = annotate(&png, &marks, 1.0).expect("annotate");
+        let out = annotate(&png, &marks, 1.0, (0.0, 0.0)).expect("annotate");
         let img = image::load_from_memory(&out).unwrap().to_rgba8();
         assert_eq!(img.width(), 200);
         assert_eq!(img.height(), 120);
@@ -607,7 +749,7 @@ mod tests {
             w: 10.0,
             h: 10.0,
         }];
-        let out = annotate(&png, &marks, 2.0).expect("annotate");
+        let out = annotate(&png, &marks, 2.0, (0.0, 0.0)).expect("annotate");
         let img = image::load_from_memory(&out).unwrap().to_rgba8();
         // Right edge of the scaled outline is around x=38–39 (20 + 20 - t).
         let mut max_painted_x = 0u32;
@@ -634,7 +776,7 @@ mod tests {
             w: 100.0, // extends well past the 50px image
             h: 100.0,
         }];
-        let out = annotate(&png, &marks, 1.0).expect("annotate must clamp, not panic");
+        let out = annotate(&png, &marks, 1.0, (0.0, 0.0)).expect("annotate must clamp, not panic");
         let img = image::load_from_memory(&out).unwrap().to_rgba8();
         assert_eq!(img.width(), 50);
     }
@@ -645,6 +787,7 @@ mod tests {
         let out = tool
             .call(DesktopSomArgs {
                 pid: None,
+                window_id: None,
                 max_depth: None,
                 max_elements: None,
                 format: None,
@@ -654,5 +797,62 @@ mod tests {
             .unwrap();
         assert!(!out.success);
         assert!(out.message.is_some());
+    }
+
+    // ── Window-scoped marks ───────────────────────────────────────────
+
+    fn frame(x: f64, y: f64, w: f64, h: f64) -> aleph_desktop::BoundingBox {
+        aleph_desktop::BoundingBox { x, y, w, h }
+    }
+
+    #[test]
+    fn marks_are_painted_relative_to_the_captured_window_not_the_screen() {
+        // A window at (100, 60): its own button at screen point (110, 70) is
+        // 10pt inside the window, so on the crop it must be painted near the
+        // top-left — not 100px in, which is where the screen coordinate sits.
+        let png = white_png(200, 200);
+        let marks = vec![Mark {
+            index: 0,
+            x: 110.0,
+            y: 70.0,
+            w: 40.0,
+            h: 20.0,
+        }];
+        let out = annotate(&png, &marks, 1.0, (100.0, 60.0)).expect("annotate");
+        let img = image::load_from_memory(&out).unwrap().to_rgba8();
+        let mut min_painted_x = u32::MAX;
+        for py in 0..200 {
+            for px in 0..200 {
+                if img.get_pixel(px, py) != &WHITE {
+                    min_painted_x = min_painted_x.min(px);
+                }
+            }
+        }
+        assert_eq!(
+            min_painted_x, 10,
+            "the mark must sit at the element's offset *within the window*"
+        );
+    }
+
+    #[test]
+    fn only_elements_inside_the_captured_window_are_marked() {
+        let window = frame(100.0, 60.0, 400.0, 300.0);
+        let inside = leaf(
+            "AXButton",
+            Some("Save"),
+            Some(rect(120.0, 80.0, 60.0, 24.0)),
+        );
+        // Same app, its *other* window — off in the corner of another display.
+        let elsewhere = leaf(
+            "AXButton",
+            Some("Send"),
+            Some(rect(1900.0, 900.0, 60.0, 24.0)),
+        );
+        // No bounds at all: nothing to place, so nothing to number.
+        let unplaceable = leaf("AXTextField", None, None);
+
+        assert!(element_inside(&inside, &window));
+        assert!(!element_inside(&elsewhere, &window));
+        assert!(!element_inside(&unplaceable, &window));
     }
 }

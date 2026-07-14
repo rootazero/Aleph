@@ -59,6 +59,13 @@ pub struct DesktopTool {
     /// optional scene description so text-only models can still act on it.
     /// `None` keeps the screenshot path byte-identical to its legacy behavior.
     pub(super) vision_bridge: Option<Arc<VisionBridge>>,
+    /// `[desktop] allow_global_pointer` — permit coordinate actions that name no
+    /// target process, and therefore run on the global input tap: they drag the
+    /// user's physical cursor and need the target app frontmost.
+    ///
+    /// Default `false` (fail closed). Only consulted on a platform that *has* a
+    /// background rail (see [`native`]); elsewhere it is inert.
+    pub(super) allow_global_pointer: bool,
 }
 
 impl DesktopTool {
@@ -70,7 +77,21 @@ impl DesktopTool {
             escape_started: Arc::new(crate::sync_primitives::AtomicBool::new(false)),
             last_run_id: Arc::new(crate::sync_primitives::Mutex::new(String::new())),
             vision_bridge: None,
+            allow_global_pointer: false,
         }
+    }
+
+    /// Permit the intrusive global input rail for actions that name no target
+    /// process (`[desktop] allow_global_pointer`).
+    ///
+    /// Left at its default, an untargeted click on a platform that could have
+    /// delivered it in the background is refused instead of moving the user's
+    /// cursor — see [`native`] for why that refusal is fail-closed rather than a
+    /// silent fallback.
+    #[must_use]
+    pub fn with_allow_global_pointer(mut self, allow: bool) -> Self {
+        self.allow_global_pointer = allow;
+        self
     }
 
     /// Attach a vision bridge so `screenshot` calls that pass `describe: true`
@@ -249,6 +270,21 @@ impl DesktopTool {
                 sub_args.observe = args.observe.clone();
             }
 
+            // Same for the target process: a batch names the app it is driving
+            // once, at the top. Without this, every sub-action of
+            // `{action:"batch", app:"Notes", actions:[…]}` would look untargeted
+            // and be refused by the pointer policy — the batch would be the one
+            // shape of call that could not use the background rail.
+            if sub_args.app.is_none() {
+                sub_args.app = args.app.clone();
+            }
+            if sub_args.pid.is_none() {
+                sub_args.pid = args.pid;
+            }
+            if sub_args.window_id.is_none() {
+                sub_args.window_id = args.window_id;
+            }
+
             // Prevent nested batch. The type system already prevents an
             // inner DesktopBatchAction from carrying its own actions list,
             // but we still reject `action == "batch"` here to surface a
@@ -345,10 +381,18 @@ impl DesktopTool {
         }
     }
 
-    /// Hard-refuse mutating actions while a credential vault is frontmost, and
-    /// refuse launching/quitting/focusing one. Fail-open: if the frontmost app
-    /// cannot be determined, proceed — this guard is defense-in-depth on top
-    /// of approval + content hard-blocks, not the only line.
+    /// Hard-refuse mutating actions aimed at a credential vault, and refuse
+    /// launching/quitting/focusing one. Fail-open: if the app cannot be
+    /// determined, proceed — this guard is defense-in-depth on top of approval +
+    /// content hard-blocks, not the only line.
+    ///
+    /// *Which* app it guards depends on where the event goes. A global event
+    /// lands wherever focus is, so the frontmost app is the one at risk. A
+    /// targeted event is posted into one process and never touches the frontmost
+    /// app — guarding that app would both miss the real target (1Password driven
+    /// in the background while Safari is frontmost) and refuse harmless work
+    /// (typing into Notes while the *user* has 1Password open). So the guard
+    /// follows the event.
     async fn check_blocked_app(&self, args: &DesktopArgs) -> Option<DesktopOutput> {
         let platform = self.platform.as_ref()?;
 
@@ -369,11 +413,31 @@ impl DesktopTool {
             return None; // launch of a non-blocked app needs no frontmost check
         }
 
-        // Frontmost guard for every other mutating action.
         let system = platform.system()?;
         let apps = system.list_running_apps().await.ok()?;
-        let front = apps.iter().find(|a| a.is_active)?;
-        safety::blocked_app_reason(&front.name, &front.bundle_id).map(|reason| DesktopOutput {
+
+        // The app the event will actually reach. `resolve_rail` costs nothing
+        // when the caller named no target (it never queries), and its Err is
+        // ignored here on purpose: the same call re-runs at dispatch and refuses
+        // there with the full message — this guard only decides *whose* identity
+        // to check.
+        let rail = match platform.screen() {
+            Some(screen) => {
+                native::resolve_rail(self.allow_global_pointer, platform, screen, args).await
+            }
+            // No screen at all: nothing is delivered anywhere, but the frontmost
+            // guard is what this platform had before, so keep it.
+            None => Ok(native::Rail::Global),
+        };
+        let target = match rail {
+            Ok(native::Rail::Targeted(pid)) => {
+                let pid = u64::try_from(pid).ok()?;
+                apps.iter().find(|a| a.pid == Some(pid))?
+            }
+            Ok(native::Rail::Global) | Err(_) => apps.iter().find(|a| a.is_active)?,
+        };
+
+        safety::blocked_app_reason(&target.name, &target.bundle_id).map(|reason| DesktopOutput {
             success: false,
             data: None,
             message: Some(reason),
@@ -487,7 +551,10 @@ fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
         )),
         "ax_action" => Some((
             ActionType::DesktopClick,
-            format!("ax_action({})", args.ax_action_name.as_deref().unwrap_or("?")),
+            format!(
+                "ax_action({})",
+                args.ax_action_name.as_deref().unwrap_or("?")
+            ),
         )),
 
         _ => Some((
@@ -577,13 +644,29 @@ impl AlephTool for DesktopTool {
     const NAME: &'static str = "desktop";
     const DESCRIPTION: &'static str = r#"Control the desktop — see the screen and interact with it.
 
+ALWAYS SAY WHICH APP YOU ARE DRIVING. Pass `app` (name or bundle id, e.g.
+"Notes" / "com.apple.Notes"), or `pid`, or `window_id` on every click, drag,
+hover, scroll, type_text, key_combo, mouse_button and paste. The event is then
+delivered straight into that process: the user's physical mouse pointer never
+moves, and the app does not have to be frontmost — you work in the background
+while the user keeps using their machine. This is the preferred path.
+
+Name no app and the event goes to the global input tap instead: it PHYSICALLY
+DRAGS THE USER'S CURSOR across the screen and only lands wherever focus already
+is. That path is refused by default (the operator can allow it with
+`[desktop] allow_global_pointer = true`). Every result says which rail ran, as
+`delivery: "targeted" | "global"`.
+
 For reliable clicking, call `desktop_ax_snapshot` first: it returns the app's
 interactable elements with ready-to-use `center` [x, y] coordinates — far more
-accurate than estimating pixels from a screenshot. Use a screenshot only when
-you need to *see* visual state the accessibility tree cannot describe.
+accurate than estimating pixels from a screenshot — and its `app_pid` is the
+`pid` to pass back here. `set_value` / `ax_action` are better still for text
+fields and buttons: they address the element directly, verify the write, and are
+likewise cursor-free. Use a screenshot only when you need to *see* visual state
+the accessibility tree cannot describe.
 
 Actions:
-- screenshot: Capture screen as base64. Optional region: {x,y,width,height}. Defaults to PNG; pass format/quality/max_width to re-encode (downscaling above 1920 hurts text legibility — keep max_width at 1920+ when you need to read text on screen). Oversized captures are auto-compressed to JPEG to stay within the result budget. Pass `describe:true` if you cannot see images — the result then also carries an `ocr_text` layer (and a scene `description` when a vision model is configured) so a text-only model can still read the screen and act.
+- screenshot: Capture screen as base64. Optional region: {x,y,width,height}. Pass `window_id` (from window_list) to capture ONE window instead of the display — it works even when the window is partly covered or not frontmost, and nothing else on screen leaks into the shot. A window capture's result carries a `coordinate_space` block: address points in it with `coord_space:"window"` (see Coordinate space below). Defaults to PNG; pass format/quality/max_width to re-encode (downscaling above 1920 hurts text legibility — keep max_width at 1920+ when you need to read text on screen). Oversized captures are auto-compressed to JPEG to stay within the result budget. Pass `describe:true` if you cannot see images — the result then also carries an `ocr_text` layer (and a scene `description` when a vision model is configured) so a text-only model can still read the screen and act.
 - ocr: Extract text from screen with bounding boxes. Optional image_base64.
 - click: Click at (x, y). Optional button (left/right/middle).
 - double_click: Double-click at (x, y). Optional button.
@@ -594,11 +677,11 @@ Actions:
 - type_text: Type text at the current keyboard focus. Blind by nature — the keystrokes go wherever focus actually is — so it is pre-flighted against the accessibility layer: it refuses when nothing is focused, or when the focused element reports that it takes no typed value, and tells you what to do instead (click the input, or use set_value). Typing into a secure/password field is always refused. If the app's accessibility tree lies (canvas, terminal, some Electron shells), pass force:true to type anyway — force does not lift the password refusal. On Linux (no accessibility layer) the pre-flight is skipped entirely.
 - key_combo: Press key combination, e.g. keys=["cmd","c"].
 - key_button: Hold or release a key/chord without auto-releasing — keys=["cmd"] plus press_action="press" (hold down) then later press_action="release". Distinct from key_combo, which presses and releases atomically. Useful for drag-with-modifier or chorded shortcuts.
-- scroll: Scroll by delta_x/delta_y PIXELS (negative = up/left), e.g. delta_y:-300 scrolls up about 300px. Pixels are quantized to whole mouse-wheel clicks (~100px each), so a delta under ~100px still moves one click and the result says how far it actually went.
+- scroll: Scroll by delta_x/delta_y PIXELS (negative = up/left), e.g. delta_y:-300 scrolls up about 300px. Pixels are quantized to whole mouse-wheel clicks (~100px each), so a delta under ~100px still moves one click and the result says how far it actually went. When you name a target app/pid/window_id, also pass x/y — a background scroll never moves the cursor, so the point is the only thing telling the app which view to scroll (any point inside it works, e.g. an element `center`).
 - launch_app: Launch app by bundle_id.
 - quit_app: Close app by bundle_id.
 - restart_app: Restart app by bundle_id (quit then relaunch).
-- window_list: List open windows.
+- window_list: List open windows — each entry carries `id`, `title`, `owner`, `pid` (pass it back to drive that app in the background) and, where the platform reports them, `bounds` {x,y,width,height} in screen points, `layer` (0 = a normal app window) and `on_screen`.
 - focus_window: Bring window to front by window_id.
 - move_window: Move a window's top-left corner to (x, y) by window_id.
 - resize_window: Resize a window to width × height pixels by window_id.
@@ -606,7 +689,7 @@ Actions:
 - clipboard_write: Write text to clipboard.
 - screen_record: Record screen as MP4. Optional duration/fps/with_audio and region {x,y,width,height} (defaults to the full primary display). region honors coord_space:"normalized" like screenshot.
 - display_list: List all connected displays with resolution and scale info.
-- batch: Execute multiple actions sequentially. Requires actions array.
+- batch: Execute multiple actions sequentially. Requires actions array. Sub-actions inherit the batch-level `app` / `pid` / `window_id` (name the app you are driving once, at the top) and `coord_space` / `coord_factors` / `observe`, unless they set their own.
 - paste: Paste text via clipboard (Cmd+V). Better for multiline text than type_text. It goes through the user's clipboard: plain text is put back afterwards, but an image or file on the clipboard cannot be (the result says so) — use type_text when the clipboard must be preserved.
 - wait_visual: Wait until the screen settles. Polls screenshots and returns when two consecutive captures match, or after `timeout_ms` (default 5000, max 60000). Use after navigation or clicks that trigger animation. Returns `{stable: bool, polls, elapsed_ms}` — `stable=false` means timeout, not failure.
 - set_value: Set a text field's value directly via the accessibility API and VERIFY the write by reading it back — the reliable way to fill forms (multiline, non-ASCII, replacing existing content). Locate the element with role ("AXTextField") and/or element_title, optionally x/y as a nearest-center hint (honors coord_space). Requires text. Result carries verification.state = "verified" | "unverified". Prefer this over click + type_text; type_text is a blind synthetic fallback.
@@ -629,7 +712,7 @@ Examples:
 {"action":"display_list"}
 {"action":"move_window","window_id":1234,"x":100,"y":80}
 {"action":"resize_window","window_id":1234,"width":1280,"height":800}
-{"action":"batch","actions":[{"action":"click","x":100,"y":200},{"action":"type_text","text":"hello"}]}
+{"action":"batch","app":"Notes","actions":[{"action":"click","x":100,"y":200},{"action":"type_text","text":"hello"}]}
 {"action":"paste","text":"line1\nline2\nline3"}
 {"action":"wait_visual","timeout_ms":3000}
 {"action":"wait_visual","timeout_ms":8000,"region":{"x":0,"y":0,"width":1280,"height":800}}
@@ -638,12 +721,20 @@ Examples:
 {"action":"set_value","role":"AXTextField","element_title":"Email","text":"a@b.c"}
 {"action":"ax_action","ax_action_name":"AXPress","element_title":"Save"}
 
-Coordinate space — by default, `x` / `y` / `start_x` / `end_x` / `region` are pixels (top-left origin). To use UI-TARS-style normalized [0, 1000] × [0, 1000] coordinates that scale to any display, set `coord_space:"normalized"` (and optionally `coord_factors:[w,h]` to override the 1000×1000 default). The runtime rescales against the primary display (or `display_id`) before dispatch.
+Coordinate space — by default, `x` / `y` / `start_x` / `end_x` / `region` are pixels (top-left origin). Two other spaces exist:
+- `coord_space:"normalized"` — UI-TARS-style [0, 1000] × [0, 1000] coordinates that scale to any display (override the 1000×1000 default with `coord_factors:[w,h]`). Resolved against the primary display (or `display_id`).
+- `coord_space:"window"` — pixels of a WINDOW capture. Requires `window_id`. Their origin is the window's top-left, not the screen's, so the runtime maps them back through that window's frame. Use this for every point you read off a `screenshot {window_id}` — resolving them against the display instead would miss by the window's offset.
 
-IMPORTANT — a full-screen `screenshot` is usually downscaled to fit the result budget, so the image you see is smaller than the real display. The screenshot result carries a `coordinate_space` block with the served `image_width`/`image_height`; to act on a point you saw at image pixel (px, py), send `coord_space:"normalized"` with `coord_factors:[image_width, image_height]` and `x=px, y=py`. Replaying raw image pixels as `pixel`-space coords will miss on Retina/downscaled captures.
+IMPORTANT — a `screenshot` is usually downscaled to fit the result budget, so the image you see is smaller than the real capture. Its result carries a `coordinate_space` block with the served `image_width`/`image_height`; to act on a point you saw at image pixel (px, py), pass those as `coord_factors:[image_width, image_height]` with `x=px, y=py` and the matching `coord_space` ("normalized" for a display capture, "window" for a window capture). Replaying raw image pixels as `pixel`-space coords will miss on Retina/downscaled captures.
 
 {"action":"click","coord_space":"normalized","x":500,"y":500}
 {"action":"batch","coord_space":"normalized","actions":[{"action":"click","x":300,"y":400},{"action":"type_text","text":"hi"}]}
+
+Drive one app in the background (nothing else on the user's screen is disturbed):
+{"action":"screenshot","window_id":8412}
+{"action":"click","window_id":8412,"coord_space":"window","coord_factors":[600,400],"x":310,"y":128}
+{"action":"type_text","app":"Notes","text":"meeting notes\n"}
+{"action":"scroll","pid":733,"x":700,"y":460,"delta_y":-300}
 
 Act→observe in one call — mutating actions accept `observe:"state"` (result gains `post_state`: frontmost app + focused element after a 300ms settle) or `observe:"screenshot"` (additionally a fresh bounded screenshot as `post_screenshot`). Use it on the last action of a step instead of a separate screenshot round-trip. In a batch, sub-actions inherit the batch-level `observe`.
 
@@ -708,9 +799,16 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
         // 2. Normalize coordinate space for leaf actions. Batches defer per
         //    sub-action so each one inherits the batch-level `coord_space`
         //    via `execute_batch` and rescales against its own display.
+        //
+        //    A window-space point that cannot be mapped back (no window_id, a
+        //    stale id, a platform with no window bounds) refuses here rather
+        //    than dispatching raw pixels, which would click at an arbitrary
+        //    place on the screen.
         if args.action != "batch" {
             if let Some(ref platform) = self.platform {
-                coord_resolve::maybe_normalize(&mut args, platform).await?;
+                if let Some(refusal) = coord_resolve::maybe_normalize(&mut args, platform).await? {
+                    return Ok(refusal);
+                }
             }
         }
 
@@ -774,8 +872,7 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
                         let mut shot_args =
                             DesktopArgs::from(&types::DesktopBatchAction::empty("screenshot"));
                         shot_args.max_width = Some(1568);
-                        if let Ok(Some(shot)) = self.call_via_platform(platform, &shot_args).await
-                        {
+                        if let Ok(Some(shot)) = self.call_via_platform(platform, &shot_args).await {
                             if let (Some(obj), Some(shot_data)) = (
                                 output.data.as_mut().and_then(|d| d.as_object_mut()),
                                 shot.data,
@@ -824,7 +921,10 @@ mod escape_scope_tests {
         let first = TURN_CONTEXT
             .scope(turn("run-1"), async { tool.run_boundary_crossed() })
             .await;
-        assert!(first, "the first action of a new run resets the abort scope");
+        assert!(
+            first,
+            "the first action of a new run resets the abort scope"
+        );
 
         let same_run = TURN_CONTEXT
             .scope(turn("run-1"), async { tool.run_boundary_crossed() })

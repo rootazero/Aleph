@@ -70,7 +70,17 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bundle_id: Option<String>,
 
-    /// Window ID to focus (from `window_list` results).
+    /// Target application for this action — app name, executable, or bundle id
+    /// (e.g. "Safari", "com.apple.safari"). Resolved against the running-app
+    /// list into a live pid, which is what [`DesktopArgs::pid`] carries; pass
+    /// whichever of the two you already have.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+
+    /// Window ID (from `window_list` results). Focuses / moves / resizes that
+    /// window; on `screenshot` it captures that window alone; on a pointer or
+    /// keyboard action it identifies the target process when neither `pid` nor
+    /// `app` was given.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_id: Option<u32>,
 
@@ -169,7 +179,13 @@ pub struct DesktopArgs {
     // Pythonic action script — set when the model emits text in UI-TARS
     // format like `click(start_box='(500,500)')` instead of JSON.
     //
-    /// Coordinate space: "pixel" (default) or "normalized".
+    /// Coordinate space: "pixel" (default), "normalized", or "window".
+    ///
+    /// "window" means the coordinates are pixels **of the window-cropped
+    /// screenshot** identified by `window_id`; they are mapped back to the
+    /// global point space (`global = window_bounds.origin + pixel / scale`)
+    /// before dispatch. Without it, a pixel read off a window capture would be
+    /// resolved against the whole display and land in the wrong place.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coord_space: Option<String>,
 
@@ -205,7 +221,19 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ax_action_name: Option<String>,
 
-    /// Target process ID for `set_value` / `ax_action`. Omit for the frontmost app.
+    /// Target process for this action.
+    ///
+    /// For `set_value` / `ax_action` it scopes the element locator, as before.
+    /// For every coordinate-space and keyboard action (click, `double_click`,
+    /// drag, hover, scroll, `mouse_button`, `type_text`, `key_combo`, paste) it
+    /// additionally selects the **delivery rail**: with a pid the event is
+    /// posted straight into that process's event queue — the user's cursor never
+    /// moves and the app need not be frontmost. Without one the event goes to
+    /// the global input tap, which drags the user's physical cursor and is
+    /// refused unless `[desktop] allow_global_pointer = true`.
+    ///
+    /// Omit for the frontmost app on `set_value` / `ax_action`. See also
+    /// [`DesktopArgs::app`], which resolves a name to the same pid.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
 
@@ -282,7 +310,17 @@ pub struct DesktopBatchAction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bundle_id: Option<String>,
 
-    /// Window ID to focus (from `window_list` results).
+    /// Target application for this action — app name, executable, or bundle id
+    /// (e.g. "Safari", "com.apple.safari"). Resolved against the running-app
+    /// list into a live pid, which is what [`DesktopArgs::pid`] carries; pass
+    /// whichever of the two you already have.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+
+    /// Window ID (from `window_list` results). Focuses / moves / resizes that
+    /// window; on `screenshot` it captures that window alone; on a pointer or
+    /// keyboard action it identifies the target process when neither `pid` nor
+    /// `app` was given.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_id: Option<u32>,
 
@@ -364,9 +402,10 @@ pub struct DesktopBatchAction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
 
-    /// Coordinate space for this sub-action. Falls back to the enclosing
-    /// `DesktopArgs.coord_space` when omitted (set by the dispatcher
-    /// before invocation).
+    /// Coordinate space for this sub-action ("pixel" / "normalized" /
+    /// "window"; see [`DesktopArgs::coord_space`]). Falls back to the enclosing
+    /// `DesktopArgs.coord_space` when omitted (set by the dispatcher before
+    /// invocation).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coord_space: Option<String>,
 
@@ -392,7 +431,19 @@ pub struct DesktopBatchAction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ax_action_name: Option<String>,
 
-    /// Target process ID for `set_value` / `ax_action`. Omit for the frontmost app.
+    /// Target process for this action.
+    ///
+    /// For `set_value` / `ax_action` it scopes the element locator, as before.
+    /// For every coordinate-space and keyboard action (click, `double_click`,
+    /// drag, hover, scroll, `mouse_button`, `type_text`, `key_combo`, paste) it
+    /// additionally selects the **delivery rail**: with a pid the event is
+    /// posted straight into that process's event queue — the user's cursor never
+    /// moves and the app need not be frontmost. Without one the event goes to
+    /// the global input tap, which drags the user's physical cursor and is
+    /// refused unless `[desktop] allow_global_pointer = true`.
+    ///
+    /// Omit for the frontmost app on `set_value` / `ax_action`. See also
+    /// [`DesktopArgs::app`], which resolves a name to the same pid.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
 
@@ -422,6 +473,7 @@ impl DesktopBatchAction {
             text: None,
             keys: None,
             bundle_id: None,
+            app: None,
             window_id: None,
             start_x: None,
             start_y: None,
@@ -467,6 +519,7 @@ impl From<&DesktopBatchAction> for DesktopArgs {
             text: b.text.clone(),
             keys: b.keys.clone(),
             bundle_id: b.bundle_id.clone(),
+            app: b.app.clone(),
             window_id: b.window_id,
             start_x: b.start_x,
             start_y: b.start_y,

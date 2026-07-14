@@ -7,10 +7,16 @@ use crate::WindowInfo;
 
 /// List all visible on-screen windows.
 ///
-/// - **macOS**: CoreGraphics `CGWindowListCopyWindowInfo`.
-/// - **Linux**: `wmctrl -l -p`.
+/// - **macOS**: CoreGraphics `CGWindowListCopyWindowInfo` (on-screen only).
+/// - **Linux**: `wmctrl -l -p -G`.
 /// - **Windows**: `EnumWindows` over visible top-level windows; `WindowInfo.id`
 ///   carries the `HWND` so [`focus_window`] can round-trip it.
+///
+/// Every arm fills in [`WindowInfo::bounds`] where its platform query yields a
+/// rectangle: the window frame in the global screen space clicks are issued in.
+/// That geometry is what lets a caller capture (and reason about) one window
+/// instead of the whole display. A field the platform does not report stays
+/// `None` — unknown is never flattened to zero.
 ///
 /// # Errors
 ///
@@ -157,10 +163,13 @@ pub fn resize_window(window_id: u64, width: u32, height: u32) -> Result<()> {
 
 #[cfg(target_os = "windows")]
 fn windows_window_list() -> Result<Vec<WindowInfo>> {
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+        EnumWindows, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+        IsWindowVisible,
     };
+
+    use crate::BoundingBox;
 
     struct EnumState {
         windows: Vec<WindowInfo>,
@@ -178,12 +187,39 @@ fn windows_window_list() -> Result<Vec<WindowInfo>> {
                     let title = String::from_utf16_lossy(&buf[..len as usize]);
                     let mut pid: u32 = 0;
                     GetWindowThreadProcessId(hwnd, Some(&mut pid));
+
+                    // A minimized window keeps WS_VISIBLE, so `IsWindowVisible`
+                    // alone would report it as on screen; `IsIconic` is the only
+                    // thing that says otherwise. Windows also parks a minimized
+                    // window's rect at (-32000, -32000) — a sentinel, not a
+                    // position — so its geometry is reported as unknown rather
+                    // than as somewhere nothing can be clicked.
+                    let iconic = IsIconic(hwnd).as_bool();
+                    let mut rect = RECT::default();
+                    let bounds = if iconic {
+                        None
+                    } else {
+                        // Screen coordinates, top-left origin — the same space
+                        // clicks are issued in.
+                        GetWindowRect(hwnd, &mut rect).ok().map(|()| BoundingBox {
+                            x: f64::from(rect.left),
+                            y: f64::from(rect.top),
+                            w: f64::from(rect.right - rect.left),
+                            h: f64::from(rect.bottom - rect.top),
+                        })
+                    };
+
                     let state = &mut *(lparam.0 as *mut EnumState);
                     state.windows.push(WindowInfo {
                         id: hwnd.0 as usize as u64,
                         title,
                         owner: String::new(),
                         pid: u64::from(pid),
+                        bounds,
+                        on_screen: Some(!iconic),
+                        // Windows has no window-level concept comparable to
+                        // macOS' `kCGWindowLayer`: not told, not zero.
+                        ..Default::default()
                     });
                 }
             }
@@ -314,14 +350,26 @@ fn windows_resize_window(window_id: u64, width: u32, height: u32) -> Result<()> 
 #[cfg(target_os = "macos")]
 fn macos_window_list() -> Result<Vec<WindowInfo>> {
     use core_foundation::base::TCFType;
+    use core_foundation::dictionary::CFDictionary;
     use core_foundation::number::CFNumber;
     use core_foundation::string::CFString;
     use core_graphics::window::{
-        copy_window_info, kCGNullWindowID, kCGWindowLayer, kCGWindowListExcludeDesktopElements,
-        kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName,
-        kCGWindowOwnerPID,
+        copy_window_info, kCGNullWindowID, kCGWindowBounds, kCGWindowLayer,
+        kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly, kCGWindowName,
+        kCGWindowNumber, kCGWindowOwnerName, kCGWindowOwnerPID,
     };
 
+    use crate::BoundingBox;
+
+    // On-screen-only is deliberate, not inherited by accident.
+    //
+    // Dropping it would list minimized and other-Space windows — but those have
+    // no live backing surface, so `screenshot_window` returns a blank or stale
+    // frame for them, and macOS' focus path activates the owning app without
+    // un-minimizing the window. The list exists to feed capture and targeting,
+    // so widening it would hand the model window ids that silently do not work,
+    // which is worse than not offering them. Listing them is a separate feature
+    // (it needs a restore-then-capture step), not a flag change.
     let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
     let list = match copy_window_info(options, kCGNullWindowID) {
         Some(l) => l,
@@ -370,6 +418,36 @@ fn macos_window_list() -> Result<Vec<WindowInfo>> {
             }
         };
 
+        // `kCGWindowBounds` is a CGRect dictionary representation — CFString
+        // keys ("X"/"Y"/"Width"/"Height") mapping to CFNumbers — in the global
+        // screen POINT space with a top-left origin, i.e. the same space clicks
+        // are issued in. Absent (or malformed) stays `None`: "not told" must not
+        // be reported as a rectangle at the origin.
+        let get_bounds = || -> Option<BoundingBox> {
+            // SAFETY: `kCGWindowBounds` is a framework constant `CFStringRef`,
+            // valid for the process lifetime; `wrap_under_get_rule` retains it.
+            let key_cf = unsafe { CFString::wrap_under_get_rule(kCGWindowBounds) };
+            // `downcast` type-checks the value against `CFDictionaryGetTypeID`,
+            // so the re-wrap below is only reached for a real CFDictionary; the
+            // K/V types then say how to read its entries.
+            let untyped = entry.find(&key_cf)?.downcast::<CFDictionary>()?;
+            // SAFETY: `untyped` is a live CFDictionary (checked above) and
+            // `wrap_under_get_rule` retains the same reference.
+            let rect: CFDictionary<CFString, core_foundation::base::CFType> =
+                unsafe { CFDictionary::wrap_under_get_rule(untyped.as_concrete_TypeRef()) };
+            let num = |k: &str| -> Option<f64> {
+                rect.find(&CFString::new(k))
+                    .and_then(|v| v.downcast::<CFNumber>())
+                    .and_then(|n| n.to_f64())
+            };
+            Some(BoundingBox {
+                x: num("X")?,
+                y: num("Y")?,
+                w: num("Width")?,
+                h: num("Height")?,
+            })
+        };
+
         let title = unsafe { get_str(kCGWindowName) };
         let layer = unsafe { get_i64(kCGWindowLayer) };
 
@@ -387,6 +465,11 @@ fn macos_window_list() -> Result<Vec<WindowInfo>> {
             title,
             owner,
             pid,
+            bounds: get_bounds(),
+            // Both come free from the query we already ran: `layer` is read
+            // above, and the option set is on-screen-only.
+            layer: i32::try_from(layer).ok(),
+            on_screen: Some(true),
         });
     }
 
@@ -513,9 +596,10 @@ end run"#
 
 #[cfg(target_os = "linux")]
 fn linux_window_list() -> Result<Vec<WindowInfo>> {
-    // Use wmctrl -l -p to list windows: <XID> <desktop> <PID> <machine> <title>
+    // `-G` adds the geometry columns; without them nothing can crop a capture
+    // to a window or map its pixels back to click coordinates.
     let output = std::process::Command::new("wmctrl")
-        .args(["-l", "-p"])
+        .args(["-l", "-p", "-G"])
         .output()
         .map_err(|e| {
             DesktopError::WindowFailed(format!(
@@ -532,30 +616,69 @@ fn linux_window_list() -> Result<Vec<WindowInfo>> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut windows = Vec::new();
-
-    for line in stdout.lines() {
-        // Format: 0x04000007  0 12345 hostname Window Title Here
-        let parts: Vec<&str> = line.splitn(5, char::is_whitespace).collect();
-        if parts.len() < 5 {
-            continue;
-        }
-
-        let id_str = parts[0].trim_start_matches("0x").trim_start_matches("0X");
-        let id = u64::from_str_radix(id_str, 16).unwrap_or(0);
-        let pid: u64 = parts[2].trim().parse().unwrap_or(0);
-        let title = parts[4].trim().to_string();
-
-        windows.push(WindowInfo {
-            id,
-            title,
-            owner: String::new(),
-            pid,
-        });
-    }
+    let windows: Vec<WindowInfo> = stdout.lines().filter_map(parse_wmctrl_line).collect();
 
     info!(count = windows.len(), "Window list retrieved (Linux)");
     Ok(windows)
+}
+
+/// Parse one line of `wmctrl -l -p -G`.
+///
+/// ```text
+/// <XID> <desktop> <PID> <x> <y> <w> <h> <machine> <title…>
+/// 0x04000007  0 12345 100  50   800  600  hostname Window Title Here
+/// ```
+///
+/// wmctrl pads the numeric columns, so fields are separated by *runs* of
+/// whitespace, and the title — everything after the machine name — may itself
+/// contain spaces, so it is taken as the untouched remainder of the line.
+///
+/// Geometry that fails to parse yields `bounds: None` rather than dropping the
+/// window: an unlistable window is worse than one whose rectangle is unknown.
+#[cfg(target_os = "linux")]
+fn parse_wmctrl_line(line: &str) -> Option<WindowInfo> {
+    use crate::BoundingBox;
+
+    // XID, desktop, PID, x, y, w, h, machine.
+    let mut fields = [""; 8];
+    let mut rest = line;
+    for slot in &mut fields {
+        let start = rest.trim_start();
+        let end = start.find(char::is_whitespace).unwrap_or(start.len());
+        *slot = &start[..end];
+        rest = &start[end..];
+    }
+    if fields.iter().any(|f| f.is_empty()) {
+        return None;
+    }
+
+    let id_str = fields[0].trim_start_matches("0x").trim_start_matches("0X");
+    let id = u64::from_str_radix(id_str, 16).ok()?;
+    let pid: u64 = fields[2].parse().unwrap_or(0);
+
+    // X11 geometry is in device pixels with a top-left origin — the same space
+    // clicks are issued in. All four columns or none: half a rectangle is not a
+    // rectangle.
+    let bounds = match (
+        fields[3].parse::<f64>(),
+        fields[4].parse::<f64>(),
+        fields[5].parse::<f64>(),
+        fields[6].parse::<f64>(),
+    ) {
+        (Ok(x), Ok(y), Ok(w), Ok(h)) => Some(BoundingBox { x, y, w, h }),
+        _ => None,
+    };
+
+    Some(WindowInfo {
+        id,
+        title: rest.trim().to_string(),
+        owner: String::new(),
+        pid,
+        bounds,
+        // wmctrl reports neither a stacking level nor whether the window is
+        // iconified: not told, not zero/false.
+        ..Default::default()
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -621,6 +744,58 @@ fn linux_wmctrl_geometry(window_id: u64, geometry: &str) -> Result<()> {
 
     info!(window_id, geometry, "Window geometry updated (Linux)");
     Ok(())
+}
+
+// ── Linux window-list parsing tests ──────────────────────────────
+//
+// `parse_wmctrl_line` is the only place the Linux arm can lose geometry or
+// mangle a title, and it needs no wmctrl to exercise.
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use super::*;
+
+    #[test]
+    fn parses_padded_columns_and_a_title_with_spaces() {
+        // wmctrl right-aligns the desktop column and left-pads the geometry
+        // columns, so fields are separated by runs of spaces.
+        let line = "0x04000007  0 12345 100  50   800  600  hostname My Window Title";
+        let w = parse_wmctrl_line(line).expect("line parses");
+        assert_eq!(w.id, 0x0400_0007);
+        assert_eq!(w.pid, 12345);
+        assert_eq!(w.title, "My Window Title");
+        let b = w.bounds.expect("geometry");
+        assert_eq!((b.x, b.y, b.w, b.h), (100.0, 50.0, 800.0, 600.0));
+        // wmctrl reports neither of these.
+        assert!(w.layer.is_none());
+        assert!(w.on_screen.is_none());
+    }
+
+    #[test]
+    fn keeps_the_window_when_geometry_is_unparseable() {
+        // Unknown geometry must not delete the window from the list.
+        let line = "0x0400000a  0 999 x y w h hostname Odd";
+        let w = parse_wmctrl_line(line).expect("line parses");
+        assert_eq!(w.id, 0x0400_000a);
+        assert_eq!(w.title, "Odd");
+        assert!(w.bounds.is_none());
+    }
+
+    #[test]
+    fn negative_coordinates_survive() {
+        // A window on a display left of the primary one has a negative origin.
+        let line = "0x1 0 7 -1920 -100 640 480 host Left";
+        let b = parse_wmctrl_line(line)
+            .expect("line parses")
+            .bounds
+            .expect("geometry");
+        assert_eq!((b.x, b.y), (-1920.0, -100.0));
+    }
+
+    #[test]
+    fn rejects_a_truncated_line() {
+        assert!(parse_wmctrl_line("0x1 0 7 hostname Title").is_none());
+        assert!(parse_wmctrl_line("").is_none());
+    }
 }
 
 // ── Windows window-management tests ──────────────────────────────

@@ -575,7 +575,12 @@ mod tests {
 
     #[test]
     fn ax_match_carries_the_elements_own_actions() {
-        let mut btn = leaf("AXButton", Some("Save"), None, Some(rect(0.0, 0.0, 60.0, 30.0)));
+        let mut btn = leaf(
+            "AXButton",
+            Some("Save"),
+            None,
+            Some(rect(0.0, 0.0, 60.0, 30.0)),
+        );
         btn.actions = Some(vec!["AXPress".into()]);
         btn.enabled = Some(false);
         let tree = window(vec![btn]);

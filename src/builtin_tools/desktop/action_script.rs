@@ -362,6 +362,7 @@ const fn blank_batch_action() -> DesktopBatchAction {
         text: None,
         keys: None,
         bundle_id: None,
+        app: None,
         window_id: None,
         start_x: None,
         start_y: None,

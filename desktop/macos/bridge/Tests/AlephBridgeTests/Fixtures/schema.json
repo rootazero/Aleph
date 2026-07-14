@@ -1,6 +1,6 @@
 {
   "AudioDeviceInfo": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "is_default": {
         "description": "Whether this is the current default input device.",
@@ -15,22 +15,21 @@
         "type": "string"
       },
       "uid": {
-        "description": "Unique device identifier (CoreAudio UID).",
+        "description": "Unique device identifier (`CoreAudio` UID).",
         "type": "string"
       }
     },
     "required": [
-      "is_default",
-      "is_input",
+      "uid",
       "name",
-      "uid"
+      "is_input",
+      "is_default"
     ],
     "title": "AudioDeviceInfo",
     "type": "object"
   },
   "CaptureParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "definitions": {
+    "$defs": {
       "Region": {
         "properties": {
           "height": {
@@ -51,18 +50,19 @@
           }
         },
         "required": [
-          "height",
-          "width",
           "x",
-          "y"
+          "y",
+          "width",
+          "height"
         ],
         "type": "object"
       }
     },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "display_id": {
         "format": "uint32",
-        "minimum": 0.0,
+        "minimum": 0,
         "type": [
           "integer",
           "null"
@@ -71,11 +71,27 @@
       "region": {
         "anyOf": [
           {
-            "$ref": "#/definitions/Region"
+            "$ref": "#/$defs/Region"
           },
           {
             "type": "null"
           }
+        ]
+      },
+      "show_cursor": {
+        "description": "Draw the mouse cursor into the capture. Absent ⇒ platform default.",
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
+      "window_id": {
+        "description": "Capture just this window (id from `window.list`), cropped to its frame,\ninstead of a whole display. The window does not need to be frontmost.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
         ]
       }
     },
@@ -83,33 +99,82 @@
     "type": "object"
   },
   "CaptureResult": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$defs": {
+      "Region": {
+        "properties": {
+          "height": {
+            "format": "double",
+            "type": "number"
+          },
+          "width": {
+            "format": "double",
+            "type": "number"
+          },
+          "x": {
+            "format": "double",
+            "type": "number"
+          },
+          "y": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "height": {
+        "description": "Image height in PIXELS (`height_points * scale`).",
         "format": "uint32",
-        "minimum": 0.0,
+        "minimum": 0,
         "type": "integer"
       },
       "png_base64": {
         "type": "string"
       },
+      "scale": {
+        "description": "Backing scale of the captured surface (2.0 on Retina): `pixels = points * scale`.",
+        "format": "double",
+        "type": [
+          "number",
+          "null"
+        ]
+      },
       "width": {
+        "description": "Image width in PIXELS (`width_points * scale`).",
         "format": "uint32",
-        "minimum": 0.0,
+        "minimum": 0,
         "type": "integer"
+      },
+      "window_bounds": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Region"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Origin+size of the captured surface in the GLOBAL screen POINT space,\ntop-left origin — i.e. the same space clicks are issued in.\n\nLOAD-BEARING for `window_id` captures: without it the crop's pixels\ncannot be mapped back to global click coordinates\n(`global = window_bounds.origin + pixel / scale`), and a window-cropped\nscreenshot silently becomes a targeting regression. Absent on a\nfull-display capture, and absent from a helper that predates the field."
       }
     },
     "required": [
-      "height",
       "png_base64",
-      "width"
+      "width",
+      "height"
     ],
     "title": "CaptureResult",
     "type": "object"
   },
   "ClickParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "definitions": {
+    "$defs": {
       "MouseButton": {
         "enum": [
           "left",
@@ -119,9 +184,28 @@
         "type": "string"
       }
     },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Params for `input.click` **and** `input.double_click`.\n\n`input.double_click` ignores `click_count` and always delivers a native\ndouble-click (click count 2).",
     "properties": {
       "button": {
-        "$ref": "#/definitions/MouseButton"
+        "$ref": "#/$defs/MouseButton"
+      },
+      "click_count": {
+        "description": "Native click count carried on the event itself. Absent or `1` is a\nsingle click; `2` is a real double-click. Two independent single clicks\nare NOT a double-click — the app reads the click count off the event, so\nit must be set on the event rather than synthesized by clicking twice.",
+        "format": "uint32",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "pid": {
+        "description": "Target process for the targeted rail; absent ⇒ global HID tap.",
+        "format": "int32",
+        "type": [
+          "integer",
+          "null"
+        ]
       },
       "x": {
         "format": "double",
@@ -133,15 +217,33 @@
       }
     },
     "required": [
-      "button",
       "x",
-      "y"
+      "y",
+      "button"
     ],
     "title": "ClickParams",
     "type": "object"
   },
+  "ClickResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "delivery": {
+        "default": "global",
+        "description": "Which rail actually delivered the event: [`DELIVERY_TARGETED`] or\n[`DELIVERY_GLOBAL`].",
+        "type": "string"
+      },
+      "ok": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "ok"
+    ],
+    "title": "ClickResult",
+    "type": "object"
+  },
   "ClipParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "duration_secs": {
         "description": "Duration in seconds. Caller clamps to [0.25, 60.0].",
@@ -161,7 +263,7 @@
     "type": "object"
   },
   "ClipResult": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "duration_secs": {
         "format": "double",
@@ -176,19 +278,77 @@
       }
     },
     "required": [
-      "duration_secs",
       "file_path",
+      "duration_secs",
       "has_audio"
     ],
     "title": "ClipResult",
     "type": "object"
   },
+  "ClipboardReadResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "title": "ClipboardReadResult",
+    "type": "object"
+  },
+  "ClipboardWriteParams": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "title": "ClipboardWriteParams",
+    "type": "object"
+  },
+  "ClipboardWriteResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "ok": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "ok"
+    ],
+    "title": "ClipboardWriteResult",
+    "type": "object"
+  },
+  "CursorPositionResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "x": {
+        "format": "double",
+        "type": "number"
+      },
+      "y": {
+        "format": "double",
+        "type": "number"
+      }
+    },
+    "required": [
+      "x",
+      "y"
+    ],
+    "title": "CursorPositionResult",
+    "type": "object"
+  },
   "DragParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "duration_ms": {
         "format": "uint64",
-        "minimum": 0.0,
+        "minimum": 0,
         "type": [
           "integer",
           "null"
@@ -202,6 +362,14 @@
         "format": "double",
         "type": "number"
       },
+      "pid": {
+        "description": "Target process for the targeted rail; absent ⇒ global HID tap.",
+        "format": "int32",
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "start_x": {
         "format": "double",
         "type": "number"
@@ -212,17 +380,33 @@
       }
     },
     "required": [
-      "end_x",
-      "end_y",
       "start_x",
-      "start_y"
+      "start_y",
+      "end_x",
+      "end_y"
     ],
     "title": "DragParams",
     "type": "object"
   },
+  "DragResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "delivery": {
+        "default": "global",
+        "type": "string"
+      },
+      "ok": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "ok"
+    ],
+    "title": "DragResult",
+    "type": "object"
+  },
   "ErrorResponse": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "definitions": {
+    "$defs": {
       "RpcError": {
         "properties": {
           "code": {
@@ -241,13 +425,14 @@
         "type": "object"
       }
     },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "error": {
-        "$ref": "#/definitions/RpcError"
+        "$ref": "#/$defs/RpcError"
       },
       "id": {
         "format": "uint64",
-        "minimum": 0.0,
+        "minimum": 0,
         "type": [
           "integer",
           "null"
@@ -258,18 +443,18 @@
       }
     },
     "required": [
-      "error",
-      "jsonrpc"
+      "jsonrpc",
+      "error"
     ],
     "title": "ErrorResponse",
     "type": "object"
   },
   "HandshakeParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "protocol_version": {
         "format": "uint32",
-        "minimum": 0.0,
+        "minimum": 0,
         "type": "integer"
       },
       "rust_version": {
@@ -277,18 +462,18 @@
       }
     },
     "required": [
-      "protocol_version",
-      "rust_version"
+      "rust_version",
+      "protocol_version"
     ],
     "title": "HandshakeParams",
     "type": "object"
   },
   "HandshakeResult": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "protocol_version": {
         "format": "uint32",
-        "minimum": 0.0,
+        "minimum": 0,
         "type": "integer"
       },
       "supported_methods": {
@@ -302,15 +487,59 @@
       }
     },
     "required": [
+      "swift_version",
       "protocol_version",
-      "supported_methods",
-      "swift_version"
+      "supported_methods"
     ],
     "title": "HandshakeResult",
     "type": "object"
   },
+  "HoverParams": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "pid": {
+        "description": "Target process for the targeted rail; absent ⇒ global HID tap.",
+        "format": "int32",
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "x": {
+        "format": "double",
+        "type": "number"
+      },
+      "y": {
+        "format": "double",
+        "type": "number"
+      }
+    },
+    "required": [
+      "x",
+      "y"
+    ],
+    "title": "HoverParams",
+    "type": "object"
+  },
+  "HoverResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "delivery": {
+        "default": "global",
+        "type": "string"
+      },
+      "ok": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "ok"
+    ],
+    "title": "HoverResult",
+    "type": "object"
+  },
   "KeyComboParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "key": {
         "type": "string"
@@ -320,24 +549,48 @@
           "type": "string"
         },
         "type": "array"
+      },
+      "pid": {
+        "description": "Target process for the targeted rail; absent ⇒ global HID tap.",
+        "format": "int32",
+        "type": [
+          "integer",
+          "null"
+        ]
       }
     },
     "required": [
-      "key",
-      "modifiers"
+      "modifiers",
+      "key"
     ],
     "title": "KeyComboParams",
     "type": "object"
   },
+  "KeyComboResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "delivery": {
+        "default": "global",
+        "type": "string"
+      },
+      "ok": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "ok"
+    ],
+    "title": "KeyComboResult",
+    "type": "object"
+  },
   "ListAudioDevicesParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "description": "List audio devices request. No parameters; sent as an empty struct for schema consistency with the rest of the RPC surface.",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "List audio devices request. No parameters; sent as an empty struct for\nschema consistency with the rest of the RPC surface.",
     "title": "ListAudioDevicesParams",
     "type": "object"
   },
   "ListAudioDevicesResult": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "definitions": {
+    "$defs": {
       "AudioDeviceInfo": {
         "properties": {
           "is_default": {
@@ -353,24 +606,25 @@
             "type": "string"
           },
           "uid": {
-            "description": "Unique device identifier (CoreAudio UID).",
+            "description": "Unique device identifier (`CoreAudio` UID).",
             "type": "string"
           }
         },
         "required": [
-          "is_default",
-          "is_input",
+          "uid",
           "name",
-          "uid"
+          "is_input",
+          "is_default"
         ],
         "type": "object"
       }
     },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "devices": {
         "description": "List of available audio devices.",
         "items": {
-          "$ref": "#/definitions/AudioDeviceInfo"
+          "$ref": "#/$defs/AudioDeviceInfo"
         },
         "type": "array"
       }
@@ -382,16 +636,15 @@
     "type": "object"
   },
   "ListDisplaysResult": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "definitions": {
+    "$defs": {
       "DisplayInfo": {
         "properties": {
           "bounds": {
-            "$ref": "#/definitions/Region"
+            "$ref": "#/$defs/Region"
           },
           "id": {
             "format": "uint32",
-            "minimum": 0.0,
+            "minimum": 0,
             "type": "integer"
           },
           "primary": {
@@ -403,10 +656,10 @@
           }
         },
         "required": [
-          "bounds",
           "id",
-          "primary",
-          "scale"
+          "bounds",
+          "scale",
+          "primary"
         ],
         "type": "object"
       },
@@ -430,18 +683,19 @@
           }
         },
         "required": [
-          "height",
-          "width",
           "x",
-          "y"
+          "y",
+          "width",
+          "height"
         ],
         "type": "object"
       }
     },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "displays": {
         "items": {
-          "$ref": "#/definitions/DisplayInfo"
+          "$ref": "#/$defs/DisplayInfo"
         },
         "type": "array"
       }
@@ -452,8 +706,78 @@
     "title": "ListDisplaysResult",
     "type": "object"
   },
+  "MouseButtonParams": {
+    "$defs": {
+      "MouseButton": {
+        "enum": [
+          "left",
+          "right",
+          "middle"
+        ],
+        "type": "string"
+      },
+      "PressAction": {
+        "enum": [
+          "press",
+          "release",
+          "click"
+        ],
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "action": {
+        "$ref": "#/$defs/PressAction"
+      },
+      "button": {
+        "$ref": "#/$defs/MouseButton"
+      },
+      "pid": {
+        "description": "Target process for the targeted rail; absent ⇒ global HID tap.",
+        "format": "int32",
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "x": {
+        "format": "double",
+        "type": "number"
+      },
+      "y": {
+        "format": "double",
+        "type": "number"
+      }
+    },
+    "required": [
+      "x",
+      "y",
+      "button",
+      "action"
+    ],
+    "title": "MouseButtonParams",
+    "type": "object"
+  },
+  "MouseButtonResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "delivery": {
+        "default": "global",
+        "type": "string"
+      },
+      "ok": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "ok"
+    ],
+    "title": "MouseButtonResult",
+    "type": "object"
+  },
   "Notification": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "jsonrpc": {
         "type": "string"
@@ -471,7 +795,7 @@
     "type": "object"
   },
   "OcrParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "fast_mode": {
         "default": false,
@@ -495,12 +819,11 @@
     "type": "object"
   },
   "OcrResult": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "definitions": {
+    "$defs": {
       "OcrBlock": {
         "properties": {
           "bbox": {
-            "$ref": "#/definitions/Region"
+            "$ref": "#/$defs/Region"
           },
           "confidence": {
             "format": "float",
@@ -511,9 +834,9 @@
           }
         },
         "required": [
+          "text",
           "bbox",
-          "confidence",
-          "text"
+          "confidence"
         ],
         "type": "object"
       },
@@ -537,18 +860,19 @@
           }
         },
         "required": [
-          "height",
-          "width",
           "x",
-          "y"
+          "y",
+          "width",
+          "height"
         ],
         "type": "object"
       }
     },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "blocks": {
         "items": {
-          "$ref": "#/definitions/OcrBlock"
+          "$ref": "#/$defs/OcrBlock"
         },
         "type": "array"
       },
@@ -557,19 +881,19 @@
       }
     },
     "required": [
-      "blocks",
-      "full_text"
+      "full_text",
+      "blocks"
     ],
     "title": "OcrResult",
     "type": "object"
   },
   "PingParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "PingParams",
     "type": "object"
   },
   "PingResult": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "pong": {
         "type": "boolean"
@@ -582,7 +906,7 @@
     "type": "object"
   },
   "RecordAudioParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "duration_secs": {
         "description": "Duration in seconds. Caller clamps to [0.25, 300.0].",
@@ -597,7 +921,7 @@
     "type": "object"
   },
   "RecordAudioResult": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "duration_secs": {
         "description": "Actual recording duration in seconds.",
@@ -614,20 +938,20 @@
       }
     },
     "required": [
-      "duration_secs",
       "file_path",
+      "duration_secs",
       "format"
     ],
     "title": "RecordAudioResult",
     "type": "object"
   },
   "Request": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "JSON-RPC 2.0 request with u64 id (replaces old String-based id).",
     "properties": {
       "id": {
         "format": "uint64",
-        "minimum": 0.0,
+        "minimum": 0,
         "type": "integer"
       },
       "jsonrpc": {
@@ -639,19 +963,19 @@
       "params": true
     },
     "required": [
-      "id",
       "jsonrpc",
+      "id",
       "method"
     ],
     "title": "Request",
     "type": "object"
   },
   "Response": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "id": {
         "format": "uint64",
-        "minimum": 0.0,
+        "minimum": 0,
         "type": "integer"
       },
       "jsonrpc": {
@@ -660,15 +984,15 @@
       "result": true
     },
     "required": [
-      "id",
       "jsonrpc",
+      "id",
       "result"
     ],
     "title": "Response",
     "type": "object"
   },
   "RpcError": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "code": {
         "format": "int32",
@@ -687,7 +1011,7 @@
     "type": "object"
   },
   "ScrollParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "amount": {
         "format": "int32",
@@ -695,20 +1019,60 @@
       },
       "direction": {
         "type": "string"
+      },
+      "pid": {
+        "description": "Target process for the targeted rail; absent ⇒ global HID tap.",
+        "format": "int32",
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "x": {
+        "description": "Point the scroll event is stamped with, in global screen points.\n\nThe global rail scrolls wherever the cursor already is, so it may omit\nthese. The targeted rail must NOT: the cursor never moves, so the event\ncarries the only location the app can route the scroll by. Absent on the\ntargeted rail ⇒ the app decides, which is almost never what was meant.",
+        "format": "double",
+        "type": [
+          "number",
+          "null"
+        ]
+      },
+      "y": {
+        "format": "double",
+        "type": [
+          "number",
+          "null"
+        ]
       }
     },
     "required": [
-      "amount",
-      "direction"
+      "direction",
+      "amount"
     ],
     "title": "ScrollParams",
     "type": "object"
   },
+  "ScrollResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "delivery": {
+        "default": "global",
+        "type": "string"
+      },
+      "ok": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "ok"
+    ],
+    "title": "ScrollResult",
+    "type": "object"
+  },
   "SnapParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "quality": {
-        "description": "JPEG quality, 0.0 – 1.0. Caller is expected to clamp; helper rejects values outside [0.05, 1.0] with ERR_INVALID_PARAMS.",
+        "description": "JPEG quality, 0.0 – 1.0. Caller is expected to clamp; helper rejects\nvalues outside [0.05, 1.0] with `ERR_INVALID_PARAMS`.",
         "format": "float",
         "type": "number"
       }
@@ -720,11 +1084,11 @@
     "type": "object"
   },
   "SnapResult": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "height": {
         "format": "uint32",
-        "minimum": 0.0,
+        "minimum": 0,
         "type": "integer"
       },
       "image_base64": {
@@ -733,27 +1097,27 @@
       },
       "width": {
         "format": "uint32",
-        "minimum": 0.0,
+        "minimum": 0,
         "type": "integer"
       }
     },
     "required": [
-      "height",
       "image_base64",
-      "width"
+      "width",
+      "height"
     ],
     "title": "SnapResult",
     "type": "object"
   },
   "TranscribeFileParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "audio_path": {
-        "description": "Absolute path to the audio file (m4a / wav / mp3 supported by SFSpeechRecognizer).",
+        "description": "Absolute path to the audio file (m4a / wav / mp3 supported by `SFSpeechRecognizer`).",
         "type": "string"
       },
       "language": {
-        "description": "BCP-47 language tag (e.g. \"en-US\", \"zh-Hans\"). Helper rejects unknown locales with ERR_INVALID_PARAMS.",
+        "description": "BCP-47 language tag (e.g. \"en-US\", \"zh-Hans\"). Helper rejects unknown\nlocales with `ERR_INVALID_PARAMS`.",
         "type": "string"
       }
     },
@@ -765,7 +1129,7 @@
     "type": "object"
   },
   "TranscribeFileResult": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "language": {
         "description": "Echo of the requested language.",
@@ -777,15 +1141,23 @@
       }
     },
     "required": [
-      "language",
-      "text"
+      "text",
+      "language"
     ],
     "title": "TranscribeFileResult",
     "type": "object"
   },
   "TypeTextParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
+      "pid": {
+        "description": "Target process for the targeted rail; absent ⇒ global HID tap.",
+        "format": "int32",
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "text": {
         "type": "string"
       }
@@ -796,12 +1168,29 @@
     "title": "TypeTextParams",
     "type": "object"
   },
+  "TypeTextResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "delivery": {
+        "default": "global",
+        "type": "string"
+      },
+      "ok": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "ok"
+    ],
+    "title": "TypeTextResult",
+    "type": "object"
+  },
   "WindowFocusParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "window_id": {
         "format": "uint64",
-        "minimum": 0.0,
+        "minimum": 0,
         "type": "integer"
       }
     },
@@ -812,26 +1201,79 @@
     "type": "object"
   },
   "WindowListParams": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "ListParams",
     "type": "object"
   },
   "WindowListResult": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "definitions": {
-      "WindowInfo": {
+    "$defs": {
+      "Region": {
         "properties": {
+          "height": {
+            "format": "double",
+            "type": "number"
+          },
+          "width": {
+            "format": "double",
+            "type": "number"
+          },
+          "x": {
+            "format": "double",
+            "type": "number"
+          },
+          "y": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      },
+      "WindowInfo": {
+        "description": "A window as reported by `window.list`.\n\nThe three trailing fields are `Option` on purpose: `None` means *\"the\nplatform query did not tell us\"*, which is not the same as \"zero\" or\n\"false\". A helper that predates them omits them from the wire, so every\nconsumer must treat unknown as unknown.\n\n`Default` exists so a limb can spell only the fields its platform query\nactually yields via `..Default::default()`.",
+        "properties": {
+          "bounds": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Region"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Window frame in the GLOBAL screen POINT space, top-left origin — the\nsame space clicks are issued in. Required to crop a screenshot to this\nwindow and map its pixels back to click coordinates."
+          },
           "id": {
             "format": "uint64",
-            "minimum": 0.0,
+            "minimum": 0,
             "type": "integer"
+          },
+          "layer": {
+            "description": "Window level. `0` is a normal application window; menu extras, docks and\noverlays sit above it. Lets a caller mechanically skip chrome without\nguessing from the title.",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "on_screen": {
+            "description": "Whether the window is currently on screen (not minimized / not on\nanother Space).",
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "owner": {
             "type": "string"
           },
           "pid": {
             "format": "uint64",
-            "minimum": 0.0,
+            "minimum": 0,
             "type": "integer"
           },
           "title": {
@@ -840,17 +1282,18 @@
         },
         "required": [
           "id",
+          "title",
           "owner",
-          "pid",
-          "title"
+          "pid"
         ],
         "type": "object"
       }
     },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
       "windows": {
         "items": {
-          "$ref": "#/definitions/WindowInfo"
+          "$ref": "#/$defs/WindowInfo"
         },
         "type": "array"
       }

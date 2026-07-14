@@ -74,7 +74,9 @@ fn bridge_err_output(err: impl std::fmt::Display) -> DesktopOutput {
     DesktopOutput {
         success: false,
         data: None,
-        message: Some(super::recovery::with_hint(format!("AX query failed: {err}"))),
+        message: Some(super::recovery::with_hint(format!(
+            "AX query failed: {err}"
+        ))),
     }
 }
 
@@ -599,7 +601,11 @@ mod tests {
         disabled.enabled = Some(false);
         disabled.actions = Some(vec!["AXPress".into(), "AXShowMenu".into()]);
 
-        let mut healthy = leaf("AXButton", Some("Cancel"), Some(rect(20.0, 0.0, 10.0, 10.0)));
+        let mut healthy = leaf(
+            "AXButton",
+            Some("Cancel"),
+            Some(rect(20.0, 0.0, 10.0, 10.0)),
+        );
         healthy.enabled = Some(true);
 
         let tree = AxElement {
@@ -621,7 +627,11 @@ mod tests {
 
     #[test]
     fn redaction_walks_the_whole_tree() {
-        let mut secret = leaf("AXTextField", Some("Password"), Some(rect(0.0, 0.0, 9.0, 9.0)));
+        let mut secret = leaf(
+            "AXTextField",
+            Some("Password"),
+            Some(rect(0.0, 0.0, 9.0, 9.0)),
+        );
         secret.value = Some("hunter2".into());
         secret.secure = Some(true);
         let mut normal = leaf("AXTextField", Some("Email"), Some(rect(0.0, 0.0, 9.0, 9.0)));
