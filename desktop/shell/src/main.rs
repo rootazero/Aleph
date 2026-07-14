@@ -291,7 +291,20 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         // guard below can externalise them; pin the lone webview to the
         // Panel origin and hand outside URLs to the OS browser (R5).
         .initialization_script(external_link::CLICK_INTERCEPTOR_JS)
-        .on_navigation(external_link::route)
+        // Intercept the banner's sentinel control links (apply / dismiss)
+        // before the external-link guard: perform the shell action and cancel
+        // the navigation so the reserved path never loads. Everything else
+        // falls through to the normal internal/external routing.
+        .on_navigation({
+            let handle = app.clone();
+            move |url| {
+                if let Some(action) = update::control_action(url) {
+                    update::handle_control(&handle, action);
+                    return false;
+                }
+                external_link::route(url)
+            }
+        })
         // `SHELL_MARKER_JS` (which sets `data-platform=macos`) is injected via
         // `initialization_script`, but that runs reliably only for same-origin
         // pages (custom protocol + loopback). A panel-only shell pointed at a
@@ -304,6 +317,10 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .on_page_load(|window, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
                 let _ = window.eval(SHELL_MARKER_JS);
+                // A daemon-recovery reload re-navigates the Panel and wipes the
+                // injected banner; put it back if an update is still staged and
+                // the user has not dismissed it this session.
+                update::reinject_banner_if_staged(window.app_handle());
             }
         });
 
