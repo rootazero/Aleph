@@ -14,9 +14,11 @@
 
 **「顶层」二字是本条最重要的部分**——见下方警告。**口径现在由测试执行**：`src/harness/tests/budget.rs`（跑在 `cargo test -p alephcore --lib` 里），同时守 12 文件与行数；出现第 13 个文件或行数上涨即 FAIL。**改这里的数字就得改那里的 `CEILING`，反之亦然。**
 
-**当前测量（2026-07-14）：5997 行 — 超 ~4900 红线 1097 行。**
+**当前测量（2026-07-14）：5863 行 — 超 ~4900 红线 963 行。**（由 `tests/budget.rs` 实测，非手算；`CEILING = 5863`）
 
-> 5994 → 5997：`think.rs` 把每次 LLM 调用的账单 token 盖到它产出的 `AssistantMessage` 上（正常路径 + grace turn 各一行，外加一行文档）。三问已答（见 `tests/budget.rs::CEILING` 的注释）：纯脚手架、与模型能力无关、两个既有消费者（`messages.input_tokens`/`output_tokens` — Panel 与 `sessions` 工具都在读，此前恒为 0）。**不靠删注释来凑行数**——那正是 `budget.rs` 要防的那种账目粉饰。
+> 5997 → 5863（−134）：棘轮第一次往回转。全部来自删除，没有靠搬家或删注释凑数——`trait_def.rs` −56（`Harness` trait 及其默认 `run()` 循环，唯一 impl 是 `AgentHarness` 且已覆写；真正的多态缝是 `SessionDriver` 与 `Arc<dyn HarnessRunner>`）、`chain_context.rs` −21（`with_max_depth` + `Display`，调用方全在 `#[cfg(test)]`）、`callback.rs`/`agent.rs`/`act.rs` −21（`on_complete` + `on_tool_call` 两条回调通道：循环里 9 个发射点，生产侧 0 个监听者）、`trace_sink.rs` −10（`on_init_seam`）、`think.rs` −21（`reactive_fit_and_retry` 两个同构分支合并 + `fire_grace_turn` 折进 `fire_boundary_grace_turn`）。逐项理由见 `tests/budget.rs::CEILING` 注释。
+>
+> 上一轮的 5994 → 5997（`think.rs` 把账单 token 盖到 `AssistantMessage` 上）仍在代码里，只是被这次的删除盖过去了。**不靠删注释来凑行数**——那正是 `budget.rs` 要防的那种账目粉饰。
 
 > ⚠️ **旧状态行「2026-07-04：TOTAL 5077 行 — 超 177 行」是错的，真实值约为 5923（超 ~1000）。** 错因不是笔误，是口径本身有歧义：`agent.rs` 在**生产 `impl` 中间**（第 215 行 / 全文 1060 行）有一个挂在 4 行测试专用取值器上的**缩进** `#[cfg(test)]`。按"第一个 `#[cfg(test)]`"的朴素读法，整个文件在第 214 行被截断，**846 行生产代码被静默排除在预算之外**——这正是 5077 与真实值之间的全部差额。旧 baseline（5267 → 5077）出自同一套读法，一并作废。
 >

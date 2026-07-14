@@ -1,5 +1,5 @@
 //! Test that `SessionDriver::drive` on `AgentHarness` delegates to
-//! `Harness::run` (Phase 4b.5).
+//! `AgentHarness::run` (Phase 4b.5).
 //!
 //! Proof of delegation only — full loop behaviour is covered by the
 //! integration test in `tests/harness_run_e2e.rs`. We wire a real
@@ -118,8 +118,8 @@ async fn session_driver_delegates_to_harness_run() {
 
     let sid: SessionId = SessionKey::ephemeral("driver-delegation");
 
-    // Cast through the trait so we're exercising the trait dispatch path,
-    // not the inherent `Harness::run`.
+    // Cast through `SessionDriver` so we're exercising the trait-dispatch path,
+    // not a direct inherent `AgentHarness::run` call.
     let driver: Arc<dyn SessionDriver> = Arc::new(harness);
     driver.drive(&sid).await.expect("drive should succeed");
 

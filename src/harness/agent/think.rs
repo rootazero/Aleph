@@ -307,14 +307,18 @@ fn promote_text_tool_calls(
 impl AgentHarness {
     /// Fold a single provider response's billed tokens into the run totals.
     ///
-    /// Used for *intermediate* responses that the empty-response and
-    /// `max_output_tokens` recovery loops discard before they reach the
-    /// once-per-turn accounting at the end of `run_turn_internal`. Each
-    /// discarded call was a real round-trip the provider billed (input tokens
-    /// always, plus any partial output on a `max_output_tokens` cut), so
-    /// counting only the final surviving response silently dropped those tokens
-    /// from `total_tokens`, the per-component `token_breakdown`, and every
-    /// downstream cost / budget consumer. Mirrors the final accounting
+    /// Used for *intermediate* responses that never reach the once-per-turn
+    /// accounting at the end of `run_turn_internal`. **Every** discard point
+    /// must account before dropping: the empty-response loop, the
+    /// `max_output_tokens` loop, `drain_context_overflow`,
+    /// `reactive_fit_and_retry`'s still-overflow discard, and the grace turn.
+    /// Each discarded call was a real round-trip the provider billed (input
+    /// tokens always, plus any partial output on a `max_output_tokens` or
+    /// context-window cut), so counting only the final surviving response
+    /// silently dropped those tokens from `total_tokens`, the per-component
+    /// `token_breakdown`, and every downstream cost / budget consumer
+    /// (`total_tokens()` / `token_breakdown()` → `FlowOutcome`). Mirrors the
+    /// final accounting
     /// (`turn_token_total` + `accumulate_token_breakdown`) so each call is
     /// counted exactly once — but NOT `AssistantMessage.usage`: a discarded
     /// response never becomes a message, which is why the session's token total
@@ -821,8 +825,7 @@ impl AgentHarness {
         // reports what the provider billed; window resolution and rendering
         // stay outside.
         if let Some(usage) = response.usage.as_ref() {
-            let occupancy =
-                u32::try_from(usage.context_occupancy_tokens()).unwrap_or(u32::MAX);
+            let occupancy = u32::try_from(usage.context_occupancy_tokens()).unwrap_or(u32::MAX);
             if occupancy > 0 {
                 callback.on_context_usage(occupancy, self.total_tokens());
             }
@@ -1161,10 +1164,8 @@ impl AgentHarness {
                 self.set_terminate_reason(
                     crate::orchestrator::dispatch::TerminateReason::DiminishingReturns,
                 );
-                self.fire_grace_turn(
+                self.fire_boundary_grace_turn(
                     session_id,
-                    &events,
-                    &messages,
                     callback,
                     iterations,
                     GraceReason::Diminishing,
@@ -1525,10 +1526,19 @@ impl AgentHarness {
                 );
                 Ok(resp)
             }
-            // Truncated prompt STILL overflows → pathological (configured window
-            // wider than the provider's real window). Surface honestly instead of
-            // looping. Loop-safe: return Err so the caller's `?` breaks the drain.
-            Ok(_still_overflow) => {
+            // Either the truncated prompt STILL overflows (pathological:
+            // configured window wider than the provider's real window) or the
+            // retry errored outright. Both surface honestly instead of looping —
+            // the still-overflow response carries the *original* error, the
+            // erroring retry its own. Loop-safe: always Err, so the caller's `?`
+            // breaks the drain.
+            other => {
+                // A still-overflow response is billed like any other (usage rides
+                // the same `message_delta` frame) and is dropped here — account it
+                // first, exactly as every other discard point does.
+                if let Ok(still_overflow) = &other {
+                    self.account_intermediate_tokens(still_overflow);
+                }
                 self.emit(
                     || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
                         token_gap,
@@ -1538,19 +1548,7 @@ impl AgentHarness {
                 self.set_terminate_reason(
                     crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
                 );
-                Err(HarnessError::Llm(primary_err))
-            }
-            Err(retry_err) => {
-                self.emit(
-                    || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
-                        token_gap,
-                        succeeded: false,
-                    },
-                );
-                self.set_terminate_reason(
-                    crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
-                );
-                Err(HarnessError::Llm(retry_err))
+                Err(HarnessError::Llm(other.err().unwrap_or(primary_err)))
             }
         }
     }
@@ -1657,30 +1655,49 @@ impl AgentHarness {
         .await;
     }
 
-    /// Fire one tool-less LLM call so the user gets a terminal text
-    /// response on a forced termination (budget critical or diminishing
-    /// returns). The nudge text is selected by `reason`; the call path is
-    /// identical otherwise. Skips entirely when the latest assistant turn
-    /// already produced displayable text. Fail-soft on any LLM error —
-    /// logs at WARN and returns without persisting.
+    /// Fire one tool-less LLM call so the user gets a terminal text response on
+    /// a forced termination (iteration cap, verifier veto, consecutive-failure
+    /// cap, tool-loop halt, timeout, diminishing returns). `reason` selects the
+    /// nudge; the call path is identical otherwise. Fail-soft: any error logs at
+    /// WARN and returns without persisting. The caller sets `hit_limit` and
+    /// returns `TurnState::Done` — the loop fires `on_complete()` on `Done`, so
+    /// the grace paths must not.
     ///
-    /// Caller is responsible for setting `hit_limit` and returning
-    /// `TurnState::Done`; the loop fires `on_complete()` on `Done`, so the
-    /// grace paths must not call it themselves.
-    async fn fire_grace_turn(
+    /// ALWAYS re-reads the session log and rebuilds the prompt, including for the
+    /// in-turn diminishing-returns site, which used to pass the `events` snapshot
+    /// it had fetched BEFORE this turn's `AssistantMessage` was persisted — the
+    /// skip guard then judged "did the user already get final text?" from a log
+    /// that did not yet contain the answer, and answered the same turn twice.
+    /// Hence exactly ONE `last_assistant_has_text` check, on the fresh log.
+    /// Well-behaved capped runs pay nothing.
+    ///
+    /// Honest caveat: the re-read log is the RAW store, whereas the in-turn
+    /// `events` were the input guardrail's sanitised in-memory clone. So the
+    /// diminishing grace turn now also sends un-sanitised user text to the
+    /// provider. Not a new hole — all five pre-existing boundary sites already
+    /// did, same root cause as the input guardrail screening only the tail's
+    /// latest user message while `build_prompt` replays the raw log every turn —
+    /// but it is real, and gets fixed at the registry level for all six at once.
+    pub(crate) async fn fire_boundary_grace_turn(
         &self,
         session_id: &SessionId,
-        events: &[SessionEventRecord],
-        messages: &[UnifiedMessage],
         callback: &mut dyn HarnessCallback,
         iterations: usize,
         reason: GraceReason,
         parent_cancel: &CancellationToken,
     ) {
-        if last_assistant_has_text(events) {
+        let events = match self.deps.session.get_events(session_id, None, None).await {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(?session_id, ?e, "boundary grace turn: get_events failed");
+                return;
+            }
+        };
+        if last_assistant_has_text(&events) {
             return; // user already has terminal text; skip.
         }
-        let mut grace_messages = messages.to_vec();
+        let tail_start = super::tail_start_index(&events);
+        let mut grace_messages = super::prompt::build_prompt(&events, tail_start);
         grace_messages.push(UnifiedMessage::user(reason.nudge()));
         // Reuse the shared payload builder so the grace call threads the same
         // cache-split `system_blocks` (and `session_id` cache-key metadata) as
@@ -1763,7 +1780,7 @@ impl AgentHarness {
         } else {
             text
         };
-        let turn_id = super::current_turn_id(events);
+        let turn_id = super::current_turn_id(&events);
         callback.on_delta(&text);
         let grace_event = SessionEvent::AssistantMessage {
             turn_id,
@@ -1786,45 +1803,6 @@ impl AgentHarness {
             stream: crate::harness::trace::LoopTraceTextKind::Final,
             text,
         });
-    }
-
-    /// Fire a grace turn from the outer loop's cap sites (`max_iterations`,
-    /// verifier-veto, consecutive-failure), where the per-turn `events` /
-    /// `messages` are no longer in scope. Re-fetches the session log and
-    /// re-assembles the prompt, then delegates to
-    /// [`AgentHarness::fire_grace_turn`]. Fail-soft: any error logs at WARN
-    /// and returns. Skips entirely when the last assistant turn already
-    /// produced text — well-behaved capped runs pay nothing.
-    pub(crate) async fn fire_boundary_grace_turn(
-        &self,
-        session_id: &SessionId,
-        callback: &mut dyn HarnessCallback,
-        iterations: usize,
-        reason: GraceReason,
-        parent_cancel: &CancellationToken,
-    ) {
-        let events = match self.deps.session.get_events(session_id, None, None).await {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!(?session_id, ?e, "boundary grace turn: get_events failed");
-                return;
-            }
-        };
-        if last_assistant_has_text(&events) {
-            return; // user already has terminal text; skip.
-        }
-        let tail_start = super::tail_start_index(&events);
-        let messages = super::prompt::build_prompt(&events, tail_start);
-        self.fire_grace_turn(
-            session_id,
-            &events,
-            &messages,
-            callback,
-            iterations,
-            reason,
-            parent_cancel,
-        )
-        .await;
     }
 
     /// Close out `tool_use` blocks the model emitted on a turn the verifier then

@@ -16,7 +16,6 @@ use crate::error::Result as AlephResult;
 use crate::harness::agent::{is_clean_turn, is_failure_turn, turn_token_total, AgentHarness};
 use crate::harness::callback::NoopHarnessCallback;
 use crate::harness::deps::HarnessDeps;
-use crate::harness::trait_def::Harness;
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::AiProvider;
 use crate::routing::session_key::SessionKey;

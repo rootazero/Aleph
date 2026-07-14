@@ -1,71 +1,15 @@
-//! Harness: the Think→Act loop driver.
+//! Loop-control types for the Think→Act driver.
 //!
-//! Stateless; all state lives in `SessionService`. Dependencies injected
-//! at construction. One call to `run_turn` produces one Think→Act cycle.
-//!
-//! ```
-//! use alephcore::harness::{Harness, TurnState};
-//! fn _assert_object_safe(_: Box<dyn Harness>) {}
-//! ```
+//! The driver itself is `AgentHarness` (an inherent `impl`, `agent.rs`). The
+//! polymorphic seams are `SessionDriver` and `Arc<dyn HarnessRunner>` — not a
+//! `Harness` trait, which was deleted as a zero-consumer abstraction.
 
-use async_trait::async_trait;
-use tokio_util::sync::CancellationToken;
-
-use crate::harness::callback::HarnessCallback;
 use crate::session::service::{SessionError, SessionId};
 use crate::tools::service::ToolError;
 
 // `AiProvider` uses `crate::error::AlephError` (not a dedicated LlmError).
 // We wrap it under the `Llm` variant name to match the spec intent.
 use crate::error::AlephError;
-
-#[async_trait]
-pub trait Harness: Send + Sync {
-    /// One Think→Act turn; returns whether the session should continue.
-    ///
-    /// The `callback` receives `on_delta` / `on_tool_call` events as the turn
-    /// runs. `on_complete` is fired by [`Harness::run`] when the outer loop
-    /// transitions to `TurnState::Done`, not here.
-    async fn run_turn(
-        &self,
-        session_id: &SessionId,
-        callback: &mut dyn HarnessCallback,
-    ) -> Result<TurnState, HarnessError>;
-
-    /// Position of this harness instance in the subagent call chain.
-    /// Default `None` keeps non-`AgentHarness` impls (test mocks, future
-    /// alternative drivers) ergonomic. `AgentHarness` overrides to return
-    /// `Some(&self.deps.chain_context)`. Stage 4 seam (#11).
-    fn chain_context(&self) -> Option<&crate::harness::chain_context::ChainContext> {
-        None
-    }
-
-    /// Loop `run_turn` until `Done`, firing `callback.on_complete()` on exit.
-    ///
-    /// `cancel` is checked before every `run_turn`; a cancelled token aborts
-    /// with [`HarnessError::Cancelled`] without firing `on_complete` — the
-    /// orchestrator needs to distinguish cooperative abort from natural
-    /// completion.
-    async fn run(
-        &self,
-        session_id: &SessionId,
-        callback: &mut dyn HarnessCallback,
-        cancel: &CancellationToken,
-    ) -> Result<(), HarnessError> {
-        loop {
-            if cancel.is_cancelled() {
-                return Err(HarnessError::Cancelled);
-            }
-            match self.run_turn(session_id, callback).await? {
-                TurnState::Continue => continue,
-                TurnState::Done => {
-                    callback.on_complete();
-                    return Ok(());
-                }
-            }
-        }
-    }
-}
 
 /// `#[must_use]` because dropping a `TurnState` silently loses the
 /// loop-control signal — Continue and Done are not interchangeable;

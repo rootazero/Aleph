@@ -150,10 +150,6 @@ impl TraceSink for ForwardingTraceSink {
     fn flush(&self) {
         self.inner.flush();
     }
-
-    fn on_init_seam(&self, stage: &'static str, seam: &'static str, configured: bool) {
-        self.inner.on_init_seam(stage, seam, configured);
-    }
 }
 
 #[cfg(test)]

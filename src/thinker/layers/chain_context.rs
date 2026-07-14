@@ -164,7 +164,10 @@ mod tests {
         let layer = ChainContextLayer;
         let config = PromptConfig::default();
         // max_depth=2 → at depth 2 the budget is fully used.
-        let root = ChainContext::with_max_depth(2);
+        let root = ChainContext {
+            max_depth: 2,
+            ..ChainContext::new()
+        };
         let c1 = root.child().unwrap();
         let c2 = c1.child().unwrap();
         let input = LayerInput::basic(&config, &[]).with_chain_context(&c2);
@@ -179,7 +182,10 @@ mod tests {
     fn singular_remaining_phrasing_when_one_left() {
         let layer = ChainContextLayer;
         let config = PromptConfig::default();
-        let root = ChainContext::with_max_depth(2);
+        let root = ChainContext {
+            max_depth: 2,
+            ..ChainContext::new()
+        };
         let c1 = root.child().unwrap();
         let input = LayerInput::basic(&config, &[]).with_chain_context(&c1);
         let mut out = String::new();

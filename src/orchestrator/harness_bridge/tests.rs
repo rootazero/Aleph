@@ -14,7 +14,6 @@ use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
 use crate::harness::agent::AgentHarness;
 use crate::harness::callback::HarnessCallback;
 use crate::harness::deps::HarnessDeps;
-use crate::harness::trait_def::Harness;
 use crate::mcp::manager::McpManagerHandle;
 use crate::memory::store::MemoryBackend;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent, HarnessRunner};
@@ -44,20 +43,16 @@ fn broadcast_callback_fans_lifecycle_events() {
 
     cb.on_delta("hello ");
     cb.on_delta("world");
-    // `act.rs` calls BOTH callbacks for the same tool call. Only the structured
-    // one may emit: the name-only callback has no call id, and the synthetic
+    // Exactly one tool-start signal now exists. Its name-only twin
+    // (`on_tool_call`) was deleted (D4): it had no call id, so the synthetic
     // `id: "legacy"` it used to invent produced a second, undeadable tool row
     // (`ToolCallDone` only ever carries the real id) that nothing keyed by call
     // id — the inline approval card — could pair against.
-    cb.on_tool_call("read_file");
     cb.on_tool_call_start(
         "call-1",
         "read_file",
         &serde_json::json!({ "path": "a.rs" }),
     );
-    // on_complete is now a no-op; Complete(outcome) is emitted by
-    // on_complete_with_outcome (P4).
-    cb.on_complete();
 
     let mut received = Vec::new();
     while let Ok(ev) = rx.try_recv() {
@@ -226,8 +221,7 @@ fn broadcast_callback_is_silent_when_no_receivers() {
     drop(_rx);
     let mut cb = super::callback::BroadcastCallback::new(tx, 200_000);
     cb.on_delta("nobody is listening");
-    cb.on_tool_call("read_file");
-    cb.on_complete();
+    cb.on_tool_call_start("call-1", "read_file", &serde_json::Value::Null);
     // No panic = pass.
 }
 

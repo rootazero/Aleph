@@ -24,7 +24,6 @@ use crate::harness::agent::AgentHarness;
 use crate::harness::callback::NoopHarnessCallback;
 use crate::harness::chain_context::ChainContext;
 use crate::harness::deps::HarnessDeps;
-use crate::harness::trait_def::Harness;
 use crate::memory::extensions::MemoryExtensionRegistry;
 use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::providers::AiProvider;
@@ -457,8 +456,33 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             // tool against truncated context). Reuse the same shared
             // `ToolResultStore` singleton the main harness falls back to
             // (`orchestrator::harness_bridge`), so large subagent results spill
-            // to the session directory and the subagent can re-read the marker.
-            result_store: crate::tools::result_store::global_tool_result_store(),
+            // to disk and the subagent can re-read the marker.
+            //
+            // Scope the *handle* like the two other seams do
+            // (`tool_service_builder`, `harness_bridge::runner_impl`) — the
+            // process-wide handle was unscoped, so a child's Layer-3 spills
+            // landed outside every session directory and its own `ctx_search`
+            // (which resolves scope from `turn_context::current_session_key()`)
+            // could never find them. Failed safe, but the recall was dead.
+            //
+            // The key is the PARENT session, not `child_id`: a subagent runs its
+            // tools through the parent's `ScopedToolService`, so both the
+            // TURN_CONTEXT its `ctx_search` reads and the Layer-2 store its
+            // individual results spill to are already parent-scoped. Scoping
+            // Layer 3 to `child_id` would just move the artifacts to a third
+            // directory nothing reads. No parent session (direct/test callers,
+            // no ScopedToolService) → keep today's unscoped handle.
+            result_store: crate::tools::result_store::global_tool_result_store().map(|store| {
+                base.parent_session_id.as_ref().map_or_else(
+                    || store.clone(),
+                    |sid| {
+                        crate::tools::result_store::ToolResultStore::for_session(
+                            &store,
+                            sid.clone(),
+                        )
+                    },
+                )
+            }),
             session_epoch_registrar: None,
             // D6 — per-tool-invocation signal capture, mirroring the main path
             // (`harness_bridge::runner_impl`). This was a hardcoded Noop even

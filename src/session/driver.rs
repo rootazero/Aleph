@@ -17,7 +17,7 @@ use crate::session::service::SessionId;
 pub trait SessionDriver: Send + Sync {
     /// Drive the session forward until it reaches an idle state.
     ///
-    /// For `AgentHarness`, this delegates to `Harness::run` which loops
+    /// For `AgentHarness`, this delegates to `AgentHarness::run` which loops
     /// `run_turn` until `TurnState::Done`. The session event log is the
     /// authoritative state — callers read it via `SessionService::get_events`
     /// after `drive` returns.

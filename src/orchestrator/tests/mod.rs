@@ -4,7 +4,6 @@ mod flow_registry;
 mod flow_run_tool;
 mod flow_spec_parse;
 mod harness_bridge;
-mod init_audit;
 mod loader;
 mod resolver;
 mod sandbox_factory;

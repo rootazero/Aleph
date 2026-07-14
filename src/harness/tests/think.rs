@@ -8,9 +8,7 @@ use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex};
 
 use crate::error::{AlephError, Result as AlephResult};
-use crate::harness::{
-    AgentHarness, Harness, HarnessDeps, HarnessError, NoopHarnessCallback, TurnState,
-};
+use crate::harness::{AgentHarness, HarnessDeps, HarnessError, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
 use crate::session::events::{
@@ -389,7 +387,7 @@ async fn primary_transient_error_without_fallback_still_propagates() {
 /// The detailed Act-side assertions live in `harness::tests::act` — this
 /// test keeps a minimal Think-level sanity check on the Continue path.
 /// Task 1 contract: the `HarnessCallback` fires `on_delta` for assistant text
-/// and `on_tool_call` before each tool dispatch, within a single `run_turn`.
+/// and `on_tool_call_start` before each tool dispatch, within a single `run_turn`.
 /// Covers both text-only Done turns and tool_use Continue turns.
 #[tokio::test]
 async fn callback_fires_on_delta_and_tool_call() {
@@ -406,10 +404,9 @@ async fn callback_fires_on_delta_and_tool_call() {
         fn on_delta(&mut self, text: &str) {
             self.deltas.push(text.to_string());
         }
-        fn on_tool_call(&mut self, name: &str) {
+        fn on_tool_call_start(&mut self, _id: &str, name: &str, _args: &serde_json::Value) {
             self.tools.push(name.to_string());
         }
-        fn on_complete(&mut self) {}
     }
 
     struct OkTool;
@@ -436,7 +433,7 @@ async fn callback_fires_on_delta_and_tool_call() {
         }
     }
 
-    // Turn with one tool_call: expect one on_delta("calling…") + on_tool_call("echo").
+    // Turn with one tool_call: expect one on_delta("calling…") + on_tool_call_start("echo").
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
     let deps = HarnessDeps {
         session: session.clone(),
@@ -482,7 +479,7 @@ async fn callback_fires_on_delta_and_tool_call() {
     assert_eq!(
         cb.tools,
         vec!["echo".to_string()],
-        "on_tool_call should fire once per tool dispatch"
+        "on_tool_call_start should fire once per tool dispatch"
     );
 }
 

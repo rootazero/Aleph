@@ -74,8 +74,10 @@ pub trait LoopTool: Send + Sync {
     /// Execute the tool with the given input.
     ///
     /// `cancel` carries opencode-parity `AbortSignal` semantics: the harness
-    /// forks a per-call child token from the run's [`ChainContext::cancellation_token`]
-    /// and the harness itself wraps the call in `tokio::select!`. Tools that
+    /// forks a per-call child token from the run's cancellation token
+    /// (`run_cancel.child_token()`, `harness::agent::act`) and wraps the call in
+    /// `tokio::select!`. (This used to name a `ChainContext::cancellation_token`
+    /// that has never existed on that type.) Tools that
     /// run unbounded loops or want to emit partial results on abort should
     /// also `select!` against `cancel.cancelled()` cooperatively. Tools that
     /// just await a single I/O future can ignore the token — when the

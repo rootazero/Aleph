@@ -58,23 +58,34 @@ const TARGET: usize = 4900;
 /// What the 12 files actually total today, under the documented measurement.
 /// Frozen, so the overrun cannot keep growing the way it grew to here.
 ///
-/// **5994 → 5997 (2026-07-14).** Raised deliberately. `think.rs` now stamps the
-/// billed tokens of each LLM call onto the `AssistantMessage` it produces
-/// (`usage: response.usage.as_ref().map(Into::into)`, once on the normal path
-/// and once on the grace turn) plus the doc line explaining why a
-/// retry-discarded call is accounted but never becomes a message. R10's three
-/// questions:
-///   1. *Scaffolding or cognition?* Scaffolding — copying a number the provider
-///      already reported onto the event that spent it. No decision is made.
-///   2. *Will a stronger model still need it?* Yes. Billing attribution is a
-///      property of the protocol, not of model capability.
-///   3. *How many real consumers?* Two, both pre-existing and both previously
-///      fed zeros: `messages.input_tokens` / `output_tokens` (the Panel and the
-///      `sessions` tool read them) — see `gateway::session_projector`.
+/// **5997 → 5863 (2026-07-14).** Lowered — the ratchet turning the way it is
+/// supposed to. Nothing was moved to buy this: every line below is a deletion
+/// of code that had no production consumer, plus one merge of two arms that
+/// were byte-for-byte the same.
 ///
-/// The alternative was to keep the count flat by deleting comments, which is
-/// the bookkeeping dishonesty this file exists to prevent.
-const CEILING: usize = 5997;
+///   - `trait_def.rs` −56: the `Harness` trait itself, including its default
+///     `run()` loop. `AgentHarness` was the only impl and overrode `run`; the
+///     real polymorphic seams are `SessionDriver` and `Arc<dyn HarnessRunner>`.
+///     The one doctest that "proved" object-safety was the only caller.
+///   - `chain_context.rs` −21: `with_max_depth` (called only from `#[cfg(test)]`)
+///     and `Display` (called only by a test asserting its own format).
+///   - `callback.rs` −11 / `agent.rs` −5 / `act.rs` −5: the `on_complete` and
+///     `on_tool_call` callback channels. Nine emit sites in the loop, zero
+///     production listeners — every terminal consumer already rides
+///     `on_complete_with_outcome`, every tool listener `on_tool_call_start`.
+///   - `trace_sink.rs` −10: `on_init_seam`, a Stage-7 telemetry channel whose
+///     only non-forwarding subscriber lived in a test.
+///   - `think.rs` −21: the still-overflow and retry-error arms of
+///     `reactive_fit_and_retry` merged (they differed only in which error
+///     surfaced — and the still-overflow arm was silently discarding a *billed*
+///     response without accounting it), and `fire_grace_turn` folded into
+///     `fire_boundary_grace_turn` (the diminishing-returns site was the sole
+///     caller and it judged the grace turn from a stale event log).
+///
+/// Measured, not hand-counted: this test is the measurement. The number here is
+/// whatever `the_harness_line_budget_does_not_grow` prints when it fails, and
+/// nothing else — that is the whole point of the file.
+const CEILING: usize = 5863;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

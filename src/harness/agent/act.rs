@@ -415,11 +415,7 @@ impl AgentHarness {
                     call.name = repair.name;
                 }
             }
-            callback.on_tool_call(&call.name);
-            // Structured tool-start event (id + name + args). The legacy
-            // name-only `on_tool_call` above is kept for backward compat; this
-            // is the preferred signal (see `HarnessCallback::on_tool_call_start`)
-            // that lets the stream sink emit a real call id instead of "legacy".
+            // Structured tool-start event (id + name + args).
             callback.on_tool_call_start(&call.id, &call.name, &call.arguments);
             let started = Instant::now();
             self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallStarted {
@@ -798,7 +794,6 @@ impl AgentHarness {
         let mut budgets: Vec<Option<(std::time::Duration, bool)>> =
             Vec::with_capacity(tool_calls.len());
         for (idx, call) in tool_calls.iter().enumerate() {
-            callback.on_tool_call(&call.name);
             // Structured tool-start event (parallel path parity with serial).
             callback.on_tool_call_start(&call.id, &call.name, &call.arguments);
             started_at.push(Instant::now());

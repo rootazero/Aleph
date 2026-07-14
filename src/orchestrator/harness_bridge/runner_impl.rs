@@ -11,7 +11,6 @@ use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
 use crate::harness::agent::AgentHarness;
 use crate::harness::callback::HarnessCallback;
 use crate::harness::deps::HarnessDeps;
-use crate::harness::trait_def::Harness;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent, HarnessRunner};
 use crate::orchestrator::errors::FlowError;
 use crate::orchestrator::flow_spec::{FlowInput, FlowSpec};
@@ -43,6 +42,15 @@ impl HarnessRunner for AgentHarnessRunner {
 
     fn turn_timeout(&self) -> Option<std::time::Duration> {
         self.turn_timeout
+    }
+
+    /// B15 — hand the spawner the SAME boot-time `[execution] max_iterations`
+    /// this runner caps its own loop with (`resolve_max_iterations`, below).
+    /// Without the override the trait default (`None`) sent every spawned child
+    /// to `FALLBACK_MAX_ITERATIONS` (200) instead of the operator's configured
+    /// value: still capped, just not the number the operator asked for.
+    fn default_max_iterations(&self) -> Option<usize> {
+        Some(self.default_max_iterations)
     }
 
     async fn run(
@@ -577,24 +585,12 @@ impl HarnessRunner for AgentHarnessRunner {
                 .map(std::sync::Arc::new),
             parallel_tool_concurrency: self.parallel_tool_concurrency,
         };
-        // Stage 7 (#12): emit init-seam visibility before the harness
-        // starts its Think→Act loop. Order mirrors HarnessDeps field
-        // declaration so trace consumers can correlate event index ↔
-        // deps.rs line number. Extracted helper lets the orchestrator
-        // tests assert the contract without a full AgentHarnessRunner
-        // fixture.
-        if let Some(sink) = trace_sink.as_ref() {
-            emit_init_seams(
-                sink.as_ref(),
-                deps.guardrails.is_some(),
-                deps.verifier_chain.is_some(),
-                deps.stall_config.is_some(),
-                deps.consecutive_failure_cap.is_some(),
-                deps.turn_timeout.is_some(),
-            );
-        }
-        // Production telemetry path — operators read these via the
-        // existing tracing subscriber regardless of TraceSink wiring.
+        // Init-seam visibility. The `TraceSink::on_init_seam` twin of this line
+        // was deleted (D3): every production sink merely forwarded it and both
+        // leaf sinks fell through to the trait's empty default, so the whole
+        // channel terminated in `{}`. This tracing line is the live one —
+        // operators read it via the existing subscriber regardless of TraceSink
+        // wiring.
         tracing::info!(
             guardrails = deps.guardrails.is_some(),
             verifier_chain = deps.verifier_chain.is_some(),

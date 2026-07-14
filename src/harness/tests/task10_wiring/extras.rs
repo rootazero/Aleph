@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::context::budget::ContextBudget;
 use crate::error::Result as AlephResult;
-use crate::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback, TurnState};
+use crate::harness::{AgentHarness, HarnessDeps, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::AiProvider;
 use crate::session::events::SessionEvent;
@@ -294,7 +294,7 @@ impl AiProvider for CapGraceProvider {
 }
 
 /// Which way the boundary grace call misbehaves — used to exercise
-/// `fire_grace_turn`'s shared `race_llm_call` robustness from the surviving
+/// `fire_boundary_grace_turn`'s shared `race_llm_call` robustness from the surviving
 /// `max_iterations` trigger (the budget trigger that used to reach it was removed).
 #[derive(Clone, Copy)]
 enum GraceCallOutcome {
@@ -513,7 +513,8 @@ async fn max_iterations_cap_fires_grace_turn_for_terminal_text() {
 // Re-homed from the removed budget→FinalReply trigger: a boundary grace call
 // whose LLM errors must fail-soft — the harness still completes cleanly with
 // hit_limit set and leaves no partial assistant event. Exercises the same
-// `fire_grace_turn` → `race_llm_call` error path that budget pressure used to reach.
+// `fire_boundary_grace_turn` → `race_llm_call` error path that budget pressure used
+// to reach.
 // =============================================================================
 #[tokio::test]
 async fn boundary_grace_turn_failsoft_on_llm_error() {
@@ -739,7 +740,8 @@ async fn tool_memo_does_not_span_turns() {
 // =============================================================================
 // Re-homed from the removed budget→FinalReply trigger: a boundary grace call
 // that hangs must abort on the turn-timeout, not hang the harness. Exercises the
-// same `fire_grace_turn` → `race_llm_call` timeout path budget pressure used to reach.
+// same `fire_boundary_grace_turn` → `race_llm_call` timeout path budget pressure used
+// to reach.
 // =============================================================================
 #[tokio::test]
 async fn boundary_grace_turn_times_out_instead_of_hanging() {

@@ -54,41 +54,6 @@ pub use context_blocks::{
 pub(crate) use behavior_resolve::resolve_behavior;
 pub(crate) use prompt_build::{agent_identity_dir_exists, last_user_query, resolve_max_iterations};
 
-/// Stage 7 (#12): emit one `TraceSink::on_init_seam` event per Stage 1-6
-/// seam. Extracted from `AgentHarnessRunner::run` so tests can assert the
-/// eight-event contract without a full runner fixture. `configured = false`
-/// distinguishes a deliberate `None` path (Phase-6 stub) from a missing
-/// wiring; `PromptBuilder` and `ChainContext` are always configured because
-/// the gateway path constructs them unconditionally.
-pub(crate) fn emit_init_seams(
-    sink: &dyn crate::harness::TraceSink,
-    guardrails_configured: bool,
-    verifier_chain_configured: bool,
-    stall_config_configured: bool,
-    consecutive_failure_cap_configured: bool,
-    turn_timeout_configured: bool,
-) {
-    sink.on_init_seam("stage3-prompt", "PromptBuilder", true);
-    sink.on_init_seam("stage4-chain", "ChainContext", true);
-    sink.on_init_seam(
-        "stage5a-guardrails",
-        "GuardrailRegistry",
-        guardrails_configured,
-    );
-    sink.on_init_seam(
-        "stage6a-verifier",
-        "VerifierChain",
-        verifier_chain_configured,
-    );
-    sink.on_init_seam("p0-rescue-stall", "StallConfig", stall_config_configured);
-    sink.on_init_seam(
-        "p0-rescue-cap",
-        "ConsecutiveFailureCap",
-        consecutive_failure_cap_configured,
-    );
-    sink.on_init_seam("p0-rescue-timeout", "TurnTimeout", turn_timeout_configured);
-}
-
 /// Concrete [`HarnessRunner`] that dispatches to the Phase 4 `AgentHarness`.
 pub struct AgentHarnessRunner {
     pub agent_registry: Arc<AgentRegistry>,

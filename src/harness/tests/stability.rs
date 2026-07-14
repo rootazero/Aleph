@@ -278,7 +278,7 @@ pub(super) fn minimal_deps(
 }
 
 use crate::harness::agent::AgentHarness;
-use crate::harness::trait_def::{Harness, HarnessError};
+use crate::harness::trait_def::HarnessError;
 
 #[tokio::test]
 async fn recording_sink_captures_full_lifecycle() {
