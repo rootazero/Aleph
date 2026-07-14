@@ -1088,3 +1088,248 @@ async fn concurrent_runs_same_agent_do_not_interleave_transcript() {
         "conv-2's note must be present in agent-a's partition, got {filenames:?}"
     );
 }
+
+// =============================================================================
+// F1 — the slash-command fast path (L0) must not dispatch a gated tool
+// =============================================================================
+//
+// `execute_direct_tool` calls `ToolRegistry::execute_tool` directly: no
+// `ScopedToolService`, so no exec tier, no `[policies.tool_permissions]`, no
+// operator gate and no approval card. The gate it now consults can only DECLINE
+// (it has no approval transport), so a gated call must return `Fallthrough` and
+// leave the registry untouched — the full agent loop then re-evaluates it with
+// the real gates. These assert on the CALL COUNTER, because "did the tool run?"
+// is the only question that matters here.
+
+/// Counts `execute_tool` calls. `get_tool` answering `None` is faithful to the
+/// gate under test: it never consults the registry for metadata.
+struct CountingToolRegistry {
+    calls: AtomicUsize,
+}
+
+impl CountingToolRegistry {
+    fn new() -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+        }
+    }
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl crate::executor::ToolRegistry for CountingToolRegistry {
+    fn get_tool(&self, _name: &str) -> Option<&crate::tool_metadata::UnifiedTool> {
+        None
+    }
+
+    fn execute_tool(
+        &self,
+        _tool_name: &str,
+        _arguments: serde_json::Value,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = crate::error::Result<serde_json::Value>> + Send + '_>,
+    > {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(serde_json::json!({"_display": "ran"})) })
+    }
+}
+
+fn slash_engine(
+    registry: Arc<CountingToolRegistry>,
+) -> ExecutionEngine<crate::thinker::SingleProviderRegistry, CountingToolRegistry> {
+    ExecutionEngine::new(
+        ExecutionEngineConfig::default(),
+        Arc::new(crate::thinker::SingleProviderRegistry::new(
+            crate::providers::create_mock_provider(),
+        )),
+        registry,
+        Vec::new(),
+        None,
+    )
+}
+
+/// A run carrying a resolved `/tool args` slash command, from `caller_role`.
+/// `None` = the Panel / CLI / loopback operator (no channel role stamped).
+fn slash_request(session_key: &SessionKey, caller_role: Option<&str>) -> RunRequest {
+    let mut req = gate_test_request(session_key, "slash-run");
+    if let Some(role) = caller_role {
+        req.metadata
+            .insert("caller_role".to_string(), role.to_string());
+    }
+    req
+}
+
+fn slash_mode(tool_id: &str, args: &str) -> String {
+    serde_json::json!({"type": "direct_tool", "tool_id": tool_id, "args": args}).to_string()
+}
+
+/// The headline: a chat-tier channel (Telegram, `caller_role = "guest"`) sends
+/// `/bash rm -rf ~`. Before the gate this reached `execute_tool` unchecked.
+#[tokio::test]
+async fn guest_slash_command_for_a_dangerous_tool_never_reaches_the_registry() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "slash-guest").await;
+    let registry = Arc::new(CountingToolRegistry::new());
+    let engine = slash_engine(Arc::clone(&registry));
+    let emitter = Arc::new(TestEmitter::new());
+    let session = SessionKey::main("slash-guest");
+
+    for tool in ["bash", "code_exec", "file_write", "self_config"] {
+        let request = slash_request(&session, Some("guest"));
+        let err = engine
+            .execute_slash_command_fast_path(
+                "slash-run",
+                &slash_mode(tool, "--cmd 'rm -rf ~'"),
+                &request,
+                Arc::clone(&agent),
+                Arc::clone(&emitter),
+            )
+            .await
+            .expect_err("a guest must not fast-path a dangerous tool");
+        assert!(
+            matches!(err, ExecutionError::Fallthrough { .. }),
+            "`/{tool}` must fall through to the gated agent loop, got {err:?}"
+        );
+    }
+    assert_eq!(
+        registry.calls(),
+        0,
+        "no gated slash command may reach the raw registry"
+    );
+}
+
+/// The operator gate (`method_authz`): a chat-tier channel cannot reconfigure
+/// Aleph through a slash command either. `agent_delete` also declares
+/// `requires_confirmation`, so it is gated for EVERY caller — see below.
+#[tokio::test]
+async fn guest_slash_command_for_an_operator_tool_falls_through() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "slash-operator-gate").await;
+    let registry = Arc::new(CountingToolRegistry::new());
+    let engine = slash_engine(Arc::clone(&registry));
+    let emitter = Arc::new(TestEmitter::new());
+    let session = SessionKey::main("slash-operator-gate");
+    let request = slash_request(&session, Some("guest"));
+
+    let err = engine
+        .execute_slash_command_fast_path(
+            "slash-run",
+            &slash_mode("cron_manage", "--action delete --id nightly"),
+            &request,
+            agent,
+            emitter,
+        )
+        .await
+        .expect_err("cron_manage is an operator tool");
+    assert!(matches!(err, ExecutionError::Fallthrough { .. }), "{err:?}");
+    assert_eq!(registry.calls(), 0);
+}
+
+/// A tool that DECLARES `requires_confirmation` is gated at every tier and for
+/// every caller — including the Panel operator on the default `Auto` tier. The
+/// loop raises a card for it; the fast path cannot, so it must decline.
+#[tokio::test]
+async fn confirmation_gated_tool_falls_through_even_for_an_operator() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "slash-confirm").await;
+    let registry = Arc::new(CountingToolRegistry::new());
+    let engine = slash_engine(Arc::clone(&registry));
+    let emitter = Arc::new(TestEmitter::new());
+    let session = SessionKey::main("slash-confirm");
+
+    for tool in ["agent_delete", "vault_store", "team_disband"] {
+        let request = slash_request(&session, None);
+        let err = engine
+            .execute_slash_command_fast_path(
+                "slash-run",
+                &slash_mode(tool, "explore"),
+                &request,
+                Arc::clone(&agent),
+                Arc::clone(&emitter),
+            )
+            .await
+            .expect_err("a confirm-gated tool must not fast-path");
+        assert!(matches!(err, ExecutionError::Fallthrough { .. }), "{err:?}");
+    }
+    assert_eq!(
+        registry.calls(),
+        0,
+        "the fast path has no approval transport — it must decline, not skip the card"
+    );
+}
+
+/// The tier's argument filter: `file_ops` hides `delete` behind the same tool
+/// name as `list`, so the name-keyed rules cannot see it. Under the default
+/// `Auto` tier the delete falls through and the list still fast-paths.
+#[tokio::test]
+async fn auto_tier_destructive_file_ops_argument_falls_through_but_a_read_does_not() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "slash-fileops").await;
+    let registry = Arc::new(CountingToolRegistry::new());
+    let engine = slash_engine(Arc::clone(&registry));
+    let emitter = Arc::new(TestEmitter::new());
+    let session = SessionKey::main("slash-fileops");
+
+    let request = slash_request(&session, None);
+    let err = engine
+        .execute_slash_command_fast_path(
+            "slash-run",
+            &slash_mode("file_ops", "--operation delete --path /home/u/Documents"),
+            &request,
+            Arc::clone(&agent),
+            Arc::clone(&emitter),
+        )
+        .await
+        .expect_err("a destructive file_ops call asks under Auto");
+    assert!(matches!(err, ExecutionError::Fallthrough { .. }), "{err:?}");
+    assert_eq!(registry.calls(), 0);
+
+    let request = slash_request(&session, None);
+    engine
+        .execute_slash_command_fast_path(
+            "slash-run",
+            &slash_mode("file_ops", "--operation list --path /tmp"),
+            &request,
+            agent,
+            emitter,
+        )
+        .await
+        .expect("a read-shaped file_ops call still takes the fast path");
+    assert_eq!(
+        registry.calls(),
+        1,
+        "the gate must not over-block: Auto allows a `list`"
+    );
+}
+
+/// No regression for the Panel / CLI operator on the default tier: an ungated
+/// tool still takes the fast path, with no LLM turn burned.
+#[tokio::test]
+async fn operator_slash_command_for_an_ungated_tool_still_fast_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "slash-allow").await;
+    let registry = Arc::new(CountingToolRegistry::new());
+    let engine = slash_engine(Arc::clone(&registry));
+    let emitter = Arc::new(TestEmitter::new());
+    let session = SessionKey::main("slash-allow");
+
+    // `search` is a declared pure read; `bash` is dangerous but the hard floor
+    // is scoped to untrusted surfaces — a loopback operator is never restricted
+    // by it, so `/bash` keeps its deterministic fast path.
+    for tool in ["search", "bash"] {
+        let request = slash_request(&session, None);
+        let out = engine
+            .execute_slash_command_fast_path(
+                "slash-run",
+                &slash_mode(tool, "hello"),
+                &request,
+                Arc::clone(&agent),
+                Arc::clone(&emitter),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("`/{tool}` must fast-path for an operator, got {e:?}"));
+        assert_eq!(out, "ran");
+    }
+    assert_eq!(registry.calls(), 2);
+}

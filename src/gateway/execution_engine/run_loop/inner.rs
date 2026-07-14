@@ -208,96 +208,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        // Effective execution tier + explicit tool permission policy for this
-        // turn. Two inputs to one enforcement chokepoint
-        // (`ScopedToolService::permission_for`): the explicit policy decides the
-        // tools it names, the tier decides everything else from each tool's
-        // declared metadata.
-        //
-        // Tier resolution (the user-facing dial):
-        //   1. global `[policies.exec_tier]`, read LIVE from the shared config
-        //      (not a boot snapshot) so a tier change takes effect on the very
-        //      next tool call with no restart;
-        //   2. the session's own tier (`identity_meta.custom["exec_tier"]`,
-        //      written through `sessions.patch`) REPLACES it — an explicit
-        //      per-chat choice is an explicit human decision, so a session may
-        //      raise as well as lower the tier. Safe because the undisableable
-        //      `[sandbox.command_policy]` floor holds under every tier;
-        //   3. clamped down for untrusted (`Chat`) channels, which must never
-        //      run at Full with nobody at the keyboard.
-        //
-        // Explicit policy: global `[policies.tool_permissions]` merged with the
-        // agent's override and the originating channel's override (stamped into
-        // metadata by the inbound router — absent for Panel / CLI / cron turns);
-        // most restrictive wins at both layers. `None` when everything is
-        // all-default so the ScopedToolService hot path stays a no-op.
-        let (exec_tier, tool_permissions) = {
-            use crate::config::types::policies::ToolPermissionsConfig;
-            let (global_tier, explicit) = match self.app_config.as_ref() {
-                Some(cfg) => {
-                    let guard = cfg.read().await;
-                    (
-                        guard.policies.exec_tier,
-                        guard.policies.tool_permissions.clone(),
-                    )
-                }
-                None => Default::default(),
-            };
-            // Precedence: the tier this REQUEST carries (the composer's pick in
-            // a conversation whose session did not exist when it was made) >
-            // the session's stored tier > the global tier. Without the first
-            // rung, a tier picked before the first message could not govern
-            // that message — the very turn the user was arming the gate for.
-            let requested = request
-                .metadata
-                .get(crate::config::types::policies::EXEC_TIER_SESSION_KEY)
-                .map(String::as_str)
-                .and_then(crate::config::types::policies::ExecTier::from_id);
-            let stored = self.session_exec_tier(&request.session_key).await;
-            // Stamp a request-carried tier onto the session, so turns 2+ (which
-            // carry nothing) and a page reload both keep it. Same "stamped on
-            // the first message" contract as `project_root`.
-            if let Some(t) = requested.filter(|t| stored != Some(*t)) {
-                self.persist_session_exec_tier(&request.session_key, t)
-                    .await;
-            }
-            let mut tier = requested.or(stored).unwrap_or(global_tier);
-            if let Some(level) = request
-                .metadata
-                .get("caller_role")
-                .map(String::as_str)
-                .and_then(crate::gateway::channel_policy::channel_permission_level_from_role)
-            {
-                tier = crate::gateway::channel_policy::clamp_tier_for_channel(level, tier);
-            }
-            let mut merged =
-                ToolPermissionsConfig::merge(&explicit, &agent.config().tool_permissions());
-            if let Some(raw) = request
-                .metadata
-                .get(super::super::CHANNEL_TOOL_PERMISSIONS_KEY)
-            {
-                match serde_json::from_str::<ToolPermissionsConfig>(raw) {
-                    Ok(channel_perms) => {
-                        merged = ToolPermissionsConfig::merge(&merged, &channel_perms)
-                    }
-                    Err(e) => warn!(
-                        run_id = run_id,
-                        error = %e,
-                        "Malformed channel tool_permissions metadata — channel layer skipped"
-                    ),
-                }
-            }
-            let is_all_default = merged.default == crate::extension::PermissionAction::Allow
-                && merged.overrides.is_empty();
-            info!(
-                run_id = run_id,
-                exec_tier = tier.id(),
-                default = ?merged.default,
-                overrides = merged.overrides.len(),
-                "Execution permissions resolved for this turn"
-            );
-            (tier, (!is_all_default).then_some(merged))
-        };
+        // This turn's execution tier + explicit tool permission policy. Resolved
+        // by the shared `turn_permissions` module: the slash-command fast path
+        // consults the same resolution before it is allowed to dispatch, so the
+        // two surfaces cannot enforce different rules.
+        let (exec_tier, tool_permissions) = self.resolve_turn_permissions(request, &agent).await;
         let _max_loops = agent.config().max_loops as usize;
         let token_budget = agent.config().max_tokens.unwrap_or(500_000);
 
@@ -1248,68 +1163,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     return Err(ExecutionError::Failed(msg));
                 }
             }
-        }
-    }
-
-    /// Per-session execution tier, carried in the session's identity metadata
-    /// under `custom["exec_tier"]` (same carrier as `custom["project_root"]`,
-    /// written through the existing `sessions.patch` RPC).
-    ///
-    /// A malformed or unknown value is ignored — the turn falls back to the
-    /// global tier rather than failing.
-    async fn session_exec_tier(
-        &self,
-        session_key: &crate::gateway::router::SessionKey,
-    ) -> Option<crate::config::types::policies::ExecTier> {
-        use crate::config::types::policies::{ExecTier, EXEC_TIER_SESSION_KEY};
-
-        let store = self.session_manager.as_ref()?;
-        let meta = match store.get_metadata(session_key).await {
-            Ok(meta) => meta?,
-            Err(e) => {
-                warn!(error = %e, "Failed to read session metadata — session exec tier skipped");
-                return None;
-            }
-        };
-        let raw = meta
-            .identity_meta?
-            .custom
-            .get(EXEC_TIER_SESSION_KEY)?
-            .as_str()?
-            .to_string();
-        match ExecTier::from_id(&raw) {
-            Some(tier) => Some(tier),
-            None => {
-                warn!(
-                    value = %raw,
-                    "Unknown session exec_tier — falling back to the global tier"
-                );
-                None
-            }
-        }
-    }
-
-    /// Stamp a request-carried tier onto the session, so the choice outlives
-    /// the turn that carried it (later turns send nothing; a page reload reads
-    /// the session back). Best-effort: a store failure must not fail the run —
-    /// the tier for THIS turn is already resolved and enforced either way.
-    async fn persist_session_exec_tier(
-        &self,
-        session_key: &crate::gateway::router::SessionKey,
-        tier: crate::config::types::policies::ExecTier,
-    ) {
-        use crate::config::types::policies::EXEC_TIER_SESSION_KEY;
-        use crate::gateway::session_store::types::SessionPatch;
-
-        let Some(store) = self.session_manager.as_ref() else {
-            return;
-        };
-        let patch = SessionPatch {
-            metadata: Some(serde_json::json!({ EXEC_TIER_SESSION_KEY: tier.id() })),
-            ..Default::default()
-        };
-        if let Err(e) = store.patch_session(session_key, &patch).await {
-            warn!(error = %e, tier = tier.id(), "Failed to persist session exec tier");
         }
     }
 }

@@ -146,8 +146,12 @@ fn is_glob_pattern(key: &str) -> bool {
 
 /// Return the more restrictive of two permission actions.
 ///
-/// Ordering: Deny (most restrictive) > Ask > Allow (least restrictive).
-const fn restrictive_min(a: PermissionAction, b: PermissionAction) -> PermissionAction {
+/// Ordering: Deny (most restrictive) > Ask > Allow (least restrictive). The one
+/// restrictiveness lattice in the codebase: [`ToolPermissionsConfig::merge`],
+/// glob-override resolution, and the exec tier's tightening rule
+/// ([`super::exec_tier::effective_permission`]) all order permissions with it,
+/// so a layer can only ever tighten what a layer below it decided.
+pub(super) const fn restrictive_min(a: PermissionAction, b: PermissionAction) -> PermissionAction {
     use PermissionAction::*;
     match (a, b) {
         (Deny, _) | (_, Deny) => Deny,

@@ -1827,6 +1827,64 @@ fn explicit_override_wins_over_the_tier_rule() {
     );
 }
 
+/// The tier TIGHTENS the operator's baseline; it never widens it. Before this
+/// was folded into the restrictiveness lattice the tier was consulted BEFORE
+/// the configured `default`, so its `Ask` verdict was returned first and a
+/// `default = "deny"` install silently became ask-by-default for exactly the
+/// dangerous half of the toolset — every tool the tier wanted to guard.
+///
+/// Production always wires a tier (`tool_service_builder`), so this — not the
+/// `exec_tier: None` case — is the posture a deny-by-default operator gets.
+#[tokio::test]
+async fn exec_tier_never_widens_a_deny_default() {
+    use crate::config::types::policies::ExecTier;
+    use crate::extension::PermissionAction;
+    for tier in [ExecTier::Ask, ExecTier::Auto, ExecTier::Full] {
+        let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+            .with_exec_tier(tier)
+            .with_tool_permissions(perms(
+                PermissionAction::Deny,
+                &[("search", PermissionAction::Allow)],
+            ));
+        // The destructive tail `Auto` would raise to `Ask`, and the mutating
+        // body `Ask` would raise to `Ask`, both stay DENIED.
+        for name in [
+            "agent_delete",
+            "bash",
+            "file_ops",
+            "system",
+            "github__create_issue",
+        ] {
+            assert_eq!(
+                svc.permission_for(name),
+                PermissionAction::Deny,
+                "{tier:?} must not widen a deny default for `{name}`"
+            );
+        }
+        // ...and the box still exposes exactly the explicit allow.
+        let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
+        assert_eq!(names, vec!["search".to_string()]);
+    }
+}
+
+/// An `Ask` baseline is a floor too: the tier cannot lower it back to `Allow`
+/// for the read-only tools it has nothing to say about.
+#[test]
+fn exec_tier_never_widens_an_ask_default() {
+    use crate::config::types::policies::ExecTier;
+    use crate::extension::PermissionAction;
+    let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Full)
+        .with_tool_permissions(perms(PermissionAction::Ask, &[]));
+    for name in ["search", "memory_search", "bash"] {
+        assert_eq!(
+            svc.permission_for(name),
+            PermissionAction::Ask,
+            "`{name}`: Full has nothing to say, so the operator's Ask baseline holds"
+        );
+    }
+}
+
 #[tokio::test]
 async fn auto_tier_asks_before_a_destructive_file_ops_call() {
     use crate::config::types::policies::ExecTier;

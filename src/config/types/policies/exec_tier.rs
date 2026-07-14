@@ -30,6 +30,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::tool_permissions::{restrictive_min, ToolPermissionsConfig};
 use crate::extension::PermissionAction;
 
 /// Identity-metadata custom key under which a session's per-session tier
@@ -162,6 +163,40 @@ impl ExecTier {
             .get("operation")
             .and_then(Value::as_str)
             .is_some_and(|op| DESTRUCTIVE_FILE_OPS.contains(&op))
+    }
+}
+
+/// The effective permission for a tool: the operator's explicit decision, else
+/// their configured baseline TIGHTENED by the tier.
+///
+/// Precedence, most specific first:
+/// 1. an **explicit** entry (exact name, then glob) in the merged
+///    [`ToolPermissionsConfig`] — an operator who names a tool has decided;
+/// 2. the configured `default` (`Allow` when no policy is attached), tightened
+///    by [`ExecTier::rule_for`] through the restrictiveness lattice.
+///
+/// The tier only ever tightens, which is what [`ExecTier::rule_for`]'s contract
+/// promises: it yields at most `Ask`, and `restrictive_min` keeps a `Deny`
+/// default denying. Consulting the tier *before* the default would invert a
+/// `default = "deny"` install into ask-by-default for exactly the tools the tier
+/// wanted to guard.
+///
+/// The single composition point: `ScopedToolService::permission_for` (the loop's
+/// enforcement chokepoint) and the gateway slash-command fast path both call it,
+/// so neither surface can drift into its own precedence.
+#[must_use]
+pub fn effective_permission(
+    permissions: Option<&ToolPermissionsConfig>,
+    tier: Option<ExecTier>,
+    facts: ToolFacts<'_>,
+) -> PermissionAction {
+    if let Some(explicit) = permissions.and_then(|p| p.resolve_explicit(facts.name)) {
+        return explicit;
+    }
+    let base = permissions.map_or(PermissionAction::Allow, |p| p.default);
+    match tier.and_then(|t| t.rule_for(facts)) {
+        Some(tier_action) => restrictive_min(base, tier_action),
+        None => base,
     }
 }
 

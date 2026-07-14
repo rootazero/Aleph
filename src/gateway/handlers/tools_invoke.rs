@@ -67,17 +67,22 @@ where
         return JsonRpcResponse::error(request.id, INVALID_PARAMS, "tool_name must not be empty");
     }
 
-    // Transport hard floor (openclaw `dangerous-tools` parity): `tools.invoke`
-    // is a gateway-reachable RPC surface, so RCE / host-mutation /
-    // self-reconfiguration tools are denied here by default. Production agents
-    // reach these tools through the agent loop, not this RPC. Re-enable a
-    // specific tool via the `ALEPH_GATEWAY_TOOLS_ALLOW` env var.
+    // Transport hard floor. This handler dispatches straight off the raw
+    // `ToolRegistry`, so none of the loop's gates (exec tier, tool_permissions,
+    // the operator gate, the confirmation card) run here — and this surface has
+    // no approval transport to raise a card with. Two classes are therefore
+    // refused outright: RCE / host-mutation / self-reconfiguration tools
+    // (openclaw `dangerous-tools` parity) and tools that self-declare
+    // `requires_confirmation`. Production agents reach both through the agent
+    // loop, which does have the gates. Re-enable a specific tool via the
+    // `ALEPH_GATEWAY_TOOLS_ALLOW` env var.
     if crate::security::dangerous_tools::is_denied_on_gateway_surface(&params.tool_name) {
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
             format!(
-                "tool '{}' is denied on the gateway tools.invoke surface (set {} to override)",
+                "tool '{}' is denied on the gateway tools.invoke surface \
+                 (dangerous or confirmation-gated; set {} to override)",
                 params.tool_name,
                 crate::security::dangerous_tools::GATEWAY_TOOLS_ALLOW_ENV
             ),
@@ -237,8 +242,8 @@ mod tests {
         // Transport hard floor: an RCE tool is refused before the registry
         // is ever touched, even with no agent allowlist supplied.
         std::env::remove_var(crate::security::dangerous_tools::GATEWAY_TOOLS_ALLOW_ENV);
-        let reg = Arc::new(StubRegistry::new().with_ok("exec", json!({"ok": true})));
-        let params = json!({"tool_name": "exec", "arguments": {}});
+        let reg = Arc::new(StubRegistry::new().with_ok("bash", json!({"ok": true})));
+        let params = json!({"tool_name": "bash", "arguments": {}});
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
         let resp = handle_invoke(req, reg.clone(), None).await;
         assert!(!resp.is_success(), "dangerous tool must be denied");
@@ -247,6 +252,27 @@ mod tests {
             reg.last_call().is_none(),
             "registry must not be touched when the hard floor denies"
         );
+    }
+
+    /// `agent_delete` DECLARES `requires_confirmation`, and the loop answers
+    /// that declaration with an approval card. This surface has no approval
+    /// transport, so it must refuse rather than delete an agent with no card
+    /// at any tier — including `ask`.
+    #[tokio::test]
+    async fn denies_confirmation_gated_tool_on_gateway_surface() {
+        std::env::remove_var(crate::security::dangerous_tools::GATEWAY_TOOLS_ALLOW_ENV);
+        for tool in ["vault_store", "team_disband"] {
+            let reg = Arc::new(StubRegistry::new().with_ok(tool, json!({"ok": true})));
+            let params = json!({"tool_name": tool, "arguments": {}});
+            let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+            let resp = handle_invoke(req, reg.clone(), None).await;
+            assert!(!resp.is_success(), "{tool} must be denied");
+            assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
+            assert!(
+                reg.last_call().is_none(),
+                "{tool} must not reach the registry: it needs a card this surface cannot raise"
+            );
+        }
     }
 
     #[tokio::test]

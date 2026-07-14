@@ -36,6 +36,7 @@ mod tool_refresh;
 mod tool_service_builder;
 pub(crate) mod topic;
 mod trace_sink_adapter;
+mod turn_permissions;
 mod unattended_redacting_sink;
 
 #[cfg(test)]
