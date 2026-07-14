@@ -36,6 +36,13 @@ pub struct TurnContext {
     /// non-gateway runs (cron, internal) and for the local no-auth daemon —
     /// both treated as trusted by the config-tier gate.
     pub caller_role: Option<String>,
+    /// The originating channel's `tool_permissions` override layer, as the JSON
+    /// string carried in run metadata under `CHANNEL_TOOL_PERMISSIONS_KEY`.
+    /// `None` for non-channel turns. Delegation tools (`session_send`) forward
+    /// this so a child run inherits the same restrictive deny layer the channel
+    /// turn ran under — without it, a guest channel could bypass its own
+    /// `deny` override by delegating (see `sessions/send_tool.rs`).
+    pub channel_tool_permissions: Option<String>,
 }
 
 /// Canonical operator-role predicate for a raw `caller_role` string. `None`
@@ -116,6 +123,7 @@ mod caller_tier_tests {
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: role.map(String::from),
+            channel_tool_permissions: None,
         }
     }
 

@@ -64,6 +64,7 @@ mod tests {
             channel_id: "slack".to_string(),
             conversation_id: "C123".to_string(),
             caller_role: None,
+            channel_tool_permissions: None,
         };
         let (agent_id, context) =
             TURN_CONTEXT.sync_scope(turn, || audit_identity("browser", "navigate", "https://x"));
@@ -79,6 +80,7 @@ mod tests {
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: None,
+            channel_tool_permissions: None,
         };
         let (agent_id, context) =
             TURN_CONTEXT.sync_scope(turn, || audit_identity("automation", "run_script", "sh"));

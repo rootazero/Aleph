@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use tauri::menu::MenuItem;
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Manager, Url, Wry};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::UpdaterExt;
 
@@ -26,6 +26,158 @@ const CHECK_INTERVAL: Duration = Duration::from_hours(6);
 /// installs): the GitHub releases page.
 const RELEASES_URL: &str = "https://github.com/rootazero/Aleph/releases/latest";
 
+/// Reserved shell-control paths the in-window update banner navigates to. The
+/// `on_navigation` guard (`main.rs`) intercepts and cancels these, so they
+/// never actually load — the Panel/daemon never serve the `/__aleph-shell/`
+/// prefix. Matching on the path (not the host) keeps the callback working
+/// whether the Panel is served from loopback (full app) or a remote Gateway
+/// (Panel-lite): Tauri IPC is loopback-scoped and unavailable from a remote
+/// origin, so this navigation channel is the only origin-independent one.
+const APPLY_PATH: &str = "/__aleph-shell/update/apply";
+const DISMISS_PATH: &str = "/__aleph-shell/update/dismiss";
+
+/// A banner control signal routed from the webview back to the shell via a
+/// sentinel navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateControl {
+    /// Apply the staged update and restart.
+    Apply,
+    /// Hide the banner for this session.
+    Dismiss,
+}
+
+/// Recognise a banner control link by its path. Returns `None` for ordinary
+/// Panel routes and external links, which must pass through to
+/// `external_link::route`.
+pub fn control_action(url: &Url) -> Option<UpdateControl> {
+    match url.path() {
+        APPLY_PATH => Some(UpdateControl::Apply),
+        DISMISS_PATH => Some(UpdateControl::Dismiss),
+        _ => None,
+    }
+}
+
+/// The injected banner as a JS template. Placeholders (`__MSG__`, `__LABEL__`,
+/// `__HREF__`, `__DISMISS__`, `__ISRESTART__`) are replaced with JSON-encoded
+/// (JS-safe) literals by `banner_script`. Built with `createElement` +
+/// `addEventListener` (never inline `onclick`) so a strict Panel CSP cannot
+/// block it; the buttons navigate via `location.href`, which is unaffected by
+/// script-CSP. On macOS (`data-platform="macos"`) the bar is offset below the
+/// overlay-titlebar traffic lights.
+const BANNER_TEMPLATE: &str = r#"(function(){
+var ID='__aleph-update-banner';
+var old=document.getElementById(ID); if(old) old.remove();
+var mac=document.documentElement.getAttribute('data-platform')==='macos';
+var dark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
+var bar=document.createElement('div'); bar.id=ID; bar.setAttribute('role','status');
+bar.style.cssText='position:fixed;left:0;right:0;top:'+(mac?'28px':'0px')+';z-index:2147483000;display:flex;align-items:center;gap:12px;padding:8px 14px;font:13px -apple-system,system-ui,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.25);'+(dark?'background:#1f2430;color:#e6e9ef;':'background:#f4f6fb;color:#1b2130;');
+var msg=document.createElement('span'); msg.style.cssText='flex:1;'; msg.textContent=__MSG__;
+var act=document.createElement('button'); act.textContent=__LABEL__;
+act.style.cssText='cursor:pointer;border:0;border-radius:6px;padding:5px 12px;font:inherit;font-weight:600;background:#3b82f6;color:#fff;';
+act.addEventListener('click',function(){ if(__ISRESTART__){ act.disabled=true; act.textContent='Updating…'; msg.textContent='Updating — Aleph will restart shortly.'; } window.location.href=__HREF__; });
+var close=document.createElement('button'); close.setAttribute('aria-label','Dismiss'); close.textContent='×';
+close.style.cssText='cursor:pointer;border:0;background:transparent;color:inherit;font-size:18px;line-height:1;padding:0 6px;';
+close.addEventListener('click',function(){ window.location.href=__DISMISS__; });
+bar.appendChild(msg); bar.appendChild(act); bar.appendChild(close);
+(document.body||document.documentElement).appendChild(bar);
+})();"#;
+
+/// Build the banner-injection JS for a staged `version`. `self_install`
+/// distinguishes platforms that can self-update (macOS / Windows / Linux
+/// AppImage — restart-to-apply) from package-manager installs (Linux
+/// .deb/.rpm — point the user at the releases page instead).
+fn banner_script(version: &str, self_install: bool) -> String {
+    let msg = serde_json::to_string(&format!("Aleph v{version} is ready"))
+        .unwrap_or_else(|_| "\"Aleph update is ready\"".to_string());
+    let (label, href, is_restart) = if self_install {
+        ("Restart to update", APPLY_PATH, "true")
+    } else {
+        ("How to update", RELEASES_URL, "false")
+    };
+    let json = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string());
+    // Apply `__MSG__` LAST: it carries the attacker-influenceable `version`, and
+    // the other replacement values are fixed constants with no placeholder
+    // tokens, so substituting the message body last means no later pass can
+    // rewrite a placeholder token that appeared inside the version string.
+    BANNER_TEMPLATE
+        .replace("__LABEL__", &json(label))
+        .replace("__HREF__", &json(href))
+        .replace("__DISMISS__", &json(DISMISS_PATH))
+        .replace("__ISRESTART__", is_restart)
+        .replace("__MSG__", &msg)
+}
+
+/// Inject (or replace) the update banner in the main window's current
+/// document. No-op when nothing is staged or the main window is gone.
+///
+/// `stage()` runs on a background async task, but `window.eval` touches the
+/// webview, which is UI-thread-affine (WebView2 on Windows especially). Marshal
+/// the injection to the main thread, mirroring `relabel_update_items`.
+pub fn show_update_banner(app: &AppHandle) {
+    let version = app
+        .state::<Updater>()
+        .staged
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let Some(version) = version else {
+        return;
+    };
+    let script = banner_script(&version, updater_can_self_install());
+    let app = app.clone();
+    let dispatch = app.run_on_main_thread({
+        let app = app.clone();
+        move || {
+            let Some(window) = app.get_webview_window("main") else {
+                return;
+            };
+            if let Err(e) = window.eval(script) {
+                tracing::debug!("could not inject the update banner: {e}");
+            }
+        }
+    });
+    if let Err(e) = dispatch {
+        tracing::debug!("could not dispatch the update banner injection: {e}");
+    }
+}
+
+/// Re-inject the banner after a Panel reload wiped the injected DOM — but only
+/// if an update is staged and the user has not dismissed it this session.
+/// Wired into `main.rs`'s `on_page_load(Finished)` handler.
+pub fn reinject_banner_if_staged(app: &AppHandle) {
+    let dismissed = *app
+        .state::<Updater>()
+        .dismissed
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if dismissed {
+        return;
+    }
+    show_update_banner(app);
+}
+
+/// Perform a banner control action routed from the `on_navigation` guard.
+pub fn handle_control(app: &AppHandle, action: UpdateControl) {
+    match action {
+        UpdateControl::Apply => apply_staged_update(app),
+        UpdateControl::Dismiss => {
+            *app.state::<Updater>()
+                .dismissed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+            remove_banner(app);
+        }
+    }
+}
+
+/// Remove the injected banner element from the current document.
+fn remove_banner(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ =
+            window.eval("var b=document.getElementById('__aleph-update-banner');if(b)b.remove();");
+    }
+}
+
 /// Shared update state, managed by Tauri so the background checker, the
 /// tray, and the macOS menu agree on whether an update is waiting.
 #[derive(Default)]
@@ -36,6 +188,9 @@ pub struct Updater {
     /// their builders so the checker can relabel them once an update is
     /// staged. Both surfaces stay in sync.
     update_items: Mutex<Vec<MenuItem<Wry>>>,
+    /// Session latch: set when the user dismisses the in-window banner (`×`).
+    /// In-memory only, so a fresh launch re-shows the banner (spec §5).
+    dismissed: Mutex<bool>,
 }
 
 impl Updater {
@@ -247,13 +402,15 @@ async fn check(app: &AppHandle, announce: Announce) {
     }
 }
 
-/// Record a staged update and relabel every registered update item.
+/// Record a staged update and relabel every registered update item, then
+/// surface the in-window banner.
 fn stage(app: &AppHandle, version: &str) {
     *app.state::<Updater>()
         .staged
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(version.to_string());
     relabel_update_items(app, staged_label(version));
+    show_update_banner(app);
 }
 
 /// Relabel the registered update items (tray + macOS menu) on the main
@@ -321,5 +478,76 @@ mod tests {
             manual_update_label("26.5.30"),
             "Update v26.5.30 available — how to update"
         );
+    }
+
+    #[test]
+    fn control_action_recognises_the_apply_sentinel() {
+        let url = Url::parse("http://127.0.0.1:18790/__aleph-shell/update/apply").unwrap();
+        assert_eq!(control_action(&url), Some(UpdateControl::Apply));
+    }
+
+    #[test]
+    fn control_action_recognises_the_dismiss_sentinel_on_any_origin() {
+        // Remote origin (Panel-lite pointed at a LAN Gateway) must match too —
+        // control_action keys off the path, not the host.
+        let url = Url::parse("http://box.lan:9000/__aleph-shell/update/dismiss").unwrap();
+        assert_eq!(control_action(&url), Some(UpdateControl::Dismiss));
+    }
+
+    #[test]
+    fn control_action_ignores_ordinary_urls() {
+        for u in [
+            "http://127.0.0.1:18790/",
+            "http://127.0.0.1:18790/chat",
+            "https://github.com/rootazero/Aleph/releases/latest",
+            "tauri://localhost/index.html",
+        ] {
+            assert_eq!(control_action(&Url::parse(u).unwrap()), None, "{u}");
+        }
+    }
+
+    #[test]
+    fn control_action_matches_apply_even_with_query() {
+        let url = Url::parse("http://127.0.0.1:18790/__aleph-shell/update/apply?v=1").unwrap();
+        assert_eq!(control_action(&url), Some(UpdateControl::Apply));
+    }
+
+    #[test]
+    fn banner_script_self_install_offers_restart_and_sentinels() {
+        let js = banner_script("26.7.14", true);
+        assert!(js.contains("Aleph v26.7.14 is ready"));
+        assert!(js.contains("Restart to update"));
+        assert!(js.contains("/__aleph-shell/update/apply"));
+        assert!(js.contains("/__aleph-shell/update/dismiss"));
+        // Idempotent injection: removes any prior banner by id first.
+        assert!(js.contains("__aleph-update-banner"));
+    }
+
+    #[test]
+    fn banner_script_package_manager_offers_howto_not_restart() {
+        let js = banner_script("26.7.14", false);
+        assert!(js.contains("How to update"));
+        assert!(js.contains(RELEASES_URL));
+        // The restart apply-sentinel must NOT be the primary action here.
+        assert!(!js.contains("/__aleph-shell/update/apply"));
+        // Dismiss still works.
+        assert!(js.contains("/__aleph-shell/update/dismiss"));
+    }
+
+    #[test]
+    fn banner_script_escapes_a_hostile_version() {
+        let js = banner_script("1\"; alert(1);//", true);
+        // The embedded quote is escaped by serde_json, so it cannot break out
+        // of the JS string literal.
+        assert!(!js.contains("1\"; alert"));
+        assert!(js.contains("1\\\"; alert"));
+    }
+
+    #[test]
+    fn banner_script_does_not_launder_placeholder_tokens_in_version() {
+        // A hostile version embedding a later placeholder token must survive
+        // verbatim in the message, not be rewritten by a subsequent pass.
+        let js = banner_script("__HREF__", true);
+        assert!(js.contains("Aleph v__HREF__ is ready"));
     }
 }

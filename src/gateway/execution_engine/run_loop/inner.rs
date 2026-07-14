@@ -443,6 +443,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 .cloned()
                 .unwrap_or_default(),
             caller_role: request.metadata.get("caller_role").cloned(),
+            channel_tool_permissions: request
+                .metadata
+                .get(crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY)
+                .cloned(),
         };
 
         loop {

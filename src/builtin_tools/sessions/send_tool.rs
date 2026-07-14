@@ -321,10 +321,17 @@ impl SessionsSendTool {
         // because tokio task-locals do not cross the `tokio::spawn`
         // boundary used by fire-and-forget below.
         let inherited_workspace = crate::projects::current_project_root();
-        let mut sub_metadata = HashMap::new();
-        if let Some(p) = inherited_workspace.as_ref() {
-            sub_metadata.insert("project_root".to_string(), p.display().to_string());
-        }
+        // `TURN_CONTEXT` is reliably in scope here (ScopedToolService scopes it
+        // around every tool dispatch and reading it does not cross a
+        // `tokio::spawn` boundary), so the dispatching turn's `caller_role` AND
+        // its channel `tool_permissions` deny layer are captured before any spawn.
+        let turn = crate::tools::turn_context::current_turn_context();
+        let sub_metadata = build_sub_metadata(
+            inherited_workspace.as_deref(),
+            turn.as_ref().and_then(|t| t.caller_role.clone()),
+            turn.as_ref().and_then(|t| t.channel_tool_permissions.clone()),
+            args.timeout_seconds == 0,
+        );
 
         // Create run request
         let request = RunRequest {
@@ -541,6 +548,53 @@ fn session_key_to_gateway(key: &crate::routing::session_key::SessionKey) -> Sess
     }
 }
 
+/// Build the delegated run's metadata. Extracted as a pure function so the two
+/// security invariants are unit-testable without a full execution harness:
+///
+/// 1. The dispatching turn's `caller_role` AND its channel `tool_permissions`
+///    deny layer are forwarded — the same two restrictive keys
+///    [`carry_policy_metadata`](crate::gateway::execution_engine) carries for
+///    goal/loop/cron continuations — so a delegated run is never MORE privileged
+///    than the turn that spawned it. Dropping `caller_role` would let
+///    `role_is_operator(None) = true` promote a guest channel to operator +
+///    unclamped tier; dropping the channel layer would let a guest bypass its own
+///    `deny` override (e.g. `web_fetch = deny`) simply by delegating.
+/// 2. A fire-and-forget run (no human attached, no routable approval channel) is
+///    stamped [`UNATTENDED_KEY`](crate::gateway::execution_engine::UNATTENDED_KEY)
+///    so confirm-gated tools fail closed immediately instead of parking on an
+///    approval card nobody can answer.
+///
+/// `channel_id` / `conversation_id` are deliberately NOT forwarded — they are
+/// what make an approval look deliverable, and a delegated run must keep failing
+/// closed on approval-gated tools.
+fn build_sub_metadata(
+    inherited_workspace: Option<&std::path::Path>,
+    caller_role: Option<String>,
+    channel_tool_permissions: Option<String>,
+    is_fire_and_forget: bool,
+) -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    if let Some(p) = inherited_workspace {
+        m.insert("project_root".to_string(), p.display().to_string());
+    }
+    if let Some(role) = caller_role {
+        m.insert("caller_role".to_string(), role);
+    }
+    if let Some(perms) = channel_tool_permissions {
+        m.insert(
+            crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY.to_string(),
+            perms,
+        );
+    }
+    if is_fire_and_forget {
+        m.insert(
+            crate::gateway::execution_engine::UNATTENDED_KEY.to_string(),
+            "true".to_string(),
+        );
+    }
+    m
+}
+
 /// Implementation of `AlephTool` trait for `SessionsSendTool`
 #[async_trait]
 impl AlephTool for SessionsSendTool {
@@ -740,5 +794,55 @@ mod tests {
         assert!(
             matches!(gateway_key, SessionKey::Task { agent_id, task_type, task_id } if agent_id == "main" && task_type == "cron" && task_id == "daily")
         );
+    }
+
+    #[test]
+    fn sub_metadata_forwards_caller_role() {
+        // A guest channel delegating must carry its role forward, or the child
+        // run passes the operator gate (role_is_operator(None) = true).
+        let m = build_sub_metadata(None, Some("guest".to_string()), None, false);
+        assert_eq!(m.get("caller_role").map(String::as_str), Some("guest"));
+        // Wait-mode (not fire-and-forget) must NOT be stamped unattended: a human
+        // is attached to the awaiting parent turn.
+        assert!(!m.contains_key(
+            crate::gateway::execution_engine::UNATTENDED_KEY
+        ));
+    }
+
+    #[test]
+    fn sub_metadata_forwards_channel_tool_permissions() {
+        // A guest channel with a deny override (e.g. web_fetch = deny) must carry
+        // that deny layer to the delegate, or it bypasses its own deny by
+        // delegating to another session.
+        let perms = r#"{"web_fetch":"deny"}"#.to_string();
+        let m = build_sub_metadata(None, Some("guest".to_string()), Some(perms.clone()), false);
+        assert_eq!(
+            m.get(crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY)
+                .map(String::as_str),
+            Some(perms.as_str())
+        );
+    }
+
+    #[test]
+    fn sub_metadata_omits_caller_role_when_absent() {
+        // A trusted local/internal run (no role) forwards nothing — the child
+        // stays at the same absent-role trust level, not a fabricated "guest".
+        let m = build_sub_metadata(None, None, None, false);
+        assert!(!m.contains_key("caller_role"));
+        assert!(!m.contains_key(
+            crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY
+        ));
+    }
+
+    #[test]
+    fn sub_metadata_stamps_unattended_on_fire_and_forget() {
+        let m = build_sub_metadata(None, Some("operator".to_string()), None, true);
+        assert_eq!(
+            m.get(crate::gateway::execution_engine::UNATTENDED_KEY)
+                .map(String::as_str),
+            Some("true")
+        );
+        // caller_role still rides along even for fire-and-forget.
+        assert_eq!(m.get("caller_role").map(String::as_str), Some("operator"));
     }
 }

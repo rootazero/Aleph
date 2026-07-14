@@ -1136,6 +1136,7 @@ mod tests {
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: None,
+            channel_tool_permissions: None,
         };
         let bound = TURN_CONTEXT.scope(turn, tool.session()).await;
         assert_eq!(bound, run_key.to_key_string());

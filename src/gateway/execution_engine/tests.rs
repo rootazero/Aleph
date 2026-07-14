@@ -726,6 +726,7 @@ fn inv_iso_turn(session_key: SessionKey) -> crate::tools::turn_context::TurnCont
         channel_id: String::new(),
         conversation_id: String::new(),
         caller_role: None,
+        channel_tool_permissions: None,
     }
 }
 

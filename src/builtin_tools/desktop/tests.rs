@@ -469,6 +469,7 @@ async fn approval_request_carries_agent_id_from_turn_context() {
         channel_id: "telegram".to_string(),
         conversation_id: "user-1".to_string(),
         caller_role: None,
+        channel_tool_permissions: None,
     };
 
     let mut args = make_args("click");
