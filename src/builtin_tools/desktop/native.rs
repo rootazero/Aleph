@@ -118,6 +118,136 @@ async fn fit_clipboard_image(png_base64: String) -> Result<String> {
     Ok(processed.image_base64)
 }
 
+/// Pixels moved by one wheel detent ("click") of
+/// [`aleph_desktop::ScreenCapability::scroll`], whose `amount` is wheel clicks,
+/// not pixels.
+///
+/// The model's only measuring stick is the screenshot it just looked at, so the
+/// tool's `delta_x`/`delta_y` are pixels; the limb speaks detents. The
+/// conversion lives here, at the one boundary that knows both units.
+///
+/// 100 is the desktop-wide convention for what one notch of a user's wheel does:
+/// a notch is `WHEEL_DELTA` = 120 raw units on Windows and 3 text lines in every
+/// major toolkit, which the browsers realize as ~100 px. It cannot be exact —
+/// the OS applies its own acceleration and each app picks its own line height —
+/// and the contract is deliberately "about what one notch of the wheel does",
+/// which is what a model estimating a scroll from a screenshot actually needs.
+const PIXELS_PER_SCROLL_CLICK: f64 = 100.0;
+
+/// Convert a positive pixel scroll distance (direction already split off) into
+/// wheel clicks.
+///
+/// Returns the clicks to send and whether the request was quantized *up* to the
+/// one-detent floor. A wheel cannot turn less than one notch, so a sub-detent
+/// request either moves further than asked or does not move at all — and a
+/// no-op reported as success is the worse of the two. The caller says which
+/// happened instead of silently rounding to zero.
+fn scroll_clicks(pixels: f64) -> (i32, bool) {
+    let rounded = (pixels / PIXELS_PER_SCROLL_CLICK).round();
+    if rounded < 1.0 {
+        return (1, true);
+    }
+    // Float→int casts saturate in Rust, so an absurd delta lands on i32::MAX
+    // rather than wrapping.
+    (rounded as i32, false)
+}
+
+/// The clipboard as it stood before a `paste` overwrote it, and whether a text
+/// write can put it back.
+enum ClipboardSnapshot {
+    /// Plain text — `clipboard_write` restores it exactly.
+    Text(String),
+    /// Content no text write can reproduce (an image, a file, a PDF). Writing
+    /// text over it is not a restore: every platform's text write clears the
+    /// pasteboard first, so "restoring" the empty string a text-only read hands
+    /// back would destroy the user's copied image. The phrase describes what was
+    /// there, for an honest message.
+    Unrestorable(&'static str),
+    /// Nothing to put back — the clipboard could not be read.
+    Nothing,
+}
+
+impl ClipboardSnapshot {
+    /// The note a paste owes the model when it could not put the clipboard back.
+    fn unrestorable_note(&self) -> Option<String> {
+        match self {
+            Self::Unrestorable(what) => Some(format!(
+                "Note: the clipboard held {what}. A text write cannot reproduce it, so nothing \
+                 was written back over it — but the paste itself replaced it, so the clipboard \
+                 now holds the pasted text. The original content is gone: tell the user to \
+                 re-copy it if they still need it, and prefer type_text over paste when the \
+                 clipboard must be preserved."
+            )),
+            Self::Text(_) | Self::Nothing => None,
+        }
+    }
+}
+
+/// Snapshot the clipboard before `paste` overwrites it.
+///
+/// Prefers `SystemCapability::clipboard_read`, whose `ClipboardContent` reports
+/// the *flavor* on the pasteboard. The text-only `ScreenCapability` path cannot
+/// tell "the user copied an image" from "the clipboard is empty" — both come
+/// back as `Ok("")` — so on that path an empty string is never treated as
+/// restorable text.
+async fn snapshot_clipboard(
+    platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
+    screen: &dyn aleph_desktop::ScreenCapability,
+) -> ClipboardSnapshot {
+    if let Some(system) = platform.system() {
+        return match system.clipboard_read().await {
+            Ok(content) if content.has_image => ClipboardSnapshot::Unrestorable("an image"),
+            Ok(content) => match content.text {
+                Some(text) if !text.is_empty() => ClipboardSnapshot::Text(text),
+                // An empty string *flavor* is a genuinely empty clipboard:
+                // nothing to put back, nothing to lose.
+                Some(_) => ClipboardSnapshot::Nothing,
+                // No string flavor at all: something a text write cannot
+                // reproduce (a file, a PDF, rich data) — or an empty pasteboard,
+                // which macOS reports the same way. Either way, write nothing.
+                None => ClipboardSnapshot::Unrestorable(
+                    "content that is not plain text (a file, a PDF, or nothing at all)",
+                ),
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, "Clipboard snapshot failed; paste will not restore");
+                ClipboardSnapshot::Nothing
+            }
+        };
+    }
+
+    match screen.clipboard_read().await {
+        Ok(text) if !text.is_empty() => ClipboardSnapshot::Text(text),
+        Ok(_) => ClipboardSnapshot::Nothing,
+        Err(e) => {
+            tracing::warn!(error = %e, "Clipboard snapshot failed; paste will not restore");
+            ClipboardSnapshot::Nothing
+        }
+    }
+}
+
+/// Put back what [`snapshot_clipboard`] captured; returns whether the original
+/// clipboard is back in place.
+///
+/// Only `Text` is ever written. A `clipboard_write("")` is not a restore, it is
+/// a `clearContents()` — the one move that destroys a clipboard image the tool
+/// never owned.
+async fn restore_clipboard(
+    screen: &dyn aleph_desktop::ScreenCapability,
+    saved: &ClipboardSnapshot,
+) -> bool {
+    let ClipboardSnapshot::Text(original) = saved else {
+        return false;
+    };
+    match screen.clipboard_write(original).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to restore original clipboard after paste");
+            false
+        }
+    }
+}
+
 /// Split a single trailing newline off `text` for UI-TARS
 /// `type(content='…\n')` submit semantics.
 ///
@@ -259,6 +389,23 @@ impl super::DesktopTool {
                 };
 
                 match screenshot_result {
+                    // A dead capture chain does not always surface as an `Err`:
+                    // a locked screen, a revoked screen-recording grant or a
+                    // wedged helper hand back a well-formed frame full of
+                    // nothing. Such a frame is small, so the budget re-encode
+                    // below never decodes it — it would reach the model as real
+                    // pixels, carrying a `coordinate_space` that tells the model
+                    // to aim at them. Refuse it here, platform-independently.
+                    Ok(s) if aleph_desktop::perception::is_degenerate(&s) => {
+                        Ok(Some(DesktopOutput {
+                            success: false,
+                            data: None,
+                            message: Some(super::recovery::with_hint(
+                                "Screen capture returned a blank frame — no pixels to look at."
+                                    .to_string(),
+                            )),
+                        }))
+                    }
                     Ok(s) => {
                         // A full-resolution screenshot can be tens of MB once
                         // base64-encoded; the generic tool-result budget would
@@ -487,12 +634,29 @@ impl super::DesktopTool {
                         }))
                     }
                 };
+                let session_id = super::held_inputs::current_session_id();
                 match screen.key_button(keys, action).await {
-                    Ok(()) => Ok(Some(DesktopOutput {
-                        success: true,
-                        data: Some(serde_json::json!({"keys": keys, "action": args.press_action})),
-                        message: None,
-                    })),
+                    Ok(()) => {
+                        // Ledger only what the OS actually took: a failed press
+                        // holds nothing, and `Click` releases what it pressed in
+                        // the same call. The abort path releases the rest.
+                        match action {
+                            aleph_desktop::PressAction::Press => {
+                                super::held_inputs::record_key_press(&session_id, keys);
+                            }
+                            aleph_desktop::PressAction::Release => {
+                                super::held_inputs::clear_key_release(&session_id, keys);
+                            }
+                            aleph_desktop::PressAction::Click => {}
+                        }
+                        Ok(Some(DesktopOutput {
+                            success: true,
+                            data: Some(
+                                serde_json::json!({"keys": keys, "action": args.press_action}),
+                            ),
+                            message: None,
+                        }))
+                    }
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
@@ -503,6 +667,11 @@ impl super::DesktopTool {
             "scroll" => {
                 let delta_y = args.delta_y.unwrap_or(0.0);
                 let delta_x = args.delta_x.unwrap_or(0.0);
+                if !delta_x.is_finite() || !delta_y.is_finite() {
+                    return Ok(Some(invalid_args(
+                        "scroll requires finite numeric delta_x/delta_y (pixels)",
+                    )));
+                }
                 if delta_x == 0.0 && delta_y == 0.0 {
                     return Ok(Some(DesktopOutput {
                         success: false,
@@ -510,39 +679,40 @@ impl super::DesktopTool {
                         message: Some("scroll requires non-zero delta_x or delta_y".to_string()),
                     }));
                 }
-                // Round (not truncate): a non-zero sub-unit delta in (-1, 1) must
-                // not silently become a no-op scroll reported as success.
-                let (direction, amount) = if delta_y.abs() >= delta_x.abs() {
+                // `delta_*` are pixels (what the model can measure off a
+                // screenshot); the limb scrolls in wheel clicks. Split the
+                // dominant axis into a direction plus a positive pixel distance,
+                // then convert.
+                let (direction, pixels) = if delta_y.abs() >= delta_x.abs() {
                     if delta_y < 0.0 {
-                        ("up", delta_y.abs().round() as i32)
+                        ("up", delta_y.abs())
                     } else {
-                        ("down", delta_y.round() as i32)
+                        ("down", delta_y)
                     }
                 } else if delta_x < 0.0 {
-                    ("left", delta_x.abs().round() as i32)
+                    ("left", delta_x.abs())
                 } else {
-                    ("right", delta_x.round() as i32)
+                    ("right", delta_x)
                 };
-                if amount == 0 {
-                    return Ok(Some(DesktopOutput {
-                        success: false,
-                        data: None,
-                        message: Some(
-                            "scroll delta too small to move (rounded to 0); use a larger \
-                             delta_x/delta_y (e.g. >= 1)"
-                                .to_string(),
-                        ),
-                    }));
-                }
-                match screen.scroll(direction, amount).await {
+                let (clicks, quantized) = scroll_clicks(pixels);
+                match screen.scroll(direction, clicks).await {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
                         data: Some(serde_json::json!({
                             "scrolled": true,
                             "direction": direction,
-                            "amount": amount,
+                            "requested_pixels": pixels,
+                            "wheel_clicks": clicks,
+                            "approx_pixels_moved": f64::from(clicks) * PIXELS_PER_SCROLL_CLICK,
                         })),
-                        message: None,
+                        message: quantized.then(|| {
+                            format!(
+                                "Scrolled 1 wheel click (~{PIXELS_PER_SCROLL_CLICK:.0}px): the \
+                                 requested {pixels:.0}px is below one wheel detent, the smallest \
+                                 step a wheel scroll can take, so the screen moved further than \
+                                 you asked. Re-observe before acting on coordinates."
+                            )
+                        }),
                     })),
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
@@ -808,12 +978,28 @@ impl super::DesktopTool {
                         }))
                     }
                 };
+                let session_id = super::held_inputs::current_session_id();
                 match screen.mouse_button(x, y, button, press_action).await {
-                    Ok(()) => Ok(Some(DesktopOutput {
-                        success: true,
-                        data: Some(serde_json::json!({"x": x, "y": y})),
-                        message: None,
-                    })),
+                    Ok(()) => {
+                        // Same ledger discipline as key_button: a held button
+                        // stays physically down on the user's mouse until it is
+                        // released, and the abort path is the only other thing
+                        // that can hand it back.
+                        match press_action {
+                            aleph_desktop::PressAction::Press => {
+                                super::held_inputs::record_button_press(&session_id, button, x, y);
+                            }
+                            aleph_desktop::PressAction::Release => {
+                                super::held_inputs::clear_button_release(&session_id, button);
+                            }
+                            aleph_desktop::PressAction::Click => {}
+                        }
+                        Ok(Some(DesktopOutput {
+                            success: true,
+                            data: Some(serde_json::json!({"x": x, "y": y})),
+                            message: None,
+                        }))
+                    }
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
@@ -993,8 +1179,10 @@ impl super::DesktopTool {
             "paste" => {
                 let text = args.text.as_deref().unwrap_or("");
 
-                // Save current clipboard (best effort)
-                let saved = screen.clipboard_read().await.ok();
+                // Snapshot the clipboard *by flavor*, not as a bare string: an
+                // image / file / PDF reads back as no text at all, and writing
+                // the empty string over it is a clear, not a restore.
+                let saved = snapshot_clipboard(platform, screen).await;
 
                 // Write target text to clipboard
                 if let Err(e) = screen.clipboard_write(text).await {
@@ -1012,14 +1200,7 @@ impl super::DesktopTool {
                 let paste_modifier = "ctrl";
 
                 if let Err(e) = screen.key_combo(&[paste_modifier.into()], "v").await {
-                    if let Some(ref original) = saved {
-                        if let Err(restore_err) = screen.clipboard_write(original).await {
-                            tracing::warn!(
-                                error = %restore_err,
-                                "Failed to restore original clipboard after paste"
-                            );
-                        }
-                    }
+                    restore_clipboard(screen, &saved).await;
                     return Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
@@ -1030,20 +1211,16 @@ impl super::DesktopTool {
                 // Wait for paste to take effect
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-                // Restore original clipboard (best effort)
-                if let Some(original) = saved {
-                    if let Err(restore_err) = screen.clipboard_write(&original).await {
-                        tracing::warn!(
-                            error = %restore_err,
-                            "Failed to restore original clipboard after paste"
-                        );
-                    }
-                }
+                let restored = restore_clipboard(screen, &saved).await;
 
                 Ok(Some(DesktopOutput {
                     success: true,
-                    data: Some(serde_json::json!({"pasted": true, "chars": text.chars().count()})),
-                    message: None,
+                    data: Some(serde_json::json!({
+                        "pasted": true,
+                        "chars": text.chars().count(),
+                        "clipboard_restored": restored,
+                    })),
+                    message: saved.unrestorable_note(),
                 }))
             }
             "wait_visual" => {
@@ -1238,6 +1415,22 @@ mod tests {
         let err = screen_region_from_args(&a, "screenshot").expect_err("negative must reject");
         assert!(!err.success);
         assert!(err.message.unwrap().contains("non-negative"));
+    }
+
+    #[test]
+    fn scroll_pixels_convert_to_wheel_clicks() {
+        // The tool's unit is pixels; the limb's is wheel detents.
+        assert_eq!(scroll_clicks(300.0), (3, false));
+        assert_eq!(scroll_clicks(100.0), (1, false));
+        assert_eq!(scroll_clicks(50.0), (1, false));
+    }
+
+    #[test]
+    fn sub_detent_scroll_clamps_to_one_click_and_flags_it() {
+        // A 5px request must not become 0 clicks reported as a successful
+        // scroll; it moves one detent and the caller says so.
+        assert_eq!(scroll_clicks(5.0), (1, true));
+        assert_eq!(scroll_clicks(49.0), (1, true));
     }
 
     #[test]

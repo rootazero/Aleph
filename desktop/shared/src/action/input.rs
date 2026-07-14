@@ -3,7 +3,7 @@
 use enigo::{Axis, Coordinate, Direction, Keyboard, Mouse};
 use tracing::info;
 
-use super::{new_enigo, to_enigo_button, validate_coordinate};
+use super::{new_enigo, new_enigo_holding, to_enigo_button, validate_coordinate};
 use crate::error::DesktopError;
 use crate::error::Result;
 use crate::MouseButton;
@@ -126,6 +126,29 @@ pub fn key_combo(modifiers: &[String], key: &str) -> Result<()> {
 /// in order; on `Release` they come up in reverse order so nested holds unwind
 /// correctly. `Click` performs a full press-and-release.
 ///
+/// # Platform behavior of a cross-call hold
+///
+/// A held key only *composes* with input sent by a later call where the OS
+/// derives modifier state from the global event stream:
+///
+/// - Windows (`SendInput`) and Linux (XTEST / ydotool): the key-down mutates
+///   global keyboard state, so a subsequent [`type_text`] or [`click`] from a
+///   fresh enigo instance really does see the modifier. A cross-call hold works.
+/// - macOS: enigo builds every event from a `CGEventSourceStateID::Private`
+///   source and stamps it with flags accumulated **inside that one instance**,
+///   which is dropped when this function returns. A later call therefore posts
+///   its event with *empty* flags, and the held modifier does not apply. The key
+///   is genuinely down at the HID layer (and must still be released — see below),
+///   but `press("cmd")` followed by `type_text("c")` will not produce Cmd+C.
+///   Use [`key_combo`] for chords on macOS; it presses and releases inside a
+///   single instance, so the flags do compose.
+///
+/// Because the enigo instance here is constructed with
+/// `release_keys_when_dropped: false`, a `Press` leaves the key physically down
+/// after this call returns — which is the whole point, and also why the caller
+/// must own the release. The desktop tool records every press in its held-input
+/// ledger and drains it at turn end / on Escape abort.
+///
 /// # Errors
 ///
 /// - [`DesktopError::InputFailed`] if `keys` is empty, a key name is invalid,
@@ -147,7 +170,12 @@ pub fn key_button(keys: &[String], action: crate::PressAction) -> Result<()> {
         .map(|k| super::key_parse::parse_key_or_modifier(k))
         .collect::<Result<Vec<_>>>()?;
 
-    let mut enigo = new_enigo()?;
+    // A self-releasing instance would undo a `Press` the instant this function
+    // returns, making the press/release split a no-op.
+    let mut enigo = match action {
+        crate::PressAction::Click => new_enigo()?,
+        crate::PressAction::Press | crate::PressAction::Release => new_enigo_holding()?,
+    };
 
     let mut press = |dir: Direction, reverse: bool| -> Result<()> {
         if reverse {
@@ -340,6 +368,11 @@ pub fn cursor_position() -> Result<(f64, f64)> {
 }
 
 /// Press, release, or click a mouse button at (x, y).
+///
+/// Unlike a held *key* (see [`key_button`]), a held mouse button does not depend
+/// on enigo's per-instance modifier flags, so a cross-call hold — press at A,
+/// move, release at B — composes correctly on every platform. The caller owns
+/// the release: this instance does not self-release on drop.
 pub fn mouse_button(x: f64, y: f64, button: MouseButton, action: crate::PressAction) -> Result<()> {
     let ix = validate_coordinate(x, "x")?;
     let iy = validate_coordinate(y, "y")?;
@@ -355,7 +388,10 @@ pub fn mouse_button(x: f64, y: f64, button: MouseButton, action: crate::PressAct
         crate::PressAction::Release => Direction::Release,
         crate::PressAction::Click => Direction::Click,
     };
-    let mut enigo = new_enigo()?;
+    let mut enigo = match action {
+        crate::PressAction::Click => new_enigo()?,
+        crate::PressAction::Press | crate::PressAction::Release => new_enigo_holding()?,
+    };
     enigo
         .move_mouse(ix, iy, Coordinate::Abs)
         .map_err(|e| DesktopError::InputFailed(format!("Failed to move mouse: {e}")))?;

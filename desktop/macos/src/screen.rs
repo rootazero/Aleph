@@ -3,11 +3,13 @@
 //! Routes `ocr()` and `screenshot()` / `display_list()` through the Swift
 //! helper (`screen.*` RPCs — backed by Vision + `ScreenCaptureKit`); falls
 //! back to `NativeScreen` (xcap) for screenshots when the bridge call fails
-//! (e.g. macOS 13 lacks `SCScreenshotManager`). All other input automation
-//! methods forward directly to `NativeScreen`.
+//! (e.g. macOS 13 lacks `SCScreenshotManager`) *or* when it succeeds with a
+//! degenerate frame. All other input automation methods forward directly to
+//! `NativeScreen`.
 
 use std::sync::Arc;
 
+use aleph_desktop::perception::is_degenerate;
 use aleph_desktop::traits::ScreenCapability;
 use aleph_desktop::{
     DesktopError, DisplayInfo, MouseButton, NativeScreen, OcrLine, OcrResult, PressAction, Result,
@@ -37,7 +39,16 @@ impl MacOSScreen {
 impl ScreenCapability for MacOSScreen {
     async fn screenshot(&self, region: Option<ScreenRegion>) -> Result<Screenshot> {
         match self.screenshot_via_bridge(region.as_ref()).await {
-            Ok(shot) => Ok(shot),
+            Ok(shot) if !is_degenerate(&shot) => Ok(shot),
+            // A blank frame is a wedged helper reporting success. xcap is a
+            // genuinely different transport, so it can still see the screen —
+            // but it is the *only* retry: whatever it returns is returned as-is,
+            // degenerate or not, and the tool layer decides what to tell the
+            // model. Two dead transports are a diagnosis, not a reason to loop.
+            Ok(_) => {
+                warn!("screen.capture bridge returned a degenerate frame; falling back to xcap");
+                self.inner.screenshot(region).await
+            }
             Err(err) => {
                 warn!(
                     error = %err,

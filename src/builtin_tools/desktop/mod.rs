@@ -6,6 +6,7 @@ mod ax;
 mod browser_operator;
 mod coord_resolve;
 mod gui_locate;
+mod held_inputs;
 mod interactable;
 mod native;
 mod observe;
@@ -49,6 +50,10 @@ pub struct DesktopTool {
     pub(super) approval_policy: Option<Arc<dyn ApprovalPolicy>>,
     pub(super) platform: Option<Arc<dyn aleph_desktop::DesktopPlatform>>,
     pub(super) escape_started: Arc<crate::sync_primitives::AtomicBool>,
+    /// Run id of the last turn seen by [`DesktopTool::check_escape`]. The tool
+    /// is a shared singleton, so the abort scope cannot be a struct field fixed
+    /// at construction — it is tracked here and compared per call.
+    pub(super) last_run_id: Arc<crate::sync_primitives::Mutex<String>>,
     /// Optional vision bridge: turns a captured screenshot into OCR text + an
     /// optional scene description so text-only models can still act on it.
     /// `None` keeps the screenshot path byte-identical to its legacy behavior.
@@ -62,6 +67,7 @@ impl DesktopTool {
             approval_policy: None,
             platform: None,
             escape_started: Arc::new(crate::sync_primitives::AtomicBool::new(false)),
+            last_run_id: Arc::new(crate::sync_primitives::Mutex::new(String::new())),
             vision_bridge: None,
         }
     }
@@ -119,35 +125,88 @@ impl DesktopTool {
         }
     }
 
-    /// Check escape abort and start listener on first call.
-    fn check_escape(&self) -> std::result::Result<(), DesktopOutput> {
-        if let Some(ref platform) = self.platform {
-            if let Some(listener) = platform.escape_listener() {
-                if !self
-                    .escape_started
-                    .load(crate::sync_primitives::Ordering::Acquire)
-                {
-                    // A failed start means the Escape abort hotkey is
-                    // unavailable — log it once (the flag is still set below so
-                    // we do not retry on every action).
-                    if let Err(e) = listener.start() {
-                        tracing::warn!(
-                            error = %e,
-                            "Failed to start desktop escape listener; abort hotkey unavailable"
-                        );
-                    }
-                    self.escape_started
-                        .store(true, crate::sync_primitives::Ordering::Release);
-                }
-                if listener.is_aborted() {
-                    return Err(DesktopOutput {
-                        success: false,
-                        data: None,
-                        message: Some("Computer use aborted by user (Escape pressed)".into()),
-                    });
-                }
+    /// True when this call is the first desktop action of a run we have not
+    /// seen before — the boundary at which the Escape abort flag is reset.
+    ///
+    /// Outside a gateway run (`run_id` empty — cron, internal, tests) there is
+    /// no run identity to compare against, so every call would look like a
+    /// fresh boundary and would clear the flag the user had just set, disarming
+    /// Escape for exactly the unattended runs where an emergency stop matters
+    /// most. Those callers therefore keep today's sticky flag; because the
+    /// platform listener's flag is process-wide, the next gateway run's
+    /// boundary clears it for them too.
+    fn run_boundary_crossed(&self) -> bool {
+        let run_id = crate::tools::turn_context::current_turn_context()
+            .map(|turn| turn.run_id)
+            .unwrap_or_default();
+        if run_id.is_empty() {
+            return false;
+        }
+        let mut last = self.last_run_id.lock().unwrap_or_else(|e| e.into_inner());
+        if *last == run_id {
+            return false;
+        }
+        *last = run_id;
+        true
+    }
+
+    /// Check escape abort, starting the listener on first call and resetting the
+    /// abort flag at each run boundary.
+    ///
+    /// The platform abort flag is process-wide and set by a *global* key
+    /// monitor: any Escape press, in any app, for any reason, raises it. Without
+    /// a boundary reset it would never fall again, and a single Escape typed
+    /// hours ago to dismiss a dialog would refuse every desktop action of every
+    /// session until the server restarts. Escape aborts the run it was pressed
+    /// during — a new run resets the flag; within one run, once aborted, stays
+    /// aborted.
+    async fn check_escape(&self) -> std::result::Result<(), DesktopOutput> {
+        let Some(platform) = self.platform.as_ref() else {
+            return Ok(());
+        };
+        let Some(listener) = platform.escape_listener() else {
+            return Ok(());
+        };
+
+        if !self
+            .escape_started
+            .load(crate::sync_primitives::Ordering::Acquire)
+        {
+            // A failed start means the Escape abort hotkey is unavailable — log
+            // it once (the flag is still set below so we do not retry on every
+            // action).
+            if let Err(e) = listener.start() {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to start desktop escape listener; abort hotkey unavailable"
+                );
+            }
+            self.escape_started
+                .store(true, crate::sync_primitives::Ordering::Release);
+        }
+
+        if self.run_boundary_crossed() {
+            listener.reset();
+            // A previous run may have died holding a modifier or mid-drag; the
+            // new run must not inherit its stuck inputs.
+            if let Some(screen) = platform.screen() {
+                held_inputs::release_all(&held_inputs::current_session_id(), screen).await;
             }
         }
+
+        if listener.is_aborted() {
+            // Escape is the user's emergency stop on the one physical desktop:
+            // hand back every held key/button, not just this session's.
+            if let Some(screen) = platform.screen() {
+                held_inputs::release_all_sessions(screen).await;
+            }
+            return Err(DesktopOutput {
+                success: false,
+                data: None,
+                message: Some("Computer use aborted by user (Escape pressed)".into()),
+            });
+        }
+
         Ok(())
     }
 
@@ -164,7 +223,7 @@ impl DesktopTool {
         let mut results = Vec::new();
         for (i, batch_action) in args.actions.iter().enumerate() {
             // Check escape between actions
-            if let Err(out) = self.check_escape() {
+            if let Err(out) = self.check_escape().await {
                 results.push(serde_json::json!({
                     "index": i,
                     "aborted": true,
@@ -534,7 +593,7 @@ Actions:
 - type_text: Type text at current cursor position.
 - key_combo: Press key combination, e.g. keys=["cmd","c"].
 - key_button: Hold or release a key/chord without auto-releasing — keys=["cmd"] plus press_action="press" (hold down) then later press_action="release". Distinct from key_combo, which presses and releases atomically. Useful for drag-with-modifier or chorded shortcuts.
-- scroll: Scroll via delta_x/delta_y.
+- scroll: Scroll by delta_x/delta_y PIXELS (negative = up/left), e.g. delta_y:-300 scrolls up about 300px. Pixels are quantized to whole mouse-wheel clicks (~100px each), so a delta under ~100px still moves one click and the result says how far it actually went.
 - launch_app: Launch app by bundle_id.
 - quit_app: Close app by bundle_id.
 - restart_app: Restart app by bundle_id (quit then relaunch).
@@ -547,10 +606,12 @@ Actions:
 - screen_record: Record screen as MP4. Optional duration/fps/with_audio and region {x,y,width,height} (defaults to the full primary display). region honors coord_space:"normalized" like screenshot.
 - display_list: List all connected displays with resolution and scale info.
 - batch: Execute multiple actions sequentially. Requires actions array.
-- paste: Paste text via clipboard (Cmd+V). Better for multiline text than type_text.
+- paste: Paste text via clipboard (Cmd+V). Better for multiline text than type_text. It goes through the user's clipboard: plain text is put back afterwards, but an image or file on the clipboard cannot be (the result says so) — use type_text when the clipboard must be preserved.
 - wait_visual: Wait until the screen settles. Polls screenshots and returns when two consecutive captures match, or after `timeout_ms` (default 5000, max 60000). Use after navigation or clicks that trigger animation. Returns `{stable: bool, polls, elapsed_ms}` — `stable=false` means timeout, not failure.
 - set_value: Set a text field's value directly via the accessibility API and VERIFY the write by reading it back — the reliable way to fill forms (multiline, non-ASCII, replacing existing content). Locate the element with role ("AXTextField") and/or element_title, optionally x/y as a nearest-center hint (honors coord_space). Requires text. Result carries verification.state = "verified" | "unverified". Prefer this over click + type_text; type_text is a blind synthetic fallback.
 - ax_action: Trigger a native accessibility action (ax_action_name, e.g. "AXPress", "AXShowMenu") on an element located the same way. More reliable than a synthetic click for buttons/menus when the app exposes AX actions. Available on macOS (AX) and Windows (UI Automation: AXPress→Invoke/Toggle/Select, AXShowMenu→Expand); Linux reports the capability as unavailable — fall back to click.
+
+Held inputs — a `press` on key_button / mouse_button stays physically down on the user's keyboard and mouse until you release it, so always send the matching `release` for every key and button you pressed before you finish a step.
 
 Examples:
 {"action":"click","x":500,"y":300}
@@ -681,7 +742,7 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
 
         // 5. Escape abort check (lock-requiring actions only)
         if needs_lock {
-            if let Err(out) = self.check_escape() {
+            if let Err(out) = self.check_escape().await {
                 return Ok(out);
             }
         }
@@ -731,5 +792,69 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
         }
 
         Ok(self.unsupported_action_output(&args))
+    }
+}
+
+/// Run-scoping of the Escape abort flag ([`DesktopTool::run_boundary_crossed`]).
+/// The platform flag itself needs a live desktop, so the boundary logic that
+/// decides *when* it is reset is tested here on its own.
+#[cfg(test)]
+mod escape_scope_tests {
+    use super::DesktopTool;
+    use crate::routing::session_key::SessionKey;
+    use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+    fn turn(run_id: &str) -> TurnContext {
+        TurnContext {
+            session_key: SessionKey::main("desktop-escape-scope"),
+            run_id: run_id.to_string(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn boundary_crosses_once_per_run() {
+        let tool = DesktopTool::new();
+
+        let first = TURN_CONTEXT
+            .scope(turn("run-1"), async { tool.run_boundary_crossed() })
+            .await;
+        assert!(first, "the first action of a new run resets the abort scope");
+
+        let same_run = TURN_CONTEXT
+            .scope(turn("run-1"), async { tool.run_boundary_crossed() })
+            .await;
+        assert!(
+            !same_run,
+            "later actions of the same run must not clear the flag — within one \
+             run, once aborted stays aborted"
+        );
+
+        let next_run = TURN_CONTEXT
+            .scope(turn("run-2"), async { tool.run_boundary_crossed() })
+            .await;
+        assert!(next_run, "the next run gets a fresh abort scope");
+    }
+
+    #[tokio::test]
+    async fn without_a_run_identity_the_flag_stays_sticky() {
+        let tool = DesktopTool::new();
+
+        assert!(
+            !tool.run_boundary_crossed(),
+            "outside a turn there is no run to scope the abort to"
+        );
+
+        let cron = TURN_CONTEXT
+            .scope(turn(""), async { tool.run_boundary_crossed() })
+            .await;
+        assert!(
+            !cron,
+            "an empty run_id (cron/internal) must not reset on every call — that \
+             would disarm Escape for unattended runs"
+        );
     }
 }

@@ -56,9 +56,34 @@ pub(crate) fn validate_coordinate(value: f64, name: &str) -> Result<i32> {
 }
 
 /// Create a new Enigo instance.
+///
+/// Self-releasing: `Settings::release_keys_when_dropped` defaults to `true`, so
+/// anything still held when the instance drops is released. That is what we want
+/// for the one-shot actions (click, key_combo, type_text) — they press and
+/// release within the call, and the Drop is a safety net.
 pub(crate) fn new_enigo() -> Result<Enigo> {
     Enigo::new(&Settings::default())
         .map_err(|e| DesktopError::InputFailed(format!("Failed to create Enigo instance: {e}")))
+}
+
+/// Create an Enigo instance whose Drop does **not** release held keys/buttons.
+///
+/// The press/release actions (`key_button`, `mouse_button`) are the only ones
+/// whose whole purpose is to leave input held *across* calls — holding Shift
+/// while a later call clicks, or pressing the mouse down before a series of
+/// drag moves. Every Enigo instance is per-call, so the default
+/// `release_keys_when_dropped: true` released the key the instant the function
+/// returned, making `PressAction::Press` a structural no-op.
+///
+/// The caller owns the cleanup instead: the desktop tool records every press in
+/// its held-input ledger and releases them at turn end or on Escape abort, so
+/// nothing stays stuck on the user's physical keyboard.
+pub(crate) fn new_enigo_holding() -> Result<Enigo> {
+    Enigo::new(&Settings {
+        release_keys_when_dropped: false,
+        ..Settings::default()
+    })
+    .map_err(|e| DesktopError::InputFailed(format!("Failed to create Enigo instance: {e}")))
 }
 
 /// Convert Aleph's `MouseButton` to enigo's Button.

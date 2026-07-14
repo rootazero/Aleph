@@ -90,11 +90,15 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_y: Option<f64>,
 
-    /// Horizontal scroll amount in pixels (negative=left).
+    /// Horizontal scroll distance in pixels (negative=left). Quantized to whole
+    /// wheel clicks (~100px each) at dispatch; a distance under one click still
+    /// moves one click, and the result says so.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delta_x: Option<f64>,
 
-    /// Vertical scroll amount in pixels (negative=up).
+    /// Vertical scroll distance in pixels (negative=up). Quantized to whole
+    /// wheel clicks (~100px each) at dispatch; a distance under one click still
+    /// moves one click, and the result says so.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delta_y: Option<f64>,
 
@@ -290,11 +294,13 @@ pub struct DesktopBatchAction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_y: Option<f64>,
 
-    /// Horizontal scroll amount in pixels (negative=left).
+    /// Horizontal scroll distance in pixels (negative=left). See
+    /// [`DesktopArgs::delta_x`] for the wheel-click quantization.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delta_x: Option<f64>,
 
-    /// Vertical scroll amount in pixels (negative=up).
+    /// Vertical scroll distance in pixels (negative=up). See
+    /// [`DesktopArgs::delta_y`] for the wheel-click quantization.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delta_y: Option<f64>,
 

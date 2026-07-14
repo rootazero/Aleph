@@ -48,6 +48,14 @@ pub(super) fn with_hint(message: String) -> String {
             "This platform has no accessibility write path — use screenshot \
              plus click / type_text instead.",
         )
+    } else if lower.contains("blank frame") {
+        Some(
+            "The capture chain is dead, not the screen: it is locked or asleep, \
+             the screen-recording grant was revoked, or the desktop helper is \
+             wedged. Run desktop_check_permissions (and the doctor) and have the \
+             user re-check screen recording; never treat a blank frame as the \
+             screen's state.",
+        )
     } else if lower.contains("read-only") || lower.contains("value_mismatch") {
         Some(
             "The element rejected the direct write — click it first, then use \
