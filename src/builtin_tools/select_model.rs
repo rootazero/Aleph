@@ -168,6 +168,7 @@ mod tests {
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: None,
+            channel_tool_permissions: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -252,6 +253,7 @@ mod tests {
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: None,
+            channel_tool_permissions: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -290,6 +292,7 @@ mod tests {
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: None,
+            channel_tool_permissions: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -326,6 +329,7 @@ mod tests {
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: None,
+            channel_tool_permissions: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -367,6 +371,7 @@ mod tests {
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: None,
+            channel_tool_permissions: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {

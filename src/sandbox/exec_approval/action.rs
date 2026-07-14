@@ -133,32 +133,51 @@ impl ApprovalAction {
 ///
 /// The input is *canonicalized* before hashing ([`canonical_args`]): key order
 /// is already `BTreeMap`-normalized (`serde_json` has no `preserve_order` here),
-/// and explicit `null`s are dropped. Without the latter, a model could mint a
-/// fresh fingerprint for a semantically identical call by appending a
-/// tool-ignored `"_":null` — defeating the denial ledger's blind-retry guard
-/// (a refused action re-prompts) and silently invalidating a session grant (the
-/// same action re-prompts). Only `null` is stripped, not every default: an
-/// absent optional and an explicitly-passed value are genuinely different calls,
-/// and collapsing them could let a grant on one authorize the other.
+/// explicit `null`s are dropped, and advisory non-identity keys (the model's
+/// free-text `justification`) are dropped. Without those, a model could mint a
+/// fresh fingerprint for a semantically identical call — by appending a
+/// tool-ignored `"_":null`, or by rewording the `justification` — defeating the
+/// denial ledger's blind-retry guard (a refused action re-prompts) and silently
+/// invalidating a session grant (the same action re-prompts). Only `null` and
+/// the known advisory keys are stripped, not every default: an absent optional
+/// and an explicitly-passed value are genuinely different calls, and collapsing
+/// them could let a grant on one authorize the other.
 #[must_use]
 pub fn grant_fingerprint(tool: &str, input: &Value) -> String {
-    super::denial_ledger::action_fingerprint(tool, &canonical_args(input).to_string())
+    super::denial_ledger::action_fingerprint(tool, &canonical_args(tool, input).to_string())
 }
 
-/// `input` with every explicit `null` removed, recursively. Object key order is
-/// left to `serde_json`'s `BTreeMap` serialization (canonical in this
-/// workspace). A non-container value is returned unchanged.
-fn canonical_args(input: &Value) -> Value {
+/// `input` with every explicit `null` and every advisory non-identity key
+/// (see [`is_non_identity_key`]) removed, recursively. Object key order is left
+/// to `serde_json`'s `BTreeMap` serialization (canonical in this workspace). A
+/// non-container value is returned unchanged.
+fn canonical_args(tool: &str, input: &Value) -> Value {
     match input {
         Value::Object(map) => Value::Object(
             map.iter()
-                .filter(|(_, v)| !v.is_null())
-                .map(|(k, v)| (k.clone(), canonical_args(v)))
+                .filter(|(k, v)| !v.is_null() && !is_non_identity_key(tool, k))
+                .map(|(k, v)| (k.clone(), canonical_args(tool, v)))
                 .collect(),
         ),
-        Value::Array(items) => Value::Array(items.iter().map(canonical_args).collect()),
+        Value::Array(items) => Value::Array(items.iter().map(|v| canonical_args(tool, v)).collect()),
         other => other.clone(),
     }
+}
+
+/// Advisory, model-controlled fields that must NOT participate in a grant /
+/// denial fingerprint. `justification` is the free-text reason a model attaches
+/// to a **sandbox capability escalation** (`bash_exec` / `code_exec`): it is
+/// shown to the human but is not part of the action's identity. Letting it into
+/// the fingerprint would let the model mint a fresh key on every call (defeating
+/// the denial ledger's blind-retry guard) or silently invalidate a session grant
+/// just by rewording it — the same defect class the `null`-strip closes.
+///
+/// Scoped to those two tools by name: an external / MCP tool Aleph does not
+/// control could carry a `justification` argument that IS identity-bearing (part
+/// of a persisted record), and stripping it there would collapse two genuinely
+/// different calls onto one grant.
+fn is_non_identity_key(tool: &str, key: &str) -> bool {
+    key == "justification" && matches!(tool, "bash_exec" | "code_exec")
 }
 
 /// The shell command a shell-shaped tool call carries, if any.
@@ -261,6 +280,47 @@ mod tests {
             base, null_padded,
             "a tool-ignored explicit null must not mint a fresh fingerprint (denial-ledger bypass)"
         );
+    }
+
+    #[test]
+    fn fingerprint_ignores_model_justification() {
+        // The model-controlled `justification` on a capability escalation is
+        // advisory (shown to the human, not part of identity). Rewording it must
+        // NOT mint a fresh fingerprint, or the model defeats the denial ledger /
+        // silently invalidates a session grant by varying the reason text.
+        let plain = grant_fingerprint(
+            "bash_exec",
+            &json!({"command": "curl example.com", "allow_network": true}),
+        );
+        let justified = grant_fingerprint(
+            "bash_exec",
+            &json!({"command": "curl example.com", "allow_network": true,
+                    "justification": "need to fetch the changelog"}),
+        );
+        let reworded = grant_fingerprint(
+            "bash_exec",
+            &json!({"command": "curl example.com", "allow_network": true,
+                    "justification": "totally different words here"}),
+        );
+        assert_eq!(plain, justified, "justification must not enter the fingerprint");
+        assert_eq!(justified, reworded, "rewording justification must not re-key");
+    }
+
+    #[test]
+    fn fingerprint_keeps_justification_for_non_exec_tools() {
+        // For a tool Aleph does not control, a `justification` argument may be
+        // identity-bearing (part of a persisted record). Two calls differing only
+        // in that field are genuinely different actions and must NOT collapse onto
+        // one grant — the strip is scoped to bash_exec/code_exec by name.
+        let a = grant_fingerprint(
+            "external_policy_write",
+            &json!({"target": "acl", "justification": "grant read"}),
+        );
+        let b = grant_fingerprint(
+            "external_policy_write",
+            &json!({"target": "acl", "justification": "grant write"}),
+        );
+        assert_ne!(a, b, "an external tool's justification stays in the identity");
     }
 
     #[test]

@@ -1242,6 +1242,7 @@ fn turn_ctx(agent: &str) -> crate::tools::turn_context::TurnContext {
         channel_id: "test".to_string(),
         conversation_id: "conv".to_string(),
         caller_role: None,
+        channel_tool_permissions: None,
     }
 }
 
@@ -1499,6 +1500,7 @@ async fn execute_scopes_session_id_from_turn_context() {
         channel_id: String::new(),
         conversation_id: String::new(),
         caller_role: None,
+        channel_tool_permissions: None,
     };
     let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(turn);
 
@@ -1559,6 +1561,7 @@ async fn chat_tier_blocked_from_config_tool() {
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: Some("guest".to_string()),
+            channel_tool_permissions: None,
         },
     );
     let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
@@ -1579,6 +1582,7 @@ async fn operator_tier_allowed_config_tool() {
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: Some("operator".to_string()),
+            channel_tool_permissions: None,
         },
     );
     assert!(svc.execute("cron_manage", json!({})).await.is_ok());
@@ -1635,6 +1639,7 @@ async fn chat_tier_config_tool_approved_executes() {
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: Some("guest".to_string()),
+            channel_tool_permissions: None,
         })
         .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Approved)));
     assert!(
@@ -1658,6 +1663,7 @@ async fn chat_tier_config_tool_denied_rejected() {
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: Some("guest".to_string()),
+            channel_tool_permissions: None,
         })
         .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Denied)));
     let err = svc.execute("cron_manage", json!({})).await.unwrap_err();

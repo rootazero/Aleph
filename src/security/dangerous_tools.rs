@@ -40,6 +40,14 @@ pub const DANGEROUS_TOOLS: &[&str] = &[
     "file_write",
     "file_edit",
     "apply_patch",
+    // `file_ops` multiplexes read-only (list/search) and destructive (delete/move)
+    // behind one name. The exec tier gates its destructive ops at the ARGUMENT
+    // level (`ExecTier::asks_for_arguments`), but `tools.invoke` has no approval
+    // transport and cannot honor an argument-level ask — so the destructive path
+    // would run un-gated there. Denied outright on this surface (consistent with
+    // the blanket deny of file_write/file_edit); the `ALEPH_GATEWAY_TOOLS_ALLOW`
+    // escape hatch still permits explicit test opt-in.
+    "file_ops",
     // --- Control plane / self-reconfiguration ---
     "self_config",
     "self_manage",
@@ -114,6 +122,7 @@ mod tests {
             "file_write",
             "file_edit",
             "apply_patch",
+            "file_ops",
             "self_config",
             "self_manage",
             "agent_create",
@@ -162,6 +171,18 @@ mod tests {
         std::env::remove_var(GATEWAY_TOOLS_ALLOW_ENV);
         assert!(is_denied_on_gateway_surface("bash"));
         assert!(!is_denied_on_gateway_surface("file_read"));
+    }
+
+    /// `file_ops` gates its destructive ops (delete/move) at the ARGUMENT level
+    /// via the exec tier, which `tools.invoke` cannot honor (no approval
+    /// transport). It must therefore be denied outright on this surface — the
+    /// argument-level parity gap that would otherwise let a `delete` slip through.
+    #[test]
+    fn gateway_surface_denies_file_ops() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var(GATEWAY_TOOLS_ALLOW_ENV);
+        assert!(is_dangerous_tool("file_ops"));
+        assert!(is_denied_on_gateway_surface("file_ops"));
     }
 
     /// `tools.invoke` dispatches straight off the raw registry: it has no

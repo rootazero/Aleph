@@ -214,6 +214,7 @@ mod tests {
             channel_id: "telegram".to_string(),
             conversation_id: "user-1".to_string(),
             caller_role: None,
+            channel_tool_permissions: None,
         }
     }
 
@@ -282,6 +283,7 @@ mod tests {
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: None,
+            channel_tool_permissions: None,
         };
         let out = TURN_CONTEXT
             .scope(non_channel_turn, async {
@@ -303,6 +305,7 @@ mod tests {
             channel_id: "gui:chat".to_string(),
             conversation_id: "sess-1".to_string(),
             caller_role: None,
+            channel_tool_permissions: None,
         }
     }
 

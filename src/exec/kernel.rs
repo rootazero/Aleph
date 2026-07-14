@@ -1,48 +1,44 @@
-//! `SecurityKernel` - Deterministic command risk assessment.
+//! `SecurityKernel` — advisory custom-pattern command classifier.
 //!
-//! Uses regex pattern matching for zero-latency security decisions.
-//! Does NOT rely on LLM for security judgments.
+//! A thin, purely-additive advisory layer: it evaluates a command against the
+//! user-configured `[security]` custom patterns ONLY. The built-in catastrophic
+//! floor lives in [`crate::sandbox::command_policy`] (the undisableable
+//! hardline) — this kernel deliberately does not re-enforce it, so the two
+//! cannot diverge. Its sole production consumer is
+//! [`crate::sandbox::security_kernel_hook::SecurityKernelHook`].
 
-use super::risk::{RiskLevel, BLOCKED_PATTERNS, DANGER_PATTERNS, SAFE_PATTERNS};
+use super::risk::RiskLevel;
 use crate::config::types::ShellSecurityConfig;
 use regex::Regex;
 
-/// Security kernel for command risk assessment.
+/// Advisory custom-pattern command classifier.
 ///
 /// # Example
 ///
 /// ```rust
 /// use alephcore::exec::SecurityKernel;
 ///
+/// // With no custom patterns configured, nothing matches.
 /// let kernel = SecurityKernel::default();
-///
-/// // Blocked command
-/// let risk = kernel.assess("rm -rf /");
-/// assert!(risk.is_blocked());
-///
-/// // Safe command
-/// let risk = kernel.assess("ls -la");
-/// assert_eq!(risk, alephcore::exec::RiskLevel::Safe);
+/// assert!(kernel.assess_custom("rm -rf /").is_none());
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct SecurityKernel {
-    /// Custom blocked patterns (in addition to defaults)
+    /// Custom blocked patterns from `[security].custom_blocked`.
     custom_blocked: Vec<Regex>,
-    /// Custom danger patterns (in addition to defaults)
+    /// Custom danger patterns from `[security].custom_danger`.
     custom_danger: Vec<Regex>,
 }
 
 impl SecurityKernel {
-    /// Create a new security kernel with default patterns.
+    /// Create a new security kernel with no custom patterns.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Create a security kernel from configuration.
-    ///
-    /// Loads custom patterns from config if enabled. Built-in patterns
-    /// are always active regardless of config.
+    /// Create a security kernel from configuration, compiling the custom
+    /// blocked / danger patterns when `enable_custom_patterns` is set.
     pub fn from_config(config: &ShellSecurityConfig) -> Result<Self, regex::Error> {
         let mut kernel = Self::default();
 
@@ -62,62 +58,12 @@ impl SecurityKernel {
         Ok(kernel)
     }
 
-    /// Add a custom blocked pattern.
-    pub fn add_blocked_pattern(&mut self, pattern: &str) -> Result<(), regex::Error> {
-        self.custom_blocked
-            .push(crate::security::safe_regex::bounded_builder(pattern).build()?);
-        Ok(())
-    }
-
-    /// Add a custom danger pattern.
-    pub fn add_danger_pattern(&mut self, pattern: &str) -> Result<(), regex::Error> {
-        self.custom_danger
-            .push(crate::security::safe_regex::bounded_builder(pattern).build()?);
-        Ok(())
-    }
-
-    /// Assess the risk level of a command.
-    ///
-    /// Evaluation order (first match wins):
-    /// 1. Blocked patterns → `RiskLevel::Blocked`
-    /// 2. Danger patterns → `RiskLevel::Danger`
-    /// 3. Safe patterns → `RiskLevel::Safe`
-    /// 4. Default → `RiskLevel::Caution`
-    pub fn assess(&self, command: &str) -> RiskLevel {
-        let cmd = command.trim();
-
-        // 1. Check blocked patterns (custom first, then defaults)
-        for pattern in self.custom_blocked.iter().chain(BLOCKED_PATTERNS.iter()) {
-            if pattern.is_match(cmd) {
-                return RiskLevel::Blocked;
-            }
-        }
-
-        // 2. Check danger patterns
-        for pattern in self.custom_danger.iter().chain(DANGER_PATTERNS.iter()) {
-            if pattern.is_match(cmd) {
-                return RiskLevel::Danger;
-            }
-        }
-
-        // 3. Check safe patterns
-        for pattern in SAFE_PATTERNS.iter() {
-            if pattern.is_match(cmd) {
-                return RiskLevel::Safe;
-            }
-        }
-
-        // 4. Default: Caution (unknown commands)
-        RiskLevel::Caution
-    }
-
     /// Assess a command against ONLY the configured custom patterns.
     ///
-    /// Built-in patterns are intentionally skipped so this can be used as a
-    /// purely additive advisory layer on top of an existing command gate
-    /// (e.g. the sandbox command-policy hook) without re-enforcing — and
-    /// possibly diverging from — the built-in floor. Returns `None` when no
-    /// custom pattern matches.
+    /// The built-in floor is intentionally skipped so this stays a purely
+    /// additive advisory layer on top of the sandbox command-policy hook,
+    /// without re-enforcing — and possibly diverging from — the built-in
+    /// hardline. Returns `None` when no custom pattern matches.
     #[must_use]
     pub fn assess_custom(&self, command: &str) -> Option<RiskLevel> {
         let cmd = command.trim();
@@ -129,94 +75,50 @@ impl SecurityKernel {
         }
         None
     }
-
-    /// Assess a command and return detailed result.
-    #[must_use]
-    pub fn assess_detailed(&self, command: &str) -> RiskAssessment {
-        let level = self.assess(command);
-        let reason = match level {
-            RiskLevel::Blocked => "Command matches blocked pattern",
-            RiskLevel::Danger => "Command matches danger pattern",
-            RiskLevel::Caution => "Command is unknown, requires caution",
-            RiskLevel::Safe => "Command matches safe pattern",
-        };
-
-        RiskAssessment {
-            command: command.to_string(),
-            level,
-            reason: reason.to_string(),
-        }
-    }
-}
-
-/// Detailed risk assessment result.
-#[derive(Debug, Clone)]
-pub struct RiskAssessment {
-    /// The assessed command
-    pub command: String,
-    /// Risk level
-    pub level: RiskLevel,
-    /// Human-readable reason
-    pub reason: String,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::types::security::CustomRiskPattern;
 
-    #[test]
-    fn test_assess_blocked() {
-        let kernel = SecurityKernel::new();
-        assert_eq!(kernel.assess("rm -rf /"), RiskLevel::Blocked);
-        assert_eq!(kernel.assess("rm -rf /*"), RiskLevel::Blocked);
+    fn blocked(pattern: &str) -> CustomRiskPattern {
+        CustomRiskPattern {
+            pattern: pattern.to_string(),
+            reason: None,
+        }
     }
 
     #[test]
-    fn test_assess_danger() {
+    fn no_custom_patterns_matches_nothing() {
         let kernel = SecurityKernel::new();
-        assert_eq!(kernel.assess("rm -rf ./temp"), RiskLevel::Danger);
-        assert_eq!(kernel.assess("sudo apt install vim"), RiskLevel::Danger);
-        assert_eq!(kernel.assess("chmod 755 script.sh"), RiskLevel::Danger);
+        assert!(kernel.assess_custom("rm -rf /").is_none());
+        assert!(kernel.assess_custom("ls -la").is_none());
     }
 
     #[test]
-    fn test_assess_safe() {
-        let kernel = SecurityKernel::new();
-        assert_eq!(kernel.assess("ls -la"), RiskLevel::Safe);
-        assert_eq!(kernel.assess("echo hello"), RiskLevel::Safe);
-        assert_eq!(kernel.assess("git status"), RiskLevel::Safe);
-        assert_eq!(kernel.assess("pwd"), RiskLevel::Safe);
-        assert_eq!(kernel.assess("cat file.txt"), RiskLevel::Safe);
+    fn from_config_compiles_and_matches_custom_blocked() {
+        let config = ShellSecurityConfig {
+            enable_custom_patterns: true,
+            custom_blocked: vec![blocked(r"^danger-cmd")],
+            ..Default::default()
+        };
+        let kernel = SecurityKernel::from_config(&config).expect("valid regex compiles");
+        assert_eq!(kernel.assess_custom("danger-cmd arg"), Some(RiskLevel::Blocked));
+        assert!(kernel.assess_custom("safe-cmd arg").is_none());
     }
 
     #[test]
-    fn test_assess_caution() {
-        let kernel = SecurityKernel::new();
-        // Unknown commands default to Caution
-        assert_eq!(kernel.assess("npm install"), RiskLevel::Caution);
-        assert_eq!(kernel.assess("cargo build"), RiskLevel::Caution);
-        assert_eq!(kernel.assess("docker run nginx"), RiskLevel::Caution);
-    }
-
-    #[test]
-    fn test_custom_blocked_pattern() {
-        let mut kernel = SecurityKernel::new();
-        kernel.add_blocked_pattern(r"^danger-cmd").unwrap();
-        assert_eq!(kernel.assess("danger-cmd arg"), RiskLevel::Blocked);
-    }
-
-    #[test]
-    fn test_assess_detailed() {
-        let kernel = SecurityKernel::new();
-        let result = kernel.assess_detailed("ls -la");
-        assert_eq!(result.level, RiskLevel::Safe);
-        assert!(result.reason.contains("safe"));
-    }
-
-    #[test]
-    fn test_blocked_takes_priority() {
-        let kernel = SecurityKernel::new();
-        // Even if it looks like a safe command, blocked patterns win
-        assert_eq!(kernel.assess("rm -rf /"), RiskLevel::Blocked);
+    fn disabled_custom_patterns_are_not_loaded() {
+        let config = ShellSecurityConfig {
+            enable_custom_patterns: false,
+            custom_blocked: vec![blocked(r"^danger-cmd")],
+            ..Default::default()
+        };
+        let kernel = SecurityKernel::from_config(&config).expect("compiles");
+        assert!(
+            kernel.assess_custom("danger-cmd arg").is_none(),
+            "patterns must be ignored when the flag is off"
+        );
     }
 }

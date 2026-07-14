@@ -58,7 +58,12 @@ pub const SECRET_PATTERN_SOURCES: &[(&str, &str)] = &[
     ("gitlab_pat", r"glpat-[A-Za-z0-9_\-]{20,}"),
     ("openai_sk", r"\bsk-[a-zA-Z0-9\-]{20,}"),
     ("google_api", r"AIza[a-zA-Z0-9_\-]{35}"),
-    ("private_key", r"-----BEGIN [A-Z ]+ PRIVATE KEY-----"),
+    // `[A-Z ]*` (zero-or-more, no forced algorithm word) so the canonical PKCS#8
+    // header `-----BEGIN PRIVATE KEY-----` matches alongside the algorithm-tagged
+    // `-----BEGIN RSA PRIVATE KEY-----`. Mirrors exec/secret_patterns.rs so the
+    // two catalogs' private-key floors cannot diverge (a `[A-Z ]+` form silently
+    // let bare PKCS#8 keys slip the block-class gate below).
+    ("private_key", r"-----BEGIN[A-Z ]*PRIVATE KEY-----"),
 ];
 
 /// Catastrophic ("block-class") secret pattern names — a curated subset of
@@ -74,8 +79,8 @@ pub const SECRET_PATTERN_SOURCES: &[(&str, &str)] = &[
 ///
 /// API-token shapes (`sk-…`, `ghp_…`, `AKIA…`) are deliberately **excluded** —
 /// they can legitimately surface in `env`/config inspection and are handled by
-/// redaction so as not to break ordinary workflows. Like risk.rs
-/// `BLOCKED_PATTERNS`, this is a frozen hard-filter floor, not a config knob.
+/// redaction so as not to break ordinary workflows. Like the
+/// `command_policy` hardline floor, this is a frozen hard-filter, not a config knob.
 pub const BLOCK_CLASS_SECRETS: &[&str] = &["private_key"];
 
 /// Whether a named secret pattern (from [`SECRET_PATTERN_SOURCES`]) is
@@ -144,7 +149,10 @@ static LEAK_PATTERNS: Lazy<Vec<(&str, Regex)>> = Lazy::new(|| {
         ),
         (
             "Private Key Block",
-            Regex::new(r"-----BEGIN [A-Z ]+ PRIVATE KEY-----")
+            // `[A-Z ]*` — see SECRET_PATTERN_SOURCES note: bare PKCS#8
+            // `-----BEGIN PRIVATE KEY-----` must match, not only algorithm-tagged
+            // variants. Kept identical to the bytes-side catalog above.
+            Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----")
                 .expect("static private key pattern compiles"),
         ),
     ];
@@ -440,6 +448,26 @@ mod tests {
         let response = "Here's a token: sk-proj-abcdefghijklmnopqrstuvwxyz12345678";
         let decision = detector.scan_inbound(response);
         assert!(decision.is_blocked());
+    }
+
+    #[test]
+    fn bare_pkcs8_private_key_header_is_matched_as_block_class() {
+        // Canonical PKCS#8 headers carry no algorithm word
+        // (`-----BEGIN PRIVATE KEY-----`). The previous `[A-Z ]+` form required
+        // one, so bare PKCS#8 keys slipped the block-class secret floor entirely
+        // — neither redacted nor refused. Pin the bytes-side catalog: the header
+        // must match under the `private_key` name, which is block-class.
+        let matched = default_patterns_bytes()
+            .iter()
+            .find(|(_, re)| re.is_match(b"-----BEGIN PRIVATE KEY-----"))
+            .map(|(name, _)| *name);
+        assert_eq!(matched, Some("private_key"), "bare PKCS#8 header must match");
+        assert!(is_block_class_secret("private_key"));
+        // Algorithm-tagged variants must still match — no regression.
+        assert!(default_patterns_bytes()
+            .iter()
+            .any(|(name, re)| *name == "private_key"
+                && re.is_match(b"-----BEGIN RSA PRIVATE KEY-----")));
     }
 
     #[test]
