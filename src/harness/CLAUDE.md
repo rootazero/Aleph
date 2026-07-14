@@ -14,8 +14,14 @@
 
 **「顶层」二字是本条最重要的部分**——见下方警告。**口径现在由测试执行**：`src/harness/tests/budget.rs`（跑在 `cargo test -p alephcore --lib` 里），同时守 12 文件与行数；出现第 13 个文件或行数上涨即 FAIL。**改这里的数字就得改那里的 `CEILING`，反之亦然。**
 
-**当前测量（2026-07-14）：5739 行 — 超 ~4900 红线 839 行。**（由 `tests/budget.rs` 实测，非手算；`CEILING = 5739`）
+**当前测量（2026-07-14）：5593 行 — 超 ~4900 红线 693 行。**（由 `tests/budget.rs` 实测，非手算；`CEILING = 5593`）
 
+> 5739 → 5593（−146）：第三轮。**Act 期墙钟离开循环**。它从来不是脚手架——"一个工具最多能跑多久"是工具自己声明的属性，harness 却拿 run 级的 `turn_timeout` 去替它判，超时还升级成 `StalledTurn` **直接杀掉整个 run**（生产受害者：人类审批慢于 120s 的那一批命令）。墙钟下沉到工具唯一收口 `src/tools/scoped/dispatch.rs::execute_inner`，且**落在所有能等人的闸门之下**；同一次超时变成模型下一轮读得到的 `ToolError::Timeout`，循环随之删掉只为跑这块表而存在的机件。
+> - **−149 act.rs**：`resolve_effective_budget`、两处 `describe()` 预算探测、两处 `tokio::time::timeout` 包裹、串行 `StalledTurn` 恢复块、并行路径的 `budgets` 向量 / `Err(elapsed)` 臂 / `first_stall`，以及 `TurnPhase` / `STALLED_CALL_CAUSE` / `budget_overrun_cause` 三个 import。`ExecOutcome` 塌回 `Result<ToolOutput, ToolError>`。
+> - **+2 deps.rs / +1 trait_def.rs**：这两个文件的文档都**断言** `turn_timeout` 约束 Act。它现在不约束了——文档一旦点名不变量，就必须是真的，故改写为"Act 由每工具预算约束，`turn_timeout` 只约束 Think"。
+>
+> 净 **−146**，全部来自真删除（+3 是被搬走的那个不变量的文档）。
+>
 > 5997 → 5863（−134）：棘轮第一次往回转。全部来自删除，没有靠搬家或删注释凑数——`trait_def.rs` −56（`Harness` trait 及其默认 `run()` 循环，唯一 impl 是 `AgentHarness` 且已覆写；真正的多态缝是 `SessionDriver` 与 `Arc<dyn HarnessRunner>`）、`chain_context.rs` −21（`with_max_depth` + `Display`，调用方全在 `#[cfg(test)]`）、`callback.rs`/`agent.rs`/`act.rs` −21（`on_complete` + `on_tool_call` 两条回调通道：循环里 9 个发射点，生产侧 0 个监听者）、`trace_sink.rs` −10（`on_init_seam`）、`think.rs` −21（`reactive_fit_and_retry` 两个同构分支合并 + `fire_grace_turn` 折进 `fire_boundary_grace_turn`）。逐项理由见 `tests/budget.rs::CEILING` 注释。
 >
 > 5863 → 5739（−124）：第二轮，也是**第一次在往循环里加生产代码的同时还净减**。三个 bug 修复 + 一个并发守卫共 **+21** 行，靠两笔下沉付清，而不是靠账面抹平：

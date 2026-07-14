@@ -31,6 +31,11 @@ pub struct McpHandler {
     /// (see `McpTool`): `concurrent_safe` ← readOnlyHint, `idempotent` ←
     /// idempotentHint, `requires_approval` ← destructiveHint. Defaults are
     /// all-false (whole-world exclusive, no auto-retry, no confirmation).
+    ///
+    /// `max_duration_ms` is seeded from the MCP client's own request timeout
+    /// (see [`Self::with_timeout_seconds`]) — never `None`, so the harness
+    /// cannot mistake an MCP tool for an unbudgeted one and abort the run on
+    /// a slow call.
     metadata: ToolDefinitionMetadata,
 }
 
@@ -48,7 +53,10 @@ impl McpHandler {
             tool_name,
             description,
             input_schema,
-            metadata: ToolDefinitionMetadata::default(),
+            metadata: ToolDefinitionMetadata {
+                max_duration_ms: Some(crate::tools::budget::mcp_tool_budget_ms(None)),
+                ..ToolDefinitionMetadata::default()
+            },
         }
     }
 
@@ -63,6 +71,22 @@ impl McpHandler {
         self.metadata.concurrent_safe = read_only;
         self.metadata.idempotent = idempotent;
         self.metadata.requires_approval = requires_approval;
+        self
+    }
+
+    /// Declare the owning server's configured request timeout (`None` = the
+    /// client's own remote default) as this tool's wall-clock budget, plus
+    /// headroom.
+    ///
+    /// The two clocks must stay ordered: the MCP client has to be the one that
+    /// gives up, so the model receives a real `Timeout` tool error it can act
+    /// on. Before this, MCP tools declared no budget at all and the harness
+    /// killed the run at its own fallback (120s) — well before the client's
+    /// 300s default could ever return gracefully.
+    #[must_use]
+    pub fn with_timeout_seconds(mut self, timeout_seconds: Option<u64>) -> Self {
+        self.metadata.max_duration_ms =
+            Some(crate::tools::budget::mcp_tool_budget_ms(timeout_seconds));
         self
     }
 

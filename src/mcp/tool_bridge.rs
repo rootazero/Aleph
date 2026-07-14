@@ -145,9 +145,27 @@ async fn sync_server(
             return;
         }
     };
+    // The server's configured request timeout bounds every tools/call
+    // roundtrip; the handlers declare it so the harness's per-tool wall clock
+    // sits above the MCP client's own and cannot preempt a call the client
+    // would still have returned. Unknown config → `None` → the client default.
+    let timeout_seconds = handle
+        .list_server_configs()
+        .await
+        .ok()
+        .and_then(|configs| configs.into_iter().find(|c| c.id == server_id))
+        .and_then(|c| c.timeout_seconds);
     let tools = client.list_tools().await;
     let _ = unregister_mcp_tools(registry, tool_catalog, server_id).await;
-    let registered = register_mcp_tools(registry, tool_catalog, client, server_id, &tools).await;
+    let registered = register_mcp_tools(
+        registry,
+        tool_catalog,
+        client,
+        server_id,
+        &tools,
+        timeout_seconds,
+    )
+    .await;
     tracing::info!(
         server_id,
         count = registered.len(),

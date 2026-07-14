@@ -1088,46 +1088,51 @@ async fn tool_loop_halt_fires_salvage_grace_turn_and_closes_orphan() {
 }
 
 // =============================================================================
-// Test — Per-tool budget fires before harness-wide turn_timeout. The sleeping
-// tool's describe() advertises max_duration_ms=50; the harness turn_timeout is
-// 60s. The inner per-tool cap must win → StalledTurn in <500ms. Cycle 3.
+// Test — A tool that overruns its own wall-clock budget comes back as a
+// recoverable `ToolError::Timeout`, not a run abort. The budget belongs to the
+// tool layer now (`ScopedToolService::execute_inner`, below the approval gate),
+// so this drives the real production `ToolService` rather than a double that
+// merely *advertises* a budget through `describe()` — the harness no longer
+// reads it, precisely so an operator's approval time cannot be charged to the
+// tool's clock. Cycle 3.
 // =============================================================================
 
-/// A `ToolService` whose `describe()` advertises a 50ms per-tool budget and
-/// whose `execute()` sleeps 200ms — long enough that the 50ms budget fires.
+/// A `LoopTool` declaring a 50ms budget whose `execute()` sleeps 200ms.
 struct SleepyBudgetedTool;
 
 #[async_trait]
-impl ToolService for SleepyBudgetedTool {
+impl crate::tools::runtime::LoopTool for SleepyBudgetedTool {
+    fn name(&self) -> &str {
+        "sleepy_tool"
+    }
+    fn description(&self) -> &str {
+        "sleeps past its own budget"
+    }
+    fn schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object" })
+    }
     async fn execute(
         &self,
-        _name: &str,
         _input: serde_json::Value,
-    ) -> Result<crate::session::events::ToolOutput, ToolError> {
+        _cancel: CancellationToken,
+    ) -> crate::tools::runtime::ToolResult {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        Ok(crate::session::events::ToolOutput {
-            value: serde_json::json!({"ok": true}),
-            metadata: Default::default(),
-        })
+        crate::tools::runtime::ToolResult::Success {
+            output: serde_json::json!({"ok": true}),
+        }
     }
-    async fn list(&self) -> Vec<ToolDefinition> {
-        vec![]
+    fn max_duration_ms(&self) -> Option<u64> {
+        Some(50)
     }
-    async fn describe(&self, name: &str) -> Option<ToolDefinition> {
-        Some(ToolDefinition {
-            name: name.to_string(),
-            description: String::new(),
-            input_schema: serde_json::json!({}),
-            source: crate::tools::service::ToolSource::Builtin,
-            metadata: crate::tools::service::ToolDefinitionMetadata {
-                max_duration_ms: Some(50),
-                ..Default::default()
-            },
-        })
-    }
-    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
-        std::sync::Arc::from([])
-    }
+}
+
+fn sleepy_tool_service() -> Arc<dyn ToolService> {
+    let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+    registry.register(Box::new(SleepyBudgetedTool));
+    Arc::new(crate::tools::ScopedToolService::new(
+        Arc::new(registry),
+        std::collections::BTreeSet::new(),
+    ))
 }
 
 /// Provider that emits exactly one tool call for `sleepy_tool`.
@@ -1168,7 +1173,7 @@ async fn per_tool_budget_overrun_recovers_as_tool_error_not_run_abort() {
     let provider = Arc::new(OneShotSleepyCallProvider);
     let deps = HarnessDeps {
         session: session.clone(),
-        tools: Arc::new(SleepyBudgetedTool),
+        tools: sleepy_tool_service(),
         llm: provider as Arc<dyn AiProvider>,
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -1201,29 +1206,30 @@ async fn per_tool_budget_overrun_recovers_as_tool_error_not_run_abort() {
         .await;
     let elapsed = started.elapsed();
 
-    // The 50ms per-tool budget still fires well before the 60s global — the
-    // per-tool ceiling is enforced, not the harness fallback.
+    // The tool's own 50ms budget fires well before the 60s `turn_timeout` — the
+    // per-tool ceiling is what bounds the call, not the harness fallback.
     assert!(
         elapsed < std::time::Duration::from_millis(500),
-        "per-tool 50ms budget must fire well before the 60s global; saw {elapsed:?}",
+        "the tool's 50ms budget must fire well before the 60s turn_timeout; saw {elapsed:?}",
     );
-    // ...but a per-tool overrun is RECOVERABLE: the turn completes instead of
-    // aborting the whole run with `StalledTurn`. Only the harness-wide
-    // `turn_timeout` is a run-level stall.
+    // ...and the overrun is RECOVERABLE: the turn completes instead of aborting
+    // the whole run.
     assert!(
         result.is_ok(),
-        "per-tool budget overrun must NOT abort the run with StalledTurn; got: {result:?}",
+        "a budget overrun must NOT abort the run; got: {result:?}",
     );
-    // The overrun is surfaced as a recoverable tool error the next Think turn
-    // can react to (retry / narrow / switch), not silently dropped.
+    // Recorded as `ToolError::Timeout` — the variant, not merely timeout-flavoured
+    // prose. It is the one thing `ToolError::is_retryable()` reads, and act.rs's
+    // cross-batch memo now only bans non-retryable failures, so the retry this
+    // error invites is actually permitted on the next batch.
     let events = session.snapshot().await;
     assert!(
         events.iter().any(|r| matches!(
             &r.event,
             crate::session::events::SessionEvent::ToolError { error, .. }
-                if error.contains("wall-clock budget")
+                if error.contains("timed out after")
         )),
-        "per-tool timeout must be recorded as a recoverable ToolError",
+        "the overrun must be recorded as a recoverable ToolError::Timeout",
     );
 }
 

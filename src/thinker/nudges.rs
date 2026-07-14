@@ -191,16 +191,6 @@ pub fn orphan_tool_result_note(call_id: &str, tool_name: &str, rendered: &str) -
 pub const CROSS_BATCH_REFUSED_CAUSE: &str = "this exact call already failed earlier in the run; \
      change inputs or try a different tool";
 
-/// Synthetic `ToolError` cause persisted for a call that overran the
-/// harness-wide `turn_timeout` (a run-aborting stall, not a recoverable
-/// per-tool budget). Emitted BEFORE `StalledTurn` bubbles so the turn's
-/// `tool_use` blocks keep their result pairing: without it the prompt
-/// builder drops the whole assistant turn as orphaned on the next build,
-/// erasing exactly the context the Timeout grace turn needs to salvage.
-/// Shared by the serial and parallel dispatch paths.
-pub const STALLED_CALL_CAUSE: &str = "aborted: exceeded the run-level turn timeout \
-     and the run is wrapping up — no result was produced";
-
 /// Reason carried by the synthetic "deferred" `ToolResult` emitted for each
 /// tool call the cooperative steer checkpoint skipped. Whether a deferred call
 /// is re-run is the model's decision next Think, not the harness's (R7).
@@ -208,16 +198,12 @@ pub const DEFERRED_TOOL_RESULT_REASON: &str =
     "superseded by a new user message that arrived mid-turn; \
      re-issue this call if it is still needed";
 
-/// Build the recoverable `ToolError` cause for a per-tool wall-clock budget
-/// overrun. Shared by the serial and parallel dispatch paths so both surface
-/// byte-identical guidance — the next Think turn reacts the same way regardless
-/// of how the batch was scheduled.
-pub fn budget_overrun_cause(seconds: f64) -> String {
-    format!(
-        "exceeded its {seconds:.1}s wall-clock budget (slow or unresponsive \
-         source) — no result; retry, narrow the query, or switch source/tool"
-    )
-}
+// `STALLED_CALL_CAUSE` and `budget_overrun_cause` lived here until the Act-period
+// wall clock moved out of the harness and into `ScopedToolService::execute_inner`
+// (below the approval gate, where the human's wait can no longer be billed to the
+// tool). Both are now spoken by `ToolError::Timeout`'s own Display, which is also
+// the variant `is_retryable()` reads — so the model is told to retry AND allowed
+// to. Zero consumers, therefore withdrawn (R10).
 
 #[cfg(test)]
 mod tests {
@@ -278,27 +264,10 @@ mod tests {
     }
 
     #[test]
-    fn stalled_call_cause_matches_pre_move_text() {
-        assert_eq!(
-            STALLED_CALL_CAUSE,
-            "aborted: exceeded the run-level turn timeout and the run is wrapping up — no result was produced"
-        );
-    }
-
-    #[test]
     fn deferred_tool_result_reason_matches_pre_move_text() {
         assert_eq!(
             DEFERRED_TOOL_RESULT_REASON,
             "superseded by a new user message that arrived mid-turn; re-issue this call if it is still needed"
-        );
-    }
-
-    #[test]
-    fn budget_overrun_cause_matches_pre_move_text() {
-        // One decimal place, as the `{seconds:.1}` format spec has always rendered.
-        assert_eq!(
-            budget_overrun_cause(30.0),
-            "exceeded its 30.0s wall-clock budget (slow or unresponsive source) — no result; retry, narrow the query, or switch source/tool"
         );
     }
 }

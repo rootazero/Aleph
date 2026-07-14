@@ -153,6 +153,7 @@ mod tests {
             max_result_tokens: None,
             concurrent_safe: false,
             requires_confirmation: false,
+            max_duration_ms: None,
         };
 
         let converted = AiProviderBridge::convert_tool_def(&def);

@@ -198,7 +198,10 @@ fn has_status(lower: &str, code: u16) -> bool {
 #[must_use]
 pub fn classify_tool_error(err: &ToolError) -> ToolErrorKind {
     match err {
-        ToolError::Timeout { .. } => ToolErrorKind::Timeout,
+        // The human timed out, not the tool — but for the model's purposes the
+        // shape is the same: transient, not a verdict, may resolve on its own.
+        // It must stay transient to keep `kind()` a superset of `is_retryable`.
+        ToolError::Timeout { .. } | ToolError::ApprovalExpired { .. } => ToolErrorKind::Timeout,
         ToolError::Transport { .. } => ToolErrorKind::Transport,
         ToolError::ValidationFailed { .. } => ToolErrorKind::Validation,
         ToolError::PermissionDenied { .. } => ToolErrorKind::Permission,

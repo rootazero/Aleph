@@ -58,7 +58,10 @@ impl ToolHandler for BuiltinHandler {
     fn definition(&self) -> ToolDefinition {
         let inner_def = self.inner.definition();
         let idempotent = crate::tools::retry::is_idempotent_builtin_name(&self.name);
-        let max_duration_ms = crate::tools::budget::builtin_tool_budget_ms(&self.name);
+        // The static-dispatch `AlephTool` surface declares no budget of its
+        // own, so this resolves table → default. Never `None`: an unbudgeted
+        // definition is what turned a slow tool into a run-level abort.
+        let max_duration_ms = crate::tools::budget::resolve_tool_budget_ms(&self.name, None);
         ToolDefinition {
             name: self.name.clone(),
             description: inner_def.description,
@@ -69,7 +72,7 @@ impl ToolHandler for BuiltinHandler {
                 requires_approval: inner_def.requires_confirmation,
                 tags: Vec::new(),
                 idempotent,
-                max_duration_ms,
+                max_duration_ms: Some(max_duration_ms),
                 // The static-dispatch `AlephTool` trait surface this handler
                 // wraps doesn't expose a concurrent-safety hint. The
                 // LoopTool-based production path (`ScopedToolService`) gets
@@ -121,10 +124,16 @@ mod builtin_handler_tests {
     }
 
     #[test]
-    fn definition_leaves_max_duration_ms_none_for_unlisted_tool() {
+    fn definition_falls_back_to_default_budget_for_unlisted_tool() {
+        // Regression: an unlisted tool used to advertise `None`, which the
+        // harness read as "no per-tool budget" and escalated a slow call into
+        // a run-level abort. Every definition now carries a budget.
         let handler = BuiltinHandler::new("unknown_custom_tool".to_string(), Arc::new(FakeTool));
         let def = handler.definition();
-        assert_eq!(def.metadata.max_duration_ms, None);
+        assert_eq!(
+            def.metadata.max_duration_ms,
+            Some(crate::tools::budget::DEFAULT_TOOL_BUDGET_MS)
+        );
     }
 
     /// A `AlephTool` whose `call_json` will reject malformed args via the

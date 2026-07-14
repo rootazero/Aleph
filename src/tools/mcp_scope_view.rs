@@ -22,6 +22,18 @@ impl McpScopedToolService {
     pub fn new(parent: Arc<dyn ToolService>, extras: Vec<ToolRegistration>) -> Self {
         Self { parent, extras }
     }
+
+    /// Metadata for an extras-only (plugin-provided) tool. The one field that
+    /// must not stay default is the wall-clock budget: a definition without one
+    /// made the harness treat a slow call as a run-level stall instead of a
+    /// recoverable tool error. Plugins declare no budget, so this resolves to
+    /// the global default.
+    fn extras_metadata(name: &str) -> ToolDefinitionMetadata {
+        ToolDefinitionMetadata {
+            max_duration_ms: Some(crate::tools::budget::resolve_tool_budget_ms(name, None)),
+            ..ToolDefinitionMetadata::default()
+        }
+    }
 }
 
 #[async_trait]
@@ -55,7 +67,7 @@ impl ToolService for McpScopedToolService {
                     source: ToolSource::Extension {
                         plugin_id: t.plugin_id.clone(),
                     },
-                    metadata: ToolDefinitionMetadata::default(),
+                    metadata: Self::extras_metadata(&t.name),
                 });
             }
         }
@@ -76,7 +88,7 @@ impl ToolService for McpScopedToolService {
                 source: ToolSource::Extension {
                     plugin_id: t.plugin_id.clone(),
                 },
-                metadata: ToolDefinitionMetadata::default(),
+                metadata: Self::extras_metadata(&t.name),
             })
     }
 
@@ -114,7 +126,7 @@ impl ToolService for McpScopedToolService {
                 source: ToolSource::Extension {
                     plugin_id: t.plugin_id.clone(),
                 },
-                metadata: ToolDefinitionMetadata::default(),
+                metadata: Self::extras_metadata(&t.name),
             })
             .collect();
         if extra_defs.is_empty() {

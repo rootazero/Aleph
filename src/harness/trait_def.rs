@@ -68,9 +68,10 @@ impl TurnStep {
 /// Identifies which sub-phase of a turn was hung when a per-turn timeout fired.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnPhase {
-    /// LLM `process()` call was hung.
+    /// LLM `process()` call was hung. The only phase `turn_timeout` judges.
     Think,
-    /// A specific tool's `execute()` call was hung.
+    /// No longer produced: a tool's wall clock lives in the tool layer, below
+    /// the approval gate, and an overrun is a recoverable `ToolError::Timeout`.
     Act { tool_name: String },
 }
 
@@ -108,9 +109,9 @@ pub enum HarnessError {
     /// The run loop was externally cancelled.
     #[error("cancelled")]
     Cancelled,
-    /// A single Think or Act phase exceeded `turn_timeout`. The cross-turn
-    /// stall watchdog (`StallTracker`) does not raise an error — it sets
-    /// `TerminateReason::StallTimeout` and exits with `hit_limit=true`.
+    /// A Think phase exceeded `turn_timeout` (Act is not judged by it). The
+    /// cross-turn stall watchdog (`StallTracker`) does not raise an error — it
+    /// sets `TerminateReason::StallTimeout` and exits with `hit_limit=true`.
     #[error("turn stalled in {phase} after {elapsed:?}")]
     StalledTurn {
         phase: TurnPhase,

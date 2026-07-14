@@ -16,6 +16,9 @@
 //! - `is_idempotent` ← `metadata.idempotent` (server's `readOnlyHint` /
 //!   `idempotentHint`); consumed by the exec-tier permission rule, so a
 //!   read-only MCP tool stops raising a card under the `Ask` tier.
+//! - `max_duration_ms` ← `metadata.max_duration_ms` (the owning server's
+//!   configured request timeout plus headroom, stamped by `McpHandler`); the
+//!   harness must not preempt a call the MCP client would still have returned.
 //! - Success output is wrapped with external-content boundary markers —
 //!   MCP servers are untrusted and their tool results are a prompt-injection
 //!   surface.
@@ -41,6 +44,7 @@ pub struct McpRegistryTool {
     concurrent_safe: bool,
     requires_confirmation: bool,
     idempotent: bool,
+    max_duration_ms: Option<u64>,
     handler: Arc<dyn ToolHandler>,
 }
 
@@ -68,6 +72,7 @@ impl McpRegistryTool {
             concurrent_safe: def.metadata.concurrent_safe,
             requires_confirmation: def.metadata.requires_approval,
             idempotent: def.metadata.idempotent,
+            max_duration_ms: def.metadata.max_duration_ms,
             handler,
         }
     }
@@ -103,6 +108,15 @@ impl LoopTool for McpRegistryTool {
         // `ToolAnnotations::is_idempotent`). Default false: an unannotated MCP
         // tool can mutate arbitrary external state.
         self.idempotent
+    }
+
+    fn max_duration_ms(&self) -> Option<u64> {
+        // The owning server's configured request timeout (+ headroom), carried
+        // through the handler's definition. Without this the loop-side
+        // definition builders would resolve MCP tools from the *builtin* budget
+        // table — which never lists them — and hand the harness a budget far
+        // below the MCP client's own timeout.
+        self.max_duration_ms
     }
 
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
@@ -232,6 +246,10 @@ mod tests {
                     // is `idempotentHint || readOnlyHint`, carried into
                     // metadata by `McpHandler::with_flags`.
                     idempotent: self.read_only,
+                    // Mirrors `McpHandler::with_timeout_seconds`: the owning
+                    // server's request timeout (+ headroom) as a wall-clock
+                    // budget.
+                    max_duration_ms: Some(330_000),
                     ..Default::default()
                 },
             }
@@ -278,6 +296,16 @@ mod tests {
             a.concurrency_claim(&json!({})),
             crate::tools::concurrency::ConcurrencyClaim::Shared
         ));
+    }
+
+    #[test]
+    fn adapter_carries_the_servers_budget_into_the_loop_tool_seam() {
+        // Regression: the adapter dropped the handler's budget, so the
+        // loop-side definition builders resolved MCP tools from the *builtin*
+        // budget table — which never lists them — and the harness treated a
+        // slow MCP call as a run-level stall instead of a tool error.
+        let a = adapter(FakeHandler::success());
+        assert_eq!(a.max_duration_ms(), Some(330_000));
     }
 
     #[test]

@@ -49,6 +49,13 @@ pub struct ToolDefinition {
     /// JSON (absent field) decoding to `false`.
     #[serde(default)]
     pub requires_confirmation: bool,
+    /// Per-call wall-clock budget the tool declared for itself, from
+    /// [`LoopTool::max_duration_ms`]. `None` = "declares nothing", NOT
+    /// "unbudgeted": the `ToolService` definition builders resolve it through
+    /// `tools::budget::resolve_tool_budget_ms` (declaration → builtin table →
+    /// global default) so the harness never sees a tool without a budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_duration_ms: Option<u64>,
 }
 
 // =============================================================================
@@ -156,6 +163,20 @@ pub trait LoopTool: Send + Sync {
     /// enough to warrant offloading (bash, `web_fetch`, etc.) or whose
     /// outputs should never be persisted (`read_file`-family).
     fn max_result_tokens(&self) -> Option<usize> {
+        None
+    }
+
+    /// Per-call wall-clock budget this tool declares for itself, in
+    /// milliseconds.
+    ///
+    /// `None` (the default) does NOT mean "unbounded": the definition
+    /// builders resolve it through
+    /// [`crate::tools::budget::resolve_tool_budget_ms`], which falls back to
+    /// the builtin table and then to `DEFAULT_TOOL_BUDGET_MS`. Override only
+    /// when the tool owns a clock the static tables cannot know — an MCP tool
+    /// whose server has a configured request timeout, say — so the harness's
+    /// budget stays above it and the tool's own timeout is what fires.
+    fn max_duration_ms(&self) -> Option<u64> {
         None
     }
 }
@@ -273,6 +294,7 @@ impl LoopToolRegistry {
                 max_result_tokens: t.max_result_tokens(),
                 concurrent_safe: t.is_concurrent_safe(&Value::Null),
                 requires_confirmation: t.requires_confirmation(),
+                max_duration_ms: t.max_duration_ms(),
             })
             .collect();
         defs.sort_by(|a, b| a.name.cmp(&b.name));

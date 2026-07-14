@@ -315,12 +315,20 @@ impl ScopedToolService {
         self.allowed.is_empty() || self.allowed.contains(name)
     }
 
-    /// Build `ToolDefinitionMetadata` for a built-in loop tool from the
-    /// static budget + idempotency tables — the same data
+    /// Build `ToolDefinitionMetadata` for a loop tool from what the tool
+    /// declares plus the static budget + idempotency tables — the same data
     /// `BuiltinHandler::definition()` surfaces through the handler path.
     /// `ScopedToolService` is the harness's production `ToolService`, so
     /// without this the per-tool wall-clock budget consulted by `act.rs`
     /// via `describe()` would always be `None` and never fire.
+    ///
+    /// `declared_budget_ms` is [`crate::tools::runtime::LoopTool::max_duration_ms`]
+    /// and wins over the table: an MCP tool's budget is only knowable from its
+    /// owning server's configured request timeout. The resolution always yields
+    /// `Some`. While the table was the only source, every tool outside it (all
+    /// MCP / plugin / skill tools, ~100 builtins) advertised no budget at all —
+    /// and the harness reads a missing budget as a run-level stall rather than
+    /// a recoverable tool error.
     ///
     /// `concurrent_safe` flows through from the inner
     /// [`crate::tools::runtime::ToolDefinition::concurrent_safe`] so the
@@ -331,10 +339,14 @@ impl ScopedToolService {
         name: &str,
         concurrent_safe: bool,
         requires_approval: bool,
+        declared_budget_ms: Option<u64>,
     ) -> ToolDefinitionMetadata {
         ToolDefinitionMetadata {
             idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
-            max_duration_ms: crate::tools::budget::builtin_tool_budget_ms(name),
+            max_duration_ms: Some(crate::tools::budget::resolve_tool_budget_ms(
+                name,
+                declared_budget_ms,
+            )),
             concurrent_safe,
             requires_approval,
             ..ToolDefinitionMetadata::default()
@@ -349,7 +361,12 @@ impl ScopedToolService {
             description: tool.description().to_string(),
             input_schema: tool.schema(),
             source: ToolSource::Builtin,
-            metadata: Self::builtin_metadata(name, concurrent_safe, tool.requires_confirmation()),
+            metadata: Self::builtin_metadata(
+                name,
+                concurrent_safe,
+                tool.requires_confirmation(),
+                tool.max_duration_ms(),
+            ),
         }
     }
 
@@ -359,7 +376,17 @@ impl ScopedToolService {
             description: tool.description().to_string(),
             input_schema: tool.schema(),
             source: ToolSource::Builtin,
-            metadata: ToolDefinitionMetadata::default(),
+            metadata: ToolDefinitionMetadata {
+                // The subagent tool is attached beside the loop registry, so it
+                // never passed through `builtin_metadata` and shipped a hardcoded
+                // default: no budget → the harness killed the PARENT run on any
+                // delegation slower than its own fallback.
+                max_duration_ms: Some(crate::tools::budget::resolve_tool_budget_ms(
+                    tool.name(),
+                    tool.max_duration_ms(),
+                )),
+                ..ToolDefinitionMetadata::default()
+            },
         }
     }
 

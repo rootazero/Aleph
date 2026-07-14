@@ -80,25 +80,12 @@ impl<'a> Drop for TurnBudgetGuard<'a> {
 
 use super::{AgentHarness, ToolCallGuardOutcome};
 use crate::harness::callback::HarnessCallback;
-use crate::harness::trait_def::{HarnessError, TurnPhase};
+use crate::harness::trait_def::HarnessError;
 use crate::providers::adapter::NativeToolCall;
 use crate::session::events::{now_ms, SessionEvent, ToolOutput, TurnId};
 use crate::session::service::SessionId;
-use crate::thinker::nudges::{
-    budget_overrun_cause, CROSS_BATCH_REFUSED_CAUSE, DEFERRED_TOOL_RESULT_REASON,
-    STALLED_CALL_CAUSE,
-};
+use crate::thinker::nudges::{CROSS_BATCH_REFUSED_CAUSE, DEFERRED_TOOL_RESULT_REASON};
 use tokio_util::sync::CancellationToken;
-
-/// Pick the effective wall-clock budget for a tool call. Per-tool
-/// metadata wins over the harness-wide `turn_timeout` fallback. Both
-/// unset → no timeout (legacy behaviour).
-fn resolve_effective_budget(
-    per_tool: Option<std::time::Duration>,
-    harness_fallback: Option<std::time::Duration>,
-) -> Option<std::time::Duration> {
-    per_tool.or(harness_fallback)
-}
 
 impl AgentHarness {
     /// Act phase: execute each `tool_call` sequentially, emitting a
@@ -241,16 +228,18 @@ impl AgentHarness {
             {
                 Ok(n) => executed_count = executed_count.saturating_add(n),
                 Err(e) => {
-                    // A stalled group aborts the run; close out the not-yet-
-                    // started later groups so their tool_use blocks keep their
-                    // result pairing (see the serial-path stall closure).
+                    // A group that aborts the run (a session-store failure, a
+                    // guardrail registry error) closes out the not-yet-started
+                    // later groups, so their tool_use blocks keep their result
+                    // pairing and the prompt builder does not drop the whole
+                    // assistant turn as orphaned on the next build.
                     let pending_ids: Vec<String> = remaining.by_ref().map(|c| c.id).collect();
                     if !pending_ids.is_empty() {
                         self.close_unexecuted_tool_uses(
                             session_id,
                             turn_id,
                             &pending_ids,
-                            "run stalled during an earlier tool group in this batch",
+                            "the run aborted during an earlier tool group in this batch",
                         )
                         .await;
                     }
@@ -525,86 +514,17 @@ impl AgentHarness {
                 .in_flight_tool_calls
                 .as_ref()
                 .map(|reg| reg.register(&call.id, &call.name, call_cancel.clone()));
-            let exec_fut = self.deps.tools.execute_with_cancel(
-                &call.name,
-                call.arguments.clone(),
-                call_cancel,
-            );
-
-            // Resolve effective wall-clock budget: per-tool metadata > global fallback.
-            let per_tool_budget = self
+            // The Act-period wall clock is NOT here. It lives in the tool layer
+            // (`ScopedToolService::execute_inner`), below the human approval gate
+            // — charging an operator's reading time to the tool's budget could
+            // kill a command they had just approved. An overrun arrives as
+            // `ToolError::Timeout`, recoverable like any other tool failure; a
+            // genuinely hung *run* is still caught by the stall tracker.
+            let inner = self
                 .deps
                 .tools
-                .describe(&call.name)
-                .await
-                .and_then(|d| d.metadata.max_duration_ms)
-                .map(std::time::Duration::from_millis);
-            let effective_budget =
-                resolve_effective_budget(per_tool_budget, self.deps.turn_timeout);
-
-            let exec_result: Result<
-                Result<ToolOutput, crate::tools::service::ToolError>,
-                HarnessError,
-            > = match effective_budget {
-                Some(budget) => {
-                    let started_call = Instant::now();
-                    match tokio::time::timeout(budget, exec_fut).await {
-                        Ok(inner) => Ok(inner),
-                        // A *per-tool* wall-clock budget overrun is RECOVERABLE:
-                        // surface it as a tool error the next Think turn can react
-                        // to (retry, narrow the query, switch source/tool) instead
-                        // of aborting the whole run on one slow `search`/`web_fetch`.
-                        // Only the harness-wide `turn_timeout` fallback
-                        // (`per_tool_budget == None`) is a genuine run-level stall
-                        // that must `StalledTurn`.
-                        Err(_) if per_tool_budget.is_some() => {
-                            Ok(Err(crate::tools::service::ToolError::Execution {
-                                name: call.name.clone(),
-                                cause: budget_overrun_cause(budget.as_secs_f64()),
-                            }))
-                        }
-                        Err(_) => Err(HarnessError::StalledTurn {
-                            phase: TurnPhase::Act {
-                                tool_name: call.name.clone(),
-                            },
-                            elapsed: started_call.elapsed(),
-                        }),
-                    }
-                }
-                None => Ok(exec_fut.await),
-            };
-            let inner = match exec_result {
-                Ok(r) => r,
-                Err(stalled) => {
-                    // Close the tool_use↔result pairing before bubbling the
-                    // run-aborting stall. The timed-out call gets a synthetic
-                    // ToolError (its ToolStart already fired, so this also
-                    // closes the live stream's start/end symmetry); calls never
-                    // started get a bare session-log closure. Without these the
-                    // prompt builder drops the whole assistant turn as orphaned
-                    // on the next build, erasing the context the Timeout grace
-                    // turn needs to salvage a partial deliverable.
-                    let synthetic = crate::tools::service::ToolError::Execution {
-                        name: call.name.clone(),
-                        cause: STALLED_CALL_CAUSE.to_string(),
-                    };
-                    self.emit_tool_error(
-                        session_id, turn_id, &call, synthetic, started, iteration, callback,
-                    )
-                    .await;
-                    let pending_ids: Vec<String> = tool_iter.by_ref().map(|c| c.id).collect();
-                    if !pending_ids.is_empty() {
-                        self.close_unexecuted_tool_uses(
-                            session_id,
-                            turn_id,
-                            &pending_ids,
-                            "run stalled during an earlier tool call in this batch",
-                        )
-                        .await;
-                    }
-                    return Err(stalled);
-                }
-            };
+                .execute_with_cancel(&call.name, call.arguments.clone(), call_cancel)
+                .await;
             match inner {
                 Ok(mut output) => {
                     executed_count = executed_count.saturating_add(1);
@@ -623,7 +543,14 @@ impl AgentHarness {
                     // Do NOT abort — continue processing remaining tool calls.
                     // The error is persisted to session log; the next Think
                     // turn will see it as tool_result(is_error=true).
-                    self.record_failure(call.name.clone(), cache_key.1.clone());
+                    //
+                    // Only a NON-retryable failure enters the cross-batch memo.
+                    // A wall-clock `Timeout` (or a `Transport` blip) says nothing
+                    // about the call, and banning it refused the very retry the
+                    // error text invites on the very next batch.
+                    if !e.is_retryable() {
+                        self.record_failure(call.name.clone(), cache_key.1.clone());
+                    }
                     self.emit_tool_error(
                         session_id, turn_id, &call, e, started, iteration, callback,
                     )
@@ -706,11 +633,8 @@ impl AgentHarness {
     /// `ToolResult` / `ToolError`, record the Layer 3 turn budget, and push
     /// the timeline entry. Side-effect ordering matches the serial loop.
     ///
-    /// Per-tool wall-clock budget is wrapped around each individual future
-    /// (same as the serial path). A timeout in this path is bubbled up as
-    /// `HarnessError::StalledTurn` AFTER all already-completed results have
-    /// been emitted in input order — strictly more information than the
-    /// serial path (which exits without emitting later calls' results).
+    /// Like the serial path, it owns no wall clock: each call's budget is
+    /// enforced by the tool layer, below the approval gate.
     #[allow(clippy::too_many_arguments)]
     async fn act_parallel(
         &self,
@@ -758,17 +682,10 @@ impl AgentHarness {
         let mut sanitized: Vec<Option<serde_json::Value>> = vec![None; tool_calls.len()];
 
         // PASS 0 — serial: notify callback, emit ToolCallStarted trace,
-        // emit ToolCallRequested SessionEvent. Resolve effective per-tool
-        // wall-clock budget. Capture started Instant for duration metrics.
-        // Skipped calls take the synthetic-error fast path here and are
-        // omitted from PASS 1 dispatch.
+        // emit ToolCallRequested SessionEvent. Capture started Instant for
+        // duration metrics. Skipped calls take the synthetic-error fast path
+        // here and are omitted from PASS 1 dispatch.
         let mut started_at: Vec<Instant> = Vec::with_capacity(tool_calls.len());
-        // Per-call effective budget plus whether it came from the *per-tool*
-        // table (`true`) or the harness-wide `turn_timeout` fallback (`false`).
-        // The flag decides, on timeout, between a recoverable tool error and a
-        // run-aborting `StalledTurn` (see PASS 1 / PASS 2 below).
-        let mut budgets: Vec<Option<(std::time::Duration, bool)>> =
-            Vec::with_capacity(tool_calls.len());
         for (idx, call) in tool_calls.iter().enumerate() {
             // Structured tool-start event (parallel path parity with serial).
             callback.on_tool_call_start(&call.id, &call.name, &call.arguments);
@@ -823,7 +740,6 @@ impl AgentHarness {
                         if let Some(ref tracker) = self.stall_tracker {
                             tracker.record_activity().await;
                         }
-                        budgets.push(None);
                         continue;
                     }
                 }
@@ -861,36 +777,21 @@ impl AgentHarness {
                 if let Some(ref tracker) = self.stall_tracker {
                     tracker.record_activity().await;
                 }
-                budgets.push(None);
                 continue;
             }
-
-            let per_tool_budget = self
-                .deps
-                .tools
-                .describe(&call.name)
-                .await
-                .and_then(|d| d.metadata.max_duration_ms)
-                .map(std::time::Duration::from_millis);
-            let per_tool = per_tool_budget.is_some();
-            budgets.push(
-                resolve_effective_budget(per_tool_budget, self.deps.turn_timeout)
-                    .map(|d| (d, per_tool)),
-            );
         }
 
         // PASS 1 — parallel: dispatch up to `parallelism` execute futures via
         // `stream::iter(...).buffered(n)`, which polls at most `n` at a time AND
         // yields completions in input order — semantically identical to opencode's
-        // `Effect.forEach({ concurrency: n })`. Per-call timeout is wrapped INSIDE
-        // each future so the timeout is owned by the call, not the batch.
+        // `Effect.forEach({ concurrency: n })`. Each call's wall clock is owned by
+        // the tool layer, below the approval gate — never by this batch.
         // A guardrail rewrite changes the path set the claim was derived from, so the
         // pre-admission disjointness proof is void: any rewrite serializes the batch.
         let cap = self.deps.parallel_tool_concurrency.unwrap_or(0).max(2);
         let rewritten = sanitized.iter().any(Option::is_some);
         let parallelism = if rewritten { 1 } else { cap };
-        type ExecOutcome =
-            Result<Result<ToolOutput, crate::tools::service::ToolError>, std::time::Duration>;
+        type ExecOutcome = Result<ToolOutput, crate::tools::service::ToolError>;
         // Build per-original-index futures, leaving None at skipped indices
         // (cross-batch dedup already emitted synthetic ToolError in PASS 0).
         // Run only the live futures through `.buffered()` and re-assemble
@@ -916,8 +817,6 @@ impl AgentHarness {
             let args = sanitized[idx]
                 .clone()
                 .unwrap_or_else(|| call.arguments.clone());
-            let budget = budgets[idx];
-            let started = started_at[idx];
             // Each parallel call owns a fresh child token forked from the
             // run-level cancel. If the run is cancelled mid-batch, every
             // in-flight call short-circuits without waiting for the entire
@@ -927,24 +826,7 @@ impl AgentHarness {
                 in_flight_guards.push(reg.register(&call.id, &call.name, call_cancel.clone()));
             }
             boxed_futs_opt.push(Some(Box::pin(async move {
-                let exec_fut = tools.execute_with_cancel(&name, args, call_cancel);
-                match budget {
-                    Some((b, per_tool)) => match tokio::time::timeout(b, exec_fut).await {
-                        Ok(inner) => Ok(inner),
-                        // Per-tool budget overrun → recoverable tool error (PASS 2
-                        // emits it like any failure and continues); only a
-                        // harness-wide `turn_timeout` overrun (`!per_tool`) bubbles
-                        // up as a run-aborting stall. Mirrors the serial path.
-                        Err(_) if per_tool => {
-                            Ok(Err(crate::tools::service::ToolError::Execution {
-                                name: name.clone(),
-                                cause: budget_overrun_cause(b.as_secs_f64()),
-                            }))
-                        }
-                        Err(_) => Err(started.elapsed()),
-                    },
-                    None => Ok(exec_fut.await),
-                }
+                tools.execute_with_cancel(&name, args, call_cancel).await
             })));
         }
         let live_indices: Vec<usize> = boxed_futs_opt
@@ -974,12 +856,9 @@ impl AgentHarness {
         drop(in_flight_guards);
 
         // PASS 2 — serial in input order: apply Layer 3 budget, emit
-        // ToolResult/ToolError, trace, push timeline entry. The first
-        // timeout encountered is remembered and bubbled up at the end so
-        // later already-completed results still reach the session log.
+        // ToolResult/ToolError, trace, push timeline entry.
         // Skipped indices (cross-batch dedup hits, already errored in PASS 0)
         // are passed through with no further action.
-        let mut first_stall: Option<(String, std::time::Duration)> = None;
         for (idx, exec_slot) in results.into_iter().enumerate() {
             let Some(exec_result) = exec_slot else {
                 continue; // PASS-0 dedup-rejected; already emitted synthetic error.
@@ -987,32 +866,7 @@ impl AgentHarness {
             let call = &tool_calls[idx];
             let started = started_at[idx];
             match exec_result {
-                Err(elapsed) => {
-                    if first_stall.is_none() {
-                        first_stall = Some((call.name.clone(), elapsed));
-                    }
-                    // Only a harness-wide `turn_timeout` overrun reaches this arm
-                    // (per-tool budget overruns are recovered as `Ok(Err)` above)
-                    // — a genuine run-level stall, bubbled up as `StalledTurn`
-                    // below. Persist a synthetic ToolError first so the stalled
-                    // call's tool_use keeps its result pairing (and its live
-                    // ToolStart gets a matching ToolEnd); otherwise the prompt
-                    // builder drops the whole assistant turn as orphaned on the
-                    // next build, erasing the context the Timeout grace turn
-                    // needs to salvage a partial deliverable.
-                    let synthetic = crate::tools::service::ToolError::Execution {
-                        name: call.name.clone(),
-                        cause: STALLED_CALL_CAUSE.to_string(),
-                    };
-                    self.emit_tool_error(
-                        session_id, turn_id, call, synthetic, started, iteration, callback,
-                    )
-                    .await;
-                    if let Some(ref tracker) = self.stall_tracker {
-                        tracker.record_activity().await;
-                    }
-                }
-                Ok(Ok(mut output)) => {
+                Ok(mut output) => {
                     executed_count = executed_count.saturating_add(1);
                     self.apply_turn_budget(budget_turn_id, call, &mut output);
                     // Cross-batch dedup: any success clears the failure set —
@@ -1026,10 +880,15 @@ impl AgentHarness {
                         tracker.record_activity().await;
                     }
                 }
-                Ok(Err(e)) => {
-                    // Cross-batch dedup: record the (tool, args) signature so
-                    // the next turn refuses an identical repeat.
-                    self.record_failure(call.name.clone(), canonical_args[idx].clone());
+                Err(e) => {
+                    // Cross-batch dedup: record the (tool, args) signature so the
+                    // next turn refuses an identical repeat — but only for a
+                    // NON-retryable failure. A wall-clock `Timeout` says nothing
+                    // about the call, and banning it refused the retry the error
+                    // text itself invites (serial parity).
+                    if !e.is_retryable() {
+                        self.record_failure(call.name.clone(), canonical_args[idx].clone());
+                    }
                     self.emit_tool_error(
                         session_id, turn_id, call, e, started, iteration, callback,
                     )
@@ -1039,13 +898,6 @@ impl AgentHarness {
                     }
                 }
             }
-        }
-
-        if let Some((tool_name, elapsed)) = first_stall {
-            return Err(HarnessError::StalledTurn {
-                phase: TurnPhase::Act { tool_name },
-                elapsed,
-            });
         }
 
         Ok(executed_count)
@@ -1264,34 +1116,5 @@ impl AgentHarness {
             false,
             Some(error_for_timeline),
         );
-    }
-}
-
-#[cfg(test)]
-mod per_tool_budget_tests {
-    use super::*;
-
-    #[test]
-    fn resolve_effective_budget_prefers_per_tool_over_global() {
-        let per_tool = Some(std::time::Duration::from_millis(50));
-        let global = Some(std::time::Duration::from_secs(60));
-        assert_eq!(
-            resolve_effective_budget(per_tool, global),
-            Some(std::time::Duration::from_millis(50)),
-        );
-    }
-
-    #[test]
-    fn resolve_effective_budget_falls_back_to_global() {
-        let global = Some(std::time::Duration::from_secs(60));
-        assert_eq!(
-            resolve_effective_budget(None, global),
-            Some(std::time::Duration::from_secs(60)),
-        );
-    }
-
-    #[test]
-    fn resolve_effective_budget_returns_none_when_both_unset() {
-        assert_eq!(resolve_effective_budget(None, None), None);
     }
 }

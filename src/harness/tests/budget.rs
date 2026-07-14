@@ -102,10 +102,34 @@ const TARGET: usize = 4900;
 ///
 /// Net **−124**. The debt to R10's [`TARGET`] is now **839** lines, not 963.
 ///
+/// **Batch 3 (2026-07-14): 5739 → 5593.** The Act-period wall clock left the
+/// loop. It was never scaffolding: deciding *how long a tool may run* is a
+/// per-tool property the tool itself declares, and the harness was second-
+/// guessing it with a run-level `turn_timeout` — then converting the overrun
+/// into `StalledTurn`, which **kills the run**. Sinking the clock to the tool
+/// chokepoint (`src/tools/scoped/dispatch.rs::execute_inner`, below every gate
+/// that can wait on a human) turns the same overrun into a recoverable
+/// `ToolError::Timeout` the next Think turn reads, and lets the loop drop the
+/// machinery that existed only to run that clock.
+///
+///   - **−149, `act.rs`.** `resolve_effective_budget`, both `describe()` budget
+///     probes, both `tokio::time::timeout` wrappers, the serial `StalledTurn`
+///     recovery block, the parallel `budgets` vector / `Err(elapsed)` arm /
+///     `first_stall`, and the `TurnPhase` / `STALLED_CALL_CAUSE` /
+///     `budget_overrun_cause` imports. `ExecOutcome` collapses to
+///     `Result<ToolOutput, ToolError>`.
+///   - **+2, `deps.rs`; +1, `trait_def.rs`.** Both files *asserted* that
+///     `turn_timeout` bounds Act. It no longer does — a doc that names an
+///     invariant has to be true, so both now say Act is bounded per-tool and
+///     `turn_timeout` bounds only Think.
+///
+/// Net **−146**, all of it real deletion (the +3 is documentation of the
+/// invariant that moved). The debt to R10's [`TARGET`] is now **693** lines.
+///
 /// Measured, not hand-counted: this test is the measurement. The number here is
 /// whatever `the_harness_line_budget_does_not_grow` prints when it fails, and
 /// nothing else — that is the whole point of the file.
-const CEILING: usize = 5739;
+const CEILING: usize = 5593;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

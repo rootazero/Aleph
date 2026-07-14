@@ -161,8 +161,12 @@ impl ToolService for ScopedToolService {
             .tool_definitions()
             .into_iter()
             .map(|d| {
-                let metadata =
-                    Self::builtin_metadata(&d.name, d.concurrent_safe, d.requires_confirmation);
+                let metadata = Self::builtin_metadata(
+                    &d.name,
+                    d.concurrent_safe,
+                    d.requires_confirmation,
+                    d.max_duration_ms,
+                );
                 ToolDefinition {
                     name: d.name,
                     description: d.description,
@@ -429,8 +433,12 @@ impl ToolService for ScopedToolService {
             .tool_definitions()
             .into_iter()
             .map(|d| {
-                let metadata =
-                    Self::builtin_metadata(&d.name, d.concurrent_safe, d.requires_confirmation);
+                let metadata = Self::builtin_metadata(
+                    &d.name,
+                    d.concurrent_safe,
+                    d.requires_confirmation,
+                    d.max_duration_ms,
+                );
                 ToolDefinition {
                     name: d.name,
                     description: d.description,

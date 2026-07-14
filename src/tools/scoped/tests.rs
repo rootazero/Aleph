@@ -272,6 +272,17 @@ async fn list_includes_subagent_tool_when_set() {
         "subagent must be in list; got: {:?}",
         names
     );
+
+    // The subagent tool is attached beside the registry, so it never passed
+    // through the metadata builder and shipped a hardcoded default: no
+    // wall-clock budget → any delegation slower than the harness fallback
+    // aborted the PARENT run. Both definition paths must carry the budget.
+    let expected = crate::tools::budget::builtin_tool_budget_ms("subagent");
+    assert!(expected.is_some(), "subagent must be in the budget table");
+    let listed = defs.iter().find(|d| d.name == "subagent").expect("listed");
+    assert_eq!(listed.metadata.max_duration_ms, expected);
+    let described = svc.describe("subagent").await.expect("subagent described");
+    assert_eq!(described.metadata.max_duration_ms, expected);
 }
 
 // -------------------------------------------------------------------------
@@ -862,17 +873,78 @@ async fn describe_populates_builtin_budget_metadata() {
 }
 
 #[tokio::test]
-async fn describe_leaves_metadata_default_for_unbudgeted_tool() {
-    // A tool absent from both tables keeps the legacy `None` budget so it
-    // inherits the harness-wide turn_timeout fallback.
+async fn describe_falls_back_to_the_default_budget_for_untabled_tool() {
+    // A tool absent from the table used to advertise `None`, which the harness
+    // read as "no per-tool budget" and escalated into a run-level StalledTurn
+    // abort. Every definition now carries a budget, so a slow call is a
+    // recoverable tool error instead.
     let registry = make_registry(&["some_custom_tool"]);
     let svc = ScopedToolService::new(registry, BTreeSet::new());
     let def = svc
         .describe("some_custom_tool")
         .await
         .expect("tool present");
-    assert_eq!(def.metadata.max_duration_ms, None);
+    assert_eq!(
+        def.metadata.max_duration_ms,
+        Some(crate::tools::budget::DEFAULT_TOOL_BUDGET_MS)
+    );
     assert!(!def.metadata.idempotent);
+}
+
+/// A `LoopTool` that declares its own wall-clock budget — the seam MCP tools
+/// use to surface their owning server's configured request timeout.
+struct SelfBudgetedTool;
+
+#[async_trait::async_trait]
+impl LoopTool for SelfBudgetedTool {
+    fn name(&self) -> &str {
+        "self_budgeted"
+    }
+    fn description(&self) -> &str {
+        "declares its own budget"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        LoopToolResult::Success { output: json!({}) }
+    }
+    fn max_duration_ms(&self) -> Option<u64> {
+        Some(777_000)
+    }
+}
+
+#[tokio::test]
+async fn declared_budget_wins_over_the_table_and_the_default() {
+    let mut registry = LoopToolRegistry::new();
+    registry.register(Box::new(SelfBudgetedTool));
+    let svc = ScopedToolService::new(Arc::new(registry), BTreeSet::new());
+    let def = svc.describe("self_budgeted").await.expect("tool present");
+    assert_eq!(def.metadata.max_duration_ms, Some(777_000));
+    // list() and metadata_schema() rebuild definitions separately from
+    // describe(); a budget that only reaches one of them is a budget the
+    // harness may still miss.
+    let listed = svc.list().await;
+    let listed = listed
+        .iter()
+        .find(|d| d.name == "self_budgeted")
+        .expect("listed");
+    assert_eq!(listed.metadata.max_duration_ms, Some(777_000));
+}
+
+#[tokio::test]
+async fn every_listed_definition_carries_a_budget() {
+    // The invariant the harness depends on: no definition leaving the
+    // registry may be unbudgeted, whatever its provenance.
+    let registry = make_registry(&["memory_search", "bash", "ask_user", "some_custom_tool"]);
+    let svc = ScopedToolService::new(registry, BTreeSet::new());
+    for def in svc.list().await {
+        assert!(
+            def.metadata.max_duration_ms.is_some(),
+            "tool {} left the registry without a wall-clock budget",
+            def.name
+        );
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -1218,6 +1290,39 @@ async fn declared_confirmation_tool_runs_when_approved() {
         requester.calls.load(Ordering::SeqCst),
         1,
         "gate must prompt once"
+    );
+}
+
+#[tokio::test]
+async fn an_expired_approval_card_is_not_a_refusal() {
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Timeout));
+    let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_confirmation(StdArc::clone(&requester) as _);
+
+    let err = svc
+        .execute("danger", json!({}))
+        .await
+        .expect_err("an unanswered card cannot run the tool");
+
+    // The distinction is the whole point. A card nobody answered used to arrive
+    // as a non-retryable `Execution` error reading "The user did not approve …
+    // Do not retry" — which (a) told the model a lie about what the human did,
+    // and (b) let the harness's cross-batch memo ban the call permanently,
+    // contradicting `DenialLedger`, which deliberately drops a Timeout because
+    // "an expired card is not a decision".
+    assert!(
+        matches!(err, ToolError::ApprovalExpired { .. }),
+        "expected ApprovalExpired, got {err:?}"
+    );
+    assert!(
+        err.is_retryable(),
+        "an expired card must not be banned by the cross-batch failure memo"
+    );
+    let text = err.to_string();
+    assert!(
+        !text.contains("did not approve"),
+        "must not speak an expiry as a refusal: {text}"
     );
 }
 
