@@ -1,12 +1,15 @@
 //! Pure-Rust WebGL2 renderer for the 3D knowledge nebula.
 //!
-//! Pure-logic submodules (`math`, `camera`, `layout3d`, `picking`) are
-//! `web-sys`-free and unit-tested on the native target. GL-bound submodules
-//! are verified by wasm compile + browser.
+//! Pure-logic submodules (`math`, `camera`, `layout3d`, `picking`, `fit`,
+//! `drift`) are `web-sys`-free and unit-tested on the native target. GL-bound
+//! submodules are verified by wasm compile + browser.
 pub mod bloom;
 pub mod camera;
 pub mod context;
+pub mod drift;
+pub mod edge_lod;
 pub mod edges;
+pub mod fit;
 pub mod layout3d;
 pub mod math;
 pub mod nodes;

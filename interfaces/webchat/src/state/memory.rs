@@ -9,10 +9,15 @@ use std::collections::VecDeque;
 /// Cap on how many nodes are retained in `recent_visited`.
 const RECENT_VISITED_CAPACITY: usize = 8;
 
-/// Default Fold-slider value (UI range 0..=10), shared by `MemoryState::new`
-/// and the canvas agent-switch reset so the stored value never lands outside
-/// the slider range. Maps to a balanced mid-density view (lod 0.5).
-pub const DEFAULT_FOLD: usize = 5;
+/// Default edge-density slider value (UI range 0..=10), shared by
+/// `MemoryState::new` and the canvas agent-switch reset so the stored value
+/// never lands outside the slider range.
+///
+/// 10 is the top of the range and maps (via `galaxy_build::fold_to_lod`) to
+/// lod 0.0 = every edge drawn. A density knob whose default already hides
+/// edges — with nothing in the UI saying so — is a lie; the honest default is
+/// "show me everything" and the slider only ever subtracts from there.
+pub const DEFAULT_FOLD: usize = 10;
 
 /// Which surface the Memory Hub is currently showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +161,17 @@ mod tests {
         }
         assert_eq!(q.len(), 1);
         assert_eq!(q[0], "x");
+    }
+
+    #[test]
+    fn default_fold_shows_all_edges() {
+        // The slider's UI range is 0..=10 (sidebar.rs / phone graph.rs) and
+        // `galaxy_build::fold_to_lod` maps 10 → lod 0.0 = every edge drawn
+        // (asserted there — it is `pub(super)` to the canvas module, so it
+        // cannot be called from here). The invariant this test pins is that
+        // the default sits at the DENSEST end of that range: the graph must
+        // not open with edges silently culled.
+        assert_eq!(DEFAULT_FOLD, 10);
     }
 
     #[test]

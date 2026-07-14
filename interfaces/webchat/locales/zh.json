@@ -317,7 +317,20 @@
     "hub_view_table": "列表",
     "view_in_graph": "在图谱中查看",
     "view_in_list": "在列表中查看",
-    "highlight_not_in_window": "该笔记不在当前窗口，请用搜索定位。"
+    "highlight_not_in_window": "该笔记不在当前窗口，请用搜索定位。",
+    "node_not_in_graph": "这条笔记不在当前载入的星系里。",
+    "search_no_match": "没有匹配的结果。",
+    "graph_empty": "还没有笔记——和智能体聊几句，记忆就会出现在这里。",
+    "graph_error": "图谱加载失败。",
+    "graph_gl_fatal": "3D 渲染已中断，刷新页面即可恢复星图。",
+    "retry": "重试",
+    "edge_density": "连线密度",
+    "edge_density_hint": "向左显示更少连线，向右显示全部连线。",
+    "fit_view": "全览",
+    "reset_view": "重置视角",
+    "zoom_in": "放大",
+    "zoom_out": "缩小",
+    "focus_selected": "聚焦所选"
   },
   "logs": {
     "title": "服务器日志",

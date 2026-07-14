@@ -13,7 +13,9 @@ use super::math::Mat4;
 use super::nodes::{set_mat4, set_vec2};
 use super::shaders;
 
-/// Edge line width in framebuffer pixels.
+/// Base edge line width in framebuffer pixels (uploaded as `u_width`). The edge
+/// vertex shader lerps it to 1.5x on the per-instance `a_highlight` flag, so an
+/// edge incident to the selected node renders at ~4.5 px.
 const EDGE_WIDTH_PX: f32 = 3.0;
 
 /// Curve tessellation: segments per edge. 12 = smooth gentle arc.
