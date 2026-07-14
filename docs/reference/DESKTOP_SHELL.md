@@ -173,10 +173,18 @@ otherwise notifications degrade silently and nothing else is affected.
 
 The shell checks GitHub Releases for a newer Aleph in the background — once
 about 90 s after launch, then every six hours. It never restarts under the
-user (R5): a found update is *staged*, surfaced through a desktop
-notification and the tray's update item (relabelled "Restart to update to
-vX.Y.Z"), and applied only when the user picks it. Applying downloads,
-installs, and restarts the app — and with it the bundled `aleph-server`.
+user (R5): a found update is *staged* and surfaced three non-intrusive ways —
+a desktop notification, the tray/macOS-menu update item (relabelled "Restart
+to update to vX.Y.Z"), and a **non-modal in-window top banner** with a
+"Restart to update" button. The banner is injected into the webview by the
+shell (`update.rs::show_update_banner`); its button calls back through a
+same-origin sentinel navigation (`/__aleph-shell/update/apply` | `/dismiss`)
+that the `on_navigation` guard intercepts — an origin-independent channel that
+works for the loopback full app and a remote-pointed Panel-lite alike. The
+banner is dismissible per session (`×`) and re-appears on the next launch; the
+tray/menu item is the always-available fallback. Applying (any surface)
+downloads, installs, and restarts the app — and with it the bundled
+`aleph-server`.
 The macOS menu's *Check for Updates…* and the tray item also run a manual
 check, which always reports its outcome.
 
