@@ -17,6 +17,7 @@ fn make_args(action: &str) -> DesktopArgs {
         text: None,
         keys: None,
         bundle_id: None,
+        app: None,
         window_id: None,
         start_x: None,
         start_y: None,
@@ -47,6 +48,7 @@ fn make_args(action: &str) -> DesktopArgs {
         ax_action_name: None,
         pid: None,
         observe: None,
+        force: None,
     }
 }
 
@@ -768,6 +770,7 @@ mod e2e_normalized {
             text: None,
             keys: None,
             bundle_id: None,
+            app: None,
             window_id: None,
             start_x: None,
             start_y: None,
@@ -796,6 +799,7 @@ mod e2e_normalized {
             ax_action_name: None,
             pid: None,
             observe: None,
+            force: None,
         }];
 
         AlephTool::call(&tool, args).await.unwrap();
@@ -1202,5 +1206,524 @@ mod blocked_app_ordering {
             "message should explain the vault refusal: {:?}",
             output.message
         );
+    }
+}
+
+/// The three promises the tool boundary makes about units and user data:
+/// `delta_*` are pixels (the limb scrolls in wheel clicks), `paste` never
+/// destroys a clipboard it cannot restore, and a capture with no pixels is never
+/// served to the model as the screen.
+mod boundary_contracts {
+    use super::*;
+    use aleph_desktop::system_types::{AppInfo, ClipboardContent, SystemInfo};
+    use aleph_desktop::traits::{
+        AutomationCapability, MediaCapability, PermissionCapability, PimCapability,
+        PowerCapability, ScreenCapability, SystemCapability,
+    };
+    use aleph_desktop::{
+        DesktopPlatform, MouseButton, OcrResult, Result as DResult, ScreenRegion, Screenshot,
+        WindowInfo,
+    };
+    use std::sync::Mutex;
+
+    /// 2×2 PNG with real structure — a healthy capture.
+    const FRAME: &str = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAE0lEQVR4nGNgYGD4//8/GDMwAAAp5AX71ZPZmwAAAABJRU5ErkJggg==";
+    /// All-black 2×2 PNG — what a locked screen or a revoked screen-recording
+    /// grant hands back, as a well-formed `Ok(Screenshot)`.
+    const BLANK_FRAME: &str = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAC0lEQVR4nGNgQAYAAA4AAamRc7EAAAAASUVORK5CYII=";
+
+    #[derive(Default)]
+    struct Recorder {
+        scrolls: Mutex<Vec<(String, i32)>>,
+        clipboard_writes: Mutex<Vec<String>>,
+    }
+
+    struct RecordingScreen {
+        rec: Arc<Recorder>,
+        frame: &'static str,
+    }
+
+    #[async_trait]
+    impl ScreenCapability for RecordingScreen {
+        async fn screenshot(&self, _r: Option<ScreenRegion>) -> DResult<Screenshot> {
+            Ok(Screenshot {
+                image_base64: self.frame.to_string(),
+                width: 2,
+                height: 2,
+                format: "png".into(),
+                scale_factor: None,
+            })
+        }
+        async fn ocr(&self, _i: Option<&[u8]>) -> DResult<OcrResult> {
+            Err(aleph_desktop::DesktopError::NotImplemented("ocr".into()))
+        }
+        async fn click(&self, _x: f64, _y: f64, _b: MouseButton) -> DResult<()> {
+            Ok(())
+        }
+        async fn type_text(&self, _t: &str) -> DResult<()> {
+            Ok(())
+        }
+        async fn key_combo(&self, _m: &[String], _k: &str) -> DResult<()> {
+            Ok(())
+        }
+        async fn scroll(&self, direction: &str, amount: i32) -> DResult<()> {
+            self.rec
+                .scrolls
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((direction.to_string(), amount));
+            Ok(())
+        }
+        async fn window_list(&self) -> DResult<Vec<WindowInfo>> {
+            Ok(vec![])
+        }
+        async fn focus_window(&self, _id: u64) -> DResult<()> {
+            Ok(())
+        }
+        async fn launch_app(&self, _n: &str) -> DResult<()> {
+            Ok(())
+        }
+        /// The text-only path a platform without a system capability falls back
+        /// to: macOS answers `Ok("")` here for an image on the pasteboard.
+        async fn clipboard_read(&self) -> DResult<String> {
+            Ok(String::new())
+        }
+        async fn clipboard_write(&self, text: &str) -> DResult<()> {
+            self.rec
+                .clipboard_writes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(text.to_string());
+            Ok(())
+        }
+    }
+
+    /// A system capability whose clipboard holds whatever it was built with.
+    struct ClipboardSystem {
+        content: ClipboardContent,
+    }
+
+    #[async_trait]
+    impl SystemCapability for ClipboardSystem {
+        async fn launch_app(&self, _app: &str) -> DResult<()> {
+            Ok(())
+        }
+        async fn quit_app(&self, _app: &str) -> DResult<()> {
+            Ok(())
+        }
+        async fn list_running_apps(&self) -> DResult<Vec<AppInfo>> {
+            Ok(vec![])
+        }
+        async fn send_notification(&self, _t: &str, _b: &str) -> DResult<()> {
+            Ok(())
+        }
+        async fn clipboard_read(&self) -> DResult<ClipboardContent> {
+            Ok(self.content.clone())
+        }
+        async fn clipboard_write(&self, _text: &str) -> DResult<()> {
+            Ok(())
+        }
+        async fn system_info(&self) -> DResult<SystemInfo> {
+            Ok(SystemInfo {
+                os_name: "macOS".into(),
+                os_version: "0".into(),
+                hostname: "h".into(),
+                arch: "aarch64".into(),
+                username: "u".into(),
+            })
+        }
+    }
+
+    struct MockPlatform {
+        screen: RecordingScreen,
+        system: Option<ClipboardSystem>,
+    }
+
+    impl DesktopPlatform for MockPlatform {
+        fn platform_name(&self) -> &str {
+            "boundary-mock"
+        }
+        fn screen(&self) -> Option<&dyn ScreenCapability> {
+            Some(&self.screen)
+        }
+        fn pim(&self) -> Option<&dyn PimCapability> {
+            None
+        }
+        fn system(&self) -> Option<&dyn SystemCapability> {
+            self.system.as_ref().map(|s| s as &dyn SystemCapability)
+        }
+        fn automation(&self) -> Option<&dyn AutomationCapability> {
+            None
+        }
+        fn permission(&self) -> Option<&dyn PermissionCapability> {
+            None
+        }
+        fn media(&self) -> Option<&dyn MediaCapability> {
+            None
+        }
+        fn power(&self) -> Option<&dyn PowerCapability> {
+            None
+        }
+    }
+
+    /// Build a tool over a screen serving `frame`, with `clipboard` on the
+    /// system capability (`None` = no system capability wired at all).
+    fn build(
+        frame: &'static str,
+        clipboard: Option<ClipboardContent>,
+    ) -> (DesktopTool, Arc<Recorder>) {
+        let rec = Arc::new(Recorder::default());
+        let platform: Arc<dyn DesktopPlatform> = Arc::new(MockPlatform {
+            screen: RecordingScreen {
+                rec: rec.clone(),
+                frame,
+            },
+            system: clipboard.map(|content| ClipboardSystem { content }),
+        });
+        (DesktopTool::new().with_platform(platform), rec)
+    }
+
+    fn scrolls(rec: &Recorder) -> Vec<(String, i32)> {
+        rec.scrolls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    fn writes(rec: &Recorder) -> Vec<String> {
+        rec.clipboard_writes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    // ── Scroll unit ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn scroll_pixels_become_wheel_clicks_at_the_boundary() {
+        // The documented unit is pixels; the limb takes wheel detents. -300px
+        // must reach it as 3 clicks up, not 300 (which was ~30 screens).
+        let (tool, rec) = build(FRAME, None);
+        let mut args = make_args("scroll");
+        args.delta_y = Some(-300.0);
+
+        let out = AlephTool::call(&tool, args).await.unwrap();
+        assert!(out.success, "scroll failed: {:?}", out.message);
+        assert_eq!(scrolls(&rec), vec![("up".to_string(), 3)]);
+
+        let data = out.data.expect("scroll data");
+        assert_eq!(data["direction"], "up");
+        assert_eq!(data["wheel_clicks"], 3);
+        assert!(out.message.is_none(), "a whole-detent scroll needs no note");
+    }
+
+    #[tokio::test]
+    async fn sub_detent_scroll_moves_one_click_and_says_so() {
+        // A 5px request cannot become 0 clicks reported as a successful scroll.
+        let (tool, rec) = build(FRAME, None);
+        let mut args = make_args("scroll");
+        args.delta_y = Some(5.0);
+
+        let out = AlephTool::call(&tool, args).await.unwrap();
+        assert!(out.success);
+        assert_eq!(scrolls(&rec), vec![("down".to_string(), 1)]);
+
+        let message = out.message.expect("the quantization must be reported");
+        assert!(message.contains("wheel"), "message: {message}");
+        assert_eq!(out.data.unwrap()["wheel_clicks"], 1);
+    }
+
+    #[tokio::test]
+    async fn zero_scroll_is_still_refused() {
+        let (tool, rec) = build(FRAME, None);
+        let mut args = make_args("scroll");
+        args.delta_x = Some(0.0);
+        args.delta_y = Some(0.0);
+
+        let out = AlephTool::call(&tool, args).await.unwrap();
+        assert!(!out.success);
+        assert!(out.message.unwrap().contains("non-zero"));
+        assert!(scrolls(&rec).is_empty(), "nothing should reach the limb");
+    }
+
+    // ── Paste clipboard safety ─────────────────────────────────────
+
+    fn image_clipboard() -> ClipboardContent {
+        ClipboardContent {
+            // What macOS reports when the user copied an image: no string
+            // flavor at all. The text-only read answers Ok("") for this.
+            text: None,
+            has_image: true,
+            image_base64: Some("ZmFrZS1wbmc=".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn paste_never_clears_a_clipboard_image_as_a_restore() {
+        let (tool, rec) = build(FRAME, Some(image_clipboard()));
+        let mut args = make_args("paste");
+        args.text = Some("hi".into());
+
+        let out = AlephTool::call(&tool, args).await.unwrap();
+        assert!(out.success, "paste failed: {:?}", out.message);
+
+        // Exactly one write — the pasted text. The old code followed it with
+        // clipboard_write("") ("restoring" the empty string a text read gives
+        // back for an image), which is clearContents(): the user's image, gone.
+        assert_eq!(writes(&rec), vec!["hi".to_string()]);
+        assert_eq!(out.data.unwrap()["clipboard_restored"], false);
+
+        let message = out
+            .message
+            .expect("an unrestorable clipboard must be reported");
+        assert!(message.contains("image"), "message: {message}");
+    }
+
+    #[tokio::test]
+    async fn paste_restores_a_plain_text_clipboard() {
+        let (tool, rec) = build(
+            FRAME,
+            Some(ClipboardContent {
+                text: Some("original".into()),
+                has_image: false,
+                image_base64: None,
+            }),
+        );
+        let mut args = make_args("paste");
+        args.text = Some("hi".into());
+
+        let out = AlephTool::call(&tool, args).await.unwrap();
+        assert!(out.success);
+        assert_eq!(writes(&rec), vec!["hi".to_string(), "original".to_string()]);
+        assert_eq!(out.data.unwrap()["clipboard_restored"], true);
+        assert!(out.message.is_none(), "a faithful restore needs no note");
+    }
+
+    #[tokio::test]
+    async fn paste_without_a_system_capability_never_writes_an_empty_restore() {
+        // No system capability: the text-only read cannot tell an image from an
+        // empty clipboard — both are Ok(""). Writing that back can only destroy.
+        let (tool, rec) = build(FRAME, None);
+        let mut args = make_args("paste");
+        args.text = Some("hi".into());
+
+        let out = AlephTool::call(&tool, args).await.unwrap();
+        assert!(out.success);
+        assert_eq!(writes(&rec), vec!["hi".to_string()]);
+    }
+
+    // ── Degenerate capture ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn screenshot_refuses_a_blank_frame() {
+        let (tool, _rec) = build(BLANK_FRAME, None);
+
+        let out = AlephTool::call(&tool, make_args("screenshot"))
+            .await
+            .unwrap();
+        assert!(
+            !out.success,
+            "a frame with no pixels must not be served as the screen"
+        );
+        assert!(out.data.is_none(), "no coordinate_space for a dead frame");
+
+        let message = out.message.expect("message present");
+        assert!(message.contains("blank frame"), "message: {message}");
+        assert!(
+            message.contains("screen-recording"),
+            "the hint must name the actionable causes: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn screenshot_serves_a_healthy_frame_unchanged() {
+        let (tool, _rec) = build(FRAME, None);
+
+        let out = AlephTool::call(&tool, make_args("screenshot"))
+            .await
+            .unwrap();
+        assert!(out.success, "screenshot failed: {:?}", out.message);
+
+        let data = out.data.expect("screenshot data");
+        assert_eq!(data["image_base64"], FRAME);
+        assert_eq!(data["coordinate_space"]["image_width"], 2);
+    }
+}
+
+/// THE security regression for the AX affordance work.
+///
+/// Three hand-written projections render AX elements into model-visible JSON —
+/// `ax::element_to_json` (desktop_ax_snapshot), `set_of_marks::build_marks`
+/// (desktop_som) and `gui_locate::ax_locate_output` (desktop_gui_locate) — plus
+/// the raw pass-through of the wire type by the three `desktop_ax_query_*`
+/// tools. A password field's `AXValue` must be incapable of reaching *any* of
+/// them: not as a `value`, not as a match `text`, and not through the ranking
+/// (the locator used to score against the raw value, which would have surfaced
+/// the secret by ordering the candidates around it).
+///
+/// If you are here because you added a fourth projection: route it through
+/// `interactable::safe_value` and add it below.
+mod secure_value_never_reaches_the_model {
+    use crate::builtin_tools::desktop::interactable::redact_secure_values;
+    use aleph_protocol::desktop_bridge::methods::ax::AxElement;
+    use aleph_protocol::desktop_bridge::methods::screen::Region;
+
+    const SECRET: &str = "correct-horse-battery-staple";
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> Region {
+        Region {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// A login form: a password box holding SECRET next to an ordinary field.
+    fn login_form() -> AxElement {
+        let mut password = AxElement {
+            role: "AXTextField".into(),
+            title: Some("Password".into()),
+            value: Some(SECRET.into()),
+            bounds: Some(rect(0.0, 40.0, 200.0, 24.0)),
+            pid: 42,
+            ..Default::default()
+        };
+        password.secure = Some(true);
+
+        let email = AxElement {
+            role: "AXTextField".into(),
+            title: Some("Email".into()),
+            value: Some("user@example.com".into()),
+            bounds: Some(rect(0.0, 0.0, 200.0, 24.0)),
+            pid: 42,
+            ..Default::default()
+        };
+
+        AxElement {
+            role: "AXWindow".into(),
+            pid: 42,
+            children: vec![email, password],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn not_in_the_ax_snapshot_projection() {
+        let (elements, _, _) =
+            crate::builtin_tools::desktop::ax::flatten_interactable(&login_form(), 200);
+        let json = serde_json::to_string(&elements).unwrap();
+        assert!(!json.contains(SECRET), "desktop_ax_snapshot leaked: {json}");
+        // The element itself is still reported — the model must know the field
+        // exists and that it is secure; it just cannot read it.
+        assert!(json.contains("Password"), "the field must stay visible");
+        assert!(json.contains("\"secure\":true"), "and be marked secure");
+        // A non-secure value in the same tree is untouched.
+        assert!(json.contains("user@example.com"));
+    }
+
+    #[test]
+    fn not_in_the_set_of_marks_projection() {
+        let root = login_form();
+        let mut collected: Vec<&AxElement> = Vec::new();
+        crate::builtin_tools::desktop::interactable::collect_interactable(&root, &mut collected);
+        let (_, elements) = crate::builtin_tools::desktop::set_of_marks::build_marks(&collected);
+        let json = serde_json::to_string(&elements).unwrap();
+        assert!(!json.contains(SECRET), "desktop_som leaked: {json}");
+        assert!(json.contains("\"secure\":true"));
+        assert!(json.contains("user@example.com"));
+    }
+
+    #[test]
+    fn not_in_the_gui_locate_projection_or_its_ranking() {
+        let root = login_form();
+
+        // (a) Searching for the secret itself must not rank the password box —
+        //     the scorer never sees the value, so there is no match at all.
+        assert!(
+            crate::builtin_tools::desktop::gui_locate::ax_locate_output(&root, SECRET, None)
+                .is_none(),
+            "a secure value must be unmatchable"
+        );
+
+        // (b) Locating the field by its label must not echo the value back.
+        let out =
+            crate::builtin_tools::desktop::gui_locate::ax_locate_output(&root, "Password", None)
+                .expect("the password field is findable by its label");
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(!json.contains(SECRET), "desktop_gui_locate leaked: {json}");
+        assert_eq!(out.data.expect("data")["secure"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn not_in_the_raw_query_pass_through() {
+        // desktop_ax_query_focused / _query_tree / _query_by_role serialize the
+        // wire type directly; they scrub it first.
+        let json = serde_json::to_string(&redact_secure_values(login_form())).unwrap();
+        assert!(!json.contains(SECRET), "raw AX query leaked: {json}");
+        assert!(json.contains("user@example.com"));
+    }
+}
+
+/// The `type_text` focus pre-flight ([`super::focus_gate`]).
+///
+/// The gate closes the hole `safety::blocked_app_reason` cannot see: that guard
+/// blocks credential *apps*, so a password box inside Safari or a `sudo` prompt
+/// in Terminal used to take synthetic keystrokes and report `{"typed": true}`.
+/// It must stay fail-open for everything it cannot judge.
+mod type_text_focus_gate {
+    use crate::builtin_tools::desktop::focus_gate::{evaluate, Gate};
+    use aleph_protocol::desktop_bridge::methods::ax::AxElement;
+
+    fn el(role: &str) -> AxElement {
+        AxElement {
+            role: role.into(),
+            pid: 1,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn refuses_a_secure_field_and_force_does_not_lift_it() {
+        let mut password = el("AXTextField");
+        password.secure = Some(true);
+        password.title = Some("Password".into());
+
+        match evaluate(Some(&password), false) {
+            Gate::Refuse(msg) => {
+                assert!(msg.contains("secure text field"), "{msg}");
+                assert!(msg.contains("not overridable"), "{msg}");
+            }
+            Gate::Allow => panic!("typing into a password box must be refused"),
+        }
+        assert!(
+            matches!(evaluate(Some(&password), true), Gate::Refuse(_)),
+            "force must not open the password refusal"
+        );
+    }
+
+    #[test]
+    fn fails_open_when_the_metadata_is_unknown() {
+        // An older helper reports no affordances at all; Electron/canvas/terminal
+        // apps legitimately focus a container that reports nothing. Refusing on
+        // silence would be the harness overruling the model (R7) — and on Linux
+        // there is no AX layer at all, which `focus_gate::check` skips outright.
+        let unknown_field = el("AXTextField");
+        assert_eq!(unknown_field.settable, None);
+        assert_eq!(evaluate(Some(&unknown_field), false), Gate::Allow);
+        assert_eq!(evaluate(Some(&el("AXWebArea")), false), Gate::Allow);
+        assert_eq!(evaluate(Some(&el("AXGroup")), false), Gate::Allow);
+    }
+
+    #[test]
+    fn refuses_when_nothing_is_focused_but_offers_the_way_out() {
+        match evaluate(None, false) {
+            Gate::Refuse(msg) => {
+                assert!(msg.contains("set_value"), "{msg}");
+                assert!(msg.contains("force:true"), "{msg}");
+            }
+            Gate::Allow => panic!("blind typing with no focus must be refused"),
+        }
+        assert_eq!(evaluate(None, true), Gate::Allow);
     }
 }

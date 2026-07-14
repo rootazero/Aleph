@@ -83,6 +83,30 @@ pub struct Screenshot {
     pub scale_factor: Option<f64>,
 }
 
+/// A screenshot cropped to a single window, plus the geometry needed to turn
+/// its pixels back into global click coordinates.
+///
+/// Carrying the mapping alongside the image is what keeps a window-cropped
+/// capture from becoming a targeting regression: the model sees pixels relative
+/// to the window, but every click is issued in the global point space, so the
+/// window's origin and the backing scale must travel with the image rather than
+/// be re-derived (and mis-derived) downstream:
+///
+/// ```text
+/// global_point = window_bounds.origin + pixel / image.scale_factor
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WindowShot {
+    /// The captured image. `image.scale_factor` is the backing scale of the
+    /// captured surface (2.0 on Retina): `pixels = points * scale_factor`.
+    pub image: Screenshot,
+    /// The window's frame in the GLOBAL screen POINT space, top-left origin.
+    /// `None` when the platform could not report it — in which case the pixels
+    /// cannot be mapped back and the caller must not pretend otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_bounds: Option<BoundingBox>,
+}
+
 /// Result of an OCR operation on a screenshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcrResult {
@@ -157,7 +181,15 @@ pub struct DisplayInfo {
 }
 
 /// Information about an on-screen window.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// The three trailing fields are `Option` because `None` means *"this
+/// platform's window query does not tell us"* — never "zero" or "false". A
+/// platform that cannot report geometry must leave `bounds` absent rather than
+/// invent one, and every consumer must treat unknown as unknown.
+///
+/// `Default` exists so a limb can spell only the fields its platform query
+/// actually yields via `..Default::default()`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WindowInfo {
     /// Platform-specific window identifier (HWND on Windows, XID on Linux, etc.).
     pub id: u64,
@@ -167,4 +199,18 @@ pub struct WindowInfo {
     pub owner: String,
     /// Process ID of the owning application.
     pub pid: u64,
+    /// Window frame in the GLOBAL screen POINT space, top-left origin — the
+    /// same space clicks are issued in. Without it nothing can crop a capture
+    /// to this window, nor map that crop's pixels back to click coordinates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<BoundingBox>,
+    /// Window level. `0` is a normal application window; menu extras, docks and
+    /// overlays sit above it. Lets a caller skip chrome by a mechanical rule
+    /// instead of guessing from the title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<i32>,
+    /// Whether the window is currently on screen (not minimized, not parked on
+    /// another Space/desktop).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_screen: Option<bool>,
 }

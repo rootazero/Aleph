@@ -84,7 +84,13 @@ impl AutomationTool {
 /// Arguments for the automation tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AutomationArgs {
-    /// Action to perform: "`run_script`", "`list_shortcuts`", "`run_shortcut`"
+    /// Action to perform: "`run_script`", "`run_background`", "`list_shortcuts`",
+    /// "`run_shortcut`".
+    ///
+    /// "`run_background`" spawns the script detached and returns immediately with
+    /// its pid and log path, instead of blocking until it exits — use it for
+    /// anything long-lived (a dev server, a watcher). It takes the same `script`
+    /// and `language` as "`run_script`", plus an optional `log`.
     pub action: String,
     /// Script source code (required for `run_script`).
     #[serde(skip_serializing_if = "Option::is_none")]

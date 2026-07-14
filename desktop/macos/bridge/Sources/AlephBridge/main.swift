@@ -1,21 +1,6 @@
-import ArgumentParser
 import Foundation
 
-// MARK: - Shared helpers (reused by CLI subcommands)
-
-func printJSON(_ value: Any) {
-    if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
-       let string = String(data: data, encoding: .utf8) {
-        print(string)
-    } else {
-        printError("Failed to serialize JSON")
-    }
-}
-
-func printError(_ message: String) -> Never {
-    fputs(message + "\n", stderr)
-    Foundation.exit(1)
-}
+// MARK: - Shared helpers
 
 func iso8601Formatter() -> ISO8601DateFormatter {
     let f = ISO8601DateFormatter()
@@ -23,12 +8,34 @@ func iso8601Formatter() -> ISO8601DateFormatter {
     return f
 }
 
+/// Parse an RFC 3339 timestamp sent by the Rust side.
+///
+/// `chrono` serialises `DateTime<Utc>` with 0, 3, 6 or 9 fractional-second
+/// digits, but `ISO8601DateFormatter` only accepts 3 — so a sub-millisecond
+/// timestamp is retried with the extra digits dropped instead of failing.
 func parseISO8601(_ string: String) -> Date? {
     let f = ISO8601DateFormatter()
     f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     if let d = f.date(from: string) { return d }
     f.formatOptions = [.withInternetDateTime]
-    return f.date(from: string)
+    if let d = f.date(from: string) { return d }
+
+    guard let truncated = truncatingSubMillisecondDigits(string) else { return nil }
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f.date(from: truncated)
+}
+
+/// Keep at most three fractional-second digits; nil when there is nothing to cut.
+private func truncatingSubMillisecondDigits(_ string: String) -> String? {
+    guard let dot = string.firstIndex(of: ".") else { return nil }
+    let digitsStart = string.index(after: dot)
+    var digitsEnd = digitsStart
+    while digitsEnd < string.endIndex, string[digitsEnd].isNumber {
+        digitsEnd = string.index(after: digitsEnd)
+    }
+    let digits = string[digitsStart..<digitsEnd]
+    guard digits.count > 3 else { return nil }
+    return String(string[..<digitsStart]) + String(digits.prefix(3)) + String(string[digitsEnd...])
 }
 
 func escapeAppleScript(_ s: String) -> String {
@@ -40,61 +47,31 @@ func escapeAppleScript(_ s: String) -> String {
     return result
 }
 
-// MARK: - Legacy CLI root command (preserved for pim.rs compatibility)
+// MARK: - Entry point
 //
-// Named `AlephBridge` (not renamed) because every *Commands.swift file uses
-// `extension AlephBridge { struct <Domain>: ParsableCommand { ... } }`.
-// The subcommands reference the nested types via their qualified names
-// (AlephBridge.Notes etc.) to avoid ambiguity with Foundation's Calendar and
-// the Swift stdlib's implicit System namespace.
+// JSON-RPC over stdin/stdout is the only mode: the Rust client
+// (desktop/shared/src/bridge/client.rs) spawns this helper with zero arguments.
+// The process exits on stdin EOF or parent death (see `ParentWatch`); there is
+// no shutdown RPC.
 
-struct AlephBridge: ParsableCommand {
-    static let configuration = CommandConfiguration(
-        commandName: "aleph-bridge",
-        abstract: "macOS native API bridge for Aleph (legacy CLI mode)",
-        subcommands: [
-            AlephBridge.Notes.self,
-            AlephBridge.Calendar.self,
-            AlephBridge.Reminders.self,
-            AlephBridge.Contacts.self,
-            AlephBridge.System.self,
-        ]
-    )
+// Top-level `await` requires an `@main` entry point in Swift, so run an
+// unstructured Task and block the main thread on a dispatch semaphore. Nothing
+// may be scheduled on the main queue from here on — it never drains again.
+let done = DispatchSemaphore(value: 0)
+Task {
+    let router = Router()
+    await registerBridgeHandlers(router)
+    await registerCameraHandlers(router)
+    await registerAudioHandlers(router)
+    await registerSpeechHandlers(router)
+    await registerOcrHandlers(router)
+    await registerAxHandlers(router)
+    await registerInputHandlers(router)
+    await registerPermHandlers(router)
+    await registerScreenCaptureHandlers(router)
+    await registerPimHandlers(router)
+    await ParentWatch().start()
+    await Server(router: router).run()
+    done.signal()
 }
-
-// MARK: - Dual-mode entry point
-//
-// If any CLI argument is given (domain + action + flags), run the legacy
-// ArgumentParser subcommand flow invoked by desktop/macos/src/pim.rs via
-// the deprecated spawn-per-call `SwiftBridge` in desktop/shared/src/bridge/mod.rs.
-//
-// With zero arguments, enter JSON-RPC mode: bridge.{ping,handshake} over
-// stdin/stdout. This is what the new long-lived `SwiftBridge` client in
-// desktop/shared/src/bridge/client.rs spawns. The process exits on stdin EOF
-// or parent death (see `ParentWatch`); there is no shutdown RPC.
-//
-// The CLI mode is scheduled for removal once every caller has migrated to
-// JSON-RPC (tracked in Stage 6 cleanup of the codex-desktop plan).
-
-if CommandLine.arguments.count > 1 {
-    AlephBridge.main()
-} else {
-    // Top-level `await` requires an `@main` entry point in Swift, so run an
-    // unstructured Task and block the main thread on a dispatch semaphore.
-    let done = DispatchSemaphore(value: 0)
-    Task {
-        let router = Router()
-        await registerBridgeHandlers(router)
-        await registerCameraHandlers(router)
-        await registerAudioHandlers(router)
-        await registerSpeechHandlers(router)
-        await registerOcrHandlers(router)
-        await registerAxHandlers(router)
-        await registerPermHandlers(router)
-        await registerScreenCaptureHandlers(router)
-        await ParentWatch().start()
-        await Server(router: router).run()
-        done.signal()
-    }
-    done.wait()
-}
+done.wait()

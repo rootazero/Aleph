@@ -38,10 +38,10 @@ use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
     ApplyPatchTool, BashExecTool, CodeCheckTool, CodeExecTool, ConfigAuditTool, CtxSearchTool,
     DesktopAxQueryByRole, DesktopAxQueryFocused, DesktopAxQueryTree, DesktopAxSnapshot,
-    DesktopBrowserOperator, DesktopCheckPermissions, DesktopGuiLocate, DesktopSom, DesktopTool,
-    DoctorTool, FileEditTool, FileOpsTool, FileReadTool, FileWriteTool, ImageGenerateTool,
-    PdfGenerateTool, ReadConfigGuideTool, RecallEventsTool, SearchTool, SelectModelTool,
-    SelfManageTool, VaultStoreTool, WebFetchTool,
+    DesktopCheckPermissions, DesktopGuiLocate, DesktopSom, DesktopTool, DoctorTool, FileEditTool,
+    FileOpsTool, FileReadTool, FileWriteTool, ImageGenerateTool, PdfGenerateTool,
+    ReadConfigGuideTool, RecallEventsTool, SearchTool, SelectModelTool, SelfManageTool,
+    VaultStoreTool, WebFetchTool,
 };
 use crate::tools::AlephToolDyn;
 
@@ -189,11 +189,6 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "desktop_gui_locate",
         description: "Resolve a human-readable on-screen target (e.g. \"Send\", \"Login button\") into clickable pixel coordinates via AX tree fuzzy match + OCR fallback",
-        requires_config: false,
-    },
-    BuiltinToolDefinition {
-        name: "desktop_browser_operator",
-        description: "Pick a browser-driving strategy (dom/hybrid/vision) and get the recommended tool set with usage flow — call once at the start of any browser task",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -919,7 +914,6 @@ pub fn create_tool_boxed(
         "desktop_ax_snapshot" => Some(Box::new(DesktopAxSnapshot::new())),
         "desktop_som" => Some(Box::new(DesktopSom::new())),
         "desktop_gui_locate" => Some(Box::new(DesktopGuiLocate::new())),
-        "desktop_browser_operator" => Some(Box::new(DesktopBrowserOperator::new())),
         "desktop_check_permissions" => Some(Box::new(DesktopCheckPermissions::new())),
         "vault_store" => config
             .and_then(|c| c.shared_token_manager.as_ref())

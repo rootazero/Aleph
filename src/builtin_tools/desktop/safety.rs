@@ -39,42 +39,87 @@ pub fn check_typed_text(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Reject key combinations that would log the user out or destroy data.
+/// Reject key combinations that would lock the screen, log the user out, or
+/// destroy data.
 ///
-/// macOS only — the blocked combinations are macOS system shortcuts. On
-/// other platforms this is a no-op (their destructive combinations are
-/// intercepted by the OS before a synthetic event can reach them).
-#[cfg(target_os = "macos")]
+/// A locked screen is as terminal as a logout: the agent cannot type the
+/// password back (credential vaults are refused by `blocked_app_reason`), so
+/// the session is unrecoverable until a human returns. Synthetic events do
+/// reach these shortcuts on every platform — only Ctrl+Alt+Del is genuinely
+/// out of reach (a kernel-held Secure Attention Sequence), which is why it is
+/// absent below rather than blocked for show.
 pub fn check_key_combo(keys: &[String]) -> Result<(), String> {
-    // (sorted normalized combo, human-readable consequence)
-    const BLOCKED: &[(&[&str], &str)] = &[
+    check_key_combo_on(keys, host_platform())
+}
+
+/// The blocked-shortcut tables differ per platform, so name the platform
+/// rather than `cfg`-gating: every table stays compiled and testable on any
+/// host.
+#[derive(Debug, Clone, Copy)]
+enum Platform {
+    MacOs,
+    Windows,
+    Linux,
+}
+
+fn host_platform() -> Platform {
+    if cfg!(target_os = "macos") {
+        Platform::MacOs
+    } else if cfg!(target_os = "windows") {
+        Platform::Windows
+    } else {
+        Platform::Linux
+    }
+}
+
+/// (sorted normalized combo, human-readable consequence)
+///
+/// Entries must be minimal: matching is by subset, so a combo that contains
+/// another entry would never be reached.
+type BlockedCombos = &'static [(&'static [&'static str], &'static str)];
+
+/// The tables cannot be shared: `normalize_key` folds `cmd`/`win`/`super`
+/// into one `meta` name, and `meta+l` is the browser address bar on macOS
+/// (legitimate, high-frequency) but the lock screen on Windows/Linux.
+fn blocked_combos(platform: Platform) -> BlockedCombos {
+    const MACOS: BlockedCombos = &[
         (
             &["meta", "q", "shift"],
             "log out of the macOS session, losing unsaved work in every open app",
         ),
         (
-            &["alt", "meta", "q", "shift"],
-            "force log out of the macOS session",
+            &["ctrl", "meta", "q"],
+            "lock the screen, leaving no way to unlock it again",
         ),
         (
             &["delete", "meta", "shift"],
             "empty the Trash, permanently destroying its contents",
         ),
     ];
+    const WINDOWS_LINUX: BlockedCombos = &[(
+        &["l", "meta"],
+        "lock the screen, leaving no way to unlock it again",
+    )];
 
+    match platform {
+        Platform::MacOs => MACOS,
+        Platform::Windows | Platform::Linux => WINDOWS_LINUX,
+    }
+}
+
+/// Platform-parameterized core of [`check_key_combo`].
+///
+/// Matches by subset, not equality: a blocked combo contained in the
+/// requested one is still a block, so an extra modifier (`fn`, `shift`)
+/// cannot smuggle the shortcut past the table.
+fn check_key_combo_on(keys: &[String], platform: Platform) -> Result<(), String> {
     let combo = normalized_combo(keys);
     let combo_refs: Vec<&str> = combo.iter().map(String::as_str).collect();
-    for (blocked, consequence) in BLOCKED {
-        if combo_refs.as_slice() == *blocked {
+    for (blocked, consequence) in blocked_combos(platform) {
+        if blocked.iter().all(|k| combo_refs.contains(k)) {
             return Err(format!("blocked: this key combination would {consequence}"));
         }
     }
-    Ok(())
-}
-
-/// Non-macOS no-op — see the macOS variant.
-#[cfg(not(target_os = "macos"))]
-pub fn check_key_combo(_keys: &[String]) -> Result<(), String> {
     Ok(())
 }
 
@@ -190,9 +235,6 @@ fn is_fork_bomb(compact: &str) -> bool {
 
 /// Normalize a key combination to a sorted, de-duplicated set of canonical
 /// modifier/key names so equivalent spellings compare equal.
-// Only `check_key_combo` (macOS-gated) uses these, so gate them the same way
-// to avoid dead-code warnings on Linux/Windows.
-#[cfg(target_os = "macos")]
 fn normalized_combo(keys: &[String]) -> Vec<String> {
     let mut v: Vec<String> = keys.iter().map(|k| normalize_key(k)).collect();
     v.sort();
@@ -201,7 +243,6 @@ fn normalized_combo(keys: &[String]) -> Vec<String> {
 }
 
 /// Map a key spelling to its canonical name (`cmd`/`⌘`/`win` → `meta`, …).
-#[cfg(target_os = "macos")]
 fn normalize_key(key: &str) -> String {
     match key.trim().to_lowercase().as_str() {
         "cmd" | "command" | "meta" | "super" | "win" | "windows" | "⌘" => "meta".to_string(),
@@ -301,6 +342,61 @@ mod tests {
         // Cmd+L (open location) must not be confused with a system shortcut.
         let location = ["cmd".to_string(), "l".to_string()];
         assert!(check_key_combo(&location).is_ok());
+    }
+
+    // The tables below are driven through `check_key_combo_on` so every
+    // platform's arm is covered whatever the host is.
+
+    #[test]
+    fn blocks_lock_screen_on_windows_and_linux() {
+        let win_l = ["win".to_string(), "l".to_string()];
+        assert!(check_key_combo_on(&win_l, Platform::Windows).is_err());
+
+        let super_l = ["super".to_string(), "l".to_string()];
+        assert!(check_key_combo_on(&super_l, Platform::Linux).is_err());
+    }
+
+    #[test]
+    fn allows_meta_l_on_macos() {
+        // Same normalized combo as Win+L, but on macOS it is the browser
+        // address bar — the fork in `blocked_combos` exists for this case.
+        let location = ["cmd".to_string(), "l".to_string()];
+        assert!(check_key_combo_on(&location, Platform::MacOs).is_ok());
+    }
+
+    #[test]
+    fn blocks_macos_lock_screen() {
+        let lock = ["ctrl".to_string(), "cmd".to_string(), "q".to_string()];
+        assert!(check_key_combo_on(&lock, Platform::MacOs).is_err());
+    }
+
+    #[test]
+    fn blocks_superset_of_a_blocked_combo() {
+        // An extra modifier used to slip past the old exact-equality match.
+        let logout = [
+            "fn".to_string(),
+            "cmd".to_string(),
+            "shift".to_string(),
+            "q".to_string(),
+        ];
+        assert!(check_key_combo_on(&logout, Platform::MacOs).is_err());
+
+        let lock = ["shift".to_string(), "win".to_string(), "l".to_string()];
+        assert!(check_key_combo_on(&lock, Platform::Windows).is_err());
+    }
+
+    #[test]
+    fn allows_ordinary_key_combos_on_every_platform() {
+        for platform in [Platform::MacOs, Platform::Windows, Platform::Linux] {
+            let copy = ["ctrl".to_string(), "c".to_string()];
+            assert!(check_key_combo_on(&copy, platform).is_ok());
+
+            let quit = ["meta".to_string(), "q".to_string()];
+            assert!(check_key_combo_on(&quit, platform).is_ok());
+
+            let empty: [String; 0] = [];
+            assert!(check_key_combo_on(&empty, platform).is_ok());
+        }
     }
 
     #[test]

@@ -3,7 +3,6 @@
 mod automation;
 mod ax;
 mod escape_listener;
-pub mod hotkey;
 mod permission;
 mod pim;
 mod screen;

@@ -376,7 +376,28 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             request.attachments.is_empty(),
             self.media_processor.as_ref(),
         ) {
-            let supports_vision = true;
+            // Whether the model serving this turn actually accepts inline
+            // images decides HOW an attachment rides: a native
+            // `ContentBlock::Image` for a vision model, a `VisionPipeline` text
+            // description for a text-only one. Model id precedence mirrors the
+            // retry loop's resolution below (per-turn picker override ▸ agent
+            // default); when that id is absent from the capability catalogue we
+            // ask the live provider chain which model it would actually serve
+            // (`serving_model_hint`) before giving up. The lookup is a static
+            // table read, never a judgement about the message (R7).
+            let configured_model = request
+                .model_override
+                .as_ref()
+                .map_or(agent.config().model.as_str(), |o| o.model());
+            let serving_hint: Option<String> =
+                if crate::providers::capabilities_for(configured_model).is_some() {
+                    None
+                } else {
+                    self.provider_registry
+                        .get(configured_model)
+                        .and_then(|p| p.serving_model_hint().map(std::borrow::Cow::into_owned))
+                };
+            let supports_vision = model_supports_vision(configured_model, serving_hint.as_deref());
             let blocks = media_processor
                 .process(
                     &request.attachments,
@@ -403,6 +424,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 content_blocks = blocks.len(),
                 has_images = has_images,
                 has_transcripts = has_transcripts,
+                supports_vision = supports_vision,
+                model = %configured_model,
                 "Multimodal content blocks built"
             );
 
@@ -1185,4 +1208,31 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
     }
+}
+
+/// Does the model serving this turn accept inline image blocks?
+///
+/// `configured` is the model id the turn resolves to; `serving_hint` is the
+/// live provider chain's [`AiProvider::serving_model_hint`](crate::providers::AiProvider::serving_model_hint),
+/// which covers the ids the catalogue cannot answer for on its own (agent model
+/// left unset, MoA / failover dynamic routing). The first id the capability
+/// catalogue knows wins — a pure static table read, blind to message content.
+///
+/// **Unknown capabilities fail OPEN (image is sent).** The two failures are not
+/// symmetric: sending an image to an unlisted text-only model produces a loud,
+/// attributable provider error (or an ignored block) the user can act on,
+/// whereas degrading an image for a model that could have seen it is silent —
+/// and when no `VisionPipeline` is configured the degradation is not even a
+/// description but a bare `[Image: id]` placeholder, i.e. total content loss
+/// with no signal. Unknown ids are overwhelmingly custom endpoints / proxy
+/// aliases of modern (vision-capable) models, so the closed default would
+/// blind them all. This matches the deliberate fail-open stance of
+/// [`providers::capability_gate`](crate::providers::capability_gate): the
+/// static table is best-effort, never authoritative.
+pub(super) fn model_supports_vision(configured: &str, serving_hint: Option<&str>) -> bool {
+    [Some(configured), serving_hint]
+        .into_iter()
+        .flatten()
+        .find_map(crate::providers::capabilities_for)
+        .is_none_or(|caps| caps.supports_vision)
 }

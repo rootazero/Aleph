@@ -87,8 +87,6 @@ pub struct BuiltinToolRegistry {
     pub(crate) desktop_som_tool: crate::builtin_tools::DesktopSom,
     /// Visual grounding tool — natural-language target → on-screen coordinates (AX + OCR).
     pub(crate) desktop_gui_locate_tool: crate::builtin_tools::DesktopGuiLocate,
-    /// Browser operator manifest tool — declarative strategy picker for browser tasks.
-    pub(crate) desktop_browser_operator_tool: crate::builtin_tools::DesktopBrowserOperator,
     /// Permission check tool (macOS-backed; graceful no-op on other platforms).
     pub(crate) desktop_check_permissions_tool: crate::builtin_tools::DesktopCheckPermissions,
     /// PIM (Personal Information Management) tool instance

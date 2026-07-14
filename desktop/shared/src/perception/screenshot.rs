@@ -185,6 +185,71 @@ pub fn take_screenshot_display(
     })
 }
 
+/// Number of pixels the uniformity probe reads before declaring a frame flat.
+const UNIFORMITY_SAMPLES: u64 = 4096;
+
+/// True when `shot` carries no information about the screen at all — empty
+/// payload, zero-sized, undecodable, or a single flat colour.
+///
+/// A dead capture chain does not always surface as an `Err`: a locked screen, a
+/// revoked screen-recording grant, or a wedged helper each hand back a
+/// well-formed `Ok(Screenshot)` full of nothing (usually all black). Forwarded
+/// to the model those are *worse* than an error — they are presented as real
+/// pixels, and two of them in a row read as "the UI has settled".
+///
+/// The uniformity probe stride-samples `UNIFORMITY_SAMPLES` pixels rather than
+/// scanning the frame: a 4K capture is 8.3M pixels and this runs on every
+/// screenshot. Sampling is sound because the property under test is *global* — a
+/// frame with any real content differs from its first pixel across a large
+/// fraction of positions, not at one rare coordinate — and the walk returns on
+/// the first differing pixel, so a healthy frame typically costs two reads. The
+/// tradeoff is deliberate: a frame whose only content is smaller than the stride
+/// may be called degenerate, which costs a redundant recapture, never a lie.
+pub fn is_degenerate(shot: &Screenshot) -> bool {
+    if shot.image_base64.is_empty() || shot.width == 0 || shot.height == 0 {
+        return true;
+    }
+
+    // A payload that will not decode is not pixels the model can look at, so it
+    // is degenerate for the same reason an empty one is.
+    let Ok(raw) = general_purpose::STANDARD.decode(&shot.image_base64) else {
+        return true;
+    };
+    let Ok(img) = image::load_from_memory(&raw) else {
+        return true;
+    };
+
+    is_uniform(&img)
+}
+
+/// True when every sampled pixel of `img` matches its top-left pixel.
+fn is_uniform(img: &image::DynamicImage) -> bool {
+    use image::GenericImageView as _;
+
+    let (width, height) = img.dimensions();
+    let total = u64::from(width) * u64::from(height);
+    if total == 0 {
+        return true;
+    }
+
+    // Odd stride: against an even row width an even stride walks a single column
+    // and would miss vertical structure entirely.
+    let stride = (total / UNIFORMITY_SAMPLES).max(1) | 1;
+    let first = img.get_pixel(0, 0);
+
+    let mut index = 0u64;
+    while index < total {
+        let x = (index % u64::from(width)) as u32;
+        let y = (index / u64::from(width)) as u32;
+        if img.get_pixel(x, y) != first {
+            return false;
+        }
+        index += stride;
+    }
+
+    true
+}
+
 /// Decode a raw screenshot, optionally resize, and re-encode as JPEG or PNG.
 ///
 /// If the image exceeds `max_width` or `max_height`, it is scaled down using
@@ -475,5 +540,93 @@ mod budget_tests {
         .expect("processing should succeed");
         assert_eq!(out.width, 800);
         assert_eq!(out.height, 400); // aspect ratio preserved
+    }
+}
+
+#[cfg(test)]
+mod degenerate_tests {
+    use super::*;
+    use image::{ImageBuffer, Rgb};
+
+    /// PNG-encode `img` into the `Screenshot` shape a capture backend returns.
+    fn shot_of(img: &image::DynamicImage) -> Screenshot {
+        let mut buf = Cursor::new(Vec::new());
+        img.write_to(&mut buf, image::ImageFormat::Png)
+            .expect("PNG encode");
+        Screenshot {
+            image_base64: general_purpose::STANDARD.encode(buf.into_inner()),
+            width: img.width(),
+            height: img.height(),
+            format: "png".to_string(),
+            scale_factor: None,
+        }
+    }
+
+    fn filled(w: u32, h: u32, colour: [u8; 3]) -> image::DynamicImage {
+        let buf = ImageBuffer::from_fn(w, h, |_, _| Rgb(colour));
+        image::DynamicImage::ImageRgb8(buf)
+    }
+
+    #[test]
+    fn empty_payload_is_degenerate() {
+        let shot = Screenshot {
+            image_base64: String::new(),
+            width: 1920,
+            height: 1080,
+            format: "png".to_string(),
+            scale_factor: None,
+        };
+        assert!(is_degenerate(&shot));
+    }
+
+    #[test]
+    fn zero_width_is_degenerate() {
+        let mut shot = shot_of(&filled(64, 64, [10, 20, 30]));
+        shot.width = 0;
+        assert!(is_degenerate(&shot));
+    }
+
+    #[test]
+    fn undecodable_payload_is_degenerate() {
+        let shot = Screenshot {
+            image_base64: "not-base64-!!!".to_string(),
+            width: 800,
+            height: 600,
+            format: "png".to_string(),
+            scale_factor: None,
+        };
+        assert!(is_degenerate(&shot));
+    }
+
+    #[test]
+    fn all_black_frame_is_degenerate() {
+        let shot = shot_of(&filled(1280, 800, [0, 0, 0]));
+        assert!(is_degenerate(&shot), "an all-black capture is a dead chain");
+    }
+
+    #[test]
+    fn uniform_non_black_frame_is_degenerate() {
+        // The invariant is "one flat colour", not "black": a blanked display can
+        // come back solid white or solid grey just as easily.
+        let shot = shot_of(&filled(1280, 800, [255, 255, 255]));
+        assert!(is_degenerate(&shot));
+    }
+
+    #[test]
+    fn dark_frame_with_content_is_not_degenerate() {
+        // A legitimately dark screenshot (dark-mode editor at night) must pass:
+        // near-black everywhere, but structured.
+        let buf = ImageBuffer::from_fn(1280, 800, |x, y| {
+            if (x / 17 + y / 13) % 2 == 0 {
+                Rgb([6u8, 6, 8])
+            } else {
+                Rgb([14u8, 15, 18])
+            }
+        });
+        let shot = shot_of(&image::DynamicImage::ImageRgb8(buf));
+        assert!(
+            !is_degenerate(&shot),
+            "a dark but structured frame must not be flagged"
+        );
     }
 }

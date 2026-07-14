@@ -1,3 +1,21 @@
+//! Coordinate-space input schemas for the desktop bridge.
+//!
+//! Two delivery rails share these types:
+//!
+//! - **targeted** — the event is built against a session-state event source and
+//!   posted straight into the target process's event queue (`pid` present).
+//!   The user's real cursor never moves and the target app need not be
+//!   frontmost.
+//! - **global** — the event is posted to the global HID event tap. It
+//!   physically drags the user's cursor and only lands where the frontmost app
+//!   is the intended one.
+//!
+//! `pid` is a *request* for the targeted rail, never a guarantee: a platform
+//! that cannot target falls back to the global tap. Every result therefore
+//! carries `delivery`, so the model can SEE which rail actually ran instead of
+//! having to guess — the honesty lives in the payload, never in a harness rule
+//! (R9).
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +31,19 @@ pub const METHOD_MOUSE_BUTTON: &str = "input.mouse_button";
 pub const METHOD_CLIPBOARD_READ: &str = "input.clipboard_read";
 pub const METHOD_CLIPBOARD_WRITE: &str = "input.clipboard_write";
 pub const SUGGESTED_TIMEOUT_MS: u64 = 2_000;
+
+/// `delivery` value: posted into the target process's own event queue; the
+/// user's cursor never moved and the app did not need to be frontmost.
+pub const DELIVERY_TARGETED: &str = "targeted";
+/// `delivery` value: posted to the global HID event tap; the user's cursor was
+/// physically moved and the frontmost app received the event.
+pub const DELIVERY_GLOBAL: &str = "global";
+
+/// A helper that omits `delivery` is one that only has the global tap — the
+/// pessimistic reading is the correct one, and it is never silently upgraded.
+fn default_delivery() -> String {
+    DELIVERY_GLOBAL.to_string()
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -30,48 +61,90 @@ pub enum PressAction {
     Click,
 }
 
+/// Params for `input.click` **and** `input.double_click`.
+///
+/// `input.double_click` ignores `click_count` and always delivers a native
+/// double-click (click count 2).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ClickParams {
     pub x: f64,
     pub y: f64,
     pub button: MouseButton,
+    /// Target process for the targeted rail; absent ⇒ global HID tap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+    /// Native click count carried on the event itself. Absent or `1` is a
+    /// single click; `2` is a real double-click. Two independent single clicks
+    /// are NOT a double-click — the app reads the click count off the event, so
+    /// it must be set on the event rather than synthesized by clicking twice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub click_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ClickResult {
     pub ok: bool,
+    /// Which rail actually delivered the event: [`DELIVERY_TARGETED`] or
+    /// [`DELIVERY_GLOBAL`].
+    #[serde(default = "default_delivery")]
+    pub delivery: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TypeTextParams {
     pub text: String,
+    /// Target process for the targeted rail; absent ⇒ global HID tap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TypeTextResult {
     pub ok: bool,
+    #[serde(default = "default_delivery")]
+    pub delivery: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct KeyComboParams {
     pub modifiers: Vec<String>,
     pub key: String,
+    /// Target process for the targeted rail; absent ⇒ global HID tap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct KeyComboResult {
     pub ok: bool,
+    #[serde(default = "default_delivery")]
+    pub delivery: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScrollParams {
     pub direction: String,
     pub amount: i32,
+    /// Target process for the targeted rail; absent ⇒ global HID tap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+    /// Point the scroll event is stamped with, in global screen points.
+    ///
+    /// The global rail scrolls wherever the cursor already is, so it may omit
+    /// these. The targeted rail must NOT: the cursor never moves, so the event
+    /// carries the only location the app can route the scroll by. Absent on the
+    /// targeted rail ⇒ the app decides, which is almost never what was meant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScrollResult {
     pub ok: bool,
+    #[serde(default = "default_delivery")]
+    pub delivery: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -82,22 +155,32 @@ pub struct DragParams {
     pub end_y: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    /// Target process for the targeted rail; absent ⇒ global HID tap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DragResult {
     pub ok: bool,
+    #[serde(default = "default_delivery")]
+    pub delivery: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HoverParams {
     pub x: f64,
     pub y: f64,
+    /// Target process for the targeted rail; absent ⇒ global HID tap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HoverResult {
     pub ok: bool,
+    #[serde(default = "default_delivery")]
+    pub delivery: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -112,11 +195,16 @@ pub struct MouseButtonParams {
     pub y: f64,
     pub button: MouseButton,
     pub action: PressAction,
+    /// Target process for the targeted rail; absent ⇒ global HID tap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MouseButtonResult {
     pub ok: bool,
+    #[serde(default = "default_delivery")]
+    pub delivery: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -144,6 +232,8 @@ mod tests {
             x: 10.0,
             y: 20.0,
             button: MouseButton::Left,
+            pid: None,
+            click_count: None,
         };
         let j = serde_json::to_string(&p).unwrap();
         // Verify "left" (not "Left") in the JSON
@@ -158,15 +248,40 @@ mod tests {
     }
 
     #[test]
+    fn click_params_omit_targeting_fields_when_absent() {
+        // The pre-targeting wire must stay byte-identical, so an old helper that
+        // knows nothing of `pid` / `click_count` sees exactly what it saw before.
+        let p = ClickParams {
+            x: 1.0,
+            y: 2.0,
+            button: MouseButton::Left,
+            pid: None,
+            click_count: None,
+        };
+        let j = serde_json::to_string(&p).unwrap();
+        assert_eq!(j, r#"{"x":1.0,"y":2.0,"button":"left"}"#);
+    }
+
+    #[test]
+    fn click_params_carry_pid_and_click_count() {
+        let j = r#"{"x":1.0,"y":2.0,"button":"left","pid":4242,"click_count":2}"#;
+        let p: ClickParams = serde_json::from_str(j).unwrap();
+        assert_eq!(p.pid, Some(4242));
+        assert_eq!(p.click_count, Some(2));
+    }
+
+    #[test]
     fn key_combo_params_roundtrip() {
         let p = KeyComboParams {
             modifiers: vec!["cmd".into(), "shift".into()],
             key: "s".into(),
+            pid: Some(7),
         };
         let j = serde_json::to_string(&p).unwrap();
         let back: KeyComboParams = serde_json::from_str(&j).unwrap();
         assert_eq!(back.modifiers, vec!["cmd", "shift"]);
         assert_eq!(back.key, "s");
+        assert_eq!(back.pid, Some(7));
     }
 
     #[test]
@@ -176,6 +291,7 @@ mod tests {
             y: 15.0,
             button: MouseButton::Right,
             action: PressAction::Press,
+            pid: None,
         };
         let j = serde_json::to_string(&p).unwrap();
         assert!(
@@ -185,5 +301,36 @@ mod tests {
         let back: MouseButtonParams = serde_json::from_str(&j).unwrap();
         assert_eq!(back.button, MouseButton::Right);
         assert_eq!(back.action, PressAction::Press);
+    }
+
+    #[test]
+    fn scroll_params_carry_target_point() {
+        let p = ScrollParams {
+            direction: "down".into(),
+            amount: 3,
+            pid: Some(99),
+            x: Some(400.0),
+            y: Some(300.0),
+        };
+        let j = serde_json::to_string(&p).unwrap();
+        let back: ScrollParams = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.pid, Some(99));
+        assert_eq!(back.x, Some(400.0));
+        assert_eq!(back.y, Some(300.0));
+    }
+
+    #[test]
+    fn results_report_the_rail_that_actually_ran() {
+        let r: ClickResult = serde_json::from_str(r#"{"ok":true,"delivery":"targeted"}"#).unwrap();
+        assert!(r.ok);
+        assert_eq!(r.delivery, DELIVERY_TARGETED);
+    }
+
+    #[test]
+    fn result_without_delivery_reads_as_global_not_targeted() {
+        // A helper that never learned about targeting only has the global tap.
+        // Absence must never be optimistically read as "the cursor stayed put".
+        let r: ScrollResult = serde_json::from_str(r#"{"ok":true}"#).unwrap();
+        assert_eq!(r.delivery, DELIVERY_GLOBAL);
     }
 }

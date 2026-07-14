@@ -126,7 +126,19 @@ pub struct AxActionResult {
 /// A node in the AX element tree.
 ///
 /// `children` is empty when the subtree has been pruned at the requested depth.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+///
+/// The affordance fields (`secure` / `enabled` / `settable` / `actions` / `url`)
+/// are `Option` rather than plain values on purpose: `None` means *"the limb did
+/// not tell us"*, which is **not** the same as `false` / empty. An older helper
+/// binary predates them and simply omits them from the wire, so every consumer
+/// must treat unknown as unknown — never as a negative. `skip_serializing_if`
+/// keeps the serialized form byte-identical to the pre-affordance wire when a
+/// field is absent.
+///
+/// `Default` exists so constructors (tests, limbs) can spell only the fields
+/// they care about via `..Default::default()` and stay source-compatible when
+/// further affordances are added.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct AxElement {
     /// AX role identifier, e.g. `"AXWindow"`, `"AXButton"`.
     pub role: String,
@@ -134,6 +146,11 @@ pub struct AxElement {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// String value of the element (may be absent).
+    ///
+    /// SECURITY: this is the **raw** value as reported by the limb and may be a
+    /// password. Never render it straight into a model-visible payload — go
+    /// through the shared redaction accessor
+    /// (`builtin_tools::desktop::interactable::safe_value`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
     /// Bounding rectangle in screen-point coordinates, top-left origin.
@@ -141,6 +158,24 @@ pub struct AxElement {
     pub bounds: Option<Region>,
     /// Process ID of the owning application.
     pub pid: i32,
+    /// `true` when the element masks its content (a password field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secure: Option<bool>,
+    /// `false` when the element is present but greyed out. A disabled element is
+    /// still reported — "Submit is disabled" is the state a model needs in order
+    /// to infer "fill the form first".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// `true` when the element's value can be written via `ax.set_value`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settable: Option<bool>,
+    /// Raw AX action names the element supports, e.g. `["AXPress"]` — pass one
+    /// verbatim to `ax.perform_action`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actions: Option<Vec<String>>,
+    /// Target URL for link-like elements.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     /// Child elements (empty when depth limit reached).
     #[serde(default)]
     pub children: Vec<Self>,
@@ -202,6 +237,51 @@ mod tests {
     }
 
     #[test]
+    fn affordances_absent_deserialize_as_unknown() {
+        // An older helper binary emits no affordance keys at all. Every one of
+        // them must land as `None` ("not told"), never as `Some(false)`.
+        let json = r#"{"role":"AXButton","pid":42}"#;
+        let el: AxElement = serde_json::from_str(json).unwrap();
+        assert_eq!(el.secure, None);
+        assert_eq!(el.enabled, None);
+        assert_eq!(el.settable, None);
+        assert_eq!(el.actions, None);
+        assert_eq!(el.url, None);
+    }
+
+    #[test]
+    fn affordances_absent_serialize_to_the_pre_affordance_wire() {
+        // Byte-identical to what the struct produced before the fields existed.
+        let el = AxElement {
+            role: "AXButton".into(),
+            pid: 42,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&el).unwrap();
+        assert_eq!(json, r#"{"role":"AXButton","pid":42,"children":[]}"#);
+    }
+
+    #[test]
+    fn affordances_roundtrip_when_present() {
+        let json = r#"{"role":"AXTextField","pid":1,"secure":true,"enabled":false,
+                       "settable":true,"actions":["AXPress","AXShowMenu"],
+                       "url":"https://example.com"}"#;
+        let el: AxElement = serde_json::from_str(json).unwrap();
+        assert_eq!(el.secure, Some(true));
+        assert_eq!(el.enabled, Some(false));
+        assert_eq!(el.settable, Some(true));
+        assert_eq!(
+            el.actions.as_deref(),
+            Some(["AXPress".to_string(), "AXShowMenu".to_string()].as_slice())
+        );
+        assert_eq!(el.url.as_deref(), Some("https://example.com"));
+
+        let back: AxElement = serde_json::from_str(&serde_json::to_string(&el).unwrap()).unwrap();
+        assert_eq!(back.enabled, Some(false));
+        assert_eq!(back.secure, Some(true));
+    }
+
+    #[test]
     fn query_result_element_null() {
         let json = r#"{}"#;
         let r: QueryResult = serde_json::from_str(json).unwrap();
@@ -214,10 +294,8 @@ mod tests {
             elements: vec![AxElement {
                 role: "AXButton".to_string(),
                 title: Some("OK".to_string()),
-                value: None,
-                bounds: None,
                 pid: 99,
-                children: vec![],
+                ..Default::default()
             }],
         };
         let json = serde_json::to_string(&r).unwrap();

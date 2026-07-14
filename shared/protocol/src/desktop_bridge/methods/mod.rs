@@ -12,5 +12,3 @@ pub mod media;
 pub mod perm;
 pub mod pim;
 pub mod screen;
-pub mod system;
-pub mod window;

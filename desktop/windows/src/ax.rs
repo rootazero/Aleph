@@ -447,7 +447,11 @@ mod imp {
             value: None, // VARIANT value extraction deferred; Name covers labels.
             bounds,
             pid,
-            children: Vec::new(),
+            // The affordances (secure/enabled/settable/actions/url) stay `None`:
+            // UIA exposes equivalents (IsPasswordAttribute, IsEnabled, patterns),
+            // but this limb does not read them yet, and `None` is the wire's
+            // "not told" — reporting `Some(false)` would be an outright lie.
+            ..Default::default()
         }
     }
 
@@ -552,7 +556,7 @@ mod imp {
                 .ok()
                 .map(rect_to_region),
             pid: unsafe { el.CurrentProcessId() }.unwrap_or(0),
-            children: Vec::new(),
+            ..Default::default()
         };
         Ok(Some((el.clone(), summary)))
     }
@@ -771,13 +775,11 @@ mod imp {
     /// element's own role/title/bounds, not its subtree.
     fn collect_role(node: &AxElement, role: &str, out: &mut Vec<AxElement>) {
         if node.role == role {
+            // Detach the node from its subtree; every other field, affordances
+            // included, is carried over verbatim.
             out.push(AxElement {
-                role: node.role.clone(),
-                title: node.title.clone(),
-                value: node.value.clone(),
-                bounds: node.bounds.clone(),
-                pid: node.pid,
                 children: Vec::new(),
+                ..node.clone()
             });
         }
         for child in &node.children {

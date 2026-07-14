@@ -5,6 +5,10 @@
 //! when the timeout elapses. Useful after navigation, animations, or any
 //! action that triggers gradual visual change.
 //!
+//! A capture that carries no pixels is refused rather than compared: two
+//! identical dead frames are byte-identical, and would otherwise be reported as
+//! a settled screen.
+//!
 //! Pure orchestration over the existing `ScreenCapability` — no new trait
 //! methods, no platform impls touched. R10-aligned (thin harness).
 
@@ -66,6 +70,30 @@ pub async fn run_wait_visual(
             }
         };
 
+        // A frame carrying no pixels (locked screen, revoked recording grant,
+        // wedged helper) is byte-identical to the next one just like it, so the
+        // stability test would answer "the UI has settled" about a screen it
+        // cannot see — the single most misleading verdict this tool can return.
+        // Refusing costs a retry; a frame of genuinely uniform content is
+        // indistinguishable from a dead capture from here, and that tradeoff is
+        // the right way round.
+        if aleph_desktop::perception::is_degenerate(&shot) {
+            return DesktopOutput {
+                success: false,
+                data: Some(serde_json::json!({
+                    "stable": false,
+                    "polls": polls,
+                    "elapsed_ms": start.elapsed().as_millis() as u64,
+                    "reason": "blank_frame",
+                })),
+                message: Some(super::recovery::with_hint(
+                    "wait_visual: screen capture returned a blank frame — stability is \
+                     unknowable from it."
+                        .to_string(),
+                )),
+            };
+        }
+
         // Byte equality on the encoded image is enough: identical pixels
         // produce identical PNG output (the encoder is deterministic), and
         // for JPEG, identical input yields identical output too. Subpixel
@@ -125,7 +153,15 @@ mod tests {
     };
     use async_trait::async_trait;
 
-    /// A scripted screen that returns a fixed sequence of base64 strings.
+    /// 2×2 PNGs with real structure — the stability loop now decodes every
+    /// frame to reject dead captures, so the fixtures must be decodable images
+    /// rather than arbitrary strings.
+    const FRAME_A: &str = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAE0lEQVR4nGNgYGD4//8/GDMwAAAp5AX71ZPZmwAAAABJRU5ErkJggg==";
+    const FRAME_B: &str = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4//8/AwQAWQAp5AX7XiD3SwAAAABJRU5ErkJggg==";
+    /// All-black 2×2 PNG — what a locked screen / revoked grant hands back.
+    const BLANK_FRAME: &str = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAC0lEQVR4nGNgQAYAAA4AAamRc7EAAAAASUVORK5CYII=";
+
+    /// A scripted screen that returns a fixed sequence of base64 frames.
     /// Other capability methods are unimplemented — the polling loop only
     /// exercises `screenshot`.
     struct ScriptedScreen {
@@ -151,8 +187,8 @@ mod tests {
             *idx = (*idx + 1).min(frames.len() - 1);
             Ok(Screenshot {
                 image_base64: frames[i].to_string(),
-                width: 1,
-                height: 1,
+                width: 2,
+                height: 2,
                 format: "png".to_string(),
                 scale_factor: None,
             })
@@ -213,7 +249,7 @@ mod tests {
     async fn returns_stable_when_two_consecutive_frames_match() {
         // Sequence: A, B, B, B — polls 1,2,3 should hit stable on poll 3
         // (2 consecutive matches after the first frame).
-        let screen = ScriptedScreen::new(vec!["A", "B", "B", "B"]);
+        let screen = ScriptedScreen::new(vec![FRAME_A, FRAME_B, FRAME_B, FRAME_B]);
         let out = run_wait_visual(&screen, Some(5_000), None).await;
         assert!(out.success);
         let data = out.data.expect("data present");
@@ -226,7 +262,8 @@ mod tests {
     #[tokio::test]
     async fn returns_not_stable_on_timeout_when_screen_keeps_changing() {
         // Sequence cycles A,B,A,B,... — never stabilizes.
-        let screen = ScriptedScreen::new(vec!["A", "B", "A", "B", "A", "B"]);
+        let screen =
+            ScriptedScreen::new(vec![FRAME_A, FRAME_B, FRAME_A, FRAME_B, FRAME_A, FRAME_B]);
         let out = run_wait_visual(&screen, Some(250), None).await;
         assert!(out.success); // timeout is a valid outcome, not an error
         let data = out.data.expect("data present");
@@ -239,9 +276,28 @@ mod tests {
         // Pass a deliberately huge timeout — implementation should clamp to
         // MAX_TIMEOUT_MS, but we just verify the call returns promptly when
         // the screen is already stable.
-        let screen = ScriptedScreen::new(vec!["X", "X", "X"]);
+        let screen = ScriptedScreen::new(vec![FRAME_A, FRAME_A, FRAME_A]);
         let out = run_wait_visual(&screen, Some(u64::MAX), None).await;
         assert!(out.success);
         assert_eq!(out.data.unwrap()["stable"], serde_json::Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn blank_frames_are_never_reported_as_stable() {
+        // Two identical dead frames used to satisfy the byte-equality test and
+        // come back as `stable: true` — the tool telling a model the screen had
+        // settled while it could not see the screen at all.
+        let screen = ScriptedScreen::new(vec![BLANK_FRAME, BLANK_FRAME, BLANK_FRAME]);
+        let out = run_wait_visual(&screen, Some(5_000), None).await;
+        assert!(!out.success, "a dead capture is a failure, not a verdict");
+        let data = out.data.expect("data present");
+        assert_eq!(data["stable"], serde_json::Value::Bool(false));
+        assert_eq!(data["reason"], "blank_frame");
+        let message = out.message.expect("message present");
+        assert!(message.contains("blank frame"), "message: {message}");
+        assert!(
+            message.contains("screen-recording"),
+            "the recovery hint must name the actionable causes: {message}"
+        );
     }
 }

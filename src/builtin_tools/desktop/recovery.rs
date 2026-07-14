@@ -18,6 +18,32 @@ pub(super) fn with_hint(message: String) -> String {
              a role plus element_title, or add x/y as a nearest-center hint. \
              Do not retry unchanged.",
         )
+    } else if lower.contains("global input tap") {
+        // The fail-closed pointer policy. The refusal already names the knobs;
+        // what it cannot say is where a pid comes from.
+        Some(
+            "Every window in window_list carries the `pid` that owns it, and \
+             desktop_som / desktop_ax_snapshot return `app_pid` — pass one of \
+             those (or `app`, or `window_id`) and the same action runs in the \
+             background. Do not retry unchanged.",
+        )
+    } else if lower.contains("targeted delivery dropped") {
+        // The helper had to fall back to the global tap: the user's cursor has
+        // already moved. Which is a fact, not a strategy — the model decides.
+        Some(
+            "The background delivery did not reach the app. Prefer set_value / \
+             ax_action, which drive the element through the accessibility API \
+             and need no rail at all; only fall back to a global click after \
+             focus_window, and expect the user's cursor to move.",
+        )
+    } else if lower.contains("screenshot_window") || lower.contains("reports no bounds") {
+        // The window rail is unavailable on this platform (no single-window
+        // capture, or no window frame to map its pixels back through).
+        Some(
+            "This platform cannot work in window space — capture the display \
+             (screenshot without window_id) and address points with \
+             coord_space:\"normalized\" instead.",
+        )
     } else if lower.contains("window not found")
         || lower.contains("no window")
         || lower.contains("window operation failed")
@@ -41,12 +67,21 @@ pub(super) fn with_hint(message: String) -> String {
             "The desktop helper is restarting. Wait a few seconds and retry \
              once; if it persists, fall back to screenshot + click.",
         )
-    } else if lower.contains("notimplemented") || lower.contains("not implemented")
+    } else if lower.contains("notimplemented")
+        || lower.contains("not implemented")
         || lower.contains("ax capability not available")
     {
         Some(
             "This platform has no accessibility write path — use screenshot \
              plus click / type_text instead.",
+        )
+    } else if lower.contains("blank frame") {
+        Some(
+            "The capture chain is dead, not the screen: it is locked or asleep, \
+             the screen-recording grant was revoked, or the desktop helper is \
+             wedged. Run desktop_check_permissions (and the doctor) and have the \
+             user re-check screen recording; never treat a blank frame as the \
+             screen's state.",
         )
     } else if lower.contains("read-only") || lower.contains("value_mismatch") {
         Some(
@@ -101,5 +136,47 @@ mod tests {
         let out = with_hint("window operation failed: window 123 not accessible".into());
         assert!(out.contains("Hint:"));
         assert!(out.contains("window_list"));
+    }
+
+    #[test]
+    fn the_global_pointer_refusal_says_where_a_pid_comes_from() {
+        // The refusal itself names the knobs; the hint's job is the one thing it
+        // cannot say — how to get a pid without asking the user.
+        let out = with_hint(
+            "click refused: with no target process this would run on the global input tap …".into(),
+        );
+        assert!(out.contains("Hint:"));
+        assert!(out.contains("app_pid"));
+        assert!(out.contains("window_list"));
+    }
+
+    #[test]
+    fn a_dropped_targeted_delivery_does_not_suggest_retrying_the_same_way() {
+        let out = with_hint(
+            "bridge input.click: targeted delivery dropped — the helper delivered via the \
+             'global' rail instead of into the target process"
+                .into(),
+        );
+        assert!(out.contains("Hint:"));
+        assert!(out.contains("ax_action"), "{out}");
+    }
+
+    #[test]
+    fn a_platform_without_window_capture_is_sent_back_to_the_display() {
+        let out = with_hint("Screen capability error: not implemented: screenshot_window".into());
+        assert!(out.contains("normalized"), "{out}");
+        // Not the AX hint: the missing capability is capture, not accessibility.
+        assert!(!out.contains("accessibility write path"), "{out}");
+    }
+
+    #[test]
+    fn a_window_with_no_reported_frame_cannot_be_addressed_in_window_space() {
+        let out = with_hint(
+            "window 900 reports no bounds on this platform, so a window-space coordinate \
+             cannot be mapped back to the screen"
+                .into(),
+        );
+        assert!(out.contains("Hint:"));
+        assert!(out.contains("normalized"), "{out}");
     }
 }

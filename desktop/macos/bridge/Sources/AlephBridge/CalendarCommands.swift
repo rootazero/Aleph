@@ -1,5 +1,4 @@
 import AppKit
-import ArgumentParser
 import EventKit
 import Foundation
 
@@ -8,7 +7,10 @@ import Foundation
 private let calendarStore = EKEventStore()
 
 /// Request calendar access synchronously using a semaphore.
-private func requestCalendarAccess() {
+///
+/// Safe only off the main thread — the RPC entry point parks the main thread on
+/// a semaphore, and PIM calls run on the serial PIM queue.
+private func requireCalendarAccess() throws {
     let semaphore = DispatchSemaphore(value: 0)
     var granted = false
 
@@ -30,245 +32,192 @@ private func requestCalendarAccess() {
         }
     }
     semaphore.wait()
-    if !granted {
-        printError("Calendar access denied. Grant access in System Settings > Privacy & Security > Calendars.")
+    guard granted else {
+        throw RpcError(
+            code: -32001,
+            message: "permission denied: calendars",
+            data: try encodeCodable(Perm.guide(.calendars))
+        )
     }
 }
 
 private let calFmt = iso8601Formatter()
 
-/// Seconds in one week.
-private let SecondsPerWeek: TimeInterval = 7 * 24 * 3600
-
-private func eventToDict(_ event: EKEvent) -> [String: Any] {
-    var dict: [String: Any] = [
-        "id": event.eventIdentifier ?? "",
-        "title": event.title ?? "",
-        "calendar_id": event.calendar.calendarIdentifier,
-        "start": calFmt.string(from: event.startDate),
-        "end": calFmt.string(from: event.endDate),
-        "all_day": event.isAllDay,
-    ]
-    if let loc = event.location, !loc.isEmpty { dict["location"] = loc }
-    if let notes = event.notes, !notes.isEmpty { dict["notes"] = notes }
-    return dict
+private func eventToWire(_ event: EKEvent) -> CalendarEvent {
+    let location = event.location.flatMap { $0.isEmpty ? nil : $0 }
+    let notes = event.notes.flatMap { $0.isEmpty ? nil : $0 }
+    return CalendarEvent(
+        id: event.eventIdentifier ?? "",
+        title: event.title ?? "",
+        calendar_id: event.calendar.calendarIdentifier,
+        start: calFmt.string(from: event.startDate),
+        end: calFmt.string(from: event.endDate),
+        all_day: event.isAllDay,
+        location: location,
+        notes: notes
+    )
 }
 
-extension AlephBridge {
-    struct Calendar: ParsableCommand {
-        static let configuration = CommandConfiguration(
-            abstract: "Apple Calendar operations",
-            subcommands: [Events.self, Get.self, Create.self, Update.self, Delete.self, Calendars.self]
+/// Apple Calendar operations. Synchronous and blocking; call from the serial PIM
+/// queue (see `PimHandlers.swift`).
+enum CalendarCommands {
+    static func events(from: Date, to: Date, calendarId: String?) throws -> CalendarEventsResult {
+        try requireCalendarAccess()
+
+        var calendars: [EKCalendar]?
+        if let cid = calendarId, !cid.isEmpty {
+            guard let cal = calendarStore.calendar(withIdentifier: cid) else {
+                throw RpcError(
+                    code: -32602,
+                    message: "pim.calendar.events: calendar not found: \(cid)",
+                    data: nil
+                )
+            }
+            calendars = [cal]
+        }
+
+        let predicate = calendarStore.predicateForEvents(
+            withStart: from, end: to, calendars: calendars
         )
+        let events = calendarStore.events(matching: predicate)
+        return CalendarEventsResult(events: events.map { eventToWire($0) })
+    }
 
-        struct Events: ParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "List calendar events")
+    static func get(id: String) throws -> CalendarEvent {
+        try requireCalendarAccess()
 
-            @Option(name: .long, help: "Start date (ISO 8601)")
-            var from: String?
+        guard let event = calendarStore.event(withIdentifier: id) else {
+            throw RpcError(
+                code: -32602,
+                message: "pim.calendar.get: event not found: \(id)",
+                data: nil
+            )
+        }
+        return eventToWire(event)
+    }
 
-            @Option(name: .long, help: "End date (ISO 8601)")
-            var to: String?
+    static func create(
+        title: String,
+        start: Date,
+        end: Date,
+        calendarId: String,
+        allDay: Bool,
+        location: String?,
+        notes: String?
+    ) throws -> CalendarCreateResult {
+        try requireCalendarAccess()
 
-            @Option(name: .long, help: "Calendar ID filter")
-            var calendarId: String?
+        let event = EKEvent(eventStore: calendarStore)
+        event.title = title
+        event.startDate = start
+        event.endDate = end
+        event.isAllDay = allDay
+        event.location = location
+        event.notes = notes
 
-            func run() {
-                requestCalendarAccess()
-
-                let now = Date()
-                let startDate = from.flatMap { parseISO8601($0) } ?? now
-                let endDate = to.flatMap { parseISO8601($0) } ?? now.addingTimeInterval(SecondsPerWeek)
-
-                var calendars: [EKCalendar]? = nil
-                if let cid = calendarId {
-                    if let cal = calendarStore.calendar(withIdentifier: cid) {
-                        calendars = [cal]
-                    } else {
-                        printError("Calendar not found: \(cid)")
-                    }
-                }
-
-                let predicate = calendarStore.predicateForEvents(withStart: startDate, end: endDate, calendars: calendars)
-                let events = calendarStore.events(matching: predicate)
-
-                let results = events.map { eventToDict($0) }
-                printJSON(["events": results])
-            }
+        // An empty or unknown calendar_id means "wherever new events go".
+        if !calendarId.isEmpty, let cal = calendarStore.calendar(withIdentifier: calendarId) {
+            event.calendar = cal
+        } else if let fallback = calendarStore.defaultCalendarForNewEvents {
+            event.calendar = fallback
+        } else {
+            throw RpcError(
+                code: -32003,
+                message: "pim.calendar.create: no writable calendar available",
+                data: nil
+            )
         }
 
-        struct Get: ParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "Get an event by ID")
-
-            @Option(name: .long, help: "Event ID")
-            var id: String
-
-            func run() {
-                requestCalendarAccess()
-
-                guard let event = calendarStore.event(withIdentifier: id) else {
-                    printError("Event not found: \(id)")
-                }
-                printJSON(eventToDict(event))
-            }
+        do {
+            try calendarStore.save(event, span: .thisEvent)
+        } catch {
+            throw RpcError(
+                code: -32003,
+                message: "pim.calendar.create: \(error.localizedDescription)",
+                data: nil
+            )
         }
 
-        struct Create: ParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "Create a calendar event")
+        return CalendarCreateResult(id: event.eventIdentifier ?? "")
+    }
 
-            @Option(name: .long, help: "Event title")
-            var title: String = ""
+    static func update(
+        id: String,
+        title: String,
+        start: Date,
+        end: Date,
+        location: String?,
+        notes: String?
+    ) throws {
+        try requireCalendarAccess()
 
-            @Option(name: .long, help: "Start datetime (ISO 8601)")
-            var start: String = ""
-
-            @Option(name: .long, help: "End datetime (ISO 8601)")
-            var end: String = ""
-
-            @Option(name: .long, help: "Calendar ID")
-            var calendarId: String?
-
-            @Option(name: .long, help: "Location")
-            var location: String?
-
-            @Option(name: .long, help: "Notes / description")
-            var notes: String?
-
-            @Option(name: .long, help: "All-day event (true/false)")
-            var allDay: String?
-
-            func run() {
-                requestCalendarAccess()
-
-                guard let startDate = parseISO8601(start) else {
-                    printError("Invalid start date: \(start)")
-                }
-                guard let endDate = parseISO8601(end) else {
-                    printError("Invalid end date: \(end)")
-                }
-
-                let event = EKEvent(eventStore: calendarStore)
-                event.title = title
-                event.startDate = startDate
-                event.endDate = endDate
-                event.isAllDay = allDay == "true"
-                event.location = location
-                event.notes = notes
-
-                if let cid = calendarId, let cal = calendarStore.calendar(withIdentifier: cid) {
-                    event.calendar = cal
-                } else {
-                    event.calendar = calendarStore.defaultCalendarForNewEvents
-                }
-
-                do {
-                    try calendarStore.save(event, span: .thisEvent)
-                } catch {
-                    printError("Failed to create event: \(error.localizedDescription)")
-                }
-
-                printJSON(eventToDict(event))
-            }
+        guard let event = calendarStore.event(withIdentifier: id) else {
+            throw RpcError(
+                code: -32602,
+                message: "pim.calendar.update: event not found: \(id)",
+                data: nil
+            )
         }
 
-        struct Update: ParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "Update a calendar event")
+        event.title = title
+        event.startDate = start
+        event.endDate = end
+        if let location = location { event.location = location }
+        if let notes = notes { event.notes = notes }
 
-            @Option(name: .long, help: "Event ID")
-            var id: String
-
-            @Option(name: .long, help: "New title")
-            var title: String?
-
-            @Option(name: .long, help: "New start datetime (ISO 8601)")
-            var start: String?
-
-            @Option(name: .long, help: "New end datetime (ISO 8601)")
-            var end: String?
-
-            @Option(name: .long, help: "New location")
-            var location: String?
-
-            @Option(name: .long, help: "New notes")
-            var notes: String?
-
-            func run() {
-                requestCalendarAccess()
-
-                guard let event = calendarStore.event(withIdentifier: id) else {
-                    printError("Event not found: \(id)")
-                }
-
-                if let t = title { event.title = t }
-                if let s = start {
-                    guard let d = parseISO8601(s) else { printError("Invalid start date: \(s)") }
-                    event.startDate = d
-                }
-                if let e = end {
-                    guard let d = parseISO8601(e) else { printError("Invalid end date: \(e)") }
-                    event.endDate = d
-                }
-                if let l = location { event.location = l }
-                if let n = notes { event.notes = n }
-
-                do {
-                    try calendarStore.save(event, span: .thisEvent)
-                } catch {
-                    printError("Failed to update event: \(error.localizedDescription)")
-                }
-
-                printJSON(eventToDict(event))
-            }
-        }
-
-        struct Delete: ParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "Delete a calendar event")
-
-            @Option(name: .long, help: "Event ID")
-            var id: String
-
-            func run() {
-                requestCalendarAccess()
-
-                guard let event = calendarStore.event(withIdentifier: id) else {
-                    printError("Event not found: \(id)")
-                }
-
-                do {
-                    try calendarStore.remove(event, span: .thisEvent)
-                } catch {
-                    printError("Failed to delete event: \(error.localizedDescription)")
-                }
-
-                printJSON(["deleted": true, "id": id])
-            }
-        }
-
-        struct Calendars: ParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "List all calendars")
-
-            func run() {
-                requestCalendarAccess()
-
-                let calendars = calendarStore.calendars(for: .event)
-                let results: [[String: Any]] = calendars.map { cal in
-                    var dict: [String: Any] = [
-                        "id": cal.calendarIdentifier,
-                        "title": cal.title,
-                        "read_only": !cal.allowsContentModifications,
-                    ]
-                    if let cgColor = cal.cgColor,
-                       let color = NSColor(cgColor: cgColor) {
-                        let rgb = color.usingColorSpace(.sRGB) ?? color
-                        let r = Int(rgb.redComponent * 255)
-                        let g = Int(rgb.greenComponent * 255)
-                        let b = Int(rgb.blueComponent * 255)
-                        dict["color"] = String(format: "#%02X%02X%02X", r, g, b)
-                    }
-                    return dict
-                }
-                printJSON(["calendars": results])
-            }
+        do {
+            try calendarStore.save(event, span: .thisEvent)
+        } catch {
+            throw RpcError(
+                code: -32003,
+                message: "pim.calendar.update: \(error.localizedDescription)",
+                data: nil
+            )
         }
     }
+
+    static func delete(id: String) throws {
+        try requireCalendarAccess()
+
+        guard let event = calendarStore.event(withIdentifier: id) else {
+            throw RpcError(
+                code: -32602,
+                message: "pim.calendar.delete: event not found: \(id)",
+                data: nil
+            )
+        }
+
+        do {
+            try calendarStore.remove(event, span: .thisEvent)
+        } catch {
+            throw RpcError(
+                code: -32003,
+                message: "pim.calendar.delete: \(error.localizedDescription)",
+                data: nil
+            )
+        }
+    }
+
+    static func calendars() throws -> CalendarListsResult {
+        try requireCalendarAccess()
+
+        let calendars = calendarStore.calendars(for: .event).map { cal in
+            CalendarInfo(
+                id: cal.calendarIdentifier,
+                title: cal.title,
+                read_only: !cal.allowsContentModifications,
+                color: hexColor(cal.cgColor)
+            )
+        }
+        return CalendarListsResult(calendars: calendars)
+    }
+}
+
+private func hexColor(_ cgColor: CGColor?) -> String? {
+    guard let cgColor = cgColor, let color = NSColor(cgColor: cgColor) else { return nil }
+    let rgb = color.usingColorSpace(.sRGB) ?? color
+    let r = Int(rgb.redComponent * 255)
+    let g = Int(rgb.greenComponent * 255)
+    let b = Int(rgb.blueComponent * 255)
+    return String(format: "#%02X%02X%02X", r, g, b)
 }

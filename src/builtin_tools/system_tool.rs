@@ -90,9 +90,15 @@ impl SystemTool {
 /// Arguments for the system tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SystemArgs {
-    /// Action to perform: "`launch_app`", "`quit_app`", "`open_path`",
-    /// "`list_running_apps`", "`send_notification`", "`clipboard_read`",
-    /// "`clipboard_write`", "`system_info`"
+    /// Action to perform: "`launch_app`", "`quit_app`", "`restart_app`",
+    /// "`open_path`" (alias "`open`"), "`list_running_apps`",
+    /// "`send_notification`", "`clipboard_read`", "`clipboard_write`",
+    /// "`system_info`", "`user_idle_time`".
+    ///
+    /// "`restart_app`" quits then relaunches `app_name`. "`user_idle_time`"
+    /// returns `idle_seconds` — how long since the user last touched the
+    /// keyboard or mouse; use it to tell "the human is here" from "the machine
+    /// is unattended" before doing anything intrusive.
     pub action: String,
     /// Application name or bundle ID (required for `launch_app`, `quit_app`).
     #[serde(skip_serializing_if = "Option::is_none")]

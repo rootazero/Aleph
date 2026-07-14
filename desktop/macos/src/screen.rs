@@ -3,19 +3,79 @@
 //! Routes `ocr()` and `screenshot()` / `display_list()` through the Swift
 //! helper (`screen.*` RPCs — backed by Vision + `ScreenCaptureKit`); falls
 //! back to `NativeScreen` (xcap) for screenshots when the bridge call fails
-//! (e.g. macOS 13 lacks `SCScreenshotManager`). All other input automation
-//! methods forward directly to `NativeScreen`.
+//! (e.g. macOS 13 lacks `SCScreenshotManager`) *or* when it succeeds with a
+//! degenerate frame.
+//!
+//! # Two input rails
+//!
+//! The plain input methods (`click`, `type_text`, …) forward to `NativeScreen`
+//! (enigo), which posts to the **global** HID event tap: the user's physical
+//! cursor is dragged across the screen and the target app must be frontmost.
+//!
+//! The `*_targeted` methods route through the Swift helper's `input.*` RPCs,
+//! which build each event against a session-state event source and post it
+//! straight into **one process's** event queue (`postToPid`). The user's cursor
+//! never moves and the app need not be frontmost — the same property the AX
+//! write rail (`ax.set_value` / `ax.perform_action`) has always had.
+//!
+//! There is deliberately **no fallback** from the targeted rail to the global
+//! one here: a caller that asked for "do not disturb the user" must be told it
+//! could not be done, not silently be given the intrusive path. Choosing what
+//! to do next is the model's call (A2), not this layer's.
 
 use std::sync::Arc;
 
+use aleph_desktop::perception::is_degenerate;
 use aleph_desktop::traits::ScreenCapability;
 use aleph_desktop::{
-    DesktopError, DisplayInfo, MouseButton, NativeScreen, OcrLine, OcrResult, PressAction, Result,
-    ScreenRegion, Screenshot, SwiftBridge, WindowInfo,
+    BoundingBox, DesktopError, DisplayInfo, MouseButton, NativeScreen, OcrLine, OcrResult,
+    PressAction, Result, ScreenRegion, Screenshot, SwiftBridge, WindowInfo, WindowShot,
 };
+use aleph_protocol::desktop_bridge::methods::input as rpc_input;
 use async_trait::async_trait;
 use base64::Engine as _;
 use tracing::warn;
+
+/// Translate the capability-level mouse button into its wire form.
+const fn to_rpc_button(button: MouseButton) -> rpc_input::MouseButton {
+    match button {
+        MouseButton::Left => rpc_input::MouseButton::Left,
+        MouseButton::Right => rpc_input::MouseButton::Right,
+        MouseButton::Middle => rpc_input::MouseButton::Middle,
+    }
+}
+
+/// Translate the capability-level press action into its wire form.
+const fn to_rpc_press(action: PressAction) -> rpc_input::PressAction {
+    match action {
+        PressAction::Press => rpc_input::PressAction::Press,
+        PressAction::Release => rpc_input::PressAction::Release,
+        PressAction::Click => rpc_input::PressAction::Click,
+    }
+}
+
+/// Hold the helper to the promise the `*_targeted` contract makes.
+///
+/// `ok: false` is a plain failure. `delivery != "targeted"` is the subtler one:
+/// the helper already moved the user's cursor on the global tap. It cannot be
+/// undone, but it must not be reported as a background action — the caller
+/// promised the user's cursor would stay put, and silence here would make that
+/// promise a lie. Surface it as an error so the model sees what happened and
+/// picks its own way forward.
+fn ensure_targeted(method: &str, ok: bool, delivery: &str) -> Result<()> {
+    if !ok {
+        return Err(DesktopError::InputFailed(format!(
+            "bridge {method}: the helper reported the event was not delivered"
+        )));
+    }
+    if delivery != rpc_input::DELIVERY_TARGETED {
+        return Err(DesktopError::InputFailed(format!(
+            "bridge {method}: targeted delivery dropped — the helper delivered via the \
+             '{delivery}' rail instead of into the target process"
+        )));
+    }
+    Ok(())
+}
 
 /// macOS-specific screen capability that routes `ocr()` through the Swift
 /// helper (`screen.ocr` RPC) while delegating everything else to `NativeScreen`.
@@ -37,7 +97,16 @@ impl MacOSScreen {
 impl ScreenCapability for MacOSScreen {
     async fn screenshot(&self, region: Option<ScreenRegion>) -> Result<Screenshot> {
         match self.screenshot_via_bridge(region.as_ref()).await {
-            Ok(shot) => Ok(shot),
+            Ok(shot) if !is_degenerate(&shot) => Ok(shot),
+            // A blank frame is a wedged helper reporting success. xcap is a
+            // genuinely different transport, so it can still see the screen —
+            // but it is the *only* retry: whatever it returns is returned as-is,
+            // degenerate or not, and the tool layer decides what to tell the
+            // model. Two dead transports are a diagnosis, not a reason to loop.
+            Ok(_) => {
+                warn!("screen.capture bridge returned a degenerate frame; falling back to xcap");
+                self.inner.screenshot(region).await
+            }
             Err(err) => {
                 warn!(
                     error = %err,
@@ -222,11 +291,234 @@ impl ScreenCapability for MacOSScreen {
             }
         }
     }
+
+    // ── Targeted rail (pid-scoped, cursor-free) ──────────────────────
+    //
+    // Each of these posts into one process's event queue via the Swift helper.
+    // None of them touches the user's cursor, and none of them falls back to
+    // the global tap: an error here means the background delivery did not
+    // happen, and the *caller* decides whether the intrusive path is worth it.
+
+    fn supports_targeted_input(&self) -> bool {
+        true
+    }
+
+    async fn click_targeted(&self, pid: i32, x: f64, y: f64, button: MouseButton) -> Result<()> {
+        let r: rpc_input::ClickResult = self
+            .call_input(
+                rpc_input::METHOD_CLICK,
+                rpc_input::ClickParams {
+                    x,
+                    y,
+                    button: to_rpc_button(button),
+                    pid: Some(pid),
+                    click_count: None,
+                },
+            )
+            .await?;
+        ensure_targeted(rpc_input::METHOD_CLICK, r.ok, &r.delivery)
+    }
+
+    async fn double_click_targeted(
+        &self,
+        pid: i32,
+        x: f64,
+        y: f64,
+        button: MouseButton,
+    ) -> Result<()> {
+        // `input.double_click` reuses ClickParams and forces click count 2 on
+        // the event itself — two independent single clicks are not a
+        // double-click, the app reads the count off the event.
+        let r: rpc_input::ClickResult = self
+            .call_input(
+                rpc_input::METHOD_DOUBLE_CLICK,
+                rpc_input::ClickParams {
+                    x,
+                    y,
+                    button: to_rpc_button(button),
+                    pid: Some(pid),
+                    click_count: Some(2),
+                },
+            )
+            .await?;
+        ensure_targeted(rpc_input::METHOD_DOUBLE_CLICK, r.ok, &r.delivery)
+    }
+
+    async fn drag_targeted(
+        &self,
+        pid: i32,
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+        duration_ms: Option<u64>,
+    ) -> Result<()> {
+        let r: rpc_input::DragResult = self
+            .call_input(
+                rpc_input::METHOD_DRAG,
+                rpc_input::DragParams {
+                    start_x,
+                    start_y,
+                    end_x,
+                    end_y,
+                    duration_ms,
+                    pid: Some(pid),
+                },
+            )
+            .await?;
+        ensure_targeted(rpc_input::METHOD_DRAG, r.ok, &r.delivery)
+    }
+
+    async fn hover_targeted(&self, pid: i32, x: f64, y: f64) -> Result<()> {
+        let r: rpc_input::HoverResult = self
+            .call_input(
+                rpc_input::METHOD_HOVER,
+                rpc_input::HoverParams {
+                    x,
+                    y,
+                    pid: Some(pid),
+                },
+            )
+            .await?;
+        ensure_targeted(rpc_input::METHOD_HOVER, r.ok, &r.delivery)
+    }
+
+    async fn scroll_targeted(
+        &self,
+        pid: i32,
+        x: f64,
+        y: f64,
+        direction: &str,
+        amount: i32,
+    ) -> Result<()> {
+        // The point is mandatory on this rail: the cursor never moves, so the
+        // event carries the only location the app can route the scroll by.
+        let r: rpc_input::ScrollResult = self
+            .call_input(
+                rpc_input::METHOD_SCROLL,
+                rpc_input::ScrollParams {
+                    direction: direction.to_string(),
+                    amount,
+                    pid: Some(pid),
+                    x: Some(x),
+                    y: Some(y),
+                },
+            )
+            .await?;
+        ensure_targeted(rpc_input::METHOD_SCROLL, r.ok, &r.delivery)
+    }
+
+    async fn type_text_targeted(&self, pid: i32, text: &str) -> Result<()> {
+        let r: rpc_input::TypeTextResult = self
+            .call_input(
+                rpc_input::METHOD_TYPE_TEXT,
+                rpc_input::TypeTextParams {
+                    text: text.to_string(),
+                    pid: Some(pid),
+                },
+            )
+            .await?;
+        ensure_targeted(rpc_input::METHOD_TYPE_TEXT, r.ok, &r.delivery)
+    }
+
+    async fn key_combo_targeted(&self, pid: i32, modifiers: &[String], key: &str) -> Result<()> {
+        let r: rpc_input::KeyComboResult = self
+            .call_input(
+                rpc_input::METHOD_KEY_COMBO,
+                rpc_input::KeyComboParams {
+                    modifiers: modifiers.to_vec(),
+                    key: key.to_string(),
+                    pid: Some(pid),
+                },
+            )
+            .await?;
+        ensure_targeted(rpc_input::METHOD_KEY_COMBO, r.ok, &r.delivery)
+    }
+
+    async fn mouse_button_targeted(
+        &self,
+        pid: i32,
+        x: f64,
+        y: f64,
+        button: MouseButton,
+        action: PressAction,
+    ) -> Result<()> {
+        let r: rpc_input::MouseButtonResult = self
+            .call_input(
+                rpc_input::METHOD_MOUSE_BUTTON,
+                rpc_input::MouseButtonParams {
+                    x,
+                    y,
+                    button: to_rpc_button(button),
+                    action: to_rpc_press(action),
+                    pid: Some(pid),
+                },
+            )
+            .await?;
+        ensure_targeted(rpc_input::METHOD_MOUSE_BUTTON, r.ok, &r.delivery)
+    }
+
+    async fn screenshot_window(&self, window_id: u64, show_cursor: bool) -> Result<WindowShot> {
+        use aleph_protocol::desktop_bridge::methods::screen::{
+            CaptureParams, CaptureResult, METHOD_CAPTURE,
+        };
+
+        // No xcap fallback: NativeScreen cannot capture a specific window, and
+        // silently widening the shot to the whole display would hand the model
+        // pixels it would then mis-map back onto the window's coordinate space.
+        let rpc: CaptureResult = self
+            .bridge
+            .call(
+                METHOD_CAPTURE,
+                CaptureParams {
+                    display_id: None,
+                    region: None,
+                    window_id: Some(window_id),
+                    show_cursor: Some(show_cursor),
+                },
+            )
+            .await
+            .map_err(|e| {
+                DesktopError::ScreenCapture(format!("bridge screen.capture (window): {e}"))
+            })?;
+
+        Ok(WindowShot {
+            image: Screenshot {
+                image_base64: rpc.png_base64,
+                width: rpc.width,
+                height: rpc.height,
+                format: "png".to_string(),
+                scale_factor: rpc.scale,
+            },
+            // Region {x,y,width,height} → BoundingBox {x,y,w,h}. Both are the
+            // window's frame in global screen POINTS, top-left origin.
+            window_bounds: rpc.window_bounds.map(|b| BoundingBox {
+                x: b.x,
+                y: b.y,
+                w: b.width,
+                h: b.height,
+            }),
+        })
+    }
 }
 
 // ── Bridge-backed helpers ────────────────────────────────────────────
 
 impl MacOSScreen {
+    /// Issue one `input.*` RPC. Every targeted-rail method funnels through
+    /// here so the failure text names the method uniformly and no call site can
+    /// forget to turn a transport error into an `InputFailed`.
+    async fn call_input<P, R>(&self, method: &str, params: P) -> Result<R>
+    where
+        P: serde::Serialize + Send,
+        R: serde::de::DeserializeOwned + Send,
+    {
+        self.bridge
+            .call(method, params)
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("bridge {method}: {e}")))
+    }
+
     /// SCK-backed screenshot via the Swift helper. Caller is expected to
     /// fall back to `NativeScreen` when this returns `Err` (e.g. on macOS
     /// 13 which lacks `SCScreenshotManager`).
@@ -242,6 +534,11 @@ impl MacOSScreen {
                 width: f64::from(r.width),
                 height: f64::from(r.height),
             }),
+            window_id: None,
+            // Historical behavior of this rail was a cursor-in-frame capture;
+            // the helper now defaults to omitting it, which is what a model
+            // reading pixel coordinates wants (the cursor is not UI).
+            show_cursor: None,
         };
         let rpc: CaptureResult = self
             .bridge
@@ -253,10 +550,10 @@ impl MacOSScreen {
             width: rpc.width,
             height: rpc.height,
             format: "png".to_string(),
-            // Bridge protocol does not surface DPR yet — leave None until the
-            // Swift `CaptureResult` is extended. Caller can still resolve
-            // scale_factor via `display_list()` if needed.
-            scale_factor: None,
+            // The helper now reports the backing scale of the captured surface.
+            // An older helper omits it and this stays `None` — callers already
+            // resolve the scale via `display_list()` in that case.
+            scale_factor: rpc.scale,
         })
     }
 
@@ -338,6 +635,26 @@ mod tests {
             0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00,
         ];
         assert_eq!(png_dimensions(not_png), None);
+    }
+
+    #[test]
+    fn targeted_delivery_is_accepted_only_when_the_helper_says_targeted() {
+        assert!(ensure_targeted("input.click", true, rpc_input::DELIVERY_TARGETED).is_ok());
+    }
+
+    #[test]
+    fn a_global_delivery_on_the_targeted_rail_is_an_error() {
+        // The helper already moved the user's cursor. It cannot be undone, but
+        // it must never be reported as a background action.
+        let err = ensure_targeted("input.click", true, rpc_input::DELIVERY_GLOBAL)
+            .expect_err("global delivery must not pass as targeted");
+        let msg = err.to_string();
+        assert!(msg.contains("targeted delivery dropped"), "{msg}");
+    }
+
+    #[test]
+    fn a_failed_event_is_an_error_even_if_delivery_claims_targeted() {
+        assert!(ensure_targeted("input.scroll", false, rpc_input::DELIVERY_TARGETED).is_err());
     }
 
     #[test]

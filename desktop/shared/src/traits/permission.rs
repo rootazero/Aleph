@@ -17,14 +17,18 @@ use crate::Result;
 ///
 /// `check` / `request` cover the TCC-managed subset (see
 /// `permission_types::TCC_MANAGED`). For bridge-only kinds the implementation
-/// returns `PermissionStatus::Unknown` — callers should use the bridge-backed
+/// returns `PermissionStatus::Unknown` — callers should use the richer
 /// `check_permission` instead.
 ///
-/// Three additional methods (`check_permission`, `guide_permission`,
-/// `open_settings`) use the bridge-backed protocol types from
-/// `aleph_protocol::desktop_bridge::methods::perm`.  They have default
-/// implementations that return `NotImplemented` so existing platform
-/// implementations that have not yet migrated continue to compile.
+/// Three of the methods (`check_permission`, `guide_permission`,
+/// `open_settings`) speak the protocol types from
+/// `aleph_protocol::desktop_bridge::methods::perm`. All are REQUIRED: every
+/// platform in the tree implements them (macOS via the Swift bridge, Linux via
+/// freedesktop idioms, Windows via the `ConsentStore`). They once carried
+/// `NotImplemented` default bodies so half-migrated platforms would still
+/// compile; nothing is half-migrated any more, and a default that silently
+/// answers `NotImplemented` would let a new platform ship a permission layer
+/// that looks present and always fails.
 #[async_trait]
 pub trait PermissionCapability: Send + Sync {
     /// Check status of one permission without prompting the user.
@@ -37,37 +41,16 @@ pub trait PermissionCapability: Send + Sync {
     /// Returns the updated status after the request attempt.
     async fn request(&self, permission: PermissionKind) -> Result<PermissionInfo>;
 
-    // -----------------------------------------------------------------------
-    // Bridge-backed protocol methods (Stage 4).
-    // Default impls return NotImplemented so non-macOS stubs compile as-is.
-    // -----------------------------------------------------------------------
-
-    /// Query the current TCC status via the Swift bridge.
+    /// Query the current permission status.
     ///
     /// Returns a `ProtocolPermissionStatus` (from `aleph_protocol`) which
     /// carries `granted`, `can_request_programmatically`, and `restricted`.
-    async fn check_permission(&self, kind: PermissionKind) -> Result<ProtocolPermissionStatus> {
-        let _ = kind;
-        Err(crate::error::DesktopError::NotImplemented(
-            "check_permission".into(),
-        ))
-    }
+    async fn check_permission(&self, kind: PermissionKind) -> Result<ProtocolPermissionStatus>;
 
-    /// Retrieve a full `PermissionGuide` (deep link + steps + rationale) via
-    /// the Swift bridge.
-    async fn guide_permission(&self, kind: PermissionKind) -> Result<PermissionGuide> {
-        let _ = kind;
-        Err(crate::error::DesktopError::NotImplemented(
-            "guide_permission".into(),
-        ))
-    }
+    /// Retrieve a full `PermissionGuide` (deep link + steps + rationale).
+    async fn guide_permission(&self, kind: PermissionKind) -> Result<PermissionGuide>;
 
-    /// Open System Settings to the pane for `kind` via the Swift bridge.
+    /// Open the OS settings pane for `kind`.
     /// Returns `true` if the URL was successfully opened.
-    async fn open_settings(&self, kind: PermissionKind) -> Result<bool> {
-        let _ = kind;
-        Err(crate::error::DesktopError::NotImplemented(
-            "open_settings".into(),
-        ))
-    }
+    async fn open_settings(&self, kind: PermissionKind) -> Result<bool>;
 }

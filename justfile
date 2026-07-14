@@ -36,7 +36,9 @@ swift-bridge:
         echo "✓ Swift bridge: skipped (non-macOS)"
         exit 0
     fi
-    cd desktop/macos/bridge && swift build -c release
+    # --product: the package also holds the test-only AlephFixture (an AppKit app),
+    # and the shipped build has no business compiling it.
+    cd desktop/macos/bridge && swift build -c release --product AlephBridge
     mkdir -p {{release_dir}} {{debug_dir}}
     ln -sf "$PWD/desktop/macos/bridge/.build/release/AlephBridge" {{release_dir}}/aleph-bridge
     ln -sf "$PWD/desktop/macos/bridge/.build/release/AlephBridge" {{debug_dir}}/aleph-bridge
@@ -451,6 +453,36 @@ test-speech-e2e: swift-bridge
 # End-to-end: OCR via the Swift helper. Requires no TCC (image is supplied directly).
 test-ocr-e2e: swift-bridge
     cargo test -p aleph-desktop-macos --test ocr_e2e -- --ignored --nocapture
+
+# Build the test-only AppKit fixture app driven by the computer-use e2e suite.
+# Never shipped: `swift-bridge` builds --product AlephBridge only, and nothing in
+# AlephBridge references this.
+swift-fixture:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "✓ Swift fixture: skipped (non-macOS)"
+        exit 0
+    fi
+    cd desktop/macos/bridge && swift build -c release --product AlephFixture
+    echo "✓ Swift fixture: desktop/macos/bridge/.build/release/AlephFixture"
+
+# End-to-end: the closed computer-use loop — drive the real bridge (real AX calls,
+# real CGEvents) at the real AlephFixture app, then assert against the FIXTURE's
+# own report of what happened to it.
+#
+# Requires Accessibility (TCC) for the helper. The Tier B tests additionally need a
+# real logged-in GUI session: they post CGEvents at an on-screen window, and they
+# sample the physical cursor — so do not touch the mouse while they run.
+# --test-threads=1: the tests drive one shared desktop; two fixtures racing for
+# focus and the cursor is not a thing a green can survive.
+test-computer-use-e2e: swift-bridge swift-fixture
+    cargo test -p aleph-desktop-macos --test computer_use_e2e -- --ignored --nocapture --test-threads=1
+
+# Tier A only: the AX rail against an off-display fixture window. No GUI session
+# interaction, no cursor sampling — still needs Accessibility.
+test-computer-use-e2e-headless: swift-bridge swift-fixture
+    cargo test -p aleph-desktop-macos --test computer_use_e2e tier_a -- --ignored --nocapture --test-threads=1
 
 # ─── iOS Distribution ───
 
