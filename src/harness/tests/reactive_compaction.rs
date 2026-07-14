@@ -486,6 +486,7 @@ fn assistant_message_event(text: &str) -> SessionEvent {
             thinking: None,
             thinking_signature: None,
         },
+        usage: None,
         at: now_ms(),
     }
 }

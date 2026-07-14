@@ -173,8 +173,6 @@ impl SessionManager {
                             .and_then(|s| serde_json::from_str(&s).ok()),
                         input_tokens: row.get(5)?,
                         output_tokens: row.get(6)?,
-                        model: None,
-                        model_provider: None,
                         tool_call_id: row.get(7)?,
                         tool_name: row.get(8)?,
                     })

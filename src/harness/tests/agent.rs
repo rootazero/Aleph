@@ -289,6 +289,7 @@ async fn emit_assistant(session: &InProcessActorSessionService, sid: &SessionId,
                     thinking: None,
                     thinking_signature: None,
                 },
+                usage: None,
                 at: now_ms(),
             },
         )

@@ -163,8 +163,6 @@ impl SessionStore for SessionManager {
             metadata_str.as_deref(),
             msg.input_tokens,
             msg.output_tokens,
-            msg.model.as_deref(),
-            msg.model_provider.as_deref(),
             msg.tool_call_id.as_deref(),
             msg.tool_name.as_deref(),
             source_seq,

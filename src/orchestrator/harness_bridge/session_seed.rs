@@ -156,6 +156,8 @@ pub(super) async fn emit_message(
         SessionEvent::AssistantMessage {
             turn_id: uuid::Uuid::new_v4(),
             content,
+            // Replayed history, not an observed call — no tokens to attribute.
+            usage: None,
             at: now_ms(),
         }
     };

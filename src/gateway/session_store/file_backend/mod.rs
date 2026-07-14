@@ -488,15 +488,11 @@ impl SessionStore for FileSessionStore {
         if let Some(mut meta) = self.read_metadata(&key_str).await? {
             meta.message_count += 1;
             meta.last_active_at = msg.timestamp;
-            meta.input_tokens += msg.input_tokens;
-            meta.output_tokens += msg.output_tokens;
-            meta.total_tokens += msg.input_tokens + msg.output_tokens;
-            if msg.model.is_some() {
-                meta.model = msg.model.clone();
-            }
-            if msg.model_provider.is_some() {
-                meta.model_provider = msg.model_provider.clone();
-            }
+            // The session's token/model columns are written by
+            // `update_session_usage` alone (the run's `AssistantRunMeta`) — see
+            // the twin comment in the SQLite backend's `add_message_full`.
+            // Accumulating them here as well would bill the session twice for
+            // the same tokens now that message rows carry real ones.
             if meta.derived_title.is_none() && msg.role == "user" {
                 let title = msg.content.trim();
                 let title = if title.chars().count() > 60 {
@@ -1295,8 +1291,6 @@ mod emit_tests {
             metadata: None,
             input_tokens: 0,
             output_tokens: 0,
-            model: None,
-            model_provider: None,
             tool_call_id: None,
             tool_name: None,
         }

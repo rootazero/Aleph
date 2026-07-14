@@ -382,6 +382,8 @@ mod tests {
                 },
             ],
             estimated_cost: None,
+            serving_model: None,
+            serving_provider: None,
             context_tokens: 0,
             context_window: 0,
         }

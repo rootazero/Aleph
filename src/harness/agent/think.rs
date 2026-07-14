@@ -312,11 +312,13 @@ impl AgentHarness {
     /// once-per-turn accounting at the end of `run_turn_internal`. Each
     /// discarded call was a real round-trip the provider billed (input tokens
     /// always, plus any partial output on a `max_output_tokens` cut), so
-    /// counting only the final surviving response silently dropped those
-    /// tokens from `total_tokens`, the per-component `token_breakdown`, and
-    /// every downstream cost / budget consumer. Mirrors the final accounting
+    /// counting only the final surviving response silently dropped those tokens
+    /// from `total_tokens`, the per-component `token_breakdown`, and every
+    /// downstream cost / budget consumer. Mirrors the final accounting
     /// (`turn_token_total` + `accumulate_token_breakdown`) so each call is
-    /// counted exactly once. R10-safe: pure arithmetic, no decision.
+    /// counted exactly once — but NOT `AssistantMessage.usage`: a discarded
+    /// response never becomes a message, which is why the session's token total
+    /// is a superset of the sum of its message rows. R10-safe: pure arithmetic.
     fn account_intermediate_tokens(&self, response: &ProviderResponse) {
         let tokens = super::turn_token_total(&response.usage);
         self.total_tokens.fetch_add(tokens, Ordering::Relaxed);
@@ -840,13 +842,12 @@ impl AgentHarness {
         // R10-safe: pure accuracy feedback, no new decision category.
         //
         // Skipped when the `max_output_tokens` recovery loop ran: that path
-        // appends the partial assistant text + resume nudge to `messages`
-        // AFTER `before_turn` snapshotted `last_pressure`, so the surviving
-        // response's `prompt_tokens_total` no longer measures the same prompt
-        // the estimate was taken on. Feeding that mismatched ratio into the
-        // EWMA would inject a spurious inflationary correction. (Empty-response
-        // retries re-issue the identical `messages`, so they stay valid samples
-        // and are intentionally NOT excluded here.)
+        // appends the partial assistant text + resume nudge to `messages` AFTER
+        // `before_turn` snapshotted `last_pressure`, so the surviving response's
+        // `prompt_tokens_total` no longer measures the prompt the estimate was
+        // taken on, and the mismatched ratio would inject a spurious
+        // inflationary correction into the EWMA. (Empty-response retries
+        // re-issue the identical `messages` — still valid samples, not excluded.)
         if max_tokens_retries == 0 {
             if let (Some(budget), Some(usage)) =
                 (self.deps.context_budget.as_ref(), response.usage.as_ref())
@@ -910,8 +911,8 @@ impl AgentHarness {
             // where streaming is suppressed so the output guardrail can sanitise
             // the final text first) keep the one-shot emit — as does a response
             // that survived from a non-streaming retry/rescue, whose text was
-            // never delta-streamed. Either way the authoritative
-            // AssistantMessage is persisted just below.
+            // never delta-streamed. The authoritative AssistantMessage is
+            // persisted just below.
             if !response_was_streamed {
                 callback.on_delta(&text);
             }
@@ -930,6 +931,7 @@ impl AgentHarness {
                 thinking: response.thinking.clone(),
                 thinking_signature: response.thinking_signature.clone(),
             },
+            usage: response.usage.as_ref().map(Into::into),
             at: crate::session::events::now_ms(),
         };
         self.deps
@@ -1771,6 +1773,7 @@ impl AgentHarness {
                 thinking: resp.thinking.clone(),
                 thinking_signature: resp.thinking_signature.clone(),
             },
+            usage: resp.usage.as_ref().map(Into::into),
             at: crate::session::events::now_ms(),
         };
         // Token accounting already happened via `account_intermediate_tokens`
@@ -1916,6 +1919,7 @@ mod tests {
                 thinking: None,
                 thinking_signature: None,
             },
+            usage: None,
             at: now_ms(),
         }
     }

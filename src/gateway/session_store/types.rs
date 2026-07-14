@@ -8,14 +8,17 @@ pub struct MessageRecord {
     pub content: String,
     pub timestamp: i64,
     pub metadata: Option<Value>,
+    /// Tokens the LLM call that produced this message was billed for. Zero on
+    /// user / tool / system rows, which no call produced.
+    ///
+    /// (There were `model` / `model_provider` fields here too. The `messages`
+    /// table has never had those columns — no INSERT wrote them and every SELECT
+    /// filled them with `None` — so they were struct-shaped decoration. The
+    /// serving model is recorded where it has a column: `sessions.model`.)
     #[serde(default)]
     pub input_tokens: i64,
     #[serde(default)]
     pub output_tokens: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -159,8 +162,6 @@ mod tests {
             metadata: None,
             input_tokens: 0,
             output_tokens: 0,
-            model: None,
-            model_provider: None,
             tool_call_id: Some("call_1".into()),
             tool_name: Some("bash_exec".into()),
         };

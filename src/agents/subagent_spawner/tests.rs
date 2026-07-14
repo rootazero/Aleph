@@ -730,6 +730,7 @@ mod tests {
                             thinking: None,
                             thinking_signature: None,
                         },
+                        usage: None,
                         at: now_ms(),
                     },
                 )

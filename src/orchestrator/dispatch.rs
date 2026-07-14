@@ -122,6 +122,14 @@ pub struct FlowOutcome {
     /// conservative fallback for unknown models. Gauge denominator. `0` only on
     /// default/test fixtures.
     pub context_window: u32,
+    /// The model that actually served this run, and the provider that served
+    /// it. Same pair the cost estimate is keyed on — never the `FailoverProvider`
+    /// wrapper name. Carried out so the session row can record which model it
+    /// last spoke to; `sessions.model` had a column, a Panel column, and no
+    /// writer that ever ran.
+    pub serving_model: Option<String>,
+    /// Provider id behind [`serving_model`](Self::serving_model).
+    pub serving_provider: Option<String>,
 }
 
 /// Loop-exit cause for an agent run. Each variant corresponds to a distinct
@@ -331,6 +339,24 @@ impl TokenBreakdown {
             .cache_creation
             .saturating_add(cache_creation.unwrap_or(0));
         self.reasoning = self.reasoning.saturating_add(reasoning.unwrap_or(0));
+    }
+}
+
+impl From<&crate::providers::adapter::TokenUsage> for TokenBreakdown {
+    /// One call's usage as a breakdown of its own. The run-cumulative counter
+    /// folds these with [`TokenBreakdown::accumulate`]; this is the same fold
+    /// starting from zero, so a single call's breakdown and its contribution to
+    /// the run total are the same arithmetic by construction.
+    fn from(u: &crate::providers::adapter::TokenUsage) -> Self {
+        let mut b = Self::default();
+        b.accumulate(
+            u.input_tokens,
+            u.output_tokens,
+            u.cache_read_tokens,
+            u.cache_creation_tokens,
+            u.thinking_tokens,
+        );
+        b
     }
 }
 

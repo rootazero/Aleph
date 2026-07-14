@@ -535,6 +535,7 @@ mod tests {
                     thinking: None,
                     thinking_signature: None,
                 },
+                usage: None,
                 at: now_ms(),
             }),
             mk_record(SessionEvent::ToolCallRequested {
@@ -604,6 +605,7 @@ mod tests {
                 thinking: None,
                 thinking_signature: None,
             },
+            usage: None,
             at: now_ms(),
         });
 
@@ -681,6 +683,7 @@ mod tests {
                     thinking: None,
                     thinking_signature: None,
                 },
+                usage: None,
                 at: now_ms(),
             }),
             mk_record(SessionEvent::ToolCallRequested {
@@ -775,6 +778,7 @@ mod tests {
                     thinking: None,
                     thinking_signature: None,
                 },
+                usage: None,
                 at: now_ms(),
             }),
             mk_record(SessionEvent::ToolResult {
@@ -863,6 +867,7 @@ mod tests {
                     thinking: Some("planning...".into()),
                     thinking_signature: Some("sig_z".into()),
                 },
+                usage: None,
                 at: now_ms(),
             }),
             mk_record(SessionEvent::UserMessage {
@@ -905,6 +910,7 @@ mod tests {
                     thinking: None,
                     thinking_signature: None,
                 },
+                usage: None,
                 at: now_ms(),
             }),
             mk_record(SessionEvent::UserMessage {
@@ -958,6 +964,7 @@ mod tests {
                     thinking: None,
                     thinking_signature: None,
                 },
+                usage: None,
                 at: now_ms(),
             }),
             mk_record(SessionEvent::UserMessage {
@@ -1136,6 +1143,7 @@ mod tests {
                     thinking: None,
                     thinking_signature: None,
                 },
+                usage: None,
                 at: now_ms(),
             }),
             // Deferred result: no ToolCallRequested for "d1" anywhere.

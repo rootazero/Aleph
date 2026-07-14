@@ -794,6 +794,10 @@ impl HarnessRunner for AgentHarnessRunner {
             estimated_cost,
             context_tokens,
             context_window,
+            // Same pair the cost estimate above is keyed on — resolved once
+            // pre-loop, never the FailoverProvider wrapper name.
+            serving_model: Some(gauge_model.clone()),
+            serving_provider: Some(cost_provider.clone()),
         };
 
         // P4: single-source the terminal `Complete(outcome)` emit. The

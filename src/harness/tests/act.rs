@@ -590,6 +590,7 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
                 thinking: None,
                 thinking_signature: None,
             },
+            usage: None,
             at: now_ms(),
         },
         SessionEvent::ToolCallRequested {
@@ -1590,6 +1591,7 @@ fn assistant_message_event(text: &str) -> SessionEvent {
             thinking: None,
             thinking_signature: None,
         },
+        usage: None,
         at: now_ms(),
     }
 }

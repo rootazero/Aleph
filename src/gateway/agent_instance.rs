@@ -489,8 +489,6 @@ impl AgentInstance {
                     metadata,
                     input_tokens: 0,
                     output_tokens: 0,
-                    model: None,
-                    model_provider: None,
                     tool_call_id: None,
                     tool_name: None,
                 },
@@ -1043,6 +1041,8 @@ mod tests {
                         input_tokens: 40_000,
                         output_tokens: 15_000,
                         cost_usd: Some(0.42),
+                        model: None,
+                        model_provider: None,
                     },
                 ),
             )
@@ -1094,6 +1094,8 @@ mod tests {
                 input_tokens: 8,
                 output_tokens: 22,
                 cost_usd: None,
+                model: None,
+                model_provider: None,
             }),
         )
         .expect("some");

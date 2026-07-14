@@ -33,7 +33,7 @@ use crate::session::events::MessageContent;
 /// the session row. The Panel re-projects the occupancy onto its gauge when a
 /// session is reloaded from history — the gauge no longer depends on a live
 /// `run_complete` event surviving in memory.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct RunContextOccupancy {
     /// Current window occupancy (provider-reported prompt tokens of the last call).
     pub context_tokens: u32,
@@ -53,6 +53,13 @@ pub struct RunContextOccupancy {
     /// leaves the total honest-but-incomplete rather than silently understated by
     /// a fabricated $0.00.
     pub cost_usd: Option<f64>,
+    /// Model that served this run, and the provider that served it — the same
+    /// pair the cost estimate is keyed on. Recorded onto `sessions.model` /
+    /// `sessions.model_provider`, whose only writer was the dead
+    /// `LlmCallStarted` event and which therefore read back NULL forever.
+    pub model: Option<String>,
+    /// Provider id behind [`model`](Self::model).
+    pub model_provider: Option<String>,
 }
 
 /// Convert a `Vec<UnifiedMessage>` loop-history into an `orchestrator::FlowInput::History`.
@@ -293,6 +300,8 @@ pub async fn run_dispatch_and_drain_classified(
                         | crate::pricing::CostStatus::PartialMissingPrice => Some(c.usd),
                         crate::pricing::CostStatus::Unknown => None,
                     }),
+                model: outcome.serving_model.clone(),
+                model_provider: outcome.serving_provider.clone(),
             });
         }
     }

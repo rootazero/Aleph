@@ -212,6 +212,7 @@ impl SimpleExecutionEngine {
                                     thinking: None,
                                     thinking_signature: None,
                                 },
+                                usage: None,
                                 at: crate::session::events::now_ms(),
                             },
                         )

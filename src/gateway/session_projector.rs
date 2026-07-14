@@ -1,9 +1,9 @@
 //! `MessageProjector` — a [`SessionEventObserver`] that materialises session
 //! events into the `messages` table via a single ordered async drain task.
 //!
-//! The projector aggregates token counts and model name across the
-//! `LlmCallStarted` / `LlmCallEnded` events for a turn, then writes the
-//! assistant row with those accumulated values when `AssistantMessage` fires.
+//! Each assistant row carries the tokens of the single LLM call that produced
+//! it, read straight off `AssistantMessage.usage` — the harness emits one
+//! `AssistantMessage` per Think step, so calls and rows are 1:1.
 //!
 //! The observer itself is **non-blocking**: `on_appended` enqueues the event
 //! onto an mpsc channel and returns immediately. On back-pressure (or an
@@ -20,33 +20,19 @@
 //! keyed off a per-row source-seq watermark) is a P2 follow-up. Panel display
 //! is therefore best-effort; the SSOT is not.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
 use crate::gateway::session_store::types::MessageRecord;
 use crate::gateway::session_store::SessionStore;
-use crate::session::events::{SessionEvent, SessionEventRecord, TurnId};
+use crate::session::events::{SessionEvent, SessionEventRecord};
 use crate::session::observer::SessionEventObserver;
 use crate::session::projection::{project_row, row_id};
 use crate::session::service::SessionId;
 
 /// Capacity of the internal mpsc channel between the observer and the drain task.
 const QUEUE_CAP: usize = 4096;
-
-/// Per-turn accumulator for token counts and model identity.
-#[derive(Default)]
-pub(crate) struct TurnAccum {
-    model: Option<String>,
-    provider: Option<String>,
-    tin: i64,
-    tout: i64,
-}
-
-/// Per-turn token/model accumulator map, keyed by `(session_key, turn_id)`.
-/// Shared by the live drain and the boot-time `ProjectionReconciler`.
-pub(crate) type TurnAccums = HashMap<(String, TurnId), TurnAccum>;
 
 /// Materialises a session event stream into the `messages` store.
 pub struct MessageProjector {
@@ -61,9 +47,8 @@ impl MessageProjector {
     pub fn new(store: Arc<dyn SessionStore>) -> Arc<Self> {
         let (tx, mut rx) = mpsc::channel::<(SessionId, SessionEventRecord)>(QUEUE_CAP);
         tokio::spawn(async move {
-            let mut accums: TurnAccums = TurnAccums::new();
             while let Some((id, rec)) = rx.recv().await {
-                project_event(&store, &mut accums, &id, &rec, None).await;
+                project_event(&store, &id, &rec, None).await;
             }
         });
         Arc::new(Self { tx })
@@ -100,17 +85,12 @@ async fn event_retired(id: &SessionId, seq: u64) -> bool {
 /// A row-producing event whose seq has been RETIRED is suppressed the same way,
 /// so a clear/rewind that races the drain queue cannot re-materialise.
 ///
-/// When `rec.seq <= materialized_through`, a row-producing event still advances
-/// the accumulator but its WRITE is suppressed: that row is already in the
-/// projection, so re-projecting it is a no-op (reconcile idempotency, and
-/// dup-avoidance for mixed/legacy rows below the watermark). The reconciler
-/// replays the *full* event log with the watermark set to the last materialised
-/// source seq, so a turn's token accumulator sees every `LlmCall*` event even
-/// when the turn straddles the watermark, while its earlier rows stay
-/// suppressed.
+/// When `rec.seq <= materialized_through`, a row-producing event's WRITE is
+/// suppressed: that row is already in the projection, so re-projecting it is a
+/// no-op (reconcile idempotency, and dup-avoidance for mixed/legacy rows below
+/// the watermark).
 pub(crate) async fn project_event(
     store: &Arc<dyn SessionStore>,
-    accums: &mut TurnAccums,
     id: &SessionId,
     rec: &SessionEventRecord,
     materialized_through: Option<u64>,
@@ -119,35 +99,18 @@ pub(crate) async fn project_event(
     let suppress =
         materialized_through.is_some_and(|w| rec.seq <= w) || event_retired(id, rec.seq).await;
     match &rec.event {
-        SessionEvent::LlmCallStarted {
-            turn_id,
-            provider,
-            model,
-            ..
-        } => {
-            let a = accums.entry((key, *turn_id)).or_default();
-            a.model = Some(model.clone());
-            a.provider = Some(provider.clone());
-        }
-        SessionEvent::LlmCallEnded {
-            turn_id,
-            tokens_in,
-            tokens_out,
-            ..
-        } => {
-            let a = accums.entry((key, *turn_id)).or_default();
-            a.tin += *tokens_in as i64;
-            a.tout += *tokens_out as i64;
-        }
-        SessionEvent::AssistantMessage {
-            turn_id, content, ..
-        } => {
-            // Consume the turn's accumulator regardless of suppression so
-            // accumulator state advances identically to the live drain.
-            let a = accums.remove(&(key.clone(), *turn_id)).unwrap_or_default();
+        SessionEvent::AssistantMessage { content, usage, .. } => {
             if suppress {
                 return;
             }
+            // The tokens of the one call that produced this message. The
+            // cross-event accumulator this replaced (`LlmCallStarted` /
+            // `LlmCallEnded` folded per turn_id) was a correct design for an
+            // event pair no production code has ever emitted, so it summed
+            // nothing and wrote 0 onto every assistant row since the projector
+            // was written. Both events are gone; the number now rides on the
+            // message that spent it.
+            let usage = usage.clone().unwrap_or_default();
             if let Err(e) = store
                 .append_message(
                     id,
@@ -157,10 +120,8 @@ pub(crate) async fn project_event(
                         content: content.text.clone(),
                         timestamp: rec.created_at_ms,
                         metadata: None,
-                        input_tokens: a.tin,
-                        output_tokens: a.tout,
-                        model: a.model,
-                        model_provider: a.provider,
+                        input_tokens: i64::from(usage.input),
+                        output_tokens: i64::from(usage.output),
                         tool_call_id: None,
                         tool_name: None,
                     },
@@ -178,6 +139,8 @@ pub(crate) async fn project_event(
             input_tokens,
             output_tokens,
             cost_usd,
+            model,
+            model_provider,
             ..
         } => {
             // A run-meta at/below the watermark already stamped its assistant
@@ -195,6 +158,8 @@ pub(crate) async fn project_event(
                 input_tokens: *input_tokens,
                 output_tokens: *output_tokens,
                 cost_usd: *cost_usd,
+                model: model.clone(),
+                model_provider: model_provider.clone(),
             };
             if let Some(meta) = crate::gateway::agent_instance::build_message_metadata(
                 Some(run_id),
@@ -213,6 +178,12 @@ pub(crate) async fn project_event(
             // writer AND no column — yet both were surfaced to the model (the
             // `sessions` tool) and to the Panel, which read them as "this session
             // cost nothing".
+            //
+            // THE run's report, not A report: `add_message_full` no longer adds
+            // each message row's tokens onto these same three columns. It did,
+            // silently, for as long as the rows carried zeros; the moment the
+            // rows became real (above) that stopped being a harmless no-op and
+            // started double-billing the session.
             if *input_tokens > 0 || *output_tokens > 0 || cost_usd.is_some() {
                 if let Err(e) = store
                     .update_session_usage(
@@ -220,8 +191,8 @@ pub(crate) async fn project_event(
                         i64::from(*input_tokens),
                         i64::from(*output_tokens),
                         cost_usd.unwrap_or(0.0),
-                        None,
-                        None,
+                        model.as_deref(),
+                        model_provider.as_deref(),
                     )
                     .await
                 {
@@ -245,8 +216,6 @@ pub(crate) async fn project_event(
                             metadata: None,
                             input_tokens: 0,
                             output_tokens: 0,
-                            model: None,
-                            model_provider: None,
                             tool_call_id: row.tool_call_id,
                             tool_name: row.tool_name,
                         },
@@ -291,7 +260,8 @@ impl SessionEventObserver for MessageProjector {
 mod tests {
     use super::*;
     use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
-    use crate::session::events::{EventSeq, MessageContent, ToolOutput};
+    use crate::orchestrator::dispatch::TokenBreakdown;
+    use crate::session::events::{EventSeq, MessageContent, ToolOutput, TurnId};
     use std::time::Duration;
     use tempfile::tempdir;
 
@@ -325,6 +295,20 @@ mod tests {
         SessionEvent::AssistantMessage {
             turn_id: tid,
             content: msg_content("hello"),
+            usage: None,
+            at: 0,
+        }
+    }
+
+    fn assistant_msg_billed(tid: TurnId, input: u32, output: u32) -> SessionEvent {
+        SessionEvent::AssistantMessage {
+            turn_id: tid,
+            content: msg_content("hello"),
+            usage: Some(TokenBreakdown {
+                input,
+                output,
+                ..Default::default()
+            }),
             at: 0,
         }
     }
@@ -387,28 +371,9 @@ mod tests {
         let tid = uuid::Uuid::new_v4();
         let events: &[(EventSeq, SessionEvent)] = &[
             (1, user_msg(tid)),
-            (
-                2,
-                SessionEvent::LlmCallStarted {
-                    turn_id: tid,
-                    provider: "anthropic".into(),
-                    model: "claude".into(),
-                    at: 1,
-                },
-            ),
+            (2, assistant_msg_billed(tid, 100, 50)),
             (
                 3,
-                SessionEvent::LlmCallEnded {
-                    turn_id: tid,
-                    tokens_in: 100,
-                    tokens_out: 50,
-                    finish_reason: "stop".into(),
-                    at: 2,
-                },
-            ),
-            (4, assistant_msg(tid)),
-            (
-                5,
                 SessionEvent::AssistantRunMeta {
                     turn_id: tid,
                     run_id: "run_xyz".into(),
@@ -418,6 +383,8 @@ mod tests {
                     input_tokens: 4000,
                     output_tokens: 1678,
                     cost_usd: Some(0.12),
+                    model: Some("claude".into()),
+                    model_provider: Some("anthropic".into()),
                     at: 3,
                 },
             ),
@@ -483,41 +450,46 @@ mod tests {
         let store: Arc<dyn SessionStore> = Arc::new(manager);
         let projector = MessageProjector::new(store.clone());
 
+        // Two Think steps — two LLM calls, two assistant rows — then the run's
+        // one billing report. This is the shape production actually emits; the
+        // `LlmCallStarted`/`LlmCallEnded` pair this test used to hand-feed was
+        // emitted by nothing but this test.
         let tid = uuid::Uuid::new_v4();
         let events: [(EventSeq, SessionEvent); 6] = [
             (1, user_msg(tid)),
+            (2, assistant_msg_billed(tid, 10, 20)),
+            (3, tool_req(tid)),
+            (4, tool_res(tid)),
+            (5, assistant_msg_billed(tid, 30, 5)),
             (
-                2,
-                SessionEvent::LlmCallStarted {
+                6,
+                SessionEvent::AssistantRunMeta {
                     turn_id: tid,
-                    provider: "anthropic".into(),
-                    model: "claude".into(),
-                    at: 1,
+                    run_id: "run_1".into(),
+                    context_tokens: 40,
+                    context_window: 200_000,
+                    total_tokens: 65,
+                    // The run's billed total. Deliberately NOT 40/25 (the sum of
+                    // the two rows): a retry-discarded call is billed but never
+                    // becomes a message, so the session total is a superset of
+                    // its rows. Distinct numbers here are what make the
+                    // double-count assertion below meaningful.
+                    input_tokens: 45,
+                    output_tokens: 25,
+                    cost_usd: Some(0.02),
+                    model: Some("claude".into()),
+                    model_provider: Some("anthropic".into()),
+                    at: 5,
                 },
             ),
-            (
-                3,
-                SessionEvent::LlmCallEnded {
-                    turn_id: tid,
-                    tokens_in: 10,
-                    tokens_out: 20,
-                    finish_reason: "stop".into(),
-                    at: 2,
-                },
-            ),
-            (4, assistant_msg(tid)),
-            (5, tool_req(tid)),
-            (6, tool_res(tid)),
         ];
         for (seq, ev) in events {
             projector.on_appended(&id, &rec(seq, ev));
         }
 
-        // The drain task is async; poll until all rows appear or the timeout
-        // elapses. The 6 events produce exactly 4 message rows (user + assistant
-        // + tool_req + tool_res; the two Llm* events write no rows), so poll for
-        // 4 — polling for more would always burn the full timeout.
-        let msgs = poll_history(&store, &id, 4, Duration::from_secs(2)).await;
+        // 5 row-producing events (user + 2 assistant + tool_req + tool_res;
+        // AssistantRunMeta stamps rather than appends).
+        let msgs = poll_history(&store, &id, 5, Duration::from_secs(2)).await;
 
         assert_eq!(
             msgs.iter().filter(|m| m.role == "user").count(),
@@ -525,32 +497,30 @@ mod tests {
             "expected exactly 1 user row"
         );
 
-        // Per-message token aggregation: the assistant row carries the turn's
-        // accumulated `LlmCallEnded` tokens (the Panel token gauge feature).
-        let asst = msgs
-            .iter()
-            .find(|m| m.role == "assistant")
-            .expect("missing assistant row");
-        assert_eq!(asst.input_tokens, 10, "assistant input_tokens mismatch");
-        assert_eq!(asst.output_tokens, 20, "assistant output_tokens mismatch");
+        // Each assistant row carries the tokens of the ONE call that produced
+        // it — not the turn's sum, and not zero (which is what every assistant
+        // row in every real deployment carried).
+        let asst: Vec<_> = msgs.iter().filter(|m| m.role == "assistant").collect();
+        assert_eq!(asst.len(), 2, "expected one row per Think step");
+        assert_eq!((asst[0].input_tokens, asst[0].output_tokens), (10, 20));
+        assert_eq!((asst[1].input_tokens, asst[1].output_tokens), (30, 5));
 
-        // Model aggregation: `SessionManager`'s `messages` table has no
-        // per-message model column (`get_history` returns `model: None`), so
-        // model round-trips at the *session* level — which is what the Panel
-        // token gauge actually reads. The projector forwards the aggregated
-        // model into `append_message`, which UPDATEs `sessions.model`.
         let meta = store
             .get_metadata(&id)
             .await
             .unwrap()
             .expect("missing session metadata");
+        // The run's report is the session's ONLY token writer. If
+        // `add_message_full` also accumulated each row (as it did until the rows
+        // stopped being zeros), these would read 45+40 / 25+25.
+        assert_eq!(meta.input_tokens, 45, "session input_tokens double-counted");
+        assert_eq!(meta.output_tokens, 25, "session output_tokens double-counted");
         assert_eq!(
             meta.model.as_deref(),
             Some("claude"),
-            "session model mismatch (projector should aggregate LlmCallStarted model)"
+            "sessions.model must be written from the run's report"
         );
-        assert_eq!(meta.input_tokens, 10, "session input_tokens mismatch");
-        assert_eq!(meta.output_tokens, 20, "session output_tokens mismatch");
+        assert_eq!(meta.model_provider.as_deref(), Some("anthropic"));
 
         assert!(
             msgs.iter()
@@ -590,9 +560,8 @@ mod tests {
         events.retire_from(&id, 1).await.unwrap();
 
         // The drain now reaches them.
-        let mut accums = TurnAccums::new();
         for (seq, ev) in &turn {
-            project_event(&store, &mut accums, &id, &rec(*seq, ev.clone()), None).await;
+            project_event(&store, &id, &rec(*seq, ev.clone()), None).await;
         }
 
         assert!(
@@ -616,19 +585,18 @@ mod tests {
         let store: Arc<dyn SessionStore> = Arc::new(manager);
 
         let tid = uuid::Uuid::new_v4();
-        let mut accums = TurnAccums::new();
         // Everything at or below seq 1 is already materialised.
         let watermark = Some(1u64);
 
         // seq 1 is at the watermark → its write is suppressed.
-        project_event(&store, &mut accums, &id, &rec(1, user_msg(tid)), watermark).await;
+        project_event(&store, &id, &rec(1, user_msg(tid)), watermark).await;
         assert!(
             store.get_history(&id, None).await.unwrap().is_empty(),
             "a materialised seq must not be re-written"
         );
 
         // seq 2 is above the watermark → written.
-        project_event(&store, &mut accums, &id, &rec(2, user_msg(tid)), watermark).await;
+        project_event(&store, &id, &rec(2, user_msg(tid)), watermark).await;
         let rows = store.get_history(&id, None).await.unwrap();
         assert_eq!(rows.len(), 1, "an unseen seq must be written");
         assert_eq!(rows[0].role, "user");

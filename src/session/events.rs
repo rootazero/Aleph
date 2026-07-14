@@ -184,6 +184,22 @@ pub enum SessionEvent {
     AssistantMessage {
         turn_id: TurnId,
         content: MessageContent,
+        /// What the provider billed for the ONE LLM call that produced this
+        /// message. The harness emits an `AssistantMessage` per Think step, so
+        /// calls and assistant rows are 1:1 and the attribution is exact — there
+        /// is no "which of the run's N calls does this row own" to guess at.
+        ///
+        /// This is what `messages.input_tokens` / `output_tokens` are projected
+        /// from. They had a column, a `MessageRecord` field, and were handed to
+        /// the model (the `sessions` tool) and the Panel — as zeros, forever,
+        /// because their only feeder was a `SessionEvent::LlmCallEnded` that no
+        /// production code has ever emitted. A fabricated 0 reads as a
+        /// measurement; this is the measurement.
+        ///
+        /// `None` on replayed pre-existing logs (hence `serde(default)`) and on
+        /// a provider that reported no usage — absent, not zero.
+        #[serde(default)]
+        usage: Option<crate::orchestrator::dispatch::TokenBreakdown>,
         at: Timestamp,
     },
     /// Stamped after the assistant message row is written; carries the
@@ -195,15 +211,15 @@ pub enum SessionEvent {
         context_tokens: u32,
         context_window: u32,
         total_tokens: u64,
-        /// Prompt tokens this run spent. Accumulated onto the session row.
+        /// Prompt tokens this run spent — the whole run, including the calls a
+        /// retry discarded before they ever became a message. Accumulated onto
+        /// the session row, which is why the session total is a superset of the
+        /// sum of its message rows rather than equal to it.
         ///
-        /// The session's token columns exist and have always been written — with
-        /// zeros. Their only feeder was `SessionEvent::LlmCallEnded`, which no
-        /// production code has ever emitted (it is constructed exclusively inside
-        /// `#[cfg(test)]` modules), so `sessions.input_tokens` / `output_tokens` /
-        /// `total_tokens` were permanently 0 in every real deployment while
-        /// looking like they worked. This event is the run's one authoritative
-        /// report, so the counters ride here.
+        /// This event is the run's one authoritative billing report, so the
+        /// session-level counters ride here and NOWHERE else: `add_message_full`
+        /// used to also add each row's tokens onto the same three session
+        /// columns, which was harmless only because those tokens were always 0.
         #[serde(default)]
         input_tokens: u32,
         /// Completion tokens this run spent. Same story as `input_tokens`.
@@ -214,25 +230,17 @@ pub enum SessionEvent {
         /// session total.
         #[serde(default)]
         cost_usd: Option<f64>,
+        /// Model that served this run, and its provider — recorded onto
+        /// `sessions.model` / `sessions.model_provider`.
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        model_provider: Option<String>,
         at: Timestamp,
     },
     SystemMessage {
         turn_id: TurnId,
         content: String,
-        at: Timestamp,
-    },
-
-    LlmCallStarted {
-        turn_id: TurnId,
-        provider: String,
-        model: String,
-        at: Timestamp,
-    },
-    LlmCallEnded {
-        turn_id: TurnId,
-        tokens_in: u32,
-        tokens_out: u32,
-        finish_reason: String,
         at: Timestamp,
     },
 

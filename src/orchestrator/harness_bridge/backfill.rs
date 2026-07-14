@@ -85,6 +85,11 @@ pub(crate) async fn backfill_events_from_messages(
                     thinking: None,
                     thinking_signature: None,
                 },
+                // Rebuilt from a stored row, not observed from a call: the row
+                // records what was billed but not how (cache split, reasoning),
+                // and this event exists to restore conversational context, not
+                // to re-bill. Absent, not zero.
+                usage: None,
                 at: msg.timestamp,
             }),
             // "system", "tool", and unknown roles are skipped: backfill only
@@ -140,8 +145,6 @@ mod tests {
             metadata: None,
             input_tokens: 0,
             output_tokens: 0,
-            model: None,
-            model_provider: None,
             tool_call_id: None,
             tool_name: None,
         }

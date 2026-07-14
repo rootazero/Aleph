@@ -310,8 +310,6 @@ async fn test_tool_fields_persist_through_append_message_and_get_history() {
         metadata: None,
         input_tokens: 0,
         output_tokens: 0,
-        model: None,
-        model_provider: None,
         tool_call_id: Some("call_abc123".into()),
         tool_name: Some("bash_exec".into()),
     };
@@ -369,8 +367,6 @@ async fn legacy_session_history_readable_without_events() {
         metadata: None,
         input_tokens: 0,
         output_tokens: 0,
-        model: None,
-        model_provider: None,
         tool_call_id: None,
         tool_name: None,
     };
@@ -386,8 +382,6 @@ async fn legacy_session_history_readable_without_events() {
         metadata: None,
         input_tokens: 0,
         output_tokens: 0,
-        model: None,
-        model_provider: None,
         tool_call_id: None,
         tool_name: None,
     };

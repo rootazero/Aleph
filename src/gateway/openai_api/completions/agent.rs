@@ -321,6 +321,9 @@ pub async fn handle(
                     "assistant" => crate::session::events::SessionEvent::AssistantMessage {
                         turn_id,
                         content: mc,
+                        // Client-supplied history from an OpenAI-compat request —
+                        // we did not make this call and were not billed for it.
+                        usage: None,
                         at,
                     },
                     "system" => crate::session::events::SessionEvent::SystemMessage {
