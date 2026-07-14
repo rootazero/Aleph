@@ -57,6 +57,52 @@ pub fn control_action(url: &Url) -> Option<UpdateControl> {
     }
 }
 
+/// The injected banner as a JS template. Placeholders (`__MSG__`, `__LABEL__`,
+/// `__HREF__`, `__DISMISS__`, `__ISRESTART__`) are replaced with JSON-encoded
+/// (JS-safe) literals by `banner_script`. Built with `createElement` +
+/// `addEventListener` (never inline `onclick`) so a strict Panel CSP cannot
+/// block it; the buttons navigate via `location.href`, which is unaffected by
+/// script-CSP. On macOS (`data-platform="macos"`) the bar is offset below the
+/// overlay-titlebar traffic lights.
+const BANNER_TEMPLATE: &str = r#"(function(){
+var ID='__aleph-update-banner';
+var old=document.getElementById(ID); if(old) old.remove();
+var mac=document.documentElement.getAttribute('data-platform')==='macos';
+var dark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
+var bar=document.createElement('div'); bar.id=ID; bar.setAttribute('role','status');
+bar.style.cssText='position:fixed;left:0;right:0;top:'+(mac?'28px':'0px')+';z-index:2147483000;display:flex;align-items:center;gap:12px;padding:8px 14px;font:13px -apple-system,system-ui,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.25);'+(dark?'background:#1f2430;color:#e6e9ef;':'background:#f4f6fb;color:#1b2130;');
+var msg=document.createElement('span'); msg.style.cssText='flex:1;'; msg.textContent=__MSG__;
+var act=document.createElement('button'); act.textContent=__LABEL__;
+act.style.cssText='cursor:pointer;border:0;border-radius:6px;padding:5px 12px;font:inherit;font-weight:600;background:#3b82f6;color:#fff;';
+act.addEventListener('click',function(){ if(__ISRESTART__){ act.disabled=true; act.textContent='Updating…'; msg.textContent='Updating — Aleph will restart shortly.'; } window.location.href=__HREF__; });
+var close=document.createElement('button'); close.setAttribute('aria-label','Dismiss'); close.textContent='×';
+close.style.cssText='cursor:pointer;border:0;background:transparent;color:inherit;font-size:18px;line-height:1;padding:0 6px;';
+close.addEventListener('click',function(){ window.location.href=__DISMISS__; });
+bar.appendChild(msg); bar.appendChild(act); bar.appendChild(close);
+(document.body||document.documentElement).appendChild(bar);
+})();"#;
+
+/// Build the banner-injection JS for a staged `version`. `self_install`
+/// distinguishes platforms that can self-update (macOS / Windows / Linux
+/// AppImage — restart-to-apply) from package-manager installs (Linux
+/// .deb/.rpm — point the user at the releases page instead).
+fn banner_script(version: &str, self_install: bool) -> String {
+    let msg = serde_json::to_string(&format!("Aleph v{version} is ready"))
+        .unwrap_or_else(|_| "\"Aleph update is ready\"".to_string());
+    let (label, href, is_restart) = if self_install {
+        ("Restart to update", APPLY_PATH, "true")
+    } else {
+        ("How to update", RELEASES_URL, "false")
+    };
+    let json = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string());
+    BANNER_TEMPLATE
+        .replace("__MSG__", &msg)
+        .replace("__LABEL__", &json(label))
+        .replace("__HREF__", &json(href))
+        .replace("__DISMISS__", &json(DISMISS_PATH))
+        .replace("__ISRESTART__", is_restart)
+}
+
 /// Shared update state, managed by Tauri so the background checker, the
 /// tray, and the macOS menu agree on whether an update is waiting.
 #[derive(Default)]
@@ -384,5 +430,36 @@ mod tests {
     fn control_action_matches_apply_even_with_query() {
         let url = Url::parse("http://127.0.0.1:18790/__aleph-shell/update/apply?v=1").unwrap();
         assert_eq!(control_action(&url), Some(UpdateControl::Apply));
+    }
+
+    #[test]
+    fn banner_script_self_install_offers_restart_and_sentinels() {
+        let js = banner_script("26.7.14", true);
+        assert!(js.contains("Aleph v26.7.14 is ready"));
+        assert!(js.contains("Restart to update"));
+        assert!(js.contains("/__aleph-shell/update/apply"));
+        assert!(js.contains("/__aleph-shell/update/dismiss"));
+        // Idempotent injection: removes any prior banner by id first.
+        assert!(js.contains("__aleph-update-banner"));
+    }
+
+    #[test]
+    fn banner_script_package_manager_offers_howto_not_restart() {
+        let js = banner_script("26.7.14", false);
+        assert!(js.contains("How to update"));
+        assert!(js.contains(RELEASES_URL));
+        // The restart apply-sentinel must NOT be the primary action here.
+        assert!(!js.contains("/__aleph-shell/update/apply"));
+        // Dismiss still works.
+        assert!(js.contains("/__aleph-shell/update/dismiss"));
+    }
+
+    #[test]
+    fn banner_script_escapes_a_hostile_version() {
+        let js = banner_script("1\"; alert(1);//", true);
+        // The embedded quote is escaped by serde_json, so it cannot break out
+        // of the JS string literal.
+        assert!(!js.contains("1\"; alert"));
+        assert!(js.contains("1\\\"; alert"));
     }
 }
