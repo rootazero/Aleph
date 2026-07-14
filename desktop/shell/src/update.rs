@@ -95,16 +95,24 @@ fn banner_script(version: &str, self_install: bool) -> String {
         ("How to update", RELEASES_URL, "false")
     };
     let json = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string());
+    // Apply `__MSG__` LAST: it carries the attacker-influenceable `version`, and
+    // the other replacement values are fixed constants with no placeholder
+    // tokens, so substituting the message body last means no later pass can
+    // rewrite a placeholder token that appeared inside the version string.
     BANNER_TEMPLATE
-        .replace("__MSG__", &msg)
         .replace("__LABEL__", &json(label))
         .replace("__HREF__", &json(href))
         .replace("__DISMISS__", &json(DISMISS_PATH))
         .replace("__ISRESTART__", is_restart)
+        .replace("__MSG__", &msg)
 }
 
 /// Inject (or replace) the update banner in the main window's current
 /// document. No-op when nothing is staged or the main window is gone.
+///
+/// `stage()` runs on a background async task, but `window.eval` touches the
+/// webview, which is UI-thread-affine (WebView2 on Windows especially). Marshal
+/// the injection to the main thread, mirroring `relabel_update_items`.
 pub fn show_update_banner(app: &AppHandle) {
     let version = app
         .state::<Updater>()
@@ -115,11 +123,21 @@ pub fn show_update_banner(app: &AppHandle) {
     let Some(version) = version else {
         return;
     };
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-    if let Err(e) = window.eval(banner_script(&version, updater_can_self_install())) {
-        tracing::debug!("could not inject the update banner: {e}");
+    let script = banner_script(&version, updater_can_self_install());
+    let app = app.clone();
+    let dispatch = app.run_on_main_thread({
+        let app = app.clone();
+        move || {
+            let Some(window) = app.get_webview_window("main") else {
+                return;
+            };
+            if let Err(e) = window.eval(script) {
+                tracing::debug!("could not inject the update banner: {e}");
+            }
+        }
+    });
+    if let Err(e) = dispatch {
+        tracing::debug!("could not dispatch the update banner injection: {e}");
     }
 }
 
@@ -523,5 +541,13 @@ mod tests {
         // of the JS string literal.
         assert!(!js.contains("1\"; alert"));
         assert!(js.contains("1\\\"; alert"));
+    }
+
+    #[test]
+    fn banner_script_does_not_launder_placeholder_tokens_in_version() {
+        // A hostile version embedding a later placeholder token must survive
+        // verbatim in the message, not be rewritten by a subsequent pass.
+        let js = banner_script("__HREF__", true);
+        assert!(js.contains("Aleph v__HREF__ is ready"));
     }
 }
