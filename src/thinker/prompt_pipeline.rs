@@ -138,14 +138,14 @@ impl PromptPipeline {
         // 3. Enforce budget — never trim the foundational layers. Each entry
         //    maps to a real registered layer (see `default_layers`): 50 soul,
         //    55 agent_role, 60 curated_memory, 75 profile, 100 role, 500 tools,
-        //    501 hydrated_tools, 600 security. The previous list carried a
-        //    phantom `1200` (no layer at that priority) and left `security`
-        //    (600) trimmable — safety guidance must survive budget pressure.
+        //    600 security. A phantom entry here protects nothing and misleads the
+        //    next reader: `1200` was one (no layer ever had that priority), and
+        //    `501` became one when `HydratedToolsLayer` was deleted.
         let refs: Vec<(u32, &str, &str)> = sections
             .iter()
             .map(|(p, n, c)| (*p, *n, c.as_str()))
             .collect();
-        let protected = &[50u32, 55, 60, 75, 100, 500, 501, 600];
+        let protected = &[50u32, 55, 60, 75, 100, 500, 600];
         let (prompt, stats) = enforce_budget(&refs, budget.max_total_chars, protected);
 
         PromptResult {
