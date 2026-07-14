@@ -668,8 +668,30 @@ mod tests {
         }
     }
 
+    /// A session of this test's own.
+    ///
+    /// `ephemeral()` mints a fresh uuid, so every call yields a distinct key
+    /// (`agent:ws-test:ephemeral:<uuid>`) — which is the only reason these tests
+    /// can run in parallel at all: the denial ledger is process-global and keyed
+    /// by session, and its session-pause flag is sticky, so two tests sharing a
+    /// key would share a bucket and become order-dependent.
+    ///
+    /// That isolation is incidental — nothing here would fail loudly if
+    /// `ephemeral()` ever became deterministic. [`sid_is_unique_per_call`] pins
+    /// it, so the day it changes, one obvious test breaks instead of a dozen
+    /// unrelated ones flaking.
     fn sid() -> SessionId {
         crate::routing::session_key::SessionKey::ephemeral("ws-test")
+    }
+
+    #[test]
+    fn sid_is_unique_per_call() {
+        assert_ne!(
+            sid().to_string(),
+            sid().to_string(),
+            "every test must own its session: the denial ledger is process-global \
+             and keyed by session, and its pause flag is sticky"
+        );
     }
 
     fn build_gate_auto_deny() -> Arc<ApprovalGate> {
@@ -917,9 +939,11 @@ mod tests {
             network: NetworkPolicy::AllowAll,
             ..SandboxCapabilities::strict()
         };
-        // A key of this test's own: the ledger is process-global, and `sid()` is
-        // a fixed key shared with the other tests in this module.
-        let session = crate::routing::session_key::SessionKey::ephemeral("ws-cross-gate");
+        // The denial ledger is process-global, so this test must not share a
+        // bucket with any other. It doesn't: `sid()` mints a fresh
+        // `agent:ws-test:ephemeral:<uuid>` per call, so every test here already
+        // owns its own session.
+        let session = sid();
 
         let denied = sandbox
             .execute(SandboxCommand {

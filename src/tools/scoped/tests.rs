@@ -1201,6 +1201,18 @@ async fn declared_confirmation_tool_runs_when_approved() {
 
 /// Build a `TurnContext` with a unique `SessionKey` so each test isolates its
 /// entry in the process-wide session approval memory.
+/// `agent` MUST be unique per test.
+///
+/// `SessionKey::main` is deterministic, and the stores this key addresses — the
+/// session approval memory and the denial ledger — are process-wide, with a
+/// sticky session-pause flag. Two tests reusing one agent name therefore share a
+/// bucket: a grant remembered by one satisfies the other's prompt, a denial
+/// recorded by one auto-refuses the other, and three denials between them pause
+/// both. The failures are order-dependent, so they surface as flakes, not as a
+/// clean red test.
+///
+/// (The sandbox workspace tests get this for free — see `sid()` there, which
+/// mints an ephemeral uuid. Here it rests on naming discipline.)
 fn turn_ctx(agent: &str) -> crate::tools::turn_context::TurnContext {
     crate::tools::turn_context::TurnContext {
         session_key: crate::routing::session_key::SessionKey::main(agent),
@@ -1427,7 +1439,11 @@ async fn chat_tier_blocked_from_config_tool() {
     let registry = make_registry(&["cron_manage"]);
     let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(
         crate::tools::turn_context::TurnContext {
-            session_key: SessionKey::main("a"),
+            // Distinct from every other test's key on purpose: `main()` is
+            // deterministic, and the approval stores it keys (session memory +
+            // denial ledger) are process-global with a sticky session-pause
+            // flag. Two tests on one key share a bucket and go order-dependent.
+            session_key: SessionKey::main("agent-cfg-chat-tier"),
             run_id: String::new(),
             channel_id: String::new(),
             conversation_id: String::new(),
@@ -1447,7 +1463,7 @@ async fn operator_tier_allowed_config_tool() {
     let registry = make_registry(&["cron_manage"]);
     let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(
         crate::tools::turn_context::TurnContext {
-            session_key: SessionKey::main("a"),
+            session_key: SessionKey::main("agent-cfg-operator-tier"),
             run_id: String::new(),
             channel_id: String::new(),
             conversation_id: String::new(),
