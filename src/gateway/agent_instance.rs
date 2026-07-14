@@ -1040,6 +1040,9 @@ mod tests {
                         context_tokens: 42_000,
                         context_window: 200_000,
                         total_tokens: 55_000,
+                        input_tokens: 40_000,
+                        output_tokens: 15_000,
+                        cost_usd: Some(0.42),
                     },
                 ),
             )
@@ -1088,6 +1091,9 @@ mod tests {
                 context_tokens: 10,
                 context_window: 20,
                 total_tokens: 30,
+                input_tokens: 8,
+                output_tokens: 22,
+                cost_usd: None,
             }),
         )
         .expect("some");

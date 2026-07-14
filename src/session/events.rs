@@ -195,6 +195,25 @@ pub enum SessionEvent {
         context_tokens: u32,
         context_window: u32,
         total_tokens: u64,
+        /// Prompt tokens this run spent. Accumulated onto the session row.
+        ///
+        /// The session's token columns exist and have always been written — with
+        /// zeros. Their only feeder was `SessionEvent::LlmCallEnded`, which no
+        /// production code has ever emitted (it is constructed exclusively inside
+        /// `#[cfg(test)]` modules), so `sessions.input_tokens` / `output_tokens` /
+        /// `total_tokens` were permanently 0 in every real deployment while
+        /// looking like they worked. This event is the run's one authoritative
+        /// report, so the counters ride here.
+        #[serde(default)]
+        input_tokens: u32,
+        /// Completion tokens this run spent. Same story as `input_tokens`.
+        #[serde(default)]
+        output_tokens: u32,
+        /// This run's cost in USD, or `None` when it could not be priced.
+        /// `None` ≠ 0.0 — an unpriced run must not silently understate the
+        /// session total.
+        #[serde(default)]
+        cost_usd: Option<f64>,
         at: Timestamp,
     },
     SystemMessage {

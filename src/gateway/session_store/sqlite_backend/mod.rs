@@ -71,6 +71,9 @@ fn map_session_metadata(
         parent_session_key: row.get(15)?,
         compaction_count: row.get(16)?,
         derived_title: row.get(17).ok(),
+        // Column added later; `.ok()` + default keeps a pre-migration row (or a
+        // NULL) reading as 0.0 rather than panicking.
+        estimated_cost_usd: row.get::<_, Option<f64>>(18).ok().flatten().unwrap_or(0.0),
         ..Default::default()
     })
 }
@@ -96,7 +99,8 @@ impl SessionStore for SessionManager {
                 "SELECT key, agent_id, session_type, created_at, last_active_at,
                         message_count, total_tokens, auto_reset_at, state, metadata,
                         label, input_tokens, output_tokens, model, model_provider,
-                        parent_session_key, compaction_count, derived_title
+                        parent_session_key, compaction_count, derived_title,
+                        estimated_cost_usd
                  FROM sessions WHERE key = ?",
                 params![&key_str],
                 map_session_metadata,
@@ -550,12 +554,20 @@ impl SessionStore for SessionManager {
         key: &SessionKey,
         input_tokens: i64,
         output_tokens: i64,
+        cost_usd: f64,
         model: Option<&str>,
         model_provider: Option<&str>,
     ) -> Result<(), SessionStoreError> {
-        self.update_session_usage(key, input_tokens, output_tokens, model, model_provider)
-            .await
-            .map_err(map_err)
+        self.update_session_usage(
+            key,
+            input_tokens,
+            output_tokens,
+            cost_usd,
+            model,
+            model_provider,
+        )
+        .await
+        .map_err(map_err)
     }
 
     async fn get_session_preview(

@@ -175,11 +175,16 @@ pub(crate) async fn project_event(
             context_tokens,
             context_window,
             total_tokens,
+            input_tokens,
+            output_tokens,
+            cost_usd,
             ..
         } => {
             // A run-meta at/below the watermark already stamped its assistant
             // row during the live drain; the reconciler's full-log replay must
-            // not re-stamp it (keeps suppression a complete no-op).
+            // not re-stamp it (keeps suppression a complete no-op). The same
+            // guard makes the spend accumulation below idempotent — a replay
+            // must not bill the session twice for one run.
             if suppress {
                 return;
             }
@@ -187,6 +192,9 @@ pub(crate) async fn project_event(
                 context_tokens: *context_tokens,
                 context_window: *context_window,
                 total_tokens: *total_tokens,
+                input_tokens: *input_tokens,
+                output_tokens: *output_tokens,
+                cost_usd: *cost_usd,
             };
             if let Some(meta) = crate::gateway::agent_instance::build_message_metadata(
                 Some(run_id),
@@ -194,6 +202,30 @@ pub(crate) async fn project_event(
             ) {
                 if let Err(e) = store.stamp_last_assistant_metadata(id, &meta).await {
                     tracing::warn!(error = %e, "projector: stamp run-meta failed");
+                }
+            }
+
+            // Accumulate this run's spend onto the session row. This resurrects
+            // `update_session_usage`, which was written, tested, and never called
+            // from production: its only feeder was `SessionEvent::LlmCallEnded`,
+            // an event no production code has ever emitted. So the session's
+            // token columns were permanently 0, and `estimated_cost_usd` had no
+            // writer AND no column — yet both were surfaced to the model (the
+            // `sessions` tool) and to the Panel, which read them as "this session
+            // cost nothing".
+            if *input_tokens > 0 || *output_tokens > 0 || cost_usd.is_some() {
+                if let Err(e) = store
+                    .update_session_usage(
+                        id,
+                        i64::from(*input_tokens),
+                        i64::from(*output_tokens),
+                        cost_usd.unwrap_or(0.0),
+                        None,
+                        None,
+                    )
+                    .await
+                {
+                    tracing::warn!(error = %e, "projector: session usage accumulation failed");
                 }
             }
         }
@@ -383,6 +415,9 @@ mod tests {
                     context_tokens: 1234,
                     context_window: 200_000,
                     total_tokens: 5678,
+                    input_tokens: 4000,
+                    output_tokens: 1678,
+                    cost_usd: Some(0.12),
                     at: 3,
                 },
             ),

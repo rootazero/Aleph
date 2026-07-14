@@ -492,13 +492,27 @@ async fn test_get_total_tokens_none_then_accumulates() {
     assert_eq!(manager.get_total_tokens(&key).await.unwrap(), Some(0));
 
     manager
-        .update_session_usage(&key, 100, 40, None, None)
+        .update_session_usage(&key, 100, 40, 0.25, None, None)
         .await
         .unwrap();
     manager
-        .update_session_usage(&key, 10, 5, None, None)
+        .update_session_usage(&key, 10, 5, 0.05, None, None)
         .await
         .unwrap();
     // Cumulative input+output across both turns: 140 + 15 = 155.
     assert_eq!(manager.get_total_tokens(&key).await.unwrap(), Some(155));
+
+    // …and the cost accumulates on the same row. `estimated_cost_usd` had no
+    // column and no writer until now, yet the `sessions` tool and the Panel both
+    // reported it to the user as this session's spend — permanently $0.00.
+    let sessions = manager.list_sessions(None).await.unwrap();
+    let meta = sessions
+        .iter()
+        .find(|m| m.key == key.to_key_string())
+        .expect("session row");
+    assert!(
+        (meta.estimated_cost_usd - 0.30).abs() < 1e-9,
+        "expected 0.25 + 0.05 = 0.30, got {}",
+        meta.estimated_cost_usd
+    );
 }

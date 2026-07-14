@@ -28,9 +28,9 @@ use crate::orchestrator::{
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::session::events::MessageContent;
 
-/// Last completed turn's context-window occupancy, captured from the
-/// authoritative [`FlowOutcome`] so the gateway can persist it onto the
-/// assistant message. The Panel re-projects it onto the occupancy gauge when a
+/// What a completed run is worth remembering, captured from the authoritative
+/// [`FlowOutcome`] so the gateway can persist it onto the assistant message and
+/// the session row. The Panel re-projects the occupancy onto its gauge when a
 /// session is reloaded from history — the gauge no longer depends on a live
 /// `run_complete` event surviving in memory.
 #[derive(Debug, Clone, Copy)]
@@ -41,6 +41,18 @@ pub struct RunContextOccupancy {
     pub context_window: u32,
     /// Run-cumulative token total — rides along for the gauge tooltip.
     pub total_tokens: u64,
+    /// Prompt tokens this run actually spent, for the session's cumulative
+    /// counters. Distinct from `context_tokens`, which is an occupancy SNAPSHOT
+    /// of the last call, not a sum.
+    pub input_tokens: u32,
+    /// Completion tokens this run actually spent.
+    pub output_tokens: u32,
+    /// This run's cost in USD, or `None` when the price table could not produce
+    /// one (unknown provider/model). `None` is NOT zero: the session's cumulative
+    /// total accumulates only what it can actually price, so an unpriced run
+    /// leaves the total honest-but-incomplete rather than silently understated by
+    /// a fabricated $0.00.
+    pub cost_usd: Option<f64>,
 }
 
 /// Convert a `Vec<UnifiedMessage>` loop-history into an `orchestrator::FlowInput::History`.
@@ -252,17 +264,35 @@ pub async fn run_dispatch_and_drain_classified(
         }
     };
 
-    // Capture the authoritative context-window occupancy for persistence onto
-    // the assistant message (so the gauge survives a session reload). Only when
-    // a real LLM call ran (`context_tokens > 0`) and core resolved a window —
-    // a no-LLM run leaves the slot untouched so the gauge stays hidden. On a
-    // provider-fallback retry the last successful attempt overwrites the slot.
-    if outcome.context_tokens > 0 && outcome.context_window > 0 {
+    // Capture what this run is worth remembering: the authoritative
+    // context-window occupancy (so the gauge survives a session reload) and the
+    // tokens + USD it spent (so the session's cumulative counters are real).
+    //
+    // The gauge fields require a real LLM call AND a resolved window; the spend
+    // fields only require that tokens moved. A run that spent tokens without a
+    // usable window still records its spend — otherwise the session cost would
+    // quietly skip it. A run that did nothing at all leaves the slot untouched,
+    // so the gauge stays hidden. On a provider-fallback retry the last
+    // successful attempt overwrites the slot.
+    let spent = outcome.token_breakdown != crate::orchestrator::dispatch::TokenBreakdown::default();
+    if (outcome.context_tokens > 0 && outcome.context_window > 0) || spent {
         if let Ok(mut slot) = occupancy_out.lock() {
             *slot = Some(RunContextOccupancy {
                 context_tokens: outcome.context_tokens,
                 context_window: outcome.context_window,
                 total_tokens: u64::from(outcome.total_tokens),
+                input_tokens: outcome.token_breakdown.input,
+                output_tokens: outcome.token_breakdown.output,
+                // `CostStatus::Unknown` ⇒ no estimate exists. Record `None`, not
+                // 0.0 — see the field doc.
+                cost_usd: outcome
+                    .estimated_cost
+                    .as_ref()
+                    .and_then(|c| match c.status {
+                        crate::pricing::CostStatus::Complete
+                        | crate::pricing::CostStatus::PartialMissingPrice => Some(c.usd),
+                        crate::pricing::CostStatus::Unknown => None,
+                    }),
             });
         }
     }

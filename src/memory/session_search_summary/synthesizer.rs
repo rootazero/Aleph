@@ -356,6 +356,7 @@ pub(crate) mod test_support {
             _key: &SessionKey,
             _input_tokens: i64,
             _output_tokens: i64,
+            _cost_usd: f64,
             _model: Option<&str>,
             _model_provider: Option<&str>,
         ) -> Result<(), SessionStoreError> {

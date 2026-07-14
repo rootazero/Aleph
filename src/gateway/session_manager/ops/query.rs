@@ -21,7 +21,8 @@ impl SessionManager {
         let sql = "SELECT key, agent_id, session_type, created_at, last_active_at,
                           message_count, total_tokens, auto_reset_at, state, metadata,
                           label, input_tokens, output_tokens, model, model_provider,
-                          parent_session_key, compaction_count, derived_title
+                          parent_session_key, compaction_count, derived_title,
+                        estimated_cost_usd
                    FROM sessions";
 
         let sessions = if let Some(id) = agent_id {
@@ -139,7 +140,8 @@ impl SessionManager {
                 "SELECT key, agent_id, session_type, created_at, last_active_at,
                         message_count, total_tokens, auto_reset_at, state, metadata,
                         label, input_tokens, output_tokens, model, model_provider,
-                        parent_session_key, compaction_count, derived_title
+                        parent_session_key, compaction_count, derived_title,
+                        estimated_cost_usd
                  FROM sessions WHERE key = ?",
                 params![&key_str],
                 map_session_metadata,
@@ -286,7 +288,8 @@ impl SessionManager {
                 "SELECT key, agent_id, session_type, created_at, last_active_at,
                         message_count, total_tokens, auto_reset_at, state, metadata,
                         label, input_tokens, output_tokens, model, model_provider,
-                        parent_session_key, compaction_count, derived_title
+                        parent_session_key, compaction_count, derived_title,
+                        estimated_cost_usd
                  FROM sessions WHERE state = ? ORDER BY last_active_at DESC",
             )
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;

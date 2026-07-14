@@ -374,6 +374,11 @@ impl SessionManager {
             ("sessions", "parent_session_key", "TEXT"),
             ("sessions", "compaction_count", "INTEGER DEFAULT 0"),
             ("sessions", "derived_title", "TEXT"),
+            // `SessionMetadata.estimated_cost_usd` has been a struct field with
+            // no column and no writer since it was introduced — it read back 0.0
+            // forever while being surfaced to the model (the `sessions` tool) and
+            // to the Panel as this session's cost. Give it somewhere to live.
+            ("sessions", "estimated_cost_usd", "REAL DEFAULT 0"),
             ("messages", "input_tokens", "INTEGER DEFAULT 0"),
             ("messages", "output_tokens", "INTEGER DEFAULT 0"),
             ("messages", "tool_call_id", "TEXT"),

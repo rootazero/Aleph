@@ -598,6 +598,9 @@ where
                             context_tokens: 0,
                             context_window: 0,
                             total_tokens: 0,
+                            input_tokens: 0,
+                            output_tokens: 0,
+                            cost_usd: None,
                         },
                     };
                     let _ = svc
@@ -609,6 +612,9 @@ where
                                 context_tokens: occ.context_tokens,
                                 context_window: occ.context_window,
                                 total_tokens: occ.total_tokens,
+                                input_tokens: occ.input_tokens,
+                                output_tokens: occ.output_tokens,
+                                cost_usd: occ.cost_usd,
                                 at: crate::session::events::now_ms(),
                             },
                         )

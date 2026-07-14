@@ -1081,6 +1081,7 @@ impl SessionStore for FileSessionStore {
         key: &SessionKey,
         input_tokens: i64,
         output_tokens: i64,
+        cost_usd: f64,
         model: Option<&str>,
         model_provider: Option<&str>,
     ) -> Result<(), SessionStoreError> {
@@ -1089,6 +1090,9 @@ impl SessionStore for FileSessionStore {
             meta.input_tokens += input_tokens;
             meta.output_tokens += output_tokens;
             meta.total_tokens += input_tokens + output_tokens;
+            // The file backend serializes the whole struct, so unlike SQLite it
+            // always HAD somewhere to put this — it just never had a writer.
+            meta.estimated_cost_usd += cost_usd;
             if let Some(m) = model {
                 meta.model = Some(m.to_string());
             }
