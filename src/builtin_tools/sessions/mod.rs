@@ -7,7 +7,6 @@
 //!
 //! - [`SessionsListTool`] - List accessible sessions for discovery
 //! - [`SessionsSendTool`] - Send messages to other sessions (same or different agent)
-//! - [`SessionsSpawnTool`] - Spawn sub-agent sessions for delegated tasks
 //!
 //! # Helper Functions
 //!
@@ -21,18 +20,12 @@
 //! ```rust,ignore
 //! use alephcore::builtin_tools::sessions::{SessionsListTool, SessionsListArgs};
 //! use alephcore::builtin_tools::sessions::{SessionsSendTool, SessionsSendArgs};
-//! use alephcore::builtin_tools::sessions::{SessionsSpawnTool, SessionsSpawnArgs};
 //! use alephcore::gateway::context::GatewayContext;
 //! use alephcore::tools::AlephTool;
 //!
 //! // Create tools with gateway context
 //! let list_tool = SessionsListTool::new(gateway_context.clone(), "main");
 //! let send_tool = SessionsSendTool::with_context(gateway_context.clone(), "main");
-//! let spawn_tool = SessionsSpawnTool::with_context(
-//!     gateway_context,
-//!     "main",
-//!     vec!["*".to_string()], // Allow spawning any agent
-//! );
 //!
 //! // List accessible sessions
 //! let list_args = SessionsListArgs {
@@ -51,19 +44,6 @@
 //! };
 //! let result = send_tool.call(send_args).await?;
 //! println!("Reply: {:?}", result.reply);
-//!
-//! // Spawn a sub-agent for a delegated task
-//! let spawn_args = SessionsSpawnArgs {
-//!     task: "Analyze this code and provide suggestions".to_string(),
-//!     label: Some("code-reviewer".to_string()),
-//!     agent_id: Some("reviewer".to_string()),
-//!     model: None,
-//!     thinking: None,
-//!     run_timeout_seconds: 120,
-//!     cleanup: CleanupPolicy::Ephemeral,
-//! };
-//! let spawn_result = spawn_tool.call(spawn_args).await?;
-//! println!("Spawned: {:?}", spawn_result.child_session_key);
 //! ```
 
 pub mod helpers;
@@ -71,7 +51,6 @@ pub mod list_tool;
 pub mod new_tool;
 pub mod send_tool;
 pub mod set_topic_tool;
-pub mod spawn_tool;
 
 pub use helpers::{
     classify_session_kind, derive_channel, parse_session_key, resolve_display_key, SessionKind,
@@ -80,10 +59,6 @@ pub use helpers::{
 pub use list_tool::{SessionListRow, SessionsListArgs, SessionsListOutput, SessionsListTool};
 
 pub use send_tool::{SessionsSendArgs, SessionsSendOutput, SessionsSendStatus, SessionsSendTool};
-
-pub use spawn_tool::{
-    CleanupPolicy, SessionsSpawnArgs, SessionsSpawnOutput, SessionsSpawnTool, SpawnStatus,
-};
 
 pub use new_tool::{SessionNewArgs, SessionNewOutput, SessionNewTool};
 pub use set_topic_tool::{SessionSetTopicArgs, SessionSetTopicOutput, SessionSetTopicTool};

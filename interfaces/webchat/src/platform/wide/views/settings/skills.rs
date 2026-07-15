@@ -994,7 +994,7 @@ fn AddSkillDialog(
         dialog_error.set(None);
         spawn_local(async move {
             match state
-                .rpc_call("skills.add", json!({ "url": trimmed }))
+                .rpc_call("skills.install", json!({ "url": trimmed }))
                 .await
             {
                 Ok(_) => {

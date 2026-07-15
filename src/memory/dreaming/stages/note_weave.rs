@@ -25,7 +25,7 @@
 //! now-existing `notes_links` row.
 //!
 //! Keyword overlap alone leaves a blind spot: an orphan compressed from the
-//! *same source document* as a peer is strongly related (the 4-signal
+//! *same source document* as a peer is strongly related (the 5-signal
 //! source-overlap / Adamic-Adar / type-affinity score), yet its LLM-extracted
 //! keywords need not textually overlap that peer's — so it stays isolated
 //! forever. Phase 5 closes that gap by reusing the relatedness
@@ -82,7 +82,7 @@ const SEMANTIC_REL_FACTOR: f32 = 1.25;
 /// Max semantic links emitted per orphan (the nearest plus very-close kin).
 const SEMANTIC_MAX_PER_ORPHAN: usize = 2;
 
-/// Minimum 4-signal relatedness score for the Phase 5 structural fallback to
+/// Minimum 5-signal relatedness score for the Phase 5 structural fallback to
 /// link an orphan. An orphan has no edges, so its score comes only from
 /// source-overlap (≤4.0 per rarest shared source) + type-affinity (1.0); a
 /// floor of 2.0 demands a reasonably-specific shared source (cited by ≲4 notes)
@@ -270,8 +270,9 @@ impl DreamStage for NoteWeaveStage {
         //       place, so a note whose wording shares no exact keyword with any
         //       peer still attaches to its closest semantic kin (zero LLM, reuses
         //       the sqlite-vec index already built at ingest).
-        // Keyword links rank first so their human-meaningful relation wins over
-        // the generic "semantic" label when both name the same pair. ---
+        // Keyword links rank first so the more specific `co_tag` (shared-keyword)
+        // edge wins over the `semantic` (embedding-nearest) label when both name
+        // the same pair. ---
         let orphan_set: std::collections::HashSet<&str> =
             orphans.iter().map(String::as_str).collect();
         let keyword_links: Vec<LinkTriple> = pair_by_overlap(&keywords)
@@ -314,7 +315,9 @@ impl DreamStage for NoteWeaveStage {
 
         // --- Phase 4: write each pair bidirectionally. Body link FIRST
         // (append_to_note creates the NULL-relation row), THEN
-        // add_link_with_relation stamps the keyword. Each direction is
+        // add_link_with_relation stamps the fixed relation type (`co_tag` for
+        // keyword edges, `semantic` for embedding edges — never the raw keyword,
+        // which survives only as `via_keyword` diagnostics). Each direction is
         // independently `.ok()`-guarded: a reverse-write failure must not skip
         // remaining pairs nor strip the forward link already on disk. ---
         let mut woven = 0u32;
@@ -322,9 +325,21 @@ impl DreamStage for NoteWeaveStage {
         // Phase 5 fallback skips orphans the keyword pass already de-isolated
         // and never re-links a note picked as another orphan's structural peer.
         let mut linked: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for LinkTriple { from, to, relation } in links {
+        for LinkTriple {
+            from,
+            to,
+            relation,
+            via_keyword,
+        } in links
+        {
             write_typed_link(&mut ctx, &from, &to, &relation).await;
             write_typed_link(&mut ctx, &to, &from, &relation).await;
+            // Keyword-overlap edges are stamped with the fixed `co_tag` type; the
+            // specific shared keyword survives only here as a diagnostic (never
+            // as the persisted relation type — that pollutes the vocabulary).
+            if !via_keyword.is_empty() {
+                tracing::trace!(from = %from, to = %to, via_keyword = %via_keyword, "NoteWeave: co_tag edge");
+            }
             // Evict cached bodies so downstream stages re-read updated markdown.
             ctx.note_contents.remove(&from);
             ctx.note_contents.remove(&to);
@@ -334,7 +349,7 @@ impl DreamStage for NoteWeaveStage {
         }
 
         // --- Phase 5: structural fallback. Orphans the keyword pass could not
-        // reach are linked to their strongest peer from the 4-signal relatedness
+        // reach are linked to their strongest peer from the 5-signal relatedness
         // GraphRecomputeStage materialized earlier this same Consolidate cycle
         // (`related_peers` reads `notes_graph_related`). No LLM, no new algorithm
         // — it consumes a signal already computed but, until now, only used for
@@ -455,6 +470,7 @@ async fn semantic_orphan_links(ctx: &DreamContext, orphans: &[String]) -> Vec<Li
                     from: orphan.clone(),
                     to: path,
                     relation: "semantic".to_string(),
+                    via_keyword: String::new(),
                 });
             }
         }
@@ -489,6 +505,7 @@ async fn write_typed_link(ctx: &mut DreamContext, from: &str, to: &str, relation
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::notes::keyword_linker::CO_TAG_RELATION;
 
     #[test]
     fn stage_name_is_note_weave() {
@@ -681,7 +698,7 @@ mod tests {
         assert!(
             typed
                 .iter()
-                .any(|(to, rel)| to == "personal/news-monitoring" && rel == "us-iran-conflict"),
+                .any(|(to, rel)| to == "personal/news-monitoring" && rel == CO_TAG_RELATION),
             "forward typed relation missing: {typed:?}"
         );
         let back = store
@@ -690,7 +707,7 @@ mod tests {
             .unwrap();
         assert!(
             back.iter()
-                .any(|(to, rel)| to == "entity/us-iran-conflict" && rel == "us-iran-conflict"),
+                .any(|(to, rel)| to == "entity/us-iran-conflict" && rel == CO_TAG_RELATION),
             "backward typed relation missing: {back:?}"
         );
     }
@@ -777,7 +794,7 @@ mod tests {
         assert!(
             typed
                 .iter()
-                .any(|(to, rel)| to == "learning/b" && rel == "shared-entity"),
+                .any(|(to, rel)| to == "learning/b" && rel == CO_TAG_RELATION),
             "expected a->b typed relation from the materialized-driven weave: {typed:?}"
         );
     }
@@ -991,7 +1008,7 @@ mod tests {
     async fn structural_fallback_links_orphans_the_keyword_pass_missed() {
         use crate::providers::recording_mock::RecordingMockProvider;
         // Two orphans with DISJOINT keywords → the keyword-overlap pass links
-        // nothing. But GraphRecomputeStage materialized a strong 4-signal related
+        // nothing. But GraphRecomputeStage materialized a strong 5-signal related
         // edge between them this cycle (e.g. they were compressed from the same
         // source document). Phase 5 must consume that to weave them with the
         // generic `related` relation, de-isolating both.
@@ -1037,7 +1054,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        // Materialize the 4-signal relatedness GraphRecomputeStage would emit
+        // Materialize the 5-signal relatedness GraphRecomputeStage would emit
         // (both directions, as the real stage flattens top-K per node).
         store
             .replace_graph_related(

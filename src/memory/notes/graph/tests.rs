@@ -217,6 +217,43 @@ fn louvain_empty_and_edgeless() {
 }
 
 #[test]
+fn refine_splits_internally_disconnected_community() {
+    use crate::memory::notes::graph::*;
+    // Two disjoint edges: {0-1} and {2-3}. If a (buggy) Louvain partition ever
+    // lumps all four into one community, the Leiden-style refinement must split
+    // it back into the two connected components — the guarantee cbm's Leiden
+    // refinement provides. Tested directly with a synthetic assignment so it
+    // does not depend on tricking Louvain into the disconnected state.
+    let node = |p: &str| GraphNode {
+        path: p.into(),
+        category: "x".into(),
+        sources: vec![],
+    };
+    let edge = |from: &str, to: &str| GraphEdge {
+        from: from.into(),
+        to: to.into(),
+        rel_type: None,
+        confidence: 1.0,
+    };
+    let snap = GraphSnapshot {
+        nodes: vec![node("g/n0"), node("g/n1"), node("g/n2"), node("g/n3")],
+        edges: vec![edge("g/n0", "g/n1"), edge("g/n2", "g/n3")],
+    };
+    let g = GraphIndex::build(&snap);
+    // Artificially place all four nodes in ONE community.
+    let refined = community::refine_connected(&g, &[0, 0, 0, 0]);
+    assert_eq!(refined[0], refined[1], "connected pair stays together");
+    assert_eq!(refined[2], refined[3], "connected pair stays together");
+    assert_ne!(refined[0], refined[2], "disconnected blobs are split apart");
+
+    // Already-connected community is a no-op (one label for a connected pair).
+    let connected = community::refine_connected(&g, &[7, 7, 9, 9]);
+    assert_eq!(connected[0], connected[1]);
+    assert_eq!(connected[2], connected[3]);
+    assert_ne!(connected[0], connected[2]);
+}
+
+#[test]
 fn detects_isolated_and_bridge() {
     use crate::memory::notes::graph::*;
     let node = |p: &str, cat: &str| GraphNode {

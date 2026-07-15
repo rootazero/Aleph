@@ -208,11 +208,6 @@ pub(in crate::commands::start) fn register_channel_handlers(
     );
     register_handler!(
         server,
-        "discord.save_config",
-        discord_panel_handlers::handle_save_config
-    );
-    register_handler!(
-        server,
         "discord.list_guilds",
         discord_panel_handlers::handle_list_guilds,
         channel_registry
@@ -227,12 +222,6 @@ pub(in crate::commands::start) fn register_channel_handlers(
         server,
         "discord.audit_permissions",
         discord_panel_handlers::handle_audit_permissions,
-        channel_registry
-    );
-    register_handler!(
-        server,
-        "discord.update_allowlists",
-        discord_panel_handlers::handle_update_allowlists,
         channel_registry
     );
 }

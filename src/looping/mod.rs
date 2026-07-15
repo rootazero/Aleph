@@ -47,6 +47,20 @@ pub enum TickDecision {
     Idle,
 }
 
+/// Outcome of [`LoopRegistry::rearm_after_busy`] — the loop sibling of
+/// `goal::RearmDecision` (parallel, not shared, like `commit_field_update`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RearmDecision {
+    /// Re-spawn the same tick after `delay_ms`, confirming `wake_ms`.
+    Retry { delay_ms: u64, wake_ms: u64 },
+    /// A cap tripped while the collision played out: the loop was stopped with
+    /// `note` (returned so the caller clears the welded strategy and notifies
+    /// the origin channel — R5), mirroring `stop_loop_on_failure`.
+    Exhausted { note: String },
+    /// Loop gone, stopped, or already re-claimed — drop this tick.
+    Drop,
+}
+
 /// In-memory map of `session_key` → `LoopState`.
 #[derive(Default)]
 pub struct LoopRegistry {
@@ -171,12 +185,13 @@ impl LoopRegistry {
     /// silently dormant `Active` until the user next spoke in this exact
     /// session. Re-stamps the pending marker with a short retry delay so the
     /// SAME claimed tick fires again shortly — no iteration bump (the tick was
-    /// already counted at claim). Returns `(delay_ms, wake_ms)` to schedule,
-    /// or `None` when the loop is gone/stopped, another tick was claimed
-    /// meanwhile, or a cap has since tripped (which stops the loop with its
-    /// reason, exactly like the claim path).
+    /// already counted at claim). Returns [`RearmDecision::Retry`] to schedule,
+    /// [`RearmDecision::Exhausted`] when a cap tripped during the collision (the
+    /// loop is stopped with its reason; the caller clears the welded strategy and
+    /// notifies — R5), or [`RearmDecision::Drop`] when the loop is gone/stopped or
+    /// another tick was claimed meanwhile.
     #[must_use]
-    pub fn rearm_after_busy(&self, session_id: &str, now_ms: u64) -> Option<(u64, u64)> {
+    pub fn rearm_after_busy(&self, session_id: &str, now_ms: u64) -> RearmDecision {
         let mut map = self.lock();
         match map.get(session_id) {
             Some(s) if s.is_active() && s.pending_tick_wake_ms.is_none() => {
@@ -187,16 +202,19 @@ impl LoopRegistry {
                     let stopped = s
                         .clone()
                         .with_status(LoopStatus::Stopped)
-                        .with_stop_reason(Some(note));
+                        .with_stop_reason(Some(note.clone()));
                     map.insert(session_id.to_string(), stopped);
-                    return None;
+                    return RearmDecision::Exhausted { note };
                 }
                 let wake = now_ms.saturating_add(BUSY_RETRY_DELAY_MS);
                 let rearmed = s.clone().with_pending_tick(Some(wake));
                 map.insert(session_id.to_string(), rearmed);
-                Some((BUSY_RETRY_DELAY_MS, wake))
+                RearmDecision::Retry {
+                    delay_ms: BUSY_RETRY_DELAY_MS,
+                    wake_ms: wake,
+                }
             }
-            _ => None,
+            _ => RearmDecision::Drop,
         }
     }
 
@@ -413,14 +431,23 @@ mod tests {
         assert!(reg.confirm_fire("a", wake_ms), "tick fires");
         let ticks_before = reg.get("a").unwrap().iterations_used;
         // AgentBusy at fire time → re-arm the same tick with a retry delay.
-        let (delay, wake) = reg.rearm_after_busy("a", 7_000).expect("re-armed");
+        let RearmDecision::Retry {
+            delay_ms: delay,
+            wake_ms: wake,
+        } = reg.rearm_after_busy("a", 7_000)
+        else {
+            panic!("expected re-arm");
+        };
         assert_eq!(wake, 7_000 + delay);
         let s = reg.get("a").unwrap();
         assert_eq!(s.pending_tick_wake_ms, Some(wake));
         assert_eq!(s.iterations_used, ticks_before, "retry must not burn a tick");
         // While the retry is pending, neither a second re-arm nor a fresh
         // claim may double-schedule.
-        assert!(reg.rearm_after_busy("a", 7_100).is_none());
+        assert!(matches!(
+            reg.rearm_after_busy("a", 7_100),
+            RearmDecision::Drop
+        ));
         assert_eq!(reg.try_claim_tick("a", None, 7_100), TickDecision::Idle);
         // The retry confirms and fires like any tick.
         assert!(reg.confirm_fire("a", wake));
@@ -430,11 +457,18 @@ mod tests {
     fn rearm_after_busy_refuses_stopped_and_stops_past_deadline() {
         let reg = LoopRegistry::default();
         reg.put(st("stopped").with_status(LoopStatus::Stopped));
-        assert!(reg.rearm_after_busy("stopped", 5_000).is_none());
+        assert!(matches!(
+            reg.rearm_after_busy("stopped", 5_000),
+            RearmDecision::Drop
+        ));
         // Deadline passed during the collision → stop with the real reason
-        // instead of re-arming a tick that could only fire out of bounds.
+        // instead of re-arming a tick that could only fire out of bounds. The
+        // cap-trip now surfaces as Exhausted so the caller notifies + cleans up.
         reg.put(st("late").with_deadline_ms(Some(4_000)));
-        assert!(reg.rearm_after_busy("late", 5_000).is_none());
+        assert!(matches!(
+            reg.rearm_after_busy("late", 5_000),
+            RearmDecision::Exhausted { .. }
+        ));
         let s = reg.get("late").unwrap();
         assert!(!s.is_active());
         assert!(s.stop_reason.as_deref().unwrap_or("").contains("time"));

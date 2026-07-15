@@ -264,11 +264,31 @@ test-loom:
 test-logic: test-proptest test-loom
 
 # Run all tests (core + desktop + proptest)
-test-all: test test-desktop-all test-proptest check-phase5
+test-all: test test-desktop-all test-proptest check-phase5 check-wiring
 
 # Phase 5 exit criterion 9 gate.
 check-phase5:
     ./scripts/check-phase5-exit.sh
+
+# Wiring parity guards: catch "severed wire" drift where both ends exist but the
+# connection is missing. Each is a grep-level diff against a triaged baseline —
+# green now, fails only on a NEW severance. See the 2026-07-15 wire audit.
+check-wiring: check-rpc-wiring check-tool-wiring check-config-wiring
+
+# RPC: no Panel rpc_call / rate-lane classifier may name a method with no handler
+# (→ METHOD_NOT_FOUND / phantom rate-lane guard).
+check-rpc-wiring:
+    python3 scripts/rpc_wiring_audit.py
+
+# Tools: every AlephTool NAME defined must have a dispatch arm (else the LLM can
+# never call it).
+check-tool-wiring:
+    python3 scripts/tool_wiring_audit.py
+
+# Config: every [policies.*] section type must have a core-side consumer (else the
+# knob is an inert R10 corpse).
+check-config-wiring:
+    python3 scripts/config_wiring_audit.py
 
 # ─── Lint ───
 

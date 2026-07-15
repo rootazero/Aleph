@@ -67,6 +67,15 @@ pub async fn handle_update_note_impl(
         );
     }
 
+    // Hard security floor (§5.1): a panel node edit writes verbatim into the
+    // trusted vault, so scan the incoming content for data-exfiltration
+    // payloads before persisting. Exfiltration-only scope (not Strict) so a
+    // user's own security-research notes aren't rejected. On threat: reject,
+    // do not write.
+    if let Err(e) = crate::builtin_tools::note_manage::scan_note_for_exfiltration(&params.content) {
+        return JsonRpcResponse::error(req.id, INVALID_PARAMS, e.to_string());
+    }
+
     match indexer
         .write_note_raw(agent_id, category, title, &params.content)
         .await

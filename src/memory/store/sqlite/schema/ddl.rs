@@ -182,6 +182,23 @@ CREATE TABLE IF NOT EXISTS notes_fts_meta (
 );
 "#;
 
+// Trigram-tokenized companion to `notes_fts`. `unicode61` indexes a run of
+// CJK ideographs as a single token, so a substring query (`记忆`) can never
+// match inside a longer token (`记忆管理`). The `trigram` tokenizer indexes
+// overlapping 3-char windows, enabling substring/phrase recall for CJK (and
+// any script) at the cost of requiring queries ≥3 chars. Kept byte-for-byte
+// in sync with `notes_fts` on every write/delete; queried only for CJK-bearing
+// queries so ASCII search behaviour is unchanged. See `search_notes_fts`.
+pub const NOTES_FTS_TRIGRAM_DDL: &str = r#"
+CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts_trigram USING fts5(
+    path,
+    filename,
+    content,
+    agent_id UNINDEXED,
+    tokenize='trigram'
+);
+"#;
+
 pub const NOTES_PROVENANCE_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS notes_provenance (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

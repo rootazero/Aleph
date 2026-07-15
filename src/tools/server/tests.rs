@@ -225,7 +225,6 @@ async fn test_call_with_repair_case_insensitive() {
     assert_eq!(info.original_name, "Search");
     assert_eq!(info.repaired_name, "search");
     assert_eq!(info.repair_type, ToolRepairType::CaseInsensitive);
-    assert!(info.was_successful());
 }
 
 #[tokio::test]
@@ -247,38 +246,13 @@ async fn test_call_with_repair_snake_case() {
     assert_eq!(info.original_name, "WebSearch");
     assert_eq!(info.repaired_name, "web_search");
     assert_eq!(info.repair_type, ToolRepairType::SnakeCase);
-    assert!(info.was_successful());
 }
 
 #[tokio::test]
-async fn test_call_with_repair_invalid_fallback() {
+async fn test_call_with_repair_unknown_returns_error() {
     let server = AlephToolServer::new();
 
-    // Add an "invalid" tool for fallback
-    server
-        .add_tool(DynamicMockTool {
-            name: "invalid".to_string(),
-        })
-        .await;
-
-    let (result, repair_info) = server
-        .call_with_repair("nonexistent", serde_json::json!({"input": "test"}))
-        .await;
-
-    assert!(result.is_ok());
-    assert!(repair_info.is_some());
-    let info = repair_info.unwrap();
-    assert_eq!(info.original_name, "nonexistent");
-    assert_eq!(info.repaired_name, "invalid");
-    assert_eq!(info.repair_type, ToolRepairType::InvalidFallback);
-    assert!(!info.was_successful()); // Fallback is not a "successful" repair
-}
-
-#[tokio::test]
-async fn test_call_with_repair_no_fallback() {
-    let server = AlephToolServer::new();
-
-    // No "invalid" tool, so should return error
+    // A name that matches no tool (exact / case-insensitive / snake_case) returns an error.
     let (result, repair_info) = server
         .call_with_repair("nonexistent", serde_json::json!({}))
         .await;

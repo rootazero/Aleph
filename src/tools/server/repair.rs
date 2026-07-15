@@ -50,8 +50,7 @@ pub(super) fn to_snake_case(s: &str) -> String {
 /// 1. Exact match
 /// 2. Case-insensitive matching
 /// 3. `snake_case` conversion
-/// 4. "invalid" tool fallback
-/// 5. Error with suggestion
+/// 4. Error with suggestion
 pub(super) async fn call_with_repair_impl(
     tools_map: &ToolMap,
     name: &str,
@@ -128,30 +127,7 @@ pub(super) async fn call_with_repair_impl(
         return (tool.call(args).await, repair_info);
     }
 
-    // 4. Route to "invalid" tool if available
-    let invalid = {
-        let tools = tools_map.lock().unwrap_or_else(|e| e.into_inner());
-        tools.get("invalid").map(Arc::clone)
-    };
-    if let Some(invalid_tool) = invalid {
-        tracing::info!(tool = name, "Routing unknown tool to invalid handler");
-
-        let invalid_args = serde_json::json!({
-            "tool": name,
-            "error": format!("Tool '{}' not found in registry", name)
-        });
-
-        return (
-            invalid_tool.call(invalid_args).await,
-            Some(ToolRepairInfo {
-                original_name: name.to_string(),
-                repaired_name: "invalid".to_string(),
-                repair_type: ToolRepairType::InvalidFallback,
-            }),
-        );
-    }
-
-    // 5. No repair possible
+    // 4. No repair possible
     (
         Err(AlephError::tool_not_found_with_suggestion(
             name,

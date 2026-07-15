@@ -12,10 +12,6 @@ pub struct MemoryPolicies {
     #[serde(default)]
     pub compression: CompressionPolicy,
 
-    /// AI-based retrieval policy
-    #[serde(default)]
-    pub ai_retrieval: AiRetrievalPolicy,
-
     /// Session compactor policy (intra-session context compression)
     #[serde(default)]
     pub session_compactor: crate::memory::session_compactor::SessionCompactorConfig,
@@ -65,60 +61,6 @@ const fn default_background_interval_seconds() -> u32 {
     3600
 }
 
-/// Policy for AI-based memory retrieval
-///
-/// Controls timeouts, candidate limits, and fallback behavior when using
-/// AI to select relevant memories.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct AiRetrievalPolicy {
-    /// Timeout for AI selection in milliseconds
-    /// Default: 3000
-    #[serde(default = "default_ai_timeout_ms")]
-    pub timeout_ms: u64,
-
-    /// Maximum candidates to send to AI for selection
-    /// Default: 20
-    #[serde(default = "default_max_candidates")]
-    pub max_candidates: u32,
-
-    /// Fallback count when AI fails (return top N by similarity)
-    /// Default: 3
-    #[serde(default = "default_fallback_count")]
-    pub fallback_count: u32,
-
-    /// Maximum content length for each candidate (characters)
-    /// Default: 300
-    #[serde(default = "default_content_truncate_length")]
-    pub content_truncate_length: u64,
-}
-
-impl Default for AiRetrievalPolicy {
-    fn default() -> Self {
-        Self {
-            timeout_ms: default_ai_timeout_ms(),
-            max_candidates: default_max_candidates(),
-            fallback_count: default_fallback_count(),
-            content_truncate_length: default_content_truncate_length(),
-        }
-    }
-}
-
-const fn default_ai_timeout_ms() -> u64 {
-    3000
-}
-
-const fn default_max_candidates() -> u32 {
-    20
-}
-
-const fn default_fallback_count() -> u32 {
-    3
-}
-
-const fn default_content_truncate_length() -> u64 {
-    300
-}
-
 impl CompressionPolicy {
     /// Get idle timeout as `std::time::Duration`
     #[must_use]
@@ -130,13 +72,6 @@ impl CompressionPolicy {
     #[must_use]
     pub const fn background_interval_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.background_interval_seconds as u64)
-    }
-}
-
-impl AiRetrievalPolicy {
-    /// Get timeout as `std::time::Duration`
-    pub const fn timeout_duration(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(self.timeout_ms)
     }
 }
 
@@ -153,32 +88,17 @@ mod tests {
     }
 
     #[test]
-    fn test_ai_retrieval_defaults() {
-        let policy = AiRetrievalPolicy::default();
-        assert_eq!(policy.timeout_ms, 3000);
-        assert_eq!(policy.max_candidates, 20);
-        assert_eq!(policy.fallback_count, 3);
-        assert_eq!(policy.content_truncate_length, 300);
-    }
-
-    #[test]
     fn test_memory_policies_nested() {
         let toml = r#"
             [compression]
             idle_timeout_seconds = 180
             turn_threshold = 15
-
-            [ai_retrieval]
-            timeout_ms = 2000
         "#;
         let policies: MemoryPolicies = toml::from_str(toml).unwrap();
         assert_eq!(policies.compression.idle_timeout_seconds, 180);
         assert_eq!(policies.compression.turn_threshold, 15);
         // Default for unspecified
         assert_eq!(policies.compression.background_interval_seconds, 3600);
-        assert_eq!(policies.ai_retrieval.timeout_ms, 2000);
-        // Defaults
-        assert_eq!(policies.ai_retrieval.max_candidates, 20);
     }
 
     #[test]
@@ -187,12 +107,6 @@ mod tests {
         assert_eq!(
             compression.idle_timeout_duration(),
             std::time::Duration::from_secs(300)
-        );
-
-        let retrieval = AiRetrievalPolicy::default();
-        assert_eq!(
-            retrieval.timeout_duration(),
-            std::time::Duration::from_millis(3000)
         );
     }
 }

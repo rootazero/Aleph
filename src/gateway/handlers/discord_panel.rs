@@ -9,15 +9,13 @@
 //! | RPC Method                  | Description                          |
 //! |-----------------------------|--------------------------------------|
 //! | `discord.validate_token`    | Validate a bot token against the API |
-//! | `discord.save_config`       | Persist Discord config (TODO)        |
 //! | `discord.list_guilds`       | List guilds the bot is in            |
 //! | `discord.list_channels`     | List channels in a guild             |
 //! | `discord.audit_permissions` | Audit bot permissions in a guild     |
-//! | `discord.update_allowlists` | Update guild/channel allowlists      |
 
 use crate::sync_primitives::Arc;
 use serde_json::{json, Value};
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::gateway::channel::{ChannelId, ChannelStatus};
 use crate::gateway::channel_registry::ChannelRegistry;
@@ -127,48 +125,6 @@ pub async fn handle_validate_token(request: JsonRpcRequest) -> JsonRpcResponse {
             format!("Token validation failed: {e}"),
         ),
     }
-}
-
-// ---------------------------------------------------------------------------
-// 2. discord.save_config
-// ---------------------------------------------------------------------------
-
-/// Save Discord configuration.
-///
-/// **Params:** `{ "token": "...", "application_id": 123, ... }`
-///
-/// TODO: Actual config persistence -- for now just logs and returns success.
-pub async fn handle_save_config(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params = match &request.params {
-        Some(Value::Object(map)) => map,
-        _ => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
-        }
-    };
-
-    // Validate token format if one is provided
-    if let Some(token) = param_str(params, "token") {
-        if token.len() < MIN_TOKEN_LENGTH {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!(
-                    "Token too short (got {} chars, minimum {})",
-                    token.len(),
-                    MIN_TOKEN_LENGTH,
-                ),
-            );
-        }
-    }
-
-    // TODO: persist config to disk / config store
-    info!("discord.save_config called (persistence not yet implemented)");
-    debug!(
-        "Config keys received: {:?}",
-        params.keys().collect::<Vec<_>>()
-    );
-
-    JsonRpcResponse::success(request.id, json!({ "success": true }))
 }
 
 // ---------------------------------------------------------------------------
@@ -356,67 +312,6 @@ pub async fn handle_audit_permissions(
 }
 
 // ---------------------------------------------------------------------------
-// 6. discord.update_allowlists
-// ---------------------------------------------------------------------------
-
-/// Update guild and channel allowlists for the Discord channel.
-///
-/// **Params:** `{ "channel_id": "discord", "guilds": [123, 456], "channels": [789] }`
-///
-/// TODO: Actual config persistence -- for now just logs and returns success.
-pub async fn handle_update_allowlists(
-    request: JsonRpcRequest,
-    registry: Arc<ChannelRegistry>,
-) -> JsonRpcResponse {
-    let params = match &request.params {
-        Some(Value::Object(map)) => map,
-        _ => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
-        }
-    };
-
-    let channel_id = param_str(params, "channel_id").unwrap_or(DEFAULT_CHANNEL_ID);
-
-    // Parse guild and channel allowlists (default to empty arrays)
-    let guilds: Vec<u64> = params
-        .get("guilds")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
-        .unwrap_or_default();
-
-    let channels: Vec<u64> = params
-        .get("channels")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
-        .unwrap_or_default();
-
-    // Verify channel exists (not strictly required to be connected for config updates)
-    let cid = ChannelId::new(channel_id);
-    if registry.get(&cid).await.is_none() {
-        return JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            format!("Channel '{channel_id}' not found in registry"),
-        );
-    }
-
-    // TODO: persist allowlists to config
-    info!(
-        "discord.update_allowlists called for channel '{}': guilds={:?}, channels={:?} (persistence not yet implemented)",
-        channel_id, guilds, channels,
-    );
-
-    JsonRpcResponse::success(
-        request.id,
-        json!({
-            "success": true,
-            "guilds": guilds,
-            "channels": channels,
-        }),
-    )
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -452,35 +347,6 @@ mod tests {
     async fn test_validate_token_too_short() {
         let req = make_request("discord.validate_token", json!({ "token": "short" }));
         let res = handle_validate_token(req).await;
-        assert!(res.is_error());
-        assert!(res.error.unwrap().message.contains("too short"));
-    }
-
-    // -- save_config ----------------------------------------------------------
-
-    #[tokio::test]
-    async fn test_save_config_missing_params() {
-        let req = JsonRpcRequest::with_id("discord.save_config", None, json!(1));
-        let res = handle_save_config(req).await;
-        assert!(res.is_error());
-    }
-
-    #[tokio::test]
-    async fn test_save_config_success_without_token() {
-        let req = make_request("discord.save_config", json!({ "application_id": 123 }));
-        let res = handle_save_config(req).await;
-        assert!(res.is_success());
-        let result = res.result.unwrap();
-        assert_eq!(result["success"], true);
-    }
-
-    #[tokio::test]
-    async fn test_save_config_rejects_short_token() {
-        let req = make_request(
-            "discord.save_config",
-            json!({ "token": "too-short", "application_id": 123 }),
-        );
-        let res = handle_save_config(req).await;
         assert!(res.is_error());
         assert!(res.error.unwrap().message.contains("too short"));
     }
@@ -524,21 +390,4 @@ mod tests {
         assert!(res.error.unwrap().message.contains("guild_id"));
     }
 
-    // -- update_allowlists ----------------------------------------------------
-
-    #[tokio::test]
-    async fn test_update_allowlists_channel_not_found() {
-        let registry = Arc::new(ChannelRegistry::new());
-        let req = make_request(
-            "discord.update_allowlists",
-            json!({
-                "channel_id": "nonexistent",
-                "guilds": [123],
-                "channels": [456],
-            }),
-        );
-        let res = handle_update_allowlists(req, registry).await;
-        assert!(res.is_error());
-        assert!(res.error.unwrap().message.contains("not found"));
-    }
 }

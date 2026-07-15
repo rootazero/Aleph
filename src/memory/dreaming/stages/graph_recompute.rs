@@ -1,6 +1,6 @@
 //! `GraphRecompute` stage — materialize the note knowledge graph.
 //!
-//! Loads the full graph snapshot, runs the 4-signal / Louvain / insights
+//! Loads the full graph snapshot, runs the 5-signal / Louvain / insights
 //! algorithms inside `spawn_blocking` (CPU-bound, std-thread parallel), and
 //! upserts `notes_graph_cache` + `notes_graph_insights`. Pure deterministic
 //! aggregation — zero LLM call (R7/R10-safe analytics infrastructure).
@@ -43,7 +43,7 @@ impl DreamStage for GraphRecomputeStage {
             .map_err(|e| AlephError::other(format!("graph recompute join: {e}")))?;
 
         // MinHash similarity edges (content-based; the structural snapshot has
-        // no bodies). Non-fatal: failure → skip, keep 4-signal edges.
+        // no bodies). Non-fatal: failure → skip, keep 5-signal edges.
         let docs: Vec<(String, String)> = match async {
             let entries = store.list_notes(&agent_id).await?;
             let paths: Vec<String> = entries.into_iter().map(|e| e.path).collect();
@@ -93,7 +93,7 @@ struct Computed {
     cache: Vec<(String, usize, f32, usize)>,
     /// `(kind, json_payload)`.
     insights: Vec<(String, String)>,
-    /// `(node_path, related_path, score)` — top-K 4-signal relatedness edges.
+    /// `(node_path, related_path, score)` — top-K 5-signal relatedness edges.
     related: Vec<(String, String, f32)>,
     node_count: usize,
 }
@@ -113,7 +113,7 @@ fn compute(snap: &GraphSnapshot) -> Computed {
     let com = community::detect(&g);
     let ins = insights::detect(&g, &com);
 
-    // 4-signal relatedness: materialize each node's top-K scored peers, flattened
+    // 5-signal relatedness: materialize each node's top-K scored peers, flattened
     // into `(seed, peer, score)` rows. CPU-bound, std-thread parallel (already
     // inside `spawn_blocking`).
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
@@ -184,7 +184,7 @@ fn compute(snap: &GraphSnapshot) -> Computed {
 }
 
 /// Merge two `(seed, peer, score)` edge lists, deduped by `(seed, peer)` keeping
-/// the max score (explicit/4-signal edges beat lexical-similarity edges on ties).
+/// the max score (explicit/5-signal edges beat lexical-similarity edges on ties).
 fn merge_related(
     a: Vec<(String, String, f32)>,
     b: Vec<(String, String, f32)>,

@@ -8,6 +8,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
+use crate::builtin_tools::note_manage::scan_note_for_exfiltration;
 use crate::config::types::memory::QueryFilerConfig;
 use crate::error::AlephError;
 use crate::memory::notes::indexer::NoteIndexer;
@@ -213,6 +214,14 @@ impl DefaultQueryFiler {
             source_notes: Vec::new(),
             ..Default::default()
         };
+
+        // Hard security floor (§5.1): the query filer launders web/search
+        // results through memory synthesis, so scan the distilled content
+        // for data-exfiltration payloads before it lands in the trusted vault.
+        // Exfiltration-only scope (not Strict) so legitimate security-research
+        // answers aren't false-positived and silently dropped. On threat:
+        // propagate, do not write.
+        scan_note_for_exfiltration(&note.facts.join("\n"))?;
 
         self.indexer.write_note(agent_id, "query", &note).await?;
 

@@ -6,9 +6,16 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-// Re-export CleanupPolicy from the spawn_tool module for use in config
-// This avoids duplicating the enum definition
-pub use crate::builtin_tools::sessions::spawn_tool::CleanupPolicy;
+/// Cleanup policy for spawned sub-agent sessions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupPolicy {
+    /// Session is cleaned up after the run completes (default)
+    #[default]
+    Ephemeral,
+    /// Session persists after run completion
+    Persistent,
+}
 
 // =============================================================================
 // SubagentsConfigToml
@@ -140,11 +147,6 @@ impl SubagentsConfigToml {
 
         // Check explicit membership
         self.allow_agents.iter().any(|a| a == agent_id)
-    }
-
-    /// Get the `allow_agents` list for use with `SessionsSpawnTool`
-    pub fn get_allow_agents(&self) -> Vec<String> {
-        self.allow_agents.clone()
     }
 }
 

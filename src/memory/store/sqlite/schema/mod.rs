@@ -118,6 +118,9 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(ddl::NOTES_FTS_META_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_fts_meta: {e}")))?;
 
+    conn.execute_batch(ddl::NOTES_FTS_TRIGRAM_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create notes_fts_trigram: {e}")))?;
+
     conn.execute_batch(ddl::NOTES_PROVENANCE_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_provenance: {e}")))?;
     conn.execute_batch(ddl::NOTES_REVIEW_QUEUE_DDL)
@@ -126,6 +129,12 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
         .map_err(|e| AlephError::config(format!("Failed to create notes_review_archive: {e}")))?;
 
     migrations::migrate_unify_default_to_main_agent(conn)?;
+
+    // Backfill the trigram FTS companion AFTER the default→main remap above, so
+    // it copies the final `notes_fts` state (the remap mutates notes_fts but not
+    // its companion). Idempotent: no-ops once the companion is populated.
+    migrations::migrate_notes_fts_trigram(conn)
+        .map_err(|e| AlephError::config(format!("backfill notes_fts_trigram: {e}")))?;
 
     conn.execute_batch(ddl::ASSEMBLY_LOGS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create assembly_logs table: {e}")))?;

@@ -1187,22 +1187,11 @@ pub(super) fn spawn_continuation_run(
                 // re-armed the goal).
                 let (delay_ms, next_kind) = match kind {
                     ContinuationKind::Loop { .. } => {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_or(0, |d| d.as_millis() as u64);
-                        match crate::looping::global()
-                            .and_then(|r| r.rearm_after_busy(&session_key_str, now))
-                        {
+                        match rearm_loop_after_busy(&session_key_str, origin.as_ref()).await {
                             Some((delay_ms, wake_ms)) => {
-                                info!(session = %session_key_str, delay_ms,
-                                    "loop: agent busy at tick fire; re-armed the tick with a retry delay");
                                 (Some(delay_ms), ContinuationKind::Loop { wake_ms })
                             }
-                            None => {
-                                info!(session = %session_key_str,
-                                    "loop: agent busy at tick fire; loop no longer active, re-claimed, or capped — tick dropped");
-                                (None, kind)
-                            }
+                            None => (None, kind),
                         }
                     }
                     ContinuationKind::Goal { .. } => {
@@ -1254,6 +1243,51 @@ pub(super) fn spawn_continuation_run(
             }
         }
     });
+}
+
+/// Loop sibling of [`super::goal_continuation::rearm_goal_after_busy`]: a woken
+/// tick lost the session run-slot (`AgentBusy`). Re-arm the SAME tick with a
+/// short retry delay; or, when a cap tripped during the collision, clear the
+/// loop-welded strategy and notify the origin — mirroring [`stop_loop_on_failure`]
+/// — so a cap-trip during a busy collision never leaves the loop a silently
+/// dormant `Active` that `loop(action='status')` then misreports. Returns
+/// `(delay_ms, wake_ms)` to re-spawn, else `None`.
+pub(super) async fn rearm_loop_after_busy(
+    session_key_str: &str,
+    origin: Option<&OriginRoute>,
+) -> Option<(u64, u64)> {
+    let reg = crate::looping::global()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    match reg.rearm_after_busy(session_key_str, now) {
+        crate::looping::RearmDecision::Retry { delay_ms, wake_ms } => {
+            info!(session = %session_key_str, delay_ms,
+                "loop: agent busy at tick fire; re-armed the tick with a retry delay");
+            Some((delay_ms, wake_ms))
+        }
+        crate::looping::RearmDecision::Exhausted { note } => {
+            // rearm_after_busy already marked the loop Stopped with `note`.
+            // Mirror stop_loop_on_failure's cleanup: clear the loop-welded
+            // Strategy so the stale plan neither bleeds into later turns nor
+            // blocks a future re-plan, then tell the user (R5).
+            if let Some(strat) = crate::strategy::global() {
+                if let Err(e) = strat.delete(&crate::strategy::loop_key(session_key_str)) {
+                    info!(session = %session_key_str, error = %e,
+                        "loop: failed to delete welded strategy on cap-trip stop (ignored)");
+                }
+            }
+            notify_origin(origin, format!("⏹ {note}")).await;
+            info!(session = %session_key_str, note = %note,
+                "loop: cap tripped during a busy collision; loop stopped");
+            None
+        }
+        crate::looping::RearmDecision::Drop => {
+            info!(session = %session_key_str,
+                "loop: agent busy at tick fire; loop no longer active, re-claimed, or superseded — tick dropped");
+            None
+        }
+    }
 }
 
 /// Loop sibling of [`block_goal_on_failure`]: when a clock-driven loop tick run

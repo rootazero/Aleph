@@ -15,6 +15,7 @@ use crate::memory::dreaming::DreamContext;
 use crate::memory::notes::store::NoteStore;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
+use crate::utils::atomic_write::atomic_write_file;
 
 use super::DreamStage;
 
@@ -269,8 +270,18 @@ async fn mark_contradictory(ctx: &DreamContext, path: &str) {
          Review linked notes for current information._\n"
     );
 
-    if let Err(e) = tokio::fs::write(&file_path, &updated).await {
+    if let Err(e) = atomic_write_file(&file_path, &updated).await {
         tracing::warn!(path = %file_path.display(), error = %e, "NoteDrift: failed to write contradiction marker");
+        return;
+    }
+
+    // Reconcile notes_index/FTS/embedding/tags with the new disk content.
+    // Best-effort: a reindex failure must not abort the dream cycle.
+    if let Some((category, _)) = path.split_once('/') {
+        let _ = ctx
+            .indexer
+            .index_file(&ctx.agent_id, category, &file_path)
+            .await;
     }
 }
 
@@ -316,8 +327,18 @@ async fn mark_stale(ctx: &DreamContext, path: &str) {
         &content[insert_at..]
     );
 
-    if let Err(e) = tokio::fs::write(&file_path, &updated).await {
+    if let Err(e) = atomic_write_file(&file_path, &updated).await {
         tracing::warn!(path = %file_path.display(), error = %e, "NoteDrift: failed to write stale marker");
+        return;
+    }
+
+    // Reconcile notes_index/FTS/embedding/tags with the new disk content.
+    // Best-effort: a reindex failure must not abort the dream cycle.
+    if let Some((category, _)) = path.split_once('/') {
+        let _ = ctx
+            .indexer
+            .index_file(&ctx.agent_id, category, &file_path)
+            .await;
     }
 }
 

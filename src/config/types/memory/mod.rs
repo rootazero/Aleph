@@ -64,7 +64,7 @@ pub struct MemoryConfig {
     #[serde(default)]
     pub retrieval_scoring: RetrievalScoringConfig,
 
-    /// Associative 4-signal graph expansion of the retrieval candidate pool
+    /// Associative 5-signal graph expansion of the retrieval candidate pool
     /// (default-on; cold cache = no-op). Surfaces notes tied to a hit even
     /// without lexical/semantic overlap.
     #[serde(default)]

@@ -23,11 +23,8 @@ use uuid::Uuid;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelProvider, ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
     MessageId, OutboundMessage, SendResult, UserId,
-};
-use crate::thinker::interaction::{
-    InteractionConstraints, InteractionManifest, InteractionParadigm,
 };
 
 /// CLI channel configuration
@@ -317,18 +314,6 @@ impl Channel for CliChannel {
             message_id,
             timestamp: Utc::now(),
         })
-    }
-}
-
-impl ChannelProvider for CliChannel {
-    fn interaction_manifest(&self) -> InteractionManifest {
-        InteractionManifest::new(InteractionParadigm::CLI).with_constraints(
-            InteractionConstraints {
-                max_output_chars: None, // CLI has no limit
-                supports_streaming: true,
-                prefer_compact: false,
-            },
-        )
     }
 }
 

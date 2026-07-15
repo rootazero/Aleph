@@ -13,14 +13,6 @@ impl DiscordApi {
         state.rpc_call("discord.validate_token", params).await
     }
 
-    /// Save Discord configuration
-    pub async fn save_config(
-        state: &DashboardState,
-        config: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
-        state.rpc_call("discord.save_config", config).await
-    }
-
     /// List guilds the bot has joined
     pub async fn list_guilds(
         state: &DashboardState,
@@ -62,20 +54,5 @@ impl DiscordApi {
             "guild_id": guild_id,
         });
         state.rpc_call("discord.audit_permissions", params).await
-    }
-
-    /// Update guild/channel monitoring allowlists
-    pub async fn update_allowlists(
-        state: &DashboardState,
-        channel_id: &str,
-        guilds: Vec<u64>,
-        channels: Vec<u64>,
-    ) -> Result<serde_json::Value, String> {
-        let params = serde_json::json!({
-            "channel_id": channel_id,
-            "guilds": guilds,
-            "channels": channels,
-        });
-        state.rpc_call("discord.update_allowlists", params).await
     }
 }

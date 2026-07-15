@@ -1317,6 +1317,33 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })
             }
 
+            // Read-only knowledge-graph interrogation: schema / neighbors /
+            // community / related over the note graph.
+            "note_graph_query" => {
+                let agent_id = self.caller_agent_id("default");
+                Box::pin(async move {
+                    let db = self.memory_trace_db.as_ref().ok_or_else(|| {
+                        AlephError::tool(
+                            "note_graph_query not available: no memory backend configured",
+                        )
+                    })?;
+                    let args: crate::builtin_tools::note_graph_query::NoteGraphQueryArgs =
+                        serde_json::from_value(arguments).map_err(|e| {
+                            AlephError::tool(format!("note_graph_query: bad args: {e}"))
+                        })?;
+                    let tool = crate::builtin_tools::note_graph_query::NoteGraphQueryTool::new(
+                        db.clone(),
+                        agent_id,
+                    );
+                    let out = tool
+                        .call_impl(args)
+                        .await
+                        .map_err(|e| AlephError::tool(format!("note_graph_query: {e}")))?;
+                    serde_json::to_value(out)
+                        .map_err(|e| AlephError::tool(format!("note_graph_query: serialize: {e}")))
+                })
+            }
+
             _ => {
                 if let Some((plugin_id, handler)) = self.resolve_plugin_handler(tool_name) {
                     let ext_mgr = self.extension_manager.clone();

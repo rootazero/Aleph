@@ -100,8 +100,21 @@ pub fn parse_user_md(raw: &str) -> Result<UserProfile, AlephError> {
     let body_start;
 
     if let Some(rest) = raw.strip_prefix("---\n") {
-        if let Some(end_idx) = rest.find("\n---") {
-            let fm = &rest[..end_idx];
+        // Line-anchored close: the first line that is exactly `---` (trimmed)
+        // terminates the frontmatter. This matches index_md's
+        // `split_frontmatter_raw`, so a bare `---` inside a multi-line value
+        // can't prematurely close the block in one parser but not the other.
+        let mut fence = None;
+        let mut cursor = 0usize;
+        for line in rest.split_inclusive('\n') {
+            if line.trim() == "---" {
+                fence = Some((cursor, line.len()));
+                break;
+            }
+            cursor += line.len();
+        }
+        if let Some((offset, fence_len)) = fence {
+            let fm = &rest[..offset];
             for line in fm.lines() {
                 if let Some(v) = line.strip_prefix("schema_version:") {
                     schema_version = v.trim().parse().unwrap_or(1);
@@ -115,10 +128,9 @@ pub fn parse_user_md(raw: &str) -> Result<UserProfile, AlephError> {
                     confidence = v.trim().trim_matches('"').to_string();
                 }
             }
-            // skip past closing `---`. `end_idx` is an offset into `rest`
-            // (which already has the opening `---\n` stripped), so re-add that
-            // prefix length to land in `raw`'s coordinate space.
-            body_start = "---\n".len() + end_idx + "\n---".len();
+            // Advance past the opening `---\n` prefix and the closing fence
+            // line to land in `raw`'s coordinate space.
+            body_start = "---\n".len() + offset + fence_len;
         } else {
             body_start = 0;
         }

@@ -17,7 +17,7 @@ use crate::memory::context::NoteType;
 use crate::memory::events::handler::MemoryCommandHandler;
 use crate::memory::events::EventActor;
 use crate::memory::notes::store::NoteStore;
-use crate::memory::notes::{sanitize_title, KnowledgeNote, NoteIndexer};
+use crate::memory::notes::{canonicalize_category, sanitize_title, KnowledgeNote, NoteIndexer};
 use crate::memory::store::SqliteMemoryBackend;
 use crate::memory::EmbeddingProvider;
 use crate::tools::AlephTool;
@@ -427,10 +427,14 @@ impl NoteManageTool {
         let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
 
-        let category = args
+        let category_raw = args
             .category
             .as_deref()
             .ok_or_else(|| AlephError::tool("category is required for create"))?;
+        // Canonicalize plural/spelling variants (projects→project) so the tool
+        // path agrees with ingest on one category dir, then validate.
+        let category_owned = canonicalize_category(category_raw);
+        let category = category_owned.as_str();
         let filename = args
             .filename
             .as_deref()
@@ -1367,9 +1371,25 @@ fn validate_category(category: &str) -> Result<()> {
 /// This is the production consumer the `first_threat_message` helper was
 /// designed for; without it the entire Strict scope (and its persistence
 /// patterns) was unreachable in production.
-fn scan_note_for_threats(text: &str) -> Result<()> {
-    use crate::security::injection_patterns::{first_threat_message, ThreatScope};
-    match first_threat_message(text, ThreatScope::Strict) {
+pub(crate) fn scan_note_for_threats(text: &str) -> Result<()> {
+    scan_note_at_scope(text, crate::security::injection_patterns::ThreatScope::Strict)
+}
+
+/// Exfiltration-only note scan (`ThreatScope::All`): flags classic
+/// data-exfiltration payloads but NOT the SSH-backdoor / persistence / C2 /
+/// hardcoded-credential patterns that would false-positive on legitimate
+/// security-research prose. Used on the untrusted-content write paths (query
+/// filer synthesis, panel node edits) where a Strict scan would silently drop
+/// or reject a user's own security notes.
+pub(crate) fn scan_note_for_exfiltration(text: &str) -> Result<()> {
+    scan_note_at_scope(text, crate::security::injection_patterns::ThreatScope::All)
+}
+
+fn scan_note_at_scope(
+    text: &str,
+    scope: crate::security::injection_patterns::ThreatScope,
+) -> Result<()> {
+    match crate::security::injection_patterns::first_threat_message(text, scope) {
         Some(reason) => Err(AlephError::tool(reason)),
         None => Ok(()),
     }

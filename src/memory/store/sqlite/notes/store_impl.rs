@@ -61,25 +61,6 @@ impl NoteStore for SqliteMemoryBackend {
         let aliases_json =
             serde_json::to_string(&note.aliases).unwrap_or_else(|_| "[]".to_string());
 
-        // Upsert notes_index
-        conn.execute(
-            "INSERT OR REPLACE INTO notes_index \
-             (path, filename, agent_id, category, tags_json, aliases_json, created_at, updated_at, content_hash) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                path,
-                filename,
-                agent_id,
-                category,
-                tags_json,
-                aliases_json,
-                note.created_at,
-                note.updated_at,
-                note.content_hash,
-            ],
-        )
-        .map_err(|e| AlephError::config(format!("index_note insert: {e}")))?;
-
         use crate::memory::notes::links::{self, LinkStatus};
 
         let resolve_ctx = super::helpers::build_resolve_context(&conn, agent_id)
@@ -311,6 +292,19 @@ impl NoteStore for SqliteMemoryBackend {
                 params![path, filename, body, agent_id],
             )
             .map_err(|e| AlephError::config(format!("index_note insert fts: {e}")))?;
+            // Mirror into the trigram companion (CJK substring search) under the
+            // same transaction + same body-hash skip-gate, so it never diverges
+            // from notes_fts.
+            tx.execute(
+                "DELETE FROM notes_fts_trigram WHERE path = ?1 AND agent_id = ?2",
+                params![path, agent_id],
+            )
+            .map_err(|e| AlephError::config(format!("index_note delete fts_trigram: {e}")))?;
+            tx.execute(
+                "INSERT INTO notes_fts_trigram (path, filename, content, agent_id) VALUES (?1, ?2, ?3, ?4)",
+                params![path, filename, body, agent_id],
+            )
+            .map_err(|e| AlephError::config(format!("index_note insert fts_trigram: {e}")))?;
             tx.execute(
                 "INSERT INTO notes_fts_meta (agent_id, path, content_hash) VALUES (?1, ?2, ?3) \
                  ON CONFLICT(agent_id, path) DO UPDATE SET content_hash = excluded.content_hash",
@@ -357,6 +351,31 @@ impl NoteStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("index_note prov insert: {e}")))?;
         }
 
+        // Upsert notes_index LAST. Its `content_hash` is the skip-gate that
+        // `full_rebuild` / `index_file` check to skip an unchanged file. Writing
+        // it only after links + notes_sources + FTS + provenance have all landed
+        // (each autocommits in order) means a crash mid-write leaves the OLD hash
+        // advertised, so the next scan re-processes this file and self-heals —
+        // instead of skipping it forever on a hash whose derived rows never got
+        // written.
+        conn.execute(
+            "INSERT OR REPLACE INTO notes_index \
+             (path, filename, agent_id, category, tags_json, aliases_json, created_at, updated_at, content_hash) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                path,
+                filename,
+                agent_id,
+                category,
+                tags_json,
+                aliases_json,
+                note.created_at,
+                note.updated_at,
+                note.content_hash,
+            ],
+        )
+        .map_err(|e| AlephError::config(format!("index_note insert: {e}")))?;
+
         Ok(())
     }
 
@@ -397,6 +416,12 @@ impl NoteStore for SqliteMemoryBackend {
             params![path, agent_id],
         )
         .map_err(|e| AlephError::config(format!("remove_note_index fts: {e}")))?;
+
+        tx.execute(
+            "DELETE FROM notes_fts_trigram WHERE path = ?1 AND agent_id = ?2",
+            params![path, agent_id],
+        )
+        .map_err(|e| AlephError::config(format!("remove_note_index fts_trigram: {e}")))?;
 
         tx.execute(
             "DELETE FROM notes_fts_meta WHERE agent_id = ?1 AND path = ?2",
@@ -684,26 +709,66 @@ impl NoteStore for SqliteMemoryBackend {
             terms.join(" OR ")
         };
 
-        let mut stmt = conn
-            .prepare(
+        // Run one FTS table (unicode61 primary or trigram companion). `table`
+        // is a compile-time constant, so interpolating it is injection-safe.
+        let run_fts = |table: &str, expr: &str| -> Result<Vec<NoteIndexEntry>, AlephError> {
+            let sql = format!(
                 "SELECT n.*, \
                  (SELECT COUNT(*) FROM notes_links WHERE from_note = n.path AND agent_id = n.agent_id) AS link_count \
-                 FROM notes_fts f \
+                 FROM {table} f \
                  JOIN notes_index n ON n.path = f.path AND n.agent_id = f.agent_id \
-                 WHERE notes_fts MATCH ?1 AND f.agent_id = ?2 \
+                 WHERE {table} MATCH ?1 AND f.agent_id = ?2 \
                  ORDER BY rank \
-                 LIMIT ?3",
-            )
-            .map_err(|e| AlephError::config(format!("search_notes_fts prepare: {e}")))?;
+                 LIMIT ?3"
+            );
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| AlephError::config(format!("search_notes_fts prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![expr, agent_id, limit as i64], row_to_entry)
+                .map_err(|e| AlephError::config(format!("search_notes_fts query: {e}")))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(
+                    row.map_err(|e| AlephError::config(format!("search_notes_fts row: {e}")))?,
+                );
+            }
+            Ok(out)
+        };
 
-        let rows = stmt
-            .query_map(params![match_expr, agent_id, limit as i64], row_to_entry)
-            .map_err(|e| AlephError::config(format!("search_notes_fts query: {e}")))?;
+        let mut entries = run_fts("notes_fts", &match_expr)?;
 
-        let mut entries = Vec::new();
-        for row in rows {
-            entries
-                .push(row.map_err(|e| AlephError::config(format!("search_notes_fts row: {e}")))?);
+        // CJK substring recall: `unicode61` indexes a run of CJK ideographs as a
+        // single token, so `记忆` never matches inside `记忆管理`. For CJK-bearing
+        // queries also consult the trigram companion. Build the MATCH from
+        // per-term OR (mirroring the unicode61 leg), keeping only terms of ≥3
+        // chars — the trigram tokenizer's minimum — so a multi-word CJK query
+        // (`记忆管理 系统运维`) still substring-matches each word; a single
+        // whole-phrase MATCH would fail across the interior spaces. New hits are
+        // merged in, capped at `limit`. ASCII-only queries skip this entirely and
+        // keep byte-identical behaviour.
+        if query
+            .chars()
+            .any(crate::memory::notes::links::mentions::is_cjk)
+        {
+            let tri_terms: Vec<String> = query
+                .split_whitespace()
+                .filter(|t| t.chars().count() >= 3)
+                .map(phrase)
+                .collect();
+            if !tri_terms.is_empty() {
+                let tri_expr = tri_terms.join(" OR ");
+                let seen: std::collections::HashSet<String> =
+                    entries.iter().map(|e| e.path.clone()).collect();
+                for entry in run_fts("notes_fts_trigram", &tri_expr)? {
+                    if entries.len() >= limit {
+                        break;
+                    }
+                    if !seen.contains(entry.path.as_str()) {
+                        entries.push(entry);
+                    }
+                }
+            }
         }
         Ok(entries)
     }
@@ -752,7 +817,7 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         depth: u8,
         limit: usize,
-    ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String)>), AlephError> {
+    ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String)>, bool), AlephError> {
         let conn = lock_conn!(self)?;
 
         // BFS from center
@@ -805,6 +870,12 @@ impl NoteStore for SqliteMemoryBackend {
             }
         }
 
+        // The BFS caps on `visited.len()` (which counts dangling endpoints too),
+        // so this — not the indexed-entry count below — is the authoritative
+        // truncation signal: if we filled the frontier to `limit`, the graph may
+        // hold neighbors we never explored.
+        let truncated = visited.len() >= limit;
+
         // Fetch index entries for visited nodes
         let mut entries = Vec::new();
         for path in &visited {
@@ -832,7 +903,7 @@ impl NoteStore for SqliteMemoryBackend {
             .map(|e| (e.from, e.to))
             .collect();
 
-        Ok((entries, edges))
+        Ok((entries, edges, truncated))
     }
 
     async fn get_outgoing_link_rows(
@@ -960,12 +1031,18 @@ impl NoteStore for SqliteMemoryBackend {
             )
             .map_err(|e| AlephError::config(format!("upsert_embedding map lookup: {e}")))?;
 
-        // Delete existing embedding (ignore if absent)
-        conn.execute(
-            &format!("DELETE FROM {table} WHERE rowid = ?1"),
-            params![rowid],
-        )
-        .map_err(|e| AlephError::config(format!("upsert_embedding delete vec: {e}")))?;
+        // Delete any existing embedding for this rowid across ALL dimension
+        // tables, not just the current one: a re-embed at a new dimension (e.g.
+        // 768 -> 1024) would otherwise orphan the old-dim row at this same rowid,
+        // leaving a stale vector permanently occupying a KNN slot in the other
+        // table. Mirrors the sweep in `remove_note_index`.
+        for t in vec::ALL_NOTES_VEC_TABLES {
+            conn.execute(
+                &format!("DELETE FROM {t} WHERE rowid = ?1"),
+                params![rowid],
+            )
+            .map_err(|e| AlephError::config(format!("upsert_embedding delete vec {t}: {e}")))?;
+        }
 
         // Insert new embedding
         let blob = vec::embedding_to_blob(embedding);
@@ -1473,9 +1550,16 @@ impl NoteStore for SqliteMemoryBackend {
     ) -> Result<(), AlephError> {
         use crate::memory::notes::graph::CO_RECALLED_RELATION;
         let conn = lock_conn!(self)?;
+        // Wrap DELETE + INSERT loop in a single transaction so a mid-loop
+        // failure cannot leave the co-recall edge set half-replaced (the full
+        // refresh must be all-or-nothing), and so the per-row INSERTs don't each
+        // autocommit (one fsync per row) during a dream recompute.
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AlephError::config(format!("replace_co_recall_links tx begin: {e}")))?;
         // Full refresh: the co-recall edge set is re-aggregated from
         // `recall_signals` every dream cycle, so stale pairs must not linger.
-        conn.execute(
+        tx.execute(
             "DELETE FROM notes_links WHERE agent_id = ?1 AND relation = ?2",
             params![agent_id, CO_RECALLED_RELATION],
         )
@@ -1483,7 +1567,7 @@ impl NoteStore for SqliteMemoryBackend {
         // DO NOTHING on conflict: an existing semantic link (wikilink / typed
         // relation) for the pair always wins over the behavioral edge.
         for (from, to, confidence) in rows {
-            conn.execute(
+            tx.execute(
                 "INSERT INTO notes_links \
                    (agent_id, from_note, to_note, to_raw, relation, confidence, status) \
                  VALUES (?1, ?2, ?3, ?3, ?4, ?5, 'active') \
@@ -1498,6 +1582,8 @@ impl NoteStore for SqliteMemoryBackend {
             )
             .map_err(|e| AlephError::config(format!("replace_co_recall_links insert: {e}")))?;
         }
+        tx.commit()
+            .map_err(|e| AlephError::config(format!("replace_co_recall_links tx commit: {e}")))?;
         Ok(())
     }
 
@@ -1675,19 +1761,52 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(out)
     }
 
+    async fn relation_type_counts(
+        &self,
+        agent_id: &str,
+    ) -> Result<Vec<(String, i64)>, AlephError> {
+        let conn = lock_conn!(self)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT COALESCE(relation, 'link') AS rel, COUNT(*) AS n \
+                 FROM notes_links \
+                 WHERE agent_id = ?1 AND status = 'active' \
+                 GROUP BY rel \
+                 ORDER BY n DESC, rel",
+            )
+            .map_err(|e| AlephError::config(format!("relation_type_counts prepare: {e}")))?;
+        let rows = stmt
+            .query_map(params![agent_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map_err(|e| AlephError::config(format!("relation_type_counts query: {e}")))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AlephError::config(format!("relation_type_counts row: {e}")))?);
+        }
+        Ok(out)
+    }
+
     async fn replace_graph_related(
         &self,
         agent_id: &str,
         rows: &[(String, String, f32)],
     ) -> Result<(), AlephError> {
         let conn = lock_conn!(self)?;
-        conn.execute(
+        // Wrap DELETE + INSERT loop in a single transaction so a mid-loop
+        // failure cannot leave the related-edge set half-replaced (the full
+        // refresh must be all-or-nothing), and so the per-row INSERTs don't each
+        // autocommit (one fsync per row) during a dream recompute.
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AlephError::config(format!("replace_graph_related tx begin: {e}")))?;
+        tx.execute(
             "DELETE FROM notes_graph_related WHERE agent_id = ?1",
             params![agent_id],
         )
         .map_err(|e| AlephError::config(format!("replace_graph_related delete: {e}")))?;
         for (node, related, score) in rows {
-            conn.execute(
+            tx.execute(
                 "INSERT OR REPLACE INTO notes_graph_related \
                  (agent_id, node_path, related_path, score) \
                  VALUES (?1, ?2, ?3, ?4)",
@@ -1695,6 +1814,8 @@ impl NoteStore for SqliteMemoryBackend {
             )
             .map_err(|e| AlephError::config(format!("replace_graph_related insert: {e}")))?;
         }
+        tx.commit()
+            .map_err(|e| AlephError::config(format!("replace_graph_related tx commit: {e}")))?;
         Ok(())
     }
 

@@ -53,7 +53,6 @@ pub mod goal;
 pub mod google_meet;
 pub mod heartbeat_manage;
 pub mod hub;
-pub mod invalid;
 pub mod list_models;
 pub mod loop_manage;
 pub mod mcp_login;
@@ -74,6 +73,7 @@ pub mod node_file;
 pub mod node_invoke;
 pub mod node_invoke_many;
 pub mod node_list;
+pub mod note_graph_query;
 pub mod note_manage;
 pub mod note_orient;
 pub mod note_schema;
@@ -103,7 +103,6 @@ pub mod task_manage;
 pub mod team;
 pub mod user_profile;
 pub mod vault_store;
-pub mod vision;
 pub mod voice_tools;
 pub mod web_fetch;
 pub mod workflow_tool;
@@ -174,7 +173,6 @@ pub use heartbeat_manage::{
     HeartbeatReportTool, HeartbeatToggleArgs, HeartbeatToggleOutput, HeartbeatToggleTool,
     HeartbeatUpdateArgs, HeartbeatUpdateOutput, HeartbeatUpdateTool,
 };
-pub use invalid::{InvalidTool, InvalidToolArgs, InvalidToolOutput};
 pub use list_models::{ListModelsArgs, ListModelsOutput, ListModelsTool};
 pub use loop_manage::{LoopAction, LoopArgs, LoopOutput, LoopTool};
 pub use mcp_login::{McpLoginArgs, McpLoginOutput, McpLoginTool};
@@ -218,7 +216,6 @@ pub use team::{
     TeamDisbandTool, TeamStatusArgs, TeamStatusOutput, TeamStatusTool,
 };
 pub use vault_store::{VaultAction, VaultStoreArgs, VaultStoreOutput, VaultStoreTool};
-pub use vision::{VisionAction, VisionArgs, VisionOutput, VisionTool};
 pub use voice_tools::{
     LocalVoiceArgs, LocalVoiceOutput, LocalVoiceTool, VoiceModeSetArgs, VoiceModeSetOutput,
     VoiceModeSetTool,

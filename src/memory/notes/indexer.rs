@@ -17,6 +17,12 @@ use crate::memory::notes::{sanitize_title, KnowledgeNote, Severity};
 use crate::utils::atomic_write::atomic_write_file;
 
 /// All valid category subdirectories under `memory/{agent_id}/`.
+///
+/// This is the *single source of truth* for every indexable note category:
+/// `full_rebuild`/`ensure_dirs` scan it, `note_manage::validate_category` and
+/// dream `validation.rs` accept it, and the rename cascade rewrites wikilinks
+/// across it. `archive/` is deliberately absent — `NoteDecay` moves cold notes
+/// there and they must stay OUT of the active index.
 pub const CATEGORY_DIRS: &[&str] = &[
     "preference",
     "plan",
@@ -35,9 +41,68 @@ pub const CATEGORY_DIRS: &[&str] = &[
     "subagent-checkpoint",
     "subagent-transcript",
     "contradiction", // Phase C2.6: note_drift conflict pages
+    "entity",        // ingest entity-graph pages (`entity/<slug>`) — the ingest
+    // prompt instructs the LLM to create these; without registration here
+    // full_rebuild silently dropped the entire entity graph on an index rebuild
+    // and dream L1 flagged every entity note "invalid category".
+    "synthesis", // NoteSynthesisStage cross-note synthesis pages — likewise
+    // written to disk but previously unscanned/unvalidated.
     "other",
     "query", // Spec 8: filed-back query answers
 ];
+
+/// Known singular/plural (and spelling) variants → their single canonical
+/// category. Explicit allow-list, NOT a generic depluralizer, so intentionally
+/// plural or hyphenated categories (`goal-lessons`, the `subagent-*` family) are
+/// never mangled. See [`canonicalize_category`].
+const CATEGORY_ALIASES: &[(&str, &str)] = &[
+    ("projects", "project"),
+    ("preferences", "preference"),
+    ("workflows", "workflow"),
+    ("teams", "team"),
+    ("systems", "system"),
+    ("interests", "interest"),
+    ("entities", "entity"),
+    ("learnings", "learning"),
+    ("lessons", "lesson"),
+    ("plans", "plan"),
+    ("tools", "tool"),
+    ("skills", "skill"),
+    ("references", "reference"),
+    ("personals", "personal"),
+    ("transcripts", "transcript"),
+    ("contradictions", "contradiction"),
+    ("queries", "query"),
+    ("synthesis-notes", "synthesis"),
+];
+
+/// Canonicalize a raw, LLM-authored category string to its single canonical
+/// spelling before it becomes a note-path prefix.
+///
+/// This is deterministic **path hygiene** (morphological normalization), NOT
+/// semantic classification — it only collapses known singular/plural spelling
+/// variants of the *same* category so `project`/`projects` (or
+/// `workflow`/`workflows`) can never split the graph into two fragmented
+/// clusters that break type-affinity relatedness, per-category synthesis
+/// thresholds, distill dedup, and orientation rendering. Unknown categories
+/// pass through unchanged (the LLM keeps category sovereignty — R7); we only
+/// merge spellings observed to coexist in practice.
+///
+/// Applied at every category write chokepoint (ingest `split_path`,
+/// `note_manage` create). Path-traversal sanitizing still happens downstream via
+/// `sanitize_title`; this only fixes spelling. Case-insensitive on match; a
+/// non-aliased category is returned byte-identical except for trimming.
+#[must_use]
+pub fn canonicalize_category(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let key = trimmed.to_ascii_lowercase();
+    for &(variant, canonical) in CATEGORY_ALIASES {
+        if key == variant {
+            return canonical.to_string();
+        }
+    }
+    trimmed.to_string()
+}
 
 /// Statistics from an indexing operation.
 #[derive(Debug, Clone, Default)]
@@ -193,26 +258,58 @@ impl<S: NoteStore> NoteIndexer<S> {
         safe_title: &str,
         content: &str,
     ) -> Result<(), AlephError> {
-        let reparsed = KnowledgeNote::from_markdown(safe_title, content).map_err(|e| {
+        let mut reparsed = KnowledgeNote::from_markdown(safe_title, content).map_err(|e| {
             AlephError::other(format!("reparse after write {category}/{safe_title}: {e}"))
         })?;
+        // Promote body-embedded supersession (`## Superseded by [[X]]`) into
+        // `superseded_by` frontmatter before indexing — mirrors `index_file` /
+        // `index_one_file`, so a raw/panel-edited body reflects the relation
+        // immediately instead of waiting for the next `full_rebuild`.
+        crate::memory::notes::governance::supersession::sync_body_to_frontmatter(
+            &mut reparsed,
+            content,
+        );
         self.store.index_note(&reparsed, agent_id, category).await?;
 
-        // Backfill: this write may resolve other notes' dangling links to this
-        // note (create / recreate-after-delete) — targeted by to_raw, P7 best-effort.
-        let mut keys: Vec<String> = vec![
-            safe_title.to_string(),
-            format!("{category}/{safe_title}"),
-        ];
-        keys.extend(reparsed.aliases.iter().cloned());
-        if let Err(e) = self.store.backfill_inbound_links(agent_id, &keys).await {
-            tracing::warn!(error = %e, "finalize_write: inbound backfill failed (non-fatal)");
-        }
-
         self.notify_orientation(agent_id, category, safe_title);
-        self.refresh_embedding(agent_id, category, safe_title, content)
+        self.finalize_side_effects(agent_id, category, safe_title, content, &reparsed.aliases, true)
             .await;
         Ok(())
+    }
+
+    /// Post-index side-effects shared by every note writer: resolve other
+    /// notes' dangling links that now point at this note
+    /// (`backfill_inbound_links`, P7 best-effort, always applied) and — when
+    /// `reembed` is set — refresh this note's vector so it is immediately
+    /// searchable (embed-on-write; a no-op without an injected embedder). The
+    /// append family routes through here too so appended / dream-distilled
+    /// knowledge becomes vector-searchable without waiting for a rare
+    /// `reembed_all` sweep. Callers pass `reembed = false` for metadata-only
+    /// edits (link/relation weaving on an already-embedded note) so the
+    /// zero-cost structural dream stages (`NoteWeave`) don't issue an embedding
+    /// call per woven edge. Callers keep their own `index_note` +
+    /// `notify_orientation`; this covers only the link/vector legs.
+    async fn finalize_side_effects(
+        &self,
+        agent_id: &str,
+        category: &str,
+        safe_title: &str,
+        content: &str,
+        aliases: &[String],
+        reembed: bool,
+    ) {
+        // This write may resolve other notes' dangling links to this note
+        // (create / recreate-after-delete) — targeted by to_raw.
+        let mut keys: Vec<String> =
+            vec![safe_title.to_string(), format!("{category}/{safe_title}")];
+        keys.extend(aliases.iter().cloned());
+        if let Err(e) = self.store.backfill_inbound_links(agent_id, &keys).await {
+            tracing::warn!(error = %e, "finalize_side_effects: inbound backfill failed (non-fatal)");
+        }
+        if reembed {
+            self.refresh_embedding(agent_id, category, safe_title, content)
+                .await;
+        }
     }
 
     /// Getter for the memory directory.
@@ -544,7 +641,8 @@ impl<S: NoteStore> NoteIndexer<S> {
             .join(&safe_cat)
             .join(format!("{safe_title}.md"));
 
-        let mut note = if file_path.exists() {
+        let existed = file_path.exists();
+        let mut note = if existed {
             let content =
                 fs::read_to_string(&file_path)
                     .await
@@ -595,6 +693,13 @@ impl<S: NoteStore> NoteIndexer<S> {
         self.store.index_note(&note, agent_id, &safe_cat).await?;
 
         self.notify_orientation(agent_id, &safe_cat, filename);
+        // Re-embed only when searchable content actually changed: a brand-new
+        // note (created here) or real appended facts. A link-only append on an
+        // already-embedded note (e.g. NoteWeave orphan-linking) skips the
+        // embedding call so the zero-cost structural weave stays cost-free.
+        let reembed = !existed || !new_facts.is_empty();
+        self.finalize_side_effects(agent_id, &safe_cat, &safe_title, &md, &note.aliases, reembed)
+            .await;
         Ok(())
     }
 
@@ -647,6 +752,11 @@ impl<S: NoteStore> NoteIndexer<S> {
         atomic_write_file(&file_path, &md).await?;
         self.store.index_note(&note, agent_id, &safe_cat).await?;
         self.notify_orientation(agent_id, &safe_cat, &safe_title);
+        // Relations are frontmatter metadata on an already-existing (already
+        // embedded) note — searchable prose is unchanged, so skip the re-embed
+        // and only run the cheap inbound-link backfill.
+        self.finalize_side_effects(agent_id, &safe_cat, &safe_title, &md, &note.aliases, false)
+            .await;
         Ok(())
     }
 
@@ -881,6 +991,11 @@ impl<S: NoteStore> NoteIndexer<S> {
         atomic_write_file(&file_path, &md).await?;
         self.store.index_note(&note, agent_id, &safe_cat).await?;
         self.notify_orientation(agent_id, &safe_cat, &safe_title);
+        // Merges source-provenance + confidence (frontmatter metadata) into an
+        // already-embedded note — searchable prose is unchanged, so skip the
+        // re-embed and only run the cheap inbound-link backfill.
+        self.finalize_side_effects(agent_id, &safe_cat, &safe_title, &md, &note.aliases, false)
+            .await;
         Ok(())
     }
 

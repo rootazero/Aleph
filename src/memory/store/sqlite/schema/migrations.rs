@@ -225,6 +225,35 @@ pub fn migrate_notes_index_aliases(conn: &rusqlite::Connection) -> rusqlite::Res
     Ok(())
 }
 
+/// Reconcile the trigram FTS companion (`notes_fts_trigram`) against the
+/// authoritative `notes_fts` on every startup, so it self-heals from any
+/// divergence rather than relying on a one-shot backfill: insert rows present in
+/// `notes_fts` but missing from the companion, and delete companion rows no
+/// longer in `notes_fts`. This covers the first-time backfill (companion empty),
+/// the legacy `default→main` remap (which mutates `notes_fts` but not its
+/// companion — run this AFTER it), and any missing/orphaned-row drift. Cheap:
+/// keyed on `(path, agent_id)`, and a no-op once in sync.
+///
+/// Not covered: a note whose *body changed under a pre-companion binary*
+/// (downgrade→edit→re-upgrade) leaves a same-key row with stale content; that
+/// self-heals the next time the note is edited (index_note re-syncs both). A
+/// per-boot full-content rescan would fix it but is not worth the cost on large
+/// stores for so narrow an operational window.
+pub fn migrate_notes_fts_trigram(conn: &Connection) -> Result<(), AlephError> {
+    // `agent_id`/`path` are always non-null, so row-value NOT IN is safe (no
+    // NULL short-circuit) and each subquery materializes once — O(N), not the
+    // O(N²) of a correlated scan over the unindexed FTS columns.
+    conn.execute_batch(
+        "INSERT INTO notes_fts_trigram (path, filename, content, agent_id) \
+         SELECT f.path, f.filename, f.content, f.agent_id FROM notes_fts f \
+         WHERE (f.agent_id, f.path) NOT IN (SELECT agent_id, path FROM notes_fts_trigram); \
+         DELETE FROM notes_fts_trigram \
+         WHERE (agent_id, path) NOT IN (SELECT agent_id, path FROM notes_fts);",
+    )
+    .map_err(|e| AlephError::config(format!("notes_fts_trigram reconcile: {e}")))?;
+    Ok(())
+}
+
 /// Drop legacy tables that were replaced by the notes pipeline.
 ///
 /// Safe to call on fresh databases (uses `DROP TABLE IF EXISTS`).

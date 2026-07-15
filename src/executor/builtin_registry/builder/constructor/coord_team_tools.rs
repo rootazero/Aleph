@@ -72,7 +72,7 @@ impl BuiltinToolRegistry {
                 let (update, wait) = if let Some(ref bus) = config.agent_message_bus {
                     (
                         Some(TaskUpdateTool::new(Arc::clone(store), Arc::clone(bus))),
-                        Some(TaskWaitTool::new(Arc::clone(store), Arc::clone(bus))),
+                        Some(TaskWaitTool::new(Arc::clone(store))),
                     )
                 } else {
                     (None, None)

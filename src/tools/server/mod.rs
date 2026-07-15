@@ -219,9 +219,8 @@ impl AlephToolServer {
     /// This method attempts to:
     /// 1. Call the tool directly if found
     /// 2. Try case-insensitive matching if exact match fails
-    /// 3. Route to "invalid" tool if no match found
-    ///
-    /// Inspired by `OpenCode`'s `experimental_repairToolCall` pattern.
+    /// 3. Try `snake_case` conversion if still unmatched
+    /// 4. Return an error with a `list_tools` suggestion if no match found
     ///
     /// # Returns
     ///

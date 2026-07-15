@@ -24,24 +24,6 @@ impl ConfigApi {
         state.rpc_call("config.get", params).await
     }
 
-    /// Set configuration value
-    pub async fn set(state: &DashboardState, key: String, value: Value) -> Result<(), String> {
-        let params = serde_json::json!({
-            "key": key,
-            "value": value,
-        });
-
-        state.rpc_call("config.set", params).await?;
-        Ok(())
-    }
-
-    /// List all configuration keys
-    pub async fn list(state: &DashboardState) -> Result<Vec<String>, String> {
-        let result = state.rpc_call("config.list", Value::Null).await?;
-
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse config list: {e}"))
-    }
-
     /// Reload configuration from disk and refresh subsystems
     pub async fn reload(state: &DashboardState) -> Result<ConfigReloadResult, String> {
         let result = state.rpc_call("config.reload", Value::Null).await?;

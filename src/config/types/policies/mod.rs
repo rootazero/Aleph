@@ -29,29 +29,19 @@
 //! ```
 
 pub mod exec_tier;
-pub mod experimental;
-pub mod intent;
-pub mod keyword;
 pub mod memory;
 pub mod metrics;
 pub mod retry;
-pub mod text;
 pub mod tool_permissions;
-pub mod tool_safety;
 pub mod web_fetch;
 
 pub use exec_tier::{
     builtin_tiers, effective_permission, ExecTier, ToolFacts, EXEC_TIER_SESSION_KEY,
 };
-pub use experimental::ExperimentalPolicy;
-pub use intent::IntentDetectionPolicy;
-pub use keyword::KeywordPolicy;
 pub use memory::{CompressionPolicy, MemoryPolicies};
 pub use metrics::MetricsPolicy;
 pub use retry::RetryPolicy;
-pub use text::TextFormatPolicy;
 pub use tool_permissions::ToolPermissionsConfig;
-pub use tool_safety::ToolSafetyPolicy;
 pub use web_fetch::{Crawl4aiConfig, WebFetchPolicy};
 
 use schemars::JsonSchema;
@@ -64,14 +54,6 @@ use serde::{Deserialize, Serialize};
 /// have a `[policies]` section.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct PoliciesConfig {
-    /// Tool safety inference policy
-    #[serde(default)]
-    pub tool_safety: ToolSafetyPolicy,
-
-    /// Intent detection policy
-    #[serde(default)]
-    pub intent: IntentDetectionPolicy,
-
     /// Memory module policies (compression + retrieval)
     #[serde(default)]
     pub memory: MemoryPolicies,
@@ -84,17 +66,9 @@ pub struct PoliciesConfig {
     #[serde(default)]
     pub web_fetch: WebFetchPolicy,
 
-    /// Text formatting policy
-    #[serde(default)]
-    pub text: TextFormatPolicy,
-
     /// Performance metrics policy
     #[serde(default)]
     pub metrics: MetricsPolicy,
-
-    /// Keyword matching policy for intent detection
-    #[serde(default)]
-    pub keyword: KeywordPolicy,
 
     /// Execution permission tier (Ask / Auto / Full).
     ///
@@ -106,13 +80,6 @@ pub struct PoliciesConfig {
     /// Tool permission levels (Allow / Ask / Deny)
     #[serde(default)]
     pub tool_permissions: ToolPermissionsConfig,
-
-    /// Experimental feature flags
-    ///
-    /// Controls experimental features like the new unified intent decider
-    /// and streamlined prompt system. All flags default to disabled.
-    #[serde(default)]
-    pub experimental: ExperimentalPolicy,
 }
 
 #[cfg(test)]
@@ -124,58 +91,32 @@ mod tests {
         let config: PoliciesConfig = toml::from_str("").unwrap();
 
         // All should use defaults
-        assert_eq!(config.intent.confidence_threshold, 0.7);
         assert_eq!(config.retry.max_retries, 3);
         assert_eq!(config.memory.compression.idle_timeout_seconds, 300);
-        assert!(config
-            .tool_safety
-            .high_risk_keywords
-            .contains(&"delete".to_string()));
+        assert_eq!(config.metrics.warning_multiplier, 2.0);
     }
 
     #[test]
     fn test_partial_policies_config() {
         let toml = r#"
-            [intent]
-            confidence_threshold = 0.8
-
             [retry]
             max_retries = 5
         "#;
         let config: PoliciesConfig = toml::from_str(toml).unwrap();
 
         // Specified values
-        assert_eq!(config.intent.confidence_threshold, 0.8);
         assert_eq!(config.retry.max_retries, 5);
 
         // Defaults for unspecified policies
         assert_eq!(config.memory.compression.idle_timeout_seconds, 300);
-        assert!(config
-            .tool_safety
-            .high_risk_keywords
-            .contains(&"delete".to_string()));
     }
 
     #[test]
     fn test_full_policies_config() {
         let toml = r#"
-            [tool_safety]
-            high_risk_keywords = ["rm", "sudo"]
-            builtin_fallback = "readonly"
-
-            [intent]
-            confidence_threshold = 0.9
-            timeout_ms = 5000
-            min_input_length = 5
-            video_url_patterns = ["youtube.com"]
-
             [memory.compression]
             idle_timeout_seconds = 600
             turn_threshold = 30
-
-            [memory.ai_retrieval]
-            timeout_ms = 5000
-            max_candidates = 30
 
             [retry]
             max_retries = 10
@@ -185,9 +126,6 @@ mod tests {
             max_content_length = 50000
             user_agent = "TestBot/1.0"
 
-            [text]
-            default_truncate_length = 500
-
             [metrics]
             target_hotkey_to_clipboard_ms = 30
             warning_multiplier = 3.0
@@ -195,20 +133,9 @@ mod tests {
         let config: PoliciesConfig = toml::from_str(toml).unwrap();
 
         // Verify all specified values
-        assert!(config
-            .tool_safety
-            .high_risk_keywords
-            .contains(&"rm".to_string()));
-        assert!(!config
-            .tool_safety
-            .high_risk_keywords
-            .contains(&"delete".to_string())); // Overridden
-        assert_eq!(config.intent.confidence_threshold, 0.9);
         assert_eq!(config.memory.compression.idle_timeout_seconds, 600);
-        assert_eq!(config.memory.ai_retrieval.max_candidates, 30);
         assert_eq!(config.retry.max_retries, 10);
         assert_eq!(config.web_fetch.max_content_length, 50000);
-        assert_eq!(config.text.default_truncate_length, 500);
         assert_eq!(config.metrics.warning_multiplier, 3.0);
     }
 
@@ -218,10 +145,10 @@ mod tests {
         let toml_str = toml::to_string(&config).unwrap();
         let parsed: PoliciesConfig = toml::from_str(&toml_str).unwrap();
 
-        assert_eq!(
-            config.intent.confidence_threshold,
-            parsed.intent.confidence_threshold
-        );
         assert_eq!(config.retry.max_retries, parsed.retry.max_retries);
+        assert_eq!(
+            config.metrics.warning_multiplier,
+            parsed.metrics.warning_multiplier
+        );
     }
 }
