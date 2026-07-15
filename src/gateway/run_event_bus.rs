@@ -170,24 +170,6 @@ pub enum RunEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
-
-    /// Input requested from user (human-in-the-loop)
-    InputRequested {
-        run_id: String,
-        seq: u64,
-        prompt: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        input_type: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        timeout_secs: Option<u64>,
-    },
-
-    /// Input received from user
-    InputReceived {
-        run_id: String,
-        seq: u64,
-        input: String,
-    },
 }
 
 impl RunEvent {
@@ -203,8 +185,6 @@ impl RunEvent {
             Self::RunCompleted { run_id, .. } => run_id,
             Self::RunFailed { run_id, .. } => run_id,
             Self::RunCancelled { run_id, .. } => run_id,
-            Self::InputRequested { run_id, .. } => run_id,
-            Self::InputReceived { run_id, .. } => run_id,
         }
     }
 
