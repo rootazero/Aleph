@@ -1,24 +1,35 @@
 //! Cross-process singleton lock for a given Aleph data directory.
 //!
-//! Uses `fs2::FileExt::try_lock_exclusive` on `<data_dir>/aleph.lock`.
-//! The lock is automatically released by the OS when the holder process
-//! exits (graceful, panic, SIGKILL — all release).
+//! Uses `fs2::FileExt::try_lock_exclusive` on `<data_dir>/aleph.lock` for the
+//! actual mutual exclusion. The holder's PID (+ start time) is recorded in an
+//! UNLOCKED sidecar `<data_dir>/aleph.lock.pid`, so a contending second
+//! instance can read who holds the lock on every platform: reading the PID out
+//! of the locked file itself fails with os error 33 on Windows, where `fs2`
+//! uses `LockFileEx` and an exclusive lock blocks reads from all other handles.
+//! The lock is automatically released by the OS when the holder process exits
+//! (graceful, panic, SIGKILL — all release).
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use fs2::FileExt;
 
+use super::atomic_io::write_atomic;
 use super::process_alive::{process_matches, process_start_time};
 
 const LOCK_FILENAME: &str = "aleph.lock";
+/// Sidecar that records the current holder's PID (+ start time). Kept separate
+/// from `aleph.lock` and never locked, so a second instance can read the holder
+/// back even while the first holds the exclusive lock (see module docs on the
+/// Windows `LockFileEx` read-blocking behavior).
+const HOLDER_FILENAME: &str = "aleph.lock.pid";
 
 #[derive(Debug)]
 pub struct InstanceLock {
     #[allow(dead_code)] // Held for OS-level lock lifetime via Drop on `File`.
     file: File,
     path: PathBuf,
+    holder_path: PathBuf,
     holder_pid: u32,
 }
 
@@ -39,18 +50,18 @@ impl InstanceLock {
         self.file
     }
 
-    /// Rewrite the lock file's holder PID to the *current* process id.
+    /// Rewrite the holder record's PID to the *current* process id.
     ///
     /// Call this after `fork()`/daemonization: the flock is held on a fd that
     /// survives `fork()`, so the daemonized grandchild still owns the lock —
-    /// but the lock file *content* still names the original (now-exited) parent
-    /// PID that called `try_acquire`. Without this, `diagnose_holder` and the
-    /// PID readback in `try_acquire` mistake the live daemon for a stale /
+    /// but the sidecar still names the original (now-exited) parent PID that
+    /// called `try_acquire`. Without this, `diagnose_holder` and the PID
+    /// readback in `try_acquire` mistake the live daemon for a stale /
     /// orphaned lock, and a second `start` can print "safe to `rm`" advice for
     /// a lock that is in fact held by a running process.
     pub fn rewrite_holder_pid(&mut self) -> std::io::Result<()> {
         let pid = std::process::id();
-        write_holder(&mut self.file, pid)?;
+        write_holder(&self.holder_path, pid)?;
         self.holder_pid = pid;
         Ok(())
     }
@@ -80,8 +91,9 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
         std::fs::create_dir_all(data_dir)?;
     }
     let lock_path = data_dir.join(LOCK_FILENAME);
+    let holder_path = data_dir.join(HOLDER_FILENAME);
 
-    let mut file = std::fs::OpenOptions::new()
+    let file = std::fs::OpenOptions::new()
         .create(true)
         .read(true)
         .write(true)
@@ -90,21 +102,23 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
 
     match file.try_lock_exclusive() {
         Ok(()) => {
-            // Got the lock — record our PID (+ start time) for diagnostics.
+            // Got the lock — record our PID (+ start time) in the unlocked
+            // sidecar so a contending second instance can read it back on
+            // every platform.
             let pid = std::process::id();
-            write_holder(&mut file, pid)?;
+            write_holder(&holder_path, pid)?;
             Ok(AcquireOutcome::Acquired(InstanceLock {
                 file,
                 path: lock_path,
+                holder_path,
                 holder_pid: pid,
             }))
         }
         Err(_) => {
-            // Lock is held by someone else. Read the holder for diagnostics.
-            let mut buf = String::new();
-            file.seek(SeekFrom::Start(0))?;
-            file.read_to_string(&mut buf)?;
-            let (pid, expected_start) = parse_holder(&buf);
+            // Lock is held by someone else. Read the holder from the unlocked
+            // sidecar (reading the locked file itself would fail with os error
+            // 33 on Windows, where the exclusive lock blocks all other reads).
+            let (pid, expected_start) = read_holder(&holder_path);
             if pid > 0 && process_matches(pid, expected_start) {
                 Ok(AcquireOutcome::HeldByLive { pid, lock_path })
             } else if pid > 0 {
@@ -116,14 +130,12 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
     }
 }
 
-/// Read holder metadata from the lock file WITHOUT competing for the lock.
-/// Returns None if the lock file does not exist.
+/// Read holder metadata from the sidecar WITHOUT competing for the lock.
+/// Returns None if the sidecar does not exist or is empty.
 #[must_use]
 pub fn diagnose_holder(data_dir: &Path) -> Option<HolderDiagnostic> {
-    let lock_path = data_dir.join(LOCK_FILENAME);
-    let mut file = std::fs::File::open(&lock_path).ok()?;
-    let mut buf = String::new();
-    file.read_to_string(&mut buf).ok()?;
+    let holder_path = data_dir.join(HOLDER_FILENAME);
+    let buf = std::fs::read_to_string(&holder_path).ok()?;
     if buf.trim().is_empty() {
         return None;
     }
@@ -131,24 +143,33 @@ pub fn diagnose_holder(data_dir: &Path) -> Option<HolderDiagnostic> {
     Some(HolderDiagnostic {
         pid,
         process_alive: process_matches(pid, expected_start),
-        lock_path,
+        lock_path: data_dir.join(LOCK_FILENAME),
     })
 }
 
-/// Write the holder record: line 1 = PID, line 2 = the holder's process start
-/// time (seconds since epoch) when the platform reports one. The start time is
-/// what makes the live/orphaned classification immune to PID reuse — a recycled
-/// PID has a different start time. When unavailable we write the PID alone,
-/// keeping the legacy single-line format.
-fn write_holder(file: &mut File, pid: u32) -> std::io::Result<()> {
-    file.set_len(0)?;
-    file.seek(SeekFrom::Start(0))?;
-    match process_start_time(pid as i32) {
-        Some(start) => writeln!(file, "{pid}\n{start}")?,
-        None => writeln!(file, "{pid}")?,
+/// Write the holder record to the unlocked sidecar: line 1 = PID, line 2 = the
+/// holder's process start time (seconds since epoch) when the platform reports
+/// one. The start time is what makes the live/orphaned classification immune to
+/// PID reuse — a recycled PID has a different start time. When unavailable we
+/// write the PID alone, keeping the legacy single-line format. The write is
+/// atomic (temp + rename) so a concurrent reader never observes a half-written
+/// record.
+fn write_holder(holder_path: &Path, pid: u32) -> std::io::Result<()> {
+    let record = match process_start_time(pid as i32) {
+        Some(start) => format!("{pid}\n{start}\n"),
+        None => format!("{pid}\n"),
+    };
+    write_atomic(holder_path, record.as_bytes())
+}
+
+/// Read the holder record from the unlocked sidecar. Returns `(-1, None)` when
+/// the sidecar is absent, empty, or unreadable — every "no live holder" case
+/// collapses to a non-positive PID the callers already treat as free.
+fn read_holder(holder_path: &Path) -> (i32, Option<u64>) {
+    match std::fs::read_to_string(holder_path) {
+        Ok(buf) => parse_holder(&buf),
+        Err(_) => (-1, None),
     }
-    file.sync_all()?;
-    Ok(())
 }
 
 /// Parse a holder record written by [`write_holder`]. Line 1 is the PID; an
@@ -178,20 +199,15 @@ mod tests {
         assert_eq!(parse_holder("abc\n456"), (-1, Some(456)));
     }
 
-    // POSIX-only: reading the holder record back while the lock is held relies
-    // on `flock` being advisory. On Windows `fs2` uses `LockFileEx`, whose
-    // exclusive lock blocks reads from every other handle (even same-process),
-    // so the readback fails with os error 33. Same rationale as
-    // `second_acquire_in_same_process_returns_held_by_live` below.
-    #[cfg(not(windows))]
     #[test]
     fn acquired_lock_records_a_recoverable_pid() {
-        // The written holder record must round-trip through parse_holder back
-        // to the current PID (the start-time line is platform-dependent).
+        // The holder record lands in the unlocked sidecar and must round-trip
+        // through parse_holder back to the current PID (the start-time line is
+        // platform-dependent). Cross-platform: the sidecar is never locked.
         let dir = tempfile::tempdir().unwrap();
         match try_acquire(dir.path()).unwrap() {
-            AcquireOutcome::Acquired(lock) => {
-                let buf = std::fs::read_to_string(lock.lock_path()).unwrap();
+            AcquireOutcome::Acquired(_lock) => {
+                let buf = std::fs::read_to_string(dir.path().join(HOLDER_FILENAME)).unwrap();
                 let (pid, _start) = parse_holder(&buf);
                 assert_eq!(pid as u32, std::process::id());
             }
@@ -206,12 +222,9 @@ mod tests {
         assert!(matches!(outcome, AcquireOutcome::Acquired(_)));
     }
 
-    // POSIX-only: reading the holder PID back while the lock is held relies on
-    // `flock` being advisory. On Windows `fs2` uses `LockFileEx`, whose
-    // exclusive lock blocks reads from every other handle (even same-process),
-    // so the PID readback cannot succeed while the lock is held. Mutual
-    // exclusion itself still works on Windows; only this diagnostic does not.
-    #[cfg(not(windows))]
+    // The holder PID lives in the unlocked sidecar, so the readback while the
+    // lock is held now works on every platform (including Windows, where the
+    // exclusive `LockFileEx` would block reads of the lock file itself).
     #[test]
     fn second_acquire_in_same_process_returns_held_by_live() {
         let dir = tempfile::tempdir().unwrap();
@@ -246,9 +259,8 @@ mod tests {
         assert!(diagnose_holder(dir.path()).is_none());
     }
 
-    // POSIX-only: see `second_acquire_in_same_process_returns_held_by_live` —
-    // Windows `LockFileEx` blocks reading the holder PID while the lock is held.
-    #[cfg(not(windows))]
+    // Cross-platform now: `diagnose_holder` reads the unlocked sidecar, so it
+    // resolves the holder PID even while the exclusive lock is held.
     #[test]
     fn diagnose_holder_returns_pid_when_held() {
         let dir = tempfile::tempdir().unwrap();

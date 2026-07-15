@@ -19,6 +19,7 @@ use crate::utils::instance_lock::diagnose_holder;
 
 const ID: &str = "core/instance-lock";
 const LOCK_FILENAME: &str = "aleph.lock";
+const HOLDER_FILENAME: &str = "aleph.lock.pid";
 
 pub struct StaleLockCheck {
     data_dir: PathBuf,
@@ -62,9 +63,13 @@ impl HealthCheck for StaleLockCheck {
             )];
         }
 
-        // PID is dead but the file remains → stale.
+        // PID is dead but the holder record remains → stale. The PID now lives
+        // in the unlocked `aleph.lock.pid` sidecar; remove it (and tidy the
+        // now-empty lock target) so the next diagnosis reports the lock free.
         let lock_path = self.data_dir.join(LOCK_FILENAME);
+        let holder_path = self.data_dir.join(HOLDER_FILENAME);
         let display = lock_path.display().to_string();
+        let holder_display = holder_path.display().to_string();
         let mut finding = Finding::problem(
             ID,
             Severity::Warning,
@@ -75,15 +80,20 @@ impl HealthCheck for StaleLockCheck {
             ),
         )
         .with_fix_hint(format!(
-            "Run `aleph doctor --fix`, or remove it manually: rm {display}"
+            "Run `aleph doctor --fix`, or remove manually: rm {display} {holder_display}"
         ))
         .repairable();
 
         if posture.allows_repair() {
-            let outcome = match std::fs::remove_file(&lock_path) {
-                Ok(()) => RepairOutcome::Repaired {
-                    detail: format!("Removed stale {display}"),
-                },
+            let outcome = match std::fs::remove_file(&holder_path) {
+                Ok(()) => {
+                    // Best-effort tidy of the empty lock target; the sidecar was
+                    // the file carrying the stale PID.
+                    let _ = std::fs::remove_file(&lock_path);
+                    RepairOutcome::Repaired {
+                        detail: format!("Removed stale lock ({display})"),
+                    }
+                }
                 Err(e) => RepairOutcome::Failed {
                     error: e.to_string(),
                 },
@@ -115,21 +125,22 @@ mod tests {
     async fn detects_and_repairs_stale_lock() {
         let tmp = tempdir().unwrap();
         // PID 1 on a typical system is alive (init); use an absurd PID that
-        // is virtually guaranteed to be dead to simulate a stale holder.
-        let lock = tmp.path().join(LOCK_FILENAME);
-        fs::write(&lock, "2147480000\n").unwrap();
+        // is virtually guaranteed to be dead to simulate a stale holder. The
+        // PID lives in the unlocked `aleph.lock.pid` sidecar.
+        let holder = tmp.path().join(HOLDER_FILENAME);
+        fs::write(&holder, "2147480000\n").unwrap();
 
         let check = StaleLockCheck::new(tmp.path().to_path_buf());
         let inspect = check.run(Posture::Inspect).await;
         assert_eq!(inspect[0].severity, Severity::Warning);
         assert!(inspect[0].repairable);
-        assert!(lock.exists(), "inspect must not mutate");
+        assert!(holder.exists(), "inspect must not mutate");
 
         let fixed = check.run(Posture::Fix).await;
         assert!(matches!(
             fixed[0].repair_outcome,
             Some(RepairOutcome::Repaired { .. })
         ));
-        assert!(!lock.exists(), "fix must remove the stale lock");
+        assert!(!holder.exists(), "fix must remove the stale holder record");
     }
 }
