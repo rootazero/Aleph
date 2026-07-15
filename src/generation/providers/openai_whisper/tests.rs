@@ -38,25 +38,27 @@ fn supports_transcription_only() {
 }
 
 #[tokio::test]
-async fn rejects_wrong_generation_type() {
-    let provider = OpenAiWhisperProvider::new("sk-test", None, None, None).unwrap();
+async fn rejects_wrong_generation_type() -> Result<(), GenerationError> {
+    let provider = OpenAiWhisperProvider::new("sk-test", None, None, None)?;
     let request = GenerationRequest::image("a cat");
     let err = provider.generate(request).await.unwrap_err();
     assert!(matches!(
         err,
         GenerationError::UnsupportedGenerationTypeError { .. }
     ));
+    Ok(())
 }
 
 #[tokio::test]
-async fn rejects_missing_audio_source() {
-    let provider = OpenAiWhisperProvider::new("sk-test", None, None, None).unwrap();
+async fn rejects_missing_audio_source() -> Result<(), GenerationError> {
+    let provider = OpenAiWhisperProvider::new("sk-test", None, None, None)?;
     let request = GenerationRequest::new(GenerationType::Transcription, "");
     let err = provider.generate(request).await.unwrap_err();
     assert!(matches!(
         err,
         GenerationError::InvalidParametersError { .. }
     ));
+    Ok(())
 }
 
 #[test]
@@ -85,14 +87,14 @@ fn mime_from_extension_known_types() {
 }
 
 #[tokio::test]
-async fn rejects_oversized_file() {
+async fn rejects_oversized_file() -> Result<(), GenerationError> {
     // Build a 26 MB in-memory buffer wrapped in a base64 data URL.
     let big_size = 26 * 1024 * 1024;
     let buf = vec![0u8; big_size];
     let encoded = base64::engine::general_purpose::STANDARD.encode(&buf);
     let url = format!("data:audio/mpeg;base64,{}", encoded);
 
-    let provider = OpenAiWhisperProvider::new("sk-test", None, None, None).unwrap();
+    let provider = OpenAiWhisperProvider::new("sk-test", None, None, None)?;
     let params = GenerationParams::builder().reference_audio(url).build();
     let request = GenerationRequest::new(GenerationType::Transcription, "").with_params(params);
     let err = provider.generate(request).await.unwrap_err();
@@ -100,4 +102,5 @@ async fn rejects_oversized_file() {
         err,
         GenerationError::InvalidParametersError { .. }
     ));
+    Ok(())
 }

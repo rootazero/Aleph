@@ -76,42 +76,45 @@ fn supports_speech_only() {
 }
 
 #[tokio::test]
-async fn rejects_wrong_generation_type() {
-    let p = AzureSpeechProvider::new("k", Some("eastus".into()), None).unwrap();
+async fn rejects_wrong_generation_type() -> Result<(), GenerationError> {
+    let p = AzureSpeechProvider::new("k", Some("eastus".into()), None)?;
     let request = GenerationRequest::image("a cat");
     let err = p.generate(request).await.unwrap_err();
     assert!(matches!(
         err,
         GenerationError::UnsupportedGenerationTypeError { .. }
     ));
+    Ok(())
 }
 
 #[tokio::test]
-async fn rejects_empty_input() {
-    let p = AzureSpeechProvider::new("k", Some("eastus".into()), None).unwrap();
+async fn rejects_empty_input() -> Result<(), GenerationError> {
+    let p = AzureSpeechProvider::new("k", Some("eastus".into()), None)?;
     let request = GenerationRequest::speech("");
     let err = p.generate(request).await.unwrap_err();
     assert!(matches!(
         err,
         GenerationError::InvalidParametersError { .. }
     ));
+    Ok(())
 }
 
 #[tokio::test]
-async fn rejects_oversized_input() {
+async fn rejects_oversized_input() -> Result<(), GenerationError> {
     let text = "a".repeat(MAX_INPUT_CHARS + 1);
-    let p = AzureSpeechProvider::new("k", Some("eastus".into()), None).unwrap();
+    let p = AzureSpeechProvider::new("k", Some("eastus".into()), None)?;
     let request = GenerationRequest::speech(text);
     let err = p.generate(request).await.unwrap_err();
     assert!(matches!(
         err,
         GenerationError::InvalidParametersError { .. }
     ));
+    Ok(())
 }
 
 #[tokio::test]
-async fn rejects_unknown_format() {
-    let p = AzureSpeechProvider::new("k", Some("eastus".into()), None).unwrap();
+async fn rejects_unknown_format() -> Result<(), GenerationError> {
+    let p = AzureSpeechProvider::new("k", Some("eastus".into()), None)?;
     let params = GenerationParams::builder().format("flac").build();
     let request = GenerationRequest::speech("hi").with_params(params);
     let err = p.generate(request).await.unwrap_err();
@@ -119,6 +122,7 @@ async fn rejects_unknown_format() {
         err,
         GenerationError::UnsupportedFormatError { .. }
     ));
+    Ok(())
 }
 
 #[test]

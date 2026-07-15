@@ -88,7 +88,9 @@ impl MoaToml {
             .map(str::to_string)
             .or_else(|| self.default_preset.clone())
             .or_else(|| {
-                (self.presets.len() == 1).then(|| self.presets.keys().next().cloned().unwrap())
+                (self.presets.len() == 1)
+                    .then(|| self.presets.keys().next().cloned())
+                    .flatten()
             })?;
         self.presets.get(&key).map(|p| (key, p))
     }

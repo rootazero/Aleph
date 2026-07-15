@@ -6,18 +6,23 @@
 //! - `@/path` - absolute file reference
 
 use super::error::{ExtensionError, ExtensionResult};
+use once_cell::sync::OnceCell;
 use regex::Regex;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
 /// Regex for matching file references: @./path or @/path
 /// Matches @./relative/path or @/absolute/path, stopping at whitespace or common delimiters
-static FILE_REF_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    // Pattern: @./path or @/path, stopping at whitespace or delimiters.
-    // The regex is a compile-time constant; a parse failure is a programmer error.
-    Regex::new(r#"@(\.?/[^\s\]\)>`"']+)"#)
-        .unwrap_or_else(|e| panic!("Invalid file reference regex: {e}"))
-});
+static FILE_REF_REGEX: OnceCell<Regex> = OnceCell::new();
+
+/// Returns the compiled file-reference regex, initializing it on first use.
+fn file_ref_regex() -> ExtensionResult<&'static Regex> {
+    FILE_REF_REGEX.get_or_try_init(|| {
+        // Pattern: @./path or @/path, stopping at whitespace or delimiters.
+        // The regex is a compile-time constant; a parse failure is a programmer error.
+        Regex::new(r#"@(\.?/[^\s\]\)>`"']+)"#)
+            .map_err(|e| ExtensionError::template_error(format!("Invalid file reference regex: {e}")))
+    })
+}
 
 /// Skill template processor
 #[derive(Debug, Clone)]
@@ -82,7 +87,7 @@ impl SkillTemplate {
         let mut replacements = Vec::new();
 
         // Find all file references
-        for cap in FILE_REF_REGEX.captures_iter(content) {
+        for cap in file_ref_regex()?.captures_iter(content) {
             let full_match = cap
                 .get(0)
                 .ok_or_else(|| ExtensionError::template_error("regex capture group 0 missing"))?;
@@ -261,7 +266,7 @@ mod tests {
     #[test]
     fn test_file_ref_regex() {
         let content = "See @./config.json and @/etc/hosts for details.";
-        let matches: Vec<_> = FILE_REF_REGEX.find_iter(content).collect();
+        let matches: Vec<_> = file_ref_regex().unwrap().find_iter(content).collect();
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].as_str(), "@./config.json");
         assert_eq!(matches[1].as_str(), "@/etc/hosts");

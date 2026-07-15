@@ -634,8 +634,7 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let prev = std::env::var("ALEPH_HOME").ok();
-        // SAFETY: single-threaded test mutates a process env var so the config
-        // save lands in the tempdir, not the real ~/.aleph. Restored below.
+        // SAFETY: test holds the ALEPH_HOME guard; scoped env override, restored below.
         unsafe {
             std::env::set_var("ALEPH_HOME", dir.path());
         }
@@ -695,7 +694,9 @@ mod tests {
         );
 
         match prev {
+            // SAFETY: restoring previously-read env var while the ALEPH_HOME guard is held.
             Some(v) => unsafe { std::env::set_var("ALEPH_HOME", v) },
+            // SAFETY: removing the env var we set above while the ALEPH_HOME guard is held.
             None => unsafe { std::env::remove_var("ALEPH_HOME") },
         }
     }

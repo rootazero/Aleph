@@ -570,7 +570,7 @@ DQIDAQAB
         let temp_dir = tempfile::tempdir().unwrap();
         let cert_path = temp_dir.path().join("cert.pem");
         let pem_content = "-----BEGIN CERTIFICATE-----\nMIICpDCCAYwCCQDU+pQ4P0aW5DANBgkqhkiG9w0BAQsFADAUMRIwEAYDVQQDDAls\nb2NhbGhvc3QwHhcNMjQwMTAxMDAwMDAwWhcNMjUwMTAxMDAwMDAwWjAUMRIwEAYDVQQD\nDAlsb2NhbGhvc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC7o5gELJvF\n-----END CERTIFICATE-----\n-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC7o5gELJvF\n-----END PRIVATE KEY-----\n";
-        std::fs::write(&cert_path, pem_content).unwrap();
+        tokio::fs::write(&cert_path, pem_content).await.unwrap();
         let cert = Certificate::load(cert_path).await;
         assert!(cert.is_ok(), "Certificate load failed: {:?}", cert.err());
     }

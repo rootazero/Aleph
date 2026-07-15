@@ -36,37 +36,40 @@ fn supports_music_only() {
 }
 
 #[tokio::test]
-async fn rejects_wrong_generation_type() {
-    let p = SunoProvider::new("k", None, None).unwrap();
+async fn rejects_wrong_generation_type() -> Result<(), GenerationError> {
+    let p = SunoProvider::new("k", None, None)?;
     let request = GenerationRequest::image("a cat");
     let err = p.generate(request).await.unwrap_err();
     assert!(matches!(
         err,
         GenerationError::UnsupportedGenerationTypeError { .. }
     ));
+    Ok(())
 }
 
 #[tokio::test]
-async fn rejects_empty_prompt() {
-    let p = SunoProvider::new("k", None, None).unwrap();
+async fn rejects_empty_prompt() -> Result<(), GenerationError> {
+    let p = SunoProvider::new("k", None, None)?;
     let request = GenerationRequest::new(GenerationType::Audio, "");
     let err = p.generate(request).await.unwrap_err();
     assert!(matches!(
         err,
         GenerationError::InvalidParametersError { .. }
     ));
+    Ok(())
 }
 
 #[tokio::test]
-async fn rejects_oversized_prompt() {
+async fn rejects_oversized_prompt() -> Result<(), GenerationError> {
     let text = "a".repeat(MAX_PROMPT_CHARS + 1);
-    let p = SunoProvider::new("k", None, None).unwrap();
+    let p = SunoProvider::new("k", None, None)?;
     let request = GenerationRequest::new(GenerationType::Audio, text);
     let err = p.generate(request).await.unwrap_err();
     assert!(matches!(
         err,
         GenerationError::InvalidParametersError { .. }
     ));
+    Ok(())
 }
 
 #[test]

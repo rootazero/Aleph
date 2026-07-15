@@ -1411,7 +1411,7 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
     let session = SessionKey::main("b10-continuation");
     let session_str = session.to_key_string();
     let project = temp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
+    tokio::fs::create_dir_all(&project).await.unwrap();
 
     // Claim the continuation exactly as the post-run hook does: the claim is
     // what stamps the pending wake the fire-time gate checks.

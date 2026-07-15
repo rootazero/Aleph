@@ -170,16 +170,17 @@ pub fn build_welcome_card(bot_name: &str, prompt_starters: &[&str]) -> serde_jso
 pub fn strip_mentions(text: &str) -> String {
     use std::sync::LazyLock;
     static RE: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r"<at>[^<]*</at>\s*").unwrap());
+        LazyLock::new(|| regex::Regex::new(r"<at>[^<]*</at>\s*").expect("mention regex is valid"));
     RE.replace_all(text, "").trim().to_string()
 }
 
 use std::sync::LazyLock;
 static QUOTE_SENDER_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r#"<strong[^>]*itemprop=["']mri["'][^>]*>(.*?)</strong>"#).unwrap()
+    regex::Regex::new(r#"<strong[^>]*itemprop=["']mri["'][^>]*>(.*?)</strong>"#)
+        .expect("quote sender regex is valid")
 });
 static QUOTE_BODY_RE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r#"<p[^>]*itemprop=["']copy["'][^>]*>(.*?)</p>"#).unwrap());
+    LazyLock::new(|| regex::Regex::new(r#"<p[^>]*itemprop=["']copy["'][^>]*>(.*?)</p>"#).expect("quote body regex is valid"));
 
 const STATUS_TEXTS: &[&str] = &[
     "Thinking...",

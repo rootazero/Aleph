@@ -522,7 +522,9 @@ async fn test_handle_update_hot_reloads_runtime_provider_protocol() {
                 .unwrap()
                 .as_nanos()
         ));
-    std::fs::create_dir_all(&tmp).expect("create test aleph home");
+    tokio::fs::create_dir_all(&tmp)
+        .await
+        .expect("create test aleph home");
     std::env::set_var("ALEPH_HOME", &tmp);
 
     let mut config = Config::default();
