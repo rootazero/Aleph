@@ -80,68 +80,52 @@ pub fn scrub_secrets_bytes<'a>(bytes: &'a [u8], injected: &[InjectedSecret]) -> 
     }
 }
 
-/// Invisible / bidirectional Unicode control characters that have no place in
-/// command output and are classic prompt- and terminal-spoofing vectors:
-/// zero-width injection (text the human never sees but the model does) and
-/// right-to-left / isolate overrides (visually reordering text to disguise its
-/// real content). Each entry is the exact UTF-8 encoding of one code point.
+/// Strip every invisible / bidirectional / tag Unicode control character from
+/// `bytes`, returning the cleaned bytes (borrowed when none present) and the
+/// number of characters removed.
 ///
-/// This is the redline-safe half of prompt-injection defense — a deterministic
-/// hard filter on a fixed set of control characters, like stripping ANSI
-/// escapes. It maps `OpenSquilla`'s `injection_guard` "invisible character" class
-/// onto Aleph WITHOUT porting its semantic regex classifier (prompt-override /
-/// role-hijack / exfiltration heuristics), which would be content scoring and
-/// violate the no-content-review redline (R7 / R10).
-const UNSAFE_INVISIBLE_SEQUENCES: &[&[u8]] = &[
-    &[0xE2, 0x80, 0x8B], // U+200B ZERO WIDTH SPACE
-    &[0xE2, 0x80, 0x8C], // U+200C ZERO WIDTH NON-JOINER
-    &[0xE2, 0x80, 0x8D], // U+200D ZERO WIDTH JOINER
-    &[0xE2, 0x80, 0xAA], // U+202A LEFT-TO-RIGHT EMBEDDING
-    &[0xE2, 0x80, 0xAB], // U+202B RIGHT-TO-LEFT EMBEDDING
-    &[0xE2, 0x80, 0xAC], // U+202C POP DIRECTIONAL FORMATTING
-    &[0xE2, 0x80, 0xAD], // U+202D LEFT-TO-RIGHT OVERRIDE
-    &[0xE2, 0x80, 0xAE], // U+202E RIGHT-TO-LEFT OVERRIDE
-    &[0xE2, 0x81, 0xA6], // U+2066 LEFT-TO-RIGHT ISOLATE
-    &[0xE2, 0x81, 0xA7], // U+2067 RIGHT-TO-LEFT ISOLATE
-    &[0xE2, 0x81, 0xA8], // U+2068 FIRST STRONG ISOLATE
-    &[0xE2, 0x81, 0xA9], // U+2069 POP DIRECTIONAL ISOLATE
-    &[0xEF, 0xBB, 0xBF], // U+FEFF ZERO WIDTH NO-BREAK SPACE (BOM)
-];
-
-/// Strip every [`UNSAFE_INVISIBLE_SEQUENCES`] occurrence from `bytes`,
-/// returning the cleaned bytes (borrowed when none present) and the number of
-/// sequences removed.
+/// This is the **byte-path** twin of the content path's
+/// [`strip_invisible_chars`](crate::security::unicode_guard::strip_invisible_chars):
+/// it defers to the same
+/// [`is_invisible_char`](crate::security::unicode_guard::is_invisible_char) SSOT,
+/// so sandbox command *output* neutralizes the exact same catalog the input path
+/// does — zero-width, the Trojan-Source bidi override / isolate family, the
+/// U+E0000 tag block (ASCII smuggling), invisible-math, marks, and the rest —
+/// with no second, drift-prone list to maintain. (It previously carried a
+/// narrower 13-entry byte table that omitted the tag block and invisible-math.)
 ///
-/// Operating on raw bytes is safe even amid non-UTF-8 data: UTF-8 is
-/// self-synchronizing, so each three-byte target sequence can only appear as
-/// the complete encoding of its code point — never spanning a character
-/// boundary — because its lead byte (`0xE2` / `0xEF`) always starts a fresh
-/// character and its trailing bytes are continuation bytes that never start one.
+/// It operates on raw bytes so it survives non-UTF-8 command output: each valid
+/// UTF-8 run is decoded and filtered through the SSOT, while any invalid byte run
+/// is copied through verbatim (binary output stays byte-for-byte intact). This is
+/// the redline-safe half of prompt-injection defense — a deterministic hard
+/// filter on a fixed character class, like stripping ANSI escapes, NOT the
+/// semantic content scoring the no-content-review redline (R7 / R10) forbids.
 #[must_use]
 pub fn strip_unsafe_invisible(bytes: &[u8]) -> (Cow<'_, [u8]>, usize) {
-    // Every target shares one of two lead bytes — cheap reject for clean output.
-    if !bytes.iter().any(|&b| b == 0xE2 || b == 0xEF) {
+    // Fast reject: every code point in the catalog is >= U+115F, whose UTF-8
+    // lead byte is >= 0xE0. No 3-or-more-byte character ⇒ nothing to strip, so
+    // hand back the borrow without allocating.
+    if !bytes.iter().any(|&b| b >= 0xE0) {
         return (Cow::Borrowed(bytes), 0);
     }
     let mut out = Vec::with_capacity(bytes.len());
     let mut removed = 0usize;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        let rest = &bytes[i..];
-        if let Some(seq) = UNSAFE_INVISIBLE_SEQUENCES
-            .iter()
-            .find(|seq| rest.starts_with(seq))
-        {
-            removed += 1;
-            i += seq.len();
-            continue;
+    let mut buf = [0u8; 4];
+    for chunk in bytes.utf8_chunks() {
+        for c in chunk.valid().chars() {
+            if crate::security::unicode_guard::is_invisible_char(c) {
+                removed += 1;
+            } else {
+                out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            }
         }
-        out.push(bytes[i]);
-        i += 1;
+        // Invalid (non-UTF-8) bytes are copied through verbatim — only decodable
+        // invisible characters are stripped, so binary output is never mangled.
+        out.extend_from_slice(chunk.invalid());
     }
     if removed == 0 {
-        // Lead byte present but no full target matched: nothing changed, so
-        // hand back the borrow and drop the scratch buffer.
+        // A catalogued lead byte was present but no whole invisible char matched
+        // (e.g. €, CJK): nothing changed, so return the borrow and drop scratch.
         return (Cow::Borrowed(bytes), 0);
     }
     (Cow::Owned(out), removed)
@@ -351,6 +335,32 @@ mod tests {
         let (out, n) = strip_unsafe_invisible(&euro);
         assert_eq!(n, 0);
         assert_eq!(out.as_ref(), euro.as_slice());
+    }
+
+    #[test]
+    fn invisible_strip_removes_tag_block_and_invisible_math() {
+        // Coverage the old 13-entry byte table lacked, now inherited from the
+        // unicode_guard SSOT: a U+E0041 tag character (ASCII smuggling, 4-byte
+        // F3 A0 81 81) and U+2062 INVISIBLE TIMES (E2 81 A2).
+        let mut input = "hi".as_bytes().to_vec();
+        input.extend_from_slice("\u{E0041}".as_bytes());
+        input.extend_from_slice("\u{2062}".as_bytes());
+        input.extend_from_slice("!".as_bytes());
+        let (out, n) = strip_unsafe_invisible(&input);
+        assert_eq!(n, 2, "tag char + invisible-math removed");
+        assert_eq!(out.as_ref(), b"hi!");
+    }
+
+    #[test]
+    fn invisible_strip_preserves_non_utf8_bytes() {
+        // Raw non-UTF-8 output (e.g. lone 0xFF/0xFE, a stray continuation byte)
+        // must pass through byte-for-byte; only decodable invisibles are stripped.
+        let mut input = vec![0xFF, 0xFE];
+        input.extend_from_slice(&[0xE2, 0x80, 0x8B]); // U+200B ZWSP (stripped)
+        input.push(0x80); // stray continuation byte (invalid, kept)
+        let (out, n) = strip_unsafe_invisible(&input);
+        assert_eq!(n, 1, "only the ZWSP is stripped");
+        assert_eq!(out.as_ref(), &[0xFFu8, 0xFE, 0x80], "invalid bytes survive");
     }
 
     #[test]

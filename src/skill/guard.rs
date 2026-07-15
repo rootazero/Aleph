@@ -129,12 +129,6 @@ static PATTERN_SET: Lazy<RegexSet> = Lazy::new(|| {
     })
 });
 
-/// Zero-width / bidi unicode chars often used for prompt-injection hiding.
-const INVISIBLE_CHARS: &[char] = &[
-    '\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}', '\u{202A}', '\u{202B}', '\u{202C}',
-    '\u{202D}', '\u{202E}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}',
-];
-
 /// Scan one file's content. `file` is used only for finding labels.
 pub fn scan_content(file: &str, content: &[u8]) -> ScanVerdict {
     let text = String::from_utf8_lossy(content);
@@ -148,7 +142,15 @@ pub fn scan_content(file: &str, content: &[u8]) -> ScanVerdict {
             level: p.level,
         });
     }
-    if text.chars().any(|c| INVISIBLE_CHARS.contains(&c)) {
+    // Defer to the crate-wide invisible-char SSOT (`security::unicode_guard`)
+    // instead of a local list: it also covers the U+E0000 tag block (ASCII
+    // smuggling) and the full bidi override/isolate family, which a skill body —
+    // injected into the model's system context as trusted instructions — must
+    // not be able to smuggle past a narrower catalog.
+    if text
+        .chars()
+        .any(crate::security::unicode_guard::is_invisible_char)
+    {
         findings.push(Finding {
             file: file.to_string(),
             pattern_id: "invisible_unicode",
@@ -263,6 +265,23 @@ mod tests {
     fn clean_content_is_safe() {
         let verdict = scan_content("SKILL.md", b"---\nname: x\ndescription: y\n---\nHello.");
         assert_eq!(verdict.level, ThreatLevel::Safe);
+    }
+
+    #[test]
+    fn flags_tag_block_and_bidi_invisibles() {
+        // The invisible check now defers to the unicode_guard SSOT, so a U+E0000
+        // tag character (ASCII smuggling) and an RTL override (Trojan Source) —
+        // both absent from the old 14-char local list — now raise a finding.
+        for payload in ["hello\u{E0041}world", "safe\u{202E}txt"] {
+            let verdict = scan_content("SKILL.md", payload.as_bytes());
+            assert!(
+                verdict
+                    .findings
+                    .iter()
+                    .any(|f| f.pattern_id == "invisible_unicode"),
+                "expected invisible_unicode finding for {payload:?}"
+            );
+        }
     }
 
     #[test]

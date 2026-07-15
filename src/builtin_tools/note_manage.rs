@@ -1389,7 +1389,12 @@ fn scan_note_at_scope(
     text: &str,
     scope: crate::security::injection_patterns::ThreatScope,
 ) -> Result<()> {
-    match crate::security::injection_patterns::first_threat_message(text, scope) {
+    // Canonicalize (fold homoglyphs + strip invisibles) before scanning: this is
+    // a raw-text write path, so the scan must not be evadable by a zero-width- or
+    // homoglyph-obfuscated payload that the model reconstructs on recall. The
+    // stored note keeps its original bytes (body fidelity); only the scanned copy
+    // is canonicalized.
+    match crate::security::injection_patterns::first_threat_message_canonicalized(text, scope) {
         Some(reason) => Err(AlephError::tool(reason)),
         None => Ok(()),
     }

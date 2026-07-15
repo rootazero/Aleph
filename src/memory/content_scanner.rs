@@ -22,25 +22,6 @@ pub enum ScanVerdict {
 }
 
 // ---------------------------------------------------------------------------
-// Invisible Unicode codepoints
-// ---------------------------------------------------------------------------
-
-/// Unicode codepoints that are invisible/zero-width and have no legitimate
-/// reason to appear in memory fact content.
-const INVISIBLE_CODEPOINTS: &[char] = &[
-    '\u{200B}', // Zero Width Space
-    '\u{200C}', // Zero Width Non-Joiner
-    '\u{200D}', // Zero Width Joiner
-    '\u{200E}', // Left-to-Right Mark
-    '\u{200F}', // Right-to-Left Mark
-    '\u{FEFF}', // BOM / Zero Width No-Break Space
-    '\u{2060}', // Word Joiner
-    '\u{2062}', // Invisible Times
-    '\u{2063}', // Invisible Separator
-    '\u{2064}', // Invisible Plus
-];
-
-// ---------------------------------------------------------------------------
 // Regex patterns (compiled once via LazyLock)
 // ---------------------------------------------------------------------------
 
@@ -88,9 +69,17 @@ static SSH_ACCESS_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Scan content for malicious patterns before persisting to memory.
 pub fn scan_content(content: &str) -> ScanVerdict {
-    // 1. Invisible Unicode check
+    // 1. Invisible / directional-formatting Unicode check.
+    //
+    // Defer to the crate-wide SSOT (`security::unicode_guard`) rather than a
+    // local list: it covers the full always-strip catalog — zero-width, the
+    // Trojan-Source bidi override/isolate family (CVE-2021-42574), and the
+    // U+E0000 tag block (ASCII smuggling) — none of which a local subset should
+    // be allowed to drift away from. Memory facts are replayed into every future
+    // session's system prompt, so this is the highest-value place to keep the
+    // catalog complete.
     for ch in content.chars() {
-        if INVISIBLE_CODEPOINTS.contains(&ch) {
+        if crate::security::unicode_guard::is_invisible_char(ch) {
             return ScanVerdict::Rejected {
                 reason: format!(
                     "Content contains invisible Unicode character U+{:04X}",
@@ -220,6 +209,25 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn rejects_trojan_source_and_tag_smuggling() {
+        // Vectors the old 10-char local list missed but the unicode_guard SSOT
+        // covers: RTL override (Trojan Source, CVE-2021-42574) and a U+E0000
+        // deprecated tag character (ASCII smuggling).
+        for content in ["safe\u{202E}reversed", "cmd\u{E0041}payload"] {
+            assert!(
+                matches!(
+                    scan_content(content),
+                    ScanVerdict::Rejected {
+                        pattern: "invisible_unicode",
+                        ..
+                    }
+                ),
+                "expected invisible_unicode rejection for {content:?}"
+            );
+        }
     }
 
     #[test]
