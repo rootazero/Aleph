@@ -815,10 +815,140 @@ closes are recorded in the security audit log (`AuthFailure` / `RateLimited`).
   Still, treat any accepted credential as a key to everything (an authorized
   remote has full operator authority, including PTY / shell): share it only
   over a trusted channel, and rotate it if it may have leaked.
-- **Beyond the LAN.** To reach Aleph across the internet, front it with
-  your own reverse proxy / VPN / SSH tunnel that terminates trust
-  *upstream* of the gateway. The Gateway token is the only transport auth
-  Aleph itself provides.
+- **Beyond the LAN.** To reach Aleph across the internet, encrypt the
+  transport — either front it with your own TLS-terminating reverse proxy
+  (recommended) or enable Aleph's native in-process TLS. See
+  **[Remote-connection transport encryption](#remote-tls)** below. Plaintext
+  to a remote client is now refused by default (boot gate + per-connect gate).
+
+### Remote-connection transport encryption (TLS) {#remote-tls}
+
+Reachability (above) controls *who can open the socket*; TLS controls *whether
+the bytes on the wire are readable*. The two are independent: the Gateway token
+authenticates, TLS encrypts. A `host = "0.0.0.0"` deployment without TLS ships
+the token and every message in cleartext, sniffable on any hop between client
+and server.
+
+**Enforcement (off-by-default; loopback always exempt).** Loopback
+(`127.0.0.1` / `::1`) stays plaintext `ws://` — the zero-config desktop / CLI
+/ same-host-proxy hop is unchanged. For a **non-loopback** bind Aleph is now
+fail-closed on plaintext:
+
+- **Boot gate** (`check_network_exposure`): a config that binds a non-loopback
+  `host` with no native TLS, no trusted proxy, and `allow_insecure_remote =
+  false` **refuses to start** with an actionable error. (This is the one
+  intentional breaking change — a previously-working `host = "0.0.0.0"`
+  plaintext config now must pick a remedy below.)
+- **Per-connect gate** (`refuse_insecure_remote`): a remote client whose leg is
+  unencrypted is rejected at the WS upgrade with `426 Upgrade Required`, even if
+  the boot gate passed on a permissive combo. "Encrypted" means native TLS
+  terminated in-process, or a trusted proxy that set `X-Forwarded-Proto: https`.
+
+Three ways to satisfy it:
+
+#### Tier ① — TLS reverse proxy (recommended; needs a domain)
+
+Aleph stays bound to **loopback**; a same-host Caddy/nginx terminates TLS and
+forwards to it. Keep the proxy config trivial — all the robustness lives in
+Aleph.
+
+`~/.aleph/config.toml`:
+
+```toml
+[gateway]
+host = "127.0.0.1"                       # aleph stays loopback; the proxy is same-host
+allowed_origins = ["https://your.domain.com"]   # domain Host is not auto-allowed (DNS-rebind guard)
+
+[gateway.trusted_proxy]
+enabled = true                            # honor the proxy's X-Forwarded-For / -Proto
+# trusted_ips defaults to ["127.0.0.1", "::1"] — correct for a same-host proxy
+```
+
+`Caddyfile` (the entire file — Caddy auto-provisions Let's Encrypt):
+
+```
+your.domain.com {
+    reverse_proxy 127.0.0.1:18790
+}
+```
+
+> **Why `trusted_proxy` is security-critical here, not just cosmetic.** The
+> proxy connects to Aleph over loopback, so *without* `trusted_proxy` every
+> remote client would appear to Aleph as `127.0.0.1` — i.e. **auto-authorized
+> as loopback operator**, a full auth bypass. With `trusted_proxy = true` Aleph
+> reads the real client IP from `X-Forwarded-For` (spoof-safe: only a peer in
+> `trusted_ips` is believed), so a remote client is correctly seen as remote
+> and must present a Gateway-token credential, and per-IP rate-limit / cap /
+> audit key on the real client. Enabling the proxy **without** setting
+> `trusted_proxy` is a mistake.
+
+> **`trusted_proxy` assumes a same-host proxy.** The default `trusted_ips` is
+> loopback, matching a co-located Caddy whose hop to Aleph never leaves the
+> machine. If you put the proxy on a *different* host you must (a) bind Aleph to
+> a LAN interface, (b) add the proxy's IP to `trusted_ips`, and (c) accept that
+> the proxy→Aleph hop and Aleph's non-`/ws` routes (Panel assets, `/health`,
+> `/metrics`) travel plaintext on that LAN segment. The Gateway token only ever
+> rides `/ws`, but prefer a same-host proxy so nothing sensitive is on the wire.
+
+#### Tier ② — Native self-signed TLS (no domain; weaker)
+
+No domain, no proxy — Aleph generates and persists a self-signed cert to
+`~/.aleph/data/tls/` on first boot and logs its SHA-256 fingerprint. Clients get
+a browser cert warning (accept-once, or pin the fingerprint). Encryption is
+real; the trust anchor is manual.
+
+```toml
+[gateway]
+host = "0.0.0.0"
+
+[gateway.tls]
+enabled = true          # empty cert/key paths ⇒ auto self-signed
+```
+
+The Panel hard-codes `wss://` for any non-loopback host and refuses a plaintext
+socket to a remote gateway, so remote Panels connect over TLS automatically.
+
+#### Tier ③ — Native TLS with a real cert (domain, no proxy)
+
+Point Aleph at operator-provided PEM files (e.g. certbot output). Aleph
+terminates TLS itself.
+
+```toml
+[gateway]
+host = "0.0.0.0"
+
+[gateway.tls]
+enabled = true
+cert_path = "/etc/letsencrypt/live/your.domain.com/fullchain.pem"
+key_path  = "/etc/letsencrypt/live/your.domain.com/privkey.pem"
+```
+
+#### Escape hatch — `allow_insecure_remote`
+
+```toml
+[gateway]
+host = "0.0.0.0"
+allow_insecure_remote = true    # DANGER: plaintext to remote clients
+```
+
+Restores pre-hardening LAN-plaintext behavior (boot gate + per-connect gate
+both stand down). Only for a trusted, isolated LAN where you knowingly accept
+cleartext. Never on a public interface.
+
+#### Debian production recipe (Tier ①, the user's ColoCrossing box)
+
+```bash
+# 1. aleph stays loopback + trusted_proxy on (config above), restart aleph-server
+# 2. install Caddy, drop in the one-line Caddyfile above, `systemctl reload caddy`
+# 3. firewall: expose only the proxy + SSH; aleph's 18790 is loopback-only already
+ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw enable
+# 4. rotate the Gateway token after enabling remote access
+#    (RPC: gateway.token.rotate — regenerates the shared token, revokes paired devices)
+```
+
+Verify: a remote browser gets a green-lock `wss://your.domain.com/ws`; a direct
+`http://<public-ip>:18790` attempt fails (loopback bind, not routable); the
+security audit log shows the **real** client IP, not the proxy's.
 
 ### The one remaining guardrail: WS Origin check
 

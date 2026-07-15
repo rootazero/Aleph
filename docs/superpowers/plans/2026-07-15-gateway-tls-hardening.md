@@ -20,6 +20,32 @@
 
 ---
 
+> **Post-implementation corrections (2026-07-15, recorded after execution).**
+> Three per-task code snippets below assumed a config shape that does not match
+> the tree; each was fixed during implementation. The task text is left intact
+> as the original plan; the corrections are:
+>
+> 1. **Mirror-config (Tasks 3, 4, 6):** `GatewayServer.config` is the LOCAL flat
+>    mirror `server::GatewayConfig` (in `src/gateway/server/mod.rs`), **not** the
+>    root `crate::gateway::config::GatewayServerConfig`. So `self.config.gateway.*`
+>    does not compile. The new knobs are carried as flat mirror fields
+>    (`trusted_proxy_enabled`, `trusted_proxy_ips`, `allow_insecure_remote`,
+>    `tls_enabled`, `tls_cert_path`, `tls_key_path`) and threaded from the root
+>    TOML in `src/bin/aleph-server/commands/start/mod.rs`'s `ServerConfig { … }`
+>    literal (mirroring the existing `max_connections_per_ip` pattern). Consumers
+>    read `self.config.<flat_field>`. Task 4 reconstructs a `GatewayTlsConfig`
+>    from the flat fields for `load_or_generate`. **Actual file list is larger
+>    than each task states** — Tasks 3/4 also touch `start/mod.rs` (and Task 3
+>    touches `probe.rs`'s test helper).
+> 2. **Double-bind (Task 4):** the native-TLS path binds via
+>    `axum_server::bind_rustls` (its own bind), so the plaintext
+>    `tokio::net::TcpListener::bind` must sit **after** the TLS early-return in
+>    both `run`/`run_until_shutdown` (the brief's "before `axum::serve`" order
+>    would double-bind ⇒ `EADDRINUSE` on every TLS boot).
+> 3. **Cert dir (Task 4):** `crate::paths::aleph_home()` does not exist; use
+>    `crate::utils::paths::get_data_dir()` (→ `~/.aleph/data/tls/`), the resolver
+>    the vault/session-store already use.
+
 ### Task 1: Config types + dependencies
 
 **Files:**
