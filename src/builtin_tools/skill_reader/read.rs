@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 use super::super::error::ToolError;
 use super::super::{notify_tool_result, notify_tool_start};
@@ -121,15 +121,29 @@ impl ReadSkillTool {
         self
     }
 
-    /// Collect every directory that contains skill `skill_id` (a SKILL.md).
-    /// Returns all matches so the caller can refuse ambiguous names rather
-    /// than silently shadowing — mirrors hermes-agent's collision refusal.
+    /// Collect every *distinct* directory that contains skill `skill_id`
+    /// (a `SKILL.md`), in precedence order (agent > project > global, per
+    /// [`crate::utils::paths::get_all_skills_dirs`]).
+    ///
+    /// Paths are canonicalized so symlink / hard-link twins that resolve to the
+    /// same physical directory collapse to a single hit: a skill installed once
+    /// but surfaced through several roots (e.g. `~/.aleph/skills/<id>` and
+    /// `~/.claude/skills/<id>` both symlinking `~/.agents/skills/<id>`) is NOT a
+    /// collision. Canonicalization failures fall back to the raw path so a real
+    /// hit is never dropped. Genuine collisions (distinct physical dirs sharing
+    /// an id) are preserved for the caller to resolve by precedence — mirroring
+    /// codex's `seen_canonical_keys` dedup and `skill_list`'s first-occurrence
+    /// win rather than hermes-agent's hard refusal.
     fn find_skill_dirs(&self, skill_id: &str) -> Vec<PathBuf> {
         let mut hits = Vec::new();
+        let mut seen_canonical = std::collections::HashSet::new();
         for skills_dir in &self.skills_dirs {
             let skill_dir = skills_dir.join(skill_id);
             if skill_dir.is_dir() && skill_dir.join("SKILL.md").exists() {
-                hits.push(skill_dir);
+                let key = fs::canonicalize(&skill_dir).unwrap_or_else(|_| skill_dir.clone());
+                if seen_canonical.insert(key) {
+                    hits.push(skill_dir);
+                }
             }
         }
         hits
@@ -223,32 +237,31 @@ impl ReadSkillTool {
         let file_name = args.file_name.as_deref().unwrap_or("SKILL.md");
         self.validate_file_name(file_name)?;
 
-        // Find skill directory across all configured locations.
-        // Refuse ambiguous names to mirror hermes-agent's collision refusal.
-        let candidates = self.find_skill_dirs(&args.skill_id);
-        let skill_dir = match candidates.len() {
-            0 => {
-                let error_msg = format!("Skill '{}' not found", args.skill_id);
-                notify_tool_result(Self::NAME, &error_msg, false);
-                return Err(ToolError::NotFound(error_msg));
-            }
-            1 => candidates
-                .into_iter()
-                .next()
-                .unwrap_or_else(|| unreachable!("candidates.len() == 1")),
-            _ => {
-                let paths: Vec<String> =
-                    candidates.iter().map(|p| p.display().to_string()).collect();
-                let error_msg = format!(
-                    "skill '{}' is ambiguous — found in multiple locations: {}. \
-                     Disambiguate by removing the duplicate or renaming one.",
-                    args.skill_id,
-                    paths.join(", ")
-                );
-                notify_tool_result(Self::NAME, &error_msg, false);
-                return Err(ToolError::InvalidArgs(error_msg));
-            }
+        // Resolve `skill_id` to a directory across all configured locations.
+        // `find_skill_dirs` already folded symlink twins, so any remaining
+        // multi-hit is a genuine same-name collision across distinct physical
+        // dirs. Resolve it by precedence — the highest-priority root wins
+        // (agent > project > global) — matching `skill_list`'s first-occurrence
+        // dedup and Claude Code's "closer skill wins". A hard refusal here only
+        // stranded the caller: the skill index the model is shown already
+        // surfaces exactly one entry per id, so refusing to read what it was
+        // shown is an internal contradiction (it fell back to a raw `cat` loop).
+        // Shadowed dirs are logged so genuine collisions stay observable.
+        let mut candidates = self.find_skill_dirs(&args.skill_id).into_iter();
+        let Some(skill_dir) = candidates.next() else {
+            let error_msg = format!("Skill '{}' not found", args.skill_id);
+            notify_tool_result(Self::NAME, &error_msg, false);
+            return Err(ToolError::NotFound(error_msg));
         };
+        let shadowed: Vec<String> = candidates.map(|p| p.display().to_string()).collect();
+        if !shadowed.is_empty() {
+            warn!(
+                skill_id = %args.skill_id,
+                winner = %skill_dir.display(),
+                shadowed = ?shadowed,
+                "skill id resolves to multiple distinct locations; using highest-precedence match"
+            );
+        }
 
         let file_path = skill_dir.join(file_name);
 
