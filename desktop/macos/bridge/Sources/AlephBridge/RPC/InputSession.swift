@@ -4,8 +4,8 @@ import Foundation
 
 // MARK: - Delivery honesty (read this before touching the ladder)
 //
-// Every event built here is delivered with `CGEvent.postToPid(_:)`, never with
-// `CGEvent.post(tap:)`. The difference is the whole point of this file:
+// The background rail here delivers with `CGEvent.postToPid(_:)`, never with
+// `CGEvent.post(tap:)`:
 //
 //   post(tap: .cghidEventTap)  → the GLOBAL HID stream. The user's physical
 //                                cursor is dragged to the point, and only the
@@ -14,27 +14,32 @@ import Foundation
 //                                user's cursor never moves and the target app
 //                                need not be frontmost.
 //
-// `postToPid` is not magic, and callers must not treat it as a guarantee:
+// The catch, verified on macOS 27 and the reason the mouse methods below refuse:
+// `postToPid` delivers KEYBOARD events but NOT located mouse events. A keyboard
+// event routes to the process's key-window first responder — no location, no
+// window-server involvement — so `type_text` / `key_combo` land. A mouse event
+// carries a screen point, and the window server (which `postToPid` bypasses) is
+// what associates that point with a window; without it the app receives the
+// event but never routes it to a view, so it does nothing. The identical mouse
+// event on the global tap DOES act — but that moves the user's cursor.
 //
-//   * Apps that install their own HID hooks or read the raw event stream
-//     (most games, some remote-desktop and anti-cheat layers) will simply DROP
-//     an injected event — it never entered the HID stream they are watching.
-//   * Electron/Chromium apps sometimes ignore injected events while not active,
-//     depending on how their compositor is driven that release.
-//   * A keyboard event posted to a pid still routes to that process's KEY
-//     WINDOW. "Targeted" scopes delivery to a process, not to a window and not
-//     to a point — a typed string lands wherever that app's focus already is.
+// So the background rail on macOS is: keyboard synthesis + the AX click ladder
+// (pressing an element that advertises the action, which needs no coordinate
+// delivery at all). Everything else — a coordinate click with no AX rung, a
+// scroll, a drag, a hover, a raw mouse press — has no background delivery, and
+// those methods throw `backgroundMouseUndeliverable` rather than post an event
+// the app will never act on and report success. The lie they refuse to tell is
+// exactly what the e2e caught.
 //
-// So `delivery: "targeted"` in the result means "this is the rail we posted
-// on", NOT "the app definitely acted on it". The caller must VERIFY the effect
-// (re-read AX, re-capture) rather than assume it. Saying so out loud in the
-// payload is the honest move; inventing a retry ladder in the bridge is not
-// (A2 — errors are compressed and handed back to the model, the limb never
-// picks a recovery strategy).
+// `delivery: "targeted"` in a result therefore means "delivered to this process,
+// cursor untouched, and the app can act on it" — keyboard, or an AX press. It is
+// never returned for a mouse event that was merely posted-and-hoped.
 //
-// Delivery is also never silently downgraded to the global tap here: a request
-// without a `pid` is an error, not a fallback. Fallback is a ROUTING POLICY and
-// routing policy lives in Rust, where the model can be told which rail ran.
+// Delivery is never silently downgraded to the global tap here: a request that
+// cannot run in the background is an error, not a cursor-moving fallback.
+// Whether to fall back to the visible cursor is a ROUTING POLICY that lives in
+// Rust (`allow_global_pointer`), where the model can be told which rail ran (A2
+// — the limb hands the error up, it never picks the recovery strategy).
 
 // MARK: - Wire-format types
 //
@@ -207,29 +212,6 @@ func chunkForUnicodeEvents(_ text: String, maxUTF16: Int = 64) -> [String] {
     return chunks
 }
 
-/// Scroll deltas in pixels for a direction name, or `nil` if the name is not one
-/// of up/down/left/right.
-///
-/// CoreGraphics convention: `wheel1` is the vertical axis (positive scrolls up),
-/// `wheel2` is the horizontal axis (positive scrolls left). `amount` is a count
-/// of wheel clicks — the same unit the global rail takes — converted to pixels
-/// so the event is pixel-precise rather than line-quantised.
-///
-/// Arithmetic is done in 64 bits and clamped: `amount` is a caller-supplied
-/// i32, and `amount * pixelsPerClick` overflows i32 for large values.
-func scrollDeltas(direction: String, amount: Int32, pixelsPerClick: Int32 = 10) -> (wheel1: Int32, wheel2: Int32)? {
-    let pixels = Int64(amount) * Int64(pixelsPerClick)
-    let forward = Int32(clamping: pixels)
-    let backward = Int32(clamping: -pixels)
-    switch direction.lowercased() {
-    case "up": return (forward, 0)
-    case "down": return (backward, 0)
-    case "left": return (0, forward)
-    case "right": return (0, backward)
-    default: return nil
-    }
-}
-
 /// ANSI virtual key code for a key name, or `nil` when the name is unknown.
 ///
 /// The vocabulary is deliberately identical to the global rail's
@@ -388,33 +370,16 @@ func rankClickCandidates(_ candidates: [(area: Double, depth: Int, index: Int)])
 /// Serialises every synthesized-input call and owns the one event source they
 /// are all built from.
 ///
-/// **Why the source is held here rather than made per call.** A
-/// `CGEventSource(stateID: .combinedSessionState)` carries state: the modifier
-/// flags currently down and the click state of the button being clicked. Build a
-/// fresh source per call (which is what `enigo` does — a new Private-state
-/// instance every time) and that state is born empty and dies on return, so
-/// nothing can COMPOSE across calls: a button held down by one call is not held
-/// down as far as the next call's events are concerned, and a chord assembled
-/// over two calls is just two unrelated events. One long-lived session-state
-/// source is what makes press-in-one-call / release-in-another actually mean
-/// press-and-hold, and it is why the double-click below is a real double-click
-/// instead of two singles.
-///
-/// The actor also serialises access, which matters for the same reason: two
-/// interleaved drags sharing one source's state would produce one incoherent
-/// event stream.
+/// The rail that survives on macOS is keyboard synthesis (`type_text`,
+/// `key_combo`) plus the AX click ladder. Synthesized *mouse* events cannot be
+/// delivered to a background process here at all — a located event handed to
+/// `postToPid` is never routed to a window — so those methods refuse rather than
+/// pretend (see `backgroundMouseUndeliverable`). The event source is a single
+/// long-lived `.combinedSessionState` instance so that a modifier the user is
+/// holding, or a key held across calls by `key_button`, composes into the next
+/// synthesized keystroke instead of being born empty and dying on return.
 actor InputSession {
 
-    /// Default drag duration when the caller does not say. Long enough that an
-    /// app's drag-tracking loop sees intermediate motion.
-    private static let defaultDragMillis: UInt64 = 300
-    /// Hard ceiling on a drag's duration. See `drag` — this is overflow and
-    /// head-of-line-blocking safety, not a preference.
-    private static let maxDragMillis: UInt64 = 10_000
-    /// Bounds on the number of interpolated drag steps: too few and the app sees
-    /// a teleport (many drag handlers ignore it); too many and we flood its queue.
-    private static let minDragSteps = 8
-    private static let maxDragSteps = 60
     /// How deep below the hit element the AX ladder looks for a more specific
     /// actionable control. Three levels covers button-inside-cell-inside-row
     /// without turning a click into a tree walk.
@@ -511,107 +476,39 @@ actor InputSession {
     }
 
     func scroll(_ params: ScrollParams) throws -> ScrollResult {
-        let pid = try requirePid(params.pid, method: "input.scroll")
-        let source = try eventSource()
-
-        guard let deltas = scrollDeltas(direction: params.direction, amount: params.amount) else {
-            throw RpcError(
-                code: -32_602,
-                message: "unknown scroll direction: '\(params.direction)'. Expected up, down, left, or right",
-                data: nil
-            )
-        }
-        // The targeted rail does not move the cursor, so an unlocated scroll event
-        // carries no hint of where it was aimed and the app routes it wherever it
-        // likes. Refusing is not a fallback decision (that lives in Rust) — it is
-        // refusing to pretend an under-specified request was honoured.
-        guard let x = params.x, let y = params.y else {
-            throw RpcError(
-                code: -32_602,
-                message: "input.scroll requires `x` and `y` on the targeted rail: the cursor never moves, so the "
-                    + "event's location is the only thing the app can route the scroll by",
-                data: nil
-            )
-        }
-
-        guard let event = CGEvent(
-            scrollWheelEvent2Source: source,
-            units: .pixel,
-            wheelCount: 2,
-            wheel1: deltas.wheel1,
-            wheel2: deltas.wheel2,
-            wheel3: 0
-        ) else {
-            throw RpcError(code: -32_603, message: "CGEvent(scrollWheelEvent2Source:) returned nil", data: nil)
-        }
-        event.location = CGPoint(x: x, y: y)
-        event.postToPid(pid)
-        return ScrollResult(ok: true, delivery: DELIVERY_TARGETED)
+        _ = try requirePid(params.pid, method: "input.scroll")
+        throw backgroundMouseUndeliverable(
+            "A background scroll",
+            alternative: "Scroll with the keyboard instead — `key_combo` with PageDown / PageUp / "
+                + "Down / Up / Space reaches the focused view in the background."
+        )
     }
 
-    func drag(_ params: DragParams) async throws -> DragResult {
-        let pid = try requirePid(params.pid, method: "input.drag")
-        let source = try eventSource()
-
-        // Clamped, not trusted: `duration_ms` is a u64 straight off the wire, and
-        // an unclamped `millis * 1_000_000` overflows and TRAPS — a bad number
-        // from the model would take the whole bridge process down with it.
-        // Clamping also stops a 10-minute drag from pinning the actor (and every
-        // other input call queued behind it) for ten minutes.
-        let millis = min(params.duration_ms ?? Self.defaultDragMillis, Self.maxDragMillis)
-        // A down at the start and an up at the end is not a drag: an app tracks a
-        // drag by the mouseDragged events BETWEEN them, and a pair with no motion
-        // in the middle reads as a click at the start point. So the path is walked.
-        let steps = min(Self.maxDragSteps, max(Self.minDragSteps, Int(millis / 10)))
-        let stepNanos = millis * 1_000_000 / UInt64(steps)
-
-        let start = CGPoint(x: params.start_x, y: params.start_y)
-        let end = CGPoint(x: params.end_x, y: params.end_y)
-
-        try postMouse(source: source, type: .leftMouseDown, at: start, button: .left, clickState: 1, pid: pid)
-        for step in 1...steps {
-            let t = Double(step) / Double(steps)
-            let point = CGPoint(
-                x: start.x + (end.x - start.x) * t,
-                y: start.y + (end.y - start.y) * t
-            )
-            try postMouse(source: source, type: .leftMouseDragged, at: point, button: .left, clickState: 1, pid: pid)
-            try? await Task.sleep(nanoseconds: stepNanos)
-        }
-        try postMouse(source: source, type: .leftMouseUp, at: end, button: .left, clickState: 1, pid: pid)
-        return DragResult(ok: true, delivery: DELIVERY_TARGETED)
+    func drag(_ params: DragParams) throws -> DragResult {
+        _ = try requirePid(params.pid, method: "input.drag")
+        throw backgroundMouseUndeliverable(
+            "A background drag",
+            alternative: "A drag has no background equivalent on macOS — the app tracks it through "
+                + "mouse motion the window server never associates with a synthesized event."
+        )
     }
 
     func hover(_ params: HoverParams) throws -> HoverResult {
-        let pid = try requirePid(params.pid, method: "input.hover")
-        let source = try eventSource()
-        // A mouseMoved posted to a pid makes the app believe the pointer is at the
-        // point (so it opens its hover state) without the pointer being there.
-        try postMouse(
-            source: source, type: .mouseMoved, at: CGPoint(x: params.x, y: params.y),
-            button: .left, clickState: 0, pid: pid
+        _ = try requirePid(params.pid, method: "input.hover")
+        throw backgroundMouseUndeliverable(
+            "A background hover",
+            alternative: "Read the element under the point with `ax_query` / `som` instead of moving "
+                + "a phantom pointer to provoke its hover state."
         )
-        return HoverResult(ok: true, delivery: DELIVERY_TARGETED)
     }
 
     func mouseButton(_ params: MouseButtonParams) throws -> MouseButtonResult {
-        let pid = try requirePid(params.pid, method: "input.mouse_button")
-        let source = try eventSource()
-        let point = CGPoint(x: params.x, y: params.y)
-        let (downType, upType, cgButton) = mouseTypes(for: params.button)
-
-        // press and release are separate CALLS on purpose, and they compose
-        // because the event source outlives them both (see the actor's doc).
-        switch params.action {
-        case .press:
-            try postMouse(source: source, type: downType, at: point, button: cgButton, clickState: 1, pid: pid)
-        case .release:
-            try postMouse(source: source, type: upType, at: point, button: cgButton, clickState: 1, pid: pid)
-        case .click:
-            try postMouse(source: source, type: downType, at: point, button: cgButton, clickState: 1, pid: pid)
-            try postMouse(source: source, type: upType, at: point, button: cgButton, clickState: 1, pid: pid)
-        }
-        return MouseButtonResult(ok: true, delivery: DELIVERY_TARGETED)
+        _ = try requirePid(params.pid, method: "input.mouse_button")
+        throw backgroundMouseUndeliverable(
+            "A background mouse press/release at a raw coordinate",
+            alternative: "Press a control directly with `ax_action` (which presses and releases the "
+                + "element), or hold a key across actions with `key_button`."
+        )
     }
 
     /// The real cursor's position. Reported top-left origin, matching the screen
@@ -646,8 +543,16 @@ actor InputSession {
         if count == 1, let matched = try axClick(pid: pid, x: x, y: y, button: button) {
             return ClickResult(ok: true, delivery: DELIVERY_TARGETED, path: "accessibility", matched: matched)
         }
-        try syntheticClick(pid: pid, x: x, y: y, button: button, count: count)
-        return ClickResult(ok: true, delivery: DELIVERY_TARGETED, path: "synthetic", matched: nil)
+        // No AX rung took the click, so the only thing left is a synthesized mouse
+        // event — and on macOS that cannot run in the background (see
+        // `backgroundMouseUndeliverable`). A multi-click never has an AX rung at
+        // all (AXPress carries no count), so it lands here by definition.
+        throw backgroundMouseUndeliverable(
+            count > 1 ? "A background double-click" : "A background click at a raw coordinate",
+            alternative: "Target a control instead — `ax_action` (or `set_value` for a field) presses "
+                + "the element directly and in the background, and hits the control rather than a "
+                + "coordinate that may have moved since the screenshot."
+        )
     }
 
     /// Rung 1. Returns the element acted on, or `nil` when no rung-1 candidate
@@ -746,23 +651,40 @@ actor InputSession {
         return (action, meta)
     }
 
-    /// Rung 2. `count` is carried ON the events (`mouseEventClickState`), which is
-    /// the only thing that makes a double-click a double-click: an app reads the
-    /// click state off the event, so two independent single clicks are two single
-    /// clicks no matter how fast they are sent. The full 1…n ladder is posted
-    /// because that is the native sequence — a lone count-2 click with no count-1
-    /// click before it is not what a real double-click looks like.
-    private func syntheticClick(pid: pid_t, x: Double, y: Double, button: MouseButton, count: Int) throws {
-        let source = try eventSource()
-        let point = CGPoint(x: x, y: y)
-        let (downType, upType, cgButton) = mouseTypes(for: button)
-        for clickState in 1...count {
-            try postMouse(source: source, type: downType, at: point, button: cgButton, clickState: clickState, pid: pid)
-            try postMouse(source: source, type: upType, at: point, button: cgButton, clickState: clickState, pid: pid)
-        }
-    }
-
     // MARK: Event plumbing
+
+    /// Error code for "this pointer act cannot be delivered to a background
+    /// process on macOS". Outside the JSON-RPC reserved band, and distinct from
+    /// -32602 (bad params) / -32603 (internal): the request was well-formed and
+    /// nothing failed internally — the platform simply offers no background rail
+    /// for it, and the caller must choose another approach.
+    private static let backgroundMouseUndeliverableCode: Int32 = -32_050
+
+    /// The honest refusal for a synthesized mouse act with no AX rung.
+    ///
+    /// A located mouse event handed to `CGEvent.postToPid` reaches the target
+    /// process but is never associated with a window by the window server, so the
+    /// app does not act on it — verified on macOS 27: the identical event posted
+    /// to the global HID tap DOES act, `postToPid` does not. The only background,
+    /// cursor-free coordinate actuation macOS offers is the AX rail (pressing an
+    /// element that advertises the action). When that is unavailable, actuating
+    /// the coordinate at all requires the global tap, which drags the user's real
+    /// cursor — no longer "background". Silently posting to the global tap (an
+    /// invisible decision to disturb the user, made in the limb) or returning a
+    /// success the app never saw (the exact lie the e2e caught) are both refused.
+    /// The limb states the fact and hands the choice up; whether to fall back to
+    /// the visible cursor rail is the caller's policy (`allow_global_pointer`),
+    /// not the bridge's to make.
+    private func backgroundMouseUndeliverable(_ what: String, alternative: String) -> RpcError {
+        RpcError(
+            code: Self.backgroundMouseUndeliverableCode,
+            message: "\(what) cannot be delivered to a background process on macOS: a synthesized "
+                + "mouse event posted to a pid is not routed to a window, so the target never acts "
+                + "on it. \(alternative) To use the visible cursor instead — which physically moves "
+                + "and requires the app frontmost — the operator can enable the global pointer rail.",
+            data: nil
+        )
+    }
 
     private func eventSource() throws -> CGEventSource {
         guard let source else {
@@ -790,39 +712,6 @@ actor InputSession {
             )
         }
         return pid_t(pid)
-    }
-
-    private func mouseTypes(for button: MouseButton) -> (CGEventType, CGEventType, CGMouseButton) {
-        switch button {
-        case .left: return (.leftMouseDown, .leftMouseUp, .left)
-        case .right: return (.rightMouseDown, .rightMouseUp, .right)
-        case .middle: return (.otherMouseDown, .otherMouseUp, .center)
-        }
-    }
-
-    private func postMouse(
-        source: CGEventSource,
-        type: CGEventType,
-        at point: CGPoint,
-        button: CGMouseButton,
-        clickState: Int,
-        pid: pid_t
-    ) throws {
-        guard let event = CGEvent(
-            mouseEventSource: source,
-            mouseType: type,
-            mouseCursorPosition: point,
-            mouseButton: button
-        ) else {
-            throw RpcError(code: -32_603, message: "CGEvent(mouseEventSource:) returned nil", data: nil)
-        }
-        if clickState > 0 {
-            event.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
-        }
-        // Flags are NOT overwritten: they come from the session-state source, so a
-        // modifier left down by an earlier call (or held by the user) composes into
-        // this click — which is what makes ⇧-click and ⌥-drag expressible at all.
-        event.postToPid(pid)
     }
 
     private func postKey(

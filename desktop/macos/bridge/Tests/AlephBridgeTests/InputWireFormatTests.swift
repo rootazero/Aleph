@@ -230,21 +230,6 @@ final class InputWireFormatTests: XCTestCase {
 
     // MARK: - Pure helpers
 
-    /// `amount` is a caller-supplied i32; `amount * pixelsPerClick` overflows i32.
-    /// Overflow TRAPS in Swift, which would take the whole bridge process down.
-    func testScrollDeltasMapDirectionsAndSurviveOverflow() {
-        XCTAssertEqual(scrollDeltas(direction: "up", amount: 3)?.wheel1, 30)
-        XCTAssertEqual(scrollDeltas(direction: "down", amount: 3)?.wheel1, -30)
-        XCTAssertEqual(scrollDeltas(direction: "left", amount: 3)?.wheel2, 30)
-        XCTAssertEqual(scrollDeltas(direction: "right", amount: 3)?.wheel2, -30)
-        XCTAssertEqual(scrollDeltas(direction: "UP", amount: 1)?.wheel1, 10)
-        XCTAssertNil(scrollDeltas(direction: "sideways", amount: 1))
-
-        XCTAssertEqual(scrollDeltas(direction: "up", amount: .max)?.wheel1, .max)
-        XCTAssertEqual(scrollDeltas(direction: "down", amount: .max)?.wheel1, .min)
-        XCTAssertEqual(scrollDeltas(direction: "up", amount: .min)?.wheel1, .min)
-    }
-
     /// A key name must mean the same thing on both rails, or the model would have
     /// to know which rail it is on. These aliases are `key_parse.rs`'s, verbatim.
     func testKeyAndModifierVocabularyMatchesTheGlobalRail() {

@@ -20,16 +20,29 @@ use crate::{
 /// process's** event queue, addressed by pid. The user's real cursor never
 /// moves and the app need not be frontmost — which is the only way a
 /// coordinate-space action can run without disturbing the person at the machine
-/// (R5). The AX write rail (`ax.set_value` / `ax.perform_action`) is already
-/// pid-scoped and cursor-free; these methods bring the coordinate rail up to it.
+/// (R5).
+///
+/// The catch is that "background delivery" is not uniform across event kinds.
+/// Keyboard events route to a process's focused element without a location, so
+/// `type_text_targeted` / `key_combo_targeted` land, and a click that resolves to
+/// an AX press (`ax.perform_action`) is pid-scoped and cursor-free by
+/// construction. But a synthesized *mouse* event carries a screen point that the
+/// window server must bind to a window, and posting it to a pid bypasses exactly
+/// that — verified on macOS 27, where such an event reaches the process but is
+/// never acted on. So a coordinate mouse act with no AX rung (a scroll, a drag, a
+/// click on a plain view) has no background delivery at all on macOS, and those
+/// `*_targeted` methods surface an error rather than pretend. The bridge refuses
+/// it; whether to retry on the visible global rail is the caller's policy.
 ///
 /// Every `*_targeted` method defaults to `NotImplemented`, so a platform that
 /// cannot address a single process (currently Windows and Linux) inherits the
 /// default and its behavior stays byte-identical. Callers must ask
-/// [`supports_targeted_input`](ScreenCapability::supports_targeted_input) —
-/// or handle `NotImplemented` — and fall back to the global rail themselves;
-/// the trait never silently downgrades, because the caller has to be able to
-/// tell the model which rail actually ran.
+/// [`supports_targeted_input`](ScreenCapability::supports_targeted_input) — or
+/// handle `NotImplemented` (platform has no targeted rail) and the
+/// coordinate-mouse-undeliverable error (platform has one, but not for this
+/// event) — and fall back to the global rail themselves; the trait never
+/// silently downgrades, because the caller has to be able to tell the model which
+/// rail actually ran.
 #[async_trait]
 pub trait ScreenCapability: Send + Sync {
     // ── Existing methods (unchanged) ────────────────────────────

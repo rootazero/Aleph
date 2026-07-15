@@ -28,14 +28,21 @@
 //! the user's focus untouched). The AX tree is still live, so `ax.perform_action`
 //! and `ax.set_value` work. No coordinates are used.
 //!
-//! **Tier B — CGEvent rail, visible.** Posted mouse/keyboard events only land on a
-//! window that is actually on screen in an active GUI session. Tier B therefore
-//! runs the fixture visible and drives it by coordinate.
+//! **Tier B — background input rail, visible.** The background rail that actually
+//! works on macOS is keyboard synthesis (`type_text`) plus the AX click ladder —
+//! both `postToPid`-delivered and cursor-free. A *synthesized mouse* event posted
+//! to a pid, by contrast, is never routed to a window, so scroll / drag / a
+//! coordinate click with no AX rung have NO background delivery and the bridge
+//! refuses them (`-32050`) rather than post-and-hope. Tier B runs the fixture
+//! visible — on screen, in an active GUI session — because that is the setting
+//! where a naive mouse rail would look like it worked, and it proves the working
+//! ops land AND the refused ops still refuse. It also samples the real cursor to
+//! pin the non-intrusive thesis: the rail that DOES work never moves it.
 //!
-//! These must never be merged. A "click" test run against an off-screen window
-//! posts an event that lands nowhere, and every assertion about it would have to
-//! be weakened to nothing to keep it green — a vacuous pass, which is exactly the
-//! disease this file was written to cure.
+//! Tier A and Tier B must never be merged. Tier A's off-screen window has no
+//! business receiving a keyboard-focus or cursor assertion, and Tier B's visible
+//! window is the only place the "did the app act, and did the cursor stay put"
+//! questions can be answered honestly.
 
 use std::fs;
 use std::path::PathBuf;
@@ -51,7 +58,7 @@ use aleph_protocol::desktop_bridge::methods::input::{
     ClickParams, CursorPositionResult, DragParams, MouseButton, ScrollParams, TypeTextParams,
     DELIVERY_TARGETED,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ── Contract shared with the fixture ─────────────────────────────────────────
 
@@ -111,6 +118,10 @@ struct FixtureElement {
 struct LastEvent {
     kind: String,
     element: Option<String>,
+    // Deserialized for completeness; the click-count / drag-step payloads it once
+    // carried were asserted by the synthesized-mouse tests, which no longer exist
+    // (that rail does not deliver in the background — see the refusal tests).
+    #[allow(dead_code)]
     value: Option<String>,
     #[allow(dead_code)]
     seq: u64,
@@ -119,6 +130,9 @@ struct LastEvent {
 #[derive(Debug, Clone, Deserialize)]
 struct FixtureState {
     pid: i32,
+    // Part of the wire format and shown in `{:?}` failure dumps; no assertion
+    // reads it directly since `wait_until` polls observed facts, not the counter.
+    #[allow(dead_code)]
     seq: u64,
     focused: Option<String>,
     counter: i64,
@@ -170,6 +184,35 @@ fn bridge() -> SwiftBridge {
     SwiftBridge::new(path)
 }
 
+/// Warm the login session's global accessibility state, once per test binary.
+///
+/// macOS serves a degraded, window-less AX tree to a third-party client — the
+/// application element reports *itself* as its only window (a self-cycle), with
+/// no `AXWindow` anywhere — until some assistive client "announces" itself and
+/// flips a login-session-global switch. From then on every app (including ones
+/// launched afterwards) vends its real tree, to every client, including cold
+/// queries. Merely being trusted and calling `AXUIElementCopyAttributeValue` is
+/// not the announcement; System Events touching a process's UI-element tree IS,
+/// so poking it once here warms the switch for the whole run.
+///
+/// Best-effort: on a machine where Automation (to System Events) is not granted
+/// the poke fails and returns — and the cold tree then trips the explicit
+/// "off-display / accessibility not granted" assertion below, which says what to
+/// do. Without this, a suite run on a freshly-booted session where nothing has
+/// yet announced itself fails for a reason that has nothing to do with the code
+/// under test. See `project-computer-use-runtime-qa-macos27` for the full trace.
+fn ensure_accessibility_warm() {
+    static WARM: std::sync::Once = std::sync::Once::new();
+    WARM.call_once(|| {
+        let _ = Command::new("osascript")
+            .args([
+                "-e",
+                "tell application \"System Events\" to get name of first process",
+            ])
+            .output();
+    });
+}
+
 #[derive(Clone, Copy)]
 enum Mode {
     /// Off-display, `.accessory`, never frontmost. AX rail only.
@@ -195,6 +238,11 @@ struct Fixture {
 
 impl Fixture {
     fn launch(mode: Mode) -> Self {
+        // Flip the session-global accessibility switch before anything is queried
+        // (see `ensure_accessibility_warm`), or a cold session returns a
+        // window-less self-cyclic tree and every AX assertion fails spuriously.
+        ensure_accessibility_warm();
+
         let binary = fixture_path();
         assert!(
             binary.exists(),
@@ -275,6 +323,25 @@ impl Drop for Fixture {
         let _ = self.child.wait();
         let _ = fs::remove_file(&self.state_path);
     }
+}
+
+/// Assert a bridge call was refused with the background-mouse-undeliverable error
+/// (`-32050`), and hand back the message so a test can also check the alternative
+/// it names. Any `Ok` — a "success" for a mouse op that has no background rail —
+/// is the exact lie this suite exists to catch, so it is a failure here.
+async fn assert_refused(bridge: &SwiftBridge, method: &str, params: impl Serialize) -> String {
+    let err = bridge
+        .call::<_, serde_json::Value>(method, params)
+        .await
+        .expect_err(&format!(
+            "{method} must refuse (no background mouse rail on macOS), not report success"
+        ));
+    let msg = err.to_string();
+    assert!(
+        msg.contains("-32050"),
+        "{method} was refused with the wrong error (expected -32050 background-undeliverable): {msg}"
+    );
+    msg
 }
 
 fn locator(pid: i32, role: &str, title: &str) -> AxLocator {
@@ -461,6 +528,16 @@ async fn tier_a_secure_field_value_never_appears_in_a_snapshot() {
 /// If they ever drift — a Retina scale factor creeping in, a flip against the
 /// wrong screen — Tier B would start missing its targets for a reason that has
 /// nothing to do with the input rail. Pin it here, where the failure is legible.
+///
+/// The comparison is on the CENTER point, not the edges, and that is deliberate.
+/// AppKit reports an `NSButton`'s AX position/size as its *alignment* rect — the
+/// visual control inside its bezel — while the fixture publishes the view's full
+/// frame, so the two disagree by the bezel inset (≈6pt in x, 12pt in width) on a
+/// bezeled control. That inset is symmetric, so the CENTER still agrees to within
+/// a point — and the center is exactly what Tier B targets (`frame.center()`), so
+/// it is the coordinate whose agreement actually matters. A real coordinate-space
+/// drift (a 2× Retina scale, a wrong-screen flip) throws the center off by
+/// hundreds of points, so this still catches the failure it was written to catch.
 #[tokio::test]
 #[ignore]
 async fn tier_a_fixture_geometry_agrees_with_the_bridges_ax_bounds() {
@@ -486,16 +563,16 @@ async fn tier_a_fixture_geometry_agrees_with_the_bridges_ax_bounds() {
     let ax = button.bounds.as_ref().expect("button has no AX bounds");
     let own = state.element("aleph.button").frame;
 
+    let ax_center = (ax.x + ax.width / 2.0, ax.y + ax.height / 2.0);
+    let own_center = own.center();
     for (what, ax_v, own_v) in [
-        ("x", ax.x, own.x),
-        ("y", ax.y, own.y),
-        ("width", ax.width, own.width),
-        ("height", ax.height, own.height),
+        ("center x", ax_center.0, own_center.0),
+        ("center y", ax_center.1, own_center.1),
     ] {
         assert!(
             (ax_v - own_v).abs() <= 1.0,
-            "{what}: the bridge's AX bounds ({ax_v}) and the fixture's own frame ({own_v}) \
-             disagree by more than a point — the two coordinate spaces have drifted"
+            "{what}: the bridge's AX center ({ax_v}) and the fixture's own frame center \
+             ({own_v}) disagree by more than a point — the two coordinate spaces have drifted"
         );
     }
 }
@@ -543,64 +620,99 @@ async fn tier_b_click_takes_the_ax_rung_and_presses_the_button() {
     assert_eq!(after.last_event().kind, "button_press");
 }
 
-/// `input.double_click` delivers ONE event carrying click count 2 — not two
-/// singles.
+/// A double-click has no background rail on macOS, so the bridge refuses it.
 ///
-/// The drag pad is a plain view: it advertises no click stand-in action, so the
-/// ladder falls through to a real synthesized mouse event, which is the rail under
-/// test. The app is the only witness that can tell the two apart — a rail that
-/// posts two independent single clicks looks identical from the sending side and
-/// arrives as two `clickCount == 1` events.
+/// A multi-click's whole payload is the click COUNT carried on a synthesized
+/// mouse event, and `AXPress` carries no count — so a double-click can never take
+/// the AX rung, and the synthesized-mouse rail it would need does not deliver in
+/// the background here. The old bridge posted a `postToPid` multi-click the app
+/// never acted on and returned `ok:true`; the contract now is an honest refusal.
 #[tokio::test]
 #[ignore]
-async fn tier_b_double_click_delivers_click_count_two_not_two_singles() {
+async fn tier_b_double_click_refuses_there_is_no_background_multi_click() {
     let fixture = Fixture::launch(Mode::Visible);
     let bridge = bridge();
     let before = fixture.state();
     let (x, y) = before.element("aleph.dragpad").frame.center();
 
-    let result: serde_json::Value = bridge
-        .call(
-            "input.double_click",
-            ClickParams {
-                x,
-                y,
-                button: MouseButton::Left,
-                pid: Some(before.pid),
-                // Ignored by `input.double_click` on purpose — the method name is the
-                // request. Passing a contradictory count here is the point: if it
-                // were honoured, the assertion below would fail.
-                click_count: Some(1),
-            },
-        )
-        .await
-        .expect("input.double_click failed");
-    assert_eq!(result["ok"], serde_json::json!(true));
-    // A multi-click never takes the AX rung: AXPress carries no count.
-    assert_eq!(result["path"], serde_json::json!("synthetic"));
+    assert_refused(
+        &bridge,
+        "input.double_click",
+        ClickParams {
+            x,
+            y,
+            button: MouseButton::Left,
+            pid: Some(before.pid),
+            click_count: None,
+        },
+    )
+    .await;
 
-    let after = fixture.wait_until("the pad to report a double click", |s| {
-        s.seq > before.seq
-            && s.last_event
-                .as_ref()
-                .is_some_and(|e| e.kind == "click" && e.value.as_deref() == Some("click_count=2"))
-    });
+    // A refusal that still moved app state would be its own lie.
+    std::thread::sleep(Duration::from_millis(300));
+    let after = fixture.state();
     assert_eq!(
-        after.last_event().value.as_deref(),
-        Some("click_count=2"),
-        "the app saw the wrong click count — two singles are not a double-click"
+        after.last_event().kind,
+        "ready",
+        "a refused double-click must not have reached the app: {after:?}"
     );
 }
 
-/// Targeted delivery does not move the user's cursor.
+/// A coordinate click that finds no AX rung refuses rather than silently doing
+/// nothing.
 ///
-/// This is THE test for the whole non-intrusive thesis of Wave 3: every event
-/// below goes into the fixture's own event queue via `CGEvent.postToPid`, so the
-/// physical pointer must be exactly where it was. (Do not touch the mouse while
-/// this runs — it samples the real cursor.)
+/// The drag pad advertises no press action, so a click on it has no background
+/// rail. The old bridge posted a `postToPid` mouse event the app never acted on
+/// and returned `ok:true` — a click that did nothing while claiming it had, which
+/// is the exact lie this file exists to catch. The contract now: refuse with
+/// -32050, name the element rail as the alternative, and leave the app untouched.
 #[tokio::test]
 #[ignore]
-async fn tier_b_targeted_input_never_moves_the_real_cursor() {
+async fn tier_b_coordinate_click_with_no_ax_rung_refuses_rather_than_lying() {
+    let fixture = Fixture::launch(Mode::Visible);
+    let bridge = bridge();
+    let before = fixture.state();
+    let (x, y) = before.element("aleph.dragpad").frame.center();
+
+    let msg = assert_refused(
+        &bridge,
+        "input.click",
+        ClickParams {
+            x,
+            y,
+            button: MouseButton::Left,
+            pid: Some(before.pid),
+            click_count: None,
+        },
+    )
+    .await;
+    assert!(
+        msg.contains("ax_action"),
+        "the click refusal should route the model to the element rail: {msg}"
+    );
+
+    std::thread::sleep(Duration::from_millis(300));
+    let after = fixture.state();
+    assert_eq!(
+        after.last_event().kind,
+        "ready",
+        "a refused click must not have reached the app: {after:?}"
+    );
+}
+
+/// The background rail that WORKS never moves the user's cursor.
+///
+/// The non-intrusive thesis, scoped to what macOS actually delivers in the
+/// background: an AX-rung click and a typed string. Both reach the target process
+/// without the window server placing the pointer, so the physical cursor must be
+/// exactly where it was. (Do not touch the mouse while this runs — it samples the
+/// real cursor.) The synthesized-mouse rail is deliberately not exercised: it
+/// does not run at all (see the refusal tests), so a cursor that "did not move"
+/// because nothing happened would be a vacuous pass. Here things DO happen — the
+/// counter ticks and the field fills — and the cursor still does not move.
+#[tokio::test]
+#[ignore]
+async fn tier_b_the_working_background_rail_never_moves_the_cursor() {
     let fixture = Fixture::launch(Mode::Visible);
     let bridge = bridge();
     let state = fixture.state();
@@ -610,118 +722,85 @@ async fn tier_b_targeted_input_never_moves_the_real_cursor() {
         .await
         .expect("input.cursor_position failed");
 
-    let (px, py) = state.element("aleph.dragpad").frame.center();
-    let _: serde_json::Value = bridge
+    // An AX-rung click on the button — background, cursor-free.
+    let (bx, by) = state.element("aleph.button").frame.center();
+    let click: serde_json::Value = bridge
         .call(
             "input.click",
             ClickParams {
-                x: px,
-                y: py,
+                x: bx,
+                y: by,
                 button: MouseButton::Left,
                 pid: Some(state.pid),
                 click_count: None,
             },
         )
         .await
-        .expect("input.click failed");
+        .expect("AX-rung click failed");
+    assert_eq!(
+        click["path"],
+        serde_json::json!("accessibility"),
+        "the button click should take the AX rung: {click}"
+    );
 
-    let (sx, sy) = state.element("aleph.scroll").frame.center();
+    // A typed string — background, cursor-free (a different code path).
     let _: serde_json::Value = bridge
         .call(
-            "input.scroll",
-            ScrollParams {
-                direction: "down".to_string(),
-                amount: 3,
-                pid: Some(state.pid),
-                x: Some(sx),
-                y: Some(sy),
-            },
-        )
-        .await
-        .expect("input.scroll failed");
-
-    let pad = state.element("aleph.dragpad").frame;
-    let _: serde_json::Value = bridge
-        .call(
-            "input.drag",
-            DragParams {
-                start_x: pad.x + 20.0,
-                start_y: pad.y + 20.0,
-                end_x: pad.x + pad.width - 20.0,
-                end_y: pad.y + pad.height - 20.0,
-                duration_ms: Some(200),
+            "input.type_text",
+            TypeTextParams {
+                text: UNICODE_PAYLOAD.to_string(),
                 pid: Some(state.pid),
             },
         )
         .await
-        .expect("input.drag failed");
+        .expect("input.type_text failed");
 
-    // The app must have actually received all that — otherwise "the cursor did not
-    // move" would be trivially true because nothing happened at all.
-    fixture.wait_until("the pad to report the drag", |s| {
-        s.last_event.as_ref().is_some_and(|e| e.kind == "drag")
+    // Both really happened — otherwise "the cursor did not move" is vacuous.
+    fixture.wait_until("the button press and the typed text to land", |s| {
+        s.counter == state.counter + 1
+            && s.element("aleph.textfield").value.as_deref() == Some(UNICODE_PAYLOAD)
     });
 
     let after: CursorPositionResult = bridge
         .call("input.cursor_position", serde_json::json!({}))
         .await
         .expect("input.cursor_position failed");
-
     assert_eq!(
         (before.x, before.y),
         (after.x, after.y),
-        "the targeted rail moved the user's physical cursor from {:?} to {:?}",
+        "the background rail moved the user's physical cursor from {:?} to {:?}",
         (before.x, before.y),
         (after.x, after.y)
     );
 }
 
-/// A real drag walks a path.
+/// A drag has no background equivalent on macOS, so the bridge refuses it.
 ///
-/// `steps` is the number of intermediate `mouseDragged` events the app saw. A
-/// down at the start and an up at the end — with nothing in between — is not a
-/// drag; apps read it as a click at the start point.
+/// An app tracks a drag by the `mouseDragged` motion between the endpoints, and
+/// that motion is exactly what the window server never associates with a
+/// `postToPid` event — there is no synthesized-mouse delivery to walk a path
+/// with. So the rail refuses rather than post a path nothing receives.
 #[tokio::test]
 #[ignore]
-async fn tier_b_drag_walks_the_path_between_the_endpoints() {
+async fn tier_b_drag_refuses_there_is_no_background_drag() {
     let fixture = Fixture::launch(Mode::Visible);
     let bridge = bridge();
     let before = fixture.state();
     let pad = before.element("aleph.dragpad").frame;
 
-    let result: serde_json::Value = bridge
-        .call(
-            "input.drag",
-            DragParams {
-                start_x: pad.x + 20.0,
-                start_y: pad.y + 20.0,
-                end_x: pad.x + pad.width - 20.0,
-                end_y: pad.y + pad.height - 20.0,
-                duration_ms: Some(300),
-                pid: Some(before.pid),
-            },
-        )
-        .await
-        .expect("input.drag failed");
-    assert_eq!(result["ok"], serde_json::json!(true));
-
-    let after = fixture.wait_until("the pad to report a drag", |s| {
-        s.last_event.as_ref().is_some_and(|e| e.kind == "drag")
-    });
-    let value = after
-        .last_event()
-        .value
-        .as_deref()
-        .expect("drag event carries no value");
-    let steps: i64 = value
-        .split(';')
-        .find_map(|f| f.strip_prefix("steps="))
-        .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("drag event has no step count: {value}"));
-    assert!(
-        steps > 0,
-        "the app saw a drag with no intermediate motion ({value}) — that is a click, not a drag"
-    );
+    assert_refused(
+        &bridge,
+        "input.drag",
+        DragParams {
+            start_x: pad.x + 20.0,
+            start_y: pad.y + 20.0,
+            end_x: pad.x + pad.width - 20.0,
+            end_y: pad.y + pad.height - 20.0,
+            duration_ms: Some(300),
+            pid: Some(before.pid),
+        },
+    )
+    .await;
 }
 
 /// Typed text lands in the focused control, byte-identically, through the CGEvent
@@ -766,52 +845,36 @@ async fn tier_b_type_text_lands_in_the_focused_field_byte_identically() {
     );
 }
 
-/// Scrolling moves the scroll view — and moves it the way it was asked to.
+/// A background scroll has no delivery on macOS; the bridge refuses it and points
+/// the model at the keyboard rail, which DOES reach the focused view in the
+/// background (PageDown/Space via `key_combo`).
 #[tokio::test]
 #[ignore]
-async fn tier_b_scroll_moves_the_scroll_view() {
+async fn tier_b_scroll_refuses_and_points_to_the_keyboard() {
     let fixture = Fixture::launch(Mode::Visible);
     let bridge = bridge();
     let before = fixture.state();
-    let baseline = scroll_offset(&before);
     let (x, y) = before.element("aleph.scroll").frame.center();
 
-    let result: serde_json::Value = bridge
-        .call(
-            "input.scroll",
-            ScrollParams {
-                direction: "down".to_string(),
-                amount: 5,
-                pid: Some(before.pid),
-                x: Some(x),
-                y: Some(y),
-            },
-        )
-        .await
-        .expect("input.scroll failed");
-    assert_eq!(result["ok"], serde_json::json!(true));
-
-    // The document view is flipped, so scrolling DOWN increases the offset.
-    let after = fixture.wait_until("the scroll view to scroll down", |s| {
-        scroll_offset(s) > baseline
-    });
+    let msg = assert_refused(
+        &bridge,
+        "input.scroll",
+        ScrollParams {
+            direction: "down".to_string(),
+            amount: 5,
+            pid: Some(before.pid),
+            x: Some(x),
+            y: Some(y),
+        },
+    )
+    .await;
     assert!(
-        scroll_offset(&after) > baseline,
-        "scroll offset did not increase: {baseline} → {}",
-        scroll_offset(&after)
+        msg.contains("key_combo"),
+        "the scroll refusal should route the model to the keyboard rail: {msg}"
     );
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-fn scroll_offset(state: &FixtureState) -> f64 {
-    state
-        .element("aleph.scroll")
-        .value
-        .as_deref()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| panic!("scroll area has no numeric offset: {state:?}"))
-}
 
 fn find_by_title<'a>(root: &'a AxElement, title: &str) -> Option<&'a AxElement> {
     if root.title.as_deref() == Some(title) {
