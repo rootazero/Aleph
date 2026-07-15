@@ -45,6 +45,17 @@ pub(super) fn parse_trusted_ips(raw: &[String]) -> Vec<IpAddr> {
     raw.iter().filter_map(|s| s.parse::<IpAddr>().ok()).collect()
 }
 
+/// Whether to refuse this upgrade for insecure transport. A non-loopback client
+/// on an unencrypted leg is refused unless the operator set
+/// `allow_insecure_remote`. Loopback is always allowed.
+pub(super) fn refuse_insecure_remote(
+    client_ip: IpAddr,
+    secure: bool,
+    allow_insecure_remote: bool,
+) -> bool {
+    !client_ip.is_loopback() && !secure && !allow_insecure_remote
+}
+
 /// Shared context for handling a WebSocket connection.
 struct ConnectionContext {
     middleware_chain: MiddlewareChain,
@@ -122,7 +133,25 @@ pub(super) async fn ws_upgrade_handler(
         &state.trusted_proxy_ips,
     );
     let client_ip = resolved.ip;
-    let _secure = state.tls_enabled || resolved.secure; // used by Task 5
+    let secure = state.tls_enabled || resolved.secure;
+
+    // Insecure-transport guard: a non-loopback client on an unencrypted leg
+    // is refused unless the operator opted into `allow_insecure_remote`.
+    // Loopback is always allowed. Must run before any auth/origin decision
+    // is made over what could be a plaintext, sniffable/tamperable leg.
+    if refuse_insecure_remote(client_ip, secure, state.allow_insecure_remote) {
+        warn!(
+            peer = %peer_addr, client = %client_ip,
+            "rejected WebSocket upgrade: insecure transport to a remote client — \
+             enable [gateway.tls], or a TLS reverse proxy + [gateway.trusted_proxy], \
+             or set allow_insecure_remote=true"
+        );
+        return (
+            axum::http::StatusCode::UPGRADE_REQUIRED,
+            "TLS required for remote connections",
+        )
+            .into_response();
+    }
 
     // Cross-origin / DNS-rebinding guard. A browser always attaches an
     // `Origin` header to a WS upgrade and cannot forge it, so a malicious page
@@ -1610,5 +1639,23 @@ mod tests {
         assert_eq!(parsed.len(), 2);
         assert!(parsed.contains(&"127.0.0.1".parse().unwrap()));
         assert!(parsed.contains(&"::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn insecure_remote_gate_truth_table() {
+        use std::net::IpAddr;
+        let lo: IpAddr = "127.0.0.1".parse().unwrap();
+        let remote: IpAddr = "203.0.113.9".parse().unwrap();
+
+        // Loopback is always allowed, secure or not, regardless of the flag.
+        assert!(!super::refuse_insecure_remote(lo, false, false));
+        assert!(!super::refuse_insecure_remote(lo, false, true));
+
+        // Remote + insecure + not allowed ⇒ refuse.
+        assert!(super::refuse_insecure_remote(remote, false, false));
+        // Remote + secure ⇒ allow.
+        assert!(!super::refuse_insecure_remote(remote, true, false));
+        // Remote + insecure + explicitly allowed ⇒ allow.
+        assert!(!super::refuse_insecure_remote(remote, false, true));
     }
 }
