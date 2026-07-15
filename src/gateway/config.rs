@@ -88,6 +88,47 @@ impl Default for GatewayConfig {
     }
 }
 
+/// Native in-process TLS for the gateway listener. Default off → plaintext,
+/// unchanged. When `enabled` with empty paths, a self-signed cert is
+/// auto-generated and persisted (see [`crate::gateway::tls`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GatewayTlsConfig {
+    /// Terminate TLS in-process. Default false.
+    pub enabled: bool,
+    /// PEM certificate chain path. Empty + `enabled` ⇒ auto self-signed.
+    pub cert_path: String,
+    /// PEM private-key path. Empty + `enabled` ⇒ auto self-signed.
+    pub key_path: String,
+}
+
+impl Default for GatewayTlsConfig {
+    fn default() -> Self {
+        Self { enabled: false, cert_path: String::new(), key_path: String::new() }
+    }
+}
+
+/// Trusted reverse-proxy forwarding. When `enabled`, `X-Forwarded-For` /
+/// `X-Forwarded-Proto` from an immediate peer in `trusted_ips` are believed,
+/// restoring the real client IP and TLS status behind a proxy. Default off.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrustedProxyConfig {
+    /// Honor forwarding headers from trusted peers. Default false.
+    pub enabled: bool,
+    /// Immediate-peer IPs whose `X-Forwarded-*` are trusted. Default loopback.
+    pub trusted_ips: Vec<String>,
+}
+
+impl Default for TrustedProxyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            trusted_ips: vec!["127.0.0.1".to_string(), "::1".to_string()],
+        }
+    }
+}
+
 /// Gateway server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -116,6 +157,19 @@ pub struct GatewayServerConfig {
     /// page the user's browser visits — keep false unless you know why.
     #[serde(default)]
     pub allow_any_origin: bool,
+    /// Native in-process TLS. See [`GatewayTlsConfig`].
+    #[serde(default)]
+    pub tls: GatewayTlsConfig,
+    /// Trusted reverse-proxy forwarding. See [`TrustedProxyConfig`].
+    #[serde(default)]
+    pub trusted_proxy: TrustedProxyConfig,
+    /// Allow plaintext to a remote (non-loopback) client. Default `false` ⇒
+    /// remote connections MUST be TLS (native or trusted-proxy https); an
+    /// insecure remote is refused and the server refuses to bind a plaintext
+    /// non-loopback listener. Set `true` only to knowingly restore
+    /// LAN-plaintext trust.
+    #[serde(default)]
+    pub allow_insecure_remote: bool,
     /// Lane concurrency & channel-class priority configuration. Missing
     /// keys fall back to [`LaneConfig::default`], so old TOML files
     /// without a `[gateway.lane]` block keep loading.
@@ -190,6 +244,9 @@ impl Default for GatewayServerConfig {
             protocol_version: 1,
             allowed_origins: Vec::new(),
             allow_any_origin: false,
+            tls: GatewayTlsConfig::default(),
+            trusted_proxy: TrustedProxyConfig::default(),
+            allow_insecure_remote: false,
             lane: LaneConfig::default(),
             ping_interval_secs: default_ping_interval_secs(),
             idle_timeout_secs: default_idle_timeout_secs(),
@@ -741,5 +798,31 @@ model = "test"
         let defaults = GatewayServerConfig::default();
         assert!(defaults.allowed_origins.is_empty());
         assert!(!defaults.allow_any_origin);
+    }
+
+    #[test]
+    fn tls_and_trusted_proxy_default_off_and_parse() {
+        // Defaults: everything off, loopback trusted.
+        let d = GatewayServerConfig::default();
+        assert!(!d.tls.enabled);
+        assert!(!d.trusted_proxy.enabled);
+        assert!(!d.allow_insecure_remote);
+        assert_eq!(d.trusted_proxy.trusted_ips, vec!["127.0.0.1", "::1"]);
+
+        // Round-trips from TOML.
+        let toml = r#"
+host = "0.0.0.0"
+allow_insecure_remote = false
+[tls]
+enabled = true
+cert_path = "/x/cert.pem"
+[trusted_proxy]
+enabled = true
+"#;
+        let c: GatewayServerConfig = toml::from_str(toml).unwrap();
+        assert!(c.tls.enabled);
+        assert_eq!(c.tls.cert_path, "/x/cert.pem");
+        assert!(c.trusted_proxy.enabled);
+        assert_eq!(c.trusted_proxy.trusted_ips, vec!["127.0.0.1", "::1"]); // still defaulted
     }
 }
