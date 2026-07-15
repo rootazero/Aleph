@@ -180,7 +180,6 @@ impl WindowsSandboxDriver {
         }
 
         lines.push(format!("allow_fork={}", policy.process.allow_fork));
-        lines.push(format!("timeout_secs={}", policy.process.timeout_secs));
         if let Some(max_mem) = policy.process.max_memory_mb {
             lines.push(format!("max_memory_mb={}", max_mem));
         }
@@ -414,11 +413,6 @@ fn parse_profile(contents: &str) -> Result<ParsedProfile, SandboxError> {
                     }
                 }
                 "allow_fork" => profile.allow_fork = value == "true",
-                "timeout_secs" => {
-                    if let Ok(secs) = value.parse() {
-                        profile.timeout_secs = secs;
-                    }
-                }
                 "max_memory_mb" => {
                     if let Ok(mb) = value.parse() {
                         profile.max_memory_mb = Some(mb);
@@ -444,7 +438,6 @@ struct ParsedProfile {
     allowed_hosts: Vec<String>,
     proxy_ports: Vec<u16>,
     allow_fork: bool,
-    timeout_secs: u64,
     max_memory_mb: Option<u64>,
 }
 
@@ -588,7 +581,6 @@ mod tests {
             network: NetworkPolicy::AllowAll,
             process: crate::sandbox::policy::ProcessPolicy {
                 allow_fork: true,
-                timeout_secs: 120,
                 max_memory_mb: Some(512),
             },
             ..Default::default()
@@ -603,7 +595,6 @@ mod tests {
         assert_eq!(parsed.write_paths, vec!["C:\\temp"]);
         assert_eq!(parsed.network_mode, "allow_all");
         assert!(parsed.allow_fork);
-        assert_eq!(parsed.timeout_secs, 120);
         assert_eq!(parsed.max_memory_mb, Some(512));
     }
 

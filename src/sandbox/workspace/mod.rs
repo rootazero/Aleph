@@ -363,8 +363,9 @@ impl Sandbox for WorkspaceSandbox {
         // Effective wall-clock timeout, most-specific first: an explicit
         // per-command `timeout` wins; else the capability-level `timeout_secs`
         // override (the documented per-call ceiling); else the sandbox-wide
-        // default. This is the single authoritative timeout — the OS-profile
-        // `timeout_secs` fields are informational and never gate execution.
+        // default. This is the single authoritative timeout for execution:
+        // `SandboxCapabilities.timeout_secs` is the only timeout carrier — no
+        // OS-profile timeout is derived or enforced.
         let timeout = cmd
             .timeout
             .or_else(|| cmd.capabilities.timeout_secs.map(Duration::from_secs))
