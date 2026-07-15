@@ -783,13 +783,22 @@ blocked_hosts = ["*.malware.com"]
 
 ## Trust model: network boundary + Gateway token {#auth-ux}
 
-The trust boundary is the network boundary, gated by a single shared
-**Gateway token**. Loopback is the implicit operator (zero-config); a remote
-connection must present the token at the `connect` handshake
-(`src/gateway/handlers/connect.rs::connect_authorized`). A valid token = full
-operator authority (single tier, identical to local); a missing / invalid one
-is walled (the WS dispatch refuses every method but `connect`). Revocation is
-token rotation (`gateway.token.rotate`).
+The trust boundary is the network boundary, gated by a **Gateway-token login
+wall**. Loopback is the implicit operator (zero-config, no credential). A
+remote connection must present a valid credential at the `connect` handshake,
+resolved by `src/gateway/handlers/connect.rs::resolve_connect_auth` in
+priority order: (1) loopback ⇒ operator; (2) **device token** (`aleph-dt-*`,
+long-lived, bound to a paired device, SHA-256-hashed at rest); (3) **bootstrap
+ticket** (`aleph-bt-*`, 5-min single-use, exchanged during onboarding for a
+fresh device token); (4) the legacy shared **Gateway token** (`aleph-<uuid>`,
+`SharedTokenManager`, HMAC-hashed, constant-time verified). A valid credential
+= full operator authority (single tier, identical to local); a missing /
+invalid one is walled (the WS dispatch refuses every method but `connect`, and
+a flood guard closes a connection that keeps probing). Revocation is token
+rotation (`gateway.token.rotate` — regenerates the shared token, revokes all
+paired Panel devices, and force-closes live remote sockets) or per-device
+revoke (`gateway.devices.revoke`). Rejected remote connects and flood-guard
+closes are recorded in the security audit log (`AuthFailure` / `RateLimited`).
 
 ### Network boundary = reachability
 
@@ -799,11 +808,13 @@ token rotation (`gateway.token.rotate`).
   is auto-authorized as operator.
 - **LAN opt-in.** Set `[gateway] host = "0.0.0.0"` in
   `~/.aleph/config.toml` to listen on every interface. A remote device on the
-  LAN can then reach the socket, but is **walled until it presents the Gateway
-  token** — so exposure of the socket no longer equals control of the agent.
-  Still, treat the token as the single key to everything (an authorized remote
-  has full operator authority, including PTY / shell): share it only over a
-  trusted channel, and rotate it if it may have leaked.
+  LAN can then reach the socket, but is **walled until it presents a valid
+  credential** (device token / bootstrap ticket / shared Gateway token) — so
+  exposure of the socket no longer equals control of the agent. The server
+  logs a one-line warning at startup when it binds a non-loopback interface.
+  Still, treat any accepted credential as a key to everything (an authorized
+  remote has full operator authority, including PTY / shell): share it only
+  over a trusted channel, and rotate it if it may have leaked.
 - **Beyond the LAN.** To reach Aleph across the internet, front it with
   your own reverse proxy / VPN / SSH tunnel that terminates trust
   *upstream* of the gateway. The Gateway token is the only transport auth
@@ -860,9 +871,14 @@ unless you know why.
 
 ### Migration from the pre-revert auth model
 
-The device-authentication / pairing / token system (silent bootstrap,
-`/pair` 6-digit codes, `/login` form, `?token=` URLs, `aleph auth …` CLI)
-was removed in the LAN-trust revert. For operators upgrading:
+The original heavyweight device system (silent bootstrap, `/pair` 6-digit
+codes, `/login` form, `?token=` URLs, `aleph auth …` CLI) was removed in the
+LAN-trust revert. It was later **replaced by a leaner device model** — device
+tokens (`aleph-dt-*`) issued via one-time bootstrap tickets (`aleph-bt-*`,
+scanned as a `?bt=` QR), managed by `gateway.devices.*` RPC rather than a CLI.
+Long-lived credentials never ride in a URL or QR (only the single-use ticket
+does), which closes the old `?token=` leak vector. For operators upgrading
+from the pre-revert build:
 
 - **Old `[gateway.auth]` config is ignored, not rejected.** The config
   root has no `deny_unknown_fields`, so dead keys (`require_auth`,

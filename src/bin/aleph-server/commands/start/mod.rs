@@ -539,6 +539,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // stamp enrolled-node last_seen_at (offline fleet view honesty).
     server.set_security_store(auth_bundle.security_store.clone());
 
+    // Dedicated gateway audit pipeline for remote-connection auth forensics
+    // (AuthFailure on a rejected remote connect; RateLimited on a flood-guard
+    // close). Deliberately decoupled from the content-guardrail audit log so a
+    // network-exposed gateway records auth events even when guardrails are off.
+    // The drain is idempotent alongside the guard's — both append to
+    // `security_audit_log`; the JoinHandle is detached for the process lifetime.
+    let (gw_audit_log, gw_audit_rx) = alephcore::security::audit::SecurityAuditLog::new(256);
+    let _gw_audit_drain =
+        alephcore::security::spawn_audit_drain(gw_audit_rx, auth_bundle.security_store.clone());
+    server.set_audit_log(gw_audit_log);
+
     // Wizard session manager — OnboardingFlow factory replaces the phase-1
     // service_unavailable stubs installed in HandlerRegistry::new. (The
     // device PairingFlow died with the LAN-trust revert.)
@@ -1127,9 +1138,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.message_router.clone(),
     ) {
         {
-            use alephcore::event::{
-                EventBus, EventContext, EventFilter, EventHandler, GlobalBus,
-            };
+            use alephcore::event::{EventBus, EventContext, EventFilter, EventHandler, GlobalBus};
             use alephcore::teams::messages::{Aggregator, AggregatorConfig};
             use alephcore::teams::TeamNotifier;
 

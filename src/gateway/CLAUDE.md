@@ -20,8 +20,12 @@
 
 ## 两道护栏
 
-- **登录墙**（`server::handler` + `handlers::connect::connect_authorized`）：远程未授权
-  连接只能发 `connect`；授权（loopback 或有效 token）= operator 全权，与本地一致。
+- **登录墙**（`server::handler` + `handlers::connect::resolve_connect_auth` 4 级，
+  `connect_authorized` 为无 device-mgr 时的 legacy 回退）：远程未授权连接只能发 `connect`；
+  授权（loopback 或有效凭据）= operator 全权，与本地一致。**审计**：远程失败连接记
+  `AuditEventType::AuthFailure`，flood-guard 关连接记 `RateLimited`，入
+  `SecurityAuditLog`（专用 drain，`start/mod.rs`，与 guardrail 解耦）；loopback 永不审计
+  （`connect::should_audit_connect_failure` 守）。
 - **channel 工具闸**（`method_authz.rs::tool_requires_operator` + `tools/scoped/dispatch.rs`）：
   **仅治理 channel**（Telegram / Slack…）——`inbound_router` 按 `ChannelPermissionLevel`
   （默认 Chat ⇒ `guest`）盖 `caller_role`，禁 chat-tier channel 跑自配置类工具。Panel
