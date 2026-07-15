@@ -37,10 +37,6 @@ pub(crate) fn is_protected(catalog: &crate::agents::AgentRegistry, id: &str) -> 
 pub struct AgentDeleteArgs {
     /// ID of the agent to delete
     pub agent_id: String,
-    /// Injected by registry — session channel (internal, hidden from LLM schema)
-    #[serde(default)]
-    #[schemars(skip)]
-    pub __channel: String,
 }
 
 /// Output from agent deletion.
@@ -59,8 +55,10 @@ pub struct AgentDeleteOutput {
 /// Tool that deletes an agent and archives its workspace.
 ///
 /// Built-in agents (those whose catalog `AgentDef.source == Builtin`) cannot
-/// be deleted. If the deleted agent is currently active, the session is
-/// automatically switched to "main".
+/// be deleted. Deletion does not rebind any channel: it clears every binding
+/// pointing at the deleted agent (`clear_bindings_for_agent`), and those
+/// channels then resolve to the router's default agent ("main" unless
+/// reconfigured) on the next inbound message.
 #[derive(Clone)]
 pub struct AgentDeleteTool {
     registry: Arc<AgentRegistry>,
@@ -108,7 +106,7 @@ impl AlephTool for AgentDeleteTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         info!(agent_id = %args.agent_id, "Agent deletion requested");
 
-        // 1. Reject deletion of any built-in agent (main + store + other builtins).
+        // 1. Reject deletion of any built-in agent (main + other builtins).
         if is_protected(&self.agent_catalog, &args.agent_id) {
             return Err(crate::error::AlephError::other(format!(
                 "Cannot delete the built-in '{}' agent. Built-in agents are protected.",

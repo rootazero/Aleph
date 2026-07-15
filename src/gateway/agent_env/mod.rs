@@ -754,16 +754,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_cannot_delete_global() {
-        let temp = tempdir().unwrap();
-        let config = test_config(temp.path().join("test.db"));
-        let manager = AgentEnvStore::new(config).unwrap();
-
-        let result = manager.delete("global").await;
-        assert!(matches!(result, Err(AgentEnvError::CannotModifyGlobal)));
-    }
-
-    #[tokio::test]
     async fn test_cache_state_update() {
         let temp = tempdir().unwrap();
         let config = test_config(temp.path().join("test.db"));

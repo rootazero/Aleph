@@ -53,8 +53,11 @@ pub struct AgentListOutput {
     pub agents: Vec<AgentListInfo>,
     /// Total number of agents
     pub total: usize,
-    /// The agent active for the calling conversation's channel (explicit binding,
-    /// or the registry default when the channel is unbound).
+    /// The agent this channel is explicitly switched to (or the registry default
+    /// when unbound). The inbound router honors this ONLY when no specific
+    /// `[routing]` binding governs the channel; a specific binding takes
+    /// precedence and shadows the per-channel switch — query `gateway_route` for
+    /// the route-governed agent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_agent: Option<String>,
 }
@@ -117,11 +120,13 @@ impl AlephTool for AgentListTool {
         // 1. Get all channels bound to each agent (many-to-one aware).
         let bindings = self.workspace_mgr.bindings_by_agent().unwrap_or_default();
 
-        // 2. Resolve the active agent for the calling conversation. Mirror the
-        //    inbound router: explicit per-channel binding wins, else the registry
-        //    default. This fulfills the tool's promise to "show which one is
-        //    currently active for this conversation" (R8: the model can ask in
-        //    natural language which agent it currently is).
+        // 2. Resolve the per-channel switch binding (or the registry default when
+        //    unbound). NOTE: this is not necessarily the fully effective agent —
+        //    the inbound router applies this override ONLY when no specific
+        //    `[routing]` binding governs the channel (a Peer/Guild/Team/Account/
+        //    Channel binding wins). This tool holds no route_bindings, so it
+        //    reports the switch binding; `gateway_route` reports the
+        //    route-resolved agent (R8: the model can query either in language).
         let channel = args.__channel.trim();
         let active_agent: Option<String> = if channel.is_empty() {
             None

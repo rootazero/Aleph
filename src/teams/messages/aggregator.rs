@@ -317,7 +317,6 @@ mod tests {
             evt_store as Arc<dyn crate::teams::events::EventLogStore>,
             EscalationRule {
                 thread_message_threshold: 100, // disable escalation in tests
-                review_reject_threshold: 100,
                 enabled: false,
             },
             None,

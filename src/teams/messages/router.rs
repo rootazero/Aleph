@@ -22,8 +22,6 @@ use crate::teams::events::{EventLogStore, NewTeamEvent, TeamEventType};
 pub struct EscalationRule {
     /// Number of messages in a thread before suggesting a collaborative session.
     pub thread_message_threshold: u32,
-    /// Number of review rejections before escalating (reserved for future use).
-    pub review_reject_threshold: u32,
     /// Whether escalation checks are enabled.
     pub enabled: bool,
 }
@@ -32,7 +30,6 @@ impl Default for EscalationRule {
     fn default() -> Self {
         Self {
             thread_message_threshold: 5,
-            review_reject_threshold: 3,
             enabled: true,
         }
     }
@@ -348,7 +345,6 @@ mod tests {
         let (msg_store, event_store) = make_stores().await;
         let rules = EscalationRule {
             thread_message_threshold: 3,
-            review_reject_threshold: 3,
             enabled: true,
         };
         let router = MessageRouter::new(
@@ -408,7 +404,6 @@ mod tests {
         let (msg_store, event_store) = make_stores().await;
         let rules = EscalationRule {
             thread_message_threshold: 2,
-            review_reject_threshold: 3,
             enabled: false,
         };
         let router = MessageRouter::new(

@@ -58,9 +58,9 @@ fn lock() -> crate::sync_primitives::MutexGuard<'static, HashMap<String, VecDequ
 
 /// Join the back of the session key's FIFO lane. Returns the ticket to poll
 /// [`is_front`] with, or `None` when the lane is full (`REJECT_NEWEST`).
-pub(super) fn register(agent_id: &str) -> Option<u64> {
+pub(super) fn register(session_key: &str) -> Option<u64> {
     let mut map = lock();
-    let queue = map.entry(agent_id.to_string()).or_default();
+    let queue = map.entry(session_key.to_string()).or_default();
     if queue.len() >= MAX_QUEUED_PER_SESSION {
         return None;
     }
@@ -73,22 +73,22 @@ pub(super) fn register(agent_id: &str) -> Option<u64> {
 /// delivery. A lane or ticket that no longer exists fails **open** (`true`):
 /// the engine's busy gate is the real authority, so the worst case of a stale
 /// ticket is one redundant delivery attempt, never a stuck message.
-pub(super) fn is_front(agent_id: &str, ticket: u64) -> bool {
+pub(super) fn is_front(session_key: &str, ticket: u64) -> bool {
     let map = lock();
-    match map.get(agent_id).and_then(|q| q.front()) {
-        Some(front) => *front == ticket || !map[agent_id].contains(&ticket),
+    match map.get(session_key).and_then(|q| q.front()) {
+        Some(front) => *front == ticket || !map[session_key].contains(&ticket),
         None => true,
     }
 }
 
 /// Drop `ticket` from the session key's lane (delivered, failed, or gave up).
 /// Removes the lane entirely once empty so idle sessions leak nothing.
-pub(super) fn remove(agent_id: &str, ticket: u64) {
+pub(super) fn remove(session_key: &str, ticket: u64) {
     let mut map = lock();
-    if let Some(queue) = map.get_mut(agent_id) {
+    if let Some(queue) = map.get_mut(session_key) {
         queue.retain(|t| *t != ticket);
         if queue.is_empty() {
-            map.remove(agent_id);
+            map.remove(session_key);
         }
     }
 }

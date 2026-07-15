@@ -242,35 +242,6 @@ impl AgentEnvStore {
         Ok(affected > 0)
     }
 
-    /// Delete an agent environment permanently
-    pub async fn delete(&self, id: &str) -> Result<bool, AgentEnvError> {
-        if id == "global" {
-            return Err(AgentEnvError::CannotModifyGlobal);
-        }
-
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AgentEnvError::Database(format!("Lock error: {e}")))?;
-
-        // Remove any channel_active_agent references pointing to this agent (agent_id = agent_id in 1:1 model)
-        conn.execute(
-            "DELETE FROM channel_active_agent WHERE agent_id = ?",
-            params![id],
-        )
-        .ok();
-
-        let affected = conn
-            .execute("DELETE FROM agent_envs WHERE id = ?", params![id])
-            .map_err(|e| AgentEnvError::Database(e.to_string()))?;
-
-        if affected > 0 {
-            info!("Deleted agent env '{}'", id);
-        }
-
-        Ok(affected > 0)
-    }
-
     // =========================================================================
     // Channel Active Agent
     // =========================================================================

@@ -63,8 +63,6 @@ fn aleph_home() -> PathBuf {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkflowMeta {
     pub name: String,
-    pub path: PathBuf,
-    pub size_bytes: u64,
 }
 
 /// Resolve a logical name within `dir`: `{dir}/{sanitised}.json`. The returned
@@ -171,11 +169,8 @@ pub fn list_at(dir: &Path) -> Result<Vec<WorkflowMeta>> {
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        let size_bytes = entry.metadata().map_or(0, |m| m.len());
         out.push(WorkflowMeta {
             name: stem.to_string(),
-            path: path.clone(),
-            size_bytes,
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
