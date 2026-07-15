@@ -45,7 +45,12 @@ pub struct CandidateNote {
 pub enum GateOutcome {
     Accept(CandidateNote),
     Defer { queue_id: String, reason: String },
-    Reject { archive_id: String, reason: String },
+    // NOTE: the gate is deliberately binary — Accept or Defer. It never rejects
+    // at admission time; a deferred candidate's discard/rewrite decision is made
+    // later by the LLM `NoteReviewStage`. (A former `Reject { archive_id, .. }`
+    // variant was dead — never produced, no `archive_rejected` store method — so
+    // it was removed per R10/YAGNI. Re-add if a hard admission-time reject is
+    // ever genuinely needed.)
 }
 
 #[derive(Debug, Clone)]

@@ -83,6 +83,11 @@ pub(super) struct Frontmatter {
     /// "permanent" core-knowledge tier). Absent in legacy notes → `false`.
     #[serde(default)]
     pub(super) permanent: bool,
+    /// When `true`, `NoteDrift` has judged this note's information outdated or
+    /// contradicted by a newer note. Read by `NoteDecay` to archive it out of
+    /// active retrieval. Absent in legacy notes → `false`.
+    #[serde(default)]
+    pub(super) stale: bool,
     /// Typed relation edges (Gap A). Absent in legacy notes → empty.
     #[serde(default)]
     pub(super) relations: Vec<super::relation::Relation>,

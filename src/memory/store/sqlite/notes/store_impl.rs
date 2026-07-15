@@ -127,6 +127,50 @@ impl NoteStore for SqliteMemoryBackend {
             );
         }
 
+        // Structural-strong supersession edges. The `superseded_by:` /
+        // `supersedes:` frontmatter lists — and their `## Superseded by [[X]]`
+        // body form, promoted into the lists by `sync_body_to_frontmatter`
+        // before every index — are materialized as typed `notes_links` edges so
+        // retrieval's `surface_relations` force-surfaces them (the
+        // `STRUCTURAL_STRONG` correctness guarantee in `note/relation.rs`).
+        // Without this, a note superseded via the body/list path — the form
+        // ingest's `mark_superseded` and the orientation prompt both write —
+        // never became an edge and was silently NOT force-surfaced; only the
+        // `relations:`-block encoding worked. An explicit `relations:` entry to
+        // the same target wins (more specific); a plain body wikilink to the
+        // target is upgraded to the typed supersession edge.
+        for (targets, rel) in [
+            (&note.superseded_by, "superseded_by"),
+            (&note.supersedes, "supersedes"),
+        ] {
+            for raw_target in targets {
+                let r = links::resolve(raw_target, &resolve_ctx);
+                let (to_note, status) = match &r.target {
+                    Some(t) => (t.clone(), LinkStatus::Active.as_str()),
+                    None => (raw_target.clone(), LinkStatus::Dangling.as_str()),
+                };
+                // Precompute so neither entry closure borrows `r`.
+                let resolved_by = r.resolved_by.map(|s| s.as_str());
+                let to_raw = raw_target.clone();
+                desired
+                    .entry(to_note)
+                    .and_modify(|e| {
+                        if e.relation.is_none() {
+                            e.relation = Some(rel.to_string());
+                            e.confidence = 1.0;
+                        }
+                    })
+                    .or_insert_with(|| DesiredEdge {
+                        to_raw,
+                        relation: Some(rel.to_string()),
+                        confidence: 1.0,
+                        resolved_by,
+                        status,
+                        label: None,
+                    });
+            }
+        }
+
         // Existing edges: to_note -> (to_raw, relation, confidence, resolved_by, status, label).
         let existing: HashMap<
             String,
@@ -904,6 +948,99 @@ impl NoteStore for SqliteMemoryBackend {
             .collect();
 
         Ok((entries, edges, truncated))
+    }
+
+    async fn find_path(
+        &self,
+        from: &str,
+        to: &str,
+        agent_id: &str,
+        max_depth: u8,
+    ) -> Result<(Option<Vec<(String, String, Option<String>)>>, bool), AlephError> {
+        // A note is connected to itself by the empty path.
+        if from == to {
+            return Ok((Some(Vec::new()), false));
+        }
+
+        // Bound total work so a pathological hub can't turn one query into a
+        // full-graph scan (mirrors get_neighbors' visit discipline).
+        const MAX_VISITS: usize = 10_000;
+
+        let conn = lock_conn!(self)?;
+
+        // BFS over notes_links in both directions, remembering the edge that
+        // first discovered each node so the path can be reconstructed.
+        // `came_from`: discovered_node -> (predecessor, connecting-edge relation).
+        let mut came_from: HashMap<String, (String, Option<String>)> = HashMap::new();
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut queue: VecDeque<(String, u8)> = VecDeque::new();
+
+        visited.insert(from.to_string());
+        queue.push_back((from.to_string(), 0));
+        let mut truncated = false;
+        let mut found = false;
+
+        'bfs: while let Some((node, d)) = queue.pop_front() {
+            if d >= max_depth {
+                // A frontier node left unexpanded: an unreached target may still
+                // be reachable beyond the depth cap.
+                truncated = true;
+                continue;
+            }
+            if visited.len() >= MAX_VISITS {
+                truncated = true;
+                break;
+            }
+
+            // Outgoing (from=node → to=nbr) then incoming (from=nbr → to=node);
+            // the connection graph is undirected, so both discover neighbours.
+            for sql in [
+                "SELECT to_note, relation FROM notes_links \
+                 WHERE from_note = ?1 AND agent_id = ?2",
+                "SELECT from_note, relation FROM notes_links \
+                 WHERE to_note = ?1 AND agent_id = ?2",
+            ] {
+                let mut stmt = conn
+                    .prepare(sql)
+                    .map_err(|e| AlephError::config(format!("find_path prepare: {e}")))?;
+                let rows = stmt
+                    .query_map(params![node, agent_id], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                    })
+                    .map_err(|e| AlephError::config(format!("find_path query: {e}")))?;
+                for r in rows {
+                    let (nbr, rel) =
+                        r.map_err(|e| AlephError::config(format!("find_path row: {e}")))?;
+                    if visited.insert(nbr.clone()) {
+                        came_from.insert(nbr.clone(), (node.clone(), rel));
+                        if nbr == to {
+                            found = true;
+                            break 'bfs;
+                        }
+                        queue.push_back((nbr, d + 1));
+                    }
+                }
+            }
+        }
+
+        if !found {
+            return Ok((None, truncated));
+        }
+
+        // Reconstruct the walk by following predecessors from `to` back to
+        // `from`, then reverse to get `from → to` order.
+        let mut path: Vec<(String, String, Option<String>)> = Vec::new();
+        let mut cursor = to.to_string();
+        while cursor != from {
+            let (pred, rel) = match came_from.get(&cursor) {
+                Some(v) => v.clone(),
+                None => break, // defensive: unreachable once `to` is in came_from
+            };
+            path.push((pred.clone(), cursor.clone(), rel));
+            cursor = pred;
+        }
+        path.reverse();
+        Ok((Some(path), false))
     }
 
     async fn get_outgoing_link_rows(

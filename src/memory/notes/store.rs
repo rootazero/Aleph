@@ -190,6 +190,31 @@ pub trait NoteStore: Send + Sync {
         limit: usize,
     ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String)>, bool), AlephError>;
 
+    /// Shortest edge-path from `from` to `to` over `notes_links`, traversing
+    /// edges in **both** directions (the knowledge graph is conceptually
+    /// undirected for connection queries), bounded by `max_depth` hops. Returns
+    /// `Some(path)` — the ordered walk as `(node, next_node, connecting-edge
+    /// relation)` hops from `from` to `to` — or `None` if the two notes are not
+    /// connected within `max_depth`. The trailing bool is `truncated`: the BFS
+    /// frontier hit the depth (or a hard visit cap) before reaching `to`, so a
+    /// longer path may exist beyond what was explored — this distinguishes "no
+    /// path within the limit" from "provably disconnected". Answers "how is note
+    /// A connected to note B": a deterministic retrieval query, not reasoning
+    /// (R7). A note is connected to itself by the empty path.
+    ///
+    /// Default impl returns `(None, false)` so non-SQLite stores and test mocks
+    /// compile unchanged; the real body lives on `SqliteMemoryBackend`.
+    async fn find_path(
+        &self,
+        from: &str,
+        to: &str,
+        agent_id: &str,
+        max_depth: u8,
+    ) -> Result<(Option<Vec<(String, String, Option<String>)>>, bool), AlephError> {
+        let _ = (from, to, agent_id, max_depth);
+        Ok((None, false))
+    }
+
     /// All outgoing link rows for one note, including dangling and tombstone
     /// (unlike the graph feed, node detail must surface every lifecycle
     /// state). Default impl returns empty so non-SQLite stores and test
@@ -224,7 +249,8 @@ pub trait NoteStore: Send + Sync {
         agent_id: &str,
     ) -> Result<Vec<String>, AlephError>;
 
-    /// Store or update the embedding vector for a note.  Stub for now.
+    /// Store or update the embedding vector for a note. Backed by sqlite-vec
+    /// (`notes_vec_{dim}` + `notes_vec_map`) in `SqliteMemoryBackend`.
     async fn upsert_embedding(
         &self,
         path: &str,
@@ -233,7 +259,8 @@ pub trait NoteStore: Send + Sync {
         dim: u32,
     ) -> Result<(), AlephError>;
 
-    /// Search notes by embedding similarity.  Stub for now.
+    /// Search notes by embedding similarity (sqlite-vec KNN over the
+    /// dimension-matched `notes_vec_{dim}` table).
     async fn vector_search(
         &self,
         embedding: &[f32],
