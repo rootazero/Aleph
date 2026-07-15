@@ -434,11 +434,15 @@ pub fn scope_for_method(method: &str) -> RateLimitScope {
         // token guessing and stale-token retry storms hit this ceiling.
         "connect" => RateLimitScope::Auth,
 
-        // State-changing writes
-        "config.patch" | "config.apply" | "config.set" | "memory.store" | "memory.delete"
-        | "session.compact" | "session.delete" | "plugins.install" | "plugins.uninstall"
-        | "skills.install" | "skills.remove" | "bundled.sync" | "moa.savePreset"
-        | "moa.deletePreset" | "moa.setDefault" | "moa.setSaveTraces" => RateLimitScope::RpcWrite,
+        // State-changing writes. sessions.reset (clear all messages) and
+        // session.truncate (drop messages past N) are destructive session
+        // mutations in the same risk class as sessions.delete / session.compact,
+        // so they get the strict write window too.
+        "config.patch" | "memory.delete" | "session.compact" | "sessions.delete"
+        | "sessions.reset" | "session.truncate" | "plugins.install"
+        | "plugins.uninstall" | "skills.install" | "skills.remove" | "bundled.sync"
+        | "moa.savePreset" | "moa.deletePreset" | "moa.setDefault"
+        | "moa.setSaveTraces" => RateLimitScope::RpcWrite,
 
         // Resource-intensive operations
         "agent.run" | "chat.send" => RateLimitScope::RpcHeavy,
@@ -613,12 +617,11 @@ mod tests {
         // RpcWrite methods
         for method in &[
             "config.patch",
-            "config.apply",
-            "config.set",
-            "memory.store",
             "memory.delete",
             "session.compact",
-            "session.delete",
+            "sessions.delete",
+            "sessions.reset",
+            "session.truncate",
             "plugins.install",
             "plugins.uninstall",
             "skills.install",

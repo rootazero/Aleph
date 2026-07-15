@@ -103,13 +103,8 @@ impl Lane {
             // so classify it explicitly — keeps this hot read off the Mutate
             // lane and out of idempotency guarding.
             "moa.listPresets" => Some(Self::Query),
-            // connect.challenge issues a nonce — read-only, idempotent.
-            // The `.challenge` suffix doesn't match the Query heuristic;
-            // putting it on Query keeps it out of the Mutate lane that
-            // would otherwise idempotency-guard a side-effect-free call.
-            "connect.challenge" => Some(Self::Query),
             // skills.remove is package management, not a data delete →
-            // System lane. memory.delete / session.delete / session.truncate
+            // System lane. memory.delete / sessions.delete / session.truncate
             // are data ops that fall through to default Mutate.
             "skills.remove" | "bundled.sync" => Some(Self::System),
             // logs.setLevel changes process-wide runtime config →

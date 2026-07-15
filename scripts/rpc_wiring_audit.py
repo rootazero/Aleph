@@ -109,16 +109,15 @@ PROTOCOL_ALLOWLIST = {
 # Already-triaged severed wires (the 2026-07-15 wire audit). Being fixed;
 # listed so the script stays green on known work-in-progress and only fails
 # on NEW severances. Remove an entry as its fix lands.
-KNOWN_SEVERED = {
-    # CLIENT phantoms — all resolved 2026-07-15 (batch A): skills.add repointed
-    # to skills.install; config.set / config.list / sessions.set_pinned were dead
-    # client wrappers (zero callers, no server-side feature) and were deleted.
-    "config.apply",        # classifier-only phantom (no handler, no client)
-    "config.set",          # classifier-only phantom too (rate_limiter RpcWrite list); real write is config.patch
-    "session.delete",      # classifier names singular; real handler is plural sessions.delete
-    "connect.challenge",   # lane classifies an unbuilt nonce handshake
-    "memory.store",        # rate_limiter RpcWrite-guards it; no handler (memory writes aren't an RPC)
-}
+# CLIENT phantoms resolved 2026-07-15 (batch A): skills.add repointed to
+# skills.install; config.set / config.list / sessions.set_pinned were dead client
+# wrappers (zero callers, no server-side feature) and were deleted.
+# CLASSIFIER phantoms resolved 2026-07-15 (batch F): config.apply / config.set /
+# memory.store deleted from rate_limiter's RpcWrite list (no handler); session.delete
+# repointed to the real plural sessions.delete so the destructive delete lands in the
+# strict write bucket instead of the loose default; connect.challenge removed from
+# lane's Query overrides (an unbuilt nonce handshake). Empty = no known gaps.
+KNOWN_SEVERED: set[str] = set()
 
 
 def main() -> int:
