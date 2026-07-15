@@ -194,7 +194,6 @@ impl MemoryExploreTool {
             max_hops,
             max_facts_per_hop: max_per_hop,
             similarity_threshold: 0.7,
-            ..Default::default()
         };
         let ripple = RippleTask::new(self.database.clone(), config, &self.agent_id);
 
