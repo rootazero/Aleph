@@ -24,7 +24,6 @@
 //! let result = ExecutionResult::failure("Connection timeout");
 //! ```
 
-pub mod action_types;
 mod builtin_registry;
 mod tool_registry;
 mod types;

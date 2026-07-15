@@ -23,16 +23,6 @@ pub enum ToolRepairType {
     CaseInsensitive,
     /// Converted to `snake_case` (e.g., "`WebSearch`" -> "`web_search`")
     SnakeCase,
-    /// Routed to the "invalid" tool as a fallback
-    InvalidFallback,
-}
-
-impl ToolRepairInfo {
-    /// Check if this was a successful repair (not a fallback to invalid)
-    #[must_use]
-    pub const fn was_successful(&self) -> bool {
-        !matches!(self.repair_type, ToolRepairType::InvalidFallback)
-    }
 }
 
 /// Information about a tool update/replacement operation

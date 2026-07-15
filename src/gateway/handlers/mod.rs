@@ -73,7 +73,6 @@ pub mod gateway_metrics;
 pub mod gateway_ticket;
 pub mod gateway_token;
 pub mod general_config;
-pub mod generation;
 pub mod generation_config;
 pub mod generation_providers;
 pub mod graph;

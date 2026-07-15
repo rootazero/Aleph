@@ -29,12 +29,11 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use tokio::sync::broadcast;
 
 use crate::gateway::cancellation::CancellationToken;
 use crate::gateway::channel_approval::ChannelApprovalCapability;
-use crate::thinker::interaction::{Capability, InteractionManifest};
 
 /// Result type for channel operations
 pub type ChannelResult<T> = Result<T, ChannelError>;
@@ -853,22 +852,6 @@ pub fn paradigm_for_channel_type(
         "telegram" | "feishu" | "slack" | "whatsapp" | "discord" | "irc" | "msteams" | "wechat"
         | "line" => InteractionParadigm::Messaging,
         _ => InteractionParadigm::Background,
-    }
-}
-
-/// Channels implement this to declare their interaction capabilities.
-/// The manifest is used by `ContextAggregator` to filter tools and
-/// generate appropriate system prompts.
-pub trait ChannelProvider {
-    /// Get the interaction manifest for this channel
-    fn interaction_manifest(&self) -> InteractionManifest;
-
-    /// Optional runtime capability detection
-    ///
-    /// Override this to detect capabilities at runtime (e.g., terminal features).
-    /// Returns None by default.
-    fn detect_capabilities(&self) -> Option<HashSet<Capability>> {
-        None
     }
 }
 

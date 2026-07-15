@@ -14,12 +14,9 @@ use async_trait::async_trait;
 use tokio::sync::watch;
 
 use crate::gateway::channel::{
-    Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo, ChannelProvider,
+    Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
     SendResult,
-};
-use crate::thinker::interaction::{
-    InteractionConstraints, InteractionManifest, InteractionParadigm,
 };
 
 use api::FeishuApi;
@@ -278,16 +275,5 @@ impl Channel for FeishuChannel {
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
         ops.delete(conversation_id, message_id).await
-    }
-}
-
-impl ChannelProvider for FeishuChannel {
-    fn interaction_manifest(&self) -> InteractionManifest {
-        InteractionManifest::new(InteractionParadigm::Messaging).with_constraints(
-            InteractionConstraints::new()
-                .max_output_chars(4096)
-                .supports_streaming(self.config.streaming)
-                .prefer_compact(false),
-        )
     }
 }

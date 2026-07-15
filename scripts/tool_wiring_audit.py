@@ -49,13 +49,16 @@ DISPATCH_RE = re.compile(r'^\s*"([a-z][a-zA-Z0-9_]*)"\s*=>', re.MULTILINE)
 
 DISPATCH_FILE = "src/executor/builtin_registry/registry/tool_registry_impl.rs"
 
-# Tools defined but intentionally not dispatched via the builtin match — being
-# triaged in the 2026-07-15 wire audit. Remove an entry when it's wired or deleted.
-KNOWN_SEVERED = {
-    "vision",         # full VisionTool impl + tests, never registered/dispatched
-    "sessions_spawn", # SessionsSpawnTool defined+exported, never wired (also a partial stub)
-    "invalid",        # InvalidTool repair fallback; repair.rs looks it up but it's never registered
-}
+# Tools defined but intentionally not dispatched via the builtin match. The
+# 2026-07-15 wire audit drained this baseline to empty:
+#   - vision (VisionTool): redundant wrapper over VisionPipeline (media_understand
+#     already routes through it) — CUT.
+#   - sessions_spawn (SessionsSpawnTool): never-wired, partly-stub delegation tool
+#     covered by team_delegate / a2a / acp — CUT.
+#   - invalid (InvalidTool): repair.rs fallback that was never registered, so the
+#     branch was dead; the error path + list_tools already covers it — CUT.
+# A NEW severed tool now means a genuinely defined-but-undispatched wire → fix it.
+KNOWN_SEVERED: set[str] = set()
 
 
 def main() -> int:

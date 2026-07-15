@@ -3,7 +3,6 @@
 //! Provides shared state for testing sub-agent orchestration components:
 //! - RunEventBus lifecycle
 //! - AuthProfileManager
-//! - SessionsSpawnTool
 //! - SubAgentRegistry lifecycle
 #![allow(dead_code)]
 
@@ -16,11 +15,6 @@ use alephcore::agents::sub_agents::{SubAgentRegistry, SubAgentRun};
 use alephcore::gateway::router::SessionKey;
 use alephcore::gateway::run_event_bus::{ActiveRunHandle, RunEndResult, RunEvent};
 use alephcore::providers::profile_manager::AuthProfileManager;
-
-#[cfg(feature = "gateway")]
-use alephcore::builtin_tools::sessions::{
-    CleanupPolicy, SessionsSpawnArgs, SessionsSpawnOutput, SessionsSpawnTool,
-};
 
 /// Subagent test context
 #[derive(Default)]
@@ -57,15 +51,6 @@ pub struct SubagentContext {
     /// Temp directory
     pub temp_dir: Option<TempDir>,
 
-    // SessionsSpawnTool state (gateway feature)
-    #[cfg(feature = "gateway")]
-    pub spawn_tool: Option<SessionsSpawnTool>,
-    #[cfg(feature = "gateway")]
-    pub spawn_output: Option<SessionsSpawnOutput>,
-    #[cfg(feature = "gateway")]
-    pub spawn_args: Option<SessionsSpawnArgs>,
-    #[cfg(feature = "gateway")]
-    pub cleanup_policy: Option<CleanupPolicy>,
     /// Authorization result
     pub auth_result: Option<Result<(), String>>,
     /// Session key prefix

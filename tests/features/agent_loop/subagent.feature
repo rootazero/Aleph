@@ -1,5 +1,5 @@
 Feature: Sub-Agent Orchestration
-  Tests for RunEventBus lifecycle, AuthProfileManager, and SessionsSpawnTool.
+  Tests for RunEventBus lifecycle and AuthProfileManager.
 
   # ==========================================================================
   # RunEventBus Lifecycle Tests
@@ -92,53 +92,3 @@ Feature: Sub-Agent Orchestration
     Given an empty profiles config
     When I try to get available profile for provider "anthropic" and agent "main"
     Then it should return an error containing "No profiles available"
-
-  # ==========================================================================
-  # SessionsSpawnTool Tests (Gateway Feature)
-  # ==========================================================================
-
-  @sessions-spawn @gateway
-  Scenario: SessionsSpawnTool session key format is correct
-    Given an agent id "poet" and label "translator"
-    Then the subagent session key prefix should be "agent:poet:subagent:translator"
-
-  @sessions-spawn @gateway
-  Scenario: SessionsSpawnTool authorization with wildcard allows all
-    Given a sessions spawn tool with default wildcard authorization
-    Then authorization for "any_agent" should succeed
-    And authorization for "translator" should succeed
-
-  @sessions-spawn @gateway
-  Scenario: SessionsSpawnTool authorization with explicit list
-    Given a sessions spawn tool with allowed agents "translator" and "summarizer"
-    Then authorization for "translator" should succeed
-    And authorization for "summarizer" should succeed
-    And authorization for "other" should fail
-
-  @sessions-spawn @gateway
-  Scenario: SessionsSpawnTool authorization with empty list denies all
-    Given a sessions spawn tool with empty allowed agents list
-    Then authorization for "any" should fail
-
-  @sessions-spawn @gateway
-  Scenario: SessionsSpawnTool without context returns error
-    Given a sessions spawn tool without gateway context
-    When I call spawn with task "Test task"
-    Then the spawn status should be Error
-    And the spawn error should contain "GatewayContext not configured"
-
-  @sessions-spawn @gateway
-  Scenario: CleanupPolicy defaults to Ephemeral
-    When I get the default cleanup policy
-    Then the cleanup policy should be Ephemeral
-
-  @sessions-spawn @gateway
-  Scenario: SessionsSpawnArgs defaults are correct
-    When I parse spawn args from JSON with only task "Do something"
-    Then the spawn args task should be "Do something"
-    And the spawn args label should be none
-    And the spawn args agent_id should be none
-    And the spawn args model should be none
-    And the spawn args thinking should be none
-    And the spawn args timeout should be 300
-    And the spawn args cleanup should be Ephemeral
