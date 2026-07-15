@@ -113,6 +113,7 @@ pub mod tailscale;
 pub mod tools_invalidation;
 pub mod trace_context;
 pub mod trace_protocol;
+pub mod trusted_proxy;
 pub mod voice;
 pub mod webhook_receiver;
 pub mod webhooks;
