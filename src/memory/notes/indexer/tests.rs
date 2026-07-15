@@ -1216,6 +1216,74 @@ async fn superseded_by_list_materializes_typed_edge() {
 }
 
 #[tokio::test]
+async fn dated_body_supersession_promotes_through_index_to_force_surface_edge() {
+    // Round-4 end-to-end: the *dated* body heading `## Superseded by [[X]]
+    // (YYYY-MM-DD)` — the exact form ingest's `mark_superseded` and the
+    // orientation prompts actually write to disk — must flow through the real
+    // `index_file` promotion+index path all the way to a queryable, typed,
+    // STRUCTURAL_STRONG edge that retrieval's `surface_relations` force-surfaces.
+    //
+    // Chain under test (each link previously proven in isolation; this closes the
+    // seam): dated body heading -> `sync_body_to_frontmatter` regex (round-4
+    // widened to tolerate the trailing `(date)`) -> `superseded_by:` frontmatter
+    // -> `index_note` typed edge (round-3 W1) -> `is_structural_strong` == the
+    // input `structural_targets` feeds force-surface. Before the round-4 regex
+    // fix the dated heading was silently rejected, so this whole chain never fired
+    // for real ingest/orientation-authored supersessions.
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+    let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
+    setup_category_dir(&memory_dir, AGENT, "reference").await;
+
+    // Superseding (newer) note first, so the promoted edge resolves Active.
+    let new_path = memory_dir.join(AGENT).join("reference").join("note-new.md");
+    fs::write(
+        &new_path,
+        "---\ncategory: reference\ncreated: 2026-07-15\nupdated: 2026-07-15\n---\n\n- current fact\n",
+    )
+    .await
+    .unwrap();
+    indexer.index_file(AGENT, "reference", &new_path).await.unwrap();
+
+    // Superseded (older) note carries ONLY the dated body heading — no
+    // `superseded_by:` frontmatter — exactly as `mark_superseded` writes it.
+    let old_path = memory_dir.join(AGENT).join("reference").join("note-old.md");
+    fs::write(
+        &old_path,
+        "---\ncategory: reference\ncreated: 2026-04-01\nupdated: 2026-07-15\n---\n\n\
+         - stale fact\n\n\
+         ## Superseded by [[reference/note-new]] (2026-07-15)\n\n\
+         _Superseded by a more recent, contradicting note._\n",
+    )
+    .await
+    .unwrap();
+    indexer.index_file(AGENT, "reference", &old_path).await.unwrap();
+
+    // The dated heading promoted into a typed `superseded_by` edge in notes_links.
+    let typed = db
+        .get_typed_relations("reference/note-old", AGENT)
+        .await
+        .unwrap();
+    assert!(
+        typed
+            .iter()
+            .any(|(to, rel)| to == "reference/note-new" && rel == "superseded_by"),
+        "dated body heading must promote+materialize a typed edge, got {typed:?}"
+    );
+
+    // That edge is STRUCTURAL_STRONG — the sole condition `structural_targets`
+    // (already unit-tested) checks before force-surfacing the superseding note
+    // when the stale note is retrieved. Edge present + strong ⇒ force-surface fires.
+    assert!(
+        typed
+            .iter()
+            .any(|(_, rel)| crate::memory::notes::is_structural_strong(rel)),
+        "promoted supersession edge must be force-surfaceable, got {typed:?}"
+    );
+}
+
+#[tokio::test]
 async fn append_relations_is_noop_when_all_already_present() {
     use crate::memory::notes::Relation;
 
