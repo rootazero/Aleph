@@ -68,15 +68,11 @@ impl BuiltinToolRegistry {
                         .unwrap_or_else(|| "main".to_string()),
                 );
 
-                // TaskUpdateTool and TaskWaitTool need the event bus
-                let (update, wait) = if let Some(ref bus) = config.agent_message_bus {
-                    (
-                        Some(TaskUpdateTool::new(Arc::clone(store), Arc::clone(bus))),
-                        Some(TaskWaitTool::new(Arc::clone(store))),
-                    )
-                } else {
-                    (None, None)
-                };
+                // TaskUpdateTool and TaskWaitTool derive purely from the coord
+                // store; the store's own GlobalBus broadcast is what wakes
+                // `task_wait`, so neither tool needs an event bus injected.
+                let update = Some(TaskUpdateTool::new(Arc::clone(store)));
+                let wait = Some(TaskWaitTool::new(Arc::clone(store)));
 
                 // Register parameter schemas for task tools
                 {

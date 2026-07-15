@@ -252,12 +252,11 @@ type TeamComponents = (
     Option<Arc<alephcore::teams::messages::MessageRouter>>,
     Option<Arc<alephcore::teams::messages::Inbox>>,
     Option<Arc<alephcore::teams::sessions::SessionCoordinator>>,
-    Option<Arc<alephcore::agents::swarm::AgentMessageBus>>,
 );
 
-/// Build higher-level team components (router, inbox, coordinator, message
-/// bus) from the four lower-level stores. Anything `None` upstream gates the
-/// matching higher-level component to `None`.
+/// Build higher-level team components (router, inbox, coordinator) from the
+/// four lower-level stores. Anything `None` upstream gates the matching
+/// higher-level component to `None`.
 pub(super) fn build_team_components(
     message_store: &Option<Arc<dyn alephcore::teams::messages::MessageStore>>,
     event_store: &Option<Arc<dyn alephcore::teams::events::EventLogStore>>,
@@ -305,16 +304,5 @@ pub(super) fn build_team_components(
         _ => None,
     };
 
-    // AgentMessageBus — in-process agent-to-agent event channel. `task_update`
-    // publishes ImportantEvents here; `task_wait` subscribes. No upstream
-    // dependency — always present.
-    let agent_message_bus: Option<Arc<alephcore::agents::swarm::AgentMessageBus>> =
-        Some(Arc::new(alephcore::agents::swarm::AgentMessageBus::new()));
-
-    (
-        message_router,
-        inbox,
-        session_coordinator,
-        agent_message_bus,
-    )
+    (message_router, inbox, session_coordinator)
 }
