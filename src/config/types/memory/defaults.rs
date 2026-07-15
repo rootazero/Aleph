@@ -239,6 +239,14 @@ pub const fn default_dedup_noop_threshold() -> f32 {
     0.985
 }
 
+/// Admission governance gate. **Off by default**: the gate + review-queue path
+/// (Phase C2) ships wired to config but dormant, so existing deployments keep
+/// byte-identical immediate-admit ingest until an operator sets
+/// `governance_enabled = true` in `[memory.compound_ingest]`.
+pub const fn default_governance_enabled() -> bool {
+    false
+}
+
 pub const fn default_replan_on_hash_conflict() -> u32 {
     1
 }

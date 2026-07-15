@@ -1168,6 +1168,54 @@ async fn append_relations_adds_typed_edge_and_indexes_it() {
 }
 
 #[tokio::test]
+async fn superseded_by_list_materializes_typed_edge() {
+    // W1: a note carrying `superseded_by: [X]` (the form ingest's
+    // `mark_superseded` and the `## Superseded by [[X]]` body section produce,
+    // promoted into the frontmatter list by `sync_body_to_frontmatter`) must
+    // become a typed `superseded_by` edge in `notes_links` so retrieval's
+    // `surface_relations` force-surfaces the newer note. Before this fix only
+    // the `relations:`-block encoding produced such an edge — the list form was
+    // silently dropped, breaking the STRUCTURAL_STRONG guarantee.
+    let db = create_test_db();
+
+    // Index the superseding (newer) note first so the edge resolves Active.
+    let newer = KnowledgeNote {
+        title: "note-new".to_string(),
+        category: "reference".to_string(),
+        facts: vec!["new fact".to_string()],
+        created_at: 2000,
+        updated_at: 2000,
+        content_hash: "hash_new".to_string(),
+        ..Default::default()
+    };
+    db.index_note(&newer, AGENT, "reference").await.unwrap();
+
+    // The superseded (older) note points forward via the `superseded_by` list.
+    let older = KnowledgeNote {
+        title: "note-old".to_string(),
+        category: "reference".to_string(),
+        facts: vec!["old fact".to_string()],
+        superseded_by: vec!["reference/note-new".to_string()],
+        created_at: 1000,
+        updated_at: 1000,
+        content_hash: "hash_old".to_string(),
+        ..Default::default()
+    };
+    db.index_note(&older, AGENT, "reference").await.unwrap();
+
+    let typed = db
+        .get_typed_relations("reference/note-old", AGENT)
+        .await
+        .unwrap();
+    assert!(
+        typed
+            .iter()
+            .any(|(to, rel)| to == "reference/note-new" && rel == "superseded_by"),
+        "superseded_by list must materialize a typed STRUCTURAL_STRONG edge, got {typed:?}"
+    );
+}
+
+#[tokio::test]
 async fn append_relations_is_noop_when_all_already_present() {
     use crate::memory::notes::Relation;
 

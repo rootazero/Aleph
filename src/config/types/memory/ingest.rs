@@ -29,6 +29,15 @@ pub struct CompoundIngestConfig {
     pub dedup_similarity_threshold: f32,
     #[serde(default = "super::defaults::default_dedup_noop_threshold")]
     pub dedup_noop_threshold: f32,
+    /// Admission governance gate (Phase C2). When `true`, ingest routes each
+    /// planned `PageOp::Create` through `DefaultNoteWriteGate`: low-confidence,
+    /// high-severity-under-confidence, and contradicting creates are deferred
+    /// into `notes_review_queue` for LLM re-adjudication (`NoteReviewStage`)
+    /// next dream cycle instead of being admitted immediately. **Default
+    /// `false`** — the mount point ships wired but dormant, so existing
+    /// deployments keep byte-identical immediate-admit behaviour until opted in.
+    #[serde(default = "super::defaults::default_governance_enabled")]
+    pub governance_enabled: bool,
 }
 
 impl Default for CompoundIngestConfig {
@@ -44,6 +53,7 @@ impl Default for CompoundIngestConfig {
             dedup_enabled: true,
             dedup_similarity_threshold: 0.92,
             dedup_noop_threshold: 0.985,
+            governance_enabled: false,
         }
     }
 }
@@ -122,5 +132,15 @@ mod tests {
         let cfg: CompoundIngestConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(cfg.dedup_noop_threshold, 0.985);
         assert!(cfg.dedup_enabled);
+    }
+
+    #[test]
+    fn governance_is_disabled_by_default() {
+        // The gate ships wired but dormant: default off, and TOML lacking the
+        // key falls back to off, so existing deployments keep immediate-admit.
+        assert!(!super::super::defaults::default_governance_enabled());
+        assert!(!CompoundIngestConfig::default().governance_enabled);
+        let cfg: CompoundIngestConfig = serde_json::from_str("{}").unwrap();
+        assert!(!cfg.governance_enabled);
     }
 }

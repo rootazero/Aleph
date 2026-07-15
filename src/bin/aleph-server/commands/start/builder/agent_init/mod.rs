@@ -846,10 +846,27 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             // queue and flushes — fresh notes are visible to
                             // vector search without a manual reembed.
                             embedding_manager: embedding_manager_out.clone(),
-                            // TODO(C2): construct DefaultNoteWriteGate from
-                            // config when governance is enabled. C2.3.2 ships
-                            // the mount point; activation is a follow-up.
-                            gate: None,
+                            // Admission governance gate (Phase C2). Wired to
+                            // config but OFF by default (`governance_enabled =
+                            // false`), so existing deployments keep byte-
+                            // identical immediate-admit ingest. Flipping the
+                            // flag routes low-confidence / high-severity-under-
+                            // confidence / contradicting Creates through the
+                            // gate → `notes_review_queue` → `NoteReviewStage`
+                            // (LLM re-adjudication) next dream cycle.
+                            gate: if cfg.governance_enabled {
+                                let gate =
+                                    alephcore::memory::notes::governance::gate::DefaultNoteWriteGate::new(
+                                        memory_db.clone(),
+                                        alephcore::memory::notes::governance::gate::GateThresholds::default(),
+                                    );
+                                Some(std::sync::Arc::new(gate)
+                                    as std::sync::Arc<
+                                        dyn alephcore::memory::notes::governance::gate::NoteWriteGate,
+                                    >)
+                            } else {
+                                None
+                            },
                         }))
                     } else {
                         None

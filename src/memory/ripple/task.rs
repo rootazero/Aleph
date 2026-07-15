@@ -105,21 +105,7 @@ impl RippleTask {
             seed_facts,
             expanded_facts: expanded,
             total_hops: self.config.max_hops,
-            tunnel_facts: Vec::new(),
         })
-    }
-
-    /// Explore cross-domain facts via tunnel edges.
-    ///
-    /// Previously used `graph_nodes/graph_edges` for tunnel discovery.
-    /// That graph system has been deprecated. This is now a no-op stub.
-    /// Future: tunnel discovery will use `notes_links` for cross-domain linking.
-    pub async fn explore_tunnels(
-        &self,
-        _seed_facts: &[MemoryFact],
-        _visited: &mut std::collections::HashSet<String>,
-    ) -> Result<Vec<MemoryFact>> {
-        Ok(Vec::new())
     }
 
     /// Check if a candidate fact meets the similarity threshold.

@@ -101,6 +101,14 @@ pub struct KnowledgeNote {
     /// `pinned` skill idiom in `skill_lifecycle`). `false` for legacy notes —
     /// see [`KnowledgeNote::is_permanent`] for the tag-based fallback.
     pub permanent: bool,
+    /// `NoteDrift`'s outdated/contradicted verdict (frontmatter `stale: true`).
+    /// Parse-only: `to_markdown` never emits it (matching the pre-field
+    /// drop-on-rewrite behaviour), so byte-preserving raw writers — `NoteDrift`
+    /// (which sets it) and `NoteDecay`'s `write_note_raw` — carry it while
+    /// lossy full rewrites drop it exactly as before. Read by `NoteDecay` to
+    /// archive stale notes out of active retrieval. `false` for legacy notes.
+    #[serde(default)]
+    pub stale: bool,
     /// Obsidian / llm_wiki page-type (mirrors category). `None` for legacy notes.
     /// Single source of truth remains the directory; this field enables vault
     /// byte-compatibility with Obsidian and llm_wiki readers.
@@ -130,6 +138,7 @@ impl Default for KnowledgeNote {
             superseded_by: Vec::new(),
             fact_provenance: Vec::new(),
             permanent: false,
+            stale: false,
             note_type: None,
             aliases: Vec::new(),
         }
@@ -176,6 +185,7 @@ impl KnowledgeNote {
             superseded_by: frontmatter.superseded_by,
             fact_provenance,
             permanent: frontmatter.permanent,
+            stale: frontmatter.stale,
             note_type: frontmatter.note_type,
             aliases: frontmatter.aliases,
         })

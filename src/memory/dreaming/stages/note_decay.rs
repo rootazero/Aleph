@@ -350,6 +350,52 @@ impl DreamStage for NoteDecayStage {
                 continue;
             }
 
+            // Stale notes: NoteDrift judged this note's information outdated or
+            // contradicted by a newer note (frontmatter `stale: true`, the
+            // previously write-only flag). Archive Low/Med stale notes out of
+            // active retrieval so they stop crowding recall — recoverable like
+            // any archived note, with NoteDrift's `## Superseded` banner
+            // explaining why in the file. High/Critical stay indexed (the C2.7
+            // confidence floor they rely on requires it; permanent already
+            // returned above). Respect the same "highly linked" protection as
+            // score-based archival — orphaning many inbound links is worse than
+            // keeping a flagged note (the extra query only fires for the rare
+            // stale note).
+            if note.stale
+                && matches!(note.severity, Severity::Low | Severity::Med)
+                && (now_ts - note.created_at) >= 7 * 86400
+            {
+                let incoming = ctx
+                    .indexer
+                    .store()
+                    .get_incoming_links_any(&note_path, &filename, &ctx.agent_id)
+                    .await
+                    .map_or(0, |links| links.len());
+                if incoming < 3 {
+                    let archive_dir = ctx
+                        .indexer
+                        .memory_dir()
+                        .join(&ctx.agent_id)
+                        .join("archive")
+                        .join(&category);
+                    let dest_path = archive_dir.join(format!("{filename}.md"));
+                    let moved = tokio::fs::create_dir_all(&archive_dir).await.is_ok()
+                        && tokio::fs::rename(&file_path, &dest_path).await.is_ok();
+                    if moved {
+                        let _ = ctx
+                            .indexer
+                            .store()
+                            .remove_note_index(&note_path, &ctx.agent_id)
+                            .await;
+                        ctx.note_contents.remove(note_path.as_str());
+                        notes_archived += 1;
+                        tracing::info!(path = %note_path, "NoteDecay: archived stale (NoteDrift-flagged) note");
+                        continue;
+                    }
+                    tracing::warn!(path = %note_path, "NoteDecay: failed to archive stale note; keeping indexed");
+                }
+            }
+
             let old_conf = note.confidence;
             let decayed = old_conf * (-days / self.half_life_days).exp();
             let floor = severity_floor(note.severity).max(self.min_strength);
@@ -842,6 +888,111 @@ mod tests {
         assert_eq!(
             out.report.notes_archived, 0,
             "protected note must not be archived"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_low_severity_note_is_archived() {
+        // W2: a note NoteDrift flagged `stale: true` (outdated / contradicted)
+        // is archived out of active retrieval even when its activity score is
+        // high (freshly updated) — the flag was previously write-only.
+        let (mut ctx, _store) = build_decay_ctx().await;
+
+        let now = chrono::Utc::now().timestamp();
+        // Updated an hour ago → high activity score, so the score-based loop
+        // does NOT archive it (only the stale path can); created 30 days ago →
+        // clears the >7-day age protection.
+        let mut md = KnowledgeNote {
+            title: "stale-note".into(),
+            category: "reference".into(),
+            facts: vec!["outdated fact".into()],
+            severity: Severity::Low,
+            content_hash: "hs".into(),
+            created_at: now - 30 * 86400,
+            updated_at: now - 3600,
+            ..Default::default()
+        }
+        .to_markdown();
+        // `to_markdown` never emits the parse-only `stale` field; NoteDrift
+        // inserts it after the opening fence, so inject it the same way here.
+        md = md.replacen("---\n", "---\nstale: true\n", 1);
+
+        let mem_dir = ctx.indexer.memory_dir().to_path_buf();
+        let cat_dir = mem_dir.join("default").join("reference");
+        tokio::fs::create_dir_all(&cat_dir).await.unwrap();
+        tokio::fs::write(cat_dir.join("stale-note.md"), &md)
+            .await
+            .unwrap();
+
+        ctx.notes = vec![decay_entry(
+            "reference/stale-note",
+            now - 30 * 86400,
+            now - 3600,
+        )];
+
+        let out = NoteDecayStage::default().execute(ctx).await.unwrap();
+
+        assert_eq!(
+            out.report.notes_archived, 1,
+            "stale note must be archived out of active retrieval"
+        );
+        assert!(
+            !cat_dir.join("stale-note.md").exists(),
+            "original stale note file must be moved out of its category dir"
+        );
+        assert!(
+            mem_dir
+                .join("default")
+                .join("archive")
+                .join("reference")
+                .join("stale-note.md")
+                .exists(),
+            "stale note must land in the archive/ dir (recoverable)"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_high_severity_note_is_not_archived() {
+        // Stale High/Critical notes stay indexed: the C2.7 confidence floor they
+        // rely on requires them present. Only Low/Med stale notes archive.
+        let (mut ctx, _store) = build_decay_ctx().await;
+
+        let now = chrono::Utc::now().timestamp();
+        let mut md = KnowledgeNote {
+            title: "stale-crit".into(),
+            category: "reference".into(),
+            facts: vec!["outdated but load-bearing".into()],
+            severity: Severity::High,
+            content_hash: "hsc".into(),
+            created_at: now - 30 * 86400,
+            updated_at: now - 3600,
+            ..Default::default()
+        }
+        .to_markdown();
+        md = md.replacen("---\n", "---\nstale: true\n", 1);
+
+        let mem_dir = ctx.indexer.memory_dir().to_path_buf();
+        let cat_dir = mem_dir.join("default").join("reference");
+        tokio::fs::create_dir_all(&cat_dir).await.unwrap();
+        tokio::fs::write(cat_dir.join("stale-crit.md"), &md)
+            .await
+            .unwrap();
+
+        ctx.notes = vec![decay_entry(
+            "reference/stale-crit",
+            now - 30 * 86400,
+            now - 3600,
+        )];
+
+        let out = NoteDecayStage::default().execute(ctx).await.unwrap();
+
+        assert_eq!(
+            out.report.notes_archived, 0,
+            "stale High-severity note must NOT be archived"
+        );
+        assert!(
+            cat_dir.join("stale-crit.md").exists(),
+            "stale High-severity note must stay in place"
         );
     }
 }

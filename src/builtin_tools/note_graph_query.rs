@@ -4,10 +4,11 @@
 //! The retrieval pipeline only ever surfaces a note's *1-hop* peers. This tool
 //! lets the model explore the graph directly: introspect its shape (`schema`),
 //! walk an N-hop neighborhood (`neighbors`), list a note's cluster
-//! (`community`), or fetch its scored related peers (`related`). It is a pure
-//! read executor over the existing `NoteStore` graph methods — the model writes
-//! the query, the store answers deterministically (R7: retrieval, not
-//! reasoning). No writes, no LLM calls.
+//! (`community`), fetch its scored related peers (`related`), or trace the
+//! shortest connection between two notes (`path`). It is a pure read executor
+//! over the existing `NoteStore` graph methods — the model writes the query, the
+//! store answers deterministically (R7: retrieval, not reasoning). No writes, no
+//! LLM calls.
 
 use crate::memory::notes::store::NoteStore;
 use crate::memory::store::MemoryBackend;
@@ -27,6 +28,9 @@ pub enum GraphOp {
     Community,
     /// Top related peers to `target` by the 5-signal relatedness score.
     Related,
+    /// Shortest connection path between `target` and `to` (both required),
+    /// walking edges in either direction up to `depth` hops.
+    Path,
 }
 
 /// Arguments for the `note_graph_query` tool.
@@ -35,10 +39,16 @@ pub struct NoteGraphQueryArgs {
     /// Which query to run.
     pub op: GraphOp,
     /// Note path (`category/name`) to center on. Required for `neighbors`,
-    /// `community`, and `related`; ignored for `schema`.
+    /// `community`, `related`, and `path` (the path source); ignored for
+    /// `schema`.
     #[serde(default)]
     pub target: Option<String>,
-    /// BFS depth for `neighbors` (1–3, default 1). Ignored by other ops.
+    /// Destination note path (`category/name`) for the `path` op. Required for
+    /// `path`; ignored by every other op.
+    #[serde(default)]
+    pub to: Option<String>,
+    /// BFS depth: `neighbors` (1–3, default 1) or `path` (1–6, default 2).
+    /// Ignored by other ops.
     #[serde(default)]
     pub depth: Option<u8>,
     /// Max results (default 20, capped at 200).
@@ -66,6 +76,18 @@ pub struct GraphEdge {
 pub struct RelatedPeer {
     pub path: String,
     pub score: f32,
+}
+
+/// One hop along a connection `path`: the walk moves `from` → `to`, connected
+/// by an edge labelled `relation` (a plain wikilink has no relation). The edge
+/// may be stored in either direction — `relation` names the connection, query
+/// the note itself for a typed relation's exact orientation.
+#[derive(Debug, Clone, Serialize)]
+pub struct PathHop {
+    pub from: String,
+    pub to: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relation: Option<String>,
 }
 
 /// Graph shape for the `schema` op.
@@ -118,8 +140,19 @@ pub struct NoteGraphQueryResult {
     /// `related` op scored peers.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub related: Vec<RelatedPeer>,
-    /// Cap advisory for paging ops (`neighbors`/`community`/`related`). Absent
-    /// for `schema` (which has no limit) and whenever no cap was in play.
+    /// `path` op: ordered hops from `target` to `to`. Empty when the two notes
+    /// are the same (self path) or when no path was found — read `path_found`
+    /// to disambiguate.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<PathHop>,
+    /// `path` op: whether a connection was found within `depth`. `Some(false)`
+    /// with `advisory.truncated == true` means "not found within the depth cap
+    /// — retry with a higher `depth`"; `Some(false)` with `truncated == false`
+    /// means the notes are provably disconnected in the reachable graph.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_found: Option<bool>,
+    /// Cap advisory for paging ops (`neighbors`/`community`/`related`) and the
+    /// depth advisory for `path`. Absent for `schema` (which has no limit).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub advisory: Option<QueryAdvisory>,
 }
@@ -140,10 +173,13 @@ impl NoteGraphQueryTool {
          `schema` introspects node categories, edge relation-types, and totals \
          (needs no target); `neighbors` returns the N-hop neighborhood around a \
          note path (depth 1–3); `community` lists notes in the same cluster; \
-         `related` returns the top related peers by relatedness score. Use it to \
-         discover how knowledge connects — before or instead of full-text search. \
-         Paging ops report an `advisory` with the applied limit/depth and a \
-         `truncated` flag so a capped result is never mistaken for a complete one.";
+         `related` returns the top related peers by relatedness score; `path` \
+         finds the shortest connection between `target` and `to` (both note \
+         paths, depth 1–6) — the ordered chain of notes/edges linking them, or \
+         `path_found:false` if unconnected within the depth. Use it to discover \
+         how knowledge connects — before or instead of full-text search. Paging \
+         ops report an `advisory` with the applied limit/depth and a `truncated` \
+         flag so a capped result is never mistaken for a complete one.";
 
     /// Create a new `NoteGraphQueryTool`.
     pub fn new(db: MemoryBackend, agent_id: impl Into<String>) -> Self {
@@ -267,6 +303,37 @@ impl NoteGraphQueryTool {
                     applied_depth: None,
                 });
             }
+            GraphOp::Path => {
+                let source = target()?;
+                let dest = args
+                    .to
+                    .as_deref()
+                    .filter(|t| !t.trim().is_empty())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("path op requires a `to` note path (\"category/name\")")
+                    })?;
+                let depth = args.depth.unwrap_or(2).clamp(1, 6);
+                let (found_path, truncated) = self
+                    .db
+                    .find_path(source, dest, agent, depth)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("find_path: {e}"))?;
+                result.path_found = Some(found_path.is_some());
+                if let Some(hops) = found_path {
+                    result.path = hops
+                        .into_iter()
+                        .map(|(from, to, relation)| PathHop { from, to, relation })
+                        .collect();
+                }
+                // `applied_limit` is not meaningful for `path` (no result cap);
+                // `truncated` here means the depth/visit cap was hit before
+                // reaching `to`, so a longer path may exist.
+                result.advisory = Some(QueryAdvisory {
+                    applied_limit: limit,
+                    truncated,
+                    applied_depth: Some(depth),
+                });
+            }
         }
         Ok(result)
     }
@@ -317,6 +384,7 @@ mod tests {
             .call_impl(NoteGraphQueryArgs {
                 op: GraphOp::Schema,
                 target: None,
+                to: None,
                 depth: None,
                 limit: None,
             })
@@ -344,6 +412,7 @@ mod tests {
             .call_impl(NoteGraphQueryArgs {
                 op: GraphOp::Neighbors,
                 target: Some("reference/alpha".to_string()),
+                to: None,
                 depth: Some(1),
                 limit: Some(10),
             })
@@ -369,6 +438,7 @@ mod tests {
             .call_impl(NoteGraphQueryArgs {
                 op: GraphOp::Neighbors,
                 target: Some("reference/alpha".to_string()),
+                to: None,
                 depth: Some(9),
                 limit: Some(500),
             })
@@ -387,10 +457,77 @@ mod tests {
             .call_impl(NoteGraphQueryArgs {
                 op: GraphOp::Neighbors,
                 target: None,
+                to: None,
                 depth: None,
                 limit: None,
             })
             .await;
         assert!(err.is_err(), "neighbors without a target must error");
+    }
+
+    #[tokio::test]
+    async fn path_finds_connection_between_notes() {
+        let db = backend();
+        seed(&db).await; // reference/alpha --[[beta]]--> learning/beta
+        let tool = NoteGraphQueryTool::new(db, "agent1");
+        let out = tool
+            .call_impl(NoteGraphQueryArgs {
+                op: GraphOp::Path,
+                target: Some("reference/alpha".to_string()),
+                to: Some("learning/beta".to_string()),
+                depth: Some(3),
+                limit: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.path_found, Some(true), "alpha and beta are linked");
+        assert!(!out.path.is_empty(), "path must contain the connecting hop");
+        // The walk starts at the source and ends at the destination.
+        assert_eq!(out.path.first().unwrap().from, "reference/alpha");
+        assert_eq!(out.path.last().unwrap().to, "learning/beta");
+        let adv = out.advisory.expect("path advisory populated");
+        assert_eq!(adv.applied_depth, Some(3));
+    }
+
+    #[tokio::test]
+    async fn path_reports_not_found_for_disconnected_target() {
+        let db = backend();
+        seed(&db).await;
+        // An indexed but unconnected note (no edges into alpha's component).
+        db.index_note(&note("gamma", "reference", &[]), "agent1", "reference")
+            .await
+            .unwrap();
+        let tool = NoteGraphQueryTool::new(db, "agent1");
+        let out = tool
+            .call_impl(NoteGraphQueryArgs {
+                op: GraphOp::Path,
+                target: Some("reference/alpha".to_string()),
+                to: Some("reference/gamma".to_string()),
+                depth: Some(3),
+                limit: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.path_found, Some(false), "gamma is disconnected");
+        assert!(out.path.is_empty());
+        // Fully explored within depth → not truncated → provably disconnected.
+        assert!(!out.advisory.unwrap().truncated);
+    }
+
+    #[tokio::test]
+    async fn path_without_to_errors() {
+        let db = backend();
+        seed(&db).await;
+        let tool = NoteGraphQueryTool::new(db, "agent1");
+        let err = tool
+            .call_impl(NoteGraphQueryArgs {
+                op: GraphOp::Path,
+                target: Some("reference/alpha".to_string()),
+                to: None,
+                depth: None,
+                limit: None,
+            })
+            .await;
+        assert!(err.is_err(), "path without a `to` must error");
     }
 }

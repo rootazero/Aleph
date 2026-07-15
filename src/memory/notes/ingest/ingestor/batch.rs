@@ -666,9 +666,9 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
         ops
     }
 
-    /// Run each `PageOp::Create` through `self.gate` and drop ops whose
-    /// outcome is `Defer` (already enqueued by the gate) or `Reject`. Other
-    /// op kinds pass through unchanged in this scoped commit; their gating
+    /// Run each `PageOp::Create` through `self.gate` and drop ops whose outcome
+    /// is `Defer` (already enqueued by the gate into `notes_review_queue`).
+    /// Other op kinds pass through unchanged in this scoped commit; their gating
     /// ships in a follow-up. Returns the filtered op vector.
     ///
     /// Caller must ensure `self.gate.is_some()` before invoking; if it is
@@ -692,14 +692,6 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                             reason = %reason,
                             note_path = %op.primary_path(),
                             "ingest deferred to review queue"
-                        );
-                    }
-                    GateOutcome::Reject { archive_id, reason } => {
-                        warn!(
-                            archive_id = %archive_id,
-                            reason = %reason,
-                            note_path = %op.primary_path(),
-                            "ingest rejected at gate"
                         );
                     }
                 },
