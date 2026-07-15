@@ -65,25 +65,6 @@ impl TurnStep {
     }
 }
 
-/// Identifies which sub-phase of a turn was hung when a per-turn timeout fired.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TurnPhase {
-    /// LLM `process()` call was hung. The only phase `turn_timeout` judges.
-    Think,
-    /// No longer produced: a tool's wall clock lives in the tool layer, below
-    /// the approval gate, and an overrun is a recoverable `ToolError::Timeout`.
-    Act { tool_name: String },
-}
-
-impl std::fmt::Display for TurnPhase {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Think => write!(f, "Think"),
-            Self::Act { tool_name } => write!(f, "Act({tool_name})"),
-        }
-    }
-}
-
 /// Harness-level errors.
 ///
 /// `ToolError` has named-field struct variants so `#[from]` is not usable;
@@ -109,14 +90,13 @@ pub enum HarnessError {
     /// The run loop was externally cancelled.
     #[error("cancelled")]
     Cancelled,
-    /// A Think phase exceeded `turn_timeout` (Act is not judged by it). The
+    /// The Think phase exceeded `turn_timeout` (Act is not judged by it — a
+    /// tool's wall clock lives in the tool layer as a recoverable
+    /// `ToolError::Timeout`, so Think is the only phase this error names). The
     /// cross-turn stall watchdog (`StallTracker`) does not raise an error — it
     /// sets `TerminateReason::StallTimeout` and exits with `hit_limit=true`.
-    #[error("turn stalled in {phase} after {elapsed:?}")]
-    StalledTurn {
-        phase: TurnPhase,
-        elapsed: std::time::Duration,
-    },
+    #[error("turn stalled in Think after {elapsed:?}")]
+    StalledTurn { elapsed: std::time::Duration },
 }
 
 impl From<AlephError> for HarnessError {
@@ -156,7 +136,7 @@ impl HarnessError {
 
 #[cfg(test)]
 mod harness_error_class_tests {
-    use super::{HarnessError, TurnPhase};
+    use super::HarnessError;
     use crate::error::{AlephError, ErrorClass};
 
     #[test]
@@ -167,7 +147,6 @@ mod harness_error_class_tests {
     #[test]
     fn stalled_turn_is_transient() {
         let e = HarnessError::StalledTurn {
-            phase: TurnPhase::Think,
             elapsed: std::time::Duration::from_secs(60),
         };
         assert_eq!(e.class(), ErrorClass::Transient);

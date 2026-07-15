@@ -40,8 +40,18 @@ impl AgentHarness {
                 Ok(ToolCallGuardOutcome::Pass)
             }
             crate::guardrails::GuardrailDecision::Sanitize(rep) => {
-                let new_args = serde_json::from_str(&rep.text)
-                    .unwrap_or_else(|_| Value::String(rep.text.clone()));
+                // On reparse failure, keep the model's original structured args
+                // rather than clobbering them into an opaque `Value::String` —
+                // a shape change (object → one string arg) is worse than an
+                // un-applied sanitize. (Deeper fix: guardrail carries a `Value`,
+                // not a `String`, so no reparse is needed.)
+                let new_args = match serde_json::from_str::<Value>(&rep.text) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(?session_id, tool = %call.name, source = %rep.source, error = %e, "sanitized tool-call args did not reparse as JSON; keeping original args");
+                        call.arguments.clone()
+                    }
+                };
                 tracing::info!(?session_id, tool = %call.name, source = %rep.source, "tool-call args sanitized");
                 Ok(ToolCallGuardOutcome::Sanitize(new_args))
             }

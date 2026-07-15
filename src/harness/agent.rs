@@ -480,8 +480,8 @@ impl crate::session::SessionDriver for AgentHarness {
                 HarnessError::Session(sess_err) => {
                     crate::error::AlephError::provider(format!("harness session error: {sess_err}"))
                 }
-                HarnessError::StalledTurn { phase, elapsed } => crate::error::AlephError::provider(
-                    format!("agent turn stalled in {phase} after {elapsed:?}"),
+                HarnessError::StalledTurn { elapsed } => crate::error::AlephError::provider(
+                    format!("agent turn stalled in Think after {elapsed:?}"),
                 ),
             })
     }
@@ -572,16 +572,15 @@ impl AgentHarness {
                 )
                 .await
             {
-                Err(HarnessError::StalledTurn { phase, elapsed }) => {
+                Err(HarnessError::StalledTurn { elapsed }) => {
                     tracing::warn!(
                         ?current_session,
-                        ?phase,
                         ?elapsed,
                         "per-turn timeout tripped; forcing Done with hit_limit",
                     );
                     self.hit_limit.store(true, Ordering::Relaxed);
                     self.set_terminate_reason(TerminateReason::TurnTimeout {
-                        phase: phase.to_string(),
+                        phase: "Think".into(),
                         elapsed_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
                     });
                     if tokio::time::timeout(
