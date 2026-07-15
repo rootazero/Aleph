@@ -59,6 +59,13 @@ pub fn render(frame: &mut Frame, state: &AppState, textarea: &TextArea) {
         tokens: state.total_tokens,
         is_connected: state.is_connected,
         tool_progress_mode: state.tool_progress_mode,
+        spinner_frame: state.spinner_frame,
+        // Only while a run is genuinely in flight (belt-and-suspenders: the
+        // timer is cleared at every run-end site, but gate on current_run too).
+        run_elapsed: state
+            .run_started_at
+            .filter(|_| state.current_run.is_some())
+            .map(|t| t.elapsed()),
     };
     status.render(frame, status_area);
 

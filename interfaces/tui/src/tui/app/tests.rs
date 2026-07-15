@@ -1,5 +1,7 @@
 use super::*;
-use aleph_protocol::{AgentTraceSessionOutcome, AgentTraceTextKind, StreamEvent};
+use aleph_protocol::{
+    AgentTraceEvent, AgentTraceReplay, AgentTraceSessionOutcome, AgentTraceTextKind, StreamEvent,
+};
 
 #[test]
 fn new_state_has_welcome_message() {
