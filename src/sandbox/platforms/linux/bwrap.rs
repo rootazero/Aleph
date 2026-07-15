@@ -987,7 +987,6 @@ mod tests {
         let policy = SandboxPolicy {
             process: ProcessPolicy {
                 allow_fork: true,
-                timeout_secs: 60,
                 max_memory_mb: None,
             },
             ..Default::default()

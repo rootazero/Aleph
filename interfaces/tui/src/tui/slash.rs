@@ -72,6 +72,9 @@ pub enum LocalCommand {
     Retry,
     /// Switch tool-progress display mode (None prints the current mode)
     Tools { mode: Option<ToolProgressMode> },
+    /// Set the session execution tier (None prints usage).
+    /// Values: `ask` | `auto` | `full` | `default` (follow global policy).
+    Tier { level: Option<String> },
     /// Browse and switch to another session (opens the session picker)
     Sessions,
 }
@@ -92,6 +95,7 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
     ("/undo", "Remove the last user+assistant turn from history"),
     ("/retry", "Undo + re-send the previous user message"),
     ("/tools", "Tool progress mode: off|new|all|verbose"),
+    ("/tier", "Set exec tier (tool-approval prompts): ask|auto|full"),
     ("/sessions", "Browse & switch session (alias: /resume)"),
     ("/replays", "List recent persisted trace replays"),
     ("/replay", "Load a persisted trace replay by task ID"),
@@ -149,6 +153,16 @@ pub fn parse_input(input: &str) -> ParsedInput {
                 _ => None,
             };
             ParsedInput::Local(LocalCommand::Tools { mode })
+        }
+        "/tier" => {
+            // Recognised tier → Some(...); anything else → None (handler prints
+            // usage), mirroring the `/tools` convention. The server re-validates
+            // the value on `sessions.patch`.
+            let level = match args.to_lowercase().as_str() {
+                "ask" | "auto" | "full" | "default" => Some(args.to_lowercase()),
+                _ => None,
+            };
+            ParsedInput::Local(LocalCommand::Tier { level })
         }
         "/sessions" | "/resume" => ParsedInput::Local(LocalCommand::Sessions),
         "/replays" => ParsedInput::Local(LocalCommand::ReplayList),
@@ -323,10 +337,43 @@ mod tests {
     }
 
     #[test]
+    fn parse_tier_command() {
+        assert_eq!(
+            parse_input("/tier"),
+            ParsedInput::Local(LocalCommand::Tier { level: None })
+        );
+        assert_eq!(
+            parse_input("/tier ask"),
+            ParsedInput::Local(LocalCommand::Tier {
+                level: Some("ask".to_string())
+            })
+        );
+        // Case-insensitive, like the other arms.
+        assert_eq!(
+            parse_input("/tier FULL"),
+            ParsedInput::Local(LocalCommand::Tier {
+                level: Some("full".to_string())
+            })
+        );
+        assert_eq!(
+            parse_input("/tier default"),
+            ParsedInput::Local(LocalCommand::Tier {
+                level: Some("default".to_string())
+            })
+        );
+        // Unrecognised arg → None (handler prints usage), mirroring /tools.
+        assert_eq!(
+            parse_input("/tier bogus"),
+            ParsedInput::Local(LocalCommand::Tier { level: None })
+        );
+    }
+
+    #[test]
     fn local_commands_returns_catalog() {
         let cmds = local_commands();
-        assert_eq!(cmds.len(), 13);
+        assert_eq!(cmds.len(), 14);
         assert!(cmds.iter().any(|(name, _)| *name == "/clear"));
+        assert!(cmds.iter().any(|(name, _)| *name == "/tier"));
         assert!(cmds.iter().any(|(name, _)| *name == "/sessions"));
         assert!(cmds.iter().any(|(name, _)| *name == "/quit"));
         assert!(cmds.iter().any(|(name, _)| *name == "/usage"));

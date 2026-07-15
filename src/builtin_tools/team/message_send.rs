@@ -226,7 +226,6 @@ mod tests {
             event_store,
             EscalationRule {
                 thread_message_threshold: 1000,
-                review_reject_threshold: 1000,
                 enabled: false,
             },
             None,

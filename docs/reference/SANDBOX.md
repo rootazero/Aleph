@@ -346,7 +346,13 @@ for the full design.
   - **Windows**: `JOBOBJECT_EXTENDED_LIMIT_INFORMATION.ProcessMemoryLimit` on
     the Job Object that contains the sandboxed process.
 - **`SandboxCapabilities.timeout_secs`** is a per-call override of the
-  `SandboxConfig.default_timeout_seconds` ceiling.
+  `SandboxConfig.default_timeout_seconds` ceiling, enforced as the
+  `WorkspaceSandbox::execute` wall-clock timeout. Precedence, most-specific
+  first: an explicit `SandboxCommand.timeout` > `capabilities.timeout_secs` >
+  the configured default. `capabilities.timeout_secs` is the only timeout
+  carrier — the internal `ProcessPolicy` no longer holds a `timeout_secs`
+  field, so no OS-profile timeout is derived or serialized; the
+  `WorkspaceSandbox` wall-clock is the sole enforcement point.
 
 ### Dissolution — 937 lines of dead Windows code removed
 

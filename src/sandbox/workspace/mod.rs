@@ -272,7 +272,39 @@ impl Sandbox for WorkspaceSandbox {
                         } else {
                             denial_ledger::DenialReason::UserRejected
                         };
-                        denial_ledger::global().record_denial(&led_key, &fingerprint, reason_kind);
+                        // Capture the circuit-breaker trip edge and mirror the
+                        // tool-confirm gate's anti-reference-bypass purge: when
+                        // this refusal is the one that crosses the brute-force
+                        // denial threshold, wipe THIS session's offloaded
+                        // tool-result cache so a now-paused adversarial session
+                        // cannot mine results cached under an earlier, more
+                        // permissive moment via `ctx_search` / `read_file`. Both
+                        // gates share one session bucket (same `led_key`), so the
+                        // breaker can trip here too; the sandbox layer holds no
+                        // injected `result_store`, so it purges via the
+                        // process-global one — `led_key` is the read path's scope
+                        // string byte-for-byte.
+                        let just_paused = denial_ledger::global().record_denial(
+                            &led_key,
+                            &fingerprint,
+                            reason_kind,
+                        );
+                        if just_paused {
+                            if let Some(store) =
+                                crate::tools::result_store::global_tool_result_store()
+                            {
+                                crate::tools::result_store::ToolResultStore::for_session(
+                                    &store,
+                                    led_key.as_str(),
+                                )
+                                .purge_all();
+                                tracing::warn!(
+                                    session = %led_key,
+                                    "denial circuit-breaker tripped at elevation gate — \
+                                     purged offloaded tool-result cache (anti-reference-bypass)"
+                                );
+                            }
+                        }
                         return Err(SandboxError::CapabilityDenied {
                             reason: format!(
                                 "user denied elevated capability request. {}",
@@ -328,7 +360,16 @@ impl Sandbox for WorkspaceSandbox {
                 .or_insert_with(|| "1".to_string());
         }
 
-        let timeout = cmd.timeout.unwrap_or(self.default_timeout);
+        // Effective wall-clock timeout, most-specific first: an explicit
+        // per-command `timeout` wins; else the capability-level `timeout_secs`
+        // override (the documented per-call ceiling); else the sandbox-wide
+        // default. This is the single authoritative timeout for execution:
+        // `SandboxCapabilities.timeout_secs` is the only timeout carrier — no
+        // OS-profile timeout is derived or enforced.
+        let timeout = cmd
+            .timeout
+            .or_else(|| cmd.capabilities.timeout_secs.map(Duration::from_secs))
+            .unwrap_or(self.default_timeout);
         let mut output = self
             .os_driver
             .run(
@@ -966,6 +1007,61 @@ mod tests {
             Some(denial_ledger::DenialReason::RepeatedSameIntent),
             "the confirm gate must see the refusal the elevation gate recorded — \
              if this is None, the two gates are keying the ledger differently again"
+        );
+    }
+
+    /// The denial circuit-breaker must be reachable at the ELEVATION gate, not
+    /// only the confirm gate — both increment one shared per-session counter.
+    /// Three distinct elevation refusals must pause the session, which is the
+    /// precondition for the anti-reference-bypass tool-result purge this gate now
+    /// fires on the trip edge. (The `purge_all` mechanics themselves are covered
+    /// in `tools::result_store`; the process-global store makes a deterministic
+    /// purge assertion order-dependent here, so we pin the reachable trip
+    /// instead.)
+    #[tokio::test]
+    async fn three_distinct_elevation_denials_trip_the_session_breaker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeDriver::new());
+        let sandbox = build_sandbox(
+            &tmp,
+            driver,
+            build_gate_with(ApprovalOutcome::Denied),
+            SandboxHooks::new(),
+        );
+        let elevated = SandboxCapabilities {
+            network: NetworkPolicy::AllowAll,
+            ..SandboxCapabilities::strict()
+        };
+        let session = sid();
+        // Three DISTINCT intents (different program → different fingerprint), so
+        // each is a fresh denial that advances the session-wide denial counter.
+        for program in ["curl", "wget", "nc"] {
+            let _ = sandbox
+                .execute(SandboxCommand {
+                    session_id: session.clone(),
+                    program: program.into(),
+                    args: vec!["https://example.com".into()],
+                    env: HashMap::new(),
+                    stdin: None,
+                    cwd: None,
+                    capabilities: elevated.clone(),
+                    timeout: None,
+                })
+                .await
+                .expect_err("each elevation is denied");
+        }
+        // A brand-new, never-denied intent is now auto-refused: the breaker
+        // tripped at the elevation gate (pause outranks per-intent state).
+        let fresh = denial_ledger::action_fingerprint(
+            "totally-new-program",
+            &format_capability_summary("totally-new-program", &elevated.normalized()),
+        );
+        assert_eq!(
+            denial_ledger::global()
+                .is_blocked(&denial_ledger::ledger_key(&session), &fresh),
+            Some(denial_ledger::DenialReason::ThresholdExceeded),
+            "3 distinct elevation denials must pause the session — the breaker is \
+             reachable at the elevation gate, so the trip-edge purge can fire here"
         );
     }
 

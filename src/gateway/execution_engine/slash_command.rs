@@ -34,6 +34,22 @@ pub(crate) fn is_shorthand_alias(name: &str) -> bool {
     SHORTHAND_ALIASES.iter().any(|(alias, _)| *alias == name)
 }
 
+/// Continuation-driven slash tools (`/loop`, `/goal`) that must NOT take the
+/// L0 direct-tool fast path on ANY surface.
+///
+/// The fast path returns before the post-run continuation hook, so a loop
+/// started (or goal set) through it registers its state but its first tick /
+/// first pursuit is never scheduled — a silent stall on the surface that used
+/// it. Both the Panel/CLI resolver (`try_resolve_slash_command`) and the
+/// channel router (`serialize_parsed_command`) consult this single source so
+/// the exclusion can never drift between surfaces — the drift that this fixes
+/// was exactly that: only the resolver excluded them, so a channel `/loop`
+/// stalled. `moa` is excluded for a different, surface-specific reason (its
+/// one-shot form is intercepted earlier) and is handled inline where relevant.
+pub(crate) fn is_continuation_driven_slash(name: &str) -> bool {
+    matches!(name, "loop" | "goal")
+}
+
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
     /// Try to resolve a `/command args` input to a slash command mode JSON.
     ///
@@ -79,7 +95,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // runs). A bare `/moa` (no prompt) falls through so the LLM maps it
         // onto the tool's structured action schema instead of the fast
         // path's generic arg mapping.
-        if cmd_name == "loop" || cmd_name == "goal" || cmd_name == "moa" {
+        if is_continuation_driven_slash(&cmd_name) || cmd_name == "moa" {
             return None;
         }
 

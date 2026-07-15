@@ -130,10 +130,6 @@ pub struct AgentCreateArgs {
     #[serde(default)]
     #[schemars(skip)]
     pub input: Option<String>,
-    /// Injected by registry — session channel (internal, hidden from LLM schema)
-    #[serde(default)]
-    #[schemars(skip)]
-    pub __channel: String,
 }
 
 /// Output from agent creation.

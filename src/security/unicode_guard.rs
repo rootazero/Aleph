@@ -12,11 +12,11 @@
 //!   keyword (`ig<ZWSP>nore previous instructions`) so substring scanners miss
 //!   it while the model still reads the intended phrase.
 //!
-//! This module is the single source of truth for that classification. The
-//! external-content sanitizer (`crate::security::content_sanitizer`) defers to
-//! it so its defense cannot drift from this catalog. (Sandbox command *output*
-//! neutralizes a narrower, byte-level set of these sequences in
-//! `crate::sandbox::scrub::strip_unsafe_invisible`.)
+//! This module is the single source of truth for that classification. Both the
+//! external-content sanitizer (`crate::security::content_sanitizer`) and the
+//! sandbox command-output floor (`crate::sandbox::scrub::strip_unsafe_invisible`,
+//! the byte-path twin) defer to it, so neither defense can drift from this
+//! catalog.
 
 /// Returns true if the character is an invisible or directional-formatting
 /// character that has no place in untrusted input.

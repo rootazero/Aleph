@@ -47,8 +47,6 @@ pub enum NetworkPolicy {
 pub struct ProcessPolicy {
     /// Whether subprocess spawning (fork/exec) is permitted.
     pub allow_fork: bool,
-    /// Hard timeout in seconds.
-    pub timeout_secs: u64,
     /// Optional memory limit in megabytes.
     pub max_memory_mb: Option<u64>,
 }
@@ -65,14 +63,13 @@ pub enum EnvPolicy {
 }
 
 impl Default for SandboxPolicy {
-    /// Strict defaults: workspace-only FS, no network, no fork, 60s timeout.
+    /// Strict defaults: workspace-only FS, no network, no fork.
     fn default() -> Self {
         Self {
             filesystem: FsPolicy::WorkspaceOnly,
             network: NetworkPolicy::None,
             process: ProcessPolicy {
                 allow_fork: false,
-                timeout_secs: 60,
                 max_memory_mb: None,
             },
             environment: EnvPolicy::Minimal,
@@ -101,7 +98,6 @@ impl From<&SandboxCapabilities> for SandboxPolicy {
 
         let process = ProcessPolicy {
             allow_fork: caps.spawn_subprocess,
-            timeout_secs: caps.timeout_secs.unwrap_or(60),
             max_memory_mb: caps.max_memory_mb,
         };
 
@@ -124,7 +120,6 @@ mod tests {
         assert_eq!(policy.filesystem, FsPolicy::WorkspaceOnly);
         assert_eq!(policy.network, NetworkPolicy::None);
         assert!(!policy.process.allow_fork);
-        assert_eq!(policy.process.timeout_secs, 60);
         assert_eq!(policy.process.max_memory_mb, None);
         assert_eq!(policy.environment, EnvPolicy::Minimal);
     }
@@ -221,7 +216,6 @@ mod tests {
         };
         let policy = SandboxPolicy::from(&caps);
         assert!(policy.process.allow_fork);
-        assert_eq!(policy.process.timeout_secs, 60);
         assert_eq!(policy.process.max_memory_mb, None);
     }
 
@@ -255,22 +249,5 @@ mod tests {
         };
         let policy = SandboxPolicy::from(&caps);
         assert_eq!(policy.process.max_memory_mb, Some(256));
-    }
-
-    #[test]
-    fn from_caps_threads_timeout_override() {
-        let caps = SandboxCapabilities {
-            timeout_secs: Some(15),
-            ..Default::default()
-        };
-        let policy = SandboxPolicy::from(&caps);
-        assert_eq!(policy.process.timeout_secs, 15);
-    }
-
-    #[test]
-    fn from_caps_timeout_defaults_to_60_when_none() {
-        let caps = SandboxCapabilities::default();
-        let policy = SandboxPolicy::from(&caps);
-        assert_eq!(policy.process.timeout_secs, 60);
     }
 }

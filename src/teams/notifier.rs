@@ -232,9 +232,10 @@ impl EventHandler for TeamNotifier {
                     )
                     .await;
                 }
-            // TeamNotifier subscribes exclusively to TeamTaskCompleted and
-            // TeamTaskFailed (see `subscriptions()`). All other event variants
-            // that reach this handler are intentionally ignored.
+            // TeamNotifier subscribes to TeamTaskCompleted, TeamTaskFailed, and
+            // TeamTaskUpdated (see `subscriptions()`); only the "waiting_review"
+            // transition of the last is acted on. Every other event variant or
+            // status that reaches this handler is intentionally ignored.
             _ => {}
         }
         Ok(vec![])

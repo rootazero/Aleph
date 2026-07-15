@@ -2,19 +2,18 @@
 //
 // Contains all state types (AppState, ChatMessage, Action, Focus, etc.)
 // and the gateway event handler that maps StreamEvent -> state mutations.
+// The two projection paths live in sibling modules: `events` (StreamEvent ->
+// state) and `trace` (AgentTraceEvent -> state).
 
 mod events;
+mod trace;
 
 #[cfg(test)]
 mod tests;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use aleph_protocol::{
-    present_agent_trace_event_with_preset, summarize_tool_input, AgentTraceEvent,
-    AgentTracePresentation, AgentTracePresentationPreset, AgentTraceReplay, AgentTraceTextKind,
-    AgentTraceToolResult, RunSummary,
-};
+use aleph_protocol::RunSummary;
 use chrono::{DateTime, Utc};
 
 use super::command_tree::{CommandEntry, DisplayEntry};
@@ -82,6 +81,11 @@ pub enum Action {
     /// Respond to an `AskUser` dialog
     RespondToDialog { run_id: String, choice: String },
 
+    // -- Tool approval (Ask exec tier) --
+    /// Resolve the pending tool-approval overlay by option index into
+    /// `APPROVAL_DECISIONS` (0 = allow once, 1 = allow session, 2 = deny).
+    ResolveApproval { index: usize },
+
     // -- Session picker --
     /// Move session-picker selection up
     SessionPickerUp,
@@ -103,6 +107,7 @@ pub enum Focus {
     CommandPalette,
     Dialog,
     SessionPicker,
+    Approval,
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +169,31 @@ pub struct DialogState {
     pub selected: usize,
 }
 
+/// Decision options for the tool-approval overlay, in display order. Each is
+/// `(label, wire_decision)`; the wire value is exactly what
+/// `exec.approval.resolve` expects (kebab-case, server-validated).
+pub const APPROVAL_DECISIONS: [(&str, &str); 3] = [
+    ("Allow once", "allow-once"),
+    ("Allow for session", "allow-session"),
+    ("Deny", "deny"),
+];
+
+/// State for the tool-execution approval overlay (Ask exec tier). A parked
+/// server run is waiting on `exec.approval.resolve` for this `id`. Kept
+/// deliberately separate from [`DialogState`] (AskUser) so a security decision
+/// can never be routed to `agent.respondToInput` by mistake.
+#[derive(Debug, Clone)]
+pub struct ApprovalState {
+    /// Approval id — the resolve key. Never shown to the user.
+    pub id: String,
+    /// Human-readable action being gated (the tool/command summary).
+    pub command: String,
+    /// Why the gate fired, when the server supplied a reason.
+    pub reason: Option<String>,
+    /// Highlighted decision index into [`APPROVAL_DECISIONS`].
+    pub selected: usize,
+}
+
 /// State for the command palette overlay.
 #[derive(Debug, Clone)]
 pub struct PaletteState {
@@ -215,10 +245,19 @@ pub struct AppState {
     pub session_key: String,
     pub model_name: String,
     pub total_tokens: u64,
+    /// Live context-window occupancy `(used_tokens, window_tokens)` from the
+    /// latest `ContextGauge` event. `None` until the session's first gauge
+    /// arrives. The pair always travels together (one event), so a single
+    /// `Option` keeps the half-known state unrepresentable; the denominator is
+    /// server-authoritative per model.
+    pub context_gauge: Option<(u32, u32)>,
     pub is_connected: bool,
 
     // -- Run tracking --
     pub current_run: Option<String>,
+    /// Wall-clock start of the active run (set on `RunAccepted`, cleared on any
+    /// run-end). Drives the status-bar working indicator's elapsed timer.
+    pub run_started_at: Option<Instant>,
     pub last_run_duration: Option<Duration>,
     pub current_run_uses_agent_trace: bool,
     pub current_run_trace_summary_applied: bool,
@@ -235,6 +274,10 @@ pub struct AppState {
     pub dialog: Option<DialogState>,
     pub palette: Option<PaletteState>,
     pub session_picker: Option<SessionPickerState>,
+    /// Pending tool-approval overlay (Ask exec tier), if one is being shown.
+    /// Surfaced by the `exec.approvals.pending` poll, resolved via
+    /// `exec.approval.resolve`.
+    pub approval: Option<ApprovalState>,
 
     // -- Control --
     pub ctrl_c_count: u8,
@@ -259,9 +302,11 @@ impl AppState {
             session_key,
             model_name,
             total_tokens: 0,
+            context_gauge: None,
             is_connected: true,
 
             current_run: None,
+            run_started_at: None,
             last_run_duration: None,
             current_run_uses_agent_trace: false,
             current_run_trace_summary_applied: false,
@@ -274,6 +319,7 @@ impl AppState {
             dialog: None,
             palette: None,
             session_picker: None,
+            approval: None,
 
             ctrl_c_count: 0,
             spinner_frame: 0,
@@ -490,6 +536,7 @@ impl AppState {
         self.palette = None;
         self.dialog = None;
         self.session_picker = None;
+        self.approval = None;
         self.focus = Focus::Input;
     }
 
@@ -544,16 +591,54 @@ impl AppState {
         self.focus = Focus::Dialog;
     }
 
+    /// Surface the tool-approval overlay for a pending, session-owned approval
+    /// and steal focus so the parked run gets a decision. The caller
+    /// (`commands::poll_approvals`) has already confirmed the `id` belongs to
+    /// this session.
+    pub fn open_approval(&mut self, id: String, command: String, reason: Option<String>) {
+        self.approval = Some(ApprovalState {
+            id,
+            command,
+            reason,
+            selected: 0,
+        });
+        self.focus = Focus::Approval;
+    }
+
+    /// Retract the approval overlay (resolved here, resolved elsewhere, or the
+    /// server-side approval expired) and return focus to input.
+    pub fn close_approval(&mut self) {
+        self.approval = None;
+        self.focus = Focus::Input;
+    }
+
+    /// Drop a showing approval overlay when its run ends by any path (complete,
+    /// error, cancel, session-complete). No-op when none is showing, so focus is
+    /// reset only in the case where the modal was actually up (and thus held
+    /// focus). Needed because the pending-approval poll runs only while a run is
+    /// active — once the run ends it can no longer retract a stale overlay.
+    pub(crate) fn dismiss_pending_approval(&mut self) {
+        if self.approval.is_some() {
+            self.close_approval();
+        }
+    }
+
     /// Switch to a different session and reset transient chat/run UI state.
     /// The caller then appends the fetched `chat.history` transcript.
     pub fn switch_session(&mut self, session_key: &str) {
         self.session_key = session_key.to_string();
         self.messages.clear();
         self.current_run = None;
+        self.run_started_at = None;
         self.current_run_uses_agent_trace = false;
         self.current_run_trace_summary_applied = false;
+        // New session = different context window; drop the stale gauge until
+        // the next run's first `ContextGauge` refreshes it.
+        self.context_gauge = None;
         self.dialog = None;
         self.palette = None;
+        // Any approval prompt belonged to the old session's run; drop it.
+        self.approval = None;
         self.focus = Focus::Input;
         self.scroll_to_bottom();
         self.add_system_message(format!("Switched to session {session_key}"));
@@ -577,236 +662,5 @@ impl AppState {
     /// Update token usage from a `RunSummary`.
     pub const fn update_token_usage(&mut self, summary: &RunSummary) {
         self.total_tokens = self.total_tokens.saturating_add(summary.total_tokens);
-    }
-
-    fn append_reasoning_entry(&mut self, content: String) {
-        self.ensure_assistant_message();
-        if let ChatMessage::Assistant { reasoning, .. } = self.current_assistant_mut() {
-            match reasoning {
-                Some(existing) if !existing.is_empty() => {
-                    existing.push('\n');
-                    existing.push_str(&content);
-                }
-                Some(existing) => existing.push_str(&content),
-                None => *reasoning = Some(content),
-            }
-        }
-    }
-
-    fn append_assistant_content(&mut self, content: &str) {
-        if content.is_empty() {
-            return;
-        }
-
-        self.ensure_assistant_message();
-        if let ChatMessage::Assistant {
-            content: msg_content,
-            ..
-        } = self.current_assistant_mut()
-        {
-            msg_content.push_str(content);
-        }
-    }
-
-    fn start_tool_execution(&mut self, tool_id: String, tool_name: String, params: String) {
-        self.ensure_assistant_message();
-        if let Some(tool) = self.find_tool_mut(&tool_id) {
-            tool.name = tool_name;
-            tool.params = params;
-            tool.status = ToolStatus::Running;
-            tool.duration = None;
-            tool.progress = None;
-            tool.error = None;
-            return;
-        }
-
-        if let ChatMessage::Assistant { tools, .. } = self.current_assistant_mut() {
-            tools.push(ToolExecution {
-                id: tool_id,
-                name: tool_name,
-                params,
-                status: ToolStatus::Running,
-                duration: None,
-                progress: None,
-                error: None,
-            });
-        }
-    }
-
-    fn finish_tool_execution(
-        &mut self,
-        tool_id: &str,
-        result: &AgentTraceToolResult,
-        duration_ms: u64,
-    ) {
-        if let Some(tool) = self.find_tool_mut(tool_id) {
-            tool.status = if result.is_success() {
-                ToolStatus::Success
-            } else {
-                ToolStatus::Failed
-            };
-            tool.duration = Some(Duration::from_millis(duration_ms));
-            tool.error = result.error_text().map(ToOwned::to_owned);
-            tool.progress = None;
-        }
-    }
-
-    fn mark_current_assistant_complete(&mut self) {
-        if let Some(ChatMessage::Assistant { is_streaming, .. }) = self
-            .messages
-            .iter_mut()
-            .rev()
-            .find(|m| matches!(m, ChatMessage::Assistant { .. }))
-        {
-            *is_streaming = false;
-        }
-    }
-
-    fn update_total_tokens_from_trace(&mut self, total_tokens: usize) {
-        let bounded = u64::try_from(total_tokens).unwrap_or(u64::MAX);
-        self.total_tokens = self.total_tokens.saturating_add(bounded);
-    }
-
-    fn default_trace_presentation(event: &AgentTraceEvent) -> Option<AgentTracePresentation> {
-        present_agent_trace_event_with_preset(event, AgentTracePresentationPreset::TuiDebug)
-    }
-
-    fn append_trace_debug_entry(
-        &mut self,
-        event: &AgentTraceEvent,
-        presentation: &AgentTracePresentation,
-    ) {
-        match event {
-            // TextEmitted carries the model's verbatim output. Feed the raw
-            // text into the user-facing message — the debug presentation would
-            // prefix it with "[Final text] iter N:" decoration meant only for
-            // a trace/debug panel, not the primary chat content.
-            AgentTraceEvent::TextEmitted { stream, text, .. } => match stream {
-                AgentTraceTextKind::Intermediate => self.append_reasoning_entry(text.clone()),
-                AgentTraceTextKind::Final => self.append_assistant_content(text),
-            },
-            // ToolSummary carries an agent-authored summary sentence — use it
-            // verbatim instead of the "Tool summary: " decorated form.
-            AgentTraceEvent::ToolSummary { summary, .. } => {
-                self.append_reasoning_entry(summary.clone());
-            }
-            AgentTraceEvent::TurnStarted { .. }
-            | AgentTraceEvent::TurnStateEntered { .. }
-            | AgentTraceEvent::TurnCompleted { .. }
-            | AgentTraceEvent::SessionCompleted { .. }
-            // Goal-loop watchdog veto: surface the interception reason (the
-            // presentation renders "checklist incomplete — …") so the user
-            // sees why the run was forced to continue.
-            | AgentTraceEvent::VerifierVeto { .. } => {
-                self.append_reasoning_entry(presentation.content.clone());
-            }
-            // Tool-call lifecycle is rendered by ToolStart/ToolEnd gateway events;
-            // observability passthrough variants have no TUI rendering.
-            AgentTraceEvent::ToolCallStarted { .. }
-            | AgentTraceEvent::ToolCallCompleted { .. }
-            | AgentTraceEvent::WorktreeCreated { .. }
-            | AgentTraceEvent::WorktreeCleanedUp { .. }
-            | AgentTraceEvent::McpScopeAttached { .. }
-            | AgentTraceEvent::McpScopeCleaned { .. }
-            | AgentTraceEvent::ProviderUsage { .. }
-            | AgentTraceEvent::ReactiveCompactionAttempted { .. }
-            // MoaTurnTrace is persisted-only (no live wire, no TUI replay).
-            | AgentTraceEvent::MoaTurnTrace { .. } => {}
-            // MoA fan-out moments render as reasoning entries — presentation
-            // already carries the error/cached/billed forms (round-2 W2).
-            AgentTraceEvent::MoaAdvisor { .. }
-            | AgentTraceEvent::MoaAggregating { .. }
-            | AgentTraceEvent::MoaAdvisorSpend { .. } => {
-                self.append_reasoning_entry(presentation.content.clone());
-            }
-        }
-    }
-
-    fn apply_agent_trace_event(&mut self, event: &AgentTraceEvent) -> Action {
-        let presentation = Self::default_trace_presentation(event);
-        if let Some(presentation) = &presentation {
-            self.append_trace_debug_entry(event, presentation);
-        }
-
-        match event {
-            AgentTraceEvent::TextEmitted { .. } => Action::ScrollToBottomIfAutoScroll,
-            AgentTraceEvent::ToolCallStarted { call, .. } => {
-                self.start_tool_execution(
-                    call.tool_id.clone(),
-                    call.tool_name.clone(),
-                    summarize_tool_input(
-                        &call.input,
-                        AgentTracePresentationPreset::TuiDebug.options(),
-                    ),
-                );
-                Action::ScrollToBottomIfAutoScroll
-            }
-            AgentTraceEvent::ToolCallCompleted { call, result, .. } => {
-                self.finish_tool_execution(&call.tool_id, result, call.duration_ms);
-                Action::ScrollToBottomIfAutoScroll
-            }
-            AgentTraceEvent::ToolSummary { summary, .. } => {
-                let _ = summary;
-                Action::ScrollToBottomIfAutoScroll
-            }
-            AgentTraceEvent::SessionCompleted {
-                total_tokens,
-                final_text,
-                ..
-            } => {
-                if let Some(text) = final_text {
-                    let needs_final_text = !matches!(
-                        self.messages.iter().rev().find_map(|msg| match msg {
-                            ChatMessage::Assistant { content, .. } => Some(!content.is_empty()),
-                            _ => None,
-                        }),
-                        Some(true)
-                    );
-
-                    if needs_final_text {
-                        self.append_assistant_content(text);
-                    }
-                }
-
-                if !self.current_run_trace_summary_applied {
-                    self.update_total_tokens_from_trace(*total_tokens);
-                    self.current_run_trace_summary_applied = true;
-                }
-                self.current_run = None;
-                self.current_run_uses_agent_trace = false;
-                self.mark_current_assistant_complete();
-                Action::ScrollToBottomIfAutoScroll
-            }
-            _ => Action::None,
-        }
-    }
-
-    pub fn load_trace_replay(&mut self, replay: &AgentTraceReplay) {
-        let summary = format!(
-            "Loaded replay {} from session {} [{}] via {}.",
-            replay.task.task_id, replay.task.session_id, replay.task.status, replay.task.agent_id
-        );
-
-        self.messages.clear();
-        self.current_run = Some(replay.task.task_id.clone());
-        self.current_run_uses_agent_trace = true;
-        self.dialog = None;
-        self.palette = None;
-        self.focus = Focus::Input;
-        self.scroll_to_bottom();
-        self.add_system_message(summary);
-
-        for trace in &replay.traces {
-            let _ = self.apply_agent_trace_event(&trace.event);
-        }
-
-        if replay.traces.is_empty() {
-            self.add_system_message("Replay has no structured trace events.".to_string());
-        }
-
-        self.current_run = None;
-        self.current_run_uses_agent_trace = false;
-        self.current_run_trace_summary_applied = false;
-        self.mark_current_assistant_complete();
     }
 }

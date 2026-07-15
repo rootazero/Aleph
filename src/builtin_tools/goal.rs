@@ -576,6 +576,24 @@ token_budget. \
                 if let Some(lesson) = args.lesson.clone() {
                     goal = goal.with_lesson_appended(lesson, now);
                 }
+                // Honest report on a resume that cannot actually take — checked
+                // BEFORE persisting. Re-activating a goal whose binding limit is
+                // still spent leaves it Active for exactly one hook, which
+                // re-Blocks it and pushes a bewildering "⏹ cap reached" to the
+                // user's channel — the exact outcome this branch exists to prevent.
+                // Committing first defeated that: the store then held an Active,
+                // cap-spent goal the next `post_run` re-Blocked (and cleared its
+                // welded plan). Reject before the write so nothing is persisted;
+                // `continuations_used` is store-owned and preserved by
+                // `commit_field_update`, so evaluating it here is check-equivalent
+                // and only drops the spurious Active write. Names the parameter
+                // that would fix it (loop's pre-commit-validation honesty parity).
+                if let Some(blocker) = inert_resume_reason(&goal, now) {
+                    return Ok(GoalOutput {
+                        success: false,
+                        message: format!("{blocker} {}", Self::render(&goal, now)),
+                    });
+                }
                 // Atomic commit: re-reads the LIVE `pending_continuation_ms` under
                 // the store lock and keeps it, so a tool update landing while a
                 // claimed continuation fires cannot restore a stale marker (which
@@ -588,17 +606,6 @@ token_budget. \
                         message: "The standing goal was cleared while this update ran — \
                                   nothing to update. Set a new goal if you still need one."
                             .to_string(),
-                    });
-                }
-                // Honest report on a resume that cannot actually take: re-activating
-                // a goal whose binding limit is still spent leaves it Active for
-                // exactly one hook, which re-Blocks it and pushes a bewildering
-                // "⏹ cap reached" to the user's channel. Say so instead, and name
-                // the parameter that would fix it (loop's honesty parity).
-                if let Some(blocker) = inert_resume_reason(&goal, now) {
-                    return Ok(GoalOutput {
-                        success: false,
-                        message: format!("{blocker} {}", Self::render(&goal, now)),
                     });
                 }
                 // Clear the welded plan on a tool-owned authoritative termination

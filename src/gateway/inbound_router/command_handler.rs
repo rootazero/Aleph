@@ -55,6 +55,20 @@ pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
 pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Option<String> {
     use crate::command::CommandContext;
 
+    // Continuation-driven builtins (`/loop`, `/goal`) must fall through to the
+    // full agent loop, NOT the direct-tool fast path: the fast path returns
+    // before the post-run continuation hook that schedules the loop's first
+    // tick / the goal's first pursuit, so serializing them here registers the
+    // state but silently stalls it. Returning None skips SLASH_COMMAND_MODE and
+    // routes the raw `/loop …` text through normal agent execution, where the
+    // completion hook claims tick 1. Single-sourced with the Panel/CLI resolver
+    // via `is_continuation_driven_slash` so the two surfaces cannot drift.
+    if let CommandContext::Builtin { tool_name } = &parsed.context {
+        if crate::gateway::execution_engine::is_continuation_driven_slash(tool_name) {
+            return None;
+        }
+    }
+
     let args = parsed.arguments.as_deref().unwrap_or("");
     let value = match &parsed.context {
         CommandContext::Skill {

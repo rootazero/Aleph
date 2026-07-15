@@ -12,7 +12,7 @@ use crate::tui::app::{AppState, Focus};
 use crate::tui::widgets::{
     chat_area::render_chat_area,
     command_palette::render_command_palette,
-    dialog::render_dialog,
+    dialog::{render_approval, render_dialog},
     input_area::{input_height, InputWidget},
     session_picker::render_session_picker,
     status_bar::StatusBar,
@@ -57,8 +57,16 @@ pub fn render(frame: &mut Frame, state: &AppState, textarea: &TextArea) {
         model: &state.model_name,
         session: &state.session_key,
         tokens: state.total_tokens,
+        context_gauge: state.context_gauge,
         is_connected: state.is_connected,
         tool_progress_mode: state.tool_progress_mode,
+        spinner_frame: state.spinner_frame,
+        // Only while a run is genuinely in flight (belt-and-suspenders: the
+        // timer is cleared at every run-end site, but gate on current_run too).
+        run_elapsed: state
+            .run_started_at
+            .filter(|_| state.current_run.is_some())
+            .map(|t| t.elapsed()),
     };
     status.render(frame, status_area);
 
@@ -71,5 +79,9 @@ pub fn render(frame: &mut Frame, state: &AppState, textarea: &TextArea) {
     }
     if let Some(dialog) = &state.dialog {
         render_dialog(frame, dialog, frame.area());
+    }
+    // Approval overlay renders above everything — a parked run is waiting on it.
+    if let Some(approval) = &state.approval {
+        render_approval(frame, approval, frame.area());
     }
 }

@@ -121,9 +121,18 @@ pub(super) fn session_is_interruptible(session_key: &SessionKey) -> bool {
     run_is_interruptible(has_active_subagents)
 }
 
-/// Render the user-visible session text for a request, mirroring the attachment
-/// markers used when a message is first persisted in `execute()`. Extracted so
-/// the steering-injection path and the normal store path stay byte-identical.
+/// Render the user-visible session text for a steering interjection: the raw
+/// input, plus a text marker for any attachment.
+///
+/// This is NOT byte-identical to how `execute()` stores a first message — that
+/// path stores the *raw* input as text and carries attachments as real media
+/// `ContentBlock`s (`FlowInput::Multimodal`). A steering event has empty
+/// `blocks`, so a marker is the only way to represent an attachment in text.
+/// In practice `try_inject_steering` now defers attachment-bearing steers to the
+/// busy queue, so the sole production caller reaches here with plain text; the
+/// markers remain a fallback for any direct caller. Do NOT "restore parity" by
+/// copying these markers into `execute()` — the normal path deliberately keeps
+/// the stored message and the derived session title equal to the raw input.
 pub(super) fn render_user_session_text(request: &RunRequest) -> String {
     let mut text = request.input.clone();
     for att in &request.attachments {
@@ -340,6 +349,18 @@ pub(super) async fn try_inject_steering(
     // Same predicate gates the `Interrupt` branch, keeping the two modes
     // symmetric.
     if !has_steering_content(request) {
+        return false;
+    }
+
+    // A steering event is a plain text `UserMessage` (blocks: Vec::new()); the
+    // injection path has no media-processor seam, so an attachment would degrade
+    // to a text marker the model cannot see (the harness replays media only from
+    // `content.blocks`). Defer an attachment-bearing steer to the FIFO busy
+    // queue, which redelivers it as a fresh run that processes media normally
+    // (inner.rs media_processor → FlowInput::Multimodal). Never dropped. Scoped
+    // to injection, NOT `has_steering_content`, so the Interrupt branch still
+    // cancels a sibling for an attachment-only message.
+    if !request.attachments.is_empty() {
         return false;
     }
 

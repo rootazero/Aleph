@@ -16,7 +16,7 @@ pub use aleph_client::{AlephClient, CliConfig, CliResult};
 /// * `agent` — Optional agent name to bind this session to (reserved for future use)
 /// * `session` — Optional session key; a new one is generated if `None`
 /// * `config` — CLI configuration (auth token, default session, etc.)
-/// * `verbose` — Enable verbose logging (reserved for future use)
+/// * `verbose` — Start with the TUI's verbose display mode on (shows reasoning)
 ///
 /// # Errors
 ///
@@ -26,7 +26,7 @@ pub async fn run(
     _agent: Option<&str>,
     session: Option<&str>,
     config: &CliConfig,
-    _verbose: bool,
+    verbose: bool,
 ) -> CliResult<()> {
     // Connect to gateway
     let (client, events) = AlephClient::connect(server_url).await?;
@@ -50,5 +50,5 @@ pub async fn run(
         });
 
     // Launch TUI
-    tui::run(client, events, config, session_key).await
+    tui::run(client, events, config, session_key, verbose).await
 }

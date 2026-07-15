@@ -346,7 +346,12 @@ impl AiProvider for MoaProvider {
             // aggregator's actual output). Fires on error too — advisors ran
             // and were billed, the audit record must say so. A cancelled
             // future drops the pending trace (advisor spend is already on the
-            // per-advisor MeteringProvider events).
+            // per-advisor MeteringProvider events). Note: `pending_trace` is
+            // populated only on a cache MISS, so a cache-HIT iteration emits just
+            // `MoaAggregating{cached:true}` and reuses the MISS turn's record —
+            // its (fresh) aggregator output is intentionally NOT re-traced, to
+            // keep the HIT path a single event (see
+            // `cache_hit_emits_cached_aggregating_only`).
             if let Some(mut payload) = pending_trace {
                 let (output, status) = match &agg_result {
                     Ok(resp) => (resp.text.clone().unwrap_or_default(), "ok".to_string()),

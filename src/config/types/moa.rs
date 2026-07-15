@@ -129,6 +129,22 @@ impl MoaToml {
                     "[moa.presets.{name}] advisor_timeout_secs must be >= 1"
                 ));
             }
+            // Temperatures thread straight to the provider with no clamp
+            // (fan_out.rs / provider.rs → RequestPayload::with_temperature), so an
+            // out-of-range value reaches the API verbatim; the aggregator branch
+            // is NOT fail-soft, so a bad value there fails the whole turn with an
+            // opaque 400. Reject at the config boundary (same 0.0..=2.0 convention
+            // as rig/config.rs) so both write paths fail closed.
+            for t in [preset.advisor_temperature, preset.aggregator_temperature]
+                .into_iter()
+                .flatten()
+            {
+                if !t.is_finite() || !(0.0..=2.0).contains(&t) {
+                    errs.push(format!(
+                        "[moa.presets.{name}] temperature {t} is out of range [0.0, 2.0]"
+                    ));
+                }
+            }
             // Global distinctness: every slot (all advisors + aggregator) must be
             // a unique (provider, model) after case/whitespace normalization.
             let mut seen = std::collections::HashSet::new();

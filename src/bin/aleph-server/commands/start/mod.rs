@@ -1128,7 +1128,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     ) {
         {
             use alephcore::event::{
-                EventBus, EventContext, EventFilter, EventHandler, EventType, GlobalBus,
+                EventBus, EventContext, EventFilter, EventHandler, GlobalBus,
             };
             use alephcore::teams::messages::{Aggregator, AggregatorConfig};
             use alephcore::teams::TeamNotifier;
@@ -1142,12 +1142,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             let ctx = EventContext::new(dummy_bus);
 
             tokio::spawn(async move {
+                // Drive the subscription from the handler's own contract so the
+                // boot filter can never drift from what `handle` actually acts
+                // on — notably `TeamTaskUpdated`/"waiting_review", the leader
+                // nudge that keeps a review-gated DAG from stalling silently.
+                let notifier_subs = notifier.subscriptions();
                 let _notifier_sub = GlobalBus::global()
                     .subscribe_async(
-                        EventFilter::new(vec![
-                            EventType::TeamTaskCompleted,
-                            EventType::TeamTaskFailed,
-                        ]),
+                        EventFilter::new(notifier_subs),
                         move |global_event| {
                             let handler = notifier.clone();
                             let event = global_event.event;
@@ -1430,7 +1432,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     if let Some(ref wm) = workspace_manager {
-        register_workspace_handlers(&mut server, wm, &memory_db, args.daemon);
+        register_workspace_handlers(
+            &mut server,
+            wm,
+            agent_result.agent_registry.as_ref(),
+            &memory_db,
+            args.daemon,
+        );
     }
 
     // Project catalogue (~/.aleph/projects.json). Stateless store — every

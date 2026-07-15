@@ -137,7 +137,6 @@ async fn test_escalation_to_collaborative_session() {
 
     let rules = EscalationRule {
         thread_message_threshold: 3,
-        review_reject_threshold: 3,
         enabled: true,
     };
 

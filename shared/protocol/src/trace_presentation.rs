@@ -502,15 +502,22 @@ pub fn present_agent_trace_event(
             output_tokens,
             billed_count,
             advisor_count,
-            ..
-        } => Some(AgentTracePresentation {
-            kind: event.kind().into(),
-            status: AgentTracePresentationStatus::Info,
-            content: format!(
-                "MoA advisors spent {input_tokens}+{output_tokens} tok ({billed_count}/{advisor_count} billed)"
-            ),
-            duration_ms: None,
-        }),
+            cost_usd,
+        } => {
+            // Append the priced cost when known so this shared formatter (native
+            // TUI + trace REPLAY) reaches parity with the webchat renderer, which
+            // already shows it. The `..` here previously dropped `cost_usd`,
+            // leaving the already-computed advisor spend dark on those surfaces.
+            let cost = cost_usd.map_or(String::new(), |c| format!(" (~${c:.4})"));
+            Some(AgentTracePresentation {
+                kind: event.kind().into(),
+                status: AgentTracePresentationStatus::Info,
+                content: format!(
+                    "MoA advisors spent {input_tokens}+{output_tokens} tok ({billed_count}/{advisor_count} billed){cost}"
+                ),
+                duration_ms: None,
+            })
+        }
 
         AgentTraceEvent::MoaTurnTrace { preset, payload } => {
             // Persisted-only on the wire; in REPLAY the one-line summary makes
@@ -909,10 +916,12 @@ mod tests {
             billed_count: 2,
             input_tokens: 100,
             output_tokens: 50,
-            cost_usd: None,
+            cost_usd: Some(0.1234),
         };
         let p = present_agent_trace_event(&spend, &opts, &labels).unwrap();
         assert!(p.content.contains("2/3 billed"));
+        // Priced cost reaches the shared formatter (TUI/REPLAY parity, not just webchat).
+        assert!(p.content.contains("$0.1234"));
 
         let trace = AgentTraceEvent::MoaTurnTrace {
             preset: "deep".into(),

@@ -265,8 +265,13 @@ impl DenialLedger {
         just_tripped
     }
 
-    /// Number of times `fingerprint` was denied in `session`.
-    pub fn denial_count(&self, session: &str, fingerprint: &str) -> u32 {
+    /// Number of times `fingerprint` was denied in `session`. Test-only
+    /// introspection: production reaches its decisions through
+    /// [`is_blocked`](Self::is_blocked), never a raw count, so this accessor is
+    /// gated out of the public API rather than implying a consumer that does not
+    /// exist.
+    #[cfg(test)]
+    fn denial_count(&self, session: &str, fingerprint: &str) -> u32 {
         let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard
             .by_session
@@ -275,8 +280,10 @@ impl DenialLedger {
             .unwrap_or(0)
     }
 
-    /// Total denials recorded for `session`.
-    pub fn session_total(&self, session: &str) -> u32 {
+    /// Total denials recorded for `session`. Test-only introspection: the
+    /// breaker-trip path reads `denials.total` inline, not through this accessor.
+    #[cfg(test)]
+    fn session_total(&self, session: &str) -> u32 {
         let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.by_session.get(session).map_or(0, |d| d.total)
     }
