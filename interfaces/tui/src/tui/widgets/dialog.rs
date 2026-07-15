@@ -9,7 +9,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::app::DialogState;
+use crate::tui::app::{ApprovalState, DialogState, APPROVAL_DECISIONS};
 use crate::tui::theme::DEFAULT_THEME;
 
 /// Render the confirmation dialog as a centered overlay.
@@ -93,6 +93,85 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
         Style::default().fg(DEFAULT_THEME.muted),
     )));
     frame.render_widget(hint, hint_area);
+}
+
+/// Render the tool-approval overlay: a red-bordered modal a parked Ask-tier run
+/// is waiting on. Deliberately distinct from [`render_dialog`] (AskUser) so a
+/// security decision never looks like an ordinary agent question. Shares only
+/// [`centered_rect`] — the layout is copied rather than abstracted (two
+/// consumers; the wrong abstraction would cost more than the duplication).
+pub fn render_approval(frame: &mut Frame, approval: &ApprovalState, area: Rect) {
+    let width = area.width.clamp(28, 60);
+    let option_count = u16::try_from(APPROVAL_DECISIONS.len()).unwrap_or(3);
+    // 2 borders + 1 blank + question (2) + 1 blank + options + 1 hint
+    let height = (option_count.saturating_add(7)).min(area.height);
+    let rect = centered_rect(width, height, area);
+
+    frame.render_widget(Clear, rect);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(DEFAULT_THEME.error))
+        .title(" \u{26a0} Tool approval required ");
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let chunks = Layout::vertical([
+        Constraint::Length(1),                   // blank line
+        Constraint::Min(2),                      // command (+ reason)
+        Constraint::Length(1),                   // blank line
+        Constraint::Length(option_count.max(1)), // decisions
+        Constraint::Length(1),                   // hint line
+    ])
+    .split(inner);
+
+    let question_area = chunks.get(1).copied().expect("approval layout has question");
+    let options_area = chunks.get(3).copied().expect("approval layout has options");
+    let hint_area = chunks.get(4).copied().expect("approval layout has hint");
+
+    // Command being gated, plus the server's reason (dim) when present.
+    let mut question_lines = vec![Line::from(Span::styled(
+        approval.command.clone(),
+        Style::default().fg(DEFAULT_THEME.primary),
+    ))];
+    if let Some(reason) = &approval.reason {
+        question_lines.push(Line::from(Span::styled(
+            format!("Reason: {reason}"),
+            Style::default().fg(DEFAULT_THEME.muted),
+        )));
+    }
+    frame.render_widget(
+        Paragraph::new(question_lines).wrap(Wrap { trim: true }),
+        question_area,
+    );
+
+    let option_lines: Vec<Line> = APPROVAL_DECISIONS
+        .iter()
+        .enumerate()
+        .map(|(i, (label, _decision))| {
+            let style = if i == approval.selected {
+                Style::default()
+                    .fg(DEFAULT_THEME.primary)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            } else {
+                Style::default().fg(DEFAULT_THEME.muted)
+            };
+            Line::from(Span::styled(format!("  [{}] {}", i + 1, label), style))
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(option_lines), options_area);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "Number key or ↑↓ + Enter to decide".to_string(),
+            Style::default().fg(DEFAULT_THEME.muted),
+        ))),
+        hint_area,
+    );
 }
 
 /// Calculate a centered rect within the given area.

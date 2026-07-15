@@ -9,7 +9,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tui_textarea::{Input, TextArea};
 
-use super::app::{Action, AppState, Focus};
+use super::app::{Action, AppState, Focus, APPROVAL_DECISIONS};
 use super::command_tree;
 use super::event;
 use super::slash::{self, LocalCommand, ParsedInput};
@@ -50,6 +50,7 @@ fn handle_key_event(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
         Focus::CommandPalette => handle_palette_key(state, key),
         Focus::Dialog => handle_dialog_key(state, key),
         Focus::SessionPicker => handle_session_picker_key(state, key),
+        Focus::Approval => handle_approval_key(state, key),
     }
 }
 
@@ -105,6 +106,11 @@ fn handle_global_key(
             return Some(Action::CloseOverlay);
         }
         if state.dialog.is_some() {
+            return Some(Action::None);
+        }
+        // Same for a tool-approval overlay: the run is parked on a decision.
+        // Esc must not orphan it — Deny is the safe way out.
+        if state.approval.is_some() {
             return Some(Action::None);
         }
         // If in chat focus, return to input
@@ -444,6 +450,43 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
                     choice: choice.clone(),
                 })
         }
+        _ => Action::None,
+    }
+}
+
+/// Handle key events when the tool-approval overlay is focused.
+///
+/// The only exits are the three decisions — there is no dismiss, because a
+/// parked Ask-tier run must be resolved (Deny is the safe way out). Mirrors
+/// `handle_dialog_key`'s number/arrow/Enter scheme; number keys resolve
+/// immediately, arrows move the highlight, Enter confirms the highlight.
+fn handle_approval_key(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char(c) if ('1'..='3').contains(&c) => Action::ResolveApproval {
+            index: (c as usize) - ('1' as usize),
+        },
+        KeyCode::Up => {
+            if let Some(approval) = &mut state.approval {
+                if approval.selected > 0 {
+                    approval.selected -= 1;
+                }
+            }
+            Action::None
+        }
+        KeyCode::Down => {
+            if let Some(approval) = &mut state.approval {
+                if approval.selected + 1 < APPROVAL_DECISIONS.len() {
+                    approval.selected += 1;
+                }
+            }
+            Action::None
+        }
+        KeyCode::Enter => state
+            .approval
+            .as_ref()
+            .map_or(Action::None, |approval| Action::ResolveApproval {
+                index: approval.selected,
+            }),
         _ => Action::None,
     }
 }

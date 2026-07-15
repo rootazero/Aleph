@@ -220,6 +220,7 @@ impl AppState {
                 }
                 self.current_run = None;
                 self.run_started_at = None;
+                self.dismiss_pending_approval();
                 self.current_run_uses_agent_trace = false;
                 self.mark_current_assistant_complete();
                 Action::ScrollToBottomIfAutoScroll
@@ -242,6 +243,7 @@ impl AppState {
         self.current_run_uses_agent_trace = true;
         self.dialog = None;
         self.palette = None;
+        self.approval = None;
         self.focus = Focus::Input;
         self.scroll_to_bottom();
         self.add_system_message(summary);

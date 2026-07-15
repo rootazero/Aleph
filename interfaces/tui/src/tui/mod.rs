@@ -7,6 +7,7 @@
 // layout into chat area, input area, status bar, and overlays.
 
 mod app;
+mod approval;
 mod command_tree;
 mod commands;
 mod cost;
@@ -201,6 +202,13 @@ async fn main_loop(
                 // on the receiver — so the connection's own atomic is the only
                 // reliable disconnect signal.
                 state.is_connected = client.is_connected();
+                // Poll for pending tool approvals while a run is active. Ask
+                // exec tier can park a run waiting on a decision the thin client
+                // receives no event for; ~1s cadence (every 20th 50ms tick)
+                // keeps the 120s approval window responsive without chatter.
+                if state.current_run.is_some() && state.spinner_frame.is_multiple_of(20) {
+                    approval::poll_approvals(state, client).await;
+                }
             }
 
             // -- Chat --
@@ -238,6 +246,10 @@ async fn main_loop(
                         state.add_system_message("Run cancelled.".to_string());
                         state.current_run = None;
                         state.run_started_at = None;
+                        // The cancelled run may have been parked on an approval;
+                        // retract its overlay (the poll stops once current_run
+                        // clears and can no longer do it).
+                        state.dismiss_pending_approval();
                     }
                     Err(e) => {
                         state.add_system_message(format!("Cancel error: {e}"));
@@ -332,6 +344,11 @@ async fn main_loop(
                     }
                 }
                 state.close_overlay();
+            }
+
+            // -- Tool approval --
+            Action::ResolveApproval { index } => {
+                approval::resolve_approval(state, client, index).await;
             }
 
             // -- Session picker --

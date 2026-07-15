@@ -122,6 +122,7 @@ impl AppState {
             } => {
                 self.current_run = None;
                 self.run_started_at = None;
+                self.dismiss_pending_approval();
                 self.last_run_duration = Some(Duration::from_millis(total_duration_ms));
                 if !self.current_run_trace_summary_applied {
                     self.update_token_usage(&summary);
@@ -156,6 +157,7 @@ impl AppState {
             StreamEvent::RunError { error, .. } => {
                 self.current_run = None;
                 self.run_started_at = None;
+                self.dismiss_pending_approval();
                 self.current_run_uses_agent_trace = false;
                 self.current_run_trace_summary_applied = false;
                 self.mark_current_assistant_complete();

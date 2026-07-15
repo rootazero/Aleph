@@ -81,6 +81,11 @@ pub enum Action {
     /// Respond to an `AskUser` dialog
     RespondToDialog { run_id: String, choice: String },
 
+    // -- Tool approval (Ask exec tier) --
+    /// Resolve the pending tool-approval overlay by option index into
+    /// `APPROVAL_DECISIONS` (0 = allow once, 1 = allow session, 2 = deny).
+    ResolveApproval { index: usize },
+
     // -- Session picker --
     /// Move session-picker selection up
     SessionPickerUp,
@@ -102,6 +107,7 @@ pub enum Focus {
     CommandPalette,
     Dialog,
     SessionPicker,
+    Approval,
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +166,31 @@ pub struct DialogState {
     pub run_id: String,
     pub question: String,
     pub options: Vec<String>,
+    pub selected: usize,
+}
+
+/// Decision options for the tool-approval overlay, in display order. Each is
+/// `(label, wire_decision)`; the wire value is exactly what
+/// `exec.approval.resolve` expects (kebab-case, server-validated).
+pub const APPROVAL_DECISIONS: [(&str, &str); 3] = [
+    ("Allow once", "allow-once"),
+    ("Allow for session", "allow-session"),
+    ("Deny", "deny"),
+];
+
+/// State for the tool-execution approval overlay (Ask exec tier). A parked
+/// server run is waiting on `exec.approval.resolve` for this `id`. Kept
+/// deliberately separate from [`DialogState`] (AskUser) so a security decision
+/// can never be routed to `agent.respondToInput` by mistake.
+#[derive(Debug, Clone)]
+pub struct ApprovalState {
+    /// Approval id — the resolve key. Never shown to the user.
+    pub id: String,
+    /// Human-readable action being gated (the tool/command summary).
+    pub command: String,
+    /// Why the gate fired, when the server supplied a reason.
+    pub reason: Option<String>,
+    /// Highlighted decision index into [`APPROVAL_DECISIONS`].
     pub selected: usize,
 }
 
@@ -243,6 +274,10 @@ pub struct AppState {
     pub dialog: Option<DialogState>,
     pub palette: Option<PaletteState>,
     pub session_picker: Option<SessionPickerState>,
+    /// Pending tool-approval overlay (Ask exec tier), if one is being shown.
+    /// Surfaced by the `exec.approvals.pending` poll, resolved via
+    /// `exec.approval.resolve`.
+    pub approval: Option<ApprovalState>,
 
     // -- Control --
     pub ctrl_c_count: u8,
@@ -284,6 +319,7 @@ impl AppState {
             dialog: None,
             palette: None,
             session_picker: None,
+            approval: None,
 
             ctrl_c_count: 0,
             spinner_frame: 0,
@@ -500,6 +536,7 @@ impl AppState {
         self.palette = None;
         self.dialog = None;
         self.session_picker = None;
+        self.approval = None;
         self.focus = Focus::Input;
     }
 
@@ -554,6 +591,38 @@ impl AppState {
         self.focus = Focus::Dialog;
     }
 
+    /// Surface the tool-approval overlay for a pending, session-owned approval
+    /// and steal focus so the parked run gets a decision. The caller
+    /// (`commands::poll_approvals`) has already confirmed the `id` belongs to
+    /// this session.
+    pub fn open_approval(&mut self, id: String, command: String, reason: Option<String>) {
+        self.approval = Some(ApprovalState {
+            id,
+            command,
+            reason,
+            selected: 0,
+        });
+        self.focus = Focus::Approval;
+    }
+
+    /// Retract the approval overlay (resolved here, resolved elsewhere, or the
+    /// server-side approval expired) and return focus to input.
+    pub fn close_approval(&mut self) {
+        self.approval = None;
+        self.focus = Focus::Input;
+    }
+
+    /// Drop a showing approval overlay when its run ends by any path (complete,
+    /// error, cancel, session-complete). No-op when none is showing, so focus is
+    /// reset only in the case where the modal was actually up (and thus held
+    /// focus). Needed because the pending-approval poll runs only while a run is
+    /// active — once the run ends it can no longer retract a stale overlay.
+    pub(crate) fn dismiss_pending_approval(&mut self) {
+        if self.approval.is_some() {
+            self.close_approval();
+        }
+    }
+
     /// Switch to a different session and reset transient chat/run UI state.
     /// The caller then appends the fetched `chat.history` transcript.
     pub fn switch_session(&mut self, session_key: &str) {
@@ -568,6 +637,8 @@ impl AppState {
         self.context_gauge = None;
         self.dialog = None;
         self.palette = None;
+        // Any approval prompt belonged to the old session's run; drop it.
+        self.approval = None;
         self.focus = Focus::Input;
         self.scroll_to_bottom();
         self.add_system_message(format!("Switched to session {session_key}"));
