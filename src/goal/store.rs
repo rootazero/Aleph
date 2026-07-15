@@ -21,13 +21,25 @@ const PENDING_STALE_GRACE_MS: u64 = 60_000;
 /// never treated as stale before it wakes. Mirrors the loop's busy retry.
 const BUSY_RETRY_DELAY_MS: u64 = 30_000;
 
+/// How long an in-flight objective-gate arbitration suppresses a second one.
+/// The gate is a shell command the caller runs with the session run-slot free,
+/// so a user turn completing inside its window re-enters the hook; the pending
+/// marker dedups it. Unlike a Fire continuation (an LLM turn, bounded by
+/// `PENDING_STALE_GRACE_MS`), a gate can be a `cargo test`/`just verify`-class
+/// command lasting minutes, so it gets its own longer grace before a presumed-
+/// dead gate task is re-arbitrated. A marker stranded by a mid-gate status
+/// change still self-heals at the shorter Fire-path grace once the goal leaves
+/// `Complete`.
+const GATE_STALE_GRACE_MS: u64 = 300_000;
+
 /// Outcome of [`GoalStore::try_claim_continuation`] — the single atomic decision
 /// the post-run continuation hook acts on. Mirrors `looping::TickDecision`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContinuationDecision {
     /// The model self-reported `complete` on an autonomous goal and an objective
-    /// gate is configured: the caller must run the gate and then call
-    /// [`GoalStore::confirm_complete`] or [`GoalStore::reopen_after_gate_veto`].
+    /// gate is configured: the caller must run the gate and then commit the
+    /// verdict via [`GoalStore::commit_gate_pass`] (passed, or vetoed with no
+    /// runway left) or [`GoalStore::claim_after_gate_veto`] (vetoed, runway left).
     /// Nothing was written — gate arbitration owns the transition.
     AwaitingGate(Box<Goal>),
     /// A continuation was claimed: the iteration is spent, the pending marker is
@@ -188,10 +200,25 @@ impl GoalStore {
             return Ok(ContinuationDecision::Idle);
         };
 
-        // The model claimed completion and a gate must arbitrate it. Nothing to
-        // write, and no baseline to seed (the goal is no longer Active).
+        // The model claimed completion and a gate must arbitrate it. Gate
+        // arbitration is an async shell command the caller runs with the session
+        // run-slot FREE, so a user turn completing inside that window re-enters
+        // this hook — and without a guard each re-entry would launch ANOTHER
+        // concurrent gate command (the `still_awaiting_gate` CAS only dedups the
+        // write-BACK, not the command execution). Reuse the pending marker as an
+        // in-flight gate guard (no new mechanism): stamp it on the first claim,
+        // and while it is fresh return `Idle` so no second gate runs; past
+        // `GATE_STALE_GRACE_MS` the gate task is presumed dead and we re-arbitrate.
+        // No baseline to seed — the goal is Complete, not Active.
         if pursuit::awaiting_gate(&current, gate_configured) {
-            return Ok(ContinuationDecision::AwaitingGate(Box::new(current)));
+            if let Some(started) = current.pending_continuation_ms {
+                if now_ms < started.saturating_add(GATE_STALE_GRACE_MS) {
+                    return Ok(ContinuationDecision::Idle);
+                }
+            }
+            let claimed = current.with_pending_continuation(Some(now_ms));
+            Self::put_locked(&conn, &claimed)?;
+            return Ok(ContinuationDecision::AwaitingGate(Box::new(claimed)));
         }
 
         // Lazy token-baseline capture on the first claim that sees a budget
@@ -641,17 +668,39 @@ mod tests {
     }
 
     #[test]
-    fn claim_returns_awaiting_gate_without_writing_anything() {
+    fn awaiting_gate_stamps_an_in_flight_marker_and_dedups_a_second_gate() {
         let (store, _d) = temp_store();
         let g = pursuing("s", 5).with_status(GoalStatus::Complete, 1);
         store.put(&g).unwrap();
+
+        // First claim: arbitrate the gate, stamping an in-flight marker. Gate
+        // arbitration owns the terminal transition, so the iteration is NOT
+        // spent and the status is untouched — only the marker moves.
         let d = store
             .try_claim_continuation("s", None, 1_000, true)
             .unwrap();
         assert!(matches!(d, ContinuationDecision::AwaitingGate(_)));
-        // Gate arbitration owns the transition — the claim must not have touched
-        // the row (a spurious bump on a terminal goal, or a stolen iteration).
-        assert_eq!(store.get("s").unwrap().unwrap(), g);
+        let stored = store.get("s").unwrap().unwrap();
+        assert_eq!(stored.pending_continuation_ms, Some(1_000));
+        assert_eq!(stored.status, GoalStatus::Complete);
+        assert_eq!(stored.continuations_used, g.continuations_used);
+
+        // A user turn completing inside the gate window re-enters the hook; the
+        // fresh marker suppresses a SECOND concurrent gate command.
+        assert_eq!(
+            store
+                .try_claim_continuation("s", None, 1_500, true)
+                .unwrap(),
+            ContinuationDecision::Idle
+        );
+
+        // Past the gate grace the gate task is presumed dead → re-arbitrate.
+        assert!(matches!(
+            store
+                .try_claim_continuation("s", None, 1_000 + GATE_STALE_GRACE_MS + 1, true)
+                .unwrap(),
+            ContinuationDecision::AwaitingGate(_)
+        ));
     }
 
     #[test]
