@@ -9,8 +9,10 @@ use crate::memory::notes::ingest::retrieve::RelatedPage;
 use crate::memory::notes::KnowledgeNote;
 
 /// Build a `CandidateNote` for the gate from a `PageOp`. Returns `None` for the
-/// still-ungated op kinds (Append/Update/Link/Supersede), which apply
-/// immediately without review.
+/// still-ungated op kinds (Append/Update/Link), which apply immediately without
+/// review. `Supersede` is gated too, but out-of-band: it needs the superseded
+/// note's on-disk severity, so the ingestor's async `supersede_candidate`
+/// handles it before this sync helper is reached.
 ///
 /// - `Create`: `confidence`/`severity` are the planner LLM's self-assessment —
 ///   the gate defers low-confidence creations and holds `High`/`Critical` pages
@@ -98,7 +100,10 @@ pub(crate) fn candidate_from_pageop(agent_id: &str, op: &PageOp) -> Option<Candi
                 replay_op: Some(replay),
             })
         }
-        // Still ungated: applied immediately without review.
+        // Ungated here: applied immediately without review. `Supersede` also
+        // returns `None` as a fallback, but the ingestor gates it upstream via
+        // `supersede_candidate` (severity lookup), so it never reaches here in
+        // the gated path.
         PageOp::Append { .. }
         | PageOp::Update { .. }
         | PageOp::Link { .. }

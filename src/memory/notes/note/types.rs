@@ -21,19 +21,6 @@ pub enum Severity {
     Critical,
 }
 
-/// Governance status of a note. Used by Phase C2 supersession / contradiction
-/// handling. `Active` is the default so legacy notes (no `status:` in
-/// frontmatter) behave exactly as before.
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-#[schemars(rename_all = "lowercase")]
-pub enum NoteStatus {
-    #[default]
-    Active,
-    Deprecated,
-    Contradicted,
-}
-
 /// Provenance origin of an individual fact-bullet within a note. Phase C2
 /// paragraph-level provenance. `Legacy` is the default for facts that have
 /// no `<!-- ... -->` marker, preserving backward compatibility with
