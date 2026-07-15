@@ -71,6 +71,7 @@ pub const IDEMPOTENT_BUILTIN_TOOLS: &[&str] = &[
     // Note discovery — pure reads
     "note_orient",
     "note_schema",
+    "note_graph_query",
 ];
 
 /// Returns true iff `name` is a built-in tool that is safe to auto-retry.

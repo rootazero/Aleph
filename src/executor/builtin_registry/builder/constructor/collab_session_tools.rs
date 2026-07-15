@@ -572,6 +572,27 @@ impl BuiltinToolRegistry {
             info!("Registered memory_trace tool");
         }
 
+        // note_graph_query tool — read-only graph interrogation (retrieval tools only)
+        if expose_retrieval_tools {
+            use crate::builtin_tools::note_graph_query::NoteGraphQueryTool;
+            let schema = serde_json::to_value(schemars::schema_for!(
+                crate::builtin_tools::note_graph_query::NoteGraphQueryArgs
+            ))
+            .unwrap_or_else(|e| {
+                warn!("Failed to serialize schema for note_graph_query: {}", e);
+                serde_json::Value::Object(Default::default())
+            });
+            let mut ut = UnifiedTool::new(
+                format!("builtin:{}", NoteGraphQueryTool::NAME),
+                NoteGraphQueryTool::NAME,
+                NoteGraphQueryTool::DESCRIPTION,
+                ToolSource::Builtin,
+            );
+            ut.parameters_schema = Some(schema);
+            tools.insert(NoteGraphQueryTool::NAME.to_string(), ut);
+            info!("Registered note_graph_query tool");
+        }
+
         (
             message_send_tool,
             inbox_read_tool,

@@ -50,6 +50,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fts_search_finds_cjk_substring_via_trigram() {
+        // `unicode61` indexes a run of CJK ideographs as a single token, so the
+        // substring `记忆管理` cannot match inside `记忆管理系统` on notes_fts
+        // alone. The trigram companion (consulted for CJK-bearing queries ≥3
+        // chars) enables the substring match. This also proves notes_fts_trigram
+        // is created + dual-written by index_note.
+        let backend = make_backend();
+        let note = make_note("记忆管理系统", "general");
+        backend
+            .index_note(&note, "agent1", "general")
+            .await
+            .unwrap();
+
+        let results = backend
+            .search_notes_fts("记忆管理", "agent1", 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "CJK substring query should find the note via the trigram companion"
+        );
+        assert_eq!(results[0].path, "general/记忆管理系统");
+    }
+
+    #[tokio::test]
+    async fn fts_search_finds_multiword_cjk_via_trigram() {
+        // A space-separated multi-word CJK query must substring-match each word
+        // (per-term trigram OR), not be sent as one whole phrase — the interior
+        // space would otherwise break the trigram match and find nothing.
+        let backend = make_backend();
+        let mut note = make_note("运维手册", "general");
+        note.facts = vec!["记忆管理的系统运维方案".to_string()];
+        backend
+            .index_note(&note, "agent1", "general")
+            .await
+            .unwrap();
+
+        let results = backend
+            .search_notes_fts("记忆管理 系统运维", "agent1", 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "multi-word CJK query should match via per-term trigram OR"
+        );
+        assert_eq!(results[0].path, "general/运维手册");
+    }
+
+    #[tokio::test]
     async fn fts_search_finds_by_content_direct() {
         let backend = make_backend();
         let note = make_note("search test", "general");

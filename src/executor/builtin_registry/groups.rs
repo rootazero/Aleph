@@ -55,6 +55,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "note_manage",
             "note_orient",
             "note_schema",
+            "note_graph_query",
             "user_profile",
             "session_complete",
             "flag_user_correction",
