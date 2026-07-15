@@ -21,10 +21,53 @@
 /// // ... do work
 /// ```
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 /// Default warning multiplier applied when no policy is configured.
 const DEFAULT_WARNING_MULTIPLIER: f64 = 2.0;
+
+/// Live metrics knobs sourced from `[policies.metrics]` at config load.
+///
+/// `StageTimer` is created via ad-hoc static `start()` calls with no config in
+/// scope, so the policy is bound process-wide once (write-once `OnceLock`,
+/// mirroring `config::defaults_override`). Reads before init — early startup,
+/// unit tests — fall back to the compiled defaults.
+#[derive(Clone, Copy)]
+struct MetricsRuntime {
+    warning_multiplier: f64,
+    enable_logging: bool,
+    enable_warnings: bool,
+}
+
+impl Default for MetricsRuntime {
+    fn default() -> Self {
+        Self {
+            warning_multiplier: DEFAULT_WARNING_MULTIPLIER,
+            enable_logging: true,
+            enable_warnings: true,
+        }
+    }
+}
+
+static METRICS_RUNTIME: OnceLock<MetricsRuntime> = OnceLock::new();
+
+/// Bind the live metrics knobs from `[policies.metrics]`. Called once from
+/// `Config::load` so `StageTimer` honours user-configured thresholds instead of
+/// the compiled defaults. Idempotent: a later call (e.g. a config reload) is
+/// ignored, matching the write-once semantics of `defaults_override`. Takes the
+/// policy by reference (like `providers::retry` consumes `RetryPolicy`).
+pub fn init_metrics_runtime(policy: &crate::config::MetricsPolicy) {
+    let _ = METRICS_RUNTIME.set(MetricsRuntime {
+        warning_multiplier: policy.warning_multiplier,
+        enable_logging: policy.enable_logging,
+        enable_warnings: policy.enable_warnings,
+    });
+}
+
+fn metrics_runtime() -> MetricsRuntime {
+    METRICS_RUNTIME.get().copied().unwrap_or_default()
+}
 
 /// A timer for measuring the duration of a specific stage in the pipeline
 ///
@@ -48,12 +91,6 @@ pub struct StageTimer {
     start: Instant,
     metadata: Option<HashMap<String, String>>,
     target_ms: Option<u64>,
-    /// Warning multiplier (default: 2.0, can be set from policy)
-    warning_multiplier: f64,
-    /// Whether logging is enabled (from policy)
-    enable_logging: bool,
-    /// Whether warnings are enabled (from policy)
-    enable_warnings: bool,
 }
 
 impl StageTimer {
@@ -74,9 +111,6 @@ impl StageTimer {
             start: Instant::now(),
             metadata: None,
             target_ms: None,
-            warning_multiplier: DEFAULT_WARNING_MULTIPLIER,
-            enable_logging: true,
-            enable_warnings: true,
         }
     }
 
@@ -147,12 +181,14 @@ impl StageTimer {
 impl Drop for StageTimer {
     fn drop(&mut self) {
         let elapsed_ms = self.elapsed_ms();
+        // Live knobs from `[policies.metrics]` (compiled defaults before init).
+        let rt = metrics_runtime();
 
         // Check if we exceeded the target (if set) and warnings are enabled
         if let Some(target_ms) = self.target_ms {
             if target_ms > 0 {
-                let threshold_ms = (target_ms as f64 * self.warning_multiplier) as u64;
-                if elapsed_ms > threshold_ms && self.enable_warnings {
+                let threshold_ms = (target_ms as f64 * rt.warning_multiplier) as u64;
+                if elapsed_ms > threshold_ms && rt.enable_warnings {
                     tracing::warn!(
                         stage = %self.name,
                         actual_ms = %elapsed_ms,
@@ -168,7 +204,7 @@ impl Drop for StageTimer {
         }
 
         // Normal timing log (debug level) if logging is enabled
-        if !self.enable_logging {
+        if !rt.enable_logging {
             return;
         }
 
@@ -201,9 +237,6 @@ mod tests {
         assert_eq!(timer.name, "test_stage");
         assert!(timer.metadata.is_none());
         assert!(timer.target_ms.is_none());
-        assert_eq!(timer.warning_multiplier, DEFAULT_WARNING_MULTIPLIER);
-        assert!(timer.enable_logging);
-        assert!(timer.enable_warnings);
     }
 
     #[test]

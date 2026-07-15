@@ -5,10 +5,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::agents::swarm::bus::AgentMessageBus;
-use crate::agents::swarm::events::EventTier;
 use crate::agents::swarm::tasks::{CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskStore};
 use crate::error::Result;
+use crate::event::{AlephEvent, GlobalBus};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -48,13 +47,24 @@ pub struct TaskWaitOutput {
 #[derive(Clone)]
 pub struct TaskWaitTool {
     store: Arc<dyn CoordTaskStore>,
-    event_bus: Arc<AgentMessageBus>,
 }
 
 impl TaskWaitTool {
-    pub fn new(store: Arc<dyn CoordTaskStore>, event_bus: Arc<AgentMessageBus>) -> Self {
-        Self { store, event_bus }
+    pub fn new(store: Arc<dyn CoordTaskStore>) -> Self {
+        Self { store }
     }
+}
+
+/// True for the CoordTask lifecycle events the store broadcasts to GlobalBus —
+/// the only events that can change a `task_wait` answer.
+fn is_task_event(event: &AlephEvent) -> bool {
+    matches!(
+        event,
+        AlephEvent::TeamTaskAssigned { .. }
+            | AlephEvent::TeamTaskUpdated { .. }
+            | AlephEvent::TeamTaskCompleted { .. }
+            | AlephEvent::TeamTaskFailed { .. }
+    )
 }
 
 /// Check if all target tasks are in a terminal state.
@@ -168,8 +178,13 @@ impl AlephTool for TaskWaitTool {
         let timeout = args.timeout_seconds.unwrap_or(300);
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout);
 
-        // Subscribe to Important events (where task events live)
-        let mut receiver = self.event_bus.subscribe(EventTier::Important).await?;
+        // Wake on the GlobalBus, where the CoordTask store actually broadcasts
+        // task lifecycle events (`TeamTask{Assigned,Updated,Completed,Failed}`).
+        // The store publishes there (and to the GatewayEventBus), never to the
+        // swarm `AgentMessageBus` this tool used to watch — so a completion never
+        // woke the waiter and it fell through to the timeout. GlobalBus is a
+        // process singleton; no injection needed.
+        let mut receiver = GlobalBus::global().subscribe_broadcast();
 
         loop {
             // Check current state
@@ -203,23 +218,27 @@ impl AlephTool for TaskWaitTool {
                 return Ok(out);
             }
 
-            // Wait for an event or timeout
-            tokio::select! {
-                event = receiver.recv() => {
-                    match event {
-                        Ok(_) => {
-                            debug!("Task wait: event received, re-checking task states");
-                            continue;
+            // Wait for a task-state change or the deadline. GlobalBus carries the
+            // whole system's events, so drain the unrelated ones here rather than
+            // re-querying the store on each — only a `TeamTask*` event (or a lag,
+            // where one may have been missed) can change the answer.
+            let timed_out = loop {
+                tokio::select! {
+                    event = receiver.recv() => match event {
+                        Ok(ev) if is_task_event(&ev.event) => {
+                            debug!("Task wait: task event received, re-checking task states");
+                            break false; // re-check at the outer loop
                         }
+                        Ok(_) => continue, // unrelated GlobalBus traffic — keep waiting
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                            // The subscriber fell behind and missed events —
-                            // the channel is still open. Re-check task states
-                            // instead of treating this as channel closure.
+                            // Fell behind and may have missed a task event — the
+                            // channel is still open, so re-check to be safe.
                             debug!(skipped, "Task wait: receiver lagged, re-checking task states");
-                            continue;
+                            break false;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            // Channel closed, no more events will arrive
+                            // GlobalBus is a process singleton, so this is
+                            // effectively unreachable; re-check once and report.
                             debug!("Task wait: event channel closed, breaking out");
                             let tasks = fetch_tasks(
                                 self.store.as_ref(),
@@ -228,17 +247,19 @@ impl AlephTool for TaskWaitTool {
                             ).await?;
                             return Ok(build_summary(&tasks, false));
                         }
-                    }
+                    },
+                    _ = tokio::time::sleep_until(deadline) => break true,
                 }
-                _ = tokio::time::sleep_until(deadline) => {
-                    let tasks = fetch_tasks(
-                        self.store.as_ref(),
-                        &args.task_ids,
-                        &args.team_id,
-                    ).await?;
-                    return Ok(build_summary(&tasks, true));
-                }
+            };
+            if timed_out {
+                let tasks = fetch_tasks(
+                    self.store.as_ref(),
+                    &args.task_ids,
+                    &args.team_id,
+                ).await?;
+                return Ok(build_summary(&tasks, true));
             }
+            // A task event (or a lag) landed — loop to re-check the store.
         }
     }
 }

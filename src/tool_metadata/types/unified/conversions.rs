@@ -4,11 +4,8 @@
 //! formatting.
 
 use super::UnifiedTool;
-use crate::config::ToolSafetyPolicy;
-use crate::tool_metadata::types::category::ToolCategory;
 use crate::tool_metadata::types::conflict::ToolSource;
 use crate::tool_metadata::types::index::{truncate_string, ToolIndexCategory, ToolIndexEntry};
-use crate::tool_metadata::types::safety::ToolSafetyLevel;
 
 impl UnifiedTool {
     // =========================================================================
@@ -58,67 +55,6 @@ impl UnifiedTool {
             summary,
             keywords,
             is_core,
-        }
-    }
-
-    /// Infer safety level from tool name and category
-    ///
-    /// Uses heuristics based on common tool naming patterns:
-    /// - Read-only: search, query, get, read, list, show, view
-    /// - Reversible: create, copy, move, rename, update, set
-    /// - Irreversible Low Risk: send, notify, post, publish
-    /// - Irreversible High Risk: delete, remove, drop, execute, run, shell
-    ///
-    /// If a `ToolSafetyPolicy` is provided, uses configurable keywords from policy.
-    /// Otherwise, uses hardcoded defaults for backward compatibility.
-    #[must_use]
-    pub fn infer_safety_level(
-        name: &str,
-        category: ToolCategory,
-        policy: Option<&ToolSafetyPolicy>,
-    ) -> ToolSafetyLevel {
-        // Use provided policy or default
-        let default_policy = ToolSafetyPolicy::default();
-        let policy = policy.unwrap_or(&default_policy);
-
-        // Check keyword-based classification using policy
-        if policy.is_high_risk(name) {
-            return ToolSafetyLevel::IrreversibleHighRisk;
-        }
-
-        if policy.is_low_risk(name) {
-            return ToolSafetyLevel::IrreversibleLowRisk;
-        }
-
-        if policy.is_reversible(name) {
-            return ToolSafetyLevel::Reversible;
-        }
-
-        if policy.is_readonly(name) {
-            return ToolSafetyLevel::ReadOnly;
-        }
-
-        // Fall back to category-based inference using policy fallbacks
-        let fallback_str = match category {
-            ToolCategory::Builtin => &policy.builtin_fallback,
-            ToolCategory::Skills => &policy.skill_fallback,
-            ToolCategory::Mcp => &policy.mcp_fallback,
-            ToolCategory::Custom => &policy.custom_fallback,
-            ToolCategory::GeneratedSkill => &policy.custom_fallback,
-        };
-
-        // Convert fallback string to ToolSafetyLevel
-        Self::parse_safety_level_str(policy.parse_safety_level(fallback_str))
-    }
-
-    /// Parse safety level string to enum
-    fn parse_safety_level_str(level: &str) -> ToolSafetyLevel {
-        match level {
-            "readonly" => ToolSafetyLevel::ReadOnly,
-            "reversible" => ToolSafetyLevel::Reversible,
-            "irreversible_low_risk" => ToolSafetyLevel::IrreversibleLowRisk,
-            "irreversible_high_risk" => ToolSafetyLevel::IrreversibleHighRisk,
-            _ => ToolSafetyLevel::IrreversibleLowRisk, // Default fallback
         }
     }
 

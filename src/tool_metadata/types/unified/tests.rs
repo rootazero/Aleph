@@ -1,7 +1,6 @@
 //! Tests for UnifiedTool
 
 use super::*;
-use crate::tool_metadata::types::category::ToolCategory;
 use crate::tool_metadata::types::conflict::ToolSource;
 use crate::tool_metadata::types::definition::{Capability, ToolDiff};
 use crate::tool_metadata::types::index::ToolIndexCategory;
@@ -152,103 +151,6 @@ fn test_unified_tool_with_structured_meta() {
     assert_eq!(meta.not_suitable_for.len(), 1);
     assert_eq!(meta.differentiation.len(), 1);
     assert_eq!(meta.use_when.len(), 1);
-}
-
-#[test]
-fn test_infer_safety_level_high_risk() {
-    assert_eq!(
-        UnifiedTool::infer_safety_level("delete_file", ToolCategory::Builtin, None),
-        ToolSafetyLevel::IrreversibleHighRisk
-    );
-    assert_eq!(
-        UnifiedTool::infer_safety_level("shell_execute", ToolCategory::Builtin, None),
-        ToolSafetyLevel::IrreversibleHighRisk
-    );
-    assert_eq!(
-        UnifiedTool::infer_safety_level("run_bash_command", ToolCategory::Builtin, None),
-        ToolSafetyLevel::IrreversibleHighRisk
-    );
-    assert_eq!(
-        UnifiedTool::infer_safety_level("remove_directory", ToolCategory::Builtin, None),
-        ToolSafetyLevel::IrreversibleHighRisk
-    );
-}
-
-#[test]
-fn test_infer_safety_level_low_risk() {
-    assert_eq!(
-        UnifiedTool::infer_safety_level("send_notification", ToolCategory::Builtin, None),
-        ToolSafetyLevel::IrreversibleLowRisk
-    );
-    assert_eq!(
-        UnifiedTool::infer_safety_level("post_message", ToolCategory::Mcp, None),
-        ToolSafetyLevel::IrreversibleLowRisk
-    );
-    assert_eq!(
-        UnifiedTool::infer_safety_level("git_push", ToolCategory::Builtin, None),
-        ToolSafetyLevel::IrreversibleLowRisk
-    );
-    assert_eq!(
-        UnifiedTool::infer_safety_level("commit_changes", ToolCategory::Builtin, None),
-        ToolSafetyLevel::IrreversibleLowRisk
-    );
-}
-
-#[test]
-fn test_infer_safety_level_reversible() {
-    assert_eq!(
-        UnifiedTool::infer_safety_level("create_file", ToolCategory::Builtin, None),
-        ToolSafetyLevel::Reversible
-    );
-    assert_eq!(
-        UnifiedTool::infer_safety_level("copy_file", ToolCategory::Builtin, None),
-        ToolSafetyLevel::Reversible
-    );
-    assert_eq!(
-        UnifiedTool::infer_safety_level("write_text", ToolCategory::Builtin, None),
-        ToolSafetyLevel::Reversible
-    );
-    assert_eq!(
-        UnifiedTool::infer_safety_level("update_config", ToolCategory::Builtin, None),
-        ToolSafetyLevel::Reversible
-    );
-}
-
-#[test]
-fn test_infer_safety_level_readonly() {
-    assert_eq!(
-        UnifiedTool::infer_safety_level("search_web", ToolCategory::Builtin, None),
-        ToolSafetyLevel::ReadOnly
-    );
-    assert_eq!(
-        UnifiedTool::infer_safety_level("read_file", ToolCategory::Builtin, None),
-        ToolSafetyLevel::ReadOnly
-    );
-    assert_eq!(
-        UnifiedTool::infer_safety_level("list_files", ToolCategory::Builtin, None),
-        ToolSafetyLevel::ReadOnly
-    );
-    assert_eq!(
-        UnifiedTool::infer_safety_level("translate_text", ToolCategory::Builtin, None),
-        ToolSafetyLevel::ReadOnly
-    );
-    assert_eq!(
-        UnifiedTool::infer_safety_level("summarize_document", ToolCategory::Builtin, None),
-        ToolSafetyLevel::ReadOnly
-    );
-}
-
-#[test]
-fn test_infer_safety_level_category_fallback() {
-    // Unknown tool names should fall back to category-based inference
-    assert_eq!(
-        UnifiedTool::infer_safety_level("xyz_unknown", ToolCategory::Builtin, None),
-        ToolSafetyLevel::ReadOnly
-    );
-    assert_eq!(
-        UnifiedTool::infer_safety_level("xyz_unknown", ToolCategory::Mcp, None),
-        ToolSafetyLevel::IrreversibleLowRisk
-    );
 }
 
 #[test]

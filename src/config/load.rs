@@ -98,6 +98,12 @@ impl Config {
         // is silently dead — Panel saves it, code never honours it.
         Self::apply_security_ssrf_overrides(&mut config, &contents);
 
+        // Bridge: honour `[policies.metrics]` in the live `StageTimer`. Without
+        // this, `warning_multiplier` / `enable_logging` / `enable_warnings` are
+        // silently dead — the timer uses compiled defaults. Same class of fix as
+        // the ssrf bridge above; write-once, mirroring `defaults_override`.
+        crate::metrics::init_metrics_runtime(&config.policies.metrics);
+
         debug!(
             path = %path.display(),
             providers_count = config.providers.len(),
