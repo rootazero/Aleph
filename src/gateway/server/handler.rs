@@ -89,6 +89,11 @@ struct ConnectionContext {
     /// Shared exec-approval manager for node-initiated approvals (cluster ③).
     /// `None` ⇒ `node.approval.request` is refused.
     exec_approval_manager: Option<Arc<crate::exec::manager::ExecApprovalManager>>,
+    /// Security audit log for remote-connection auth forensics. Records
+    /// `AuthFailure` on a rejected remote `connect` and `RateLimited` when the
+    /// flood guard closes an unauthorized connection. `None` ⇒ auth events are
+    /// not persisted (probe/degraded wiring).
+    audit_log: Option<crate::security::audit::SecurityAuditLog>,
 }
 
 /// axum handler: upgrade HTTP connection to WebSocket at `/ws`
@@ -193,6 +198,7 @@ pub(super) async fn ws_upgrade_handler(
             client_ip,
             node_registry: state.node_registry.clone(),
             exec_approval_manager: state.exec_approval_manager.clone(),
+            audit_log: state.audit_log.clone(),
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
             error!("Connection error from {}: {}", peer_addr, e);
@@ -577,6 +583,18 @@ async fn handle_connection(
                                                 conn_id,
                                                 flood_guard.strikes()
                                             );
+                                            // Forensic trail: one row per abusive
+                                            // connection (bounded by the flood-guard
+                                            // close, not per rejected frame).
+                                            if let Some(log) = ctx.audit_log.as_ref() {
+                                                log.log(crate::security::audit::AuditEntry::rate_limited(
+                                                    ctx.client_ip.to_string(),
+                                                    format!(
+                                                        "connection closed: {} unauthorized requests (flood guard)",
+                                                        flood_guard.strikes()
+                                                    ),
+                                                ));
+                                            }
                                             break;
                                         }
                                         continue;
@@ -798,6 +816,23 @@ async fn handle_connection(
                                                         crate::gateway::handlers::connect::ConnectAuthOutcome::BootstrapExchanged { device_token, .. } => (true, "operator", Some(device_token.clone())),
                                                         crate::gateway::handlers::connect::ConnectAuthOutcome::Unauthorized => (false, "guest", None),
                                                     };
+                                                    // Forensic trail: a remote connection that
+                                                    // failed the Gateway-token login wall. Bounded
+                                                    // to <=10/60s/IP by the `Auth`-scope limiter,
+                                                    // so a brute-force campaign self-throttles
+                                                    // after ~10 recorded attempts. Loopback is the
+                                                    // zero-config operator and never audited.
+                                                    if crate::gateway::handlers::connect::should_audit_connect_failure(
+                                                        authorized,
+                                                        ctx.client_ip.is_loopback(),
+                                                    ) {
+                                                        if let Some(log) = ctx.audit_log.as_ref() {
+                                                            log.log(crate::security::audit::AuditEntry::auth_failure(
+                                                                ctx.client_ip.to_string(),
+                                                                "remote connect rejected: no valid Gateway credential",
+                                                            ));
+                                                        }
+                                                    }
                                                     {
                                                         let mut conns = ctx.connections.write().await;
                                                         if let Some(state) = conns.get_mut(&conn_id) {

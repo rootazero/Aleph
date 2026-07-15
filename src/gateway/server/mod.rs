@@ -309,6 +309,10 @@ pub struct GatewayServer {
     /// canonical instance; `None` in test/probe constructors ⇒ node-approval
     /// routing is inert (the handler refuses `node.approval.request`).
     pub exec_approval_manager: Option<Arc<crate::exec::manager::ExecApprovalManager>>,
+    /// Security audit log for remote-connection auth forensics. Installed by
+    /// [`GatewayServer::set_audit_log`] and cloned into `GatewaySharedState`.
+    /// `None` in test/probe constructors ⇒ auth events go unrecorded.
+    audit_log: Option<crate::security::audit::SecurityAuditLog>,
 }
 
 impl GatewayServer {
@@ -358,6 +362,7 @@ impl GatewayServer {
             security_store: None,
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
+            audit_log: None,
         }
     }
 
@@ -408,6 +413,7 @@ impl GatewayServer {
             security_store: None,
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
+            audit_log: None,
         }
     }
 
@@ -472,6 +478,14 @@ impl GatewayServer {
         self.security_store = Some(store);
     }
 
+    /// Install the `SecurityAuditLog` so the WS auth path records a forensic
+    /// trail of remote-connection auth failures and flood-guard closes. Fed by
+    /// a dedicated drain (see the start command); `None` leaves auth events
+    /// unrecorded, matching pre-wiring behavior.
+    pub fn set_audit_log(&mut self, log: crate::security::audit::SecurityAuditLog) {
+        self.audit_log = Some(log);
+    }
+
     /// Get the current number of active connections
     pub async fn connection_count(&self) -> usize {
         self.connections.read().await.len()
@@ -506,7 +520,7 @@ impl GatewayServer {
             lane_manager: self.lane_manager.clone(),
             idempotency_guard: self.idempotency_guard.clone(),
             event_scope_guard: self.event_scope_guard.clone(),
-            audit_log: None,
+            audit_log: self.audit_log.clone(),
             ready: self.ready.clone(),
             instance_id: self.instance_id.clone(),
             started_at_unix: self.started_at_unix,
@@ -628,6 +642,22 @@ impl GatewayServer {
         });
     }
 
+    /// Emit a one-line operator warning when the gateway binds a non-loopback
+    /// interface. Under the LAN-trust model the Gateway token is then the only
+    /// thing between the network and full operator authority — loopback binds
+    /// (the zero-config default) are silent.
+    fn warn_if_network_exposed(&self) {
+        if !self.addr.ip().is_loopback() {
+            warn!(
+                "Gateway bound to non-loopback {} — every device that presents the \
+                 Gateway token gains full operator authority (PTY/shell included). \
+                 Share the token only over a trusted channel and rotate it if it may \
+                 have leaked.",
+                self.addr
+            );
+        }
+    }
+
     /// Run the Gateway server
     ///
     /// This method runs indefinitely, accepting new connections and
@@ -642,6 +672,7 @@ impl GatewayServer {
                 source: e,
             })?;
         info!("Aleph listening on http://{}", self.addr);
+        self.warn_if_network_exposed();
         axum::serve(
             listener,
             router.into_make_service_with_connect_info::<SocketAddr>(),
@@ -667,6 +698,7 @@ impl GatewayServer {
         info!("Aleph listening on http://{}", self.addr);
         info!("  WebSocket: ws://{}/ws", self.addr);
         info!("  Panel UI:  http://{}/", self.addr);
+        self.warn_if_network_exposed();
         axum::serve(
             listener,
             router.into_make_service_with_connect_info::<SocketAddr>(),
