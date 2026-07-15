@@ -122,7 +122,7 @@ const fn default_expansion_weight() -> f32 {
 }
 
 /// Associative graph expansion of the retrieval candidate pool. Pulls the
-/// strongest 4-signal related peers of the top direct hits into the pool before
+/// strongest 5-signal related peers of the top direct hits into the pool before
 /// rerank, so notes tied to a match surface even without lexical/semantic
 /// overlap. Default-on and conservative: a peer's propagated score is scaled
 /// strictly below its seed, and a cold graph cache makes the stage a no-op.

@@ -817,7 +817,7 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         depth: u8,
         limit: usize,
-    ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String)>), AlephError> {
+    ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String)>, bool), AlephError> {
         let conn = lock_conn!(self)?;
 
         // BFS from center
@@ -870,6 +870,12 @@ impl NoteStore for SqliteMemoryBackend {
             }
         }
 
+        // The BFS caps on `visited.len()` (which counts dangling endpoints too),
+        // so this — not the indexed-entry count below — is the authoritative
+        // truncation signal: if we filled the frontier to `limit`, the graph may
+        // hold neighbors we never explored.
+        let truncated = visited.len() >= limit;
+
         // Fetch index entries for visited nodes
         let mut entries = Vec::new();
         for path in &visited {
@@ -897,7 +903,7 @@ impl NoteStore for SqliteMemoryBackend {
             .map(|e| (e.from, e.to))
             .collect();
 
-        Ok((entries, edges))
+        Ok((entries, edges, truncated))
     }
 
     async fn get_outgoing_link_rows(

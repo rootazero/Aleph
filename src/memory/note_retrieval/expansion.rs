@@ -1,6 +1,6 @@
 //! Associative graph expansion of the retrieval candidate pool.
 //!
-//! Query-independent: 4-signal relatedness measures note<->note, so a peer
+//! Query-independent: 5-signal relatedness measures note<->note, so a peer
 //! surfaces purely because it is tied to a *query-relevant* seed. Conservative
 //! by construction — a peer's score is scaled strictly below its seed. Never
 //! fails retrieval: store errors are swallowed (logged) and treated as "no
@@ -13,7 +13,7 @@ use crate::config::types::memory::ExpansionConfig;
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::NoteSearchResult;
 
-/// Expand `hits` with the strongest 4-signal related peers of the top seeds.
+/// Expand `hits` with the strongest 5-signal related peers of the top seeds.
 /// Returns hydrated `NoteSearchResult`s (content carried) stamped with a
 /// propagated score, sorted by score desc then path asc. Empty when expansion
 /// is inactive, hits are empty, the cache is cold, or every peer fails to
@@ -47,7 +47,7 @@ pub async fn graph_expand<S: NoteStore + Send + Sync>(
                 continue;
             }
         };
-        // Normalize by the seed's strongest edge so unbounded 4-signal
+        // Normalize by the seed's strongest edge so unbounded 5-signal
         // magnitudes can't dominate; the top peer of a seed maxes at
         // `weight * seed.score`.
         let seed_top_edge = peers.iter().map(|(_, s)| *s).fold(0.0_f32, f32::max);

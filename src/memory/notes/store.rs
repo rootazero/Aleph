@@ -175,13 +175,20 @@ pub trait NoteStore: Send + Sync {
     ) -> Result<(Vec<NoteIndexEntry>, Vec<GraphEdgeRow>), AlephError>;
 
     /// BFS neighborhood around `center` up to `depth` hops.
+    ///
+    /// Returns `(nodes, edges, truncated)`. `truncated` is `true` when the BFS
+    /// hit `limit` and stopped early — the graph may hold more neighbors than
+    /// returned. It is derived from the BFS `visited` frontier, NOT the returned
+    /// node count, because `visited` includes dangling link endpoints that are
+    /// not indexed nodes (inferring truncation from `nodes.len()` would
+    /// under-report a cap whenever an endpoint dangles).
     async fn get_neighbors(
         &self,
         center: &str,
         agent_id: &str,
         depth: u8,
         limit: usize,
-    ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String)>), AlephError>;
+    ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String)>, bool), AlephError>;
 
     /// All outgoing link rows for one note, including dangling and tombstone
     /// (unlike the graph feed, node detail must surface every lifecycle
@@ -381,7 +388,7 @@ pub trait NoteStore: Send + Sync {
         Ok(vec![])
     }
 
-    /// Replace the materialized 4-signal relatedness edges for `agent_id`.
+    /// Replace the materialized 5-signal relatedness edges for `agent_id`.
     /// Rows are `(node_path, related_path, score)`.
     async fn replace_graph_related(
         &self,
@@ -392,11 +399,11 @@ pub trait NoteStore: Send + Sync {
         Ok(())
     }
 
-    /// Top related peers for `node_path` by materialized 4-signal score
+    /// Top related peers for `node_path` by materialized 5-signal score
     /// (descending), capped at `limit`. Returns `(related_path, score)`.
     ///
     /// Complements `community_peers`: where community membership gives coarse
-    /// cluster recall, this gives the scored 4-signal relatedness. A cold cache
+    /// cluster recall, this gives the scored 5-signal relatedness. A cold cache
     /// (and the default impl) returns an empty vec, so callers degrade to their
     /// existing expansion.
     async fn related_peers(
@@ -409,7 +416,7 @@ pub trait NoteStore: Send + Sync {
         Ok(vec![])
     }
 
-    /// Materialized 4-signal relatedness edges (`notes_graph_related`) whose
+    /// Materialized 5-signal relatedness edges (`notes_graph_related`) whose
     /// endpoints are both in `visible`, top `per_node` by score per
     /// `node_path`. Batch/visibility-filtered counterpart to `related_peers`,
     /// used by `graph.query` to surface similarity edges alongside real

@@ -83,6 +83,22 @@ pub struct GraphSchema {
     pub community_count: usize,
 }
 
+/// Advisory metadata about the caps applied to a paging op (`neighbors`,
+/// `community`, `related`), so the model can distinguish a **truncated** result
+/// (a cap was hit — the graph holds more) from a genuinely **complete** one.
+/// Silent caps otherwise read as "this is everything", misleading exploration.
+#[derive(Debug, Clone, Serialize)]
+pub struct QueryAdvisory {
+    /// Result limit actually applied after clamping the request into `[1, 200]`.
+    pub applied_limit: usize,
+    /// True when the returned set reached `applied_limit` — more peers/nodes may
+    /// exist beyond what is shown. Re-query with a higher `limit` to see more.
+    pub truncated: bool,
+    /// Effective BFS depth after clamping into `[1, 3]` (present for `neighbors`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub applied_depth: Option<u8>,
+}
+
 /// Result of a `note_graph_query`. Only the field(s) relevant to `op` are
 /// populated; the rest serialize away (empty / `null`).
 #[derive(Debug, Clone, Serialize, Default)]
@@ -102,6 +118,10 @@ pub struct NoteGraphQueryResult {
     /// `related` op scored peers.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub related: Vec<RelatedPeer>,
+    /// Cap advisory for paging ops (`neighbors`/`community`/`related`). Absent
+    /// for `schema` (which has no limit) and whenever no cap was in play.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advisory: Option<QueryAdvisory>,
 }
 
 /// Read-only knowledge-graph query tool.
@@ -121,7 +141,9 @@ impl NoteGraphQueryTool {
          (needs no target); `neighbors` returns the N-hop neighborhood around a \
          note path (depth 1–3); `community` lists notes in the same cluster; \
          `related` returns the top related peers by relatedness score. Use it to \
-         discover how knowledge connects — before or instead of full-text search.";
+         discover how knowledge connects — before or instead of full-text search. \
+         Paging ops report an `advisory` with the applied limit/depth and a \
+         `truncated` flag so a capped result is never mistaken for a complete one.";
 
     /// Create a new `NoteGraphQueryTool`.
     pub fn new(db: MemoryBackend, agent_id: impl Into<String>) -> Self {
@@ -191,7 +213,7 @@ impl NoteGraphQueryTool {
             GraphOp::Neighbors => {
                 let center = target()?;
                 let depth = args.depth.unwrap_or(1).clamp(1, 3);
-                let (nodes, edges) = self
+                let (nodes, edges, truncated) = self
                     .db
                     .get_neighbors(center, agent, depth, limit)
                     .await
@@ -208,6 +230,13 @@ impl NoteGraphQueryTool {
                     .into_iter()
                     .map(|(from, to)| GraphEdge { from, to })
                     .collect();
+                // `truncated` comes from the store's BFS frontier, not the node
+                // count — dangling endpoints eat cap slots without adding nodes.
+                result.advisory = Some(QueryAdvisory {
+                    applied_limit: limit,
+                    truncated,
+                    applied_depth: Some(depth),
+                });
             }
             GraphOp::Community => {
                 let node_path = target()?;
@@ -216,6 +245,11 @@ impl NoteGraphQueryTool {
                     .community_peers(agent, node_path, limit)
                     .await
                     .map_err(|e| anyhow::anyhow!("community_peers: {e}"))?;
+                result.advisory = Some(QueryAdvisory {
+                    applied_limit: limit,
+                    truncated: result.community.len() >= limit,
+                    applied_depth: None,
+                });
             }
             GraphOp::Related => {
                 let node_path = target()?;
@@ -227,6 +261,11 @@ impl NoteGraphQueryTool {
                     .into_iter()
                     .map(|(path, score)| RelatedPeer { path, score })
                     .collect();
+                result.advisory = Some(QueryAdvisory {
+                    applied_limit: limit,
+                    truncated: result.related.len() >= limit,
+                    applied_depth: None,
+                });
             }
         }
         Ok(result)
@@ -314,6 +353,30 @@ mod tests {
             out.nodes.iter().any(|n| n.path == "reference/alpha"),
             "center should be in the neighborhood"
         );
+        // Paging ops carry an honest advisory: the effective depth is reported.
+        let adv = out.advisory.expect("neighbors advisory populated");
+        assert_eq!(adv.applied_depth, Some(1));
+    }
+
+    #[tokio::test]
+    async fn advisory_reports_clamped_limit() {
+        let db = backend();
+        seed(&db).await;
+        let tool = NoteGraphQueryTool::new(db, "agent1");
+        // Request an over-cap limit; the advisory must report the clamped value
+        // so the model can tell a cap from a complete result.
+        let out = tool
+            .call_impl(NoteGraphQueryArgs {
+                op: GraphOp::Neighbors,
+                target: Some("reference/alpha".to_string()),
+                depth: Some(9),
+                limit: Some(500),
+            })
+            .await
+            .unwrap();
+        let adv = out.advisory.expect("advisory populated");
+        assert_eq!(adv.applied_limit, 200, "limit clamped to 200");
+        assert_eq!(adv.applied_depth, Some(3), "depth clamped to 3");
     }
 
     #[tokio::test]

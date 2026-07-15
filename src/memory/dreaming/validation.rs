@@ -80,9 +80,13 @@ pub fn validate_frontmatter(content: &str, note_path: &str) -> Vec<ValidationIss
             message: "missing category field in frontmatter".into(),
         });
     } else if let Some(cat) = extract_yaml_value(frontmatter, "category") {
+        // CATEGORY_DIRS is the single source of truth and now includes
+        // `entity`/`synthesis`/`query`, so no ad-hoc exceptions are needed —
+        // the prior hand-maintained `synthesis`/`query` allowances (and the
+        // missing `entity`, which made L1 flag every ingest-written entity note
+        // invalid) are subsumed here.
         let valid_categories: HashSet<&str> = CATEGORY_DIRS.iter().copied().collect();
-        // Also allow "synthesis" and "query"
-        if !valid_categories.contains(cat.as_str()) && cat != "synthesis" && cat != "query" {
+        if !valid_categories.contains(cat.as_str()) {
             issues.push(ValidationIssue {
                 tier: tier.clone(),
                 note_path: note_path.to_string(),

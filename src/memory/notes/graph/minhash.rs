@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 pub const K: usize = 64;
-/// Scale jaccard (≤1) into the 4-signal magnitude range so similarity edges are
+/// Scale jaccard (≤1) into the 5-signal magnitude range so similarity edges are
 /// competitive with a single direct link when merged into notes_graph_related.
 pub const SIMILARITY_EDGE_WEIGHT: f32 = 3.0;
 const BANDS: usize = 32;

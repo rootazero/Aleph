@@ -6,6 +6,7 @@
 //! anything already moved.
 
 use crate::error::AlephError;
+use crate::memory::notes::canonicalize_category;
 use crate::memory::notes::indexer::NoteIndexer;
 use crate::memory::notes::ingest::plan::{ApplyReport, PageOp};
 use crate::memory::notes::note::{sanitize_title, KnowledgeNote, Relation};
@@ -234,14 +235,22 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
             } => {
                 let (category, filename) = split_path(note_path)?;
                 let safe = sanitize_title(&filename)?;
-                let entry = self.store.get_note_index(note_path, self.agent_id).await?;
+                // The note is stored/indexed under the CANONICAL path
+                // (`{category}/{safe}`); look up the hash there, not under the
+                // raw plural/aliased `note_path`, or a canonicalized category
+                // would spuriously miss the row and false-conflict.
+                let canonical_path = format!("{category}/{safe}");
+                let entry = self
+                    .store
+                    .get_note_index(&canonical_path, self.agent_id)
+                    .await?;
                 let actual = entry
                     .as_ref()
                     .map(|e| e.content_hash.clone())
                     .unwrap_or_default();
                 if &actual != expected_content_hash {
                     return Err(ApplyError::HashConflict {
-                        path: note_path.clone(),
+                        path: canonical_path,
                         expected: expected_content_hash.clone(),
                         actual,
                     });
@@ -276,11 +285,21 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                     .await?;
             }
             PageOp::Link { from, to } => {
-                self.pending_links.push((from.clone(), to.clone()));
+                // Canonicalize at the queue boundary so add_link's
+                // append_to_note (which re-splits with sanitize-only) writes the
+                // link on the canonical note instead of a phantom plural one.
+                self.pending_links.push((
+                    canonicalize_note_path(from),
+                    canonicalize_note_path(to),
+                ));
             }
             PageOp::Supersede { old_path, new_path } => {
-                self.pending_supersedes
-                    .push((old_path.clone(), new_path.clone()));
+                // Canonicalize both so the read (old) and the embedded
+                // `[[new_path]]` supersede pointer reference the canonical notes.
+                self.pending_supersedes.push((
+                    canonicalize_note_path(old_path),
+                    canonicalize_note_path(new_path),
+                ));
             }
         }
         Ok(())
@@ -509,12 +528,34 @@ fn split_path(note_path: &str) -> Result<(String, String), ApplyError> {
             "invalid note_path '{note_path}' — expected 'category/filename'"
         ))));
     };
-    let safe_cat = sanitize_title(cat).map_err(|e| {
+    // Canonicalize the LLM-authored category prefix (plural→singular spelling
+    // merge) BEFORE sanitizing for path-safety, so `projects/foo` and
+    // `project/foo` land in the same category dir instead of fragmenting the
+    // graph. Ingest is the only write path that accepts a free category prefix
+    // (note_manage validates against CATEGORY_DIRS), so this is the chokepoint.
+    let canonical = canonicalize_category(cat);
+    let safe_cat = sanitize_title(&canonical).map_err(|e| {
         ApplyError::Other(AlephError::other(format!(
             "invalid category in note_path '{note_path}': {e}"
         )))
     })?;
     Ok((safe_cat, name.to_string()))
+}
+
+/// Canonicalize the category prefix of a full `category/filename` note path,
+/// leaving the filename untouched (`projects/foo` → `project/foo`).
+///
+/// `split_path` canonicalizes the category it *derives*, but several op paths
+/// forward the RAW `note_path` string to downstream calls that re-split it with
+/// sanitize-only semantics (`append_to_note`, `get_note_index`) or embed it in a
+/// wikilink marker. Canonicalizing those raw strings at the op boundary keeps
+/// the ingest chokepoint complete, so a plural/aliased path never spawns a
+/// phantom note in a dead category dir or dangles a supersede pointer.
+fn canonicalize_note_path(note_path: &str) -> String {
+    match note_path.split_once('/') {
+        Some((cat, name)) => format!("{}/{}", canonicalize_category(cat), name),
+        None => note_path.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -580,6 +621,66 @@ mod tests {
         let listed = backend.list_notes("default").await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].path, "learning/tokio");
+    }
+
+    #[test]
+    fn canonicalize_note_path_only_touches_category_prefix() {
+        assert_eq!(canonicalize_note_path("projects/foo"), "project/foo");
+        assert_eq!(canonicalize_note_path("project/foo"), "project/foo");
+        // Filename is untouched (even if it contains no further slash logic).
+        assert_eq!(canonicalize_note_path("teams/my-team"), "team/my-team");
+        // Pathological / prefix-less inputs pass through unchanged.
+        assert_eq!(canonicalize_note_path("noslash"), "noslash");
+    }
+
+    #[tokio::test]
+    async fn link_op_canonicalizes_plural_from_no_phantom_note() {
+        let (dir, backend, indexer) = fresh().await;
+        let mut tx = CompoundApplyTx::new(&indexer, &backend, dir.path().join("note"), "default");
+        // Real note lives under the canonical singular category.
+        tx.stage(&PageOp::Create {
+            note_path: "project/foo".into(),
+            title: "Foo".into(),
+            summary: String::new(),
+            facts: vec!["fact".into()],
+            links: vec![],
+            tags: vec![],
+            relations: vec![],
+            source_ids: vec![],
+            confidence: 1.0,
+            severity: Default::default(),
+        })
+        .await
+        .unwrap();
+        // A link referencing the PLURAL category must resolve onto the canonical
+        // note — NOT spawn a phantom `projects/foo` in a dead (unscanned) dir and
+        // lose the edge (the regression the review caught).
+        tx.stage(&PageOp::Link {
+            from: "projects/foo".into(),
+            to: "reference/bar".into(),
+        })
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        assert!(dir.path().join("note/default/project/foo.md").exists());
+        assert!(
+            !dir.path().join("note/default/projects/foo.md").exists(),
+            "plural link `from` must not create a phantom note dir"
+        );
+        let listed = backend.list_notes("default").await.unwrap();
+        assert!(
+            listed.iter().all(|n| n.category != "projects"),
+            "no row should be indexed under the dead plural category: {listed:?}"
+        );
+        // The canonical note actually received the link.
+        let body = tokio::fs::read_to_string(dir.path().join("note/default/project/foo.md"))
+            .await
+            .unwrap();
+        assert!(
+            body.contains("[[reference/bar]]"),
+            "canonical note should carry the woven link: {body}"
+        );
     }
 
     #[tokio::test]

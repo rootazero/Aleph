@@ -17,7 +17,7 @@ use crate::memory::context::NoteType;
 use crate::memory::events::handler::MemoryCommandHandler;
 use crate::memory::events::EventActor;
 use crate::memory::notes::store::NoteStore;
-use crate::memory::notes::{sanitize_title, KnowledgeNote, NoteIndexer};
+use crate::memory::notes::{canonicalize_category, sanitize_title, KnowledgeNote, NoteIndexer};
 use crate::memory::store::SqliteMemoryBackend;
 use crate::memory::EmbeddingProvider;
 use crate::tools::AlephTool;
@@ -427,10 +427,14 @@ impl NoteManageTool {
         let agent_id_owned = self.resolve_agent_id(args)?;
         let agent_id = agent_id_owned.as_str();
 
-        let category = args
+        let category_raw = args
             .category
             .as_deref()
             .ok_or_else(|| AlephError::tool("category is required for create"))?;
+        // Canonicalize plural/spelling variants (projects→project) so the tool
+        // path agrees with ingest on one category dir, then validate.
+        let category_owned = canonicalize_category(category_raw);
+        let category = category_owned.as_str();
         let filename = args
             .filename
             .as_deref()

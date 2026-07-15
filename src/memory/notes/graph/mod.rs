@@ -1,4 +1,4 @@
-//! Note knowledge-graph intelligence: 4-signal relevance, Louvain community
+//! Note knowledge-graph intelligence: 5-signal relevance, Louvain community
 //! detection, graph-health insights. Pure functions over an immutable
 //! `GraphSnapshot` — zero storage coupling (P4). Consumed by the offline
 //! `GraphRecomputeStage` (materialization) and `note_retrieval` (seed

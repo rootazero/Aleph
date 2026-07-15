@@ -935,7 +935,7 @@ mod tests {
         const AGENT: &str = "agent1";
         let backend = make_backend();
 
-        // Materialize 4-signal related edges for cat/a.
+        // Materialize 5-signal related edges for cat/a.
         // Rows are (node_path, related_path, score).
         backend
             .replace_graph_related(

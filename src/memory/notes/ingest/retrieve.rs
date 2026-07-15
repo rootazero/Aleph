@@ -103,7 +103,7 @@ pub async fn gather_related<S: NoteStore + Send + Sync + 'static>(
         }
     }
 
-    // 4-signal materialized relatedness (richer than community membership):
+    // 5-signal materialized relatedness (richer than community membership):
     // fold top related peers with their real score. Cold cache → empty → no-op.
     // Runs BEFORE the community loop so scored peers win the `seen.insert` race
     // over the 0.0-scored community peers below.

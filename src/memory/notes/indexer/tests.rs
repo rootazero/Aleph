@@ -1224,3 +1224,33 @@ async fn append_relations_is_noop_when_all_already_present() {
         "relation must not be duplicated"
     );
 }
+
+#[test]
+fn canonicalize_category_merges_plural_and_spelling_variants() {
+    // Plurals collapse to the single canonical singular.
+    assert_eq!(canonicalize_category("projects"), "project");
+    assert_eq!(canonicalize_category("preferences"), "preference");
+    assert_eq!(canonicalize_category("workflows"), "workflow");
+    assert_eq!(canonicalize_category("teams"), "team");
+    assert_eq!(canonicalize_category("entities"), "entity");
+    // Case-insensitive on match.
+    assert_eq!(canonicalize_category("Projects"), "project");
+    // Already-canonical singulars pass through unchanged.
+    assert_eq!(canonicalize_category("project"), "project");
+    assert_eq!(canonicalize_category("entity"), "entity");
+    // Intentionally-plural / hyphenated categories are NEVER mangled.
+    assert_eq!(canonicalize_category("goal-lessons"), "goal-lessons");
+    assert_eq!(canonicalize_category("subagent-run"), "subagent-run");
+    // Unknown free categories keep LLM sovereignty (trimmed, otherwise verbatim).
+    assert_eq!(canonicalize_category("  research  "), "research");
+}
+
+#[test]
+fn entity_and_synthesis_are_registered_indexable_categories() {
+    // Regression: the ingest prompt tells the LLM to create `entity/<slug>`
+    // notes and NoteSynthesisStage writes `synthesis/` pages. Both must be in
+    // CATEGORY_DIRS so full_rebuild scans+reconciles them (no silent data loss
+    // on an index rebuild) and dream L1 validation accepts them.
+    assert!(CATEGORY_DIRS.contains(&"entity"));
+    assert!(CATEGORY_DIRS.contains(&"synthesis"));
+}
