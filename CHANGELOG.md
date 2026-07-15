@@ -5,7 +5,78 @@ All notable changes to the Aleph project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [26.7.15]
+
+A hardening and safety release. The headline is a **three-tier execution
+permission model** (Ask / Auto / Full) with an action-aware approval gate — the
+human sees the exact command and the grant keys on it — surfaced as inline
+approval and `ask_user` clarification cards in Panel and a polled HITL overlay
+in the TUI. Alongside it: a matured **knowledge-memory note layer** (graph
+path-finding, `[[wikilink]]` supersession, CJK full-text search,
+contradiction→supersession closure), **truthful cost & token accounting** (both
+were partly fabricated), a repaired **cluster enrollment / reverse-RPC** path,
+and a large **harness R10 paydown** that deletes zero-consumer abstractions and
+an unreachable ~3,800-line tool-hydration stack.
+
+### Added
+
+- **Three-tier execution permissions (Ask / Auto / Full).** A single
+  operator-facing knob picks how much tool execution is auto-approved. It reads
+  each tool's declared metadata (idempotent / destructive), not its name;
+  unknown tools fail closed in `Ask`; the `[sandbox.command_policy]` hard-floor
+  can't be lowered by any tier. The gate is action-aware — the human sees the
+  actual command and the grant fingerprint keys on it — enforced at the single
+  choke point `src/tools/scoped/`, with the slash fast-path, `tools.invoke` and
+  background-continuation bypasses all closed. Panel gains a composer tier pill
+  plus inline approval / `ask_user` clarification cards; the TUI gains a polled
+  Ask-tier approval overlay.
+- **`note_graph_query` read-only tool + note-graph path-finding.** The
+  knowledge-memory note layer gains a graph query surface with bidirectional-BFS
+  path finding between notes, typed relation edges, and `[[wikilink]]`
+  supersession that force-surfaces a correcting note when an outdated one is
+  recalled — backed by a crash-safe index and CJK trigram full-text search.
+- **In-window restart-to-update banner.** The desktop shell injects an update
+  banner on stage with its own sentinel control channel, intercepts the banner's
+  control links, and re-injects it across Panel reloads, so an available update
+  is one click to restart-and-apply.
+- **TUI §5.12 maturity.** A `/sessions` picker, a live context-window gauge in
+  the status bar, a polled Ask-tier tool-approval overlay (HITL), and a
+  connection status dot; `mod.rs` / `app` split by responsibility.
+- **Live cluster fleet feed.** The Panel cluster view is wired to a live feed
+  with a corrected contract, and node identity now persists on the connect
+  verdict.
+
+### Changed
+
+- **Truthful cost & token accounting.** The gateway session now carries a real
+  spend ledger (both cost *and* token counts were previously fabricated),
+  prompt-cache discipline is restored, thinking depth is wired end-to-end, and
+  every assistant message carries its real per-message token cost without
+  double-counting.
+- **Non-intrusive computer-use.** Desktop apps are driven through a pid-targeted
+  input rail with window-scoped capture, so automation no longer moves the
+  user's cursor. Six P0 defects were fixed (escape trap, key-combo block,
+  press-hold, scroll units, paste, degenerate frames), macOS PIM and Chromium AX
+  were wired, and background mouse acts macOS can't actually deliver are refused
+  up front.
+- **Knowledge-memory note layer, rounds 2–4.** Category names canonicalized
+  (singular/plural split-brain fixed), the relation vocabulary cleaned of
+  entity-name pollution, connected communities via Leiden refinement, the
+  contradiction→supersession loop closed, stale notes archived, and a
+  default-off governance gate wired.
+- **Memory Tier-3 hardening.** Agent-scoped recall signals, severity-gated
+  archival, a maturity cohort, and several retrieval bug fixes; dead knobs
+  pruned.
+- **Cluster enrollment repaired.** Dead cold-start enrollment fixed,
+  deregistration made to stick, reverse RPC hardened, and the `connect`
+  handshake now precedes the method in `gateway call`.
+- **Deferred tools are callable.** Progressive tool disclosure no longer strands
+  deferred tools; CJK tool search is unbroken, and an `off` reasoning setting no
+  longer silently buys reasoning.
+- **Sandbox hardening.** Invisible-character SSOT, symmetric breaker purge, and a
+  dead-code sweep.
+- **Goal subsystem.** A fail-closed continuation gate and an atomic continuation
+  claim.
 
 ### Removed
 
@@ -34,9 +105,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `TurnState` / `TurnStep` / `HarnessError` / `TurnPhase` are unaffected.
   - `ChainContext::with_max_depth` and its `Display` impl — the former had only
     `#[cfg(test)]` callers, the latter only its own formatting test.
+- **Unreachable tool-hydration stack (~3,800 lines)**, plus a cache framework
+  for caching that was never performed and a configuration knob that reported a
+  value it did not honor — deleted in the cost-efficiency sweep.
+- **The phantom 4,900-line harness target** — retired in favor of the
+  `budget.rs` ratchet as the actual R10 redline (now measured, not hand-counted;
+  currently 5,043 lines).
 
 ### Fixed
 
+- **Dreaming daemon burned provider quota nightly.** A retry storm in the
+  nightly dream run is now bounded, so it no longer exhausts the provider quota.
+- **Panel auto-update 404.** Manifest URLs normalize the space in the version to
+  a dot, so the Panel updater resolves the release asset.
+- **`channels.set_agent` accepted non-existent agents.** The gateway now
+  validates agent existence before binding a channel (AS-1).
+- **Provider error reads could hang on a stalled proxy.** Error-response body
+  reads are now bounded.
+- **Instance-lock holder was unreadable cross-platform.** The holder PID is now
+  recorded in an unlocked sidecar for readback.
 - **Spawned subagents inherit the operator's `[execution] max_iterations`.** The
   `HarnessRunner::default_max_iterations` hook existed and the spawner consumed
   it, but `AgentHarnessRunner` never overrode it, so every child fell back to
