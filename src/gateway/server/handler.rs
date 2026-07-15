@@ -39,6 +39,12 @@ use super::per_client_buffer::PerClientBuffer;
 use super::{ConnectionState, GatewaySharedState};
 use crate::gateway::security::SecurityStore;
 
+/// Parse configured trusted-proxy IP strings into `IpAddr`, silently dropping
+/// unparseable entries (fail-safe: a garbage entry just isn't trusted).
+pub(super) fn parse_trusted_ips(raw: &[String]) -> Vec<IpAddr> {
+    raw.iter().filter_map(|s| s.parse::<IpAddr>().ok()).collect()
+}
+
 /// Shared context for handling a WebSocket connection.
 struct ConnectionContext {
     middleware_chain: MiddlewareChain,
@@ -80,8 +86,9 @@ struct ConnectionContext {
     security_store: Option<Arc<SecurityStore>>,
     /// Device-token manager for bootstrap-ticket / per-device-token auth.
     device_token_mgr: Option<Arc<crate::gateway::security::DeviceTokenManager>>,
-    /// Socket peer IP. Used for the per-IP connection cap and rate-limit
-    /// identity.
+    /// Resolved client IP (the trusted-proxy-forwarded client behind a
+    /// reverse proxy, else the raw socket peer). Used for the per-IP
+    /// connection cap and rate-limit identity.
     client_ip: IpAddr,
     /// Cluster node registry (shared Arc). The connect handler registers a
     /// `role:node` connection here and cleanup deregisters it.
@@ -103,10 +110,19 @@ pub(super) async fn ws_upgrade_handler(
     State(state): State<Arc<GatewaySharedState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
-    // IP-keyed abuse protections (per-IP cap, rate limiting) key off the
-    // socket peer address verbatim. The trusted-proxy / X-Forwarded-For
-    // resolution died with the LAN-trust revert.
-    let client_ip = peer_addr.ip();
+    // IP-keyed abuse protections (per-IP cap, rate limiting), the security
+    // audit log, AND the connect-auth loopback test all read `client_ip`.
+    // Behind a trusted proxy the transport peer is the proxy, so resolve the
+    // real client from forwarding headers first (spoof-safe: untrusted peers'
+    // headers are ignored). `secure` = native TLS OR the proxy's XFF-Proto.
+    let resolved = crate::gateway::trusted_proxy::resolve_client(
+        peer_addr.ip(),
+        &headers,
+        state.trusted_proxy_enabled,
+        &state.trusted_proxy_ips,
+    );
+    let client_ip = resolved.ip;
+    let _secure = state.tls_enabled || resolved.secure; // used by Task 5
 
     // Cross-origin / DNS-rebinding guard. A browser always attaches an
     // `Origin` header to a WS upgrade and cannot forge it, so a malicious page
@@ -169,7 +185,7 @@ pub(super) async fn ws_upgrade_handler(
     // on the reserved desktop semaphore pool; everyone else falls back to
     // the shared pool. See `ConnectionContext::channel_class` for the
     // accepted trade-off.
-    let channel_class = if peer_addr.ip().is_loopback() {
+    let channel_class = if client_ip.is_loopback() {
         ChannelClass::Desktop
     } else {
         ChannelClass::Bot
@@ -1580,5 +1596,19 @@ mod tests {
                 Some(format!("m{i}").as_str())
             );
         }
+    }
+
+    // ── Trusted-proxy IP parsing (F5) ─────────────────────────────────────
+
+    #[test]
+    fn parses_trusted_ips_dropping_garbage() {
+        let parsed = super::parse_trusted_ips(&[
+            "127.0.0.1".to_string(),
+            "::1".to_string(),
+            "not-an-ip".to_string(),
+        ]);
+        assert_eq!(parsed.len(), 2);
+        assert!(parsed.contains(&"127.0.0.1".parse().unwrap()));
+        assert!(parsed.contains(&"::1".parse().unwrap()));
     }
 }

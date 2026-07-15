@@ -47,8 +47,9 @@ pub struct ConnectionState {
     /// wildcard here; `EventScopeGuard` then delivers guarded topics
     /// (approval banners, config.changed) to every connected client.
     pub permissions: Vec<String>,
-    /// Socket peer IP. The per-IP connection cap counts established
-    /// connections by this value.
+    /// Resolved client IP (the trusted-proxy-forwarded client behind a
+    /// reverse proxy, else the raw socket peer). The per-IP connection cap
+    /// counts established connections by this value.
     pub client_ip: std::net::IpAddr,
     /// Surface identity declared by the client on `connect` (or inferred from
     /// loopback when undeclared). Names *what kind of shell* this connection is
@@ -105,6 +106,16 @@ pub struct GatewaySharedState {
     pub idempotency_guard: Arc<crate::gateway::idempotency::IdempotencyGuard>,
     pub event_scope_guard: Arc<EventScopeGuard>,
     pub audit_log: Option<crate::security::audit::SecurityAuditLog>,
+    /// Trusted-proxy toggle (mirror of `[gateway.trusted_proxy] enabled`).
+    pub trusted_proxy_enabled: bool,
+    /// Parsed trusted-proxy peer IPs whose `X-Forwarded-*` are honored.
+    pub trusted_proxy_ips: Vec<std::net::IpAddr>,
+    /// Mirror of `[gateway] allow_insecure_remote`. `false` ⇒ a non-loopback
+    /// insecure connection is refused at upgrade (Task 5).
+    pub allow_insecure_remote: bool,
+    /// True when the gateway terminates TLS in-process (native tiers). Every
+    /// connection is then secure regardless of forwarding headers.
+    pub tls_enabled: bool,
     /// Readiness flag — flipped to true after `agent_init.rs` completes
     /// phase-2 wiring. Read by `/ready` HTTP probe.
     pub ready: Arc<crate::sync_primitives::AtomicBool>,
@@ -194,6 +205,15 @@ pub struct GatewayConfig {
     /// Trust every Origin on the `/ws` upgrade (reverse-proxy escape
     /// hatch). Mirrors `GatewayServerConfig::allow_any_origin`.
     pub allow_any_origin: bool,
+    /// Trusted-proxy toggle. Mirrors `GatewayServerConfig::trusted_proxy.enabled`.
+    pub trusted_proxy_enabled: bool,
+    /// Trusted-proxy peer IPs (raw strings; parsed in `build_router`).
+    /// Mirrors `GatewayServerConfig::trusted_proxy.trusted_ips`.
+    pub trusted_proxy_ips: Vec<String>,
+    /// Mirrors `GatewayServerConfig::allow_insecure_remote`.
+    pub allow_insecure_remote: bool,
+    /// Mirrors `GatewayServerConfig::tls.enabled`.
+    pub tls_enabled: bool,
 }
 
 impl Default for GatewayConfig {
@@ -206,6 +226,10 @@ impl Default for GatewayConfig {
             idle_timeout_secs: 90,
             allowed_origins: Vec::new(),
             allow_any_origin: false,
+            trusted_proxy_enabled: false,
+            trusted_proxy_ips: vec!["127.0.0.1".to_string(), "::1".to_string()],
+            allow_insecure_remote: false,
+            tls_enabled: false,
             lane: LaneConfig::default(),
             require_idempotency_key: false,
         }
@@ -521,6 +545,10 @@ impl GatewayServer {
             idempotency_guard: self.idempotency_guard.clone(),
             event_scope_guard: self.event_scope_guard.clone(),
             audit_log: self.audit_log.clone(),
+            trusted_proxy_enabled: self.config.trusted_proxy_enabled,
+            trusted_proxy_ips: handler::parse_trusted_ips(&self.config.trusted_proxy_ips),
+            allow_insecure_remote: self.config.allow_insecure_remote,
+            tls_enabled: self.config.tls_enabled,
             ready: self.ready.clone(),
             instance_id: self.instance_id.clone(),
             started_at_unix: self.started_at_unix,
