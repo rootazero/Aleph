@@ -236,6 +236,23 @@ impl AppState {
                 }
                 Action::None
             }
+
+            StreamEvent::ContextGauge {
+                context_tokens,
+                context_window,
+                ..
+            } => {
+                // Live context-window occupancy (mirrors the Panel gauge). Only
+                // the numerator/denominator are stored; the event's own
+                // `total_tokens` is deliberately ignored — RunComplete's summary
+                // already owns the running token tally, and adding both would
+                // double-count. Skip windowless frames so the bar never divides
+                // by zero and keeps the last good reading.
+                if context_window > 0 {
+                    self.context_gauge = Some((context_tokens, context_window));
+                }
+                Action::None
+            }
         }
     }
 }

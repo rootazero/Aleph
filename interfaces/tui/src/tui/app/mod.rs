@@ -214,6 +214,12 @@ pub struct AppState {
     pub session_key: String,
     pub model_name: String,
     pub total_tokens: u64,
+    /// Live context-window occupancy `(used_tokens, window_tokens)` from the
+    /// latest `ContextGauge` event. `None` until the session's first gauge
+    /// arrives. The pair always travels together (one event), so a single
+    /// `Option` keeps the half-known state unrepresentable; the denominator is
+    /// server-authoritative per model.
+    pub context_gauge: Option<(u32, u32)>,
     pub is_connected: bool,
 
     // -- Run tracking --
@@ -261,6 +267,7 @@ impl AppState {
             session_key,
             model_name,
             total_tokens: 0,
+            context_gauge: None,
             is_connected: true,
 
             current_run: None,
@@ -556,6 +563,9 @@ impl AppState {
         self.run_started_at = None;
         self.current_run_uses_agent_trace = false;
         self.current_run_trace_summary_applied = false;
+        // New session = different context window; drop the stale gauge until
+        // the next run's first `ContextGauge` refreshes it.
+        self.context_gauge = None;
         self.dialog = None;
         self.palette = None;
         self.focus = Focus::Input;
