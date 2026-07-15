@@ -28,32 +28,28 @@ mod tests {
     }
 
     #[test]
-    fn note_status_default_active_for_legacy() {
+    fn legacy_note_has_empty_supersession_lists() {
         let md = "---\ncategory: skill\ntags: []\ncreated: \"2026-04-29\"\nupdated: \"2026-04-29\"\n---\n\n- f\n";
         let n = KnowledgeNote::from_markdown("legacy", md).unwrap();
-        assert_eq!(n.status, types::NoteStatus::Active);
         assert!(n.supersedes.is_empty());
         assert!(n.superseded_by.is_empty());
     }
 
     #[test]
-    fn note_status_round_trip_contradicted() {
+    fn supersession_lists_round_trip() {
         let n = KnowledgeNote {
             title: "x".into(),
             category: "preference".into(),
             facts: vec!["body".into()],
-            status: types::NoteStatus::Contradicted,
             supersedes: vec!["preference/old".into()],
             superseded_by: vec!["preference/new".into()],
             ..Default::default()
         };
         let md = n.to_markdown();
-        assert!(md.contains("status: contradicted"));
         assert!(md.contains("supersedes: [preference/old]"));
         assert!(md.contains("superseded_by: [preference/new]"));
 
         let parsed = KnowledgeNote::from_markdown("x", &md).unwrap();
-        assert_eq!(parsed.status, types::NoteStatus::Contradicted);
         assert_eq!(parsed.supersedes, vec!["preference/old".to_string()]);
         assert_eq!(parsed.superseded_by, vec!["preference/new".to_string()]);
     }

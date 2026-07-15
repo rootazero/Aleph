@@ -16,6 +16,7 @@ pub enum NoteWriteAction {
     Update,
     Append,
     Delete,
+    Supersede,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +100,18 @@ impl NoteWriteGate for DefaultNoteWriteGate {
         {
             return self
                 .defer(candidate, "delete of critical note requires review")
+                .await;
+        }
+
+        // Supersede of a High/Critical note deprecates load-bearing knowledge —
+        // defer for review. The candidate's severity is the *superseded* note's,
+        // loaded by the ingestor (it is not indexed). Confidence-independent: the
+        // risk is in retiring an important note, not in the writer's certainty.
+        if matches!(candidate.action, NoteWriteAction::Supersede)
+            && candidate.note.severity >= Severity::High
+        {
+            return self
+                .defer(candidate, "supersede of high/critical note requires review")
                 .await;
         }
 
@@ -238,6 +251,32 @@ mod tests {
         assert!(matches!(
             gate.evaluate(&cand).await.unwrap(),
             GateOutcome::Defer { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn supersede_high_severity_defers() {
+        // High confidence (0.95) so neither confidence rule fires — only the
+        // Supersede-of-High/Critical rule can produce this Defer.
+        let store = make_store();
+        let gate = DefaultNoteWriteGate::new(store, Default::default());
+        let mut cand = make_candidate(Severity::High, 0.95);
+        cand.action = NoteWriteAction::Supersede;
+        assert!(matches!(
+            gate.evaluate(&cand).await.unwrap(),
+            GateOutcome::Defer { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn supersede_low_severity_admits() {
+        let store = make_store();
+        let gate = DefaultNoteWriteGate::new(store, Default::default());
+        let mut cand = make_candidate(Severity::Low, 0.9);
+        cand.action = NoteWriteAction::Supersede;
+        assert!(matches!(
+            gate.evaluate(&cand).await.unwrap(),
+            GateOutcome::Accept(_)
         ));
     }
 }

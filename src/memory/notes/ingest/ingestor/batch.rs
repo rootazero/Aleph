@@ -3,14 +3,16 @@
 //! enforcement, keyword linking, gate filtering).
 
 use crate::error::AlephError;
-use crate::memory::notes::governance::gate::GateOutcome;
+use crate::memory::notes::governance::gate::{CandidateNote, GateOutcome, NoteWriteAction};
 use crate::memory::notes::ingest::apply::{ApplyError, CompoundApplyTx};
 use crate::memory::notes::ingest::plan::{ApplyReport, IngestPlan, PageOp};
 use crate::memory::notes::ingest::prompts::PROMPT_LINK_REPAIR;
 use crate::memory::notes::ingest::ref_table::{RefTable, ResolveStats};
 use crate::memory::notes::ingest::retrieve::{gather_related, RelatedPage};
 use crate::memory::notes::keyword_linker::{extract_keywords, pair_by_overlap, NoteForExtraction};
+use crate::memory::notes::note::sanitize_title;
 use crate::memory::notes::store::NoteStore;
+use crate::memory::notes::KnowledgeNote;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
 use crate::utils::json_extract::extract_json_robust;
@@ -683,7 +685,16 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
         };
         let mut out: Vec<PageOp> = Vec::with_capacity(ops.len());
         for op in ops {
-            match candidate_from_pageop(agent_id, &op) {
+            // `Supersede` is gated on the *superseded* note's existing severity,
+            // which lives on disk rather than in the index — an async lookup the
+            // sync `candidate_from_pageop` can't perform. Build its candidate
+            // here so the gate can defer supersession of High/Critical knowledge.
+            let candidate = if let PageOp::Supersede { old_path, .. } = &op {
+                self.supersede_candidate(agent_id, &op, old_path).await
+            } else {
+                candidate_from_pageop(agent_id, &op)
+            };
+            match candidate {
                 Some(candidate) => match gate.evaluate(&candidate).await? {
                     GateOutcome::Accept(_) => out.push(op),
                     GateOutcome::Defer { queue_id, reason } => {
@@ -695,12 +706,52 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                         );
                     }
                 },
-                // Op kinds the gate does not understand in this scoped
-                // commit (Append/Update/Contradict/Link/Supersede) pass
-                // through unchanged.
+                // Op kinds the gate does not understand in this scoped commit
+                // (Append/Update/Link, plus a Supersede whose target can't be
+                // read) pass through unchanged — applied immediately.
                 None => out.push(op),
             }
         }
         Ok(out)
+    }
+
+    /// Build a gate candidate for a `Supersede` op from the *superseded* note's
+    /// existing severity. Severity is not an index column, so the target note is
+    /// read from disk and parsed. Returns `None` when the target can't be read or
+    /// the op can't be serialized (fail-open → the supersession applies
+    /// immediately, matching the pre-governance bypass). The serialized op rides
+    /// along as `replay_op` so an approved deferral replays the supersession
+    /// verbatim rather than losing it.
+    async fn supersede_candidate(
+        &self,
+        agent_id: &str,
+        op: &PageOp,
+        old_path: &str,
+    ) -> Option<CandidateNote> {
+        let (category, filename) = old_path.split_once('/')?;
+        let safe = sanitize_title(filename).ok()?;
+        let disk = self
+            .memory_dir
+            .join(agent_id)
+            .join(category)
+            .join(format!("{safe}.md"));
+        let content = tokio::fs::read_to_string(&disk).await.ok()?;
+        let target = KnowledgeNote::from_markdown(&safe, &content).ok()?;
+        let replay = serde_json::to_value(op).ok()?;
+        Some(CandidateNote {
+            agent_id: agent_id.to_string(),
+            category: category.to_string(),
+            // A minimal note carrying only the risk signal the gate reads.
+            note: KnowledgeNote {
+                severity: target.severity,
+                ..KnowledgeNote::default()
+            },
+            source_path: None,
+            fact_provenance: Vec::new(),
+            action: NoteWriteAction::Supersede,
+            bypass_review: false,
+            contradicts_existing: false,
+            replay_op: Some(replay),
+        })
     }
 }

@@ -83,9 +83,6 @@ pub struct KnowledgeNote {
     /// Source synthesis-note paths or raw-memory IDs that produced this note.
     /// Empty for hand-authored / legacy notes.
     pub source_notes: Vec<String>,
-    /// Governance status. `Active` for legacy notes. Phase C2 supersession /
-    /// contradiction handling sets this to `Deprecated` or `Contradicted`.
-    pub status: types::NoteStatus,
     /// Note paths this note supersedes (i.e. this note replaces them).
     /// Empty for legacy / non-superseding notes.
     pub supersedes: Vec<String>,
@@ -133,7 +130,6 @@ impl Default for KnowledgeNote {
             confidence: 1.0,
             severity: types::Severity::Low,
             source_notes: Vec::new(),
-            status: types::NoteStatus::default(),
             supersedes: Vec::new(),
             superseded_by: Vec::new(),
             fact_provenance: Vec::new(),
@@ -180,7 +176,6 @@ impl KnowledgeNote {
             confidence: frontmatter.confidence,
             severity: frontmatter.severity,
             source_notes: frontmatter.source_notes,
-            status: frontmatter.status,
             supersedes: frontmatter.supersedes,
             superseded_by: frontmatter.superseded_by,
             fact_provenance,
@@ -243,12 +238,6 @@ impl KnowledgeNote {
             "source_notes: {}\n",
             yaml_inline_array(&self.source_notes)
         ));
-        let status_str = match self.status {
-            types::NoteStatus::Active => "active",
-            types::NoteStatus::Deprecated => "deprecated",
-            types::NoteStatus::Contradicted => "contradicted",
-        };
-        out.push_str(&format!("status: {status_str}\n"));
         out.push_str(&format!(
             "supersedes: {}\n",
             yaml_inline_array(&self.supersedes)

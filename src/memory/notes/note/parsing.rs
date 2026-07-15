@@ -74,8 +74,6 @@ pub(super) struct Frontmatter {
     #[serde(default, alias = "source_facts")]
     pub(super) source_notes: Vec<String>,
     #[serde(default)]
-    pub(super) status: super::types::NoteStatus,
-    #[serde(default)]
     pub(super) supersedes: Vec<String>,
     #[serde(default)]
     pub(super) superseded_by: Vec<String>,

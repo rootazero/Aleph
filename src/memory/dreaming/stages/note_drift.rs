@@ -177,7 +177,7 @@ impl DreamStage for NoteDriftStage {
                 let verdict = response.text_content().trim().to_uppercase();
 
                 if verdict.contains("CONTRADICTORY") {
-                    mark_contradictory(&ctx, &linked_path).await;
+                    mark_contradictory(&ctx, &linked_path, recent_path).await;
                     // Invalidate cached content for the modified note.
                     ctx.note_contents.remove(&linked_path);
                     contradictions_found += 1;
@@ -244,9 +244,20 @@ fn resolve_link_path(ctx: &DreamContext, target: &str) -> Option<String> {
         .map(|n| n.path.clone())
 }
 
-/// Append a `## Superseded` section to the note at `path` if it is not already
-/// present, signalling that some information may conflict with a newer note.
-async fn mark_contradictory(ctx: &DreamContext, path: &str) {
+/// Mark the note at `path` as superseded by the newer note `superseded_by`
+/// (the recently-updated note that contradicts it).
+///
+/// The heading is written in the bare `## Superseded by [[target]]` form — no
+/// date suffix — precisely so `sync_body_to_frontmatter`'s promotion regex
+/// matches it, `index_note` materializes a `superseded_by` typed edge, and
+/// retrieval force-surfaces the newer note alongside this one. A target-less
+/// `## Superseded` banner (the earlier form) never promoted, so the loop was
+/// silently open.
+///
+/// `CONTRADICTORY` is a symmetric verdict, so "the recently-updated note
+/// supersedes the older one it contradicts" is a newer-wins governance default,
+/// not an LLM attestation of direction.
+async fn mark_contradictory(ctx: &DreamContext, path: &str, superseded_by: &str) {
     let file_path = match note_file_path(ctx, path) {
         Some(p) => p,
         None => return,
@@ -260,15 +271,10 @@ async fn mark_contradictory(ctx: &DreamContext, path: &str) {
         }
     };
 
-    if content.contains("## Superseded") {
-        return; // Already marked — idempotent.
-    }
-
-    let updated = format!(
-        "{content}\n\n## Superseded\n\n\
-         _Some information in this note may be outdated or contradicted by a more recent note. \
-         Review linked notes for current information._\n"
-    );
+    let updated = match apply_supersede_banner(&content, superseded_by) {
+        Some(u) => u,
+        None => return, // Already superseded by this target — idempotent.
+    };
 
     if let Err(e) = atomic_write_file(&file_path, &updated).await {
         tracing::warn!(path = %file_path.display(), error = %e, "NoteDrift: failed to write contradiction marker");
@@ -283,6 +289,31 @@ async fn mark_contradictory(ctx: &DreamContext, path: &str) {
             .index_file(&ctx.agent_id, category, &file_path)
             .await;
     }
+}
+
+/// Build the supersession banner appended to a contradicted note.
+///
+/// The heading MUST stay in the bare `## Superseded by [[target]]` form (no date
+/// suffix) so `sync_body_to_frontmatter` promotes it into a `superseded_by`
+/// edge — the whole point of the marker. `supersede_banner_promotes` guards this.
+fn supersede_banner(superseded_by: &str) -> String {
+    format!(
+        "## Superseded by [[{superseded_by}]]\n\n\
+         _Superseded by a more recent, contradicting note. \
+         See the linked note for current information._\n"
+    )
+}
+
+/// Append the supersession banner to `content`, or `None` if `content` already
+/// records this supersessor. Idempotency is *per target* — distinct newer notes
+/// may each add their own banner, so the guard keys on the target-tagged
+/// heading, not the bare `## Superseded` prefix.
+fn apply_supersede_banner(content: &str, superseded_by: &str) -> Option<String> {
+    let heading = format!("## Superseded by [[{superseded_by}]]");
+    if content.contains(&heading) {
+        return None;
+    }
+    Some(format!("{content}\n\n{}", supersede_banner(superseded_by)))
 }
 
 /// Insert `stale: true` into the YAML frontmatter of the note at `path`.
@@ -471,51 +502,27 @@ mod tests {
     // mark_contradictory helper — unit test with temp file
     // -----------------------------------------------------------------------
 
-    #[tokio::test]
-    async fn mark_contradictory_appends_superseded_section() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("note.md");
-
+    #[test]
+    fn apply_supersede_banner_appends_target_and_preserves_body() {
         let original = "---\ncategory: reference\n---\n\n- A fact\n";
-        tokio::fs::write(&file, original).await.unwrap();
-
-        let content = tokio::fs::read_to_string(&file).await.unwrap();
-        assert!(!content.contains("## Superseded"));
-
-        // Replicate mark_contradictory logic
-        let updated = format!(
-            "{content}\n\n## Superseded\n\n\
-             _Some information in this note may be outdated or contradicted by a more recent note. \
-             Review linked notes for current information._\n"
-        );
-        tokio::fs::write(&file, &updated).await.unwrap();
-
-        let result = tokio::fs::read_to_string(&file).await.unwrap();
+        let updated = apply_supersede_banner(original, "reference/new").unwrap();
         assert!(
-            result.contains("## Superseded"),
-            "Superseded section must be appended"
+            updated.contains("## Superseded by [[reference/new]]"),
+            "target-tagged section must be appended"
         );
-        assert!(result.contains("- A fact"), "Original body preserved");
+        assert!(updated.contains("- A fact"), "original body preserved");
     }
 
-    #[tokio::test]
-    async fn mark_contradictory_idempotent_when_superseded_present() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("note.md");
-
-        let original =
-            "---\ncategory: reference\n---\n\n- A fact\n\n## Superseded\n\n_Already marked._\n";
-        tokio::fs::write(&file, original).await.unwrap();
-
-        // Guard condition: if "## Superseded" already present, do nothing.
-        let content = tokio::fs::read_to_string(&file).await.unwrap();
-        assert!(
-            content.contains("## Superseded"),
-            "Pre-condition: already marked"
-        );
-        // File unchanged — no second append.
-        let after = tokio::fs::read_to_string(&file).await.unwrap();
-        assert_eq!(content, after);
+    #[test]
+    fn apply_supersede_banner_is_idempotent_per_target() {
+        let base = "---\ncategory: reference\n---\n\n- A fact\n";
+        let once = apply_supersede_banner(base, "reference/new").unwrap();
+        // Same supersessor already recorded → no second append.
+        assert!(apply_supersede_banner(&once, "reference/new").is_none());
+        // A *different* supersessor is not blocked (multiple may accumulate).
+        let twice = apply_supersede_banner(&once, "reference/other").unwrap();
+        assert!(twice.contains("## Superseded by [[reference/new]]"));
+        assert!(twice.contains("## Superseded by [[reference/other]]"));
     }
 
     // -----------------------------------------------------------------------
@@ -587,5 +594,20 @@ mod tests {
                 .unwrap_or(false)
         });
         assert!(found.is_none());
+    }
+
+    /// The contradiction→supersession loop only closes if the banner's heading
+    /// is promotable by `sync_body_to_frontmatter`. Guards against a regression
+    /// (e.g. re-adding a date suffix, or reverting to a target-less banner) that
+    /// would silently stop materializing the `superseded_by` edge.
+    #[test]
+    fn supersede_banner_promotes() {
+        let banner = supersede_banner("reference/new");
+        assert!(banner.starts_with("## Superseded by [[reference/new]]\n"));
+
+        let md = format!("---\ncategory: reference\ntags: []\n---\n\n- x\n\n{banner}");
+        let mut n = crate::memory::notes::KnowledgeNote::from_markdown("old", &md).unwrap();
+        crate::memory::notes::governance::supersession::sync_body_to_frontmatter(&mut n, &md);
+        assert_eq!(n.superseded_by, vec!["reference/new".to_string()]);
     }
 }

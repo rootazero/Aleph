@@ -8,8 +8,14 @@
 
 use crate::memory::notes::KnowledgeNote;
 
+// Matches a `## Superseded by [[target]]` heading, tolerating an optional
+// trailing ` (YYYY-MM-DD)` date annotation after the wikilink. The ingest
+// supersede path (`apply.rs::mark_superseded`) and the orientation prompts both
+// emit the *dated* form; without the optional `(...)` group the anchor `\s*$`
+// rejected them, so those supersessions never promoted to a `superseded_by`
+// edge. The bare form (written by `NoteDrift::mark_contradictory`) still matches.
 static SUPERSEDED_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"(?m)^## Superseded by \[\[([^\]]+)\]\]\s*$").unwrap()
+    regex::Regex::new(r"(?m)^## Superseded by \[\[([^\]]+)\]\](?:\s*\([^)]*\))?\s*$").unwrap()
 });
 
 /// Read the rendered markdown for `## Superseded by [[X]]` headings and merge
@@ -79,6 +85,17 @@ mod tests {
         let again = ensure_supersession_section(md, &n);
         let count = again.matches("## Superseded by [[preference/new]]").count();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn dated_body_section_promotes_to_frontmatter() {
+        // The ingest/orientation path writes `## Superseded by [[X]] (YYYY-MM-DD)`.
+        // The trailing date must not defeat promotion, or the supersession edge
+        // never materializes.
+        let md = "---\ncategory: preference\ntags: []\n---\n\n- claim\n\n## Superseded by [[preference/new]] (2026-07-15)\n";
+        let mut n = KnowledgeNote::from_markdown("old", md).unwrap();
+        sync_body_to_frontmatter(&mut n, md);
+        assert_eq!(n.superseded_by, vec!["preference/new".to_string()]);
     }
 
     #[test]

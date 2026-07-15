@@ -499,7 +499,15 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
         crate::utils::atomic_write::atomic_write_file(&disk, &combined)
             .await
             .map_err(|e| AlephError::other(format!("supersede: write: {e}")))?;
-        if let Ok(n) = KnowledgeNote::from_markdown(&safe, &combined) {
+        if let Ok(mut n) = KnowledgeNote::from_markdown(&safe, &combined) {
+            // This path calls `store.index_note` directly, bypassing the
+            // indexer's normal promotion step, so promote the `## Superseded by
+            // [[new]]` body heading into the `superseded_by` frontmatter list
+            // ourselves — otherwise `index_note` has no list to materialize into
+            // a typed edge and the supersession is never force-surfaced.
+            crate::memory::notes::governance::supersession::sync_body_to_frontmatter(
+                &mut n, &combined,
+            );
             self.store.index_note(&n, self.agent_id, &category).await?;
         }
         Ok(())
