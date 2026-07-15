@@ -222,7 +222,7 @@ async fn open_settings_uri(kind: PermissionKind) -> bool {
             .args(["/C", "start", "", uri])
             .status()
             .await
-            .map_or(false, |s| s.success())
+            .is_ok_and(|s| s.success())
     }
     #[cfg(not(windows))]
     {

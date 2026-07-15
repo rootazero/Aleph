@@ -171,7 +171,7 @@ impl TokenRefreshManager {
         );
 
         let _new_tokens = provider
-            .refresh_token_with(metadata, client_id, &refresh_token)
+            .refresh_token_with(metadata, client_id, refresh_token)
             .await?;
 
         tracing::info!(server = %server_name, "Token refreshed successfully");

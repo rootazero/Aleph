@@ -306,7 +306,7 @@ fn collect_project_skills_dirs(
         }
 
         // Stop at git root or if we've reached filesystem root
-        if stop_at.map_or(false, |stop| current == stop) {
+        if stop_at.is_some_and(|stop| current == stop) {
             break;
         }
 

@@ -399,7 +399,7 @@ impl AgentRuntime {
         // logged inside `persist_transcript`.
         let transcript_for_persist = transcript.clone();
         let chain_id_for_persist = self.child_chain.chain_id.clone();
-        let _ = tokio::task::spawn_blocking(move || {
+        let _handle = tokio::task::spawn_blocking(move || {
             persist_transcript(&transcript_for_persist, &chain_id_for_persist);
         });
 

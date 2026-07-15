@@ -192,7 +192,7 @@ impl SelfConfigTool {
     }
 
     fn read_file(&self, file_name: &str) -> Result<SelfConfigOutput> {
-        validate_identity_file_name(file_name).map_err(|m| ToolError::InvalidArgs(m.into()))?;
+        validate_identity_file_name(file_name).map_err(ToolError::InvalidArgs)?;
         let path = self.agent_dir.join(file_name);
         match std::fs::read_to_string(&path) {
             Ok(content) => Ok(SelfConfigOutput {
@@ -225,7 +225,7 @@ impl SelfConfigTool {
             .into());
         }
 
-        validate_identity_file_name(file_name).map_err(|m| ToolError::InvalidArgs(m.into()))?;
+        validate_identity_file_name(file_name).map_err(ToolError::InvalidArgs)?;
 
         if content.len() > MAX_FILE_CONTENT_SIZE {
             return Ok(SelfConfigOutput {

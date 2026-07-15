@@ -99,7 +99,7 @@ fn resolve_result_budget_under(
     // `RegistryToolAdapter` (which does not carry the trait value). Their budget
     // stays here until that adapter forwards declared budgets. `bash` (8k) ==
     // the default, so only the non-default ones need arms.
-    let declared = explicit.or_else(|| match name {
+    let declared = explicit.or(match name {
         "Grep" | "search_files" => Some(6_000),
         "web_fetch" => Some(10_000),
         _ => Some(DEFAULT_RESULT_BUDGET_TOKENS),
