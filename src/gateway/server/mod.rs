@@ -676,20 +676,18 @@ impl GatewayServer {
         });
     }
 
-    /// Emit a one-line operator warning when the gateway binds a non-loopback
-    /// interface. Under the LAN-trust model the Gateway token is then the only
-    /// thing between the network and full operator authority — loopback binds
-    /// (the zero-config default) are silent.
-    fn warn_if_network_exposed(&self) {
-        if !self.addr.ip().is_loopback() {
-            warn!(
-                "Gateway bound to non-loopback {} — every device that presents the \
-                 Gateway token gains full operator authority (PTY/shell included). \
-                 Share the token only over a trusted channel and rotate it if it may \
-                 have leaked.",
-                self.addr
-            );
+    /// Refuse to boot if the gateway would serve plaintext to the network.
+    /// Loopback / TLS / trusted-proxy / explicit-opt-out all pass.
+    fn check_network_exposure(&self) -> Result<(), GatewayError> {
+        if let Some(msg) = insecure_exposure_refused(
+            self.addr.ip().is_loopback(),
+            self.config.tls_enabled,
+            self.config.trusted_proxy_enabled,
+            self.config.allow_insecure_remote,
+        ) {
+            return Err(GatewayError::ConnectionError(msg));
         }
+        Ok(())
     }
 
     /// Run the Gateway server
@@ -699,7 +697,7 @@ impl GatewayServer {
     pub async fn run(&self) -> Result<(), GatewayError> {
         self.spawn_background_tasks();
         let router = self.build_router();
-        self.warn_if_network_exposed();
+        self.check_network_exposure()?;
 
         // Native TLS tiers terminate in-process via axum-server's own listener;
         // plaintext binds its own listener below and stays on axum::serve. The
@@ -753,7 +751,7 @@ impl GatewayServer {
     ) -> Result<(), GatewayError> {
         self.spawn_background_tasks();
         let router = self.build_router();
-        self.warn_if_network_exposed();
+        self.check_network_exposure()?;
 
         // Native TLS tiers terminate in-process via axum-server's own listener;
         // plaintext binds its own listener below and stays on axum::serve. The
@@ -828,6 +826,28 @@ fn install_ring_provider() {
     ONCE.call_once(|| {
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
+}
+
+/// Boot-time verdict: `Some(diagnostic)` when the server would expose plaintext
+/// to the network and must refuse to start. Loopback bind, any native-TLS tier,
+/// a trusted-proxy (TLS-terminating) upstream, or an explicit
+/// `allow_insecure_remote` all pass.
+fn insecure_exposure_refused(
+    host_is_loopback: bool,
+    tls_enabled: bool,
+    trusted_proxy_enabled: bool,
+    allow_insecure_remote: bool,
+) -> Option<String> {
+    if host_is_loopback || tls_enabled || trusted_proxy_enabled || allow_insecure_remote {
+        return None;
+    }
+    Some(
+        "gateway would serve PLAINTEXT on a non-loopback interface. Refusing to start. \
+         Fix: enable [gateway.tls], OR front it with a TLS reverse proxy and set \
+         [gateway.trusted_proxy] enabled = true, OR knowingly set \
+         [gateway] allow_insecure_remote = true."
+            .to_string(),
+    )
 }
 
 /// Gateway server errors
@@ -907,6 +927,20 @@ mod tests {
     async fn node_registry_is_empty_on_fresh_server() {
         let server = GatewayServer::new("127.0.0.1:0".parse().unwrap());
         assert!(server.node_registry.list_environments().is_empty());
+    }
+
+    #[test]
+    fn boot_gate_refuses_only_plaintext_non_loopback() {
+        // Default loopback install: allowed.
+        assert!(super::insecure_exposure_refused(true, false, false, false).is_none());
+        // Non-loopback plaintext, no proxy, not allowed ⇒ refuse.
+        assert!(super::insecure_exposure_refused(false, false, false, false).is_some());
+        // Non-loopback but native TLS ⇒ allowed.
+        assert!(super::insecure_exposure_refused(false, true, false, false).is_none());
+        // Non-loopback behind trusted proxy ⇒ allowed.
+        assert!(super::insecure_exposure_refused(false, false, true, false).is_none());
+        // Non-loopback plaintext but explicitly allowed ⇒ allowed.
+        assert!(super::insecure_exposure_refused(false, false, false, true).is_none());
     }
 }
 
