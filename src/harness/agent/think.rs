@@ -1184,7 +1184,6 @@ impl AgentHarness {
                 biased;
                 _ = parent_cancel.cancelled() => Err(HarnessError::Cancelled),
                 _ = tokio::time::sleep(budget) => Err(HarnessError::StalledTurn {
-                    phase: crate::harness::trait_def::TurnPhase::Think,
                     elapsed: started.elapsed(),
                 }),
                 r = fut => Ok(r),

@@ -45,6 +45,11 @@ struct SaveTracesParam {
     on: bool,
 }
 
+// `JsonRpcResponse` is the wire response value type this module returns by
+// value everywhere; the `Err` here is really a ready-to-send response, not an
+// error to bubble. Boxing it to shave stack bytes would add a heap alloc on
+// every invalid-params path plus a deref at all four call sites — not worth it.
+#[allow(clippy::result_large_err)]
 fn parse<T: for<'de> Deserialize<'de>>(req: &JsonRpcRequest) -> Result<T, JsonRpcResponse> {
     let params = req
         .params

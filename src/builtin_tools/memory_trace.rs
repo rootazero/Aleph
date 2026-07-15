@@ -169,7 +169,7 @@ impl MemoryTraceTool {
         if args.kind == TraceKind::Raw {
             let fetched = self
                 .db
-                .get_raws_by_ids(agent, &[args.target.clone()])
+                .get_raws_by_ids(agent, std::slice::from_ref(&args.target))
                 .await
                 .map_err(|e| anyhow::anyhow!("get_raws_by_ids(raw): {e}"))?;
             if let Some(r) = fetched.first() {

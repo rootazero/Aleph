@@ -139,7 +139,7 @@ impl CommandLedger {
                 rec.count = rec.count.saturating_add(1);
                 rec.last_seen = now;
                 let occurrence = rec.count;
-                (since <= ADVISORY_WINDOW).then(|| RepeatAdvisory {
+                (since <= ADVISORY_WINDOW).then_some(RepeatAdvisory {
                     seconds_since_last: since.as_secs(),
                     occurrence,
                 })

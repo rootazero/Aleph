@@ -182,10 +182,31 @@ const BUDGETED: [&str; 12] = [
 /// redline itself — the honest, ratcheted figure. The discipline is unchanged: it
 /// only moves down without a written reason.
 ///
+/// **Batch 5 (2026-07-15): 5043 → 5035.** Not a relocation campaign — a fifth
+/// gap-analysis pass (vs the Lilian Weng harness article + codex/pi/hermes) found
+/// the loop already leads its reference set, so this is the honest small residue:
+/// one vestige removed and one latent bug fixed, netting **−8**.
+///
+///   - **−~20, `trait_def.rs` + threading.** `TurnPhase::Act { tool_name }` and
+///     its `Display` arm went dead when Batch 3 sank the Act wall clock to the
+///     tool layer — `StalledTurn.phase` has been invariably `Think` since. The
+///     whole `TurnPhase` enum is deleted, `HarnessError::StalledTurn` drops its
+///     `phase` field (the `#[error]` string hardcodes "Think"), the two agent.rs
+///     consumers feed the separate cross-layer `TerminateReason::TurnTimeout {
+///     phase: String }` contract the literal "Think", and the `mod.rs` re-export
+///     is dropped. Unconstructable variant → zero behaviour change.
+///   - **+~12, `guardrails.rs`.** The tool-call `Sanitize` arm reparsed the
+///     redacted-JSON string and, on failure, fell back to `Value::String(text)` —
+///     silently replacing a structured args *object* with one opaque string arg.
+///     A parse failure now keeps the model's original structured args and warns;
+///     a shape change is worse than an un-applied sanitize.
+///
+/// Net **−8**, taking the loop to **5035**.
+///
 /// Measured, not hand-counted: this test is the measurement. The number here is
 /// whatever `the_harness_line_budget_does_not_grow` prints when it fails, and
 /// nothing else — that is the whole point of the file.
-const CEILING: usize = 5043;
+const CEILING: usize = 5035;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

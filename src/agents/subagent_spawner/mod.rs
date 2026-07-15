@@ -167,7 +167,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         Some(crate::agents::IsolationMode::Worktree) => {
             // `current_dir()` is a blocking syscall; run it on the blocking pool
             // so the async runtime thread stays available.
-            let repo_root = tokio::task::spawn_blocking(|| std::env::current_dir())
+            let repo_root = tokio::task::spawn_blocking(std::env::current_dir)
                 .await
                 .map_err(|e| format!("sub-agent failed: cwd join: {e}"))?
                 .map_err(|e| format!("sub-agent failed: cwd: {e}"))?;
@@ -231,7 +231,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 (wt, repo)
             })
             .await
-            .unwrap_or_else(|_| (wt, repo));
+            .unwrap_or((wt, repo));
             Some(crate::tools::fs_scope::FsScope::worktree(wt, repo))
         }
         None => None,

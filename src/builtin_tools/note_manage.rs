@@ -1367,9 +1367,25 @@ fn validate_category(category: &str) -> Result<()> {
 /// This is the production consumer the `first_threat_message` helper was
 /// designed for; without it the entire Strict scope (and its persistence
 /// patterns) was unreachable in production.
-fn scan_note_for_threats(text: &str) -> Result<()> {
-    use crate::security::injection_patterns::{first_threat_message, ThreatScope};
-    match first_threat_message(text, ThreatScope::Strict) {
+pub(crate) fn scan_note_for_threats(text: &str) -> Result<()> {
+    scan_note_at_scope(text, crate::security::injection_patterns::ThreatScope::Strict)
+}
+
+/// Exfiltration-only note scan (`ThreatScope::All`): flags classic
+/// data-exfiltration payloads but NOT the SSH-backdoor / persistence / C2 /
+/// hardcoded-credential patterns that would false-positive on legitimate
+/// security-research prose. Used on the untrusted-content write paths (query
+/// filer synthesis, panel node edits) where a Strict scan would silently drop
+/// or reject a user's own security notes.
+pub(crate) fn scan_note_for_exfiltration(text: &str) -> Result<()> {
+    scan_note_at_scope(text, crate::security::injection_patterns::ThreatScope::All)
+}
+
+fn scan_note_at_scope(
+    text: &str,
+    scope: crate::security::injection_patterns::ThreatScope,
+) -> Result<()> {
+    match crate::security::injection_patterns::first_threat_message(text, scope) {
         Some(reason) => Err(AlephError::tool(reason)),
         None => Ok(()),
     }

@@ -73,6 +73,7 @@ pub mod node_file;
 pub mod node_invoke;
 pub mod node_invoke_many;
 pub mod node_list;
+pub mod note_graph_query;
 pub mod note_manage;
 pub mod note_orient;
 pub mod note_schema;

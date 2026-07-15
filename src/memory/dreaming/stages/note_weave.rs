@@ -231,7 +231,7 @@ impl DreamStage for NoteWeaveStage {
 
         let inputs: Vec<NoteForExtraction> = orphan_batch
             .iter()
-            .chain(peer_batch.into_iter())
+            .chain(peer_batch)
             .map(|path| build_extraction_input(path, orphan_bodies.get(path).map(String::as_str)))
             .collect();
 

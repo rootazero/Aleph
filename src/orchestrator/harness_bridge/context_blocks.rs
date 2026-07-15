@@ -87,8 +87,8 @@ pub async fn live_deadline_status(session_key: &str) -> Option<String> {
     Some(lines.join("\n"))
 }
 
-/// Fetch the session's active timer loop as a compact summary (watch prompt
-/// + status) for `TimerLoopLayer`. The clock-gated sibling of
+/// Fetch the session's active timer loop as a compact summary (watch
+/// prompt + status) for `TimerLoopLayer`. The clock-gated sibling of
 /// `active_standing_goal`: between ticks the model had no idea a watch was
 /// running in this session (the tick reminder exists only inside tick
 /// turns), so on an ordinary user turn it could neither report on the loop

@@ -895,7 +895,7 @@ impl McpManagerActor {
         Some(McpServerStatusDetail {
             id: server_id.to_string(),
             name: config.name.clone(),
-            transport: config.transport.clone(),
+            transport: config.transport,
             health,
             tools,
             resources,

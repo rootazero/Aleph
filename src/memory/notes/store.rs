@@ -367,6 +367,20 @@ pub trait NoteStore: Send + Sync {
         Ok(vec![])
     }
 
+    /// Distinct edge relation-type vocabulary with counts over `status='active'`
+    /// links for one agent, most frequent first. A NULL relation (a plain body
+    /// wikilink, not a dream-stage typed edge) is labelled `"link"`. Powers the
+    /// `note_graph_query` schema-introspection op so the model can discover the
+    /// graph's de-facto edge taxonomy before querying. Default impl returns
+    /// empty so non-SQLite stores and test mocks compile unchanged.
+    async fn relation_type_counts(
+        &self,
+        agent_id: &str,
+    ) -> Result<Vec<(String, i64)>, AlephError> {
+        let _ = agent_id;
+        Ok(vec![])
+    }
+
     /// Replace the materialized 4-signal relatedness edges for `agent_id`.
     /// Rows are `(node_path, related_path, score)`.
     async fn replace_graph_related(

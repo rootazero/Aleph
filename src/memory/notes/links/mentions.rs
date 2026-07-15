@@ -38,7 +38,7 @@ fn name_qualifies(name: &str) -> bool {
     }
 }
 
-const fn is_cjk(c: char) -> bool {
+pub(crate) const fn is_cjk(c: char) -> bool {
     matches!(c as u32,
         0x4E00..=0x9FFF | 0x3400..=0x4DBF | 0x3040..=0x30FF | 0xAC00..=0xD7AF)
 }

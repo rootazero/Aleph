@@ -632,9 +632,9 @@ async fn turn_timeout_returns_ok_with_hit_limit_not_err() {
         "hit_limit should be true after timeout"
     );
 
-    // P2: TurnTimeout is distinguishable from other cap reasons. The
-    // phase string comes from `TurnPhase::Think` because the sleeping
-    // provider hangs the LLM call (not a tool call).
+    // P2: TurnTimeout is distinguishable from other cap reasons. The phase
+    // string is always "Think" — `turn_timeout` only judges the LLM call; a
+    // tool's wall clock lives in the tool layer as a recoverable timeout.
     match harness.terminate_reason() {
         crate::orchestrator::dispatch::TerminateReason::TurnTimeout { phase, .. } => {
             assert!(

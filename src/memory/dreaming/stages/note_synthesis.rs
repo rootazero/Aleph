@@ -97,7 +97,7 @@ impl DreamStage for NoteSynthesisStage {
             let synthesis_text = response.text_content();
 
             // Build the synthesis note from its source member paths.
-            let note = build_synthesis_note(&category, &synthesis_text, note_paths.to_vec());
+            let note = build_synthesis_note(category, &synthesis_text, note_paths.to_vec());
 
             // Ensure the synthesis directory exists (not in CATEGORY_DIRS, create manually)
             let synthesis_dir = ctx

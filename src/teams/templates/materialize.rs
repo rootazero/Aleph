@@ -310,7 +310,7 @@ fn topo_sort(tpl: &TeamTemplate) -> Result<Vec<&super::types::TemplateTask>, Tea
             }
         }
         newly_ready.sort_by_key(|k| std::cmp::Reverse(pos.get(*k).copied().unwrap_or(0)));
-        ready.extend(newly_ready.drain(..));
+        ready.append(&mut newly_ready);
     }
 
     if out.len() != tpl.tasks.len() {

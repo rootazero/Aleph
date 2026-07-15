@@ -304,6 +304,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true,
     },
     BuiltinToolDefinition {
+        name: "note_graph_query",
+        description: "Interrogate the long-term memory knowledge graph (read-only): `schema` introspection (categories, edge relation-types, totals), N-hop `neighbors`, `community` members, and top `related` peers.",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
         name: "note_orient",
         description: "Fetch a compact orientation snapshot of the memory wiki: SCHEMA, index, and recent log entries",
         requires_config: true,

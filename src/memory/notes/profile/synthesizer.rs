@@ -5,7 +5,7 @@
 //! hash-guarded writes, diff computation, and optional orientation logging.
 
 use crate::sync_primitives::Mutex;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -59,7 +59,7 @@ pub struct FsProfileSynthesizer {
     memory_dir: PathBuf,
     provider: Arc<dyn AiProvider>,
     orientation: Option<Arc<dyn NoteOrientation>>,
-    last_update: Mutex<Option<Instant>>,
+    last_update: Mutex<HashMap<String, Instant>>,
     min_interval: Duration,
     max_bullets_per_section: usize,
     bootstrap_on_first_session_end: bool,
@@ -72,7 +72,7 @@ impl FsProfileSynthesizer {
             memory_dir: memory_dir.into(),
             provider,
             orientation: None,
-            last_update: Mutex::new(None),
+            last_update: Mutex::new(HashMap::new()),
             min_interval: Duration::from_secs(30 * 60),
             max_bullets_per_section: 20,
             bootstrap_on_first_session_end: true,
@@ -290,7 +290,7 @@ impl ProfileSynthesizer for FsProfileSynthesizer {
         // Rate-limit check
         {
             let guard = self.last_update.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(last) = *guard {
+            if let Some(last) = guard.get(agent_id) {
                 if last.elapsed() < self.min_interval {
                     debug!(agent_id, "update rate-limited");
                     return Ok(UpdateOutcome::Unchanged);
@@ -392,7 +392,7 @@ impl ProfileSynthesizer for FsProfileSynthesizer {
         // Update rate-limit timestamp
         {
             let mut guard = self.last_update.lock().unwrap_or_else(|e| e.into_inner());
-            *guard = Some(Instant::now());
+            guard.insert(agent_id.to_string(), Instant::now());
         }
 
         self.log_orientation(
@@ -513,7 +513,7 @@ mod tests {
             memory_dir: synth.memory_dir.clone(),
             provider,
             orientation: None,
-            last_update: Mutex::new(None),
+            last_update: Mutex::new(HashMap::new()),
             min_interval: Duration::from_secs(0),
             max_bullets_per_section: 20,
             bootstrap_on_first_session_end: true,
@@ -549,7 +549,7 @@ mod tests {
             memory_dir: synth.memory_dir.clone(),
             provider,
             orientation: None,
-            last_update: Mutex::new(None),
+            last_update: Mutex::new(HashMap::new()),
             min_interval: Duration::from_secs(0),
             max_bullets_per_section: 20,
             bootstrap_on_first_session_end: true,
@@ -570,7 +570,10 @@ mod tests {
             memory_dir: synth.memory_dir.clone(),
             provider,
             orientation: None,
-            last_update: Mutex::new(Some(Instant::now())),
+            last_update: Mutex::new(HashMap::from([(
+                "agent_d".to_string(),
+                Instant::now(),
+            )])),
             min_interval: Duration::from_secs(3600),
             max_bullets_per_section: 20,
             bootstrap_on_first_session_end: true,
@@ -579,5 +582,30 @@ mod tests {
         // Should return Unchanged without calling LLM
         let outcome = synth2.update("agent_d", test_signal()).await.unwrap();
         assert!(matches!(outcome, UpdateOutcome::Unchanged));
+    }
+
+    #[tokio::test]
+    async fn rate_limit_is_per_agent() {
+        // agent_e was just updated; a long interval keeps it rate-limited.
+        // agent_f has never been seen and must NOT be starved by agent_e.
+        let dir = tempfile::tempdir().unwrap();
+        let provider = Arc::new(RecordingMockProvider::new(bootstrap_json()));
+        let synth = FsProfileSynthesizer {
+            memory_dir: dir.path().to_path_buf(),
+            provider,
+            orientation: None,
+            last_update: Mutex::new(HashMap::from([("agent_e".to_string(), Instant::now())])),
+            min_interval: Duration::from_secs(3600),
+            max_bullets_per_section: 20,
+            bootstrap_on_first_session_end: true,
+        };
+
+        // agent_e is inside its own window -> rate-limited.
+        let e = synth.update("agent_e", test_signal()).await.unwrap();
+        assert!(matches!(e, UpdateOutcome::Unchanged));
+
+        // agent_f has no prior entry -> allowed to proceed (bootstraps here).
+        let f = synth.update("agent_f", test_signal()).await.unwrap();
+        assert!(matches!(f, UpdateOutcome::Bootstrapped { .. }));
     }
 }
