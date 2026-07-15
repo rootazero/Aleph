@@ -27,6 +27,19 @@ pub enum ToolError {
     #[error("tool {name} timed out after {elapsed_ms}ms")]
     Timeout { name: String, elapsed_ms: u64 },
 
+    /// The approval card expired with nobody answering it. Distinct from
+    /// `PermissionDenied` and from a plain `Execution` failure, because nobody
+    /// said no — nobody said anything, and the human may simply be away.
+    /// `DenialLedger::record_denial` already drops a `DenialReason::Timeout`
+    /// for exactly this reason ("an expired card is not a decision"); folding
+    /// the expiry into a non-retryable error one layer up put the permanent ban
+    /// back and told the model the user had refused.
+    #[error(
+        "approval for tool {name} expired after {waited_ms}ms with no response — nobody \
+         answered; the user did not decline this call"
+    )]
+    ApprovalExpired { name: String, waited_ms: u64 },
+
     #[error("tool {name} transport error: {cause}")]
     Transport { name: String, cause: String },
 
@@ -38,17 +51,26 @@ pub enum ToolError {
 }
 
 impl ToolError {
-    /// Whether `tools::retry::execute_with_one_shot_backoff` should
-    /// re-run this call (subject to per-tool idempotence). Unchanged
-    /// from earlier semantics — `Timeout` / `Transport` are the only
-    /// variants the in-process retry layer will respin without LLM
-    /// intervention.
+    /// "This failure was not a verdict on the call itself." Two consumers read
+    /// it, and they want different things from it:
+    ///
+    /// - `tools::retry::execute_with_one_shot_backoff` respins the call
+    ///   (subject to per-tool idempotence). Only `Timeout` / `Transport` can
+    ///   reach it: it lives *below* the approval gate, so an
+    ///   `ApprovalExpired` is returned long before the retry layer is entered
+    ///   and is never silently respun into a second approval card.
+    /// - the harness's cross-batch failure memo (`agent/act.rs`) refuses to
+    ///   *ban* a call whose error was retryable. An expired approval must not
+    ///   be banned — the human was away, they did not refuse.
     ///
     /// For richer, prompt-side classification (rate-limited,
     /// unauthorized, blocked-by-policy, …) see [`Self::kind`].
     #[must_use]
     pub const fn is_retryable(&self) -> bool {
-        matches!(self, Self::Timeout { .. } | Self::Transport { .. })
+        matches!(
+            self,
+            Self::Timeout { .. } | Self::Transport { .. } | Self::ApprovalExpired { .. }
+        )
     }
 
     /// Coarse, stable taxonomy used to render the LLM-facing routing
@@ -91,11 +113,19 @@ pub struct ToolDefinitionMetadata {
     /// tools never auto-retry to avoid duplicate side effects.
     #[serde(default)]
     pub idempotent: bool,
-    /// Per-tool wall-clock execution budget hint. `None` falls back to the
-    /// harness-wide `turn_timeout`; if both are `None`, the call is
-    /// unbounded. Populated for builtins via `tools::budget` (see
-    /// `BUILTIN_TOOL_BUDGETS_MS`); MCP / Extension / Markdown-skill tools
-    /// currently leave this as `None` and inherit the global fallback.
+    /// Per-tool wall-clock execution budget.
+    ///
+    /// Every definition a production `ToolService` publishes carries one:
+    /// the builders resolve it through `tools::budget::resolve_tool_budget_ms`
+    /// (the tool's own `LoopTool::max_duration_ms` → `BUILTIN_TOOL_BUDGETS_MS`
+    /// → `DEFAULT_TOOL_BUDGET_MS`), so MCP / plugin / skill tools and the ~100
+    /// builtins outside the table are budgeted too. That matters because the
+    /// harness treats an overrun of a *declared* budget as a recoverable tool
+    /// error, and a `None` budget as a run-level stall — an unbudgeted tool
+    /// turned one slow call into an aborted run.
+    ///
+    /// Still `Option` because the type is also the wire form (`#[serde(default)]`
+    /// for legacy JSON) and test doubles need a "says nothing" value.
     #[serde(default)]
     pub max_duration_ms: Option<u64>,
     /// Static "always safe under parallel dispatch" hint, mirroring the

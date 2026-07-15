@@ -1,8 +1,7 @@
 //! Stage 4 — Subagent ChainContext Wiring tests (#11).
 //!
 //! Verifies that `AgentHarness::chain_context()` reflects the chain
-//! injected via `HarnessDeps`, that the trait default is `None` for
-//! non-`AgentHarness` impls, and that concurrent readers see a stable
+//! injected via `HarnessDeps` and that concurrent readers see a stable
 //! immutable chain. End-to-end propagation through `subagent_spawner`
 //! is covered by the existing spawner tests via `LoopRunResult.depth /
 //! chain_id` — those continue to pass and now reflect the same chain
@@ -13,7 +12,6 @@ use crate::sync_primitives::Arc;
 use crate::harness::agent::AgentHarness;
 use crate::harness::chain_context::ChainContext;
 use crate::harness::deps::HarnessDeps;
-use crate::harness::trait_def::Harness;
 
 mod stubs {
     use super::*;
@@ -150,39 +148,6 @@ fn three_layer_chain_preserves_id_and_increments_depth() {
     assert_eq!(h_l1.chain_context().depth, 1);
     assert_eq!(h_l2.chain_context().depth, 2);
     assert_eq!(h_l3.chain_context().depth, 3);
-}
-
-#[test]
-fn trait_default_returns_none_for_non_overriding_impls() {
-    // Synthetic Harness impl that does not override chain_context() must
-    // continue to return None (preserves existing mock ergonomics).
-    struct Bare;
-    #[async_trait::async_trait]
-    impl Harness for Bare {
-        async fn run_turn(
-            &self,
-            _sid: &crate::session::service::SessionId,
-            _cb: &mut dyn crate::harness::callback::HarnessCallback,
-        ) -> Result<crate::harness::trait_def::TurnState, crate::harness::trait_def::HarnessError>
-        {
-            Ok(crate::harness::trait_def::TurnState::Done)
-        }
-    }
-    let b = Bare;
-    let h: &dyn Harness = &b;
-    assert!(h.chain_context().is_none());
-}
-
-#[test]
-fn agent_harness_trait_dispatch_returns_some_chain() {
-    let root = ChainContext::new();
-    let h = AgentHarness::new(stubs::make_deps_with_chain(root.clone()));
-    let h_dyn: &dyn Harness = &h;
-    let chain = h_dyn
-        .chain_context()
-        .expect("AgentHarness must report a chain");
-    assert_eq!(chain.chain_id, root.chain_id);
-    assert_eq!(chain.depth, 0);
 }
 
 /// Concurrent readers of `chain_context()` across `Arc<AgentHarness>` clones

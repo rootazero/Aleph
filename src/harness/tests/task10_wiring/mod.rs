@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 use crate::context::budget::{ContextBudget, ContextBudgetConfig};
 use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
 use crate::error::Result as AlephResult;
-use crate::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback, TurnState};
+use crate::harness::{AgentHarness, HarnessDeps, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
@@ -586,12 +586,20 @@ async fn stop_hook_veto_forces_continue_and_injects_block_reason() {
 }
 
 // =============================================================================
-// Test 6 — StopDiminishing fires grace turn + hit_limit when
-// DiminishingReturnsDetector trips on an unproductive turn.
-// Cycle 3 — after_turn was dead-wired before this commit.
+// Test 6 — StopDiminishing trips hit_limit, but must NOT re-answer a turn that
+// already produced terminal text.
+//
+// The diminishing site used to judge "does the user already have final text?"
+// from the `events` snapshot fetched at the TOP of this turn — i.e. before this
+// turn's own `AssistantMessage` was persisted — so the skip guard read a log
+// that did not yet contain the answer and fired a grace turn that answered the
+// same question twice (this test previously asserted `call_count == 2` and
+// called that expected). It now goes through `fire_boundary_grace_turn`, which
+// re-reads the log like the five outer-loop grace sites always did.
+// Cycle 3 — after_turn was dead-wired before the commit that added this test.
 // =============================================================================
 #[tokio::test]
-async fn diminishing_returns_fires_grace_and_hits_limit() {
+async fn diminishing_returns_hits_limit_without_reanswering_the_same_turn() {
     let user_text = "ping".to_string();
     let session = MockSession::new(vec![turn_started_event(), user_message_event(&user_text)]);
     let provider = CountingProvider::new("grace summary text");
@@ -649,8 +657,169 @@ async fn diminishing_returns_fires_grace_and_hits_limit() {
     );
     assert_eq!(
         provider.call_count(),
+        1,
+        "this turn already produced terminal text — the grace turn must skip, not re-answer",
+    );
+
+    // And the user is not shown the same answer twice.
+    let events = session.snapshot().await;
+    let assistant_count = events
+        .iter()
+        .filter(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
+        .count();
+    assert_eq!(
+        assistant_count, 1,
+        "exactly one AssistantMessage — a second one is the double-answer bug; got: {events:#?}",
+    );
+}
+
+// =============================================================================
+// Test 6b — StopDiminishing on a turn that ended on an unresolved tool_use DOES
+// fire the grace turn, and the grace prompt is rebuilt from the FRESH log: it
+// carries this turn's assistant message (the tool_use) and this turn's tool
+// results. The stale in-turn `messages` vec could not contain either — it was
+// assembled before the model even answered.
+// =============================================================================
+
+/// Emits one tool_use with NO text (so the turn ends without terminal text),
+/// then answers the grace turn with text. Records every payload so the test can
+/// inspect what the grace call actually saw.
+struct DiminishingToolCallProvider {
+    calls: AtomicUsize,
+    recorded: tokio::sync::Mutex<Vec<Vec<UnifiedMessage>>>,
+}
+
+impl DiminishingToolCallProvider {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            recorded: tokio::sync::Mutex::new(Vec::new()),
+        })
+    }
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl AiProvider for DiminishingToolCallProvider {
+    fn process<'a>(
+        &'a self,
+        payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        let messages_clone: Vec<UnifiedMessage> = payload.messages.to_vec();
+        // The grace turn appends GRACE_NUDGE_DIMINISHING as the trailing user
+        // message; its "measurable progress" wording is the sentinel.
+        let is_grace = payload
+            .messages
+            .last()
+            .map(|m| m.text_content().contains("measurable progress"))
+            .unwrap_or(false);
+        Box::pin(async move {
+            self.recorded.lock().await.push(messages_clone);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if is_grace {
+                return Ok(ProviderResponse::text_only(
+                    "here is what I found before stalling".to_string(),
+                ));
+            }
+            Ok(ProviderResponse {
+                text: None,
+                tool_calls: vec![crate::providers::adapter::NativeToolCall {
+                    thought_signature: None,
+                    id: "dim-id".to_string(),
+                    name: "dim_tool".to_string(),
+                    arguments: serde_json::json!({"q": 1}),
+                }],
+                ..Default::default()
+            })
+        })
+    }
+    fn name(&self) -> &str {
+        "diminishing-tool-call"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+#[tokio::test]
+async fn diminishing_grace_prompt_carries_this_turns_tool_use_and_results() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("ping")]);
+    let provider = DiminishingToolCallProvider::new();
+
+    // Same detector settings as the test above: window=1 + threshold=10_000, so
+    // one unproductive turn trips. `NoopTools` fails the call (NotFound), so
+    // `executed == 0` → `productive == false` → StopDiminishing.
+    let mut cfg = tiny_budget_config(10_000, 0.99, 0.99);
+    cfg.diminishing_window = 1;
+    cfg.diminishing_threshold = 10_000;
+    let budget = ContextBudget::new(&cfg);
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        llm: provider.clone(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: Some(Arc::new(AsyncMutex::new(budget))),
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        recall_context: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn should succeed on StopDiminishing");
+
+    assert_eq!(state, TurnState::Done);
+    assert!(harness.hit_limit(), "StopDiminishing must set hit_limit");
+    assert_eq!(
+        provider.call_count(),
         2,
-        "1 primary call + 1 grace turn = 2 LLM calls expected",
+        "the turn ended on an unresolved tool_use with no text → grace must fire",
+    );
+
+    // The grace payload is the LAST one the provider received.
+    let recorded = provider.recorded.lock().await;
+    let grace = recorded.last().expect("grace payload recorded");
+
+    // ① This turn's assistant message (carrying the tool_use) is in the prompt.
+    use crate::providers::message::ContentBlock;
+    let has_tool_use = grace.iter().any(|m| match m {
+        UnifiedMessage::Assistant { content } => content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolCall { id, .. } if id == "dim-id")),
+        _ => false,
+    });
+    assert!(
+        has_tool_use,
+        "grace prompt must carry this turn's assistant tool_use; got: {grace:#?}",
+    );
+
+    // ② …and this turn's tool result (the NotFound error) that closes it.
+    let has_result = grace.iter().any(|m| {
+        matches!(m, UnifiedMessage::ToolResult { tool_call_id, .. } if tool_call_id == "dim-id")
+    });
+    assert!(
+        has_result,
+        "grace prompt must carry this turn's tool result; got: {grace:#?}",
     );
 }
 
@@ -919,46 +1088,51 @@ async fn tool_loop_halt_fires_salvage_grace_turn_and_closes_orphan() {
 }
 
 // =============================================================================
-// Test — Per-tool budget fires before harness-wide turn_timeout. The sleeping
-// tool's describe() advertises max_duration_ms=50; the harness turn_timeout is
-// 60s. The inner per-tool cap must win → StalledTurn in <500ms. Cycle 3.
+// Test — A tool that overruns its own wall-clock budget comes back as a
+// recoverable `ToolError::Timeout`, not a run abort. The budget belongs to the
+// tool layer now (`ScopedToolService::execute_inner`, below the approval gate),
+// so this drives the real production `ToolService` rather than a double that
+// merely *advertises* a budget through `describe()` — the harness no longer
+// reads it, precisely so an operator's approval time cannot be charged to the
+// tool's clock. Cycle 3.
 // =============================================================================
 
-/// A `ToolService` whose `describe()` advertises a 50ms per-tool budget and
-/// whose `execute()` sleeps 200ms — long enough that the 50ms budget fires.
+/// A `LoopTool` declaring a 50ms budget whose `execute()` sleeps 200ms.
 struct SleepyBudgetedTool;
 
 #[async_trait]
-impl ToolService for SleepyBudgetedTool {
+impl crate::tools::runtime::LoopTool for SleepyBudgetedTool {
+    fn name(&self) -> &str {
+        "sleepy_tool"
+    }
+    fn description(&self) -> &str {
+        "sleeps past its own budget"
+    }
+    fn schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object" })
+    }
     async fn execute(
         &self,
-        _name: &str,
         _input: serde_json::Value,
-    ) -> Result<crate::session::events::ToolOutput, ToolError> {
+        _cancel: CancellationToken,
+    ) -> crate::tools::runtime::ToolResult {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        Ok(crate::session::events::ToolOutput {
-            value: serde_json::json!({"ok": true}),
-            metadata: Default::default(),
-        })
+        crate::tools::runtime::ToolResult::Success {
+            output: serde_json::json!({"ok": true}),
+        }
     }
-    async fn list(&self) -> Vec<ToolDefinition> {
-        vec![]
+    fn max_duration_ms(&self) -> Option<u64> {
+        Some(50)
     }
-    async fn describe(&self, name: &str) -> Option<ToolDefinition> {
-        Some(ToolDefinition {
-            name: name.to_string(),
-            description: String::new(),
-            input_schema: serde_json::json!({}),
-            source: crate::tools::service::ToolSource::Builtin,
-            metadata: crate::tools::service::ToolDefinitionMetadata {
-                max_duration_ms: Some(50),
-                ..Default::default()
-            },
-        })
-    }
-    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
-        std::sync::Arc::from([])
-    }
+}
+
+fn sleepy_tool_service() -> Arc<dyn ToolService> {
+    let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+    registry.register(Box::new(SleepyBudgetedTool));
+    Arc::new(crate::tools::ScopedToolService::new(
+        Arc::new(registry),
+        std::collections::BTreeSet::new(),
+    ))
 }
 
 /// Provider that emits exactly one tool call for `sleepy_tool`.
@@ -999,7 +1173,7 @@ async fn per_tool_budget_overrun_recovers_as_tool_error_not_run_abort() {
     let provider = Arc::new(OneShotSleepyCallProvider);
     let deps = HarnessDeps {
         session: session.clone(),
-        tools: Arc::new(SleepyBudgetedTool),
+        tools: sleepy_tool_service(),
         llm: provider as Arc<dyn AiProvider>,
         robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         verifier_chain: None,
@@ -1032,29 +1206,30 @@ async fn per_tool_budget_overrun_recovers_as_tool_error_not_run_abort() {
         .await;
     let elapsed = started.elapsed();
 
-    // The 50ms per-tool budget still fires well before the 60s global — the
-    // per-tool ceiling is enforced, not the harness fallback.
+    // The tool's own 50ms budget fires well before the 60s `turn_timeout` — the
+    // per-tool ceiling is what bounds the call, not the harness fallback.
     assert!(
         elapsed < std::time::Duration::from_millis(500),
-        "per-tool 50ms budget must fire well before the 60s global; saw {elapsed:?}",
+        "the tool's 50ms budget must fire well before the 60s turn_timeout; saw {elapsed:?}",
     );
-    // ...but a per-tool overrun is RECOVERABLE: the turn completes instead of
-    // aborting the whole run with `StalledTurn`. Only the harness-wide
-    // `turn_timeout` is a run-level stall.
+    // ...and the overrun is RECOVERABLE: the turn completes instead of aborting
+    // the whole run.
     assert!(
         result.is_ok(),
-        "per-tool budget overrun must NOT abort the run with StalledTurn; got: {result:?}",
+        "a budget overrun must NOT abort the run; got: {result:?}",
     );
-    // The overrun is surfaced as a recoverable tool error the next Think turn
-    // can react to (retry / narrow / switch), not silently dropped.
+    // Recorded as `ToolError::Timeout` — the variant, not merely timeout-flavoured
+    // prose. It is the one thing `ToolError::is_retryable()` reads, and act.rs's
+    // cross-batch memo now only bans non-retryable failures, so the retry this
+    // error invites is actually permitted on the next batch.
     let events = session.snapshot().await;
     assert!(
         events.iter().any(|r| matches!(
             &r.event,
             crate::session::events::SessionEvent::ToolError { error, .. }
-                if error.contains("wall-clock budget")
+                if error.contains("timed out after")
         )),
-        "per-tool timeout must be recorded as a recoverable ToolError",
+        "the overrun must be recorded as a recoverable ToolError::Timeout",
     );
 }
 

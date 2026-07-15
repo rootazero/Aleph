@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex};
 
 use crate::error::Result as AlephResult;
-use crate::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback, TurnState};
+use crate::harness::{AgentHarness, HarnessDeps, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::AiProvider;
@@ -1872,4 +1872,486 @@ async fn group_boundary_defers_remaining_groups_when_steer_present() {
         })
         .count();
     assert_eq!(deferred, 3, "every call gets a deferred ToolResult");
+}
+
+// -- Per-tool budget resolution (production ToolService) ---------------------
+
+/// A `LoopTool` that overruns any sane budget. It declares 50ms for itself —
+/// the seam MCP tools use to publish their owning server's request timeout —
+/// and is absent from the builtin budget table, so before the definition
+/// builders learned to resolve a budget for every tool it advertised `None`.
+struct SlowUnlistedTool;
+
+#[async_trait]
+impl crate::tools::runtime::LoopTool for SlowUnlistedTool {
+    fn name(&self) -> &str {
+        "slow_unlisted_tool"
+    }
+    fn description(&self) -> &str {
+        "sleeps well past its budget"
+    }
+    fn schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object" })
+    }
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> crate::tools::runtime::ToolResult {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        crate::tools::runtime::ToolResult::Success {
+            output: serde_json::json!("never reached"),
+        }
+    }
+    fn is_concurrent_safe(&self, _input: &serde_json::Value) -> bool {
+        // Pin the call to the serial dispatch path so the assertion is about
+        // the budget branch, not about which path a one-call batch takes.
+        false
+    }
+    fn max_duration_ms(&self) -> Option<u64> {
+        Some(50)
+    }
+}
+
+/// A tool that overruns its wall-clock budget must come back as a recoverable
+/// `ToolError` the next Think turn can react to — not as `HarnessError::StalledTurn`,
+/// which kills the entire run.
+///
+/// Regression: the budget only ever reached the harness for the 19 builtins in
+/// `tools::budget`'s table. Every other tool — every MCP tool, plugin, skill,
+/// `ask_user`, `subagent` — described itself with `max_duration_ms: None`, and
+/// `None` is exactly the branch that aborts the run. This drives the real
+/// production `ToolService` (`ScopedToolService`) so the whole resolution chain
+/// (`LoopTool::max_duration_ms` → builtin table → default) is under test.
+#[tokio::test]
+async fn overrunning_tool_yields_recoverable_error_not_stalled_turn() {
+    let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+    registry.register(Box::new(SlowUnlistedTool));
+    let tools: Arc<dyn ToolService> = Arc::new(crate::tools::ScopedToolService::new(
+        Arc::new(registry),
+        std::collections::BTreeSet::new(),
+    ));
+
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools,
+        llm: CapturingProvider::text_only("idle"),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        recall_context: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        // The harness-wide fallback: the clock that used to kill the run for
+        // every tool the budget table did not name.
+        turn_timeout: Some(std::time::Duration::from_millis(300)),
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+
+    let executed = harness
+        .act(
+            &sample_session_id(),
+            uuid::Uuid::new_v4(),
+            vec![NativeToolCall {
+                thought_signature: None,
+                id: "c1".into(),
+                name: "slow_unlisted_tool".into(),
+                arguments: serde_json::json!({}),
+            }],
+            &mut NoopHarnessCallback,
+            0,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("a per-tool budget overrun must not abort the run");
+
+    assert_eq!(executed, 0, "the call timed out, so nothing succeeded");
+
+    let errors = session
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|r| matches!(&r.event, SessionEvent::ToolError { .. }))
+        .count();
+    assert_eq!(
+        errors, 1,
+        "the overrun must be persisted as a ToolError the model can react to"
+    );
+}
+
+/// A `LoopTool` that declares nothing and is absent from the builtin budget
+/// table — the shape of every MCP tool, plugin, skill, and the ~100 builtins
+/// the table never named. It is slower than the harness-wide fallback but well
+/// inside any sane per-tool budget.
+struct UndeclaredSlowishTool;
+
+#[async_trait]
+impl crate::tools::runtime::LoopTool for UndeclaredSlowishTool {
+    fn name(&self) -> &str {
+        "undeclared_tool"
+    }
+    fn description(&self) -> &str {
+        "slower than the harness fallback, faster than its own budget"
+    }
+    fn schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object" })
+    }
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> crate::tools::runtime::ToolResult {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        crate::tools::runtime::ToolResult::Success {
+            output: serde_json::json!("done"),
+        }
+    }
+    fn is_concurrent_safe(&self, _input: &serde_json::Value) -> bool {
+        false
+    }
+}
+
+/// The harness-wide `turn_timeout` must no longer be the clock a tool call is
+/// judged by. It was, for every tool the budget table did not name: the call
+/// was killed at the fallback (120s in production) and — because the budget
+/// came back `None` — the kill aborted the whole run instead of erroring the
+/// call. Here the fallback is 100ms and the tool takes 400ms; it must survive,
+/// because it now resolves its own (default) budget.
+#[tokio::test]
+async fn undeclared_tool_is_not_judged_by_the_harness_turn_timeout() {
+    let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+    registry.register(Box::new(UndeclaredSlowishTool));
+    let tools: Arc<dyn ToolService> = Arc::new(crate::tools::ScopedToolService::new(
+        Arc::new(registry),
+        std::collections::BTreeSet::new(),
+    ));
+
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools,
+        llm: CapturingProvider::text_only("idle"),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        recall_context: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: Some(std::time::Duration::from_millis(100)),
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+
+    let executed = harness
+        .act(
+            &sample_session_id(),
+            uuid::Uuid::new_v4(),
+            vec![NativeToolCall {
+                thought_signature: None,
+                id: "c1".into(),
+                name: "undeclared_tool".into(),
+                arguments: serde_json::json!({}),
+            }],
+            &mut NoopHarnessCallback,
+            0,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("an undeclared tool must not be stalled out by the turn_timeout");
+
+    assert_eq!(
+        executed, 1,
+        "the call had time to finish under its own budget"
+    );
+}
+
+// -- The Act-period clock sits BELOW the approval gate ------------------------
+
+/// Deps around a real `ScopedToolService`. `turn_timeout` is deliberately set:
+/// it must have no bearing on Act any more — its one legitimate home is
+/// `think.rs::race_llm_call`, where no human stands in front of the future.
+fn scoped_deps(session: Arc<MockSession>, tools: Arc<dyn ToolService>) -> HarnessDeps {
+    HarnessDeps {
+        session,
+        tools,
+        llm: CapturingProvider::text_only("idle"),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        recall_context: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: Some(std::time::Duration::from_secs(120)),
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    }
+}
+
+fn one_call(id: &str, name: &str) -> Vec<NativeToolCall> {
+    vec![NativeToolCall {
+        thought_signature: None,
+        id: id.into(),
+        name: name.into(),
+        arguments: serde_json::json!({}),
+    }]
+}
+
+/// An operator who takes five seconds to read the command, then approves it.
+struct SlowOperator;
+
+#[async_trait]
+impl crate::sandbox::exec_approval::gate::ApprovalRequester for SlowOperator {
+    async fn request_approval(
+        &self,
+        _action: &crate::sandbox::exec_approval::ApprovalAction,
+    ) -> crate::sandbox::exec_approval::gate::ApprovalOutcome {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        crate::sandbox::exec_approval::gate::ApprovalOutcome::Approved
+    }
+}
+
+/// A confirm-gated tool with a 3s budget that runs for 1s once approved.
+struct GatedTool;
+
+#[async_trait]
+impl crate::tools::runtime::LoopTool for GatedTool {
+    fn name(&self) -> &str {
+        "gated_tool"
+    }
+    fn description(&self) -> &str {
+        "needs approval, then runs for a second"
+    }
+    fn schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object" })
+    }
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> crate::tools::runtime::ToolResult {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        crate::tools::runtime::ToolResult::Success {
+            output: serde_json::json!("ran"),
+        }
+    }
+    fn requires_confirmation(&self) -> bool {
+        true
+    }
+    fn max_duration_ms(&self) -> Option<u64> {
+        Some(3_000)
+    }
+}
+
+/// A command the operator explicitly APPROVED must not be killed for having been
+/// read slowly.
+///
+/// Regression: `act.rs` wrapped `tokio::time::timeout(budget, …)` around the
+/// ENTIRE execute future, and the human's wait is inside it —
+/// `scoped/dispatch.rs` awaits `request_approval` before it ever routes to the
+/// tool. So the operator's thinking time was spent out of the tool's execution
+/// budget. Here the approval alone (5s) exceeds the tool's whole budget (3s),
+/// yet the actual work takes 1s: the call must succeed. It also silently voided
+/// a documented invariant — `CodeExecTool` clamps its foreground timeout to 170s
+/// precisely so it sits 10s inside its 180s budget and can return a clean
+/// exit-124 with partial output; any approval over 10s destroyed that.
+///
+/// (`start_paused` so the two sleeps are simulated, not slept.)
+#[tokio::test(start_paused = true)]
+async fn approved_command_survives_a_slow_operator() {
+    let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+    registry.register(Box::new(GatedTool));
+    let tools: Arc<dyn ToolService> = Arc::new(
+        crate::tools::ScopedToolService::new(Arc::new(registry), std::collections::BTreeSet::new())
+            .with_confirmation(Arc::new(SlowOperator)),
+    );
+
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let harness = AgentHarness::new(scoped_deps(session.clone(), tools));
+
+    let executed = harness
+        .act(
+            &sample_session_id(),
+            uuid::Uuid::new_v4(),
+            one_call("c1", "gated_tool"),
+            &mut NoopHarnessCallback,
+            0,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("an approved call must not abort the run");
+
+    assert_eq!(
+        executed, 1,
+        "the operator approved it and the work fit the budget — it must have run",
+    );
+    let errors = session
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|r| matches!(&r.event, SessionEvent::ToolError { .. }))
+        .count();
+    assert_eq!(
+        errors, 0,
+        "an approved, in-budget call produces no ToolError"
+    );
+}
+
+/// Times out on its first call (well past its declared 50ms), returns instantly
+/// on every call after — the shape of a slow source that recovers.
+struct FlakySlowTool {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl crate::tools::runtime::LoopTool for FlakySlowTool {
+    fn name(&self) -> &str {
+        "flaky_slow"
+    }
+    fn description(&self) -> &str {
+        "slow once, then fine"
+    }
+    fn schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object" })
+    }
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> crate::tools::runtime::ToolResult {
+        let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if n == 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+        crate::tools::runtime::ToolResult::Success {
+            output: serde_json::json!("ok"),
+        }
+    }
+    fn is_concurrent_safe(&self, _input: &serde_json::Value) -> bool {
+        false
+    }
+    fn max_duration_ms(&self) -> Option<u64> {
+        Some(50)
+    }
+}
+
+/// A wall-clock timeout must NOT be remembered as a permanent, cross-batch
+/// failure — the identical call has to be allowed to run again next batch.
+///
+/// Regression: the timeout was synthesised as `ToolError::Execution`, whose own
+/// text tells the model to "retry, narrow the query, or switch source/tool", and
+/// the `Err(e)` arm then called `record_failure` unconditionally. So the very
+/// next batch hit the cross-batch dedup preflight and was refused with
+/// `CROSS_BATCH_REFUSED_CAUSE`: the harness wrote a hint it guaranteed it would
+/// reject. It is now a `ToolError::Timeout` — the variant `is_retryable()` reads
+/// — and only non-retryable failures enter the memo.
+#[tokio::test(start_paused = true)]
+async fn a_timed_out_call_may_be_retried_in_the_next_batch() {
+    let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+    registry.register(Box::new(FlakySlowTool {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    }));
+    let tools: Arc<dyn ToolService> = Arc::new(crate::tools::ScopedToolService::new(
+        Arc::new(registry),
+        std::collections::BTreeSet::new(),
+    ));
+
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let harness = AgentHarness::new(scoped_deps(session.clone(), tools));
+    let sid = sample_session_id();
+    let cancel = tokio_util::sync::CancellationToken::new();
+
+    // Batch 1: the call overruns its 50ms budget.
+    let first = harness
+        .act(
+            &sid,
+            uuid::Uuid::new_v4(),
+            one_call("c1", "flaky_slow"),
+            &mut NoopHarnessCallback,
+            0,
+            &cancel,
+        )
+        .await
+        .expect("a budget overrun is recoverable");
+    assert_eq!(first, 0, "the first call timed out");
+
+    // Batch 2: the SAME (tool, args). The source has recovered; the harness must
+    // let the model find that out.
+    let second = harness
+        .act(
+            &sid,
+            uuid::Uuid::new_v4(),
+            one_call("c2", "flaky_slow"),
+            &mut NoopHarnessCallback,
+            1,
+            &cancel,
+        )
+        .await
+        .expect("the retry must not abort the run");
+    assert_eq!(
+        second, 1,
+        "the identical repeat of a TIMED-OUT call must be re-run, not refused",
+    );
+
+    let events = session.snapshot().await;
+    let refused = events.iter().any(|r| matches!(
+        &r.event,
+        SessionEvent::ToolError { error, .. } if error.contains("already failed earlier in the run")
+    ));
+    assert!(
+        !refused,
+        "cross-batch dedup must not ban a call whose only sin was being slow",
+    );
+    let timed_out = events.iter().any(|r| {
+        matches!(
+            &r.event,
+            SessionEvent::ToolError { error, .. } if error.contains("timed out after")
+        )
+    });
+    assert!(
+        timed_out,
+        "batch 1's overrun must surface as ToolError::Timeout"
+    );
 }

@@ -19,7 +19,7 @@
 //! Split into sub-modules:
 //!   * `think.rs` — `run_turn_internal`, `race_llm_call`, `run_verifiers`
 //!   * `act.rs` — `act`
-//!   * `guardrails.rs` — `apply_input_guardrail`, `apply_tool_call_guardrail`
+//!   * `guardrails.rs` — `apply_tool_call_guardrail`
 //!   * `prompt.rs` — `build_prompt` (sync per-turn message assembler)
 
 use crate::sync_primitives::{AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering};
@@ -32,7 +32,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::harness::callback::{HarnessCallback, NoopHarnessCallback};
 use crate::harness::deps::HarnessDeps;
-use crate::harness::trait_def::{Harness, HarnessError, TurnState, TurnStep};
+use crate::harness::trait_def::{HarnessError, TurnState, TurnStep};
 use crate::orchestrator::dispatch::{TerminateReason, TokenBreakdown, ToolInvocation};
 use crate::providers::adapter::NativeToolCall;
 
@@ -62,20 +62,6 @@ pub(crate) const fn is_failure_turn(executed: usize, errors: usize) -> bool {
 /// clean turn does.
 pub(crate) const fn is_clean_turn(_executed: usize, errors: usize) -> bool {
     errors == 0
-}
-
-/// Outcome of `AgentHarness::apply_input_guardrail`. The two non-block
-/// variants both carry the (possibly mutated) events vector; the caller
-/// rebinds `events` to the returned vector before assembling the prompt.
-pub(crate) enum InputGuardrailOutcome {
-    /// Pass-through; events are unchanged.
-    Allow(Vec<crate::session::events::SessionEventRecord>),
-    /// Latest `UserMessage`'s text was rewritten in-memory only — the
-    /// session log retains the original event for audit.
-    Sanitized(Vec<crate::session::events::SessionEventRecord>),
-    /// Guardrail blocked the turn; caller emits `on_safety_block` and
-    /// returns `TurnState::Done` without invoking the LLM.
-    Blocked(String),
 }
 
 /// Stage 5b tool-call guardrail outcome. `Block` means the helper already
@@ -198,14 +184,20 @@ impl AgentHarness {
         }
     }
 
-    /// Atomically reserve one reactive-compaction rescue slot. Returns
-    /// `true` exactly once per run (the cap is
-    /// `MAX_REACTIVE_COMPACT_ATTEMPTS = 1`); subsequent callers see `false`
-    /// and must surface the original provider error. `compare_exchange` so
-    /// concurrent paths cannot both reserve under high concurrency.
+    /// Atomically reserve a reactive-compaction rescue slot; `false` once the
+    /// run's budget is spent, and the caller must then fall back to the
+    /// deterministic floor. The slot is per-run state and lives here; the cap
+    /// is *policy* and lives with the algorithm, in
+    /// [`crate::context::compact::rescue::MAX_REACTIVE_COMPACT_ATTEMPTS`] —
+    /// this reads it rather than hardcoding the same number, because a cap the
+    /// slot ignores is a lie: raising the const would silently change nothing.
+    /// Compare-and-swap, so two concurrent paths can never both rescue.
     pub(super) fn try_reserve_reactive_compact(&self) -> bool {
         self.reactive_compact_attempts
-            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |spent| {
+                (spent < crate::context::compact::rescue::MAX_REACTIVE_COMPACT_ATTEMPTS)
+                    .then_some(spent + 1)
+            })
             .is_ok()
     }
 
@@ -495,13 +487,14 @@ impl crate::session::SessionDriver for AgentHarness {
     }
 }
 
-#[async_trait]
-impl Harness for AgentHarness {
-    fn chain_context(&self) -> Option<&crate::harness::chain_context::ChainContext> {
-        Some(self.chain_context())
-    }
-
-    async fn run(
+impl AgentHarness {
+    /// Loop `run_turn_internal` until `Done` or a cap trips. `cancel` is checked
+    /// before every turn; a cancelled token aborts with
+    /// [`HarnessError::Cancelled`] — the orchestrator distinguishes cooperative
+    /// abort from natural completion. The terminal callback is
+    /// `on_complete_with_outcome`, fired by `AgentHarnessRunner` once the full
+    /// `FlowOutcome` exists.
+    pub async fn run(
         &self,
         session_id: &SessionId,
         callback: &mut dyn HarnessCallback,
@@ -565,7 +558,6 @@ impl Harness for AgentHarness {
                              terminal summary may be incomplete",
                         );
                     }
-                    callback.on_complete();
                     break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                 }
             }
@@ -612,7 +604,6 @@ impl Harness for AgentHarness {
                              terminal summary may be incomplete",
                         );
                     }
-                    callback.on_complete();
                     break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                 }
                 Err(e) => {
@@ -649,11 +640,7 @@ impl Harness for AgentHarness {
                         let events = self
                             .deps
                             .session
-                            .get_events(
-                                &current_session,
-                                Some(prompt_seq.saturating_add(1)),
-                                None,
-                            )
+                            .get_events(&current_session, Some(prompt_seq.saturating_add(1)), None)
                             .await
                             .map_err(HarnessError::Session)?;
                         let last_assistant_idx = events
@@ -678,7 +665,7 @@ impl Harness for AgentHarness {
                                         turn_id: uuid::Uuid::new_v4(),
                                         content: MessageContent {
                                             text: crate::thinker::nudges::SOFT_FAILURE_WARNING
-                                            .to_string(),
+                                                .to_string(),
                                             blocks: Vec::new(),
                                             thinking: None,
                                             thinking_signature: None,
@@ -718,7 +705,6 @@ impl Harness for AgentHarness {
                                         cancel,
                                     )
                                     .await;
-                                    callback.on_complete();
                                     break Ok(
                                         crate::harness::trace::LoopTraceSessionOutcome::HitLimit,
                                     );
@@ -751,7 +737,6 @@ impl Harness for AgentHarness {
                                 cancel,
                             )
                             .await;
-                            callback.on_complete();
                             break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                         }
                     } else {
@@ -776,7 +761,6 @@ impl Harness for AgentHarness {
                                 cancel,
                             )
                             .await;
-                            callback.on_complete();
                             break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                         }
                     }
@@ -826,13 +810,11 @@ impl Harness for AgentHarness {
                                     cancel,
                                 )
                                 .await;
-                                callback.on_complete();
                                 break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                             }
                         }
                         continue;
                     }
-                    callback.on_complete();
                     break Ok(crate::harness::trace::LoopTraceSessionOutcome::Completed);
                 }
             }
@@ -931,7 +913,8 @@ impl Harness for AgentHarness {
         }
     }
 
-    async fn run_turn(
+    /// One Think→Act turn; returns whether the session should continue.
+    pub async fn run_turn(
         &self,
         session_id: &SessionId,
         callback: &mut dyn HarnessCallback,

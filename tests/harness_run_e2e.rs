@@ -1,7 +1,10 @@
-//! End-to-end test for `Harness::run` (Phase 4b Task 10 / 4b.4).
+//! End-to-end test for `AgentHarness::run` (Phase 4b Task 10 / 4b.4).
 //!
-//! Exercises the default `run` loop on `AgentHarness` with a real
+//! Exercises `AgentHarness`'s own Think→Act loop with a real
 //! `InProcessActorSessionService` backed by an in-memory SQLite event store.
+//! (The header used to claim it exercised the `Harness` trait's *default* `run`
+//! body. It never did — `AgentHarness` always overrode `run`, so that default
+//! executed nowhere; the trait has since been deleted.)
 //! A scripted `AiProvider` drives the Think→Act loop:
 //!   * Turn 0: assistant text + one `noop` tool_call (forces `TurnState::Continue`).
 //!   * Turn 1: text-only response → `TurnState::Done` ends the loop.
@@ -17,7 +20,7 @@ use async_trait::async_trait;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use alephcore::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback};
+use alephcore::harness::{AgentHarness, HarnessDeps, NoopHarnessCallback};
 use alephcore::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload};
 use alephcore::providers::AiProvider;
 use alephcore::routing::session_key::SessionKey;

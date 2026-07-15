@@ -27,10 +27,6 @@ pub trait HarnessCallback: Send {
     /// Invoked when the harness produces a reasoning/thinking fragment.
     fn on_reasoning(&mut self, _text: &str) {}
 
-    /// Invoked once per tool dispatch, *before* the tool executes.
-    /// Kept for backward compatibility — prefer `on_tool_call_start`.
-    fn on_tool_call(&mut self, _name: &str) {}
-
     /// Invoked when a tool call begins. `id` pairs with `on_tool_call_done`.
     fn on_tool_call_start(&mut self, _id: &str, _name: &str, _args: &serde_json::Value) {}
 
@@ -58,27 +54,20 @@ pub trait HarnessCallback: Send {
     /// Invoked when a safety gate blocks the current turn.
     fn on_safety_block(&mut self, _reason: &str) {}
 
-    /// Invoked when the harness reaches a terminal `TurnState::Done`.
-    fn on_complete(&mut self) {}
-
     /// Invoked by `AgentHarnessRunner` after the inner Think→Act loop
     /// finishes and the full [`FlowOutcome`] has been synthesised from the
-    /// harness accessors. The default implementation calls
-    /// [`HarnessCallback::on_complete`] for backwards compatibility — the
-    /// callback receives no outcome data, matching the legacy behaviour.
+    /// harness accessors. This is the single terminal hook.
     ///
     /// Implementations that need the final terminate reason, token
     /// breakdown, tool timeline, or cost estimate (e.g. the gateway's
     /// `BroadcastCallback`, which fires the terminal
     /// `FlowStreamEvent::Complete(outcome)` from this method) override it.
     ///
-    /// Lifecycle ordering — `on_complete_with_outcome` always fires AFTER
-    /// `on_complete`. Implementations that emit a terminal "Complete"-style
-    /// event should do so here, not in `on_complete`, so the outcome
-    /// payload is always present.
-    fn on_complete_with_outcome(&mut self, _outcome: &FlowOutcome) {
-        self.on_complete();
-    }
+    /// Its argument-free twin `on_complete` was deleted: the harness loop
+    /// fired it from eight places, the one production impl overrode it with an
+    /// explicitly empty body, and everything terminal already rides the
+    /// outcome payload.
+    fn on_complete_with_outcome(&mut self, _outcome: &FlowOutcome) {}
 }
 
 /// Drop-in `HarnessCallback` that ignores every event. Used by call sites
@@ -110,10 +99,10 @@ mod tests {
         fn on_delta(&mut self, text: &str) {
             self.deltas.push(text.to_string());
         }
-        fn on_tool_call(&mut self, name: &str) {
+        fn on_tool_call_start(&mut self, _id: &str, name: &str, _args: &serde_json::Value) {
             self.tools.push(name.to_string());
         }
-        fn on_complete(&mut self) {
+        fn on_complete_with_outcome(&mut self, _outcome: &FlowOutcome) {
             self.completed = true;
         }
     }
@@ -123,8 +112,8 @@ mod tests {
         let mut cb = CapturingCallback::default();
         cb.on_delta("hello ");
         cb.on_delta("world");
-        cb.on_tool_call("read_file");
-        cb.on_complete();
+        cb.on_tool_call_start("call-1", "read_file", &serde_json::Value::Null);
+        cb.on_complete_with_outcome(&FlowOutcome::default());
         assert_eq!(cb.deltas, vec!["hello ".to_string(), "world".to_string()]);
         assert_eq!(cb.tools, vec!["read_file".to_string()]);
         assert!(cb.completed);
@@ -134,8 +123,8 @@ mod tests {
     fn noop_callback_ignores_all_events() {
         let mut cb = NoopHarnessCallback;
         cb.on_delta("ignored");
-        cb.on_tool_call("ignored_tool");
-        cb.on_complete();
+        cb.on_tool_call_start("call-1", "ignored_tool", &serde_json::Value::Null);
+        cb.on_complete_with_outcome(&FlowOutcome::default());
         // No panic, nothing to assert — the point is absence of side effects.
     }
 

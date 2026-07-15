@@ -9,7 +9,8 @@ use std::collections::VecDeque;
 /// Parse one Gemini SSE data JSON chunk and push [`ProviderDelta`] events into `out`.
 ///
 /// - Text parts with `thought: true` emit `ThinkingDelta` instead of `TextDelta`
-/// - Function calls prefer native `id` field (Gemini 3+), fallback to synthetic `gemini_fc_{n}`
+/// - Function calls prefer native `id` field (Gemini 3+), fallback to synthetic
+///   `gemini_fc_{n}_{nonce}` (see the mint site for why the nonce is mandatory)
 /// - Usage includes `thoughtsTokenCount` when available
 pub(crate) fn parse_gemini_sse_chunk(
     data: &str,
@@ -96,10 +97,21 @@ pub(crate) fn parse_gemini_sse_chunk(
                     let args = fc.get("args").cloned().unwrap_or(serde_json::Value::Null);
                     let args_str = args.to_string();
 
-                    // Prefer native ID (Gemini 3+), fallback to synthetic
+                    // Prefer native ID (Gemini 3+), fallback to synthetic.
+                    //
+                    // The synthetic id MUST carry a nonce. A bare `gemini_fc_0`
+                    // repeats on every response (the counter resets per
+                    // request), and `build_prompt`'s orphan check matches tool
+                    // results by call_id *anywhere later in the log*: one Stop
+                    // press leaves a tool_use with no result, and the next
+                    // turn's `gemini_fc_0` result then marks that orphan
+                    // resolved — replaying an unpaired tool_use the provider
+                    // rejects with a 400. Same failure and same fix as
+                    // `promoted_{i}_{nonce}` in `harness/agent/think.rs`.
                     let id = fc.get("id").and_then(|v| v.as_str()).map_or_else(
                         || {
-                            let synthetic = format!("gemini_fc_{}", *fc_counter);
+                            let nonce = uuid::Uuid::new_v4().simple().to_string();
+                            let synthetic = format!("gemini_fc_{}_{nonce}", *fc_counter);
                             *fc_counter += 1;
                             synthetic
                         },

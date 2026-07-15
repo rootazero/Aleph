@@ -117,9 +117,9 @@ pub(crate) fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decisi
     };
 
     match classify_exhausted(&msg) {
-        // 413 — the harness owns this recovery path via
-        // `AgentHarness::try_reactive_compact_and_retry` (see
-        // `harness::agent::think`). The failover layer stops so the
+        // 413 — the turn driver owns this recovery path via
+        // `context::compact::rescue::try_reactive_compact_and_retry` (the
+        // harness reaches it through `RescueHost`). The failover layer stops so the
         // verdict reaches the harness intact instead of being swallowed
         // by sibling-provider attempts that would hit the same overflow.
         RetryVerdict::CompactAndRetry { .. } => Decision::Stop,

@@ -916,11 +916,19 @@ mod tests {
         let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
         let manager = AgentRunManager::new(router, event_bus, agent_registry, execution_adapter);
 
+        // Route to a DM session with a peer_id unique to this test. `session_mode`
+        // is a process-global map keyed by session key; with `session_key: None`
+        // this test's `AgentRouter::new()` (no session_store ⇒ no per-call epoch)
+        // resolved to the shared `agent:main:main` key that every other concurrent
+        // `session_key: None` test in this binary also writes — a sibling's
+        // `voice_input: false` turn `remove`s the entry between this test's `set`
+        // and `get`, making the assertion below flaky under `--tests` load. A
+        // unique peer key gives this test its own registry entry, no one else touches.
         let voice_params = AgentRunParams {
             input: "把窗帘拉上".to_string(),
             session_key: None,
             channel: None,
-            peer_id: None,
+            peer_id: Some("voice-roundtrip".to_string()),
             stream: false,
             thinking: None,
             attachments: vec![],

@@ -24,7 +24,6 @@ use crate::harness::agent::AgentHarness;
 use crate::harness::callback::NoopHarnessCallback;
 use crate::harness::chain_context::ChainContext;
 use crate::harness::deps::HarnessDeps;
-use crate::harness::trait_def::Harness;
 use crate::memory::extensions::MemoryExtensionRegistry;
 use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::providers::AiProvider;
@@ -97,6 +96,12 @@ pub struct SpawnerBase {
     /// run under `agent_def.id`. Holds the embedder via `embed_task`. `None`
     /// keeps the child sink raw (today's behavior — no capture).
     pub routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
+    /// B15 — the runner's boot-time `[execution] max_iterations`, inherited so a
+    /// child whose `AgentDef` declares no cap still gets one. `None` falls
+    /// through to `FALLBACK_MAX_ITERATIONS` inside `resolve_max_iterations`;
+    /// either way the child loop is never left uncapped (the main path's
+    /// "the harness loop is never left uncapped" invariant, `harness_bridge`).
+    pub default_max_iterations: Option<usize>,
 }
 
 /// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
@@ -400,12 +405,21 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             agent_def_arc.clone(),
         ));
 
-        let max_iter = req
-            .agent_def
-            .max_iterations
-            .map(usize::try_from)
-            .transpose()
-            .map_err(|_| "max_iterations exceeds platform limit".to_string())?;
+        // B15 — the spawn path used to hand `AgentDef.max_iterations` straight
+        // to `HarnessDeps`, where `None` means *unbounded* (deps.rs). The
+        // built-in "default" role — where the model lands when it omits
+        // `agent_type` — declares no cap, so such a child looped until the
+        // wall-clock spawn timeout killed it and threw the whole run away with
+        // an error string. An iteration cap instead fires the harness's
+        // boundary grace turn, which returns a usable summary. Resolved through
+        // `resolve_max_iterations` rather than a bare `.or(...)` so a
+        // configured `0` (frontmatter or `[execution]`) can never degrade into
+        // `Some(0)` = "die after one turn".
+        let max_iter = Some(crate::orchestrator::harness_bridge::resolve_max_iterations(
+            None,
+            req.agent_def.max_iterations,
+            base.default_max_iterations.unwrap_or(0),
+        ));
 
         let deps = HarnessDeps {
             session: base.session.clone(),
@@ -442,10 +456,53 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             // tool against truncated context). Reuse the same shared
             // `ToolResultStore` singleton the main harness falls back to
             // (`orchestrator::harness_bridge`), so large subagent results spill
-            // to the session directory and the subagent can re-read the marker.
-            result_store: crate::tools::result_store::global_tool_result_store(),
+            // to disk and the subagent can re-read the marker.
+            //
+            // Scope the *handle* like the two other seams do
+            // (`tool_service_builder`, `harness_bridge::runner_impl`) — the
+            // process-wide handle was unscoped, so a child's Layer-3 spills
+            // landed outside every session directory and its own `ctx_search`
+            // (which resolves scope from `turn_context::current_session_key()`)
+            // could never find them. Failed safe, but the recall was dead.
+            //
+            // The key is the PARENT session, not `child_id`: a subagent runs its
+            // tools through the parent's `ScopedToolService`, so both the
+            // TURN_CONTEXT its `ctx_search` reads and the Layer-2 store its
+            // individual results spill to are already parent-scoped. Scoping
+            // Layer 3 to `child_id` would just move the artifacts to a third
+            // directory nothing reads. No parent session (direct/test callers,
+            // no ScopedToolService) → keep today's unscoped handle.
+            result_store: crate::tools::result_store::global_tool_result_store().map(|store| {
+                base.parent_session_id.as_ref().map_or_else(
+                    || store.clone(),
+                    |sid| {
+                        crate::tools::result_store::ToolResultStore::for_session(
+                            &store,
+                            sid.clone(),
+                        )
+                    },
+                )
+            }),
             session_epoch_registrar: None,
-            tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+            // D6 — per-tool-invocation signal capture, mirroring the main path
+            // (`harness_bridge::runner_impl`). This was a hardcoded Noop even
+            // though `raw_memory_writer` is `Some` in production (the gateway
+            // wires it, and the Delegation emit below already uses it), so every
+            // tool call a subagent made was invisible to the `insights.tools`
+            // RPC — the sink's only real consumer. Tagged with the sub-role's
+            // `agent_def.id` (not the parent's) so per-role tool stats attribute
+            // to the role that actually ran the tool, matching the `routing_store`
+            // precedent above. No writer (tests / legacy callers) → Noop.
+            tool_signal_sink: match base.raw_memory_writer.clone() {
+                Some(store) => Arc::new(crate::memory::tool_signal_sink::RawMemoryToolSink::new(
+                    store,
+                    req.agent_def.id.clone(),
+                    child_id.to_key_string(),
+                ))
+                    as Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>,
+                None => Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink)
+                    as Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>,
+            },
             in_flight_tool_calls: None,
             // Parity with the main gateway harness (was `None` — subagents ran
             // every tool batch serially). Subagents routinely fan out

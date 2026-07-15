@@ -20,6 +20,7 @@
 //! boot driver would double-drive the same session.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use tracing::{info, warn};
 
@@ -77,13 +78,16 @@ async fn origin_of(agent: &Arc<AgentInstance>, session_key: &SessionKey) -> Opti
 ///
 /// `policy_meta` is `execute::carry_policy_metadata` of the completing run: the
 /// continuation this hook spawns must be no more privileged than the
-/// conversation it continues.
+/// conversation it continues. `workspace` is that run's project root, which is
+/// persisted nowhere (`goal::types` does not carry it) — pass it down or the
+/// continuation silently falls back to the agent workspace.
 pub(super) async fn post_run(
     deps: &ContinuationDeps,
     session_manager: &SessionManager,
     session_key: &SessionKey,
     agent: &Arc<AgentInstance>,
     policy_meta: &HashMap<String, String>,
+    workspace: Option<&Path>,
 ) {
     let Some(store) = crate::goal::global() else {
         return;
@@ -128,6 +132,7 @@ pub(super) async fn post_run(
                 session.clone(),
                 prompt,
                 policy_meta.clone(),
+                workspace.map(Path::to_path_buf),
                 deps.event_bus.clone(),
                 Some(delay_ms),
                 ContinuationKind::Goal { wake_ms },
@@ -162,6 +167,7 @@ pub(super) async fn post_run(
                 tokens.unwrap_or(0),
                 now,
                 policy_meta,
+                workspace,
             )
             .await;
         }
@@ -225,6 +231,7 @@ async fn arbitrate_gate(
     tokens_now: u64,
     claim_now_ms: u64,
     policy_meta: &HashMap<String, String>,
+    workspace: Option<&Path>,
 ) {
     let Some(store) = crate::goal::global() else {
         return;
@@ -309,6 +316,7 @@ async fn arbitrate_gate(
                 session.to_string(),
                 prompt,
                 policy_meta.clone(),
+                workspace.map(Path::to_path_buf),
                 deps.event_bus.clone(),
                 Some(0),
                 ContinuationKind::Goal { wake_ms },

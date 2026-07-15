@@ -12,16 +12,6 @@ use crate::harness::trace::LoopTraceEvent;
 pub trait TraceSink: Send + Sync {
     fn on_trace(&self, event: &LoopTraceEvent);
     fn flush(&self);
-
-    /// Stage 7 (#12): emitted once per `HarnessDeps` construction (= once
-    /// per session run on the gateway path) for each Stage 1-6 seam. The
-    /// `configured` flag distinguishes a wired impl from an explicit
-    /// `None` placeholder — Phase-6 will flip these as `aleph.toml`
-    /// loading lands.
-    ///
-    /// Default no-op so existing impls (`NoopTraceSink`, `GatewayTraceSink`,
-    /// test sinks) compile unchanged. Test sinks override to capture.
-    fn on_init_seam(&self, _stage: &'static str, _seam: &'static str, _configured: bool) {}
 }
 
 /// No-op implementation for tests / internal `flow_run` calls.

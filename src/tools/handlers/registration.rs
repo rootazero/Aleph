@@ -60,12 +60,17 @@ fn unusable_tool_schema_reason(schema: &Value) -> Option<&'static str> {
 /// repeatedly — collisions log a warning and are skipped. Returns the list of
 /// qualified names that were newly registered so the caller can tear them down
 /// in a matching `unregister_mcp_tools` on disconnect.
+///
+/// `timeout_seconds` is the server config's request timeout (`None` = the
+/// client's own default). Each handler declares it as its wall-clock budget so
+/// the harness cannot preempt a call the MCP client would have returned.
 pub async fn register_mcp_tools(
     registry: &ToolHandlerRegistry,
     tool_catalog: Option<&Arc<ToolCatalog>>,
     client: Arc<McpClient>,
     server_id: &str,
     tools: &[McpTool],
+    timeout_seconds: Option<u64>,
 ) -> Vec<String> {
     let mut registered = Vec::with_capacity(tools.len());
     for tool in tools {
@@ -93,7 +98,8 @@ pub async fn register_mcp_tools(
             tool.description.clone(),
             tool.input_schema.clone(),
         )
-        .with_flags(tool.read_only, tool.idempotent, tool.requires_confirmation);
+        .with_flags(tool.read_only, tool.idempotent, tool.requires_confirmation)
+        .with_timeout_seconds(timeout_seconds);
         // Single source of naming truth: the handler computes the provider-
         // safe registry key (strips the manager's `{server}:` namespace
         // prefix, sanitizes to `[A-Za-z0-9_-]{1,64}`). Composing the key
@@ -201,6 +207,7 @@ mod tests {
             client,
             "github",
             &[tool("github:create_issue", "d")],
+            None,
         )
         .await;
         assert_eq!(names, vec!["github__create_issue"]);
@@ -216,7 +223,7 @@ mod tests {
         ro.idempotent = true;
         let mut boom = tool("delete_item", "d");
         boom.requires_confirmation = true;
-        register_mcp_tools(&reg, None, client, "srv", &[ro, boom]).await;
+        register_mcp_tools(&reg, None, client, "srv", &[ro, boom], None).await;
         let snap = reg.snapshot();
         let ro_def = snap.get("srv__list_items").unwrap().definition();
         assert!(ro_def.metadata.concurrent_safe);
@@ -225,6 +232,35 @@ mod tests {
         let boom_def = snap.get("srv__delete_item").unwrap().definition();
         assert!(boom_def.metadata.requires_approval);
         assert!(!boom_def.metadata.concurrent_safe);
+    }
+
+    #[tokio::test]
+    async fn register_mcp_tools_declares_a_budget_above_the_server_timeout() {
+        // Regression: MCP tools carried NO wall-clock budget, so the harness
+        // read them as unbudgeted and aborted the whole run at its own
+        // fallback — long before the MCP client's own timeout could return a
+        // recoverable error. The declared budget must outlive that timeout.
+        let reg = ToolHandlerRegistry::new();
+        let client = Arc::new(McpClient::new());
+        register_mcp_tools(&reg, None, client, "srv", &[tool("slow", "d")], Some(600)).await;
+        let def = reg.snapshot().get("srv__slow").unwrap().definition();
+        let budget = def.metadata.max_duration_ms.expect("MCP tool is budgeted");
+        assert!(
+            budget > 600_000,
+            "budget {budget}ms must outlive the server's 600s request timeout"
+        );
+    }
+
+    #[tokio::test]
+    async fn register_mcp_tools_budgets_a_server_with_no_configured_timeout() {
+        // No `timeout_seconds` in config → the client's own remote default
+        // (300s) applies; the definition must still carry a budget above it.
+        let reg = ToolHandlerRegistry::new();
+        let client = Arc::new(McpClient::new());
+        register_mcp_tools(&reg, None, client, "srv", &[tool("slow", "d")], None).await;
+        let def = reg.snapshot().get("srv__slow").unwrap().definition();
+        let budget = def.metadata.max_duration_ms.expect("MCP tool is budgeted");
+        assert!(budget > 300_000, "budget {budget}ms must clear the default");
     }
 
     #[test]
@@ -252,7 +288,7 @@ mod tests {
         let mut bad2 = tool("scalar", "d");
         bad2.input_schema = json!("nope");
         let good = tool("ok", "d");
-        let names = register_mcp_tools(&reg, None, client, "srv", &[bad, bad2, good]).await;
+        let names = register_mcp_tools(&reg, None, client, "srv", &[bad, bad2, good], None).await;
         // Only the valid tool is registered; the two broken ones are skipped.
         assert_eq!(names, vec!["srv__ok"]);
         let snap = reg.snapshot();
@@ -266,7 +302,7 @@ mod tests {
         let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
         let tools = [tool("get_time", "a"), tool("set_tz", "b")];
-        let names = register_mcp_tools(&reg, None, client, "clock", &tools).await;
+        let names = register_mcp_tools(&reg, None, client, "clock", &tools, None).await;
         assert_eq!(names, vec!["clock__get_time", "clock__set_tz"]);
         let snap = reg.snapshot();
         assert!(snap.contains_key("clock__get_time"));
@@ -277,8 +313,24 @@ mod tests {
     async fn unregister_mcp_tools_removes_only_matching_server() {
         let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
-        register_mcp_tools(&reg, None, Arc::clone(&client), "alpha", &[tool("x", "d")]).await;
-        register_mcp_tools(&reg, None, Arc::clone(&client), "beta", &[tool("y", "d")]).await;
+        register_mcp_tools(
+            &reg,
+            None,
+            Arc::clone(&client),
+            "alpha",
+            &[tool("x", "d")],
+            None,
+        )
+        .await;
+        register_mcp_tools(
+            &reg,
+            None,
+            Arc::clone(&client),
+            "beta",
+            &[tool("y", "d")],
+            None,
+        )
+        .await;
         assert_eq!(reg.snapshot().len(), 2);
         let removed = unregister_mcp_tools(&reg, None, "alpha").await;
         assert_eq!(removed, vec!["alpha__x"]);
@@ -291,8 +343,8 @@ mod tests {
         let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
         let t = [tool("dup", "d")];
-        let first = register_mcp_tools(&reg, None, Arc::clone(&client), "s", &t).await;
-        let second = register_mcp_tools(&reg, None, client, "s", &t).await;
+        let first = register_mcp_tools(&reg, None, Arc::clone(&client), "s", &t, None).await;
+        let second = register_mcp_tools(&reg, None, client, "s", &t, None).await;
         assert_eq!(first, vec!["s__dup"]);
         assert!(second.is_empty());
         assert_eq!(reg.snapshot().len(), 1);
@@ -309,6 +361,7 @@ mod tests {
             client,
             "srv",
             &[tool("a", "d"), tool("b", "d")],
+            None,
         )
         .await;
         // No public introspection of registered probes; instead, force a
@@ -327,7 +380,7 @@ mod tests {
         let reg = ToolHandlerRegistry::new();
         let disp = Arc::new(ToolCatalog::new());
         let client = Arc::new(McpClient::new());
-        register_mcp_tools(&reg, Some(&disp), client, "srv", &[tool("a", "d")]).await;
+        register_mcp_tools(&reg, Some(&disp), client, "srv", &[tool("a", "d")], None).await;
         let removed = unregister_mcp_tools(&reg, Some(&disp), "srv").await;
         assert_eq!(removed, vec!["srv__a"]);
         // Re-registering immediately should not collide with a leftover probe
@@ -344,7 +397,7 @@ mod tests {
         let catalog = Arc::new(ToolCatalog::new());
         let client = Arc::new(McpClient::new());
         let t = tool("do_thing", "does a thing");
-        let names = register_mcp_tools(&reg, Some(&catalog), client, "srv", &[t]).await;
+        let names = register_mcp_tools(&reg, Some(&catalog), client, "srv", &[t], None).await;
         assert_eq!(names.len(), 1);
         let in_catalog = catalog.list_by_mcp_server("srv").await;
         assert_eq!(in_catalog.len(), 1, "MCP tool must appear in ToolCatalog");
@@ -363,6 +416,7 @@ mod tests {
             Arc::clone(&client),
             "srv",
             &[tool("t", "d")],
+            None,
         )
         .await;
         let removed = unregister_mcp_tools(&reg, Some(&catalog), "srv").await;

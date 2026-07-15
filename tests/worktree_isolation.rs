@@ -146,6 +146,7 @@ async fn h_t1_worktree_isolation_happy_path() {
         plugin_registry: None,
         subagent_semaphore: None,
         routing_store: None,
+        default_max_iterations: None,
     };
 
     let agent_def =

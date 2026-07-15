@@ -168,27 +168,43 @@ impl crate::tools::service::ToolService for MixedTools {
     }
 }
 
-/// Tool service whose `execute` blocks forever (for act-phase timeout tests).
-pub(super) struct HangingTools;
+/// A `LoopTool` that never returns, declaring a 150ms budget for itself.
+///
+/// Behind the production `ScopedToolService` (see [`hanging_tool_service`]) —
+/// the tool layer is where a call's wall clock lives now, so a hang is bounded
+/// there, not by the harness.
+pub(super) struct HangingLoopTool;
 
 #[async_trait::async_trait]
-impl crate::tools::service::ToolService for HangingTools {
+impl crate::tools::runtime::LoopTool for HangingLoopTool {
+    fn name(&self) -> &str {
+        "slow_tool"
+    }
+    fn description(&self) -> &str {
+        "never returns"
+    }
+    fn schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object" })
+    }
     async fn execute(
         &self,
-        _name: &str,
         _input: serde_json::Value,
-    ) -> Result<ToolOutput, crate::tools::service::ToolError> {
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> crate::tools::runtime::ToolResult {
         std::future::pending().await
     }
-    async fn list(&self) -> Vec<crate::tools::service::ToolDefinition> {
-        Vec::new()
+    fn max_duration_ms(&self) -> Option<u64> {
+        Some(150)
     }
-    async fn describe(&self, _name: &str) -> Option<crate::tools::service::ToolDefinition> {
-        None
-    }
-    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
-        std::sync::Arc::from([])
-    }
+}
+
+pub(super) fn hanging_tool_service() -> Arc<dyn crate::tools::service::ToolService> {
+    let mut registry = crate::tools::runtime::LoopToolRegistry::new();
+    registry.register(Box::new(HangingLoopTool));
+    Arc::new(crate::tools::ScopedToolService::new(
+        Arc::new(registry),
+        std::collections::BTreeSet::new(),
+    ))
 }
 
 /// Build a fresh attached session with one `TurnStarted` + `UserMessage`
@@ -278,7 +294,7 @@ pub(super) fn minimal_deps(
 }
 
 use crate::harness::agent::AgentHarness;
-use crate::harness::trait_def::{Harness, HarnessError};
+use crate::harness::trait_def::HarnessError;
 
 #[tokio::test]
 async fn recording_sink_captures_full_lifecycle() {
@@ -614,18 +630,30 @@ async fn think_phase_timeout_terminates_via_hit_limit() {
     );
 }
 
+/// The Act phase is no longer judged by `turn_timeout`. That clock's one
+/// remaining home is `think.rs::race_llm_call` — an LLM call has no human gate
+/// in front of it, a tool call does. The harness used to wrap `turn_timeout`
+/// around the whole Act future, which put the operator's approval wait *inside*
+/// the tool's execution budget; production `turn_timeout` (120s) is the same
+/// order as the approval timeout, so a slow human aborted the entire run.
+///
+/// A hung tool is now bounded where it should be — by its own budget, in
+/// `ScopedToolService::execute_inner`, below the approval gate — and the overrun
+/// comes back as a recoverable `ToolError`, so the run finishes normally instead
+/// of dying with `hit_limit`.
 #[tokio::test]
-async fn act_phase_timeout_terminates_via_hit_limit() {
+async fn hung_tool_is_bounded_by_its_own_budget_not_the_turn_timeout() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let provider: Arc<dyn AiProvider> = Arc::new(OneShotToolProvider {
         name: "slow_tool".into(),
         calls,
     });
     let (session, sid) = fresh_session("act-timeout").await;
-    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(HangingTools);
 
-    let mut deps = minimal_deps(session, tools, provider);
-    deps.turn_timeout = Some(std::time::Duration::from_millis(200));
+    let mut deps = minimal_deps(session, hanging_tool_service(), provider);
+    // Ten seconds: long enough that if `turn_timeout` were still the Act clock,
+    // the outer 2s guard below would fire first and fail the test.
+    deps.turn_timeout = Some(std::time::Duration::from_secs(10));
     let harness = AgentHarness::new(deps);
 
     let mut cb = NoopHarnessCallback;
@@ -635,12 +663,12 @@ async fn act_phase_timeout_terminates_via_hit_limit() {
         harness.run(&sid, &mut cb, &cancel),
     )
     .await
-    .expect("must return within 2s");
+    .expect("the tool's own 150ms budget must bound the hang");
 
-    result.expect("Phase-2: Act-phase timeout must surface as Ok(HitLimit), not Err(StalledTurn)");
+    result.expect("a tool budget overrun is recoverable, not a run abort");
     assert!(
-        harness.hit_limit(),
-        "hit_limit must be true after Act turn timeout (slow_tool)",
+        !harness.hit_limit(),
+        "a recoverable tool timeout must not exhaust the run",
     );
 }
 

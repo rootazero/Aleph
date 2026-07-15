@@ -10,17 +10,12 @@ use tokio::sync::broadcast;
 ///
 /// * `on_delta(text)` → `FlowStreamEvent::Delta(text)`
 /// * `on_reasoning(text)` → `FlowStreamEvent::Reasoning(text)`
-/// * `on_tool_call(name)` → `FlowStreamEvent::ToolCallStart { id: "legacy", name, args: null }`
 /// * `on_tool_call_start(id, name, args)` → `FlowStreamEvent::ToolCallStart { id, name, args }`
 /// * `on_tool_call_done(id, result, error, duration_ms)` → `FlowStreamEvent::ToolCallDone { id, result, error, duration_ms }`
 /// * `on_context_usage(tokens, total)` → `FlowStreamEvent::ContextGauge
 ///   { context_tokens, context_window, total_tokens }` (window pre-resolved
 ///   at construction; suppressed when either side is 0)
 /// * `on_safety_block(reason)` → `FlowStreamEvent::SafetyBlock { reason }`
-/// * `on_complete()` → no-op (the terminal `Complete(outcome)` event is
-///   emitted by [`BroadcastCallback::on_complete_with_outcome`], which fires
-///   strictly after `on_complete` and after `AgentHarnessRunner` has built
-///   the full `FlowOutcome`)
 /// * `on_complete_with_outcome(&outcome)` →
 ///   `FlowStreamEvent::Complete(outcome.clone())`. Single source of the
 ///   terminal event — `AgentHarnessRunner::run` no longer sends it via
@@ -52,15 +47,6 @@ impl HarnessCallback for BroadcastCallback {
     fn on_reasoning(&mut self, text: &str) {
         let _ = self.tx.send(FlowStreamEvent::Reasoning(text.to_string()));
     }
-
-    // `on_tool_call` (the name-only callback) is deliberately NOT implemented:
-    // the trait's default is a no-op, and `act.rs` calls it immediately before
-    // `on_tool_call_start` for the SAME call. Emitting from both fired two
-    // `ToolCallStart` events per tool call — one carrying a synthetic
-    // `id: "legacy"` and null args. `ToolCallDone` only ever carries the real
-    // call id, so the synthetic row could never be completed: it stayed
-    // "running" forever, and anything keyed by call id (the inline approval
-    // card) could not pair against it.
 
     fn on_tool_call_start(&mut self, id: &str, name: &str, args: &serde_json::Value) {
         let _ = self.tx.send(FlowStreamEvent::ToolCallStart {
@@ -103,12 +89,6 @@ impl HarnessCallback for BroadcastCallback {
             reason: reason.to_string(),
         });
     }
-
-    // `on_complete` is intentionally a no-op here.
-    // The terminal `Complete(outcome)` event is emitted in
-    // `on_complete_with_outcome` (P4), so the broadcast channel always
-    // sees the full outcome payload.
-    fn on_complete(&mut self) {}
 
     fn on_complete_with_outcome(&mut self, outcome: &FlowOutcome) {
         // P4 (single-source): this is the only place that emits

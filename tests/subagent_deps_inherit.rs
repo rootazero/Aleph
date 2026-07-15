@@ -134,6 +134,7 @@ async fn subagent_base_carries_4_p1_fields() {
         plugin_registry: None,
         subagent_semaphore: None,
         routing_store: None,
+        default_max_iterations: None,
     };
 
     // Structural assertions — the 5 P1 fields are populated as expected.

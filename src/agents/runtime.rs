@@ -151,6 +151,10 @@ pub struct AgentRuntime {
     /// `agent_def.id`. `None` (the `new()` default) keeps subagents
     /// capture-free.
     routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
+    /// B15 — the parent runner's boot-time `[execution] max_iterations`,
+    /// threaded into `SpawnerBase` so a child role with no declared cap
+    /// inherits one instead of running its Think→Act loop unbounded.
+    default_max_iterations: Option<usize>,
 }
 
 impl AgentRuntime {
@@ -183,7 +187,16 @@ impl AgentRuntime {
             provider_overrides: HashMap::new(),
             strategy: None,
             routing_store: None,
+            default_max_iterations: None,
         }
+    }
+
+    /// B15 — wire the parent runner's boot-time iteration cap, inherited by
+    /// every spawned child that declares none of its own.
+    #[must_use]
+    pub const fn with_default_max_iterations(mut self, max_iterations: usize) -> Self {
+        self.default_max_iterations = Some(max_iterations);
+        self
     }
 
     /// Wire the welded strategy `<strategy>` body inherited by every spawn.
@@ -468,6 +481,9 @@ impl AgentRuntime {
             subagent_semaphore: self.subagent_semaphore.clone(),
             // VESR v1.1 (b) — threaded from the gateway so subagents capture.
             routing_store: self.routing_store.clone(),
+            // B15 — the parent's iteration cap, so a capless child role does
+            // not run its loop unbounded until the spawn timeout kills it.
+            default_max_iterations: self.default_max_iterations,
         };
         let req = SpawnRequest {
             agent_def: &config.agent_def,

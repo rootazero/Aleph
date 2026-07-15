@@ -14,6 +14,7 @@
 //!   over a tool's text output and returns `ProcessedResult`.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use crate::context::budget::pressure::{
     content_ratio_with_baseline, estimate_tokens_smart, DEFAULT_PROSE_RATIO,
@@ -26,6 +27,34 @@ use crate::tools::result_store::{extract_persisted_ref, ToolResultStore};
 /// `max_result_tokens` nor appear in the legacy name table. Mirrors the
 /// `MAX_TOOL_RESULT_TOKENS` constant in `pipeline/helpers.rs`.
 pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 8_000;
+
+/// Process-wide ceiling on every per-result budget, installed at boot from the
+/// model's usable window (`turn_budget::budget_for_window`). Absent = no
+/// ceiling, which is exactly today's behavior.
+///
+/// It lives here rather than as a `ToolService::execute` parameter on purpose:
+/// that signature's callers are in `harness/agent/act.rs`, and that tree is over
+/// its R10 line budget. A boot-installed ceiling costs the harness zero lines.
+static RESULT_BUDGET_CEILING: OnceLock<usize> = OnceLock::new();
+
+/// Install the process-wide per-result ceiling. Called once at boot.
+///
+/// A ceiling at or above [`DEFAULT_RESULT_BUDGET_TOKENS`] is **ignored**: it
+/// would clip the budgets tools declare above the default (`web_fetch`'s 10k)
+/// without buying anything, and this knob exists solely to clamp *down* on
+/// small-window models. So a large-window model installs nothing and behaves
+/// byte-for-byte as it does today.
+pub fn set_global_result_budget_ceiling(ceiling: usize) {
+    if ceiling >= DEFAULT_RESULT_BUDGET_TOKENS {
+        return;
+    }
+    let _ = RESULT_BUDGET_CEILING.set(ceiling);
+}
+
+/// The installed ceiling, or `usize::MAX` (= uncapped) when boot installed none.
+fn result_budget_ceiling() -> usize {
+    RESULT_BUDGET_CEILING.get().copied().unwrap_or(usize::MAX)
+}
 
 /// Resolve a tool's per-result token budget.
 ///
@@ -41,28 +70,41 @@ pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 8_000;
 ///    which has no in-crate tool to carry the trait method).
 /// 4. Otherwise fall back to [`DEFAULT_RESULT_BUDGET_TOKENS`].
 ///
+/// Whatever that yields is then capped by the boot-installed window ceiling
+/// (see [`set_global_result_budget_ceiling`]). The cap applies to *every*
+/// branch, not just the fallback: a declared 10k budget on a 16k-window model is
+/// exactly the value that has to come down, so treating the ceiling as a default
+/// rather than a maximum would let the worst offenders through untouched.
+///
 /// `None` from this function means "do not persist this tool's output;
 /// just truncate when it exceeds the global default".
 #[must_use]
 pub fn resolve_result_budget(name: &str, explicit: Option<usize>) -> Option<usize> {
+    resolve_result_budget_under(name, explicit, result_budget_ceiling())
+}
+
+/// Pure core of [`resolve_result_budget`] with the ceiling passed in, so the
+/// cap semantics are unit-testable without touching the process-wide `OnceLock`.
+fn resolve_result_budget_under(
+    name: &str,
+    explicit: Option<usize>,
+    ceiling: usize,
+) -> Option<usize> {
     match name {
         "read_file" | "Read" | "file_read" => return None,
         _ => {}
     }
-    if let Some(n) = explicit {
-        return Some(n);
-    }
-    match name {
-        // Tools whose `AlephTool::max_result_tokens()` never reaches this
-        // function because they are registered through the executor
-        // `ToolRegistry` → `RegistryToolAdapter` (which does not carry the
-        // trait value). Their budget stays here until that adapter forwards
-        // declared budgets. `bash` (8k) == the default, so only the
-        // non-default ones need arms.
+    // Tools whose `AlephTool::max_result_tokens()` never reaches this function
+    // because they are registered through the executor `ToolRegistry` →
+    // `RegistryToolAdapter` (which does not carry the trait value). Their budget
+    // stays here until that adapter forwards declared budgets. `bash` (8k) ==
+    // the default, so only the non-default ones need arms.
+    let declared = explicit.or_else(|| match name {
         "Grep" | "search_files" => Some(6_000),
         "web_fetch" => Some(10_000),
         _ => Some(DEFAULT_RESULT_BUDGET_TOKENS),
-    }
+    });
+    declared.map(|n| n.min(ceiling))
 }
 
 /// Output of [`apply_result_budget`]. `text` is what the LLM should see.
@@ -433,6 +475,77 @@ mod tests {
     #[test]
     fn explicit_budget_still_wins_over_name_table() {
         assert_eq!(resolve_result_budget("web_fetch", Some(4_000)), Some(4_000));
+    }
+
+    // ---------------------------------------------------------------
+    // window ceiling (B14)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn window_ceiling_caps_declared_budgets_not_just_the_default() {
+        // A 16k-window model yields a 2_400 per-result ceiling. `web_fetch`'s
+        // declared 10k and `Grep`'s 6k are exactly the values that must come
+        // down — a ceiling applied only to the `None` fallback would leave the
+        // biggest offenders untouched.
+        let ceiling = 2_400;
+        assert_eq!(
+            resolve_result_budget_under("web_fetch", None, ceiling),
+            Some(2_400)
+        );
+        assert_eq!(
+            resolve_result_budget_under("Grep", None, ceiling),
+            Some(2_400)
+        );
+        assert_eq!(
+            resolve_result_budget_under("bash", Some(8_000), ceiling),
+            Some(2_400)
+        );
+        assert_eq!(
+            resolve_result_budget_under("unknown", None, ceiling),
+            Some(2_400)
+        );
+        // A tool that already declares less than the ceiling keeps its value.
+        assert_eq!(
+            resolve_result_budget_under("tiny", Some(500), ceiling),
+            Some(500)
+        );
+        // The read-recursion guard still wins over everything.
+        assert_eq!(
+            resolve_result_budget_under("read_file", None, ceiling),
+            None
+        );
+    }
+
+    #[test]
+    fn uncapped_ceiling_is_todays_behavior() {
+        // No ceiling installed (large window / no `[context_budget]`) → the
+        // table is byte-for-byte what it was.
+        assert_eq!(
+            resolve_result_budget_under("web_fetch", None, usize::MAX),
+            Some(10_000)
+        );
+        assert_eq!(
+            resolve_result_budget_under("Grep", None, usize::MAX),
+            Some(6_000)
+        );
+        assert_eq!(
+            resolve_result_budget_under("bash", None, usize::MAX),
+            Some(DEFAULT_RESULT_BUDGET_TOKENS)
+        );
+    }
+
+    #[test]
+    fn ceiling_at_or_above_the_default_is_refused() {
+        // A large-window model must not install a ceiling at all — an 8_000 one
+        // would silently clip `web_fetch`'s declared 10k, which is a regression,
+        // not a fix. The installer drops it, so the global stays uncapped.
+        set_global_result_budget_ceiling(DEFAULT_RESULT_BUDGET_TOKENS);
+        set_global_result_budget_ceiling(50_000);
+        assert_eq!(
+            resolve_result_budget("web_fetch", None),
+            Some(10_000),
+            "a refused ceiling must leave the process uncapped"
+        );
     }
 
     // ---------------------------------------------------------------

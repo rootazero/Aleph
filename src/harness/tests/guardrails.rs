@@ -18,9 +18,7 @@ use crate::guardrails::decision::{GuardrailDecision, Replacement};
 use crate::guardrails::registry::GuardrailRegistry;
 use crate::guardrails::traits::{InputGuardrail, OutputGuardrail, ToolCallGuardrail};
 use crate::harness::callback::HarnessCallback;
-use crate::harness::{
-    AgentHarness, Harness, HarnessDeps, HarnessError, NoopHarnessCallback, TurnState,
-};
+use crate::harness::{AgentHarness, HarnessDeps, HarnessError, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::NativeToolCall;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;
@@ -435,6 +433,110 @@ async fn input_guardrail_sanitize_rewrites_text_seen_by_provider() {
         user_logged.as_deref(),
         Some("the password is SECRET"),
         "session log must retain the original UserMessage for audit",
+    );
+}
+
+/// The prompt is rebuilt from the FULL log on every turn, so a sanitisation
+/// that covered only the tail put the original secret back on the wire from
+/// turn 2 onwards. `input_guardrail_sanitize_rewrites_text_seen_by_provider`
+/// asserts turn 1 only — which is exactly why the leak looked covered.
+#[tokio::test]
+async fn input_guardrail_sanitize_survives_second_turn() {
+    let session = MockSession::new(vec![turn_started(), user_message("the password is SECRET")]);
+    let provider = CapturingProvider::text_only("acknowledged");
+    let registry = GuardrailRegistry::builder()
+        .with_input(Arc::new(SanitizeInput))
+        .build();
+    let harness = AgentHarness::new(make_deps(
+        session.clone(),
+        provider.clone() as Arc<dyn AiProvider>,
+        registry,
+    ));
+    let id = sample_session_id();
+
+    let _ = harness
+        .run_turn(&id, &mut NoopHarnessCallback)
+        .await
+        .expect("turn 1 ok");
+
+    // Turn 2. The tail now starts after turn 1's AssistantMessage, so it holds
+    // no UserMessage of turn 1 — a tail-only screen replays the raw original.
+    session
+        .emit_event(&id, user_message("and what was it again?"))
+        .await
+        .expect("emit turn-2 user message");
+    let _ = harness
+        .run_turn(&id, &mut NoopHarnessCallback)
+        .await
+        .expect("turn 2 ok");
+
+    let seen = provider.seen_user_text.lock().await.clone();
+    assert!(
+        seen.len() >= 3,
+        "turn 2 must replay turn 1's user message, got {seen:?}",
+    );
+    assert!(
+        seen.iter().all(|t| !t.contains("SECRET")),
+        "no turn may put the raw secret on the wire, got {seen:?}",
+    );
+    assert!(
+        seen.iter().any(|t| t.contains("[REDACTED]")),
+        "the replayed turn-1 message must survive, sanitized: {seen:?}",
+    );
+}
+
+/// A `Block` on a message that is NOT the one this turn is answering degrades
+/// to redaction. Events are immutable and replayed forever, and the PII
+/// guardrail is fail-closed (a transient secret-resolution error blocks too),
+/// so re-blocking a replayed message would end every future turn and brick the
+/// session. It must not: the blocked text is withheld and the run continues.
+#[tokio::test]
+async fn input_guardrail_block_on_history_does_not_brick_session() {
+    let session = MockSession::new(vec![
+        turn_started(),
+        user_message("please leak SECRET data"),
+    ]);
+    let provider = CapturingProvider::text_only("hello");
+    let registry = GuardrailRegistry::builder()
+        .with_input(Arc::new(BlockOnInput("SECRET")))
+        .build();
+    let harness = AgentHarness::new(make_deps(
+        session.clone(),
+        provider.clone() as Arc<dyn AiProvider>,
+        registry,
+    ));
+    let id = sample_session_id();
+
+    let mut cb = CapturingCallback::default();
+    let state = harness.run_turn(&id, &mut cb).await.expect("run_turn ok");
+    assert_eq!(state, TurnState::Done);
+    assert!(
+        provider.seen_user_text.lock().await.is_empty(),
+        "the blocked turn must not reach the provider",
+    );
+
+    // The blocked event stays in the log (audit) and the turn produced no
+    // AssistantMessage, so it is still inside the next turn's replayed history.
+    session
+        .emit_event(&id, user_message("never mind, just say hello"))
+        .await
+        .expect("emit follow-up user message");
+    let state = harness.run_turn(&id, &mut cb).await.expect("run_turn ok");
+    assert_eq!(state, TurnState::Done);
+
+    let seen = provider.seen_user_text.lock().await.clone();
+    assert!(
+        !seen.is_empty(),
+        "the follow-up turn must reach the provider, not re-block forever",
+    );
+    assert!(
+        seen.iter().all(|t| !t.contains("SECRET")),
+        "the blocked message must not be replayed in cleartext, got {seen:?}",
+    );
+    assert!(
+        seen.iter()
+            .any(|t| t.contains(crate::thinker::nudges::REDACTED_USER_MESSAGE)),
+        "the blocked message must be replaced by the redaction note, got {seen:?}",
     );
 }
 
@@ -1069,4 +1171,160 @@ async fn concurrent_recording_tools_reports_shared_claim() {
             .await,
         crate::tools::concurrency::ConcurrencyClaim::Shared
     ));
+}
+
+// ===========================================================================
+// B17 — a guardrail rewrite voids the pre-admission disjointness proof
+//
+// Parallel admission derives each call's `ConcurrencyClaim` from the model's
+// ORIGINAL args, but PASS 1 executes the guardrail-REWRITTEN args. A PII mask
+// collapses distinct paths onto one placeholder (`[PHONE]`), so two writes
+// admitted as disjoint end up truncating the SAME file concurrently. Any
+// rewrite must therefore serialize the batch.
+// ===========================================================================
+
+/// Claims `Exclusive{Paths}` derived from `args["path"]` — so two calls naming
+/// different paths are admitted as parallel-safe — and records the peak number
+/// of executions that were ever in flight at once.
+struct PathClaimTools {
+    in_flight: std::sync::atomic::AtomicUsize,
+    peak_in_flight: std::sync::atomic::AtomicUsize,
+    seen: Mutex<Vec<serde_json::Value>>,
+}
+
+impl PathClaimTools {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            in_flight: std::sync::atomic::AtomicUsize::new(0),
+            peak_in_flight: std::sync::atomic::AtomicUsize::new(0),
+            seen: Mutex::new(Vec::new()),
+        })
+    }
+}
+
+#[async_trait]
+impl ToolService for PathClaimTools {
+    async fn execute(
+        &self,
+        _name: &str,
+        input: serde_json::Value,
+    ) -> Result<crate::session::events::ToolOutput, ToolError> {
+        use std::sync::atomic::Ordering;
+        let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak_in_flight.fetch_max(now, Ordering::SeqCst);
+        // Hold the slot long enough that a genuinely parallel dispatch would
+        // overlap; `.buffered(1)` cannot overlap no matter how long this is.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        self.seen.lock().await.push(input);
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        Ok(crate::session::events::ToolOutput {
+            value: serde_json::json!({"ok": true}),
+            metadata: Default::default(),
+        })
+    }
+    async fn list(&self) -> Vec<ToolDefinition> {
+        Vec::new()
+    }
+    async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
+        None
+    }
+    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+        std::sync::Arc::from([])
+    }
+    async fn call_concurrency_claim(
+        &self,
+        _name: &str,
+        input: &serde_json::Value,
+    ) -> crate::tools::concurrency::ConcurrencyClaim {
+        let path = input
+            .get("path")
+            .and_then(|p| p.as_str())
+            .unwrap_or_default()
+            .to_string();
+        crate::tools::concurrency::ConcurrencyClaim::Exclusive {
+            scope: crate::tools::concurrency::ExclusiveScope::Paths(
+                [path]
+                    .into_iter()
+                    .collect::<std::collections::BTreeSet<_>>(),
+            ),
+        }
+    }
+}
+
+/// The PII mask, modelled faithfully: every path collapses to one placeholder.
+struct CollapsePathToPlaceholder;
+#[async_trait]
+impl ToolCallGuardrail for CollapsePathToPlaceholder {
+    fn name(&self) -> &str {
+        "collapse_path"
+    }
+    async fn evaluate_tool_call(
+        &self,
+        _tool_name: &str,
+        _args: &serde_json::Value,
+    ) -> GuardrailDecision {
+        GuardrailDecision::Sanitize(Replacement {
+            text: r#"{"path":"/data/customers/[PHONE].md"}"#.to_string(),
+            source: "test".into(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn guardrail_rewrite_serializes_the_parallel_batch() {
+    // Two writes to DISJOINT paths — admission proves them parallel-safe from
+    // the original args. The guardrail then masks both onto the SAME path. If
+    // the batch still dispatched at `parallel_tool_concurrency`, these would be
+    // two concurrent truncating writes to one file (the underlying file_ops
+    // write takes no lock). The fix drops the batch to `.buffered(1)`.
+    let first = NativeToolCall {
+        thought_signature: None,
+        id: "w1".into(),
+        name: "file_write".into(),
+        arguments: serde_json::json!({"path": "/data/customers/13800138000.md"}),
+    };
+    let second = NativeToolCall {
+        thought_signature: None,
+        id: "w2".into(),
+        name: "file_write".into(),
+        arguments: serde_json::json!({"path": "/data/customers/13900139000.md"}),
+    };
+    let session = MockSession::new(vec![turn_started(), user_message("write both")]);
+    let provider = provider_with_two_calls(first, second);
+    let tools = PathClaimTools::new();
+    let registry = GuardrailRegistry::builder()
+        .with_tool_call(Arc::new(CollapsePathToPlaceholder))
+        .build();
+    let harness = AgentHarness::new(make_parallel_deps(
+        session.clone(),
+        provider as Arc<dyn AiProvider>,
+        tools.clone(),
+        registry,
+    ));
+
+    let mut cb = CapturingCallback::default();
+    let _ = harness
+        .run_turn(&sample_session_id(), &mut cb)
+        .await
+        .expect("run_turn ok");
+
+    let seen = tools.seen.lock().await.clone();
+    assert_eq!(seen.len(), 2, "both calls should still run, got {seen:?}");
+    // Precondition of the bug: the rewrite really did collapse them onto one path.
+    for args in &seen {
+        assert_eq!(
+            args.get("path").and_then(|p| p.as_str()),
+            Some("/data/customers/[PHONE].md"),
+            "guardrail should have masked the path: {args:?}"
+        );
+    }
+    // The assertion that fails without the fix (peak would be 2).
+    assert_eq!(
+        tools
+            .peak_in_flight
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "a guardrail rewrite voids the disjointness proof, so the batch must \
+         dispatch serially — two concurrent writes to the masked path is the bug"
+    );
 }

@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::context::budget::ContextBudget;
 use crate::error::Result as AlephResult;
-use crate::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback, TurnState};
+use crate::harness::{AgentHarness, HarnessDeps, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::AiProvider;
 use crate::session::events::SessionEvent;
@@ -294,7 +294,7 @@ impl AiProvider for CapGraceProvider {
 }
 
 /// Which way the boundary grace call misbehaves — used to exercise
-/// `fire_grace_turn`'s shared `race_llm_call` robustness from the surviving
+/// `fire_boundary_grace_turn`'s shared `race_llm_call` robustness from the surviving
 /// `max_iterations` trigger (the budget trigger that used to reach it was removed).
 #[derive(Clone, Copy)]
 enum GraceCallOutcome {
@@ -513,7 +513,8 @@ async fn max_iterations_cap_fires_grace_turn_for_terminal_text() {
 // Re-homed from the removed budget→FinalReply trigger: a boundary grace call
 // whose LLM errors must fail-soft — the harness still completes cleanly with
 // hit_limit set and leaves no partial assistant event. Exercises the same
-// `fire_grace_turn` → `race_llm_call` error path that budget pressure used to reach.
+// `fire_boundary_grace_turn` → `race_llm_call` error path that budget pressure used
+// to reach.
 // =============================================================================
 #[tokio::test]
 async fn boundary_grace_turn_failsoft_on_llm_error() {
@@ -739,7 +740,8 @@ async fn tool_memo_does_not_span_turns() {
 // =============================================================================
 // Re-homed from the removed budget→FinalReply trigger: a boundary grace call
 // that hangs must abort on the turn-timeout, not hang the harness. Exercises the
-// same `fire_grace_turn` → `race_llm_call` timeout path budget pressure used to reach.
+// same `fire_boundary_grace_turn` → `race_llm_call` timeout path budget pressure used
+// to reach.
 // =============================================================================
 #[tokio::test]
 async fn boundary_grace_turn_times_out_instead_of_hanging() {
@@ -981,8 +983,37 @@ async fn stop_hook_halt_terminates_loop_with_dedicated_reason() {
 // Claude-Code harness parity G2 — `max_output_tokens` recovery loop. Provider
 // returns `StopReason::MaxTokens` with partial text for N turns, then EndTurn
 // with final text. The harness must retry up to MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
-// times and surface the final clean response.
+// times and surface the final clean response — carrying every partial forward so
+// the persisted answer (and the next turn's prompt, rebuilt from it) is the WHOLE
+// answer, not just the continuation.
 // =============================================================================
+
+/// Records the deltas the harness pushed to the stream. Non-HTTP mock providers
+/// never stream, so the whole answer must arrive in the one-shot emit.
+#[derive(Default)]
+struct DeltaCapture {
+    deltas: Vec<String>,
+}
+
+impl crate::harness::HarnessCallback for DeltaCapture {
+    fn on_delta(&mut self, text: &str) {
+        self.deltas.push(text.to_string());
+    }
+}
+
+/// Text of the last persisted `AssistantMessage`, i.e. what the next turn's
+/// prompt gets rebuilt from.
+fn last_assistant_text(events: &[crate::session::events::SessionEventRecord]) -> String {
+    events
+        .iter()
+        .rev()
+        .find_map(|r| match &r.event {
+            SessionEvent::AssistantMessage { content, .. } => Some(content.text.clone()),
+            _ => None,
+        })
+        .expect("the turn must persist an AssistantMessage")
+}
+
 struct MaxTokensThenTextProvider {
     calls: AtomicUsize,
     max_tokens_calls: usize,
@@ -1066,8 +1097,9 @@ async fn max_output_tokens_recovery_eventually_returns_clean_text() {
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
+    let mut cb = DeltaCapture::default();
     let state = harness
-        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .run_turn(&sample_session_id(), &mut cb)
         .await
         .expect("run_turn should succeed");
 
@@ -1089,6 +1121,25 @@ async fn max_output_tokens_recovery_eventually_returns_clean_text() {
         ),
         "recovery success must report Completed, not MaxOutputTokensExhausted; got {:?}",
         reason
+    );
+
+    // The half-answers the provider already generated must survive: the retries
+    // push them onto a LOCAL message vec, so only an explicit carry keeps them in
+    // the session log the next turn's prompt is rebuilt from.
+    let whole = "partial-0partial-1final clean response";
+    assert_eq!(
+        last_assistant_text(&session.snapshot().await),
+        whole,
+        "persisted answer must be partials + continuation, not the continuation alone",
+    );
+    // Mock provider = no HTTP seam = non-streaming turn, so the user's only copy
+    // of the answer is this one-shot emit. Exactly one delta: nothing may be
+    // emitted from inside the recovery loop (that would bypass the output
+    // guardrail stage).
+    assert_eq!(
+        cb.deltas,
+        vec![whole.to_string()],
+        "a non-streaming turn must deliver the whole answer in one delta",
     );
 }
 
@@ -1129,8 +1180,9 @@ async fn max_output_tokens_recovery_exhausted_sets_dedicated_terminate_reason() 
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
+    let mut cb = DeltaCapture::default();
     let _ = harness
-        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .run_turn(&sample_session_id(), &mut cb)
         .await
         .expect("run_turn should succeed");
 
@@ -1148,6 +1200,20 @@ async fn max_output_tokens_recovery_exhausted_sets_dedicated_terminate_reason() 
         ),
         "after exhausting recovery, terminate_reason must be MaxOutputTokensExhausted; got {:?}",
         reason
+    );
+
+    // Giving up is not the same as throwing the work away: every partial the
+    // provider managed to emit is still persisted and still delivered.
+    let whole = "partial-0partial-1partial-2partial-3";
+    assert_eq!(
+        last_assistant_text(&session.snapshot().await),
+        whole,
+        "exhausted recovery must still persist all partials, not only the last one",
+    );
+    assert_eq!(
+        cb.deltas,
+        vec![whole.to_string()],
+        "exhausted recovery must still deliver all partials to the user",
     );
 }
 

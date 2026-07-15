@@ -428,7 +428,7 @@ fn build_guardrail_registry(
 /// Build the P0 rescue triple from `[stability]`. Forwarding wrapper around
 /// the shared assembly module; the wrapper unpacks the `StabilityTriple`
 /// struct back into the historical 3-tuple so existing callers (and the
-/// 13 builder + 4 `init_audit` tests) keep working unchanged.
+/// 13 builder tests) keep working unchanged.
 fn build_stability_triple(
     config: &Config,
 ) -> (

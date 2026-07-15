@@ -13,13 +13,16 @@
 
 use crate::sync_primitives::Arc;
 
+use std::collections::HashMap;
+
 use tokio::sync::Semaphore;
 
 use crate::config::types::ResumeConfig;
-use crate::gateway::agent_instance::AgentRegistry;
+use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
 use crate::gateway::event_emitter::CollectingEventEmitter;
 use crate::gateway::execution_adapter::ExecutionAdapter;
-use crate::gateway::execution_engine::RunRequest;
+use crate::gateway::execution_engine::{RunRequest, CHANNEL_TOOL_PERMISSIONS_KEY, UNATTENDED_KEY};
+use crate::gateway::inbound_router::ChannelConfig;
 use crate::session::events::{now_ms, RunOutcome, SessionEvent, SessionEventRecord};
 use crate::session::service::SessionId;
 use crate::session::store::SessionEventStore;
@@ -128,6 +131,12 @@ pub struct ResumeCoordinator {
     agent_registry: Arc<AgentRegistry>,
     /// Bounds the boot resume burst. `max_concurrent` permits.
     semaphore: Arc<Semaphore>,
+    /// The inbound router's channel policy map, keyed by channel id — the LIVE
+    /// source [`Self::stamp_origin_identity`] re-derives a resumed run's
+    /// restrictive metadata from. Empty until boot wires it, which is the
+    /// fail-closed direction: an unknown channel resolves to the Chat tier
+    /// (`"guest"`), never to operator.
+    channel_configs: HashMap<String, ChannelConfig>,
 }
 
 impl ResumeCoordinator {
@@ -145,7 +154,17 @@ impl ResumeCoordinator {
             execution_adapter,
             agent_registry,
             semaphore: Arc::new(Semaphore::new(permits)),
+            channel_configs: HashMap::new(),
         }
+    }
+
+    /// Wire the same per-channel policy map the inbound router gates live
+    /// messages with, so a resumed channel run re-derives the exact tier and
+    /// tool-permission layer its interactive turns ran under.
+    #[must_use]
+    pub fn with_channel_configs(mut self, channel_configs: HashMap<String, ChannelConfig>) -> Self {
+        self.channel_configs = channel_configs;
+        self
     }
 
     /// Scan for interrupted runs and re-trigger each. Best-effort: any
@@ -354,7 +373,6 @@ impl ResumeCoordinator {
         workspace_override: Option<std::path::PathBuf>,
     ) -> Result<(), crate::session::service::SessionError> {
         use crate::session::service::SessionError;
-        use std::collections::HashMap;
 
         let permit = self
             .semaphore
@@ -373,6 +391,8 @@ impl ResumeCoordinator {
         if let Some(p) = workspace_override.as_ref() {
             metadata.insert("project_root".to_string(), p.display().to_string());
         }
+        self.stamp_origin_identity(&agent, session_id, &mut metadata)
+            .await;
 
         let request = RunRequest {
             run_id: uuid::Uuid::new_v4().to_string(),
@@ -404,6 +424,68 @@ impl ResumeCoordinator {
 
         drop(permit);
         result
+    }
+
+    /// Re-derive the run identity the session's origin channel imposes, LIVE.
+    ///
+    /// A resumed run used to be born with `{resume, project_root}` and nothing
+    /// else, and both of the missing keys fail OPEN: `role_is_operator(None)`
+    /// is `true` (`tools/turn_context.rs`), so the config-tool gate waves the
+    /// run through, and an absent channel `ToolPermissionsConfig` merges no deny
+    /// layer. A killed daemon restarting therefore resurrected a Chat-tier
+    /// Telegram run as an unwatched **operator** with no deny layer — the exact
+    /// bug class `execute::carry_policy_metadata` exists to prevent for the
+    /// continuation path.
+    ///
+    /// Deliberately re-derived from the live channel config rather than read
+    /// back from a persisted snapshot of the original run's metadata: a snapshot
+    /// goes stale in the PERMISSIVE direction (the operator demotes a channel to
+    /// Chat tier, the daemon restarts, and the old `"operator"` role resurrects
+    /// anyway). An unconfigured / unknown channel resolves to `guest` via
+    /// `unwrap_or_default()` — the same fail-closed default the inbound router's
+    /// `channel_run_identity` pins, and the reason an unwired `channel_configs`
+    /// map is safe.
+    ///
+    /// No routable origin (the Panel's `gui:chat`, or a session whose origin
+    /// conversation was never captured) ⇒ mark the run `unattended`: nobody is
+    /// there to answer an approval card raised by a run a boot scan re-triggered,
+    /// so confirm-gated tools must fail closed instead of publishing into the
+    /// void and parking on the 120 s approval timeout. A run that DOES carry a
+    /// full origin route keeps it — its approval is genuinely deliverable and the
+    /// human on the other end can `/approve`. Same rule, same reasons, as
+    /// `tasks::cron::executor::build_cron_metadata`.
+    async fn stamp_origin_identity(
+        &self,
+        agent: &Arc<AgentInstance>,
+        session_id: &SessionId,
+        metadata: &mut HashMap<String, String>,
+    ) {
+        let Some((channel, conversation)) = agent.origin_route(session_id).await else {
+            metadata.insert(UNATTENDED_KEY.to_string(), "true".to_string());
+            return;
+        };
+
+        let cfg = self
+            .channel_configs
+            .get(&channel)
+            .cloned()
+            .unwrap_or_default();
+        metadata.insert("caller_role".to_string(), cfg.caller_role_str().to_string());
+        if let Some(perms) = cfg.tool_permissions.as_ref() {
+            match serde_json::to_string(perms) {
+                Ok(json) => {
+                    metadata.insert(CHANNEL_TOOL_PERMISSIONS_KEY.to_string(), json);
+                }
+                // The role clamp above still stands; only the deny layer is lost.
+                Err(e) => tracing::error!(
+                    channel = %channel,
+                    error = %e,
+                    "resume: channel tool_permissions failed to serialize — channel deny layer skipped"
+                ),
+            }
+        }
+        metadata.insert("channel_id".to_string(), channel);
+        metadata.insert("conversation_id".to_string(), conversation);
     }
 }
 

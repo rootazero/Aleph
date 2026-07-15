@@ -4,6 +4,29 @@
 //! session-scoped directory on disk. A compact reference marker is injected
 //! into the context window so the LLM can identify that the full output
 //! exists but was offloaded.
+//!
+//! # Shared storage, session-scoped handles
+//!
+//! The physical storage (blob root + FTS5 `index.db`) is process-wide: boot
+//! installs exactly one, and both the gateway `ScopedToolService` seam and the
+//! orchestrator `HarnessDeps` seam read it back from a `OnceLock`. The *handle*
+//! is what carries the session scope — [`ToolResultStore::for_session`] clones
+//! the shared inner and stamps a session key onto it, so blobs land in a
+//! per-session subdirectory and index rows carry a `session_id` the reads and
+//! the purge filter on.
+//!
+//! This split exists because the alternative — threading a session id through
+//! `persist_if_large` — would have to cross `harness/agent/act.rs`, and that
+//! tree is over its R10 line budget. Baking the scope into the handle keeps the
+//! call sites byte-identical.
+//!
+//! Without the scope, two live bugs: `ctx_search` in one session retrieved
+//! another agent's tool output (violating INV-ISO), and [`purge_all`] — fired
+//! by the denial circuit-breaker after three refusals in *one* session — wiped
+//! the blobs and index of every concurrent session, leaving their
+//! `[Full output persisted: …]` markers pointing at deleted files.
+//!
+//! [`purge_all`]: ToolResultStore::purge_all
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -64,11 +87,11 @@ pub fn set_global_tool_result_store(store: Arc<ToolResultStore>) {
     // intentionally do nothing (the existing sweeper is fine).
     let installed_now = GLOBAL_STORE.set(store.clone()).is_ok();
     if installed_now {
-        // The sweeper walks the parent of the per-session dir
-        // (`~/.aleph/data/tool_results/`) so every other session's dir is
+        // The sweeper walks the parent of the store root
+        // (`~/.aleph/data/tool_results/`) so roots left by earlier runs are
         // visible. `parent()` is `None` only for fs roots — never the case
-        // for our `~/.aleph/data/tool_results/<session_id>` layout.
-        if let Some(parent) = store.base_dir.parent().map(Path::to_path_buf) {
+        // for our `~/.aleph/data/tool_results/<root>` layout.
+        if let Some(parent) = store.inner.base_dir.parent().map(Path::to_path_buf) {
             spawn_periodic_sweeper(
                 parent,
                 DEFAULT_TOOL_RESULT_RETENTION,
@@ -87,41 +110,100 @@ pub fn global_tool_result_store() -> Option<Arc<ToolResultStore>> {
 // ToolResultStore
 // =============================================================================
 
-/// Filename of the FTS5 retrieval index inside [`ToolResultStore::base_dir`].
+/// Filename of the FTS5 retrieval index inside the shared store root. One DB
+/// for the whole process; rows are separated by their `session_id` column.
 const INDEX_DB_NAME: &str = "index.db";
 
-/// Session-scoped store that offloads large tool outputs to disk.
-///
-/// On drop the store removes its base directory, so tool result files are
-/// automatically cleaned up when the session ends.
-///
-/// Alongside the raw `.txt` blobs, the store lazily maintains an FTS5
-/// [`ContentIndex`] (`index.db`) so the model can BM25-search offloaded
-/// output via `ctx_search` instead of re-reading whole files. The index is
-/// opened on first use and shares the directory's Drop / TTL-sweep lifecycle.
-pub struct ToolResultStore {
+/// The physical storage every handle shares: the blob root and the lazily
+/// opened FTS5 index that lives inside it. Held behind an `Arc` so a
+/// session-scoped handle costs a pointer clone, not a second `index.db`.
+struct StoreInner {
     base_dir: PathBuf,
     /// Lazily-opened retrieval index. `None` inside the `OnceLock` means an
     /// open attempt failed once and indexing/search degrade to no-ops.
     index: OnceLock<Option<ContentIndex>>,
 }
 
+impl Drop for StoreInner {
+    fn drop(&mut self) {
+        // Cleanup hangs off the *inner*, not the handle: a session-scoped
+        // handle going out of scope must not delete the root every other live
+        // session is still writing into.
+        if self.base_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&self.base_dir) {
+                tracing::warn!(
+                    dir = %self.base_dir.display(),
+                    error = %e,
+                    "failed to clean up tool result store"
+                );
+            }
+        }
+    }
+}
+
+/// Store that offloads large tool outputs to disk, scoped to one session.
+///
+/// The storage is shared (see the module docs); the *scope* lives on the
+/// handle. An empty scope is the legacy unscoped root — reachable only from
+/// bootstraps that have no session context (tests, and the boot-time handle
+/// itself before [`Self::for_session`] narrows it). It is a scope like any
+/// other, not a wildcard: an unscoped handle cannot see or purge a scoped
+/// session's output, so "forgot to scope it" degrades to "sees nothing" rather
+/// than to a cross-session leak.
+///
+/// Alongside the raw `.txt` blobs, the store lazily maintains an FTS5
+/// [`ContentIndex`] (`index.db`) so the model can BM25-search offloaded
+/// output via `ctx_search` instead of re-reading whole files. The index is
+/// opened on first use and shares the directory's Drop / TTL-sweep lifecycle.
+pub struct ToolResultStore {
+    inner: Arc<StoreInner>,
+    /// Session key this handle reads, writes and purges under. Empty = the
+    /// unscoped root scope (see above). Must be byte-equal to
+    /// [`crate::tools::turn_context::current_session_key`] for the read path
+    /// (`ctx_search`) to find what the write path stored.
+    session: String,
+}
+
 impl ToolResultStore {
-    /// Create a new store for the given session.
+    /// Create the process-wide store rooted at
+    /// `~/.aleph/data/tool_results/{root}/`.
     ///
-    /// Creates `~/.aleph/data/tool_results/{session_id}/` on disk.
-    pub fn new(session_id: &str) -> std::io::Result<Self> {
+    /// `root` names the *directory*, not a session: the returned handle is
+    /// unscoped. Boot installs it as the shared singleton and the two seams
+    /// that own session context ([`crate::gateway::execution_engine`]'s tool
+    /// service builder and the orchestrator's harness bridge) narrow it with
+    /// [`Self::for_session`].
+    pub fn new(root: &str) -> std::io::Result<Self> {
         let base_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join(".aleph")
             .join("data")
             .join("tool_results")
-            .join(session_id);
+            .join(root);
 
         std::fs::create_dir_all(&base_dir)?;
         Ok(Self {
-            base_dir,
-            index: OnceLock::new(),
+            inner: Arc::new(StoreInner {
+                base_dir,
+                index: OnceLock::new(),
+            }),
+            session: String::new(),
+        })
+    }
+
+    /// Narrow a store handle to one session: same storage, session-scoped
+    /// reads, writes and purges.
+    ///
+    /// `session` must be the wire session key (`SessionKey::to_key_string`),
+    /// because `ctx_search` resolves its own scope from
+    /// [`crate::tools::turn_context::current_session_key`]. A mismatch here is
+    /// silent — the writes land under one key and the searches look under
+    /// another, returning zero hits forever.
+    #[must_use]
+    pub fn for_session(store: &Arc<Self>, session: impl Into<String>) -> Arc<Self> {
+        Arc::new(Self {
+            inner: Arc::clone(&store.inner),
+            session: session.into(),
         })
     }
 
@@ -132,10 +214,27 @@ impl ToolResultStore {
     /// `~/.aleph/`.
     #[doc(hidden)]
     #[must_use]
-    pub const fn with_dir_for_tests(base_dir: PathBuf) -> Self {
+    pub fn with_dir_for_tests(base_dir: PathBuf) -> Self {
         Self {
-            base_dir,
-            index: OnceLock::new(),
+            inner: Arc::new(StoreInner {
+                base_dir,
+                index: OnceLock::new(),
+            }),
+            session: String::new(),
+        }
+    }
+
+    /// Directory this handle's blobs live in: the root for the unscoped scope,
+    /// a per-session subdirectory otherwise. Keeping each session's blobs in
+    /// their own directory is what lets [`Self::purge_all`] wipe one session
+    /// without touching another's files.
+    fn blob_dir(&self) -> PathBuf {
+        if self.session.is_empty() {
+            self.inner.base_dir.clone()
+        } else {
+            self.inner
+                .base_dir
+                .join(sanitize_for_filename(&self.session))
         }
     }
 
@@ -161,7 +260,16 @@ impl ToolResultStore {
             sanitize_for_filename(tool_call_id),
             sanitize_for_filename(tool_name)
         );
-        let path = self.base_dir.join(&safe_name);
+        let dir = self.blob_dir();
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::warn!(
+                dir = %dir.display(),
+                error = %e,
+                "failed to create session blob dir for tool result"
+            );
+            return None;
+        }
+        let path = dir.join(&safe_name);
 
         if let Err(e) = std::fs::write(&path, content) {
             tracing::warn!(
@@ -183,12 +291,15 @@ impl ToolResultStore {
         Some(marker)
     }
 
-    /// Lazily open (once) the FTS5 retrieval index in `base_dir`. Returns
-    /// `None` if the index could not be opened — callers degrade to no-ops.
+    /// Lazily open (once) the FTS5 retrieval index in the shared `base_dir`.
+    /// Returns `None` if the index could not be opened — callers degrade to
+    /// no-ops. The DB is shared across sessions; the scoping happens in the
+    /// queries below, not in the file layout.
     fn index(&self) -> Option<&ContentIndex> {
-        self.index
+        self.inner
+            .index
             .get_or_init(|| {
-                let db_path = self.base_dir.join(INDEX_DB_NAME);
+                let db_path = self.inner.base_dir.join(INDEX_DB_NAME);
                 match ContentIndex::open(&db_path) {
                     Ok(idx) => Some(idx),
                     Err(e) => {
@@ -215,7 +326,7 @@ impl ToolResultStore {
         content: &str,
     ) -> Option<IndexOutcome> {
         let idx = self.index()?;
-        match idx.index_text(tool_call_id, tool_name, content) {
+        match idx.index_text(&self.session, tool_call_id, tool_name, content) {
             Ok(out) => Some(out),
             Err(e) => {
                 tracing::warn!(
@@ -229,28 +340,32 @@ impl ToolResultStore {
         }
     }
 
-    /// BM25-search previously-indexed tool output. Returns up to `limit` hits,
-    /// most relevant first. Empty when nothing is indexed or the index is
-    /// unavailable — never errors out to the caller.
+    /// BM25-search tool output previously offloaded **by this session**.
+    /// Returns up to `limit` hits, most relevant first. Empty when nothing is
+    /// indexed or the index is unavailable — never errors out to the caller.
     pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
         match self.index() {
-            Some(idx) => idx.search(query, limit).unwrap_or_default(),
+            Some(idx) => idx.search(&self.session, query, limit).unwrap_or_default(),
             None => Vec::new(),
         }
     }
 
-    /// Number of indexed sections across all offloaded outputs. `0` when the
-    /// index is empty or unavailable.
+    /// Number of indexed sections across this session's offloaded outputs. `0`
+    /// when the index is empty or unavailable.
     pub fn indexed_sections(&self) -> usize {
-        self.index().and_then(|idx| idx.len().ok()).unwrap_or(0)
+        self.index()
+            .and_then(|idx| idx.len(&self.session).ok())
+            .unwrap_or(0)
     }
 
-    /// Remove the base directory and all its contents.
+    /// Remove the shared base directory and all its contents — *every*
+    /// session's blobs plus the index. Process-teardown scale; a session that
+    /// wants only its own artifacts gone calls [`Self::purge_all`].
     pub fn cleanup(&self) {
-        if self.base_dir.exists() {
-            if let Err(e) = std::fs::remove_dir_all(&self.base_dir) {
+        if self.inner.base_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&self.inner.base_dir) {
                 tracing::warn!(
-                    dir = %self.base_dir.display(),
+                    dir = %self.inner.base_dir.display(),
                     error = %e,
                     "failed to clean up tool result store"
                 );
@@ -258,9 +373,10 @@ impl ToolResultStore {
         }
     }
 
-    /// Purge every offloaded tool result — the `.txt` blobs *and* the FTS5
-    /// index entries — while keeping the store usable for the rest of the
-    /// session (the directory and `index.db` survive; only their contents go).
+    /// Purge **this session's** offloaded tool results — the `.txt` blobs *and*
+    /// the FTS5 index entries — while keeping the store usable for the rest of
+    /// the session (the directories and `index.db` survive; only this session's
+    /// contents go).
     ///
     /// This is the **anti-reference-bypass** countermeasure (maps `OpenSquilla`'s
     /// `StaleOutputCache.purge`). Offloaded output is otherwise retrievable
@@ -271,9 +387,16 @@ impl ToolResultStore {
     /// cached under an earlier, more permissive moment. Wiping both vectors at
     /// the trip closes that hole. It fires only on the brute-force threshold,
     /// so ordinary large-output workflows are never disturbed.
+    ///
+    /// The session scope is load-bearing: three refusals in one Panel tab used
+    /// to delete every *other* tab's blobs and index rows too, leaving their
+    /// in-context `[Full output persisted: …]` markers pointing at files that
+    /// no longer existed.
     pub fn purge_all(&self) {
-        // 1. Remove offloaded `.txt` blobs (the `read_file`-via-marker vector).
-        if let Ok(entries) = std::fs::read_dir(&self.base_dir) {
+        // 1. Remove this session's offloaded `.txt` blobs (the
+        //    `read_file`-via-marker vector). Scoped by directory: a scoped
+        //    handle only ever wrote into `blob_dir()`.
+        if let Ok(entries) = std::fs::read_dir(self.blob_dir()) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("txt") {
@@ -287,23 +410,17 @@ impl ToolResultStore {
                 }
             }
         }
-        // 2. Clear the FTS5 index (the `ctx_search` vector). `index()` opens it
-        // lazily, so this also catches an on-disk `index.db` left by an earlier
-        // turn that was never reopened this run.
+        // 2. Clear this session's FTS5 rows (the `ctx_search` vector). `index()`
+        // opens it lazily, so this also catches an on-disk `index.db` left by an
+        // earlier turn that was never reopened this run.
         if let Some(idx) = self.index() {
-            if let Err(e) = idx.clear() {
+            if let Err(e) = idx.clear(&self.session) {
                 tracing::warn!(
                     error = %e,
                     "purge_all: failed to clear offloaded-output index"
                 );
             }
         }
-    }
-}
-
-impl Drop for ToolResultStore {
-    fn drop(&mut self) {
-        self.cleanup();
     }
 }
 
@@ -469,12 +586,20 @@ mod tests {
         let base = std::env::temp_dir()
             .join("aleph_test_tool_result_store")
             .join(name);
+        let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
-        let store = ToolResultStore {
-            base_dir: base.clone(),
-            index: OnceLock::new(),
-        };
+        let store = ToolResultStore::with_dir_for_tests(base.clone());
         (store, base)
+    }
+
+    /// Two session-scoped handles over one shared store — the production shape
+    /// (boot installs one store; each run narrows it with `for_session`).
+    fn shared_pair(name: &str) -> (Arc<ToolResultStore>, Arc<ToolResultStore>, PathBuf) {
+        let (root, base) = test_store(name);
+        let root = Arc::new(root);
+        let a = ToolResultStore::for_session(&root, "agent:main:sess-a");
+        let b = ToolResultStore::for_session(&root, "agent:main:sess-b");
+        (a, b, base)
     }
 
     #[test]
@@ -513,10 +638,7 @@ mod tests {
             .join("aleph_test_tool_result_store")
             .join("cleanup_test");
         std::fs::create_dir_all(&base).unwrap();
-        let store = ToolResultStore {
-            base_dir: base.clone(),
-            index: OnceLock::new(),
-        };
+        let store = ToolResultStore::with_dir_for_tests(base.clone());
         assert!(base.exists());
         store.cleanup();
         assert!(!base.exists(), "cleanup should remove the base directory");
@@ -585,6 +707,79 @@ mod tests {
             store.search("secret-token-abcdef", 5).is_empty(),
             "ctx_search must find nothing after purge"
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Session scoping (INV-ISO) — B2
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn ctx_search_cannot_reach_another_sessions_offloaded_output() {
+        // Panel multi-session is the norm: two runs share the one store boot
+        // installed. Session A's `ctx_search` must not surface B's tool output.
+        let (a, b, _base) = shared_pair("scope_search_isolation");
+        let a_text = format!("{}{}", "alpha ".repeat(50), "secretalpha ".repeat(200));
+        let b_text = format!("{}{}", "beta ".repeat(50), "secretbeta ".repeat(200));
+
+        assert!(a.persist_if_large("call_a", "bash", &a_text, 1).is_some());
+        let _ = a.index_output("call_a", "bash", &a_text);
+        assert!(b.persist_if_large("call_b", "bash", &b_text, 1).is_some());
+        let _ = b.index_output("call_b", "bash", &b_text);
+
+        assert!(
+            a.search("secretbeta", 5).is_empty(),
+            "session A must not retrieve session B's offloaded output"
+        );
+        assert!(
+            b.search("secretalpha", 5).is_empty(),
+            "session B must not retrieve session A's offloaded output"
+        );
+        // ...and each still finds its own (the scope must not break retrieval).
+        assert!(!a.search("secretalpha", 5).is_empty());
+        assert!(!b.search("secretbeta", 5).is_empty());
+    }
+
+    #[test]
+    fn purge_all_in_one_session_leaves_other_sessions_intact() {
+        // The denial circuit-breaker fires `purge_all` after 3 refusals in ONE
+        // session. It used to wipe every concurrent session's blobs and index,
+        // leaving their `[Full output persisted: …]` markers dangling.
+        let (a, b, _base) = shared_pair("scope_purge_isolation");
+        let a_text = "alpha payload ".repeat(300);
+        let b_text = "beta payload ".repeat(300);
+
+        let a_marker = a.persist_if_large("call_a", "bash", &a_text, 1).unwrap();
+        let _ = a.index_output("call_a", "bash", &a_text);
+        let b_marker = b.persist_if_large("call_b", "bash", &b_text, 1).unwrap();
+        let _ = b.index_output("call_b", "bash", &b_text);
+        let b_blob = marker_path(&b_marker);
+        assert!(b_blob.exists());
+        assert!(marker_path(&a_marker).exists());
+
+        a.purge_all();
+
+        assert!(
+            !marker_path(&a_marker).exists(),
+            "the purging session's own blob must be gone"
+        );
+        assert_eq!(a.indexed_sections(), 0, "A's index rows must be gone");
+        assert!(
+            b_blob.exists(),
+            "a bystander session's blob must survive another session's purge"
+        );
+        assert!(b.indexed_sections() > 0, "B's index rows must survive");
+        assert!(
+            !b.search("beta payload", 5).is_empty(),
+            "B's ctx_search must still work after A's purge"
+        );
+    }
+
+    /// Extract the blob path out of a `[Full output persisted: <path> (…)]`
+    /// marker (the same shape `result_processing::parse_marker_path` parses).
+    fn marker_path(marker: &str) -> PathBuf {
+        let rest = marker.strip_prefix(PERSISTED_REF_PREFIX).unwrap();
+        let end = rest.find(" (").unwrap();
+        PathBuf::from(&rest[..end])
     }
 
     // -------------------------------------------------------------------

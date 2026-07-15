@@ -236,3 +236,173 @@ async fn concurrent_evaluate_vs_disable_all_is_consistent() {
     // because the scheduler may run the toggler to completion before any
     // readers schedule (especially on a busy CI runner).
 }
+
+// -- screen_session_input ----------------------------------------------------
+
+use crate::guardrails::registry::SessionInputScreen;
+use crate::session::events::{now_ms, MessageContent, SessionEvent, SessionEventRecord, TurnId};
+
+struct SanitizeSecret;
+#[async_trait]
+impl InputGuardrail for SanitizeSecret {
+    fn name(&self) -> &str {
+        "sanitize_secret"
+    }
+    async fn evaluate_input(&self, text: &str) -> GuardrailDecision {
+        if text.contains("SECRET") {
+            GuardrailDecision::Sanitize(crate::guardrails::decision::Replacement {
+                text: text.replace("SECRET", "[X]"),
+                source: "test".into(),
+            })
+        } else {
+            GuardrailDecision::Allow
+        }
+    }
+}
+
+fn rec(seq: u64, text: &str, synthetic: bool) -> SessionEventRecord {
+    SessionEventRecord {
+        seq,
+        event: SessionEvent::UserMessage {
+            turn_id: TurnId::new_v4(),
+            content: MessageContent {
+                text: text.to_string(),
+                blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: now_ms(),
+            synthetic,
+        },
+        created_at_ms: now_ms(),
+    }
+}
+
+/// The compaction summary a split child session is rebuilt from.
+fn summary_rec(seq: u64, text: &str) -> SessionEventRecord {
+    SessionEventRecord {
+        seq,
+        event: SessionEvent::SystemMessage {
+            turn_id: TurnId::new_v4(),
+            content: text.to_string(),
+            at: now_ms(),
+        },
+        created_at_ms: now_ms(),
+    }
+}
+
+fn texts(events: &[SessionEventRecord]) -> Vec<String> {
+    events
+        .iter()
+        .map(|r| match &r.event {
+            SessionEvent::UserMessage { content, .. } => content.text.clone(),
+            SessionEvent::SystemMessage { content, .. } => content.clone(),
+            _ => String::new(),
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn screen_rewrites_every_replayed_user_message_not_just_the_tail() {
+    let r = GuardrailRegistry::builder()
+        .with_input(Arc::new(SanitizeSecret))
+        .build();
+    // tail_start = 2: only the last message belongs to this turn, yet the
+    // prompt replays all three.
+    let events = vec![
+        rec(1, "the password is SECRET", false),
+        rec(2, "and the key is SECRET too", false),
+        rec(3, "what did I say?", false),
+    ];
+    let SessionInputScreen::Pass(out) = r.screen_session_input(events, 2).await else {
+        panic!("expected Pass");
+    };
+    assert!(
+        texts(&out).iter().all(|t| !t.contains("SECRET")),
+        "history must be sanitized too, got {:?}",
+        texts(&out),
+    );
+}
+
+#[tokio::test]
+async fn screen_covers_the_compaction_summary_a_split_child_is_rebuilt_from() {
+    let r = GuardrailRegistry::builder()
+        .with_input(Arc::new(SanitizeSecret))
+        .build();
+    // A split child's head: the summary restates the user messages that were
+    // compacted away, so the secret survives in it even after the originals are
+    // gone. Screening only UserMessage would put it straight back on the wire.
+    let events = vec![
+        summary_rec(1, "[Context Summary] the user said the password is SECRET"),
+        rec(2, "carry on", false),
+    ];
+    let SessionInputScreen::Pass(out) = r.screen_session_input(events, 1).await else {
+        panic!("expected Pass");
+    };
+    assert!(
+        !texts(&out)[0].contains("SECRET"),
+        "the summary must be sanitized, got {:?}",
+        texts(&out)[0],
+    );
+}
+
+#[tokio::test]
+async fn a_block_on_the_summary_redacts_it_instead_of_ending_the_turn() {
+    let r = GuardrailRegistry::builder()
+        .with_input(Arc::new(AlwaysBlock))
+        .build();
+    // The summary is never "the message this turn is answering", so it can only
+    // ever be redacted. If it could block, every turn of a split child session
+    // would end immediately and the session would be unusable.
+    let events = vec![summary_rec(1, "[Context Summary] whatever")];
+    let SessionInputScreen::Pass(out) = r.screen_session_input(events, 1).await else {
+        panic!("a block on the summary must not end the turn");
+    };
+    assert_eq!(
+        texts(&out),
+        vec![crate::thinker::nudges::REDACTED_USER_MESSAGE.to_string()],
+    );
+}
+
+#[tokio::test]
+async fn screen_blocks_only_this_turns_message_and_redacts_older_ones() {
+    let r = GuardrailRegistry::builder()
+        .with_input(Arc::new(AlwaysBlock))
+        .build();
+    // The turn's own message (index 1) blocks.
+    let events = vec![rec(1, "old", false), rec(2, "new", false)];
+    assert!(matches!(
+        r.screen_session_input(events, 1).await,
+        SessionInputScreen::Blocked(_)
+    ));
+
+    // A block on a replayed message cannot end the turn — it is redacted, and
+    // the turn (whose own message index 1 is synthetic, hence never screened)
+    // still runs. Re-blocking on every rebuild would brick the session.
+    let events = vec![rec(1, "old", false), rec(2, "harness nudge", true)];
+    let SessionInputScreen::Pass(out) = r.screen_session_input(events, 1).await else {
+        panic!("a block on a replayed message must not end the turn");
+    };
+    assert_eq!(
+        texts(&out),
+        vec![
+            crate::thinker::nudges::REDACTED_USER_MESSAGE.to_string(),
+            "harness nudge".to_string(),
+        ],
+        "the replayed message is redacted; the synthetic one is left alone",
+    );
+}
+
+#[tokio::test]
+async fn redact_session_input_never_blocks() {
+    let r = GuardrailRegistry::builder()
+        .with_input(Arc::new(AlwaysBlock))
+        .build();
+    // The grace turn's face: everything is redacted, nothing ends the turn.
+    let out = r
+        .redact_session_input(vec![rec(1, "old", false), rec(2, "new", false)])
+        .await;
+    assert!(texts(&out)
+        .iter()
+        .all(|t| t == crate::thinker::nudges::REDACTED_USER_MESSAGE));
+}

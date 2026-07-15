@@ -13,6 +13,19 @@ use serde_json::Value;
 
 use crate::guardrails::decision::GuardrailDecision;
 use crate::guardrails::traits::{InputGuardrail, OutputGuardrail, ToolCallGuardrail};
+use crate::session::events::{SessionEvent, SessionEventRecord};
+use crate::thinker::nudges::REDACTED_USER_MESSAGE;
+
+/// Outcome of [`GuardrailRegistry::screen_session_input`].
+pub enum SessionInputScreen {
+    /// The events the prompt is built from — an in-memory clone whose user
+    /// text may have been rewritten. The persisted log is never touched, so
+    /// the audit trail keeps the original.
+    Pass(Vec<SessionEventRecord>),
+    /// The message this turn is answering was blocked; the caller ends the
+    /// turn without calling the provider.
+    Blocked(String),
+}
 
 pub struct GuardrailRegistry {
     input: Vec<Arc<dyn InputGuardrail>>,
@@ -79,6 +92,91 @@ impl GuardrailRegistry {
         last_warn.unwrap_or(GuardrailDecision::Allow)
     }
 
+    /// Screen the user input the harness is about to replay into a prompt.
+    /// EVERY non-synthetic `UserMessage` in the log is evaluated, not only the
+    /// one that opened this turn: the harness rebuilds each prompt from the
+    /// full raw log, so a rewrite that covered only the tail sent the original
+    /// text to the provider again from turn 2 onwards. `SystemMessage` is
+    /// screened on the same footing — it is compacted user content, and a
+    /// summary that outlives the message it summarises would otherwise carry
+    /// the redacted secret back onto the wire.
+    ///
+    /// `Block` is deliberately asymmetric. Only the tail's own user message —
+    /// the one this turn is answering — ends the turn. A `Block` landing on an
+    /// earlier message degrades to redaction, because session events are
+    /// immutable and replayed forever: re-blocking on every rebuild would end
+    /// every subsequent turn and brick the session with no way out, and the
+    /// PII guardrail is fail-closed, so a transient secret-resolution error
+    /// blocks too.
+    ///
+    /// Rewrites land on the returned clone only.
+    pub async fn screen_session_input(
+        &self,
+        events: Vec<SessionEventRecord>,
+        tail_start: usize,
+    ) -> SessionInputScreen {
+        let blocking = events[tail_start.min(events.len())..]
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(rel, r)| user_text(&r.event).map(|_| tail_start + rel));
+        let (events, blocked) = self.screen_user_messages(events, blocking).await;
+        match blocked {
+            Some(reason) => SessionInputScreen::Blocked(reason),
+            None => SessionInputScreen::Pass(events),
+        }
+    }
+
+    /// The salvage face of [`Self::screen_session_input`]: the boundary grace
+    /// turn re-reads the RAW log and rebuilds the prompt from it, so it needs
+    /// the same redaction. Nothing can end that turn (the run is already
+    /// terminating and the grace call is the last chance at terminal text), so
+    /// every `Block` degrades to redaction here.
+    pub async fn redact_session_input(
+        &self,
+        events: Vec<SessionEventRecord>,
+    ) -> Vec<SessionEventRecord> {
+        self.screen_user_messages(events, None).await.0
+    }
+
+    /// Shared core. `blocking` is the one index whose `Block` ends the turn;
+    /// a `Block` on any other message is redacted in place.
+    async fn screen_user_messages(
+        &self,
+        mut events: Vec<SessionEventRecord>,
+        blocking: Option<usize>,
+    ) -> (Vec<SessionEventRecord>, Option<String>) {
+        if !self.is_enabled() || self.input.is_empty() {
+            return (events, None);
+        }
+        let mut blocked = None;
+        for (idx, record) in events.iter_mut().enumerate() {
+            let Some(text) = screenable_text(&record.event).map(str::to_string) else {
+                continue;
+            };
+            match self.evaluate_input(&text).await {
+                GuardrailDecision::Allow => {}
+                GuardrailDecision::Warn { reason } => {
+                    tracing::warn!(reason = %reason, "input guardrail warned");
+                }
+                GuardrailDecision::Sanitize(rep) => set_screened_text(&mut record.event, rep.text),
+                GuardrailDecision::Block { reason, .. } if blocking == Some(idx) => {
+                    blocked = Some(reason);
+                    break;
+                }
+                GuardrailDecision::Block { reason, .. } => {
+                    tracing::warn!(
+                        seq = record.seq,
+                        reason = %reason,
+                        "input guardrail blocked a replayed user message; redacting it",
+                    );
+                    set_screened_text(&mut record.event, REDACTED_USER_MESSAGE.to_string());
+                }
+            }
+        }
+        (events, blocked)
+    }
+
     pub async fn evaluate_output(&self, text: &str) -> GuardrailDecision {
         if !self.is_enabled() || self.output.is_empty() {
             return GuardrailDecision::Allow;
@@ -113,6 +211,42 @@ impl GuardrailRegistry {
             }
         }
         last_warn.unwrap_or(GuardrailDecision::Allow)
+    }
+}
+
+/// Text of a real user message. Synthetic entries are the harness's own copy
+/// (grace nudges, verifier vetoes, `MAX_STEPS` hints) — screening them would
+/// let a fail-closed guardrail block the loop on text the loop itself wrote.
+///
+/// This is also the *blocking* candidate set: only a real user message can be
+/// "the message this turn is answering", so only it may end a turn.
+fn user_text(event: &SessionEvent) -> Option<&str> {
+    match event {
+        SessionEvent::UserMessage {
+            content, synthetic, ..
+        } if !*synthetic => Some(content.text.as_str()),
+        _ => None,
+    }
+}
+
+/// Everything the prompt builder replays as *user-authored* content. A
+/// `SystemMessage` is the compaction summary a split child is rebuilt from —
+/// it is a lossy restatement of earlier user messages and tool output, so a
+/// secret redacted in the original survives in the summary unless it is
+/// screened here too. It can never be the blocking message (see [`user_text`]),
+/// so a `Block` on it always degrades to redaction.
+fn screenable_text(event: &SessionEvent) -> Option<&str> {
+    match event {
+        SessionEvent::SystemMessage { content, .. } => Some(content.as_str()),
+        _ => user_text(event),
+    }
+}
+
+fn set_screened_text(event: &mut SessionEvent, text: String) {
+    match event {
+        SessionEvent::UserMessage { content, .. } => content.text = text,
+        SessionEvent::SystemMessage { content, .. } => *content = text,
+        _ => {}
     }
 }
 

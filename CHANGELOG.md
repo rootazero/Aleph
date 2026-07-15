@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Four zero-consumer harness abstractions (R10 line-budget paydown).**
+  - `TraceSink::on_init_seam` + `harness_bridge::emit_init_seams` — a trait
+    method with an empty default body. Seven events fired per run, five
+    production sinks forwarded them, and **both leaf sinks fell through to the
+    empty default**: the channel terminated in `{}`. The same facts were already
+    on the live `tracing` channel five lines later, which is what operators
+    actually read. (The 26.5-era entry below advertises "9 events" and the
+    deleted `src/orchestrator/tests/init_audit.rs` said "eight" — three numbers
+    for one dead channel. All three are gone with the code.)
+  - `HarnessCallback::on_tool_call` — the name-only tool hook. The one real impl
+    (`BroadcastCallback`) deliberately never implemented it, because the
+    synthetic `ToolCallStart { id: "legacy" }` it used to emit could never be
+    paired by a `ToolCallDone` (those only ever carry the real call id).
+    `on_tool_call_start` is now the single tool-start signal.
+  - `HarnessCallback::on_complete` — fired from eight places in the loop and
+    overridden to an explicitly empty body by the only production impl. The real
+    terminal event has come from `on_complete_with_outcome` since P4.
+  - The `Harness` trait itself. Its only production impl (`AgentHarness`)
+    overrode `run()`, so the trait's default loop body executed nowhere — not in
+    production and not in tests — and `dyn Harness` appeared only in a doctest.
+    `AgentHarness::run` / `run_turn` are now inherent methods; the real
+    polymorphic seams remain `SessionDriver` and `Arc<dyn HarnessRunner>`.
+    `TurnState` / `TurnStep` / `HarnessError` / `TurnPhase` are unaffected.
+  - `ChainContext::with_max_depth` and its `Display` impl — the former had only
+    `#[cfg(test)]` callers, the latter only its own formatting test.
+
+### Fixed
+
+- **Spawned subagents inherit the operator's `[execution] max_iterations`.** The
+  `HarnessRunner::default_max_iterations` hook existed and the spawner consumed
+  it, but `AgentHarnessRunner` never overrode it, so every child fell back to
+  `FALLBACK_MAX_ITERATIONS` (200). The loop was never uncapped; the number was
+  just not the configured one.
+- **A subagent can find its own offloaded tool output again.** The child harness
+  was handed the process-wide, *unscoped* `ToolResultStore`, so its Layer-3
+  spills landed outside any session directory while its `ctx_search` looked in
+  the (parent-scoped) session index — a silent zero-hit recall. The child now
+  gets a handle scoped to the parent session, which is the scope its tools
+  already run under. Failed safe before (a child saw nothing, never another
+  session's data), so this is a recall fix, not an isolation fix.
+
 ## [26.7.7]
 
 A large capability release. The headline is **Mixture-of-Agents (MoA)

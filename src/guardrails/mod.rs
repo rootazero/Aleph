@@ -16,7 +16,7 @@ pub mod traits;
 
 pub use decision::{GuardrailDecision, Replacement};
 pub use pii_secrets::PiiSecretsGuardrail;
-pub use registry::{GuardrailRegistry, GuardrailRegistryBuilder};
+pub use registry::{GuardrailRegistry, GuardrailRegistryBuilder, SessionInputScreen};
 pub use traits::{InputGuardrail, OutputGuardrail, ToolCallGuardrail};
 
 #[cfg(test)]

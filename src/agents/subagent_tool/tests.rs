@@ -537,6 +537,72 @@ async fn check_status_returns_progress_array_when_running() {
     assert_eq!(progress.as_array().unwrap().len(), 1);
 }
 
+/// B18 — a *failed* background sub-agent must not reach the parent as a bare
+/// error string. The trajectory (what it was doing, how far it got) is compacted
+/// into the error the model reads, and the completed entry still answers
+/// `progress`. Without the tail carried into `mark_completed`, the parent could
+/// only see "Background sub-agent failed: boom" and had no way to tell a
+/// first-step crash from a nineteen-step dead end.
+#[tokio::test]
+async fn check_status_failed_error_carries_progress_trail() {
+    use crate::agents::progress::{ProgressKind, SubagentProgress};
+    use std::time::SystemTime;
+
+    let tracker = make_tracker();
+    tracker.register("rid".into(), CancellationToken::new(), "explore".into());
+    for (step, tool) in [(1, "read_file"), (2, "grep"), (3, "bash")] {
+        tracker.push_progress(
+            "rid",
+            SubagentProgress {
+                step,
+                timestamp: SystemTime::now(),
+                kind: ProgressKind::ToolCalled,
+                tool_name: Some(tool.into()),
+                latency_ms: None,
+                preview: None,
+            },
+        );
+    }
+    tracker.mark_completed(
+        "rid",
+        CompletedOutcome::Err("Sub-agent timed out after 120s".into()),
+    );
+
+    let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
+    let chain = crate::harness::chain_context::ChainContext::new();
+    let tool = SubagentTool::new(
+        provider,
+        chain,
+        make_registry(),
+        tracker,
+        in_mem_session(),
+        Arc::new(NoopTestToolService),
+    );
+
+    let result = tool
+        .execute(
+            json!({"action": "check_status", "request_id": "rid"}),
+            CancellationToken::new(),
+        )
+        .await;
+    let error = match result {
+        ToolResult::Error { error, .. } => error,
+        other => unreachable!("a failed child must stay a ToolResult::Error, got {other:?}"),
+    };
+    assert!(
+        error.contains("Sub-agent timed out after 120s"),
+        "the original cause must survive: {error}"
+    );
+    assert!(
+        error.contains("bash"),
+        "the last tool the child ran must be in the error: {error}"
+    );
+    assert!(
+        error.contains("3 steps"),
+        "how far the child got must be in the error: {error}"
+    );
+}
+
 // -------------------------------------------------------------------------
 // batch_tasks: parse + execute (sync vs background)
 // -------------------------------------------------------------------------

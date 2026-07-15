@@ -118,43 +118,56 @@ loop {
 
 ## 4. Aleph 的物理实现 (Physical Topology)
 
-### 4.1 重构成果（2026-04-24 P0–P7 dissolution → 2026-07-04 R10 diet）
+### 4.1 重构成果（2026-04-24 P0–P7 dissolution → 2026-07-15 R10 diet 第四轮）
 
 经 P0–P7 共 8 阶段 dissolution，`src/harness/` 从 **16 文件 / 3712 行** 瘦身到 9 文件。2026-07-04 的跨层收口任务（Tasks 5–8）在此基础上把 `agent.rs` 按 Think/Act/Guardrails/Prompt 拆成 `agent/` 子目录四文件、把 nudge 文案与压缩派发下沉出 harness、把内联测试搬去 `src/harness/tests/`，当前物理边界固化为 **12 文件**（与 [src/harness/CLAUDE.md](../../src/harness/CLAUDE.md) 的硬边界一致）：
 
 ```
 src/harness/                            # 笨循环编排核心 (Thin Core)
-├── mod.rs                  (20)        # 导出 Harness trait + AgentHarness
-├── agent.rs               (212)        # AgentHarness struct + run() 顶层循环
-├── deps.rs                (241)        # HarnessDeps: DI 容器
-├── trait_def.rs           (211)        # Harness trait + HarnessError + TurnState
-├── callback.rs             (94)        # HarnessCallback (编排级事件)
-├── chain_context.rs       (100)        # turn 间状态接力
-├── trace.rs               (387)        # 编排 trace 收集
-├── trace_sink.rs           (33)        # Trace 输出抽象
+├── mod.rs                  (20)        # 导出 AgentHarness
+├── agent.rs              (1037)        # AgentHarness struct + run() 顶层循环 + 救援 CAS 槽
+├── deps.rs                (228)        # HarnessDeps: DI 容器
+├── trait_def.rs           (156)        # HarnessError + TurnState
+├── callback.rs             (86)        # HarnessCallback (编排级事件)
+├── chain_context.rs        (79)        # turn 间状态接力
+├── trace.rs               (244)        # 编排 trace 收集（线协议 DTO 已迁出）
+├── trace_sink.rs           (23)        # Trace 输出抽象
 └── agent/                              # Task 7 拆分（原 agent.rs 单文件 1713 行）
-    ├── think.rs          (1884)        # Think：LLM 调用 + 守卫 + 验证 + 反应式压缩救援
-    ├── act.rs            (1296)        # Act：工具执行 + 资源域并行调度
-    ├── guardrails.rs      (127)        # 输入/输出/工具调用护栏挂载
-    └── prompt.rs          (472)        # 逐轮消息组装
+    ├── think.rs          (1509)        # Think：LLM 调用 + 守卫 + 验证（救援簇已迁出）
+    ├── act.rs            (1120)        # Act：工具执行 + 资源域并行调度
+    ├── guardrails.rs       (84)        # 输入/输出/工具调用护栏挂载
+    └── prompt.rs          (451)        # 逐轮消息组装
                           ─────
-                   TOTAL   5077 行
+                   TOTAL   5037 行
 ```
 
 只有这些（+ `src/harness/tests/*` 的内联测试外置，不计入预算）。其它一切搬走。
 
-**口径**：每个文件的行数取"文件开头到该文件内第一个 `#[cfg(test)]` 之前"（`awk '/#\[cfg\(test\)\]/{print NR; exit}'`，无 `#[cfg(test)]` 的文件取全文行数）——测试代码不计入 12 文件预算，这也是 Task 7 把 `agent.rs` 内联测试搬到 `src/harness/tests/agent.rs` 的动机。
+**口径**：每个文件的行数取"文件开头到该文件内第一个**顶层（第 0 列）** `#[cfg(test)]` 之前"——测试代码不计入 12 文件预算，这也是 Task 7 把 `agent.rs` 内联测试搬到 `src/harness/tests/agent.rs` 的动机。
+
+> ⚠️ **"顶层"二字是口径的全部**。本表上一版写着 `agent.rs (212)` / `TOTAL 5077`，那是**错的**：`agent.rs` 在生产 `impl` 中间挂着一个**缩进的** `#[cfg(test)]`（4 行测试专用取值器），朴素的"第一个 `#[cfg(test)]`"读法在那里截断，静默丢掉 846 行生产代码。当年"超红线 177 行"的结论因此是粉饰过的。**这些数字现在一律由 `src/harness/tests/budget.rs` 实测产出，不再手算**——那个测试就是本表的唯一来源。
 
 **已不存在 `loop_callback.rs`**——本节此前记为第 9 个文件（`LoopCallback` turn 级钩子），该类型已在更早的重构中删除/合并进 `callback.rs`，此前的表格是未跟进的过时残留，2026-07-04 一并订正。
 
-**honest 缺口（2026-07-04，不掩盖）**：TOTAL 5077 行，超出本文件与 `src/harness/CLAUDE.md` 共同声明的 ~4900 行红线 177 行、超出 Task 8 验收闸的 4950 行容差 127 行。Task 5–7 已把 baseline 5267 行减到 5077（−190，达成 ≥150 行目标但未达容差）；Task 8 尝试把 Step 2（`drain_context_overflow`）继续下沉但被 BLOCKED——其依赖 `account_intermediate_tokens`/`try_reactive_compact_and_retry` 是读写私有 harness 状态（`AtomicU64`/`Mutex`/CAS 一次性槽位）的 `&self` 方法，不是可参数化的 `self.deps.X` 字段，Task 6 那套"改写成 data 参数"的搬迁范式在这里不适用（详见 `.superpowers/sdd/task-8-report.md`）。留给未来的候选下沉项（按价值排序）：
-1. `try_reactive_compact_and_retry` + `reactive_fit_and_retry`（`agent/think.rs` 内，约 294 行的反应式压缩救援簇）——一起下沉可把 TOTAL 拉到 ~4840（低于 4950），但需要为 `race_llm_call`/`emit`/`set_terminate_reason`/rescue-CAS 设计注入 seam，是独立设计任务而非纯搬迁。
-2. `drain_context_overflow` 自身（~65 行）——只能与候选 1 一起搬，单独搬只是 ~46 行的空壳仍越界。
-3. `fire_grace_turn` 及残余 nudge 管线审计（`agent/think.rs` 1666 行往后）——Task 5 已部分下沉，预期剩余收益较小。
+**honest 现值（2026-07-15）**：TOTAL **5043 行**——由 `src/harness/tests/budget.rs` 的棘轮实测（`CEILING = 5043`）。**旧的 ~4900 红线已退休**：它是一次手算口径事故（上方警告所述缩进 `#[cfg(test)]` 截断 `agent.rs`、静默漏计 846 行）的残值，从不是实测地板，循环不再背那个不存在的"137 行债"。红线现在就是**棘轮机制本身**——只减不增，增必答 3 问。
 
-**两个新下沉目的地**（Task 5、Task 6 落地，本轮新增）：
+真实 baseline 从来不是 5077（见上方警告），而是 ~5997。四轮棘轮：5997 → 5863 → 5739 → 5593 → 5037 →（+6 `agent.rs`，见 `budget.rs` 批四注）**5043**。第四轮的两次搬迁（−556）搬走的是**依赖**而非仅仅行数：
+
+- **−221 `trace.rs`**：六个 `From<LoopTrace*> for aleph_protocol::AgentTrace*` DTO 转换迁往 `src/gateway/trace_protocol.rs`。战利品不是行数——`rg aleph_protocol src/harness/` 现在返回空，**循环不再依赖 gateway 线协议**。
+- **−335 `agent/think.rs`**：反应式压缩救援簇迁往 `src/context/compact/rescue.rs`，缝是 context 层定义、harness 实现的 `RescueHost` / `RescueCx`（P4 依赖倒置；`rg "crate::harness" src/context/` 返回空）。
+
+**Task 8 当年判定此簇 BLOCKED（"依赖读写私有 harness 状态的 `&self` 方法，不是可参数化的 `self.deps.X` 字段"）——这个判断是错的。** 真正需要的把手只有 5 个（LLM 调用 / 救援 CAS 槽 / token 记账 / trace / 终止原因），装进一个 52 行适配器即可；CAS 槽本身留在 `agent.rs` 未动。**教训：「依赖私有状态」不等于不可下沉。先数把手，再宣布 BLOCKED。**
+
+若要进一步瘦身，单文件气味线（~800 行）以上的候选（按价值排序，均未验证；注意这已是**可选优化**，不再是"欠 4900 的债"）：
+1. `agent.rs`（1037 行）——四轮以来从未被审计过，是现在最大的未探区域。
+2. `agent/act.rs`（1120 行）——第三轮已取走墙钟，剩余并行调度机件是否全属脚手架待查。
+3. `agent/think.rs` 的 `fire_boundary_grace_turn` 及残余 nudge 管线——预期收益较小。
+
+**下沉目的地（新增代码先看这里，而不是塞回 harness）**：
 - Nudge / 护栏文案 → [`src/thinker/nudges.rs`](../../src/thinker/nudges.rs)（6 个 `GRACE_NUDGE_*` + `SOFT_FAILURE_WARNING` + `MUTATION_EVIDENCE_NUDGE`）——R9「智慧在 prompt 中」的具体落地：面向模型的文案是 prompt 内容，不是调度逻辑。
 - 压缩指令派发 → [`src/context/compact/directive.rs`](../../src/context/compact/directive.rs)（`DirectiveOutcome` + `apply_budget_directive` + `compact_to_fit_and_note`）——`LoopDirective` 到具体压缩/session-split 动作的分发落在 Context 层，harness 只消费返回的 `DirectiveOutcome`。
+- 反应式压缩救援 → [`src/context/compact/rescue.rs`](../../src/context/compact/rescue.rs)（`RescueHost` / `RescueCx` + `drain_context_overflow` + `try_reactive_compact_and_retry` + `reactive_fit_and_retry`）——**机制不是认知**：压不压缩完全由 `llm_retry::classify` 的 `CompactAndRetry` 裁决决定，harness 仍不挑恢复策略（R10 第 5 不），模型仍看得见错误并自愈（A2）。
+- Trace → 线协议 DTO 转换 → [`src/gateway/trace_protocol.rs`](../../src/gateway/trace_protocol.rs)——为传输层序列化不是**循环的**脚手架，它属于 transport 自己。
 
 ### 4.2 12 模块归位映射
 
@@ -234,7 +247,7 @@ dissolution 过程中识别并删除了 **~5,200 行无消费者的死代码**�
 | 4 | 验证循环 | 计算式 + LLM 当裁判，但**裁判逻辑写在 prompt** | `src/verification/` + R10 |
 | 5 | 权限与安全 | 分层（security/sandbox/approval/pii），按部署调档 | R3 + R9 |
 | 6 | 工具范围 | 暴露当前步骤所需最小工具集 | R8（避免污染推理） |
-| 7 | **Harness 厚度** | **极薄** — 12 文件 / 5077 行（超 ~4900 红线 177 行，缺口留痕见 §4.1） | **本文档的核心** |
+| 7 | **Harness 厚度** | **极薄** — 12 文件 / 5043 行（`budget.rs` 棘轮实测；旧"5077 / 超 177"是手算口径事故的残值，已作废，见 §4.1） | **本文档的核心** |
 
 ---
 

@@ -1,5 +1,7 @@
 //! Tests for the reactive-compaction rescue path (Phase A — see
-//! `harness::agent::think::try_reactive_compact_and_retry`).
+//! `context::compact::rescue::try_reactive_compact_and_retry`, reached from the
+//! loop through `RescueHost`/`RescueCx`; these tests drive the whole turn, so
+//! they pin the seam end-to-end, not the algorithm in isolation).
 //!
 //! Mirrors claude-code's query.ts:1092 single-shot reactive compaction
 //! pattern. The wire was previously dead: `RetryVerdict::CompactAndRetry`
@@ -17,8 +19,9 @@ use tokio::sync::{broadcast, Mutex};
 
 use crate::context::budget::{ContextBudget, ContextBudgetConfig};
 use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
+use crate::context::compact::rescue::MAX_REACTIVE_COMPACT_ATTEMPTS;
 use crate::error::{AlephError, Result as AlephResult};
-use crate::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback, TurnState};
+use crate::harness::{AgentHarness, HarnessDeps, NoopHarnessCallback, TurnState};
 use crate::orchestrator::dispatch::TerminateReason;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
@@ -332,6 +335,61 @@ impl AiProvider for OverflowTwiceThenTextProvider {
     }
 }
 
+/// Errors with `prompt_too_long` on the first call, then returns a BILLED
+/// response that is *still* `ContextWindowExceeded`. Drives
+/// `reactive_fit_and_retry`'s still-overflow discard: that response never
+/// becomes an `AssistantMessage`, but the provider billed it (Anthropic carries
+/// usage in the same `message_delta` frame as the stop reason), so the harness
+/// must fold its tokens into the run totals before dropping it.
+struct BilledStillOverflowProvider {
+    calls: AtomicUsize,
+}
+
+impl BilledStillOverflowProvider {
+    /// Tokens the still-overflow response reports: 900 + 100 = 1000 billed.
+    const BILLED_TOKENS: u64 = 1_000;
+
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+        })
+    }
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl AiProvider for BilledStillOverflowProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                return Err(AlephError::provider(
+                    "prompt is too long: 250000 tokens > 200000 maximum",
+                ));
+            }
+            Ok(ProviderResponse {
+                stop_reason: crate::providers::adapter::StopReason::ContextWindowExceeded,
+                usage: Some(crate::providers::adapter::TokenUsage {
+                    input_tokens: 900,
+                    output_tokens: 100,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        })
+    }
+    fn name(&self) -> &str {
+        "billed_still_overflow"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
 /// Provider that always returns clean text (no overflow). The seeded history is
 /// compacted proactively *before* this call, so the call itself succeeds — the
 /// whole point of the never-break regression: a reloaded near-full session must
@@ -536,6 +594,37 @@ async fn rescue_succeeds_when_compactor_wired_and_retry_returns_clean() {
 /// → surfaces `HarnessError::Llm` + `ReactiveCompactExhausted`. Bounded: floor +
 /// a single extra retry, then honest surface — the helper cannot loop forever
 /// even when nothing can shrink the prompt enough.
+/// The cap lives in the Context layer (it is the rescue *policy*); the slot
+/// lives in the harness (it is per-run *state*). The seam only means something
+/// if the slot actually reads the cap — a `compare_exchange(0, 1)` hardcoding
+/// the same number would pass every behavioural test above while making
+/// `MAX_REACTIVE_COMPACT_ATTEMPTS` decorative: raise it and nothing happens.
+#[test]
+fn the_rescue_slot_is_bounded_by_the_context_layers_cap_not_a_hardcoded_one() {
+    // The provider is never called — this exercises the slot, not a turn.
+    let deps = build_deps(
+        MockSession::new(vec![]),
+        PlainTextProvider::new("unused"),
+        Some(stub_compactor()),
+    );
+    let harness = AgentHarness::new(deps);
+
+    for reserved in 0..MAX_REACTIVE_COMPACT_ATTEMPTS {
+        assert!(
+            harness.try_reserve_reactive_compact(),
+            "slot {reserved} of {MAX_REACTIVE_COMPACT_ATTEMPTS} must be claimable",
+        );
+    }
+    assert!(
+        !harness.try_reserve_reactive_compact(),
+        "the run's LLM-compaction budget is spent; the caller must fall back to the floor",
+    );
+    assert_eq!(
+        harness.reactive_compact_attempts_for_tests(),
+        MAX_REACTIVE_COMPACT_ATTEMPTS,
+    );
+}
+
 #[tokio::test]
 async fn rescue_exhausts_when_retry_still_overflows() {
     let session = MockSession::new(vec![
@@ -672,6 +761,51 @@ async fn overflow_floor_retry_recovers_to_clean_completion() {
         harness.reactive_compact_attempts_for_tests(),
         0,
         "the no-compactor floor path does not consume an LLM-compaction rescue slot",
+    );
+}
+
+/// The still-overflow response `reactive_fit_and_retry` discards is a real
+/// billed round-trip and must be accounted before it is dropped — every other
+/// discard point in the harness (empty-response loop, max_output_tokens loop,
+/// overflow drain, grace turn) already does. It never becomes an
+/// `AssistantMessage`, so `total_tokens()` / `token_breakdown()` (→ FlowOutcome)
+/// are the only places those tokens can ever surface.
+#[tokio::test]
+async fn still_overflow_response_is_accounted_before_being_discarded() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("oversized")]);
+    let llm = BilledStillOverflowProvider::new();
+    // No compactor + a budget → the overflow error routes straight to
+    // `reactive_fit_and_retry`, whose retry returns the billed still-overflow.
+    let mut deps = build_deps(session.clone(), llm.clone(), None);
+    deps.context_budget = Some(Arc::new(Mutex::new(ContextBudget::new(&budget_config()))));
+    let harness = AgentHarness::new(deps);
+
+    let result = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await;
+
+    assert!(
+        result.is_err(),
+        "a prompt that still overflows after the floor must surface honestly",
+    );
+    assert_eq!(
+        llm.call_count(),
+        2,
+        "primary overflow error + one post-floor retry",
+    );
+    assert_eq!(
+        harness.terminate_reason(),
+        TerminateReason::ReactiveCompactExhausted,
+    );
+    assert_eq!(
+        harness.total_tokens(),
+        BilledStillOverflowProvider::BILLED_TOKENS,
+        "the discarded still-overflow response was billed; its tokens must be in the run total",
+    );
+    assert_eq!(
+        harness.token_breakdown().total(),
+        BilledStillOverflowProvider::BILLED_TOKENS,
+        "the per-component breakdown must agree with total_tokens()",
     );
 }
 

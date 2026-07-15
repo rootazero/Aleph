@@ -304,7 +304,7 @@ impl LoopTool for SubagentTool {
                     Some(snap) => {
                         if let CompletedOutcome::Err(err) = &snap.outcome {
                             return ToolResult::Error {
-                                error: format!("Background sub-agent failed: {err}"),
+                                error: error_with_trail(err, &snap.progress_tail),
                                 retryable: false,
                             };
                         }
@@ -843,6 +843,37 @@ fn summarize_progress(progress: &[SubagentProgress]) -> Value {
     })
 }
 
+/// B18 — fold a failed background sub-agent's trajectory into the error string.
+///
+/// `ToolResult::Error` carries no structured payload, and it must stay that way
+/// (the variant is exhaustively destructured inside the harness, which is over
+/// its line budget), so the trail rides the message itself. This is error
+/// *compaction*, not error recovery: the parent model sees what the dead child
+/// actually tried and can retry differently instead of re-deriving it blind. The
+/// shape stays `Error` on purpose — the harness's consecutive-failure counter
+/// depends on a failure reading as a failure.
+///
+/// Bounded by construction: the tracker only retains `PROGRESS_TAIL_LEN` events,
+/// and this renders at most `TRAIL_LINES` of them.
+fn error_with_trail(err: &str, progress: &[SubagentProgress]) -> String {
+    const TRAIL_LINES: usize = 5;
+    let head = format!("Background sub-agent failed: {err}");
+    if progress.is_empty() {
+        return head;
+    }
+    let steps = progress.iter().map(|p| p.step).max().unwrap_or(0);
+    let start = progress.len().saturating_sub(TRAIL_LINES);
+    let mut out = format!("{head}\nTrajectory before failure ({steps} steps):");
+    for p in &progress[start..] {
+        let activity = crate::agents::background_tracker::progress_activity(p.kind);
+        match &p.tool_name {
+            Some(tool) => out.push_str(&format!("\n  step {}: {activity} {tool}", p.step)),
+            None => out.push_str(&format!("\n  step {}: {activity}", p.step)),
+        }
+    }
+    out
+}
+
 /// Build the Mixture-of-Agents aggregator prompt: the shared goal, every
 /// successful proposal labelled with the model that produced it, and an
 /// instruction to synthesize a single best answer. Mirrors the MoA paper
@@ -890,7 +921,12 @@ fn build_synthesis_prompt(
 /// `cancel`, and `list` actions so a finished agent reports identically
 /// everywhere — at parity with the foreground spawn path's
 /// `{result, iterations, tool_calls_made}` response shape.
+///
+/// B18 — both arms carry the retained progress tail (`progress` + `summary`),
+/// the same pair a *running* agent reports, so `list` no longer goes blind the
+/// moment a child finishes.
 fn completed_to_json(request_id: &str, ok_status: &str, snap: &CompletedSnapshot) -> Value {
+    let progress = &snap.progress_tail;
     match &snap.outcome {
         CompletedOutcome::Ok {
             final_text,
@@ -906,6 +942,8 @@ fn completed_to_json(request_id: &str, ok_status: &str, snap: &CompletedSnapshot
             "tool_calls_made": tool_calls_made,
             "total_tokens": total_tokens,
             "duration_secs": snap.duration_secs,
+            "summary": summarize_progress(progress),
+            "progress": progress,
         }),
         CompletedOutcome::Err(err) => json!({
             "status": "failed",
@@ -913,6 +951,8 @@ fn completed_to_json(request_id: &str, ok_status: &str, snap: &CompletedSnapshot
             "task": snap.task,
             "error": err,
             "duration_secs": snap.duration_secs,
+            "summary": summarize_progress(progress),
+            "progress": progress,
         }),
     }
 }

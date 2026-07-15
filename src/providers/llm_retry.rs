@@ -375,6 +375,49 @@ pub fn is_permanent_failure(raw: &str) -> bool {
         || msg.contains("forbidden")
 }
 
+/// Every wording a provider uses to say "your prompt does not fit the context
+/// window". Matching any of them routes the turn into the reactive-compaction
+/// rescue (`CompactAndRetry`) instead of killing the run.
+///
+/// This list used to hold only the five Anthropic shapes, which made the whole
+/// rescue path dead code on OpenAI / vLLM / Ollama / Gemini: an overflow there
+/// matched nothing, fell through to `Fatal`, and — because token estimation is
+/// a fail-open heuristic that only recalibrates on a *successful* response —
+/// bricked the session permanently.
+///
+/// Every entry must stay NARROW. The overflow check runs *before* the
+/// quota-Fatal and 429 arms in [`classify`], so a loose pattern like
+/// "too large" or "token limit" would hijack an OpenAI TPM rate-limit into a
+/// pointless compact-and-retry against a provider that is throttling us, not
+/// out of context.
+const CONTEXT_OVERFLOW_PATTERNS: &[&str] = &[
+    // Anthropic: HTTP 413, `prompt_too_long`, `request_too_large`.
+    // `model_context_window_exceeded` is the same overflow surfaced as a *stop
+    // reason* — the harness synthesizes an error carrying that marker to route
+    // a context-exhausted stream into this same rescue.
+    "413",
+    "prompt is too long",
+    "prompt_too_long",
+    "request_too_large",
+    "model_context_window_exceeded",
+    // OpenAI and every OpenAI-compatible endpoint: error code
+    // `context_length_exceeded`, message "This model's maximum context length
+    // is N tokens. However, your messages resulted in M tokens. Please reduce
+    // the length of the messages."
+    "context_length_exceeded",
+    "maximum context length",
+    "context length exceeded",
+    "reduce the length of the messages",
+    // vLLM / local OpenAI-compatible servers name the window directly:
+    // "... is longer than the maximum model length (max_model_len)".
+    "max_model_len",
+    // Ollama and llama.cpp-backed servers.
+    "input is too long",
+    // Gemini: "The input token count (N) exceeds the maximum number of tokens
+    // allowed (M)."
+    "input token count",
+];
+
 /// Inspect an `anyhow::Error` display string and decide whether to retry.
 #[must_use]
 pub fn classify_error(err: &anyhow::Error) -> RetryVerdict {
@@ -388,16 +431,10 @@ pub fn classify_error(err: &anyhow::Error) -> RetryVerdict {
 pub fn classify(raw: &str) -> RetryVerdict {
     let msg = raw.to_lowercase();
 
-    // Prompt too long / 413 → compact and retry (not a transient retry).
-    // `model_context_window_exceeded` is the same overflow surfaced as an
-    // Anthropic *stop reason* — the harness synthesizes an error carrying
-    // that marker to route a context-exhausted turn into the same rescue.
-    if msg.contains("413")
-        || msg.contains("prompt is too long")
-        || msg.contains("prompt_too_long")
-        || msg.contains("request_too_large")
-        || msg.contains("model_context_window_exceeded")
-    {
+    // Context overflow → compact and retry (not a transient retry). Must stay
+    // ahead of the 429/quota arms below; see [`CONTEXT_OVERFLOW_PATTERNS`] for
+    // why the patterns are deliberately narrow.
+    if CONTEXT_OVERFLOW_PATTERNS.iter().any(|p| msg.contains(p)) {
         return RetryVerdict::CompactAndRetry {
             token_gap: parse_token_gap_str(raw),
         };
@@ -772,6 +809,54 @@ mod tests {
             classify_error(&err),
             RetryVerdict::CompactAndRetry { token_gap: None }
         ));
+    }
+
+    /// The compaction rescue must be reachable on every provider, not just
+    /// Anthropic. Before this list was widened these four bodies all fell
+    /// through to `Fatal` and killed the run — and, because usage is only
+    /// recalibrated after a *successful* response, the under-counting session
+    /// stayed bricked forever.
+    #[test]
+    fn test_classify_context_overflow_non_anthropic_providers() {
+        let bodies = [
+            // OpenAI (and every OpenAI-compatible endpoint).
+            r#"OpenAI Chat API error (400): {"error":{"message":"This model's maximum context length is 128000 tokens. However, your messages resulted in 131500 tokens. Please reduce the length of the messages.","type":"invalid_request_error","param":"messages","code":"context_length_exceeded"}}"#,
+            // vLLM names the window by its config key.
+            "Provider error: ValueError: The prompt (9000 tokens) is longer than the model's max_model_len (8192)",
+            // Ollama / llama.cpp-backed servers.
+            r#"Ollama API error: {"error":"input is too long for this model's context window"}"#,
+            // Gemini.
+            r#"Gemini API error (400): {"error":{"code":400,"message":"The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).","status":"INVALID_ARGUMENT"}}"#,
+        ];
+        for body in bodies {
+            assert!(
+                matches!(classify(body), RetryVerdict::CompactAndRetry { .. }),
+                "context overflow must route to compaction, got {:?} for {body}",
+                classify(body)
+            );
+        }
+    }
+
+    /// Guards the narrowness of `CONTEXT_OVERFLOW_PATTERNS`. The overflow check
+    /// runs BEFORE the quota/429 arms, so widening it to loose words like
+    /// "token limit" or "too large" would turn an OpenAI tokens-per-minute
+    /// throttle — which needs a backoff or a failover — into a pointless
+    /// compact-and-retry against a context that was never too big.
+    #[test]
+    fn test_openai_tpm_429_is_not_hijacked_into_compaction() {
+        let org_scoped = r#"Rate limit error: OpenAI Chat API rate limited (429): {"error":{"message":"Rate limit reached for gpt-4o in organization org-abc123 on tokens per min (TPM): Limit 30000, Used 28500, Requested 5000. Please try again in 6s.","type":"tokens","code":"rate_limit_exceeded"}}"#;
+        assert_eq!(
+            classify(org_scoped),
+            RetryVerdict::Fatal,
+            "an org-wide TPM limit must stay Fatal, not compact"
+        );
+
+        let model_scoped = r#"Rate limit error: OpenAI Chat API rate limited (429): {"error":{"message":"Rate limit reached on tokens per min (TPM): Limit 30000, Used 28500, Requested 5000. Please try again in 6s.","code":"rate_limit_exceeded"}}"#;
+        assert!(
+            matches!(classify(model_scoped), RetryVerdict::Fallback { .. }),
+            "a model-scoped TPM limit must stay Fallback, not compact — got {:?}",
+            classify(model_scoped)
+        );
     }
 
     #[tokio::test]

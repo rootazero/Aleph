@@ -4,7 +4,6 @@
 //! position in a call chain. It prevents infinite recursion by enforcing
 //! a maximum depth limit.
 
-use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -49,16 +48,6 @@ impl ChainContext {
         }
     }
 
-    /// Create a root context with a custom `max_depth`.
-    #[must_use]
-    pub fn with_max_depth(max_depth: u32) -> Self {
-        Self {
-            chain_id: generate_chain_id(),
-            depth: 0,
-            max_depth,
-        }
-    }
-
     /// Create a child context with depth+1 and the same `chain_id`.
     ///
     /// Returns `None` if the current depth has reached `max_depth`,
@@ -85,16 +74,6 @@ impl ChainContext {
 impl Default for ChainContext {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl fmt::Display for ChainContext {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "ChainContext(chain_id={}, depth={}/{})",
-            self.chain_id, self.depth, self.max_depth
-        )
     }
 }
 
@@ -133,7 +112,12 @@ mod tests {
 
     #[test]
     fn child_returns_none_at_max_depth() {
-        let root = ChainContext::with_max_depth(2);
+        // `with_max_depth` was deleted (zero non-test callers); build the
+        // shallow-cap fixture from the public fields instead.
+        let root = ChainContext {
+            max_depth: 2,
+            ..ChainContext::new()
+        };
         let c1 = root.child().expect("0→1 should succeed");
         assert_eq!(c1.depth, 1);
         let c2 = c1.child().expect("1→2 should succeed");
@@ -147,16 +131,5 @@ mod tests {
         let a = ChainContext::new();
         let b = ChainContext::new();
         assert_ne!(a.chain_id, b.chain_id);
-    }
-
-    #[test]
-    fn display_format() {
-        let ctx = ChainContext::new();
-        let display = format!("{ctx}");
-        assert!(
-            display.contains(&ctx.chain_id),
-            "Display should contain chain_id"
-        );
-        assert!(display.contains("depth=0"), "Display should contain depth");
     }
 }

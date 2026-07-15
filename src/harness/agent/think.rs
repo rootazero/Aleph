@@ -4,14 +4,17 @@ use std::sync::atomic::Ordering;
 
 use tokio_util::sync::CancellationToken;
 
-use super::{AgentHarness, InputGuardrailOutcome};
+use super::AgentHarness;
 use crate::context::budget::LoopDirective;
+use crate::context::compact::rescue::{self, RescueCx, RescueHost};
+use crate::guardrails::SessionInputScreen;
 use crate::harness::callback::HarnessCallback;
 use crate::harness::trait_def::{HarnessError, TurnState, TurnStep};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::message::UnifiedMessage;
 use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord, TurnId};
 use crate::session::service::SessionId;
+use crate::thinker::nudges::{MAX_OUTPUT_TOKENS_RESUME_NUDGE, MAX_STEPS_HINT};
 use crate::verification::{
     hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict, TOOL_HISTORY_WINDOW,
 };
@@ -52,43 +55,12 @@ impl crate::providers::DeltaSink for CallbackSink<'_> {
 /// endpoint that more retries will not fix.
 const EMPTY_RESPONSE_RETRIES: u32 = 2;
 
-/// G1 (opencode-inspired): last-step soft warning. Injected as a synthetic
-/// trailing user message wrapped in `<system-reminder>` on the LAST allowed
-/// iteration so the model uses *this* turn to emit a final summary instead
-/// of triggering the post-hoc C1 grace turn (which costs an extra LLM
-/// round-trip). C1 remains as a fail-safe for the rare case where the
-/// model ignores this hint and still emits `tool_use`.
-///
-/// Text intentionally mirrors opencode's `max-steps.txt` shape so model
-/// behaviour transfers across harnesses.
-const MAX_STEPS_HINT: &str = "<system-reminder>\n\
-CRITICAL — MAXIMUM ITERATIONS REACHED\n\n\
-This is the LAST iteration allowed for this task. Tools are effectively \
-disabled — any tool_use you emit will be discarded after one more grace \
-turn. You MUST respond with TEXT ONLY now.\n\n\
-Your response should include:\n\
-- A short statement that the iteration cap was reached\n\
-- A summary of what was accomplished so far\n\
-- Any tasks that remain incomplete\n\
-- A recommendation for what should be done next\n\
-</system-reminder>";
-
 /// Maximum re-issues of the LLM call when the provider hits
 /// `max_output_tokens` mid-stream. Mirrors claude-code's
 /// `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT` (query.ts:164). The retry appends
 /// the partial assistant output and a "resume directly" nudge so the
 /// model continues mid-thought rather than restarting.
 const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT: u32 = 3;
-
-/// Meta user message appended on each `max_output_tokens` recovery
-/// retry. Text mirrors claude-code's wording (query.ts:1226) so model
-/// behaviour transfers across harnesses. The model is expected to pick
-/// up mid-thought; "no apology, no recap" prevents wasted output tokens
-/// on regenerating context the model already produced.
-const MAX_OUTPUT_TOKENS_RESUME_NUDGE: &str =
-    "Output token limit hit. Resume directly — no apology, no recap of \
-     what you were doing. Pick up mid-thought if that is where the cut \
-     happened. Break remaining work into smaller pieces.";
 
 /// Why a grace turn is being fired. Selects the nudge text; otherwise
 /// the call path is identical.
@@ -224,14 +196,6 @@ fn build_request_payload<'a>(
     base.with_system_blocks(system_blocks)
 }
 
-/// Hard cap on reactive-compaction rescue attempts per harness run. The
-/// classifier yielded `CompactAndRetry { token_gap }` and the harness ran
-/// `context_compactor.compact()` on the local message vec; one retry is
-/// enough — repeated overflows after summarisation mean the input is
-/// fundamentally too large rather than a recoverable burst. Mirrors
-/// claude-code's "already attempted" single-shot guard (query.ts:1092).
-const MAX_REACTIVE_COMPACT_ATTEMPTS: u32 = 1;
-
 /// Fresh-tail size for the preflight cheap passes when no context budget is
 /// wired (`context_budget == None`). Mirrors `CompactorConfig::default`'s tail
 /// of 6 — named so the no-budget fallback cannot silently diverge from the
@@ -307,14 +271,19 @@ fn promote_text_tool_calls(
 impl AgentHarness {
     /// Fold a single provider response's billed tokens into the run totals.
     ///
-    /// Used for *intermediate* responses that the empty-response and
-    /// `max_output_tokens` recovery loops discard before they reach the
-    /// once-per-turn accounting at the end of `run_turn_internal`. Each
-    /// discarded call was a real round-trip the provider billed (input tokens
-    /// always, plus any partial output on a `max_output_tokens` cut), so
-    /// counting only the final surviving response silently dropped those tokens
-    /// from `total_tokens`, the per-component `token_breakdown`, and every
-    /// downstream cost / budget consumer. Mirrors the final accounting
+    /// Used for *intermediate* responses that never reach the once-per-turn
+    /// accounting at the end of `run_turn_internal`. **Every** discard point
+    /// must account before dropping: the empty-response loop, the
+    /// `max_output_tokens` loop, the grace turn, and — via
+    /// [`RescueHost::account_discarded_tokens`] — the reactive rescue's overflow
+    /// drain and still-overflow discard (`context::compact::rescue`).
+    /// Each discarded call was a real round-trip the provider billed (input
+    /// tokens always, plus any partial output on a `max_output_tokens` or
+    /// context-window cut), so counting only the final surviving response
+    /// silently dropped those tokens from `total_tokens`, the per-component
+    /// `token_breakdown`, and every downstream cost / budget consumer
+    /// (`total_tokens()` / `token_breakdown()` → `FlowOutcome`). Mirrors the
+    /// final accounting
     /// (`turn_token_total` + `accumulate_token_breakdown`) so each call is
     /// counted exactly once — but NOT `AssistantMessage.usage`: a discarded
     /// response never becomes a message, which is why the session's token total
@@ -372,26 +341,23 @@ impl AgentHarness {
             .store(events.last().map_or(0, |r| r.seq), Ordering::Relaxed);
         let tail_start = super::tail_start_index(&events);
 
-        // 1a. Stage 5a (#9): Input guardrail. Inspect the latest UserMessage
-        // in the tail. `Block` ends the turn early via `on_safety_block`;
-        // `Sanitize` rewrites the in-memory event before the prompt builder
-        // sees it (the original session-log event is left intact for audit).
-        let events: Vec<crate::session::events::SessionEventRecord> =
-            if let Some(registry) = self.deps.guardrails.as_ref() {
-                match self
-                    .apply_input_guardrail(registry, events, tail_start)
-                    .await?
-                {
-                    InputGuardrailOutcome::Allow(events) => events,
-                    InputGuardrailOutcome::Sanitized(events) => events,
-                    InputGuardrailOutcome::Blocked(reason) => {
-                        callback.on_safety_block(&reason);
-                        return Ok(TurnStep::done());
-                    }
+        // 1a. Stage 5a (#9): input guardrail. The registry screens every
+        // replayed user message, not just this turn's — `build_prompt` below
+        // walks the log from index 0, so rewriting only the tail put the
+        // original text back on the wire from turn 2 onwards. Rewrites land on
+        // the in-memory clone; the session log keeps the original for audit.
+        // Only this turn's own message can `Block` (older ones are redacted
+        // instead — see `screen_session_input`).
+        let events = match self.deps.guardrails.as_ref() {
+            Some(registry) => match registry.screen_session_input(events, tail_start).await {
+                SessionInputScreen::Pass(events) => events,
+                SessionInputScreen::Blocked(reason) => {
+                    callback.on_safety_block(&reason);
+                    return Ok(TurnStep::done());
                 }
-            } else {
-                events
-            };
+            },
+            None => events,
+        };
 
         // 2. Build the LLM request. `build_prompt` has access to the full log
         //    so it can reconstruct the preceding assistant tool_use turn and
@@ -543,7 +509,7 @@ impl AgentHarness {
         // mutate `messages` via the compactor between calls. The dedicated
         // `build_request_payload` free function (above) avoids the
         // closure-borrows-messages NLL conflict that would otherwise block
-        // `&mut messages` inside `try_reactive_compact_and_retry`.
+        // `&mut messages` inside `rescue::try_reactive_compact_and_retry`.
 
         self.emit(|| crate::harness::trace::LoopTraceEvent::TurnStateEntered {
             iteration: iterations,
@@ -555,6 +521,18 @@ impl AgentHarness {
         // breaker — lives inside `deps.llm` itself (`providers::FailoverProvider`),
         // so the harness simply propagates whatever error survives it.
         let started = std::time::Instant::now();
+        // Data seam for the reactive-compaction rescue (`context::compact::rescue`).
+        // Built AFTER `started` so the rescue's retries race the SAME turn budget
+        // as the primary call rather than a fresh one.
+        let rescue_cx = RescueCx {
+            session_id,
+            system_prompt,
+            tools: tools_ref,
+            budget_tool_tokens,
+            started,
+            compactor: self.deps.context_compactor.as_deref(),
+            budget: self.deps.context_budget.as_ref(),
+        };
         let payload = build_request_payload(
             self.deps.system_prompt.as_deref(),
             self.deps.system_prompt_parts.as_deref(),
@@ -601,14 +579,12 @@ impl AgentHarness {
                 // tags the error as `CompactAndRetry`, summarise `messages`
                 // and retry once. Returns `Err(HarnessError::Llm)` when the
                 // verdict is anything else (transparent passthrough).
-                self.try_reactive_compact_and_retry(
+                rescue::try_reactive_compact_and_retry(
+                    self,
                     primary_err,
-                    session_id,
+                    &rescue_cx,
                     &mut messages,
-                    tools_ref,
-                    budget_tool_tokens,
                     parent_cancel,
-                    started,
                 )
                 .await?
             }
@@ -647,14 +623,12 @@ impl AgentHarness {
             {
                 Ok(r) => r,
                 Err(primary_err) => {
-                    self.try_reactive_compact_and_retry(
+                    rescue::try_reactive_compact_and_retry(
+                        self,
                         primary_err,
-                        session_id,
+                        &rescue_cx,
                         &mut messages,
-                        tools_ref,
-                        budget_tool_tokens,
                         parent_cancel,
-                        started,
                     )
                     .await?
                 }
@@ -666,16 +640,14 @@ impl AgentHarness {
         // 3b would append more messages and re-hit the wall, so route this to
         // reactive compaction FIRST, before 3b ever appends. The drain helper
         // is bounded by the one-shot reactive-compact cap, so a model that
-        // keeps overflowing cannot spin. See `drain_context_overflow`.
-        self.drain_context_overflow(
+        // keeps overflowing cannot spin. See `rescue::drain_context_overflow`.
+        rescue::drain_context_overflow(
+            self,
             &mut response,
             &mut response_was_streamed,
-            session_id,
+            &rescue_cx,
             &mut messages,
-            tools_ref,
-            budget_tool_tokens,
             parent_cancel,
-            started,
         )
         .await?;
 
@@ -689,10 +661,12 @@ impl AgentHarness {
         // times. The nudge text mirrors claude-code's wording so model
         // behaviour transfers across harnesses. R10-safe: pure round
         // scheduling around a specific provider failure mode, no policy.
-        // The retry pushes onto `messages` (local, never persisted to the
-        // session log). The closure `build_payload` would hold an immutable
-        // borrow that conflicts with the push; the retry inlines payload
-        // construction so the borrow is scoped to each LLM call.
+        // `messages` is local (never persisted), so each partial is ALSO kept in
+        // `carried` and concatenated with the continuation BEFORE the output
+        // guardrail below — else the persisted answer, and the next turn's prompt
+        // rebuilt from it, both start mid-sentence.
+        let mut carried = String::new();
+        let mut streamed_prefix_len = 0usize;
         let mut max_tokens_retries = 0u32;
         while matches!(
             response.stop_reason,
@@ -700,10 +674,6 @@ impl AgentHarness {
         ) && max_tokens_retries < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
         {
             max_tokens_retries += 1;
-            // The retry below replaces `response` via the non-streaming path;
-            // only the truncated partial was delta-streamed, so the surviving
-            // continuation must get the one-shot emit.
-            response_was_streamed = false;
             // Count the partial (max_output_tokens-cut) call before discarding
             // it: it billed input tokens plus the partial output the model
             // already emitted. The once-per-turn accounting below only sees
@@ -716,8 +686,15 @@ impl AgentHarness {
             );
             let partial = response.text_content();
             if !partial.trim().is_empty() {
+                carried.push_str(&partial);
                 messages.push(UnifiedMessage::assistant(partial));
             }
+            // Nothing is emitted here — a delta would bypass the Stage-5a output
+            // guardrail. A streaming primary call already sent this partial live.
+            if response_was_streamed {
+                streamed_prefix_len = carried.len();
+            }
+            response_was_streamed = false;
             messages.push(UnifiedMessage::user(MAX_OUTPUT_TOKENS_RESUME_NUDGE));
             let payload = build_request_payload(
                 self.deps.system_prompt.as_deref(),
@@ -736,14 +713,12 @@ impl AgentHarness {
                     // through after the resume nudge — rescue applies the
                     // same way; on non-overflow errors the helper returns
                     // the wrapped error unchanged.
-                    self.try_reactive_compact_and_retry(
+                    rescue::try_reactive_compact_and_retry(
+                        self,
                         primary_err,
-                        session_id,
+                        &rescue_cx,
                         &mut messages,
-                        tools_ref,
-                        budget_tool_tokens,
                         parent_cancel,
-                        started,
                     )
                     .await?
                 }
@@ -758,15 +733,13 @@ impl AgentHarness {
         // both drains jointly — a second overflow after the cap is spent
         // surfaces the error rather than spinning. No-op (zero LLM cost) on the
         // common path where 3b did not run or left a non-overflow response.
-        self.drain_context_overflow(
+        rescue::drain_context_overflow(
+            self,
             &mut response,
             &mut response_was_streamed,
-            session_id,
+            &rescue_cx,
             &mut messages,
-            tools_ref,
-            budget_tool_tokens,
             parent_cancel,
-            started,
         )
         .await?;
 
@@ -821,8 +794,7 @@ impl AgentHarness {
         // reports what the provider billed; window resolution and rendering
         // stay outside.
         if let Some(usage) = response.usage.as_ref() {
-            let occupancy =
-                u32::try_from(usage.context_occupancy_tokens()).unwrap_or(u32::MAX);
+            let occupancy = u32::try_from(usage.context_occupancy_tokens()).unwrap_or(u32::MAX);
             if occupancy > 0 {
                 callback.on_context_usage(occupancy, self.total_tokens());
             }
@@ -859,7 +831,7 @@ impl AgentHarness {
 
         // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
         let turn_id = super::current_turn_id(&events);
-        let text = response.text_content();
+        let text = format!("{carried}{}", response.text_content());
 
         // 4a. Stage 5a (#9): Output guardrail. `Block` aborts the turn with a
         // terminal `HarnessError::Llm`. The decision's `class` is preserved
@@ -911,10 +883,13 @@ impl AgentHarness {
             // where streaming is suppressed so the output guardrail can sanitise
             // the final text first) keep the one-shot emit — as does a response
             // that survived from a non-streaming retry/rescue, whose text was
-            // never delta-streamed. The authoritative AssistantMessage is
-            // persisted just below.
+            // never delta-streamed — minus the `streamed_prefix_len` bytes a
+            // truncated streaming call already sent (`.get()`, not `&text[..]`: a
+            // byte index must not split a codepoint).
             if !response_was_streamed {
-                callback.on_delta(&text);
+                if let Some(rest) = text.get(streamed_prefix_len..) {
+                    callback.on_delta(rest);
+                }
             }
             self.emit(|| crate::harness::trace::LoopTraceEvent::TextEmitted {
                 iteration: iterations,
@@ -1161,10 +1136,8 @@ impl AgentHarness {
                 self.set_terminate_reason(
                     crate::orchestrator::dispatch::TerminateReason::DiminishingReturns,
                 );
-                self.fire_grace_turn(
+                self.fire_boundary_grace_turn(
                     session_id,
-                    &events,
-                    &messages,
                     callback,
                     iterations,
                     GraceReason::Diminishing,
@@ -1191,368 +1164,6 @@ impl AgentHarness {
             metrics: metrics_for_trace,
         });
         result
-    }
-
-    /// Drain a `ContextWindowExceeded` terminal state via reactive compaction.
-    ///
-    /// `model_context_window_exceeded` means the *context window* filled
-    /// mid-generation (distinct from the output-token cap). Each pass counts
-    /// the overflowed call's billed tokens, synthesizes the overflow-marker
-    /// error (`llm_retry::classify` maps it to `CompactAndRetry`), and routes
-    /// through [`Self::try_reactive_compact_and_retry`] — reusing its one-shot
-    /// cap, trace, and budget plumbing. Bounded by that cap: a model that keeps
-    /// overflowing surfaces the error (via `?`) rather than spinning.
-    ///
-    /// Called at BOTH points the window can fill mid-pipeline — right after the
-    /// primary call (3b-pre, before the resume loop appends more) and again
-    /// after the `max_output_tokens` resume loop (3b-post, whose nudge retry can
-    /// itself overflow). `response` / `response_was_streamed` are `&mut` so the
-    /// helper updates the caller's surviving state in place. No-op (zero LLM
-    /// cost) when `response` is not in the overflow state.
-    ///
-    /// R10-safe: pure round scheduling around one provider failure mode, no
-    /// policy — the decision to compact is fully encoded in the classifier.
-    #[allow(clippy::too_many_arguments)]
-    async fn drain_context_overflow(
-        &self,
-        response: &mut ProviderResponse,
-        response_was_streamed: &mut bool,
-        session_id: &SessionId,
-        messages: &mut Vec<UnifiedMessage>,
-        tools_ref: Option<&[crate::tool_metadata::ToolDefinition]>,
-        budget_tool_tokens: usize,
-        parent_cancel: &CancellationToken,
-        started: std::time::Instant,
-    ) -> Result<(), HarnessError> {
-        while matches!(
-            response.stop_reason,
-            crate::providers::adapter::StopReason::ContextWindowExceeded
-        ) {
-            // The overflowed call still billed input plus the partial output;
-            // count it before the retry replaces `response`.
-            self.account_intermediate_tokens(response);
-            // The rescue below replaces `response` via the non-streaming path.
-            *response_was_streamed = false;
-            tracing::warn!(
-                ?session_id,
-                "provider stopped with model_context_window_exceeded; \
-                 routing to reactive compaction",
-            );
-            let overflow_err = crate::error::AlephError::ProviderError {
-                message: "model_context_window_exceeded: provider stopped because \
-                          the context window is full"
-                    .to_string(),
-                suggestion: None,
-            };
-            *response = self
-                .try_reactive_compact_and_retry(
-                    overflow_err,
-                    session_id,
-                    messages,
-                    tools_ref,
-                    budget_tool_tokens,
-                    parent_cancel,
-                    started,
-                )
-                .await?;
-        }
-        Ok(())
-    }
-
-    /// Reactive-compaction rescue (Phase A — claude-code parity,
-    /// query.ts:1092-1162; codex `mid-turn auto-compact` parity).
-    ///
-    /// When the LLM call returned a provider error, classify it via
-    /// [`crate::providers::llm_retry::classify`]. If the verdict is
-    /// `RetryVerdict::CompactAndRetry { token_gap }`, run
-    /// `context_compactor.compact()` on the in-flight `messages` vec and
-    /// retry the LLM call ONCE. On any other verdict — or if the
-    /// compactor is not wired, the rescue cap is already exhausted, the
-    /// compactor itself fails, or the retried call still errors — return
-    /// the wrapped error so the caller surfaces it.
-    ///
-    /// This closes the dead wire flagged at `failover.rs:183` ("the
-    /// harness context-compactor owns this recovery path") — before this
-    /// helper existed the verdict was generated but no harness path
-    /// consumed it.
-    ///
-    /// R10 discipline: the helper is **scaffolding** — it picks no policy
-    /// and makes no judgements. The decision to retry is fully encoded in
-    /// the classifier verdict; the helper just dispatches the
-    /// pre-existing compactor on the pre-existing message vec and emits
-    /// one trace event for observability.
-    async fn try_reactive_compact_and_retry(
-        &self,
-        primary_err: crate::error::AlephError,
-        session_id: &SessionId,
-        messages: &mut Vec<UnifiedMessage>,
-        tools_ref: Option<&[crate::tool_metadata::ToolDefinition]>,
-        budget_tool_tokens: usize,
-        parent_cancel: &CancellationToken,
-        started: std::time::Instant,
-    ) -> Result<ProviderResponse, HarnessError> {
-        use crate::providers::llm_retry::{classify, RetryVerdict};
-
-        // 1. Classify. Anything that isn't `CompactAndRetry` is a clean
-        //    pass-through — preserve the original error so the orchestrator
-        //    sees identical pre-rescue semantics.
-        let token_gap = match classify(&primary_err.to_string()) {
-            RetryVerdict::CompactAndRetry { token_gap } => token_gap,
-            _ => return Err(HarnessError::Llm(primary_err)),
-        };
-
-        // 2. The compactor must be wired AND we must still have a rescue
-        //    slot. `try_reserve_reactive_compact` is a one-shot
-        //    `compare_exchange` so concurrent paths can never both rescue.
-        let Some(compactor) = self.deps.context_compactor.as_ref() else {
-            // No LLM compactor wired — fall back to the deterministic floor + one
-            // retry instead of hard-stopping. A full context window must not end
-            // the run (never-break).
-            return self
-                .reactive_fit_and_retry(
-                    primary_err,
-                    session_id,
-                    messages,
-                    tools_ref,
-                    budget_tool_tokens,
-                    parent_cancel,
-                    started,
-                    token_gap,
-                )
-                .await;
-        };
-        if !self.try_reserve_reactive_compact() {
-            // Rescue cap reached — the LLM-compaction budget for this run is spent.
-            // Fall back to the deterministic floor + one retry instead of
-            // hard-stopping (never-break).
-            tracing::warn!(
-                ?session_id,
-                MAX_REACTIVE_COMPACT_ATTEMPTS,
-                "reactive-compaction rescue cap reached; flooring to fit and retrying once",
-            );
-            return self
-                .reactive_fit_and_retry(
-                    primary_err,
-                    session_id,
-                    messages,
-                    tools_ref,
-                    budget_tool_tokens,
-                    parent_cancel,
-                    started,
-                    token_gap,
-                )
-                .await;
-        }
-
-        // 3. Run the compactor on the in-flight message vec. Failure here
-        //    is fail-soft: the original provider error is what the user
-        //    needs to see, the compactor's own error is secondary noise.
-        tracing::warn!(
-            ?session_id,
-            ?token_gap,
-            "provider hit context overflow; running reactive compaction",
-        );
-        let session_id_str = session_id.to_string();
-        if let Err(e) = compactor
-            .compact(messages, 0, Some(session_id_str.as_str()))
-            .await
-        {
-            // LLM compaction failed — fall back to the deterministic floor + one
-            // retry instead of hard-stopping (never-break). `reactive_fit_and_retry`
-            // re-runs `compact_to_fit`, whose floor guarantees fit even when the
-            // summariser is down.
-            tracing::warn!(
-                ?session_id,
-                error = %e,
-                "reactive compactor failed; flooring to fit and retrying once",
-            );
-            return self
-                .reactive_fit_and_retry(
-                    primary_err,
-                    session_id,
-                    messages,
-                    tools_ref,
-                    budget_tool_tokens,
-                    parent_cancel,
-                    started,
-                    token_gap,
-                )
-                .await;
-        }
-
-        // 3a. Refresh the budget's `last_pressure` snapshot to the compacted
-        //     message vec. `before_turn` snapshotted the *pre*-compaction
-        //     prompt; without this refresh the post-retry
-        //     `observe_actual_usage` calibration would divide the surviving
-        //     response's real `prompt_tokens_total` (compacted) by the stale
-        //     uncompacted estimate, injecting a spurious shrink into the EWMA
-        //     and corrupting every later compaction decision this run. Mirrors
-        //     the `CompactAndContinue` path's `note_compaction_effect` call.
-        if let Some(budget) = self.deps.context_budget.as_ref() {
-            let system_prompt = self.deps.system_prompt.as_deref().unwrap_or("");
-            budget
-                .lock()
-                .await
-                .note_compaction_effect(messages, system_prompt, budget_tool_tokens);
-        }
-
-        // 4. Retry the LLM call once with the summarised history.
-        let payload = build_request_payload(
-            self.deps.system_prompt.as_deref(),
-            self.deps.system_prompt_parts.as_deref(),
-            messages,
-            tools_ref,
-            session_id,
-        );
-        match self
-            .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
-            .await?
-        {
-            Ok(resp) => {
-                self.emit(
-                    || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
-                        token_gap,
-                        succeeded: true,
-                    },
-                );
-                Ok(resp)
-            }
-            Err(retry_err) => {
-                // I1: if the retry ALSO failed with a context-overflow error (the
-                // OpenAI-compatible-proxy shape that surfaces overflow as an `Err`
-                // rather than a `ContextWindowExceeded` stop_reason), the LLM
-                // summary alone wasn't enough — fall back to the deterministic
-                // floor + one more retry before giving up (never-break). Only a
-                // genuine non-context error surfaces immediately. Loop-safe:
-                // `reactive_fit_and_retry` floors once and retries once, never
-                // returning `Ok(overflow)`, so the caller's drain loop terminates.
-                if matches!(
-                    classify(&retry_err.to_string()),
-                    RetryVerdict::CompactAndRetry { .. }
-                ) {
-                    return self
-                        .reactive_fit_and_retry(
-                            retry_err,
-                            session_id,
-                            messages,
-                            tools_ref,
-                            budget_tool_tokens,
-                            parent_cancel,
-                            started,
-                            token_gap,
-                        )
-                        .await;
-                }
-                tracing::warn!(
-                    ?session_id,
-                    error = %retry_err,
-                    "reactive-compaction retry failed with a non-context error; surfacing",
-                );
-                self.emit(
-                    || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
-                        token_gap,
-                        succeeded: false,
-                    },
-                );
-                self.set_terminate_reason(
-                    crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
-                );
-                Err(HarnessError::Llm(retry_err))
-            }
-        }
-    }
-
-    /// Reactive-overflow fallback: floor the in-flight prompt to fit the model
-    /// window DETERMINISTICALLY (`compact_to_fit_in_place` with
-    /// `use_llm_compactor: false` — the LLM summariser was already tried on the
-    /// main path), then retry the provider ONCE. Backs the no-compactor /
-    /// cap-exhausted / compact-failed exits AND the still-overflow retry error
-    /// (I1) — a full context window must not end the run. Only a
-    /// non-overflow response is success; a still-overflowing OR erroring retry
-    /// surfaces honestly (the truncated prompt didn't fit ⇒ pathological config,
-    /// not "context full", which the floor already resolved). Loop-safe: never
-    /// returns `Ok(overflow)`, so the caller's drain loop always terminates.
-    /// R10-safe: mechanical floor + one retry, no policy.
-    #[allow(clippy::too_many_arguments)]
-    async fn reactive_fit_and_retry(
-        &self,
-        primary_err: crate::error::AlephError,
-        session_id: &SessionId,
-        messages: &mut Vec<UnifiedMessage>,
-        tools_ref: Option<&[crate::tool_metadata::ToolDefinition]>,
-        budget_tool_tokens: usize,
-        parent_cancel: &CancellationToken,
-        started: std::time::Instant,
-        token_gap: Option<usize>,
-    ) -> Result<ProviderResponse, HarnessError> {
-        // 1. Compact to fit — DETERMINISTIC floor only (`use_llm_compactor: false`).
-        // The LLM summariser was already attempted on the main reactive path
-        // before we got here, so re-running it would waste a call and soften the
-        // reactive rescue cap; the floor alone guarantees fit.
-        let system_prompt = self.deps.system_prompt.as_deref().unwrap_or("");
-        self.compact_to_fit_in_place(
-            session_id,
-            messages,
-            system_prompt,
-            budget_tool_tokens,
-            false,
-        )
-        .await;
-
-        // 2. Retry the provider once with the fitted prompt.
-        let payload = build_request_payload(
-            self.deps.system_prompt.as_deref(),
-            self.deps.system_prompt_parts.as_deref(),
-            messages,
-            tools_ref,
-            session_id,
-        );
-        match self
-            .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
-            .await?
-        {
-            Ok(resp)
-                if !matches!(
-                    resp.stop_reason,
-                    crate::providers::adapter::StopReason::ContextWindowExceeded
-                ) =>
-            {
-                self.emit(
-                    || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
-                        token_gap,
-                        succeeded: true,
-                    },
-                );
-                Ok(resp)
-            }
-            // Truncated prompt STILL overflows → pathological (configured window
-            // wider than the provider's real window). Surface honestly instead of
-            // looping. Loop-safe: return Err so the caller's `?` breaks the drain.
-            Ok(_still_overflow) => {
-                self.emit(
-                    || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
-                        token_gap,
-                        succeeded: false,
-                    },
-                );
-                self.set_terminate_reason(
-                    crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
-                );
-                Err(HarnessError::Llm(primary_err))
-            }
-            Err(retry_err) => {
-                self.emit(
-                    || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
-                        token_gap,
-                        succeeded: false,
-                    },
-                );
-                self.set_terminate_reason(
-                    crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
-                );
-                Err(HarnessError::Llm(retry_err))
-            }
-        }
     }
 
     /// Race a single LLM call against `parent_cancel` and the optional
@@ -1629,58 +1240,50 @@ impl AgentHarness {
         .await
     }
 
-    /// Compact the in-flight prompt down to fit the model's context window, then
-    /// return so the caller can fall through to the normal LLM call. Shared by the
-    /// `CompactToFit` directive and the `SplitSession` fail-soft path — both must
-    /// reduce pressure and continue, never hard-stop (the never-break guarantee).
-    /// R10-safe: mechanical delegation to
-    /// `crate::context::compact::directive::compact_to_fit_and_note` (which
-    /// itself calls `context::compact::fit::compact_to_fit`; lives outside
-    /// the harness); no policy, no error-recovery strategy choice.
-    async fn compact_to_fit_in_place(
-        &self,
-        session_id: &SessionId,
-        messages: &mut Vec<UnifiedMessage>,
-        system_prompt: &str,
-        budget_tool_tokens: usize,
-        use_llm_compactor: bool,
-    ) {
-        crate::context::compact::directive::compact_to_fit_and_note(
-            self.deps.context_budget.as_ref(),
-            self.deps.context_compactor.as_deref(),
-            session_id,
-            messages,
-            system_prompt,
-            budget_tool_tokens,
-            use_llm_compactor,
-        )
-        .await;
-    }
-
-    /// Fire one tool-less LLM call so the user gets a terminal text
-    /// response on a forced termination (budget critical or diminishing
-    /// returns). The nudge text is selected by `reason`; the call path is
-    /// identical otherwise. Skips entirely when the latest assistant turn
-    /// already produced displayable text. Fail-soft on any LLM error —
-    /// logs at WARN and returns without persisting.
+    /// Fire one tool-less LLM call so the user gets a terminal text response on
+    /// a forced termination (iteration cap, verifier veto, consecutive-failure
+    /// cap, tool-loop halt, timeout, diminishing returns). `reason` selects the
+    /// nudge; the call path is identical otherwise. Fail-soft: any error logs at
+    /// WARN and returns without persisting. The caller sets `hit_limit` and
+    /// returns `TurnState::Done` — the loop fires `on_complete()` on `Done`, so
+    /// the grace paths must not.
     ///
-    /// Caller is responsible for setting `hit_limit` and returning
-    /// `TurnState::Done`; the loop fires `on_complete()` on `Done`, so the
-    /// grace paths must not call it themselves.
-    async fn fire_grace_turn(
+    /// ALWAYS re-reads the session log and rebuilds the prompt, including for the
+    /// in-turn diminishing-returns site, which used to pass the `events` snapshot
+    /// it had fetched BEFORE this turn's `AssistantMessage` was persisted — the
+    /// skip guard then judged "did the user already get final text?" from a log
+    /// that did not yet contain the answer, and answered the same turn twice.
+    /// Hence exactly ONE `last_assistant_has_text` check, on the fresh log.
+    /// Well-behaved capped runs pay nothing.
+    ///
+    /// The re-read log is the RAW store, so it goes through the same registry
+    /// screen as the Think path before it becomes a prompt — otherwise every
+    /// grace site (all six funnel here) would be a hole around the input
+    /// guardrail. Nothing can end this turn, so a `Block` redacts here.
+    pub(crate) async fn fire_boundary_grace_turn(
         &self,
         session_id: &SessionId,
-        events: &[SessionEventRecord],
-        messages: &[UnifiedMessage],
         callback: &mut dyn HarnessCallback,
         iterations: usize,
         reason: GraceReason,
         parent_cancel: &CancellationToken,
     ) {
-        if last_assistant_has_text(events) {
+        let events = match self.deps.session.get_events(session_id, None, None).await {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(?session_id, ?e, "boundary grace turn: get_events failed");
+                return;
+            }
+        };
+        if last_assistant_has_text(&events) {
             return; // user already has terminal text; skip.
         }
-        let mut grace_messages = messages.to_vec();
+        let tail_start = super::tail_start_index(&events);
+        let events = match self.deps.guardrails.as_ref() {
+            Some(registry) => registry.redact_session_input(events).await,
+            None => events,
+        };
+        let mut grace_messages = super::prompt::build_prompt(&events, tail_start);
         grace_messages.push(UnifiedMessage::user(reason.nudge()));
         // Reuse the shared payload builder so the grace call threads the same
         // cache-split `system_blocks` (and `session_id` cache-key metadata) as
@@ -1763,7 +1366,7 @@ impl AgentHarness {
         } else {
             text
         };
-        let turn_id = super::current_turn_id(events);
+        let turn_id = super::current_turn_id(&events);
         callback.on_delta(&text);
         let grace_event = SessionEvent::AssistantMessage {
             turn_id,
@@ -1786,45 +1389,6 @@ impl AgentHarness {
             stream: crate::harness::trace::LoopTraceTextKind::Final,
             text,
         });
-    }
-
-    /// Fire a grace turn from the outer loop's cap sites (`max_iterations`,
-    /// verifier-veto, consecutive-failure), where the per-turn `events` /
-    /// `messages` are no longer in scope. Re-fetches the session log and
-    /// re-assembles the prompt, then delegates to
-    /// [`AgentHarness::fire_grace_turn`]. Fail-soft: any error logs at WARN
-    /// and returns. Skips entirely when the last assistant turn already
-    /// produced text — well-behaved capped runs pay nothing.
-    pub(crate) async fn fire_boundary_grace_turn(
-        &self,
-        session_id: &SessionId,
-        callback: &mut dyn HarnessCallback,
-        iterations: usize,
-        reason: GraceReason,
-        parent_cancel: &CancellationToken,
-    ) {
-        let events = match self.deps.session.get_events(session_id, None, None).await {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!(?session_id, ?e, "boundary grace turn: get_events failed");
-                return;
-            }
-        };
-        if last_assistant_has_text(&events) {
-            return; // user already has terminal text; skip.
-        }
-        let tail_start = super::tail_start_index(&events);
-        let messages = super::prompt::build_prompt(&events, tail_start);
-        self.fire_grace_turn(
-            session_id,
-            &events,
-            &messages,
-            callback,
-            iterations,
-            reason,
-            parent_cancel,
-        )
-        .await;
     }
 
     /// Close out `tool_use` blocks the model emitted on a turn the verifier then
@@ -1884,6 +1448,62 @@ impl AgentHarness {
             robustness_profile: self.deps.robustness_profile,
         };
         chain.verify(&ctx, cancel).await
+    }
+}
+
+/// The loop's side of the reactive-compaction rescue (`context::compact::rescue`).
+///
+/// The rescue algorithm itself is context-layer mechanism; all that stays in the
+/// harness is this adapter onto the four pieces of private run state it cannot
+/// own — the provider handle raced against cancellation, the trace sink, the
+/// token counters, and the one-shot rescue slot. The trait is declared in the
+/// context layer and implemented here, never the reverse: `src/context/` must not
+/// know the harness exists.
+#[async_trait::async_trait]
+impl RescueHost for AgentHarness {
+    type Fatal = HarnessError;
+
+    async fn call_llm(
+        &self,
+        cx: &RescueCx<'_>,
+        messages: &[UnifiedMessage],
+        parent_cancel: &CancellationToken,
+    ) -> Result<Result<ProviderResponse, crate::error::AlephError>, HarnessError> {
+        // Non-streaming by construction: a rescued response replaces one whose
+        // deltas were never emitted (or were discarded), so the caller re-arms
+        // its one-shot `on_delta` via `response_was_streamed = false`.
+        let payload = build_request_payload(
+            self.deps.system_prompt.as_deref(),
+            self.deps.system_prompt_parts.as_deref(),
+            messages,
+            cx.tools,
+            cx.session_id,
+        );
+        self.race_llm_call(self.deps.llm.process(payload), parent_cancel, cx.started)
+            .await
+    }
+
+    fn reserve_rescue_slot(&self) -> bool {
+        self.try_reserve_reactive_compact()
+    }
+
+    fn account_discarded_tokens(&self, response: &ProviderResponse) {
+        self.account_intermediate_tokens(response);
+    }
+
+    fn note_rescue_attempt(&self, token_gap: Option<usize>, succeeded: bool) {
+        self.emit(
+            || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                token_gap,
+                succeeded,
+            },
+        );
+    }
+
+    fn mark_rescue_exhausted(&self) {
+        self.set_terminate_reason(
+            crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
+        );
     }
 }
 

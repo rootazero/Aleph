@@ -78,6 +78,9 @@ fn wrap_value_with_hook_contexts(value: Value, contexts: &[String]) -> Value {
 struct ConfirmDenial {
     outcome: ApprovalOutcome,
     hint: Option<&'static str>,
+    /// How long a human was actually given to answer. Zero for the denials
+    /// that never showed a card (unattended auto-deny, ledger short-circuit).
+    waited_ms: u64,
 }
 
 /// Which dispatch branch `execute_inner` is routing into. Kept as a
@@ -213,6 +216,19 @@ impl ScopedToolService {
                     );
                     if let Err(denial) = self.confirm_with_memory(requester, &action, &input).await
                     {
+                        // An expired card is not a refusal, and must not be
+                        // spoken as one. `DenialLedger::record_denial` already
+                        // drops a `DenialReason::Timeout` ("a timeout is not a
+                        // decision"); telling the model "the user did not
+                        // approve — do not retry" and handing the harness a
+                        // non-retryable error put the permanent ban straight
+                        // back, one layer up.
+                        if matches!(denial.outcome, ApprovalOutcome::Timeout) {
+                            return Err(ToolError::ApprovalExpired {
+                                name: name.to_string(),
+                                waited_ms: denial.waited_ms,
+                            });
+                        }
                         let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
                         return Err(ToolError::Execution {
                             name: name.to_string(),
@@ -278,7 +294,79 @@ impl ScopedToolService {
             RoutingTarget::Missing
         };
 
-        let mut result = match routing {
+        // The Act-period wall clock starts HERE, below every gate above that can
+        // wait on a human (config-tier sudo, the confirmation gate, a hook's
+        // `ask`) — it used to live in the harness, wrapped around the *whole*
+        // `execute_with_cancel` future, so the operator's reading time was spent
+        // out of the tool's execution budget: a command the operator explicitly
+        // APPROVED could be killed mid-flight for having been read slowly. It
+        // also voided a documented invariant — `CodeExecTool` clamps its
+        // foreground timeout to 170s precisely so it sits 10s inside the 180s
+        // budget and can return a clean exit-124 with partial output, which any
+        // approval longer than 10 seconds silently destroyed.
+        //
+        // Same resolution chain `describe()` publishes (the tool's own
+        // declaration → the builtin table → the default), read straight off the
+        // tool so the clock we enforce and the budget we advertise cannot drift.
+        let declared_ms = match routing {
+            RoutingTarget::Subagent => self
+                .subagent_tool
+                .as_ref()
+                .and_then(|st| st.max_duration_ms()),
+            _ => self.inner.get(name).and_then(|t| t.max_duration_ms()),
+        };
+        let budget_ms = crate::tools::budget::resolve_tool_budget_ms(name, declared_ms);
+        let budget = std::time::Duration::from_millis(budget_ms);
+
+        let mut result = match tokio::time::timeout(
+            budget,
+            self.route_and_execute(routing, name, &effective_input, cancel),
+        )
+        .await
+        {
+            Ok(result) => result,
+            // A `Timeout` — not an `Execution` carrying timeout prose. The
+            // variant is what `is_retryable()` reads, and the harness's
+            // cross-batch memo now only bans non-retryable failures, so the
+            // retry this error invites is actually allowed on the next batch.
+            Err(_) => Err(ToolError::Timeout {
+                name: name.to_string(),
+                elapsed_ms: budget_ms,
+            }),
+        };
+
+        // Extension `AfterToolCall` / `AfterToolCallFailure` hooks. Observers
+        // fire in parallel; Interceptors run sequentially and may rewrite the
+        // visible tool output via `update_output:` on the success path.
+        // `pre_hook_contexts` from BeforeToolCall are merged in here so they
+        // ride along on the same tool result the LLM sees next turn.
+        self.run_after_tool_hooks(name, &effective_input, &mut result, pre_hook_contexts)
+            .await;
+
+        let duration_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+
+        // Fire post-hooks. Both for back-compat (v1) and with-duration (v2).
+        if let Some(ref hook) = self.hook_decorator {
+            hook.after_execute(name, &result);
+            hook.after_execute_with_duration(name, &result, duration_ms);
+        }
+
+        result
+    }
+
+    /// Run the call: route it to the subagent tool or the inner registry, through
+    /// the one-shot retry helper and the Layer-2 result budget.
+    ///
+    /// Split out of [`Self::execute_inner`] so the wall clock can wrap exactly
+    /// this and nothing above it. Everything above it can block on a person.
+    async fn route_and_execute(
+        &self,
+        routing: RoutingTarget,
+        name: &str,
+        effective_input: &Value,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        match routing {
             RoutingTarget::Missing => Err(ToolError::NotFound {
                 name: name.to_string(),
             }),
@@ -329,25 +417,7 @@ impl ScopedToolService {
                     Err(err) => Err(Self::sanitize_tool_error(name, err)),
                 }
             }
-        };
-
-        // Extension `AfterToolCall` / `AfterToolCallFailure` hooks. Observers
-        // fire in parallel; Interceptors run sequentially and may rewrite the
-        // visible tool output via `update_output:` on the success path.
-        // `pre_hook_contexts` from BeforeToolCall are merged in here so they
-        // ride along on the same tool result the LLM sees next turn.
-        self.run_after_tool_hooks(name, &effective_input, &mut result, pre_hook_contexts)
-            .await;
-
-        let duration_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-
-        // Fire post-hooks. Both for back-compat (v1) and with-duration (v2).
-        if let Some(ref hook) = self.hook_decorator {
-            hook.after_execute(name, &result);
-            hook.after_execute_with_duration(name, &result, duration_ms);
         }
-
-        result
     }
 
     /// Stable session key for the session approval memory *and* the denial
@@ -432,6 +502,7 @@ impl ScopedToolService {
                      goal(action='update', status='blocked') to hand back to the \
                      user.",
                 ),
+                waited_ms: 0,
             });
         }
 
@@ -475,6 +546,7 @@ impl ScopedToolService {
                 return Err(ConfirmDenial {
                     outcome: ApprovalOutcome::Denied,
                     hint: Some(reason_kind.agent_hint()),
+                    waited_ms: 0,
                 });
             }
         }
@@ -510,9 +582,11 @@ impl ScopedToolService {
         // is an unordered map, so with two concurrent tool calls the card renders
         // under the wrong tool and the user approves something they never read.
         let tool_call_id = self.newest_tool_call(name).await.map(|(_, id)| id);
+        let asked_at = std::time::Instant::now();
         let outcome =
             crate::approval::with_tool_call_id(tool_call_id, requester.request_approval(action))
                 .await;
+        let waited_ms = u64::try_from(asked_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         if !outcome.is_approved() {
             let reason_kind = match outcome {
                 ApprovalOutcome::Timeout => denial_ledger::DenialReason::Timeout,
@@ -553,6 +627,7 @@ impl ScopedToolService {
             return Err(ConfirmDenial {
                 outcome,
                 hint: Some(reason_kind.agent_hint()),
+                waited_ms,
             });
         }
 

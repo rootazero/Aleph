@@ -186,7 +186,7 @@ pub enum TerminateReason {
     /// the rescue retry still overflowed or no compactor was wired. The
     /// `RetryVerdict::CompactAndRetry` path used to leak into
     /// `HarnessError::Llm` before this variant existed — see the wiring
-    /// in `harness::agent::think::try_reactive_compact_and_retry`.
+    /// in `context::compact::rescue::try_reactive_compact_and_retry`.
     ReactiveCompactExhausted,
     /// `CancellationToken` fired before the loop reached `Done`.
     Cancelled,
@@ -597,6 +597,17 @@ pub trait HarnessRunner: Send + Sync {
     /// installs. Threaded into `SubagentTool` so a hung subagent turn aborts
     /// on the same deadline the main run enforces. Default `None` = no timeout.
     fn turn_timeout(&self) -> Option<std::time::Duration> {
+        None
+    }
+
+    /// B15 — the boot-time `[execution] max_iterations` this runner caps its own
+    /// Think→Act loop with. Threaded into `SubagentTool` so a child role that
+    /// declares no `max_iterations` inherits a cap instead of looping until the
+    /// spawn timeout kills it (an iteration cap yields a usable summary via the
+    /// boundary grace turn; a timeout throws the whole run away). Default `None`
+    /// leaves the spawner on `FALLBACK_MAX_ITERATIONS` — still capped, just not
+    /// the operator's configured value.
+    fn default_max_iterations(&self) -> Option<usize> {
         None
     }
 
