@@ -1432,7 +1432,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     if let Some(ref wm) = workspace_manager {
-        register_workspace_handlers(&mut server, wm, &memory_db, args.daemon);
+        register_workspace_handlers(
+            &mut server,
+            wm,
+            agent_result.agent_registry.as_ref(),
+            &memory_db,
+            args.daemon,
+        );
     }
 
     // Project catalogue (~/.aleph/projects.json). Stateless store — every

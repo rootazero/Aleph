@@ -1,10 +1,14 @@
 use super::{
     config_handlers, workspace_handlers, AgentEnvStore, Arc, GatewayServer, MemoryBackend,
 };
+use alephcore::gateway::AgentRegistry;
 
 pub(in crate::commands::start) fn register_workspace_handlers(
     server: &mut GatewayServer,
     workspace_manager: &Arc<AgentEnvStore>,
+    // Runtime registry used to reject a bind to a non-existent agent, matching
+    // the `agent_switch` tool. `None` on a minimal server → bind stays unchecked.
+    agent_registry: Option<&Arc<AgentRegistry>>,
     _memory_db: &MemoryBackend,
     daemon: bool,
 ) {
@@ -38,12 +42,22 @@ pub(in crate::commands::start) fn register_workspace_handlers(
         workspace_handlers::handle_archive,
         workspace_manager
     );
-    register_handler!(
-        server,
-        "channels.set_agent",
-        workspace_handlers::handle_set_agent,
-        workspace_manager
-    );
+    // Hand-wired (not the `register_handler!` macro) because the handler takes
+    // an `Option<Arc<AgentRegistry>>` — the macro only threads required `Arc`s.
+    {
+        let workspace_manager = Arc::clone(workspace_manager);
+        let agent_registry = agent_registry.cloned();
+        server
+            .handlers_mut()
+            .register("channels.set_agent", move |req| {
+                let workspace_manager = Arc::clone(&workspace_manager);
+                let agent_registry = agent_registry.clone();
+                async move {
+                    workspace_handlers::handle_set_agent(req, workspace_manager, agent_registry)
+                        .await
+                }
+            });
+    }
     register_handler!(
         server,
         "agents.bindings",

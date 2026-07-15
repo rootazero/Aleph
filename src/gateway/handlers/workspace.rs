@@ -12,6 +12,7 @@ use super::super::protocol::{
 };
 use super::parse_params;
 use crate::gateway::agent_env::AgentEnvStore;
+use crate::gateway::agent_instance::AgentRegistry;
 use crate::sync_primitives::Arc;
 
 // ============================================================================
@@ -269,6 +270,13 @@ pub struct SetAgentParams {
 /// If `agent_id` is Some, binds the agent (with 1:1 constraint).
 /// If `agent_id` is None, unbinds the current agent.
 ///
+/// The `agent_registry`, when wired, is the same runtime registry the
+/// `agent_switch` tool validates against — a bind to a non-existent agent is
+/// rejected here so the Panel RPC can never create a ghost binding the tool
+/// would refuse (the inbound router resolves the binding to a runtime instance
+/// on the next message; a missing target would strand every inbound message on
+/// that channel).
+///
 /// # Example Request
 ///
 /// ```json
@@ -277,6 +285,7 @@ pub struct SetAgentParams {
 pub async fn handle_set_agent(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
+    agent_registry: Option<Arc<AgentRegistry>>,
 ) -> JsonRpcResponse {
     let params: SetAgentParams =
         match serde_json::from_value(request.params.clone().unwrap_or_default()) {
@@ -285,10 +294,30 @@ pub async fn handle_set_agent(
         };
 
     match params.agent_id {
-        Some(agent_id) => match workspace_manager.set_active_agent(&params.channel_id, &agent_id) {
-            Ok(()) => JsonRpcResponse::success(request.id, json!({"ok": true})),
-            Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
-        },
+        Some(agent_id) => {
+            // Parity with the `agent_switch` tool (builtin_tools/agent_manage/switch.rs):
+            // never bind a channel to a ghost agent. When no registry is wired (a
+            // minimal server), fall back to the prior unchecked behavior rather than
+            // block the bind.
+            if let Some(registry) = agent_registry.as_ref() {
+                if registry.get(&agent_id).await.is_none() {
+                    let mut available = registry.list().await;
+                    available.sort();
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INVALID_PARAMS,
+                        format!(
+                            "Agent '{agent_id}' not found. Available agents: {}",
+                            available.join(", ")
+                        ),
+                    );
+                }
+            }
+            match workspace_manager.set_active_agent(&params.channel_id, &agent_id) {
+                Ok(()) => JsonRpcResponse::success(request.id, json!({"ok": true})),
+                Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
+            }
+        }
         None => match workspace_manager.clear_active_agent(&params.channel_id) {
             Ok(()) => JsonRpcResponse::success(request.id, json!({"ok": true})),
             Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
@@ -380,5 +409,117 @@ mod tests {
         let params: SetAgentParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.channel_id, "rpc");
         assert!(params.agent_id.is_none());
+    }
+
+    // ── channels.set_agent ghost-binding validation (AS-1) ────────────────
+    // Mirrors the `agent_switch` tool's helpers (builtin_tools/agent_manage/switch.rs).
+
+    use crate::gateway::agent_env::AgentEnvStoreConfig;
+    use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use tempfile::tempdir;
+
+    fn test_workspace_mgr() -> Arc<AgentEnvStore> {
+        let temp = tempdir().unwrap();
+        let config = AgentEnvStoreConfig {
+            db_path: temp.keep().join("test.db"),
+            default_profile: "default".to_string(),
+            archive_after_days: 0,
+        };
+        Arc::new(AgentEnvStore::new(config).unwrap())
+    }
+
+    fn test_session_store() -> Arc<dyn crate::gateway::session_store::SessionStore> {
+        let temp = tempdir().unwrap();
+        let cfg = SessionManagerConfig {
+            db_path: temp.keep().join("sessions.db"),
+            ..Default::default()
+        };
+        Arc::new(SessionManager::new(cfg).expect("session manager"))
+    }
+
+    fn test_instance(agent_id: &str) -> AgentInstance {
+        let root = tempdir().unwrap().keep();
+        let config = AgentInstanceConfig {
+            agent_id: agent_id.to_string(),
+            workspace: root.join("workspace"),
+            agent_dir: root.join("state"),
+            model: "claude-sonnet-4-5".to_string(),
+            ..Default::default()
+        };
+        AgentInstance::new(config, test_session_store()).expect("instance")
+    }
+
+    async fn registry_with(agent_id: &str) -> Arc<AgentRegistry> {
+        let registry = Arc::new(AgentRegistry::new());
+        registry.register(test_instance(agent_id)).await;
+        registry
+    }
+
+    fn set_agent_req(channel: &str, agent: Option<&str>) -> JsonRpcRequest {
+        let params = match agent {
+            Some(a) => json!({"channel_id": channel, "agent_id": a}),
+            None => json!({"channel_id": channel}),
+        };
+        JsonRpcRequest::with_id("channels.set_agent", Some(params), json!(1))
+    }
+
+    #[tokio::test]
+    async fn set_agent_rejects_ghost_when_registry_present() {
+        let wm = test_workspace_mgr();
+        let registry = registry_with("trader").await;
+        let resp = handle_set_agent(
+            set_agent_req("telegram", Some("ghost")),
+            Arc::clone(&wm),
+            Some(registry),
+        )
+        .await;
+        assert!(resp.is_error());
+        let msg = resp.error.unwrap().message;
+        assert!(msg.contains("not found"), "unexpected: {msg}");
+        assert!(msg.contains("trader"), "should list available: {msg}");
+        // The rejected bind persisted nothing.
+        assert!(wm.get_active_agent("telegram").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn set_agent_binds_existing_agent() {
+        let wm = test_workspace_mgr();
+        let registry = registry_with("trader").await;
+        let resp = handle_set_agent(
+            set_agent_req("telegram", Some("trader")),
+            Arc::clone(&wm),
+            Some(registry),
+        )
+        .await;
+        assert!(resp.is_success(), "expected success: {:?}", resp.error);
+        assert_eq!(
+            wm.get_active_agent("telegram").unwrap().as_deref(),
+            Some("trader")
+        );
+    }
+
+    #[tokio::test]
+    async fn set_agent_skips_validation_without_registry() {
+        // A minimal server with no runtime registry must not block binds
+        // (graceful fallback — the prior unchecked behavior).
+        let wm = test_workspace_mgr();
+        let resp =
+            handle_set_agent(set_agent_req("telegram", Some("ghost")), Arc::clone(&wm), None).await;
+        assert!(resp.is_success(), "expected success: {:?}", resp.error);
+        assert_eq!(
+            wm.get_active_agent("telegram").unwrap().as_deref(),
+            Some("ghost")
+        );
+    }
+
+    #[tokio::test]
+    async fn set_agent_unbind_needs_no_registry() {
+        let wm = test_workspace_mgr();
+        wm.set_active_agent("telegram", "trader").unwrap();
+        // Unbind (agent_id: None) never consults the registry.
+        let resp = handle_set_agent(set_agent_req("telegram", None), Arc::clone(&wm), None).await;
+        assert!(resp.is_success(), "expected success: {:?}", resp.error);
+        assert!(wm.get_active_agent("telegram").unwrap().is_none());
     }
 }
