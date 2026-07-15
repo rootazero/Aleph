@@ -3,7 +3,7 @@
 //! Pulled out of [`mod`] to keep the orchestrator file under the 1 kLOC
 //! soft cap. Lives in a second `impl AppState { … }` block.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aleph_protocol::{
     summarize_tool_input, AgentTracePresentationPreset, AgentTraceToolResult, StreamEvent,
@@ -26,6 +26,7 @@ impl AppState {
         match event {
             StreamEvent::RunAccepted { run_id, .. } => {
                 self.current_run = Some(run_id);
+                self.run_started_at = Some(Instant::now());
                 self.current_run_uses_agent_trace = false;
                 self.current_run_trace_summary_applied = false;
                 self.is_connected = true;
@@ -120,6 +121,8 @@ impl AppState {
                 ..
             } => {
                 self.current_run = None;
+                self.run_started_at = None;
+                self.dismiss_pending_approval();
                 self.last_run_duration = Some(Duration::from_millis(total_duration_ms));
                 if !self.current_run_trace_summary_applied {
                     self.update_token_usage(&summary);
@@ -128,11 +131,33 @@ impl AppState {
                 self.current_run_trace_summary_applied = false;
                 self.mark_current_assistant_complete();
 
+                // Surface non-clean terminations (a hit cap / exhausted budget)
+                // so a truncated answer doesn't read as a clean finish.
+                // `terminate_detail` carries the granular cap inside the budget
+                // umbrella; fall back to the reason token when absent.
+                if let Some(reason) = summary.terminate_reason.as_deref() {
+                    if reason != "completed" {
+                        let raw = summary.terminate_detail.as_deref().unwrap_or(reason);
+                        let label = match raw {
+                            "hit_max_iterations" => "hit max iterations",
+                            "context_budget_exhausted" => "context budget exhausted",
+                            "max_output_tokens_exhausted" => "max output tokens reached",
+                            "budget_exhausted_partial_result" => {
+                                "budget exhausted (partial result)"
+                            }
+                            other => other,
+                        };
+                        self.add_system_message(format!("Run stopped: {label}"));
+                    }
+                }
+
                 Action::ScrollToBottomIfAutoScroll
             }
 
             StreamEvent::RunError { error, .. } => {
                 self.current_run = None;
+                self.run_started_at = None;
+                self.dismiss_pending_approval();
                 self.current_run_uses_agent_trace = false;
                 self.current_run_trace_summary_applied = false;
                 self.mark_current_assistant_complete();
@@ -210,6 +235,23 @@ impl AppState {
                     };
                     self.add_system_message(line);
                     return Action::ScrollToBottomIfAutoScroll;
+                }
+                Action::None
+            }
+
+            StreamEvent::ContextGauge {
+                context_tokens,
+                context_window,
+                ..
+            } => {
+                // Live context-window occupancy (mirrors the Panel gauge). Only
+                // the numerator/denominator are stored; the event's own
+                // `total_tokens` is deliberately ignored — RunComplete's summary
+                // already owns the running token tally, and adding both would
+                // double-count. Skip windowless frames so the bar never divides
+                // by zero and keeps the last good reading.
+                if context_window > 0 {
+                    self.context_gauge = Some((context_tokens, context_window));
                 }
                 Action::None
             }

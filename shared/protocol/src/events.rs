@@ -152,6 +152,24 @@ pub enum StreamEvent {
         run_id: String,
         model_info: ModelInfo,
     },
+
+    /// Live context-window occupancy after one LLM call (mid-run).
+    ///
+    /// Mirrors the gateway's `stream.context_gauge` frame — already broadcast
+    /// to every subscriber (the webchat Panel renders it live) but invisible to
+    /// the *typed* terminal clients until this variant existed to parse it.
+    /// Same precedent as [`Self::RunRetrying`] / [`Self::ModelResolved`]. Field
+    /// names/types must stay aligned with `StreamEvent::ContextGauge` in
+    /// `src/gateway/event_emitter/types.rs`: `context_tokens` = current
+    /// occupancy, `context_window` = server-authoritative per-model
+    /// denominator, `total_tokens` = run-cumulative tally.
+    ContextGauge {
+        run_id: String,
+        seq: u64,
+        context_tokens: u32,
+        context_window: u32,
+        total_tokens: u64,
+    },
 }
 
 /// Resolved model metadata attached to [`StreamEvent::ModelResolved`].
@@ -537,7 +555,8 @@ impl StreamEvent {
             | Self::ReasoningBlock { run_id, .. }
             | Self::UncertaintySignal { run_id, .. }
             | Self::RunRetrying { run_id, .. }
-            | Self::ModelResolved { run_id, .. } => run_id,
+            | Self::ModelResolved { run_id, .. }
+            | Self::ContextGauge { run_id, .. } => run_id,
         }
     }
 
@@ -559,6 +578,7 @@ impl StreamEvent {
             Self::UncertaintySignal { .. } => "stream.uncertainty_signal",
             Self::RunRetrying { .. } => "stream.run_retrying",
             Self::ModelResolved { .. } => "stream.model_resolved",
+            Self::ContextGauge { .. } => "stream.context_gauge",
         }
     }
 }
@@ -808,6 +828,38 @@ mod tests {
         }
         assert_eq!(event.run_id(), "run-3");
         assert_eq!(event.method_name(), "stream.model_resolved");
+    }
+
+    #[test]
+    fn context_gauge_deserializes_from_gateway_frame_shape() {
+        // Wire-compat guard: exact params shape of the gateway's
+        // `StreamEvent::ContextGauge` (src/gateway/event_emitter/types.rs),
+        // tag = "type", snake_case. A drift here is what silently blinded the
+        // TUI before this variant existed.
+        let params = serde_json::json!({
+            "type": "context_gauge",
+            "run_id": "run-7",
+            "seq": 4,
+            "context_tokens": 12_345,
+            "context_window": 200_000,
+            "total_tokens": 15_000,
+        });
+        let event: StreamEvent = serde_json::from_value(params).unwrap();
+        match &event {
+            StreamEvent::ContextGauge {
+                context_tokens,
+                context_window,
+                total_tokens,
+                ..
+            } => {
+                assert_eq!(*context_tokens, 12_345);
+                assert_eq!(*context_window, 200_000);
+                assert_eq!(*total_tokens, 15_000);
+            }
+            other => panic!("expected ContextGauge, got {other:?}"),
+        }
+        assert_eq!(event.run_id(), "run-7");
+        assert_eq!(event.method_name(), "stream.context_gauge");
     }
 
     #[test]

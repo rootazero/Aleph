@@ -91,6 +91,27 @@ pub fn render_tool_block(
         Span::styled("\u{2502}".to_string(), border_style),
     ]));
 
+    // Live progress line (running tools only). `ToolUpdate` progress is stored
+    // on the execution only when the display mode is All/Verbose (see
+    // app/events.rs), so simply rendering what is present honors the /tools mode
+    // without re-threading the flag through the render chain.
+    if tool.status == ToolStatus::Running {
+        if let Some(ref progress) = tool.progress {
+            let prefix = "\u{22ef} "; // ⋯
+            let max_len = inner_width.saturating_sub(prefix.len() + 1);
+            let progress_display = truncate_to_width(progress, max_len);
+            let progress_full = format!("{prefix}{progress_display}");
+            let prog_pad = inner_width
+                .saturating_sub(unicode_width::UnicodeWidthStr::width(progress_full.as_str()) + 1);
+            lines.push(Line::from(vec![
+                Span::styled("\u{2502} ".to_string(), border_style),
+                Span::styled(progress_full, Style::default().fg(DEFAULT_THEME.muted)),
+                Span::styled(" ".repeat(prog_pad), param_style),
+                Span::styled("\u{2502}".to_string(), border_style),
+            ]));
+        }
+    }
+
     // Error line (only if failed and error exists)
     if tool.status == ToolStatus::Failed {
         if let Some(ref err) = tool.error {

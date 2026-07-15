@@ -1,5 +1,7 @@
 use super::*;
-use aleph_protocol::{AgentTraceSessionOutcome, AgentTraceTextKind, StreamEvent};
+use aleph_protocol::{
+    AgentTraceEvent, AgentTraceReplay, AgentTraceSessionOutcome, AgentTraceTextKind, StreamEvent,
+};
 
 #[test]
 fn new_state_has_welcome_message() {
@@ -694,6 +696,48 @@ fn handle_run_error_adds_system_message() {
         }
         other => panic!("Expected System message, got: {other:?}"),
     }
+}
+
+#[test]
+fn open_approval_sets_focus_and_state() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.open_approval("ap-1".into(), "rm -rf /tmp/x".into(), Some("destructive".into()));
+    assert_eq!(state.focus, Focus::Approval);
+    let approval = state.approval.as_ref().unwrap();
+    assert_eq!(approval.id, "ap-1");
+    assert_eq!(approval.command, "rm -rf /tmp/x");
+    assert_eq!(approval.selected, 0);
+}
+
+#[test]
+fn run_error_dismisses_pending_approval() {
+    // A run parked on an approval that then errors must not strand the modal:
+    // the poll stops once current_run clears, so run-end has to retract it.
+    let mut state = AppState::new("s".into(), "m".into());
+    state.current_run = Some("run-1".into());
+    state.open_approval("ap-1".into(), "cmd".into(), None);
+    assert_eq!(state.focus, Focus::Approval);
+
+    state.handle_gateway_event(StreamEvent::RunError {
+        run_id: "run-1".into(),
+        seq: 1,
+        error: "boom".into(),
+        error_code: None,
+    });
+
+    assert!(state.approval.is_none());
+    assert_eq!(state.focus, Focus::Input);
+}
+
+#[test]
+fn dismiss_pending_approval_is_noop_without_overlay() {
+    // The guard must not touch focus when no overlay is up (e.g. a run ending
+    // while the user is scrolling chat).
+    let mut state = AppState::new("s".into(), "m".into());
+    state.focus = Focus::Chat;
+    state.dismiss_pending_approval();
+    assert_eq!(state.focus, Focus::Chat);
+    assert!(state.approval.is_none());
 }
 
 #[test]
