@@ -9,12 +9,30 @@ pub struct NoteKeywords {
     pub keywords: Vec<String>,
 }
 
-/// An undirected link candidate with the connecting keyword as `relation`.
+/// The fixed, honest relation *type* for keyword-overlap edges.
+///
+/// A keyword-overlap edge means "these two notes share a tag/keyword" — it is
+/// **co-occurrence, not a verb**. Stamping the shared keyword itself (e.g.
+/// `iran`, `strait-of-hormuz`) into the `notes_links.relation` type column
+/// polluted the relation-type vocabulary that `note_graph_query`'s `schema` op
+/// surfaces to the model, mingling fabricated entity names with genuine
+/// LLM-authored verbs (`works_at`) and structural labels (`supersedes`). These
+/// edges instead carry this one fixed type; the specific connecting keyword is
+/// preserved as observability metadata on [`LinkTriple::via_keyword`], not as
+/// the type. (R7-safe: no verb classifier — a co-tag edge is honestly labelled
+/// a co-tag edge.)
+pub const CO_TAG_RELATION: &str = "co_tag";
+
+/// An undirected link candidate. `relation` is the fixed [`CO_TAG_RELATION`]
+/// type; `via_keyword` records which shared keyword triggered the link (for
+/// logs/diagnostics only — never the persisted relation type).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkTriple {
     pub from: String,
     pub to: String,
     pub relation: String,
+    /// The connecting keyword that produced this co-tag edge (diagnostics).
+    pub via_keyword: String,
 }
 
 /// A keyword is "specific" when it names an entity/multi-token concept —
@@ -25,8 +43,10 @@ fn is_specific(keyword: &str) -> bool {
 
 /// Pair every note against every other; emit a link when their keyword sets
 /// share ≥1 specific entity OR ≥2 generic keywords. The connecting keyword
-/// (most specific shared one, else lexicographically-first) is the relation.
-/// Pairs are undirected and unique (i<j), no self-links.
+/// (most specific shared one, else lexicographically-first) is recorded as
+/// `via_keyword`; the relation *type* is the fixed [`CO_TAG_RELATION`] so the
+/// keyword never pollutes the relation-type vocabulary. Pairs are undirected
+/// and unique (i<j), no self-links.
 pub fn pair_by_overlap(notes: &[NoteKeywords]) -> Vec<LinkTriple> {
     let sets: Vec<BTreeSet<&str>> = notes
         .iter()
@@ -47,11 +67,12 @@ pub fn pair_by_overlap(notes: &[NoteKeywords]) -> Vec<LinkTriple> {
             } else {
                 None
             };
-            if let Some(relation) = connects {
+            if let Some(via) = connects {
                 out.push(LinkTriple {
                     from: notes[i].path.clone(),
                     to: notes[j].path.clone(),
-                    relation: relation.to_string(),
+                    relation: CO_TAG_RELATION.to_string(),
+                    via_keyword: via.to_string(),
                 });
             }
         }
@@ -83,7 +104,10 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].from, "entity/us-iran-conflict-2026");
         assert_eq!(links[0].to, "personal/news-monitoring");
-        assert_eq!(links[0].relation, "us-iran-conflict");
+        // Relation TYPE is the fixed honest co-tag label, NOT the entity name;
+        // the connecting keyword survives only as diagnostics.
+        assert_eq!(links[0].relation, CO_TAG_RELATION);
+        assert_eq!(links[0].via_keyword, "us-iran-conflict");
     }
 
     #[test]
@@ -100,7 +124,8 @@ mod tests {
         ];
         let links = pair_by_overlap(&notes);
         assert_eq!(links.len(), 1);
-        assert_eq!(links[0].relation, "finance");
+        assert_eq!(links[0].relation, CO_TAG_RELATION);
+        assert_eq!(links[0].via_keyword, "finance");
     }
 
     #[test]

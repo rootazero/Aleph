@@ -17,6 +17,12 @@ use crate::memory::notes::{sanitize_title, KnowledgeNote, Severity};
 use crate::utils::atomic_write::atomic_write_file;
 
 /// All valid category subdirectories under `memory/{agent_id}/`.
+///
+/// This is the *single source of truth* for every indexable note category:
+/// `full_rebuild`/`ensure_dirs` scan it, `note_manage::validate_category` and
+/// dream `validation.rs` accept it, and the rename cascade rewrites wikilinks
+/// across it. `archive/` is deliberately absent — `NoteDecay` moves cold notes
+/// there and they must stay OUT of the active index.
 pub const CATEGORY_DIRS: &[&str] = &[
     "preference",
     "plan",
@@ -35,9 +41,68 @@ pub const CATEGORY_DIRS: &[&str] = &[
     "subagent-checkpoint",
     "subagent-transcript",
     "contradiction", // Phase C2.6: note_drift conflict pages
+    "entity",        // ingest entity-graph pages (`entity/<slug>`) — the ingest
+    // prompt instructs the LLM to create these; without registration here
+    // full_rebuild silently dropped the entire entity graph on an index rebuild
+    // and dream L1 flagged every entity note "invalid category".
+    "synthesis", // NoteSynthesisStage cross-note synthesis pages — likewise
+    // written to disk but previously unscanned/unvalidated.
     "other",
     "query", // Spec 8: filed-back query answers
 ];
+
+/// Known singular/plural (and spelling) variants → their single canonical
+/// category. Explicit allow-list, NOT a generic depluralizer, so intentionally
+/// plural or hyphenated categories (`goal-lessons`, the `subagent-*` family) are
+/// never mangled. See [`canonicalize_category`].
+const CATEGORY_ALIASES: &[(&str, &str)] = &[
+    ("projects", "project"),
+    ("preferences", "preference"),
+    ("workflows", "workflow"),
+    ("teams", "team"),
+    ("systems", "system"),
+    ("interests", "interest"),
+    ("entities", "entity"),
+    ("learnings", "learning"),
+    ("lessons", "lesson"),
+    ("plans", "plan"),
+    ("tools", "tool"),
+    ("skills", "skill"),
+    ("references", "reference"),
+    ("personals", "personal"),
+    ("transcripts", "transcript"),
+    ("contradictions", "contradiction"),
+    ("queries", "query"),
+    ("synthesis-notes", "synthesis"),
+];
+
+/// Canonicalize a raw, LLM-authored category string to its single canonical
+/// spelling before it becomes a note-path prefix.
+///
+/// This is deterministic **path hygiene** (morphological normalization), NOT
+/// semantic classification — it only collapses known singular/plural spelling
+/// variants of the *same* category so `project`/`projects` (or
+/// `workflow`/`workflows`) can never split the graph into two fragmented
+/// clusters that break type-affinity relatedness, per-category synthesis
+/// thresholds, distill dedup, and orientation rendering. Unknown categories
+/// pass through unchanged (the LLM keeps category sovereignty — R7); we only
+/// merge spellings observed to coexist in practice.
+///
+/// Applied at every category write chokepoint (ingest `split_path`,
+/// `note_manage` create). Path-traversal sanitizing still happens downstream via
+/// `sanitize_title`; this only fixes spelling. Case-insensitive on match; a
+/// non-aliased category is returned byte-identical except for trimming.
+#[must_use]
+pub fn canonicalize_category(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let key = trimmed.to_ascii_lowercase();
+    for &(variant, canonical) in CATEGORY_ALIASES {
+        if key == variant {
+            return canonical.to_string();
+        }
+    }
+    trimmed.to_string()
+}
 
 /// Statistics from an indexing operation.
 #[derive(Debug, Clone, Default)]

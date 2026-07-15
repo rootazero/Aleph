@@ -31,7 +31,7 @@ pub async fn handle_neighbors_impl(req: JsonRpcRequest, db: MemoryBackend) -> Js
         .as_deref()
         .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
 
-    let (entries, links) = match db
+    let (entries, links, _truncated) = match db
         .get_neighbors(&params.node_id, agent_id, params.depth, params.limit)
         .await
     {

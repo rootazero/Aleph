@@ -1,7 +1,21 @@
 //! Louvain community detection (modularity maximisation) over the undirected
-//! note graph. Hand-rolled, no external crate (R3). Deterministic: nodes are
-//! visited in index order and ties break to the lower community id, so the same
-//! graph always yields the same partition.
+//! note graph, followed by a Leiden-style connectivity refinement. Hand-rolled,
+//! no external crate (R3). Deterministic: nodes are visited in index order and
+//! ties break to the lower community id, so the same graph always yields the
+//! same partition.
+//!
+//! ## Why the refinement pass
+//!
+//! Single-level Louvain's aggregate/re-move loop can leave a "community" whose
+//! members are split across ≥2 disconnected blobs (a super-node merge that a
+//! later local move stranded) — a well-known Louvain defect that Leiden was
+//! designed to cure. Such a partition is an artifact, not a cluster, and it
+//! fragments everything downstream that trusts a community to be one connected
+//! region: `note_graph_query community`, dream synthesis grouping, and the
+//! canvas centroid gravity. [`refine_connected`] splits each Louvain community
+//! into its connected components so every emitted community is provably
+//! internally connected — a no-op on already-connected communities (the common
+//! case), so it never worsens a good partition.
 
 use std::collections::HashMap;
 
@@ -43,7 +57,11 @@ pub fn detect(g: &GraphIndex) -> Communities {
         };
     }
     let raw = louvain(&adj, total_w);
-    let of_node = renumber(&raw);
+    // Leiden-style refinement: split any Louvain community that is internally
+    // disconnected into its connected components. Consumes the raw labels
+    // directly (it depends only on same-community equality) and returns dense
+    // 0..k labels, so no separate renumber pass is needed.
+    let of_node = refine_connected(g, &raw);
     let k = of_node.iter().copied().max().map_or(0, |m| m + 1);
     let cohesion = cohesion_per_community(g, &of_node, k);
     Communities { of_node, cohesion }
@@ -138,6 +156,42 @@ fn renumber(comm: &[usize]) -> Vec<usize> {
             })
         })
         .collect()
+}
+
+/// Leiden-style refinement: guarantee every emitted community's induced
+/// subgraph is internally connected, by splitting each input community into its
+/// connected components over the *base* graph. Returns dense `0..k` labels.
+///
+/// Determinism holds regardless of `adj`'s (hash-set) iteration order: the
+/// connected components of a fixed graph are invariant, and each component's
+/// label is fixed by the index of its lowest-numbered node (the outer loop
+/// visits nodes in index order and only mints a new label at a component's
+/// first-seen node). Pure graph structure — no content, no LLM (R7).
+pub(crate) fn refine_connected(g: &GraphIndex, comm: &[usize]) -> Vec<usize> {
+    let n = comm.len();
+    let mut out = vec![usize::MAX; n];
+    let mut next = 0usize;
+    for start in 0..n {
+        if out[start] != usize::MAX {
+            continue; // already claimed by an earlier component
+        }
+        let cid = comm[start];
+        let label = next;
+        next += 1;
+        // BFS the connected component of `start`, restricted to its community.
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(start);
+        out[start] = label;
+        while let Some(u) = queue.pop_front() {
+            for &v in &g.adj[u] {
+                if comm[v] == cid && out[v] == usize::MAX {
+                    out[v] = label;
+                    queue.push_back(v);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Intra-edge density per community over the *base* graph.
