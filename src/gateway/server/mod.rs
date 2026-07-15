@@ -214,6 +214,10 @@ pub struct GatewayConfig {
     pub allow_insecure_remote: bool,
     /// Mirrors `GatewayServerConfig::tls.enabled`.
     pub tls_enabled: bool,
+    /// Mirrors `GatewayServerConfig::tls.cert_path`.
+    pub tls_cert_path: String,
+    /// Mirrors `GatewayServerConfig::tls.key_path`.
+    pub tls_key_path: String,
 }
 
 impl Default for GatewayConfig {
@@ -230,6 +234,8 @@ impl Default for GatewayConfig {
             trusted_proxy_ips: vec!["127.0.0.1".to_string(), "::1".to_string()],
             allow_insecure_remote: false,
             tls_enabled: false,
+            tls_cert_path: String::new(),
+            tls_key_path: String::new(),
             lane: LaneConfig::default(),
             require_idempotency_key: false,
         }
@@ -693,6 +699,37 @@ impl GatewayServer {
     pub async fn run(&self) -> Result<(), GatewayError> {
         self.spawn_background_tasks();
         let router = self.build_router();
+        self.warn_if_network_exposed();
+
+        // Native TLS tiers terminate in-process via axum-server's own listener;
+        // plaintext binds its own listener below and stays on axum::serve. The
+        // bind is deliberately *not* hoisted above this branch — axum-server
+        // binds `self.addr` itself inside `.serve()`, so pre-binding here too
+        // would double-bind the port and fail with "address already in use".
+        if self.config.tls_enabled {
+            install_ring_provider();
+            let tls_cfg = crate::gateway::config::GatewayTlsConfig {
+                enabled: self.config.tls_enabled,
+                cert_path: self.config.tls_cert_path.clone(),
+                key_path: self.config.tls_key_path.clone(),
+            };
+            let tls_dir = crate::utils::paths::get_data_dir()
+                .map_err(|e| GatewayError::ConnectionError(format!("data dir: {e}")))?
+                .join("tls");
+            let (cert_pem, key_pem, fp) = crate::gateway::tls::load_or_generate(&tls_cfg, &tls_dir)
+                .await
+                .map_err(|e| GatewayError::ConnectionError(format!("TLS material: {e}")))?;
+            info!("Aleph listening on https://{} (wss:// on /ws), cert fp {fp}", self.addr);
+            let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem)
+                .await
+                .map_err(|e| GatewayError::ConnectionError(format!("rustls config: {e}")))?;
+            axum_server::bind_rustls(self.addr, tls)
+                .serve(router.into_make_service_with_connect_info::<SocketAddr>())
+                .await
+                .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
+            return Ok(());
+        }
+
         let listener = tokio::net::TcpListener::bind(&self.addr)
             .await
             .map_err(|e| GatewayError::BindFailed {
@@ -700,7 +737,6 @@ impl GatewayServer {
                 source: e,
             })?;
         info!("Aleph listening on http://{}", self.addr);
-        self.warn_if_network_exposed();
         axum::serve(
             listener,
             router.into_make_service_with_connect_info::<SocketAddr>(),
@@ -717,6 +753,47 @@ impl GatewayServer {
     ) -> Result<(), GatewayError> {
         self.spawn_background_tasks();
         let router = self.build_router();
+        self.warn_if_network_exposed();
+
+        // Native TLS tiers terminate in-process via axum-server's own listener;
+        // plaintext binds its own listener below and stays on axum::serve. The
+        // bind is deliberately *not* hoisted above this branch — axum-server
+        // binds `self.addr` itself inside `.serve()`, so pre-binding here too
+        // would double-bind the port and fail with "address already in use".
+        if self.config.tls_enabled {
+            install_ring_provider();
+            let tls_cfg = crate::gateway::config::GatewayTlsConfig {
+                enabled: self.config.tls_enabled,
+                cert_path: self.config.tls_cert_path.clone(),
+                key_path: self.config.tls_key_path.clone(),
+            };
+            let tls_dir = crate::utils::paths::get_data_dir()
+                .map_err(|e| GatewayError::ConnectionError(format!("data dir: {e}")))?
+                .join("tls");
+            let (cert_pem, key_pem, fp) =
+                crate::gateway::tls::load_or_generate(&tls_cfg, &tls_dir)
+                    .await
+                    .map_err(|e| GatewayError::ConnectionError(format!("TLS material: {e}")))?;
+            info!("Aleph listening on https://{}", self.addr);
+            info!("  WebSocket: wss://{}/ws", self.addr);
+            info!("  TLS cert SHA-256 fingerprint: {fp}");
+            let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem)
+                .await
+                .map_err(|e| GatewayError::ConnectionError(format!("rustls config: {e}")))?;
+            let handle = axum_server::Handle::new();
+            let shutdown_handle = handle.clone();
+            tokio::spawn(async move {
+                let _ = shutdown.await;
+                shutdown_handle.graceful_shutdown(Some(Duration::from_secs(3)));
+            });
+            axum_server::bind_rustls(self.addr, tls)
+                .handle(handle)
+                .serve(router.into_make_service_with_connect_info::<SocketAddr>())
+                .await
+                .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
+            return Ok(());
+        }
+
         let listener = tokio::net::TcpListener::bind(&self.addr)
             .await
             .map_err(|e| GatewayError::BindFailed {
@@ -726,7 +803,6 @@ impl GatewayServer {
         info!("Aleph listening on http://{}", self.addr);
         info!("  WebSocket: ws://{}/ws", self.addr);
         info!("  Panel UI:  http://{}/", self.addr);
-        self.warn_if_network_exposed();
         axum::serve(
             listener,
             router.into_make_service_with_connect_info::<SocketAddr>(),
@@ -738,6 +814,20 @@ impl GatewayServer {
         .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
         Ok(())
     }
+}
+
+/// Install the process-wide rustls crypto provider once (idempotent). Native
+/// TLS tiers need a default `CryptoProvider` installed before the first
+/// `RustlsConfig::from_pem` call — both `ring` and `aws-lc-rs` are compiled
+/// into the dependency graph, so relying on a single-implementation default
+/// is not safe; pin `ring` explicitly. `install_default` returns `Err` if a
+/// provider is already installed (fine — idempotent, first writer wins).
+fn install_ring_provider() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
 }
 
 /// Gateway server errors

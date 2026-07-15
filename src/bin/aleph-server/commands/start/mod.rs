@@ -165,6 +165,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         trusted_proxy_ips: full_config.gateway.trusted_proxy.trusted_ips.clone(),
         allow_insecure_remote: full_config.gateway.allow_insecure_remote,
         tls_enabled: full_config.gateway.tls.enabled,
+        tls_cert_path: full_config.gateway.tls.cert_path.clone(),
+        tls_key_path: full_config.gateway.tls.key_path.clone(),
     };
     let mut server = GatewayServer::with_config(addr, server_config);
 
