@@ -35,7 +35,7 @@ use crate::verification::stop_hooks::{execute_stop_hooks_arc, StopHookContext};
 type SessionManager = Option<Arc<dyn crate::gateway::session_store::SessionStore>>;
 
 /// Wall-clock now (Unix epoch ms); 0 only if the clock predates the epoch.
-fn now_ms() -> u64 {
+pub(super) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)

@@ -37,18 +37,27 @@ impl TeamDispatcher {
     /// Cancelled stays sticky on both paths — a cancel issued mid-flight is
     /// neither retried nor overwritten with a failure.
     pub(super) async fn fail_or_retry(&self, task: &CoordTask, error: &str) {
-        // Cancelled-sticky guard for the retry path (fail_task re-checks for the
-        // give-up path); never resurrect a task cancelled since the snapshot.
-        if matches!(
-            self.coord_store.get_task(&task.id).await,
-            Ok(Some(t)) if t.status == CoordTaskStatus::Cancelled
-        ) {
-            tracing::info!(task_id = %task.id, "dispatcher: task cancelled; neither retrying nor failing");
-            return;
+        // One fresh fetch serves two guards. (1) Terminal-sticky: a task an
+        // operator moved to ANY terminal state mid-flight (cancel, skip,
+        // manual complete — not just Cancelled) is neither retried nor
+        // overwritten with a failure. (2) Fresh-basis stamp: the retry
+        // metadata below is based on the CURRENT row, not the claim-time
+        // snapshot, so mid-run edits (max_retries / timeout_secs raised via
+        // task_update while the attempt ran) survive the failure write-back
+        // instead of being reverted to the dispatch-time values.
+        let fresh = self.coord_store.get_task(&task.id).await.ok().flatten();
+        if let Some(t) = &fresh {
+            if t.status.is_terminal() {
+                tracing::info!(task_id = %task.id, status = %t.status, "dispatcher: task already terminal; neither retrying nor failing");
+                return;
+            }
         }
+        let base_metadata = fresh
+            .map(|t| t.metadata)
+            .unwrap_or_else(|| task.metadata.clone());
 
         let max_retries =
-            read_max_retries(&task.metadata).unwrap_or(self.config.default_max_retries);
+            read_max_retries(&base_metadata).unwrap_or(self.config.default_max_retries);
         let failed_attempts = self
             .coord_store
             .list_task_runs(&task.id)
@@ -83,7 +92,7 @@ impl TeamDispatcher {
                     seed,
                 );
                 let not_before = Self::now_epoch().saturating_add(backoff);
-                let metadata = with_retry_not_before(task.metadata.clone(), not_before);
+                let metadata = with_retry_not_before(base_metadata, not_before);
                 tracing::info!(
                     task_id = %task.id,
                     attempt = failed_attempts,
@@ -140,16 +149,17 @@ impl TeamDispatcher {
     /// [`fail_or_retry`](Self::fail_or_retry) once the retry budget is spent, and
     /// directly from zombie reclamation (which never retries).
     ///
-    /// Cancelled is sticky: if the task was cancelled since the caller's
-    /// snapshot was taken, the failure is NOT written over it — the attempt
-    /// is already recorded in run history and a cancelled task must stay
-    /// cancelled.
+    /// Terminal states are sticky: if the task reached ANY terminal state
+    /// since the caller's snapshot was taken (cancelled, skipped, manually
+    /// completed), the failure is NOT written over it — the attempt is
+    /// already recorded in run history and an externally-decided outcome
+    /// must stand.
     pub(in crate::teams::dispatcher) async fn fail_task(&self, task: &CoordTask, error: &str) {
         if matches!(
             self.coord_store.get_task(&task.id).await,
-            Ok(Some(t)) if t.status == CoordTaskStatus::Cancelled
+            Ok(Some(t)) if t.status.is_terminal()
         ) {
-            tracing::info!(task_id = %task.id, "dispatcher: not overwriting cancelled task with failure");
+            tracing::info!(task_id = %task.id, "dispatcher: not overwriting terminal task with failure");
             return;
         }
         if let Err(e) = self

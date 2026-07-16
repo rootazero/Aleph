@@ -115,11 +115,40 @@ pub async fn handle_update_task(
         );
     }
 
+    // Metadata is a shallow merge-patch, not a wholesale replace — the store
+    // writes the column verbatim, and a raw panel/LLM patch would wipe the
+    // dispatcher control keys (`managed_by`, `max_retries`, `timeout_secs`,
+    // review/retry markers), silently dropping the task out of scheduling.
+    // Same single-source merge the `task_update` tool uses.
+    let metadata = match params.metadata.clone() {
+        Some(patch) => match coord_store.get_task(&params.task_id).await {
+            Ok(existing) => {
+                let existing = existing
+                    .map(|t| t.metadata)
+                    .unwrap_or(serde_json::Value::Null);
+                Some(crate::agents::swarm::tasks::merge_metadata_patch(
+                    &existing, patch,
+                ))
+            }
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!(
+                        "Failed to read task '{}' for metadata merge: {e}",
+                        params.task_id
+                    ),
+                )
+            }
+        },
+        None => None,
+    };
+
     let update = CoordTaskUpdate {
         status,
         owner: params.owner.clone(),
         result: params.result.clone(),
-        metadata: params.metadata.clone(),
+        metadata,
     };
 
     match coord_store.update_task(&params.task_id, update).await {

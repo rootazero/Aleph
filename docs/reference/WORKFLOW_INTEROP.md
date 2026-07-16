@@ -44,8 +44,12 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
 - 可选:`description` / `whenToUse` / `phases`(条目可选 `model` 相位级模型覆盖);步骤
   `dependsOn`(缺省 `[]`)/ `label` / `model` / `phase` / `schema` / `isolation` /
   `agentType`(均为原样透传,Aleph 不解释、不执行,仅为忠实导出 `.workflow.js`)。
-- 只有 `name` / `description` / `steps{id,agent,prompt,dependsOn}` 映射进 `WorkflowDef`;
-  其余字段仅在导出的 `.workflow.js` 头部内嵌块中保留。
+- **可执行扩展(2026-07-16 起)**:步骤 `review`(lead 审查门)/ `timeoutSecs`(每步运行
+  超时秒)/ `maxRetries`(每步重试上限,`0`=首败即终)——三者进 `WorkflowDef` 可执行核心,
+  materialize 时盖进任务元数据由 dispatcher 现有消费者执行;`.workflow.js` 侧渲染/解析为
+  agent() 的 bare-literal opts(非字符串),header-stripped 的 bare 路径同样往返。
+- 只有 `name` / `description` / `steps{id,agent,prompt,dependsOn,review,timeoutSecs,maxRetries}`
+  映射进 `WorkflowDef`;其余字段仅在导出的 `.workflow.js` 头部内嵌块中保留。
 
 ## `.workflow.js` ↔ DAG 映射
 
@@ -58,6 +62,7 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
 | `parallel([agent, agent])` | ↔ | 同拓扑层、彼此无 `dependsOn` 的兄弟步骤 |
 | `agent()` fan-in | ↔ | 一步 `dependsOn` 多个上游 |
 | `opts.{label,model,phase,schema,isolation,agentType}` | ↔ 无损(经内嵌块) | 存 manifest,不入 `WorkflowDef` |
+| `opts.{review,timeoutSecs,maxRetries}`(bare literal) | ↔ 无损(bare 路径亦对称) | **可执行核心**:进 `WorkflowDef`,materialize 盖任务元数据 |
 | `pipeline(items, s1, s2)` | → 导入近似 | 运行时 item 列表未知 → 记 `dropped`;导出不生成 |
 | 循环 / 条件 / `budget` / 嵌套 `workflow()` | ✗ 故意不支持 | 导入记 `dropped`(R7/R10) |
 

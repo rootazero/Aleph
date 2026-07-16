@@ -320,6 +320,14 @@ fn reject_zero_caps(args: &GoalArgs) -> Result<()> {
                 .to_string(),
         ));
     }
+    if args.token_budget == Some(0) {
+        return Err(AlephError::tool(
+            "token_budget must be at least 1 — 0 exhausts the budget after the \
+             first step (a near-born-dead pursuit with a baffling \"reached its \
+             token budget (0 tokens)\" push). Omit it for no budget."
+                .to_string(),
+        ));
+    }
     Ok(())
 }
 

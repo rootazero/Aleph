@@ -175,14 +175,25 @@ pub(super) async fn update_task(
     };
 
     let task = task_opt.ok_or_else(|| db_err(format!("task not found after update: {id}")))?;
-    let verb = match task.status {
-        CoordTaskStatus::Completed => "completed",
-        CoordTaskStatus::Failed => "failed",
-        CoordTaskStatus::Cancelled => "cancelled",
-        CoordTaskStatus::WaitingReview => "waiting_review",
-        CoordTaskStatus::Skipped => "skipped",
-        CoordTaskStatus::Paused => "paused",
-        _ => "updated",
+    // The broadcast verb reflects the TRANSITION, not the row's resting state:
+    // a metadata/owner/result-only write on an already-terminal task must not
+    // re-broadcast TeamTaskCompleted/TeamTaskFailed. Downstream listeners
+    // treat those verbs as fresh terminal transitions — TeamNotifier's
+    // completion claim would re-fire "Team work complete" (even after a
+    // FAILED run) and duplicate failure alerts whenever a marker stamp (e.g.
+    // `workflow_notified`, clarify delivery markers) lands on a settled task.
+    let verb = if update.status.is_some() {
+        match task.status {
+            CoordTaskStatus::Completed => "completed",
+            CoordTaskStatus::Failed => "failed",
+            CoordTaskStatus::Cancelled => "cancelled",
+            CoordTaskStatus::WaitingReview => "waiting_review",
+            CoordTaskStatus::Skipped => "skipped",
+            CoordTaskStatus::Paused => "paused",
+            _ => "updated",
+        }
+    } else {
+        "updated"
     };
     store.emit_task_topic(&task, verb).await;
     Ok(task)

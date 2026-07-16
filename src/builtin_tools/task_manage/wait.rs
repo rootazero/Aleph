@@ -67,17 +67,14 @@ fn is_task_event(event: &AlephEvent) -> bool {
     )
 }
 
-/// Check if all target tasks are in a terminal state.
+/// Check if all target tasks are settled (terminal, or structurally dead).
+///
+/// `is_settled`, not strictly-terminal: a failed step leaves its dependents
+/// derived-`Unsatisfiable` forever (no janitor finalises them), so a waiter
+/// requiring strict terminality would spin until its timeout on every set
+/// containing such a corpse instead of resolving honestly.
 fn all_terminal(tasks: &[CoordTask]) -> bool {
-    tasks.iter().all(|t| {
-        matches!(
-            t.status,
-            CoordTaskStatus::Completed
-                | CoordTaskStatus::Failed
-                | CoordTaskStatus::Cancelled
-                | CoordTaskStatus::Skipped
-        )
-    })
+    tasks.iter().all(|t| t.status.is_settled())
 }
 
 /// Requested task IDs that do not exist in the store. A non-existent task will
@@ -100,8 +97,15 @@ fn build_summary(tasks: &[CoordTask], timed_out: bool) -> TaskWaitOutput {
 
     for t in tasks {
         match t.status {
-            CoordTaskStatus::Completed => completed.push(t.id.clone()),
-            CoordTaskStatus::Failed | CoordTaskStatus::Cancelled => failed.push(t.id.clone()),
+            // Skipped satisfies downstream dependencies exactly like
+            // Completed — reporting it as "pending" inside a resolved wait
+            // misled the caller into re-waiting on finished work.
+            CoordTaskStatus::Completed | CoordTaskStatus::Skipped => completed.push(t.id.clone()),
+            // Unsatisfiable is structurally dead (a dependency terminally
+            // failed) — bucket with the failures, not the still-pending.
+            CoordTaskStatus::Failed
+            | CoordTaskStatus::Cancelled
+            | CoordTaskStatus::Unsatisfiable => failed.push(t.id.clone()),
             _ => pending.push(t.id.clone()),
         }
     }
@@ -252,11 +256,7 @@ impl AlephTool for TaskWaitTool {
                 }
             };
             if timed_out {
-                let tasks = fetch_tasks(
-                    self.store.as_ref(),
-                    &args.task_ids,
-                    &args.team_id,
-                ).await?;
+                let tasks = fetch_tasks(self.store.as_ref(), &args.task_ids, &args.team_id).await?;
                 return Ok(build_summary(&tasks, true));
             }
             // A task event (or a lag) landed — loop to re-check the store.

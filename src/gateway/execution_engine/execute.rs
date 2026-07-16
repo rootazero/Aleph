@@ -1115,11 +1115,70 @@ pub(super) fn spawn_continuation_run(
             }
         }
         let Some(cont_agent) = registry.get(&cont_agent_id).await else {
+            // The agent was deleted between claim and fire. A bare skip would
+            // leave the goal/loop Active-forever: the pending marker was just
+            // cleared by confirm_fire, claims only happen post-run, and no run
+            // can ever happen on this session again — so nothing re-claims,
+            // `goal(action='list')` keeps showing a live pursuit from every
+            // other session (dishonest), and the welded strategy row leaks.
+            // Terminate honestly per kind instead. No origin channel can be
+            // resolved without the agent, so the stored stop reason / blocked
+            // note is the surviving signal (R5 as far as it can reach).
             warn!(
                 agent_id = %cont_agent_id,
                 session = %session_key_str,
-                "goal pursuit: agent not found, skipping continuation"
+                kind = ?kind,
+                "continuation: agent no longer exists — terminating instead of skipping"
             );
+            match kind {
+                ContinuationKind::Loop { .. } => {
+                    if let Some(reg) = crate::looping::global() {
+                        if let Some(state) = reg.get_active(&session_key_str) {
+                            reg.put(
+                                state
+                                    .with_status(crate::looping::LoopStatus::Stopped)
+                                    .with_stop_reason(Some(format!(
+                                        "Halted: agent '{cont_agent_id}' no longer exists"
+                                    ))),
+                            );
+                            // Mirror the tool-stop cleanup: clear the welded
+                            // strategy so the stale plan cannot bleed into a
+                            // future session under a recreated agent.
+                            if let Some(strat) = crate::strategy::global() {
+                                if let Err(e) =
+                                    strat.delete(&crate::strategy::loop_key(&session_key_str))
+                                {
+                                    info!(session = %session_key_str, error = %e,
+                                        "loop: failed to delete welded strategy on agent-miss stop (ignored)");
+                                }
+                            }
+                        }
+                    }
+                }
+                ContinuationKind::Goal { .. } => {
+                    if let Some(store) = crate::goal::global() {
+                        let note = format!(
+                            "Autonomous pursuit halted: agent '{cont_agent_id}' no longer \
+                             exists. Re-set the goal in a session of an existing agent to \
+                             continue."
+                        );
+                        match store.block_if_active(
+                            &session_key_str,
+                            &note,
+                            super::goal_continuation::now_ms(),
+                        ) {
+                            Ok(true) => {
+                                super::goal_continuation::clear_goal_welded_strategy(
+                                    &session_key_str,
+                                );
+                            }
+                            Ok(false) => {}
+                            Err(e) => warn!(error = %e, session = %session_key_str,
+                                "goal pursuit: failed to block goal after agent deletion"),
+                        }
+                    }
+                }
+            }
             return;
         };
         // G1: resolve the session's bound origin channel once — used both to

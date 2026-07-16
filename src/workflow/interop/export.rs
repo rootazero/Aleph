@@ -202,6 +202,19 @@ fn render_agent_call(step: &WorkflowManifestStep) -> String {
     if let Some(at) = &step.agent_type {
         opts.push(format!("agentType: {}", js_str(at)));
     }
+    // Executable-core opts beyond the Claude-Code set: without these the
+    // header-stripped (bare-scan) round-trip silently loses a human-review
+    // safety gate and the per-step execution budgets — the wrong side to
+    // fail on. `read_agent_opts` parses the bare literals back.
+    if step.review {
+        opts.push("review: true".to_string());
+    }
+    if let Some(t) = step.timeout_secs {
+        opts.push(format!("timeoutSecs: {t}"));
+    }
+    if let Some(r) = step.max_retries {
+        opts.push(format!("maxRetries: {r}"));
+    }
     if opts.is_empty() {
         format!("agent({})", render_prompt_arg(&step.prompt))
     } else {
@@ -312,6 +325,8 @@ mod tests {
             kind: WorkflowStepKind::Agent,
             choices: vec![],
             review: false,
+            timeout_secs: None,
+            max_retries: None,
         }
     }
 
@@ -335,6 +350,8 @@ mod tests {
             kind: WorkflowStepKind::Clarify,
             choices: choices.iter().map(|s| s.to_string()).collect(),
             review: false,
+            timeout_secs: None,
+            max_retries: None,
         }
     }
 

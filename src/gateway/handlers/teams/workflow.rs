@@ -400,9 +400,17 @@ pub async fn handle_workflow_retry_step(
             format!("Failed to reset task to pending: {e}"),
         );
     }
-    // Best-effort lock release — failure here is non-fatal (lock may
-    // have expired naturally or never been acquired).
-    let _ = coord_store.release_lock(&params.task_id, "").await;
+    // Release any leftover claim with its ACTUAL holder — releasing with ""
+    // never clears a genuinely held lock (the store checks holder equality),
+    // which would leave the retried task Pending-but-unschedulable until
+    // release_stale_locks fires. Best-effort: failure is non-fatal.
+    if let Ok(Some(t)) = coord_store.get_task(&params.task_id).await {
+        if let Some(holder) = t.locked_by.as_deref() {
+            if let Err(e) = coord_store.release_lock(&params.task_id, holder).await {
+                tracing::warn!(task_id = %params.task_id, holder = %holder, error = %e, "workflow step retry: could not release leftover lock");
+            }
+        }
+    }
     JsonRpcResponse::success(request.id, json!({ "status": "pending" }))
 }
 
@@ -605,7 +613,15 @@ pub async fn handle_task_retry(
             format!("Failed to retry task: {e}"),
         );
     }
-    let _ = coord_store.release_lock(&params.task_id, "").await;
+    // Same actual-holder release as the reviewer retry above — "" can never
+    // clear a genuinely held lock.
+    if let Ok(Some(t)) = coord_store.get_task(&params.task_id).await {
+        if let Some(holder) = t.locked_by.as_deref() {
+            if let Err(e) = coord_store.release_lock(&params.task_id, holder).await {
+                tracing::warn!(task_id = %params.task_id, holder = %holder, error = %e, "task retry: could not release leftover lock");
+            }
+        }
+    }
     JsonRpcResponse::success(request.id, json!({ "status": "pending" }))
 }
 

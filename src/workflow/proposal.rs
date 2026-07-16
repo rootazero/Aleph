@@ -104,6 +104,8 @@ pub fn skeleton_from_chain(chain: &[String], observations: u32) -> Option<Workfl
                 kind: Default::default(),
                 choices: Vec::new(),
                 review: false,
+                timeout_secs: None,
+                max_retries: None,
             }
         })
         .collect();
@@ -152,7 +154,13 @@ pub fn delete_proposal(name: &str) -> Result<bool> {
 pub fn accept(name: &str) -> Result<PathBuf> {
     let manifest = load_proposal(name)?;
     let active_path = store::save(&manifest)?;
-    let _ = delete_proposal(name)?;
+    // Draft removal is cleanup, not the semantic outcome — the workflow IS
+    // active once the save above succeeded. Propagating a delete I/O error
+    // here would report failure for an accept that worked (and invite a
+    // confusing re-accept of the leftover draft), so log-and-continue.
+    if let Err(e) = delete_proposal(name) {
+        tracing::warn!(proposal = %name, error = %e, "accepted proposal but could not remove the draft; it may be re-listed until deleted");
+    }
     Ok(active_path)
 }
 

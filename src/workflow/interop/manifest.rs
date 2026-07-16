@@ -91,6 +91,14 @@ pub struct WorkflowManifestStep {
     /// wire when false (byte-identical to legacy manifests).
     #[serde(default, skip_serializing_if = "is_false")]
     pub review: bool,
+    /// Per-step run timeout in seconds (see `WorkflowStepDef::timeout_secs`).
+    /// Executable core; omitted on the wire when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    /// Per-step retry ceiling (see `WorkflowStepDef::max_retries`).
+    /// Executable core; omitted on the wire when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_retries: Option<u32>,
 }
 
 /// serde `skip_serializing_if` helper — keeps non-reviewed steps byte-identical.
@@ -125,6 +133,8 @@ impl WorkflowManifest {
                     kind: s.kind,
                     choices: s.choices.clone(),
                     review: s.review,
+                    timeout_secs: s.timeout_secs,
+                    max_retries: s.max_retries,
                 })
                 .collect(),
         }
@@ -158,6 +168,8 @@ impl WorkflowManifest {
                     kind: s.kind,
                     choices: s.choices.clone(),
                     review: s.review,
+                    timeout_secs: s.timeout_secs,
+                    max_retries: s.max_retries,
                 })
                 .collect(),
         }
@@ -181,6 +193,8 @@ mod tests {
                     kind: WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    timeout_secs: None,
+                    max_retries: None,
                 },
                 WorkflowStepDef {
                     id: "b".into(),
@@ -190,6 +204,8 @@ mod tests {
                     kind: WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    timeout_secs: None,
+                    max_retries: None,
                 },
             ],
         }
@@ -240,6 +256,8 @@ mod tests {
                 kind: WorkflowStepKind::Agent,
                 choices: vec![],
                 review: false,
+                timeout_secs: None,
+                max_retries: None,
             }],
         };
         let def = manifest.to_def();
@@ -271,6 +289,8 @@ mod tests {
                 kind: WorkflowStepKind::Agent,
                 choices: vec![],
                 review: false,
+                timeout_secs: None,
+                max_retries: None,
             }],
         };
         let v = serde_json::to_value(&manifest).unwrap();
@@ -330,6 +350,8 @@ mod tests {
                 kind: WorkflowStepKind::Clarify,
                 choices: vec!["staging".into(), "prod".into()],
                 review: false,
+                timeout_secs: None,
+                max_retries: None,
             }],
         };
         // The clarify kind + choices survive the manifest projection both ways.

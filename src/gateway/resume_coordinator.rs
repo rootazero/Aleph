@@ -411,8 +411,32 @@ impl ResumeCoordinator {
         };
 
         let collector = Arc::new(CollectingEventEmitter::new());
-        let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
+        let base: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
             Arc::clone(&collector) as _;
+        // Fan the recovered run's final reply out to the session's bound
+        // origin channel — the human who asked. Without this the resumed run
+        // completed into a collect-and-drop emitter: the crash-recovered
+        // answer existed only in the session log and the Telegram/Slack user
+        // never heard back (R5). Mirrors `spawn_continuation_run`; a Panel-
+        // only session (`gui:chat`, no origin route) keeps the bare collector.
+        // Best-effort: the boot scan may outrun a slow channel connect — the
+        // fanout decorator warns-and-drops on send failure, never fails the
+        // resumed run itself.
+        let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
+            match crate::gateway::event_emitter::origin_fanout::channel_registry() {
+                Some(reg) => match agent.origin_route(session_id).await {
+                    Some((channel, conversation)) => Arc::new(
+                        crate::gateway::event_emitter::origin_fanout::OriginFanoutEmitter::new(
+                            base,
+                            reg,
+                            channel,
+                            conversation,
+                        ),
+                    ),
+                    None => base,
+                },
+                None => base,
+            };
 
         tracing::info!(session = ?session_id, agent_id, "resume: re-triggering interrupted run");
 

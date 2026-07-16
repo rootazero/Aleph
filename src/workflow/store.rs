@@ -228,6 +228,8 @@ mod tests {
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    timeout_secs: None,
+                    max_retries: None,
                 },
                 WorkflowManifestStep {
                     id: "write".into(),
@@ -243,6 +245,8 @@ mod tests {
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    timeout_secs: None,
+                    max_retries: None,
                 },
             ],
         }

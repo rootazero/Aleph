@@ -31,6 +31,34 @@ pub const CLARIFY_OWNER: &str = "__clarify__";
 /// Metadata key under which [`ClarifyTaskMeta`] is stored on a `coord_task`.
 pub const CLARIFY_META_KEY: &str = "clarify";
 
+/// Metadata key stamped (epoch seconds) TOGETHER with the `Paused` park, i.e.
+/// BEFORE channel delivery. Its presence on a Paused clarify task means "the
+/// dispatcher parked this but delivery has not been confirmed" — the
+/// redelivery janitor resets such tasks (past a grace window) back to
+/// `Pending` so a crash between park and send cannot stall the DAG forever.
+/// Replaced by [`CLARIFY_DELIVERED_AT_KEY`] once the send succeeds. A clarify
+/// task manually paused by an operator carries NEITHER key and is never
+/// touched by the janitor.
+pub const CLARIFY_DELIVERY_PENDING_KEY: &str = "clarify_delivery_pending";
+
+/// Metadata key stamped (epoch seconds) after the question was successfully
+/// delivered to the originating channel. The inbound router only consumes a
+/// session reply as the clarify answer when this key is present — a question
+/// that was never asked must never eat the user's next message.
+pub const CLARIFY_DELIVERED_AT_KEY: &str = "clarify_delivered_at";
+
+/// Read the park-time delivery-pending stamp, if any (epoch seconds).
+#[must_use]
+pub fn clarify_delivery_pending_at(metadata: &Value) -> Option<u64> {
+    metadata.get(CLARIFY_DELIVERY_PENDING_KEY)?.as_u64()
+}
+
+/// Whether the clarify question was confirmed delivered to the channel.
+#[must_use]
+pub fn clarify_delivered(metadata: &Value) -> bool {
+    metadata.get(CLARIFY_DELIVERED_AT_KEY).is_some()
+}
+
 /// The originating channel address captured when a workflow run starts, threaded
 /// into each clarify step so the dispatcher knows where to push the question and
 /// the inbound router knows which session's reply completes it.

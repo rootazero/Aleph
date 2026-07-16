@@ -97,6 +97,21 @@ pub struct WorkflowStepDef {
     /// wire for every pre-existing template).
     #[serde(default, skip_serializing_if = "is_false")]
     pub review: bool,
+    /// Per-step wall-clock timeout (seconds) for the member run. Stamped into
+    /// the materialised task's metadata (`timeout_secs` — the same override
+    /// channel `task_create` uses), so a deep-research step and a quick
+    /// formatting step no longer share the dispatcher's one global budget.
+    /// `None` → the global `[team_dispatcher] task_timeout_secs`. Absent on
+    /// the wire when unset (byte-identical legacy templates).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    /// Per-step automatic retry ceiling. Stamped into the materialised task's
+    /// metadata (`max_retries`), overriding the dispatcher's
+    /// `default_max_retries` for this step only. `0` = first failure is
+    /// terminal. Absent on the wire when unset (byte-identical legacy
+    /// templates).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_retries: Option<u32>,
 }
 
 /// serde `skip_serializing_if` helper — keeps non-reviewed steps byte-identical.
@@ -158,7 +173,22 @@ impl WorkflowDef {
                             step.id
                         )));
                     }
+                    if step.timeout_secs.is_some() || step.max_retries.is_some() {
+                        return Err(AlephError::invalid_input(format!(
+                            "clarify step '{}' cannot set timeout_secs/max_retries — it runs no agent",
+                            step.id
+                        )));
+                    }
                 }
+            }
+            // A zero timeout would create a born-dead step (the very first
+            // attempt times out immediately) — reject at the boundary (P7).
+            // `max_retries: 0` is legitimate ("first failure is terminal").
+            if step.timeout_secs == Some(0) {
+                return Err(AlephError::invalid_input(format!(
+                    "step '{}' has timeout_secs=0 — omit the field for the global default",
+                    step.id
+                )));
             }
             if !ids.insert(step.id.as_str()) {
                 return Err(AlephError::invalid_input(format!(
@@ -269,6 +299,8 @@ mod tests {
             kind: WorkflowStepKind::Agent,
             choices: vec![],
             review: false,
+            timeout_secs: None,
+            max_retries: None,
         }
     }
 
@@ -281,6 +313,8 @@ mod tests {
             kind: WorkflowStepKind::Clarify,
             choices: choices.iter().map(|s| s.to_string()).collect(),
             review: false,
+            timeout_secs: None,
+            max_retries: None,
         }
     }
 
@@ -476,5 +510,44 @@ mod tests {
         d.steps[0].review = true;
         let err = d.validate().unwrap_err().to_string();
         assert!(err.contains("cannot require review"), "got: {err}");
+    }
+
+    // ---- Per-step timeout / retry overrides --------------------------------
+
+    #[test]
+    fn timeout_and_retries_roundtrip_and_skip_when_unset() {
+        let mut d = def(vec![step("a", &[])]);
+        d.steps[0].timeout_secs = Some(1800);
+        d.steps[0].max_retries = Some(0);
+        assert!(d.validate().is_ok(), "{:?}", d.validate());
+        let s = serde_json::to_string(&d).unwrap();
+        let back: WorkflowDef = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.steps[0].timeout_secs, Some(1800));
+        assert_eq!(
+            back.steps[0].max_retries,
+            Some(0),
+            "0 = no auto-retry, legal"
+        );
+
+        // Unset fields stay off the wire (byte-identical legacy templates).
+        let plain = serde_json::to_string(&def(vec![step("a", &[])])).unwrap();
+        assert!(!plain.contains("timeout_secs"));
+        assert!(!plain.contains("max_retries"));
+    }
+
+    #[test]
+    fn validate_rejects_zero_timeout() {
+        let mut d = def(vec![step("a", &[])]);
+        d.steps[0].timeout_secs = Some(0);
+        let err = d.validate().unwrap_err().to_string();
+        assert!(err.contains("timeout_secs=0"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_timeout_on_clarify_step() {
+        let mut d = def(vec![clarify_step("ask", "Pick env", &[], &[])]);
+        d.steps[0].timeout_secs = Some(60);
+        let err = d.validate().unwrap_err().to_string();
+        assert!(err.contains("runs no agent"), "got: {err}");
     }
 }

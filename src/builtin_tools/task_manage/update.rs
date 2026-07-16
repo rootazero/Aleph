@@ -28,7 +28,10 @@ pub struct TaskUpdateArgs {
     /// Result summary (typically set when completing or failing)
     #[serde(default)]
     pub result: Option<String>,
-    /// Arbitrary metadata JSON to merge
+    /// Metadata JSON to shallow-merge into the task's existing metadata:
+    /// given keys are set, a `null` value deletes a key, and keys you do not
+    /// mention are preserved (so dispatcher control keys like `managed_by`,
+    /// `max_retries`, `timeout_secs` survive unrelated updates).
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
 }
@@ -77,11 +80,33 @@ impl AlephTool for TaskUpdateTool {
             .as_deref()
             .and_then(CoordTaskStatus::from_stored);
 
+        // Metadata is a shallow merge-patch, not a wholesale replace: the
+        // store's `update_task` writes the metadata column verbatim, so a
+        // partial patch passed straight through would silently wipe the
+        // dispatcher control keys (`managed_by`, `max_retries`,
+        // `timeout_secs`, review/retry markers) and drop the task out of
+        // scheduling forever. Read-modify-write through the shared
+        // `merge_metadata_patch` (same source the gateway RPC uses).
+        let metadata = match args.metadata {
+            Some(patch) => {
+                let existing = self
+                    .store
+                    .get_task(&args.task_id)
+                    .await?
+                    .map(|t| t.metadata)
+                    .unwrap_or(serde_json::Value::Null);
+                Some(crate::agents::swarm::tasks::merge_metadata_patch(
+                    &existing, patch,
+                ))
+            }
+            None => None,
+        };
+
         let update = CoordTaskUpdate {
             status: new_status,
             owner: args.owner,
             result: args.result,
-            metadata: args.metadata,
+            metadata,
         };
 
         let task = self.store.update_task(&args.task_id, update).await?;

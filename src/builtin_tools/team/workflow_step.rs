@@ -195,6 +195,18 @@ impl AlephTool for WorkflowStepReviewTool {
             }
             WorkflowStepReviewArgs::Retry { task_id } => {
                 debug!(task_id = %task_id, "workflow_step_review: retry");
+                // Snapshot BEFORE the reset so a leftover lock can be released
+                // with its actual holder — releasing with "" never clears a
+                // genuinely held lock (the store checks holder equality) and
+                // would leave the retried task Pending-but-unschedulable until
+                // release_stale_locks fires.
+                let locked_by = self
+                    .coord_store
+                    .get_task(&task_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|t| t.locked_by);
                 self.coord_store
                     .update_task(
                         &task_id,
@@ -205,7 +217,11 @@ impl AlephTool for WorkflowStepReviewTool {
                         },
                     )
                     .await?;
-                let _ = self.coord_store.release_lock(&task_id, "").await;
+                if let Some(holder) = locked_by.as_deref() {
+                    if let Err(e) = self.coord_store.release_lock(&task_id, holder).await {
+                        tracing::warn!(task_id = %task_id, holder = %holder, error = %e, "workflow_step_review: retry could not release leftover lock");
+                    }
+                }
                 Ok(WorkflowStepReviewOutput {
                     task_id,
                     status: "pending".into(),

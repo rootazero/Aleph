@@ -74,6 +74,7 @@ pub mod channel_health_monitor;
 pub mod channel_policy;
 pub mod channel_registry;
 pub mod coalescer;
+pub mod continuation_lifecycle;
 pub mod delivery_queue;
 pub mod hot_reload;
 pub mod http_server;

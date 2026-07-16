@@ -48,6 +48,36 @@ pub const WORKFLOW_MODEL_KEY: &str = "workflow_model";
 /// task block. Absent when no strategy was planned (byte-identical legacy rows).
 /// Clarify steps run no agent, so they are never stamped.
 pub const WORKFLOW_STRATEGY_KEY: &str = "workflow_strategy";
+/// Metadata key carrying the originating channel address
+/// (`{"channel_id", "conversation_id"}`) on every materialised task of an
+/// interactively-launched run. The dispatcher's settle sweep
+/// (`notify_settled_workflow_runs`) reads it to push the run's terminal
+/// summary back to the user's channel (R5 — autonomous terminal states never
+/// die silently). Absent for non-interactive runs (byte-identical legacy rows).
+pub const WORKFLOW_ORIGIN_KEY: &str = "workflow_origin";
+/// Metadata key marking a run whose terminal notification has already been
+/// delivered (or deliberately suppressed — the `workflow` tool's `cancel`
+/// stamps it because the cancelling user already knows). Stamped on one task
+/// of the run with the epoch-seconds stamp time; its presence on ANY task
+/// silences the settle sweep, making the notification once-only across daemon
+/// restarts. The sweep clears it (re-arms) when a marked run is reopened by a
+/// step retry, grace-gated on the stamp's age so a mid-cancel window is never
+/// mistaken for a reopen.
+pub const WORKFLOW_NOTIFIED_KEY: &str = "workflow_notified";
+
+/// Read the originating channel address stamped on a materialised workflow
+/// task under [`WORKFLOW_ORIGIN_KEY`]. Returns `(channel_id, conversation_id)`;
+/// `None` for legacy rows or non-interactive runs. Pure.
+#[must_use]
+pub fn workflow_origin(metadata: &serde_json::Value) -> Option<(String, String)> {
+    let origin = metadata.get(WORKFLOW_ORIGIN_KEY)?;
+    let channel = origin.get("channel_id")?.as_str()?.trim();
+    let conversation = origin.get("conversation_id")?.as_str()?.trim();
+    if channel.is_empty() || conversation.is_empty() {
+        return None;
+    }
+    Some((channel.to_string(), conversation.to_string()))
+}
 
 /// Read a step's per-step model override off its materialised `coord_task`
 /// metadata and build a [`ModelOverride`](crate::gateway::model_override::ModelOverride).
@@ -217,7 +247,39 @@ pub async fn materialize(
                     obj.insert(WORKFLOW_STRATEGY_KEY.to_string(), json!(frame));
                 }
             }
+            // Per-step execution-budget overrides: stamped through the SAME
+            // metadata helpers `task_create` uses, so the dispatcher's
+            // existing consumers (`effective_timeout_secs` at launch,
+            // `read_max_retries` on failure) pick them up with zero new
+            // plumbing. `None` leaves the row byte-identical (helpers are
+            // no-ops on None).
+            let meta =
+                crate::agents::swarm::tasks::timeout::with_task_timeout(meta, step.timeout_secs);
+            let meta = crate::agents::swarm::tasks::retry::with_max_retries(meta, step.max_retries);
             (step.agent.clone(), meta)
+        };
+
+        // Origin stamp: the originating channel captured at run start rides on
+        // EVERY task (agent and clarify alike) so the dispatcher's settle sweep
+        // can push the run's terminal summary back to the user (R5). Absent
+        // when the run was launched non-interactively (byte-identical legacy
+        // rows) — the sweep then stays silent for this run.
+        let metadata = {
+            let mut metadata = metadata;
+            if let Some(ctx) = clarify_ctx {
+                if !ctx.channel_id.is_empty() && !ctx.conversation_id.is_empty() {
+                    if let Some(obj) = metadata.as_object_mut() {
+                        obj.insert(
+                            WORKFLOW_ORIGIN_KEY.to_string(),
+                            json!({
+                                "channel_id": ctx.channel_id,
+                                "conversation_id": ctx.conversation_id,
+                            }),
+                        );
+                    }
+                }
+            }
+            metadata
         };
 
         let created = match store
@@ -290,6 +352,8 @@ mod tests {
             kind: crate::workflow::def::WorkflowStepKind::Agent,
             choices: vec![],
             review: false,
+            timeout_secs: None,
+            max_retries: None,
         }
     }
 
@@ -302,6 +366,8 @@ mod tests {
             kind: crate::workflow::def::WorkflowStepKind::Clarify,
             choices: choices.iter().map(|s| s.to_string()).collect(),
             review: false,
+            timeout_secs: None,
+            max_retries: None,
         }
     }
 
@@ -654,6 +720,62 @@ mod tests {
         }
         assert!(saw_agent_stamp, "agent steps must carry the strategy frame");
         assert!(!saw_clarify_stamp, "clarify steps must NOT be stamped");
+    }
+
+    #[tokio::test]
+    async fn materialize_stamps_per_step_timeout_and_retries() {
+        use crate::agents::swarm::tasks::retry::read_max_retries;
+        use crate::agents::swarm::tasks::timeout::effective_timeout_secs;
+        let store = setup_store().await;
+        let mut def = linear_def();
+        def.steps[0].timeout_secs = Some(1800);
+        def.steps[0].max_retries = Some(0);
+        let mat = materialize(&def, "x", "team-1", &store, None, None, None)
+            .await
+            .unwrap();
+
+        // The overridden step carries both keys, readable through the exact
+        // dispatcher-side consumers.
+        let gather = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
+        assert_eq!(effective_timeout_secs(&gather.metadata, 600), 1800);
+        assert_eq!(read_max_retries(&gather.metadata), Some(0));
+
+        // The unlisted step stays byte-identical (global defaults apply).
+        let write = store.get_task(&mat.task_ids[1]).await.unwrap().unwrap();
+        assert!(write.metadata.get("timeout_secs").is_none());
+        assert!(write.metadata.get("max_retries").is_none());
+        assert_eq!(effective_timeout_secs(&write.metadata, 600), 600);
+    }
+
+    #[tokio::test]
+    async fn materialize_stamps_origin_on_every_task() {
+        use crate::workflow::clarify::ClarifyContext;
+        let store = setup_store().await;
+        let ctx = ClarifyContext {
+            channel_id: "telegram".into(),
+            conversation_id: "user-1".into(),
+            session_key: "telegram:bot:1:user-1".into(),
+        };
+        let mat = materialize(&linear_def(), "x", "team-1", &store, Some(&ctx), None, None)
+            .await
+            .unwrap();
+        for id in &mat.task_ids {
+            let task = store.get_task(id).await.unwrap().unwrap();
+            assert_eq!(
+                workflow_origin(&task.metadata),
+                Some(("telegram".to_string(), "user-1".to_string())),
+                "every task carries the origin stamp"
+            );
+        }
+        // Non-interactive runs stay byte-identical (no origin key).
+        let silent = materialize(&linear_def(), "x", "team-1", &store, None, None, None)
+            .await
+            .unwrap();
+        for id in &silent.task_ids {
+            let task = store.get_task(id).await.unwrap().unwrap();
+            assert!(task.metadata.get(WORKFLOW_ORIGIN_KEY).is_none());
+            assert!(workflow_origin(&task.metadata).is_none());
+        }
     }
 
     #[tokio::test]

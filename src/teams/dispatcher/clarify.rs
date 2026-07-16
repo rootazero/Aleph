@@ -9,10 +9,14 @@
 //! dependents on its next tick (R10 — no new scheduler, no reasoning).
 
 use super::TeamDispatcher;
-use crate::agents::swarm::tasks::{CoordTask, CoordTaskStatus, CoordTaskUpdate};
+use crate::agents::swarm::tasks::{
+    merge_metadata_patch, CoordTask, CoordTaskStatus, CoordTaskUpdate,
+};
 use crate::gateway::channel::{ChannelId, OutboundMessage};
 use crate::sync_primitives::Arc;
-use crate::workflow::clarify::{ClarifyTaskMeta, CLARIFY_OWNER};
+use crate::workflow::clarify::{
+    ClarifyTaskMeta, CLARIFY_DELIVERED_AT_KEY, CLARIFY_DELIVERY_PENDING_KEY, CLARIFY_OWNER,
+};
 
 impl TeamDispatcher {
     /// Deliver a clarify step's question and park the task awaiting the reply.
@@ -59,13 +63,22 @@ impl TeamDispatcher {
 
         // Park BEFORE delivery: the awaiting record must exist before the user
         // can reply, and `Paused` removes the task from the schedulable set so a
-        // racing tick won't re-handle it (only `Pending` is selected).
+        // racing tick won't re-handle it (only `Pending` is selected). The
+        // `clarify_delivery_pending` stamp travels in the SAME write: if the
+        // daemon dies between this park and the send below, the redelivery
+        // janitor (`redeliver_stalled_clarify`) sees a Paused clarify task
+        // whose delivery was never confirmed and resets it to Pending — the
+        // question is re-delivered instead of the DAG stalling forever.
         if let Err(e) = self
             .coord_store
             .update_task(
                 &task.id,
                 CoordTaskUpdate {
                     status: Some(CoordTaskStatus::Paused),
+                    metadata: Some(merge_metadata_patch(
+                        &task.metadata,
+                        serde_json::json!({ CLARIFY_DELIVERY_PENDING_KEY: Self::now_epoch() }),
+                    )),
                     ..Default::default()
                 },
             )
@@ -90,6 +103,44 @@ impl TeamDispatcher {
                     channel = %meta.channel_id,
                     "dispatcher: clarify question delivered — awaiting user reply"
                 );
+                // Confirm delivery: swap the pending stamp for the delivered
+                // stamp. The inbound router only consumes a session reply as
+                // the answer when the question was actually asked, so an
+                // undelivered question can never eat the user's next message.
+                // Merge onto a FRESH read (not the pre-park snapshot) with an
+                // explicit null-delete of the pending key: the coord lock
+                // only excludes lock-acquiring dispatcher paths — a
+                // concurrent `task_update` / `teams.update_task` merge-patch
+                // never takes it, and a stale-snapshot base would clobber
+                // such an edit (and could resurrect the pending stamp). A
+                // failed stamp is logged: the janitor then re-delivers after
+                // the grace window (duplicate question, never a stall).
+                let fresh_meta = self
+                    .coord_store
+                    .get_task(&task.id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map_or_else(|| task.metadata.clone(), |t| t.metadata);
+                if let Err(e) = self
+                    .coord_store
+                    .update_task(
+                        &task.id,
+                        CoordTaskUpdate {
+                            metadata: Some(merge_metadata_patch(
+                                &fresh_meta,
+                                serde_json::json!({
+                                    CLARIFY_DELIVERED_AT_KEY: Self::now_epoch(),
+                                    CLARIFY_DELIVERY_PENDING_KEY: serde_json::Value::Null,
+                                }),
+                            )),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                {
+                    tracing::warn!(task_id = %task.id, error = %e, "dispatcher: failed to stamp clarify delivered marker");
+                }
             }
             Err(e) => {
                 // Nobody can ever answer — fail so dependents stop waiting.
