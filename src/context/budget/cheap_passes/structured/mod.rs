@@ -45,16 +45,19 @@ impl ContentKind {
     }
 }
 
-/// Outcome of a structured reduction: the kept body plus a kept/total line
-/// tally, so the caller can emit an honest header telling the model the result
-/// was compacted (and roughly how much was dropped).
+/// Outcome of a structured reduction: the kept body plus a kept/total tally,
+/// so the caller can emit an honest header telling the model the result was
+/// compacted (and roughly how much was dropped).
 pub struct Reduction {
     pub kind: ContentKind,
     /// The reduced body (signal-preserving), without the header line.
     pub body: String,
-    /// Lines kept in `body` (excludes the omission markers).
+    /// Kept tally for `body`. Unit depends on the reducer: lines for the
+    /// line-oriented kinds (log / search / diff, excluding omission markers),
+    /// chars for [`ContentKind::Json`] — its body is re-pretty-printed, so a
+    /// line tally would be dishonest ("kept 43/1 lines" for a dense blob).
     pub kept_lines: usize,
-    /// Lines in the original input.
+    /// Tally for the original input, in the same unit as `kept_lines`.
     pub total_lines: usize,
 }
 
@@ -64,6 +67,17 @@ impl Reduction {
     /// partial, so it can re-run the tool if it needs the dropped detail.
     #[must_use]
     pub fn render(&self) -> String {
+        // JSON is tallied in chars (see `kept_lines`) — render the matching
+        // unit so the header counts what the reducer actually measured.
+        if matches!(self.kind, ContentKind::Json) {
+            return format!(
+                "[compacted {}: reduced {}→{} chars]\n{}",
+                self.kind.label(),
+                self.total_lines,
+                self.kept_lines,
+                self.body
+            );
+        }
         format!(
             "[compacted {}: kept {}/{} lines]\n{}",
             self.kind.label(),
@@ -152,7 +166,14 @@ pub(super) fn render_selected(lines: &[&str], kept: &[usize]) -> String {
 /// search reducers so the two stay consistent about what counts as "loud".
 pub(super) fn is_error_signal(line: &str) -> bool {
     let l = line.to_ascii_lowercase();
-    const NEEDLES: [&str; 11] = [
+    // Android logcat error lines ("E/Tag: message") put the marker at the
+    // start of the (possibly indented) line — as a bare substring needle it
+    // would false-positive on any path containing "e/", so it gets a trimmed
+    // prefix check instead.
+    if l.trim_start().starts_with("e/") {
+        return true;
+    }
+    const NEEDLES: [&str; 10] = [
         "error",
         "warning",
         "failed",
@@ -162,7 +183,6 @@ pub(super) fn is_error_signal(line: &str) -> bool {
         "traceback",
         "fatal",
         "assert",
-        " e/",
         "✗",
     ];
     NEEDLES.iter().any(|n| l.contains(n))
@@ -198,6 +218,16 @@ mod tests {
         let lines = vec!["a", "b", "c"];
         let body = render_selected(&lines, &[0, 1, 2]);
         assert_eq!(body, "a\nb\nc");
+    }
+
+    #[test]
+    fn logcat_error_lines_are_error_signals() {
+        // Brief-format logcat error lines start at column 0 — the old " e/"
+        // needle (leading space) could never match them.
+        assert!(is_error_signal("E/ActivityManager: ANR in com.example"));
+        assert!(is_error_signal("  E/Tag: indented variant"));
+        // …while a mid-line "e/" (e.g. a path segment) must not be loud.
+        assert!(!is_error_signal("copied assets to build e/output dir"));
     }
 
     #[test]

@@ -1,8 +1,13 @@
-//! `PreflightPipeline` — async stage execution before the main compaction pipeline.
+//! `PreflightPipeline` — ordered execution of the deterministic "cheap pass"
+//! stages (see `cheap_passes/`) over the message list before the more
+//! expensive LLM compaction is considered.
 //!
-//! Unlike the synchronous `CompactionStage` trait in `pipeline.rs`, preflight
-//! stages are async because later implementations (e.g. Autocompact) will call
-//! LLMs to summarize or reorganize context.
+//! Every stage is a zero-LLM structural transform (tool-result pruning,
+//! file-op supersession, historical image stripping) gated by the preventive
+//! band: below the configured fill-ratio floor
+//! ([`PreflightPipeline::with_min_pressure_ratio`]) the whole pipeline is a
+//! no-op. The trait is `async` only because the pipeline sits on the agent's
+//! async path — implementations are deterministic and make no LLM calls.
 
 use super::ContextPressure;
 use crate::providers::message::UnifiedMessage;

@@ -109,7 +109,6 @@ pub mod resume_coordinator;
 pub mod run_event_bus;
 pub mod state_version;
 pub mod streaming;
-pub mod tls;
 pub mod tools_invalidation;
 pub mod trace_context;
 pub mod trace_protocol;

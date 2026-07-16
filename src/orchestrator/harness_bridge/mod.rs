@@ -136,6 +136,14 @@ pub struct AgentHarnessRunner {
     /// without a memory backend) keeps the LLM summarization path.
     pub memory_backend: Option<MemoryBackend>,
 
+    /// Mirror of `MemoryConfig.project_scoped`. The d0/d1/d2 session summaries
+    /// the compactor's reuse path reads are *written* under
+    /// `scoped_or_base(agent, project_scoped, current_project_root())` (see
+    /// `memory::session_compactor::prepare_history`); the reuse read filters
+    /// `WHERE agent_id = ?`, so the compactor must resolve the same scoped id
+    /// or `try_reuse` silently matches nothing whenever project scoping is on.
+    pub memory_project_scoped: bool,
+
     /// Tool catalog — owns the `ToolHealthCache` whose
     /// snapshots drive the `<tool_runtime_state>` block emitted by
     /// `ToolRuntimeStateLayer` @502. `None` in test/early-boot paths keeps

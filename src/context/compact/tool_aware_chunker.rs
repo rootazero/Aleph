@@ -1,9 +1,12 @@
-//! `ToolAwareChunker` — semantic unit parsing and pair-aware chunking.
+//! Semantic-unit parsing and greedy chunking for post-turn compaction.
 //!
-//! Treats `tool_use` / `tool_result` pairs as atomic semantic units that must
-//! never be split across compaction chunks.  A [`ToolRound`] always contains
-//! the tool-calling assistant message, the matching `ToolResult`, and the
-//! optional follow-up assistant text that references the result.
+//! The sole production caller (`session_compactor::post_turn_compress`)
+//! flattens history into plain user/assistant text messages before parsing,
+//! so every message maps to exactly one atomic [`SemanticUnit`].  The former
+//! tool-round pairing machinery (tool_use/tool_result grouping, follow-up
+//! absorption, orphan repair, fresh-tail straddle guard) was unreachable from
+//! production and has been removed; the `ToolAware` name is retained for API
+//! stability.
 
 use crate::providers::message::UnifiedMessage;
 
@@ -11,34 +14,17 @@ use crate::providers::message::UnifiedMessage;
 // SemanticUnit
 // =============================================================================
 
-/// A complete tool interaction round: the assistant tool-call message, its
-/// matching `ToolResult`, and an optional follow-up assistant message.
-#[derive(Debug, Clone)]
-pub struct ToolRound {
-    /// Index of the assistant message containing the `ToolCall` block.
-    pub tool_use_index: usize,
-    /// Index of the `ToolResult` message that answers the call.
-    pub tool_result_index: usize,
-    /// Index of the assistant follow-up message after the result, if any.
-    pub follow_up_index: Option<usize>,
-    /// Name of the first tool called in the round (for logging / scoring).
-    pub tool_name: String,
-}
-
 /// A single atomic semantic unit within a conversation.
 ///
-/// The chunker never splits a unit — even a large `ToolRound` that exceeds the
+/// The chunker never splits a unit — even a message that alone exceeds the
 /// chunk token limit is placed in its own chunk rather than being fragmented.
 #[derive(Debug, Clone)]
 pub enum SemanticUnit {
     /// A plain user message at the given message index.
     UserMessage { index: usize },
 
-    /// A plain assistant text message (no tool calls) at the given message index.
+    /// A plain assistant text message at the given message index.
     AssistantText { index: usize },
-
-    /// A complete tool interaction round.
-    ToolRound(Box<ToolRound>),
 }
 
 impl SemanticUnit {
@@ -46,19 +32,11 @@ impl SemanticUnit {
     #[must_use]
     pub fn message_indices(&self) -> Vec<usize> {
         match self {
-            Self::UserMessage { index } => vec![*index],
-            Self::AssistantText { index } => vec![*index],
-            Self::ToolRound(round) => {
-                let mut indices = vec![round.tool_use_index, round.tool_result_index];
-                if let Some(fu) = round.follow_up_index {
-                    indices.push(fu);
-                }
-                indices
-            }
+            Self::UserMessage { index } | Self::AssistantText { index } => vec![*index],
         }
     }
 
-    /// Estimated token size of this unit across all its messages.
+    /// Estimated token size of this unit.
     ///
     /// Uses `content_len / ratio` as a proxy, matching the estimator used
     /// throughout the compaction pipeline.
@@ -72,34 +50,6 @@ impl SemanticUnit {
                 (text.chars().count() as f64 / ratio).ceil() as usize
             })
             .sum()
-    }
-
-    /// The earliest (smallest) message index in this unit.
-    #[must_use]
-    pub const fn first_index(&self) -> usize {
-        match self {
-            Self::UserMessage { index } => *index,
-            Self::AssistantText { index } => *index,
-            Self::ToolRound(round) => round.tool_use_index,
-        }
-    }
-
-    /// The latest (largest) message index in this unit.
-    ///
-    /// For a `ToolRound` this is the follow-up (if present), else the tool
-    /// result — a round can straddle a tail boundary that its `first_index`
-    /// (the tool-use message) sits below.
-    #[must_use]
-    pub fn last_index(&self) -> usize {
-        match self {
-            Self::UserMessage { index } => *index,
-            Self::AssistantText { index } => *index,
-            Self::ToolRound(round) => round
-                .follow_up_index
-                .unwrap_or(round.tool_result_index)
-                .max(round.tool_result_index)
-                .max(round.tool_use_index),
-        }
     }
 }
 
@@ -133,85 +83,21 @@ impl SemanticChunk {
 
 /// Parse a message slice into a sequence of [`SemanticUnit`]s.
 ///
-/// Rules (evaluated in order for each cursor position):
-/// 1. An `Assistant` message with tool calls is the start of a `ToolRound`.
-///    - The immediately following message must be a `ToolResult` to form a round.
-///    - After the `ToolResult`, an optional plain `Assistant` message (no tool
-///      calls) is absorbed as `follow_up`.
-///    - If the next message is *not* a `ToolResult`, the assistant message is
-///      treated as a plain `AssistantText`.
-/// 2. A `User` message → `UserMessage`.
-/// 3. A `ToolResult` without a preceding tool call (orphan) → `UserMessage` by
-///    index (rare; the provider layer should already have repaired orphans).
-/// 4. A plain `Assistant` message → `AssistantText`.
+/// Each message becomes exactly one unit: a `User` message → `UserMessage`,
+/// anything else → `AssistantText`.
 #[must_use]
 pub fn parse_semantic_units(messages: &[UnifiedMessage]) -> Vec<SemanticUnit> {
-    let mut units = Vec::new();
-    let mut i = 0;
-
-    while i < messages.len() {
-        let msg = &messages[i];
-
-        if msg.has_tool_calls() {
-            // Potential start of a ToolRound.
-            let tool_use_index = i;
-            let tool_name = extract_first_tool_name(msg);
-
-            // The very next message must be a ToolResult.
-            if i + 1 < messages.len() && messages[i + 1].is_tool_result() {
-                let tool_result_index = i + 1;
-                i += 2; // consume tool_use + tool_result
-
-                // Optionally absorb a plain assistant follow-up.
-                let follow_up_index = if i < messages.len()
-                    && messages[i].is_assistant()
-                    && !messages[i].has_tool_calls()
-                {
-                    let idx = i;
-                    i += 1;
-                    Some(idx)
-                } else {
-                    None
-                };
-
-                units.push(SemanticUnit::ToolRound(Box::new(ToolRound {
-                    tool_use_index,
-                    tool_result_index,
-                    follow_up_index,
-                    tool_name,
-                })));
+    messages
+        .iter()
+        .enumerate()
+        .map(|(index, msg)| {
+            if msg.is_user() {
+                SemanticUnit::UserMessage { index }
             } else {
-                // No matching ToolResult — treat as plain assistant text.
-                units.push(SemanticUnit::AssistantText {
-                    index: tool_use_index,
-                });
-                i += 1;
+                SemanticUnit::AssistantText { index }
             }
-        } else if msg.is_user() {
-            units.push(SemanticUnit::UserMessage { index: i });
-            i += 1;
-        } else if msg.is_tool_result() {
-            // Orphan ToolResult — no preceding ToolCall.  Treat as UserMessage
-            // by convention so downstream compactors still see the content.
-            units.push(SemanticUnit::UserMessage { index: i });
-            i += 1;
-        } else {
-            // Plain assistant message without tool calls.
-            units.push(SemanticUnit::AssistantText { index: i });
-            i += 1;
-        }
-    }
-
-    units
-}
-
-/// Extract the name of the first tool call from an assistant message.
-fn extract_first_tool_name(msg: &UnifiedMessage) -> String {
-    msg.tool_calls()
-        .into_iter()
-        .next()
-        .map(|(_, name, _)| name.to_owned())
-        .unwrap_or_default()
+        })
+        .collect()
 }
 
 // =============================================================================
@@ -239,36 +125,16 @@ impl ToolAwareChunker {
 
     /// Chunk `units` into [`SemanticChunk`]s using a greedy algorithm.
     ///
-    /// # Parameters
-    /// - `units` — the semantic units to group.
-    /// - `messages` — the original message slice (used for token estimation).
-    /// - `fresh_start` — units that touch the protected "fresh tail" are
-    ///   excluded. A unit is excluded when *any* of its messages falls at or
-    ///   beyond `fresh_start` (checked via `last_index()`), so a `ToolRound`
-    ///   whose tool-use sits below the boundary but whose result/follow-up
-    ///   crosses it is never both summarized here and kept verbatim in the tail.
-    ///
     /// # Invariants
     /// - A single unit is **never split**, even if it alone exceeds the limit.
     /// - An oversized unit is placed in its own chunk.
     #[must_use]
-    pub fn chunk(
-        &self,
-        units: &[SemanticUnit],
-        messages: &[UnifiedMessage],
-        fresh_start: usize,
-    ) -> Vec<SemanticChunk> {
+    pub fn chunk(&self, units: &[SemanticUnit], messages: &[UnifiedMessage]) -> Vec<SemanticChunk> {
         let mut chunks: Vec<SemanticChunk> = Vec::new();
         let mut current_units: Vec<SemanticUnit> = Vec::new();
         let mut current_tokens: usize = 0;
 
         for unit in units {
-            // Skip units that touch the fresh tail. Guard on the unit's last
-            // index so a ToolRound straddling the boundary is excluded whole.
-            if unit.last_index() >= fresh_start {
-                break;
-            }
-
             let unit_tokens = unit.token_size(messages, self.token_ratio);
 
             // Would adding this unit exceed the limit, and do we have content?
@@ -305,8 +171,6 @@ impl ToolAwareChunker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::message::{ContentBlock, UnifiedMessage};
-    use serde_json::json;
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -316,21 +180,6 @@ mod tests {
 
     fn assistant_msg(text: &str) -> UnifiedMessage {
         UnifiedMessage::assistant(text)
-    }
-
-    fn tool_use_msg(call_id: &str, tool_name: &str) -> UnifiedMessage {
-        UnifiedMessage::Assistant {
-            content: vec![ContentBlock::ToolCall {
-                thought_signature: None,
-                id: call_id.to_owned(),
-                name: tool_name.to_owned(),
-                arguments: json!({}),
-            }],
-        }
-    }
-
-    fn tool_result_msg(call_id: &str, tool_name: &str, output: &str) -> UnifiedMessage {
-        UnifiedMessage::tool_result(call_id, tool_name, output, false)
     }
 
     // ── tests ─────────────────────────────────────────────────────────────────
@@ -353,33 +202,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_tool_round_groups_correctly() {
-        // 4 messages: user, tool_use, tool_result, assistant follow-up
-        // Expected: 2 units — UserMessage + ToolRound(with follow_up)
-        let messages = vec![
-            user_msg("Search for cats"),
-            tool_use_msg("c1", "web_search"),
-            tool_result_msg("c1", "web_search", "Found 42 cat articles"),
-            assistant_msg("Here are the results about cats!"),
-        ];
-
-        let units = parse_semantic_units(&messages);
-        assert_eq!(units.len(), 2, "expected 2 units, got {units:?}");
-
-        assert!(matches!(units[0], SemanticUnit::UserMessage { index: 0 }));
-
-        match &units[1] {
-            SemanticUnit::ToolRound(round) => {
-                assert_eq!(round.tool_use_index, 1);
-                assert_eq!(round.tool_result_index, 2);
-                assert_eq!(round.follow_up_index, Some(3));
-                assert_eq!(round.tool_name, "web_search");
-            }
-            other => panic!("expected ToolRound, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn chunking_respects_token_limit() {
         // 3 messages each with ~57 tokens of content (ratio = 4.0 → ~228 chars each)
         // With a 100-token limit, each message should land in its own chunk.
@@ -394,58 +216,12 @@ mod tests {
         assert_eq!(units.len(), 3);
 
         let chunker = ToolAwareChunker::new(100, 4.0);
-        let chunks = chunker.chunk(&units, &messages, messages.len());
+        let chunks = chunker.chunk(&units, &messages);
 
         assert!(
             chunks.len() >= 2,
             "expected at least 2 chunks with 100-token limit, got {}",
             chunks.len()
         );
-    }
-
-    #[test]
-    fn chunking_never_splits_tool_round() {
-        // Build a ToolRound that is large enough to exceed even a tiny limit on its own.
-        let large_output = "y".repeat(400); // ~100 tokens at ratio 4.0
-        let messages = vec![
-            user_msg("Do something"),
-            tool_use_msg("c2", "big_tool"),
-            tool_result_msg("c2", "big_tool", &large_output),
-            assistant_msg("Done."),
-        ];
-
-        let units = parse_semantic_units(&messages);
-
-        // Use a very small token limit (10) — the ToolRound alone exceeds it.
-        let chunker = ToolAwareChunker::new(10, 4.0);
-        let chunks = chunker.chunk(&units, &messages, messages.len());
-
-        // Every chunk must contain at most one ToolRound, and all indices of a
-        // ToolRound must be in the same chunk.
-        for chunk in &chunks {
-            for unit in &chunk.units {
-                if let SemanticUnit::ToolRound(round) = unit {
-                    let chunk_indices = chunk.message_indices();
-                    assert!(
-                        chunk_indices.contains(&round.tool_use_index),
-                        "tool_use_index missing from chunk"
-                    );
-                    assert!(
-                        chunk_indices.contains(&round.tool_result_index),
-                        "tool_result_index missing from chunk"
-                    );
-                    if let Some(fu) = round.follow_up_index {
-                        assert!(
-                            chunk_indices.contains(&fu),
-                            "follow_up_index missing from chunk"
-                        );
-                    }
-                }
-            }
-        }
-
-        // Sanity: all 4 messages accounted for across all chunks.
-        let all_indices: Vec<usize> = chunks.iter().flat_map(|c| c.message_indices()).collect();
-        assert_eq!(all_indices.len(), 4);
     }
 }
