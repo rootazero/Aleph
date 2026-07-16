@@ -731,37 +731,6 @@ pub async fn handle_list(request: JsonRpcRequest, router: Arc<AgentRouter>) -> J
     )
 }
 
-// ============================================================================
-// Extended Agent Handlers (for remove-ffi migration)
-// ============================================================================
-
-/// Parameters for agent.respondToInput
-#[derive(Debug, Deserialize)]
-pub(crate) struct RespondToInputParams {
-    /// Request ID for the user input request
-    pub request_id: String,
-    /// User's response
-    pub response: String,
-}
-
-/// Handle agent.respondToInput RPC request
-///
-/// Responds to a user input request from the agent.
-pub async fn handle_respond_to_input(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: RespondToInputParams = match parse_params(&request) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-
-    // TODO: Forward to active agent instance
-    info!(
-        request_id = %params.request_id,
-        response_len = params.response.len(),
-        "User input response received"
-    );
-
-    JsonRpcResponse::success(request.id, json!({ "ok": true }))
-}
 
 #[cfg(test)]
 mod tests {

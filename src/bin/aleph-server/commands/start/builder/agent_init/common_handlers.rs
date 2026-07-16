@@ -127,13 +127,6 @@ pub(super) fn register_common_handlers(
         async move { chat_handlers::handle_rewind(req, manager).await }
     });
 
-    // agent.respondToInput is stateless (no context args)
-    server
-        .handlers_mut()
-        .register("agent.respondToInput", |req| async move {
-            alephcore::gateway::handlers::agent::handle_respond_to_input(req).await
-        });
-
     // agent.list — returns available agents from the router
     {
         let router_list = router.clone();
@@ -149,7 +142,6 @@ pub(super) fn register_common_handlers(
         println!("  - agent.status         : Query run status by run_id");
         println!("  - agent.cancel         : Cancel an active run");
         println!("  - agent.list           : List available agents");
-        println!("  - agent.respondToInput : Respond to user input request");
         println!("  - chat.send            : Send chat message (wraps agent.run)");
         println!("  - chat.abort           : Abort message generation");
         println!("  - chat.history         : Get chat history");

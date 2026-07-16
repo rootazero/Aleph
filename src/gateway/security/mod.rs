@@ -31,8 +31,8 @@ pub mod token_readonly;
 
 // Re-export commonly used types
 pub use crypto::{
-    generate_keypair, generate_pairing_code, generate_secret, hmac_sign, hmac_verify, sign_message,
-    verify_signature, CryptoError, DeviceFingerprint, PAIRING_CODE_CHARSET, PAIRING_CODE_LENGTH,
+    generate_keypair, generate_secret, hmac_sign, hmac_verify, sign_message, verify_signature,
+    CryptoError, DeviceFingerprint,
 };
 pub use device_token_manager::{DeviceTokenError, DeviceTokenManager};
 pub use shared_token::{SharedTokenError, SharedTokenManager};

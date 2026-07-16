@@ -232,7 +232,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         init_teams_evolution_stores(daemon).await;
 
     // Higher-level team components derived from the four stores above.
-    let (message_router, inbox, session_coordinator, agent_message_bus) = build_team_components(
+    let (message_router, inbox, session_coordinator) = build_team_components(
         &message_store,
         &event_store,
         &team_session_store,
@@ -468,7 +468,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             coord_task_store: coord_store.clone(),
             snapshot_store: snapshot_store.clone(),
             dispatch_signal: Some(dispatch_signal.clone()),
-            agent_message_bus: agent_message_bus.clone(),
             team_store: team_store.clone(),
             artifact_store: artifact_store.clone(),
             event_store: event_store.clone(),

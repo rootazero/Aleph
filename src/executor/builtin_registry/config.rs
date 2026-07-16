@@ -73,8 +73,6 @@ pub struct BuiltinToolConfig {
     /// Shared with `task_create` so a newly created task is dispatched without
     /// polling latency.
     pub dispatch_signal: Option<Arc<tokio::sync::Notify>>,
-    /// Agent message bus for task update/wait event notifications
-    pub agent_message_bus: Option<Arc<crate::agents::swarm::AgentMessageBus>>,
     /// Team store for team management tools (`team_create`, `team_delegate`, `team_status`, `team_disband`)
     pub team_store: Option<Arc<dyn crate::teams::TeamStore>>,
     /// Artifact store for persisting task artifacts (delegation results, reports, etc.)

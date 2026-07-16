@@ -183,8 +183,14 @@ pub async fn handle_logs(request: JsonRpcRequest, _handle: McpManagerHandle) -> 
         Err(resp) => return resp,
     };
 
-    // TODO: Implement log retrieval when logging is added to the actor
-    JsonRpcResponse::success(request.id, json!({ "logs": Vec::<String>::new() }))
+    // Log retrieval is not implemented yet — the MCP actor keeps no log buffer.
+    // Return an explicit `implemented: false` next to the empty list so a caller
+    // can distinguish "not yet supported" from "the server produced no logs",
+    // instead of silently returning `[]` as if it were real output.
+    JsonRpcResponse::success(
+        request.id,
+        json!({ "logs": Vec::<String>::new(), "implemented": false }),
+    )
 }
 
 // ============================================================================

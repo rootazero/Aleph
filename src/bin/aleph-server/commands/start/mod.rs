@@ -161,6 +161,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         require_idempotency_key: full_config.gateway.require_idempotency_key,
         allowed_origins: full_config.gateway.allowed_origins.clone(),
         allow_any_origin: full_config.gateway.allow_any_origin,
+        trusted_proxy_enabled: full_config.gateway.trusted_proxy.enabled,
+        trusted_proxy_ips: full_config.gateway.trusted_proxy.trusted_ips.clone(),
+        allow_insecure_remote: full_config.gateway.allow_insecure_remote,
+        tls_enabled: full_config.gateway.tls.enabled,
+        tls_cert_path: full_config.gateway.tls.cert_path.clone(),
+        tls_key_path: full_config.gateway.tls.key_path.clone(),
     };
     let mut server = GatewayServer::with_config(addr, server_config);
 
@@ -538,6 +544,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Wire the security store so the WS node connect/disconnect paths can
     // stamp enrolled-node last_seen_at (offline fleet view honesty).
     server.set_security_store(auth_bundle.security_store.clone());
+
+    // Dedicated gateway audit pipeline for remote-connection auth forensics
+    // (AuthFailure on a rejected remote connect; RateLimited on a flood-guard
+    // close). Deliberately decoupled from the content-guardrail audit log so a
+    // network-exposed gateway records auth events even when guardrails are off.
+    // The drain is idempotent alongside the guard's — both append to
+    // `security_audit_log`; the JoinHandle is detached for the process lifetime.
+    let (gw_audit_log, gw_audit_rx) = alephcore::security::audit::SecurityAuditLog::new(256);
+    let _gw_audit_drain =
+        alephcore::security::spawn_audit_drain(gw_audit_rx, auth_bundle.security_store.clone());
+    server.set_audit_log(gw_audit_log);
 
     // Wizard session manager — OnboardingFlow factory replaces the phase-1
     // service_unavailable stubs installed in HandlerRegistry::new. (The
@@ -1126,9 +1143,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.message_router.clone(),
     ) {
         {
-            use alephcore::event::{
-                EventBus, EventContext, EventFilter, EventHandler, GlobalBus,
-            };
+            use alephcore::event::{EventBus, EventContext, EventFilter, EventHandler, GlobalBus};
             use alephcore::teams::messages::{Aggregator, AggregatorConfig};
             use alephcore::teams::TeamNotifier;
 

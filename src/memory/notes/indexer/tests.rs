@@ -1479,8 +1479,12 @@ fn canonicalize_category_merges_plural_and_spelling_variants() {
     // Plurals collapse to the single canonical singular.
     assert_eq!(canonicalize_category("projects"), "project");
     assert_eq!(canonicalize_category("preferences"), "preference");
-    assert_eq!(canonicalize_category("workflows"), "workflow");
-    assert_eq!(canonicalize_category("teams"), "team");
+    // `workflows`/`teams`/`systems`/`interests` are deliberately NOT aliased —
+    // their singular forms are not registered categories (CATEGORY_DIRS), so
+    // rewriting them would yield a category that validation/rebuild rejects.
+    // They pass through unchanged, keeping LLM category sovereignty.
+    assert_eq!(canonicalize_category("workflows"), "workflows");
+    assert_eq!(canonicalize_category("teams"), "teams");
     assert_eq!(canonicalize_category("entities"), "entity");
     // Case-insensitive on match.
     assert_eq!(canonicalize_category("Projects"), "project");
@@ -1502,4 +1506,20 @@ fn entity_and_synthesis_are_registered_indexable_categories() {
     // on an index rebuild) and dream L1 validation accepts them.
     assert!(CATEGORY_DIRS.contains(&"entity"));
     assert!(CATEGORY_DIRS.contains(&"synthesis"));
+}
+
+#[test]
+fn every_alias_target_is_a_registered_category() {
+    // Guard against the category-drift severed wire: an alias whose canonical
+    // form is absent from CATEGORY_DIRS actively rewrites an LLM-authored plural
+    // into a singular that validation/rebuild then rejects — silently dropping
+    // the note on the next index rebuild. Every CATEGORY_ALIASES target MUST be
+    // a registered indexable category; this fails loudly if a new alias (or a
+    // removed CATEGORY_DIRS entry) reintroduces the drift.
+    for &(variant, canonical) in CATEGORY_ALIASES {
+        assert!(
+            CATEGORY_DIRS.contains(&canonical),
+            "alias '{variant}' -> '{canonical}' targets a category absent from CATEGORY_DIRS"
+        );
+    }
 }

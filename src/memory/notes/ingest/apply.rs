@@ -653,7 +653,7 @@ mod tests {
         assert_eq!(canonicalize_note_path("projects/foo"), "project/foo");
         assert_eq!(canonicalize_note_path("project/foo"), "project/foo");
         // Filename is untouched (even if it contains no further slash logic).
-        assert_eq!(canonicalize_note_path("teams/my-team"), "team/my-team");
+        assert_eq!(canonicalize_note_path("entities/my-thing"), "entity/my-thing");
         // Pathological / prefix-less inputs pass through unchanged.
         assert_eq!(canonicalize_note_path("noslash"), "noslash");
     }

@@ -58,10 +58,6 @@ pub const CATEGORY_DIRS: &[&str] = &[
 const CATEGORY_ALIASES: &[(&str, &str)] = &[
     ("projects", "project"),
     ("preferences", "preference"),
-    ("workflows", "workflow"),
-    ("teams", "team"),
-    ("systems", "system"),
-    ("interests", "interest"),
     ("entities", "entity"),
     ("learnings", "learning"),
     ("lessons", "lesson"),

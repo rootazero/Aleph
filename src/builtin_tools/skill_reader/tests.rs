@@ -310,22 +310,20 @@ async fn skill_read_rejects_traversal_in_file_name() {
 }
 
 #[tokio::test]
-async fn duplicate_skill_across_dirs_is_refused() {
+async fn duplicate_skill_across_dirs_resolves_by_precedence() {
+    // Two DISTINCT physical dirs share a skill id — e.g. a project skill
+    // shadowing a same-named global one. `skill_read` must resolve to the
+    // highest-precedence root (first in the list), matching `skill_list`'s
+    // first-occurrence dedup and Claude Code's "closer skill wins", rather
+    // than stranding the caller with an "ambiguous" refusal.
     let tmp = tempfile::tempdir().unwrap();
     let dir_a = tmp.path().join("a");
     let dir_b = tmp.path().join("b");
-    for d in [&dir_a, &dir_b] {
-        let sk = d.join("dup");
-        tokio::fs::create_dir_all(&sk).await.unwrap();
-        tokio::fs::write(
-            sk.join("SKILL.md"),
-            "---\nname: dup\ndescription: d\n---\nx",
-        )
-        .await
-        .unwrap();
-    }
+    create_test_skill(&dir_a, "dup", "Dup A", "from dir a (higher precedence)");
+    create_test_skill(&dir_b, "dup", "Dup B", "from dir b (shadowed)");
+
     let tool = ReadSkillTool::with_directories(vec![dir_a, dir_b]);
-    let err = AlephTool::call(
+    let result = AlephTool::call(
         &tool,
         ReadSkillArgs {
             skill_id: "dup".to_string(),
@@ -333,10 +331,41 @@ async fn duplicate_skill_across_dirs_is_refused() {
         },
     )
     .await
-    .unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("ambiguous") || msg.contains("multiple"),
-        "got: {msg}"
-    );
+    .expect("genuine same-name collisions resolve by precedence, not refusal");
+    assert!(result.success);
+    // First directory wins; the shadowed one is not read.
+    assert!(result.content.contains("Dup A"), "got: {}", result.content);
+    assert!(!result.content.contains("Dup B"), "got: {}", result.content);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn symlink_twins_across_roots_resolve_to_single_skill() {
+    // Regression for the real-world `agentkey` case: a skill installed once,
+    // then surfaced through several roots via symlinks (`~/.aleph/skills/<id>`
+    // and `~/.claude/skills/<id>` both symlinking `~/.agents/skills/<id>`).
+    // Both roots canonicalize to the same physical dir, so `skill_read` must
+    // treat it as ONE hit — not a false "ambiguous" collision that strands the
+    // model into a raw `cat` loop.
+    let tmp = tempfile::tempdir().unwrap();
+    let real_root = tmp.path().join("real");
+    let alias_root = tmp.path().join("alias");
+    std::fs::create_dir_all(&alias_root).unwrap();
+    create_test_skill(&real_root, "twin", "Twin Skill", "installed once");
+
+    // alias_root/twin -> real_root/twin : same physical directory.
+    std::os::unix::fs::symlink(real_root.join("twin"), alias_root.join("twin")).unwrap();
+
+    let tool = ReadSkillTool::with_directories(vec![real_root, alias_root]);
+    let result = AlephTool::call(
+        &tool,
+        ReadSkillArgs {
+            skill_id: "twin".to_string(),
+            file_name: None,
+        },
+    )
+    .await
+    .expect("symlink twins across roots must not be a false ambiguity");
+    assert!(result.success);
+    assert!(result.content.contains("Twin Skill"));
 }

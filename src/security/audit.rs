@@ -23,10 +23,7 @@ pub enum AuditEventType {
     InjectionPatternDetected,
     EnvInjectionDetected,
     PathTraversalBlocked,
-    PairingAttempt,
-    PairingBruteForce,
     PermissionDenied,
-    GuestSessionCreated,
     PiiDetected,
     LeakWarning,
 }
@@ -45,10 +42,7 @@ impl fmt::Display for AuditEventType {
             Self::InjectionPatternDetected => "injection_pattern",
             Self::EnvInjectionDetected => "env_injection",
             Self::PathTraversalBlocked => "path_traversal_blocked",
-            Self::PairingAttempt => "pairing_attempt",
-            Self::PairingBruteForce => "pairing_brute_force",
             Self::PermissionDenied => "permission_denied",
-            Self::GuestSessionCreated => "guest_session_created",
             Self::PiiDetected => "pii_detected",
             Self::LeakWarning => "leak_warning",
         };
@@ -80,6 +74,33 @@ pub struct AuditEntry {
     pub source_ip: Option<String>,
     pub session_id: Option<String>,
     pub detail: String,
+}
+
+impl AuditEntry {
+    /// A remote connection failed the Gateway-token login wall at `connect`.
+    /// `source_ip` is the socket peer; `detail` names the rejected path.
+    #[must_use]
+    pub fn auth_failure(source_ip: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            event_type: AuditEventType::AuthFailure,
+            severity: AuditSeverity::Warn,
+            source_ip: Some(source_ip.into()),
+            session_id: None,
+            detail: detail.into(),
+        }
+    }
+
+    /// A remote connection was closed for excessive requests (flood guard).
+    #[must_use]
+    pub fn rate_limited(source_ip: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            event_type: AuditEventType::RateLimited,
+            severity: AuditSeverity::Warn,
+            source_ip: Some(source_ip.into()),
+            session_id: None,
+            detail: detail.into(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -201,5 +222,23 @@ mod tests {
     #[test]
     fn test_severity_display() {
         assert_eq!(AuditSeverity::Critical.to_string(), "critical");
+    }
+
+    #[test]
+    fn auth_failure_entry_stamps_ip_and_type() {
+        let e = AuditEntry::auth_failure("10.0.0.6", "remote connect rejected");
+        assert_eq!(e.event_type, AuditEventType::AuthFailure);
+        assert_eq!(e.severity, AuditSeverity::Warn);
+        assert_eq!(e.source_ip.as_deref(), Some("10.0.0.6"));
+        assert!(e.session_id.is_none());
+        assert!(e.detail.contains("rejected"));
+    }
+
+    #[test]
+    fn rate_limited_entry_stamps_ip_and_type() {
+        let e = AuditEntry::rate_limited("10.0.0.6", "flood guard: 10 unauthorized");
+        assert_eq!(e.event_type, AuditEventType::RateLimited);
+        assert_eq!(e.severity, AuditSeverity::Warn);
+        assert_eq!(e.source_ip.as_deref(), Some("10.0.0.6"));
     }
 }

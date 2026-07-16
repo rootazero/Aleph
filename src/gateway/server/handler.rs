@@ -39,6 +39,23 @@ use super::per_client_buffer::PerClientBuffer;
 use super::{ConnectionState, GatewaySharedState};
 use crate::gateway::security::SecurityStore;
 
+/// Parse configured trusted-proxy IP strings into `IpAddr`, silently dropping
+/// unparseable entries (fail-safe: a garbage entry just isn't trusted).
+pub(super) fn parse_trusted_ips(raw: &[String]) -> Vec<IpAddr> {
+    raw.iter().filter_map(|s| s.parse::<IpAddr>().ok()).collect()
+}
+
+/// Whether to refuse this upgrade for insecure transport. A non-loopback client
+/// on an unencrypted leg is refused unless the operator set
+/// `allow_insecure_remote`. Loopback is always allowed.
+pub(super) fn refuse_insecure_remote(
+    client_ip: IpAddr,
+    secure: bool,
+    allow_insecure_remote: bool,
+) -> bool {
+    !client_ip.is_loopback() && !secure && !allow_insecure_remote
+}
+
 /// Shared context for handling a WebSocket connection.
 struct ConnectionContext {
     middleware_chain: MiddlewareChain,
@@ -80,8 +97,9 @@ struct ConnectionContext {
     security_store: Option<Arc<SecurityStore>>,
     /// Device-token manager for bootstrap-ticket / per-device-token auth.
     device_token_mgr: Option<Arc<crate::gateway::security::DeviceTokenManager>>,
-    /// Socket peer IP. Used for the per-IP connection cap and rate-limit
-    /// identity.
+    /// Resolved client IP (the trusted-proxy-forwarded client behind a
+    /// reverse proxy, else the raw socket peer). Used for the per-IP
+    /// connection cap and rate-limit identity.
     client_ip: IpAddr,
     /// Cluster node registry (shared Arc). The connect handler registers a
     /// `role:node` connection here and cleanup deregisters it.
@@ -89,6 +107,11 @@ struct ConnectionContext {
     /// Shared exec-approval manager for node-initiated approvals (cluster ③).
     /// `None` ⇒ `node.approval.request` is refused.
     exec_approval_manager: Option<Arc<crate::exec::manager::ExecApprovalManager>>,
+    /// Security audit log for remote-connection auth forensics. Records
+    /// `AuthFailure` on a rejected remote `connect` and `RateLimited` when the
+    /// flood guard closes an unauthorized connection. `None` ⇒ auth events are
+    /// not persisted (probe/degraded wiring).
+    audit_log: Option<crate::security::audit::SecurityAuditLog>,
 }
 
 /// axum handler: upgrade HTTP connection to WebSocket at `/ws`
@@ -98,10 +121,37 @@ pub(super) async fn ws_upgrade_handler(
     State(state): State<Arc<GatewaySharedState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
-    // IP-keyed abuse protections (per-IP cap, rate limiting) key off the
-    // socket peer address verbatim. The trusted-proxy / X-Forwarded-For
-    // resolution died with the LAN-trust revert.
-    let client_ip = peer_addr.ip();
+    // IP-keyed abuse protections (per-IP cap, rate limiting), the security
+    // audit log, AND the connect-auth loopback test all read `client_ip`.
+    // Behind a trusted proxy the transport peer is the proxy, so resolve the
+    // real client from forwarding headers first (spoof-safe: untrusted peers'
+    // headers are ignored). `secure` = native TLS OR the proxy's XFF-Proto.
+    let resolved = crate::gateway::trusted_proxy::resolve_client(
+        peer_addr.ip(),
+        &headers,
+        state.trusted_proxy_enabled,
+        &state.trusted_proxy_ips,
+    );
+    let client_ip = resolved.ip;
+    let secure = state.tls_enabled || resolved.secure;
+
+    // Insecure-transport guard: a non-loopback client on an unencrypted leg
+    // is refused unless the operator opted into `allow_insecure_remote`.
+    // Loopback is always allowed. Must run before any auth/origin decision
+    // is made over what could be a plaintext, sniffable/tamperable leg.
+    if refuse_insecure_remote(client_ip, secure, state.allow_insecure_remote) {
+        warn!(
+            peer = %peer_addr, client = %client_ip,
+            "rejected WebSocket upgrade: insecure transport to a remote client — \
+             enable [gateway.tls], or a TLS reverse proxy + [gateway.trusted_proxy], \
+             or set allow_insecure_remote=true"
+        );
+        return (
+            axum::http::StatusCode::UPGRADE_REQUIRED,
+            "TLS required for remote connections",
+        )
+            .into_response();
+    }
 
     // Cross-origin / DNS-rebinding guard. A browser always attaches an
     // `Origin` header to a WS upgrade and cannot forge it, so a malicious page
@@ -164,7 +214,7 @@ pub(super) async fn ws_upgrade_handler(
     // on the reserved desktop semaphore pool; everyone else falls back to
     // the shared pool. See `ConnectionContext::channel_class` for the
     // accepted trade-off.
-    let channel_class = if peer_addr.ip().is_loopback() {
+    let channel_class = if client_ip.is_loopback() {
         ChannelClass::Desktop
     } else {
         ChannelClass::Bot
@@ -193,6 +243,7 @@ pub(super) async fn ws_upgrade_handler(
             client_ip,
             node_registry: state.node_registry.clone(),
             exec_approval_manager: state.exec_approval_manager.clone(),
+            audit_log: state.audit_log.clone(),
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
             error!("Connection error from {}: {}", peer_addr, e);
@@ -577,6 +628,18 @@ async fn handle_connection(
                                                 conn_id,
                                                 flood_guard.strikes()
                                             );
+                                            // Forensic trail: one row per abusive
+                                            // connection (bounded by the flood-guard
+                                            // close, not per rejected frame).
+                                            if let Some(log) = ctx.audit_log.as_ref() {
+                                                log.log(crate::security::audit::AuditEntry::rate_limited(
+                                                    ctx.client_ip.to_string(),
+                                                    format!(
+                                                        "connection closed: {} unauthorized requests (flood guard)",
+                                                        flood_guard.strikes()
+                                                    ),
+                                                ));
+                                            }
                                             break;
                                         }
                                         continue;
@@ -798,6 +861,23 @@ async fn handle_connection(
                                                         crate::gateway::handlers::connect::ConnectAuthOutcome::BootstrapExchanged { device_token, .. } => (true, "operator", Some(device_token.clone())),
                                                         crate::gateway::handlers::connect::ConnectAuthOutcome::Unauthorized => (false, "guest", None),
                                                     };
+                                                    // Forensic trail: a remote connection that
+                                                    // failed the Gateway-token login wall. Bounded
+                                                    // to <=10/60s/IP by the `Auth`-scope limiter,
+                                                    // so a brute-force campaign self-throttles
+                                                    // after ~10 recorded attempts. Loopback is the
+                                                    // zero-config operator and never audited.
+                                                    if crate::gateway::handlers::connect::should_audit_connect_failure(
+                                                        authorized,
+                                                        ctx.client_ip.is_loopback(),
+                                                    ) {
+                                                        if let Some(log) = ctx.audit_log.as_ref() {
+                                                            log.log(crate::security::audit::AuditEntry::auth_failure(
+                                                                ctx.client_ip.to_string(),
+                                                                "remote connect rejected: no valid Gateway credential",
+                                                            ));
+                                                        }
+                                                    }
                                                     {
                                                         let mut conns = ctx.connections.write().await;
                                                         if let Some(state) = conns.get_mut(&conn_id) {
@@ -1545,5 +1625,37 @@ mod tests {
                 Some(format!("m{i}").as_str())
             );
         }
+    }
+
+    // ── Trusted-proxy IP parsing (F5) ─────────────────────────────────────
+
+    #[test]
+    fn parses_trusted_ips_dropping_garbage() {
+        let parsed = super::parse_trusted_ips(&[
+            "127.0.0.1".to_string(),
+            "::1".to_string(),
+            "not-an-ip".to_string(),
+        ]);
+        assert_eq!(parsed.len(), 2);
+        assert!(parsed.contains(&"127.0.0.1".parse().unwrap()));
+        assert!(parsed.contains(&"::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn insecure_remote_gate_truth_table() {
+        use std::net::IpAddr;
+        let lo: IpAddr = "127.0.0.1".parse().unwrap();
+        let remote: IpAddr = "203.0.113.9".parse().unwrap();
+
+        // Loopback is always allowed, secure or not, regardless of the flag.
+        assert!(!super::refuse_insecure_remote(lo, false, false));
+        assert!(!super::refuse_insecure_remote(lo, false, true));
+
+        // Remote + insecure + not allowed ⇒ refuse.
+        assert!(super::refuse_insecure_remote(remote, false, false));
+        // Remote + secure ⇒ allow.
+        assert!(!super::refuse_insecure_remote(remote, true, false));
+        // Remote + insecure + explicitly allowed ⇒ allow.
+        assert!(!super::refuse_insecure_remote(remote, false, true));
     }
 }

@@ -8,7 +8,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hmac::{Hmac, Mac};
 use rand::rand_core::UnwrapErr;
 use rand::rngs::SysRng;
-use rand::{Rng, RngExt};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use thiserror::Error;
@@ -128,22 +128,6 @@ pub fn generate_secret() -> [u8; 32] {
     secret
 }
 
-/// Pairing code constants
-pub const PAIRING_CODE_LENGTH: usize = 8;
-pub const PAIRING_CODE_CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-
-/// Generate an 8-character Base32 pairing code (excluding confusing chars)
-#[must_use]
-pub fn generate_pairing_code() -> String {
-    let mut rng = os_rng();
-    (0..PAIRING_CODE_LENGTH)
-        .map(|_| {
-            let idx = rng.random_range(0..PAIRING_CODE_CHARSET.len());
-            PAIRING_CODE_CHARSET[idx] as char
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,22 +174,5 @@ mod tests {
         assert!(hmac_verify(&secret, token, &signature).is_ok());
         assert!(hmac_verify(&secret, token, "wrong").is_err());
         assert!(hmac_verify(&secret, "wrong-token", &signature).is_err());
-    }
-
-    #[test]
-    fn test_pairing_code_format() {
-        for _ in 0..100 {
-            let code = generate_pairing_code();
-            assert_eq!(code.len(), 8);
-            // Should only contain allowed characters
-            assert!(code
-                .chars()
-                .all(|c| { PAIRING_CODE_CHARSET.contains(&(c as u8)) }));
-            // Should not contain confusing characters
-            assert!(!code.contains('0'));
-            assert!(!code.contains('1'));
-            assert!(!code.contains('I'));
-            assert!(!code.contains('O'));
-        }
     }
 }

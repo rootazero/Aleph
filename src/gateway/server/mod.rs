@@ -47,8 +47,9 @@ pub struct ConnectionState {
     /// wildcard here; `EventScopeGuard` then delivers guarded topics
     /// (approval banners, config.changed) to every connected client.
     pub permissions: Vec<String>,
-    /// Socket peer IP. The per-IP connection cap counts established
-    /// connections by this value.
+    /// Resolved client IP (the trusted-proxy-forwarded client behind a
+    /// reverse proxy, else the raw socket peer). The per-IP connection cap
+    /// counts established connections by this value.
     pub client_ip: std::net::IpAddr,
     /// Surface identity declared by the client on `connect` (or inferred from
     /// loopback when undeclared). Names *what kind of shell* this connection is
@@ -105,6 +106,16 @@ pub struct GatewaySharedState {
     pub idempotency_guard: Arc<crate::gateway::idempotency::IdempotencyGuard>,
     pub event_scope_guard: Arc<EventScopeGuard>,
     pub audit_log: Option<crate::security::audit::SecurityAuditLog>,
+    /// Trusted-proxy toggle (mirror of `[gateway.trusted_proxy] enabled`).
+    pub trusted_proxy_enabled: bool,
+    /// Parsed trusted-proxy peer IPs whose `X-Forwarded-*` are honored.
+    pub trusted_proxy_ips: Vec<std::net::IpAddr>,
+    /// Mirror of `[gateway] allow_insecure_remote`. `false` ⇒ a non-loopback
+    /// insecure connection is refused at upgrade (Task 5).
+    pub allow_insecure_remote: bool,
+    /// True when the gateway terminates TLS in-process (native tiers). Every
+    /// connection is then secure regardless of forwarding headers.
+    pub tls_enabled: bool,
     /// Readiness flag — flipped to true after `agent_init.rs` completes
     /// phase-2 wiring. Read by `/ready` HTTP probe.
     pub ready: Arc<crate::sync_primitives::AtomicBool>,
@@ -194,6 +205,19 @@ pub struct GatewayConfig {
     /// Trust every Origin on the `/ws` upgrade (reverse-proxy escape
     /// hatch). Mirrors `GatewayServerConfig::allow_any_origin`.
     pub allow_any_origin: bool,
+    /// Trusted-proxy toggle. Mirrors `GatewayServerConfig::trusted_proxy.enabled`.
+    pub trusted_proxy_enabled: bool,
+    /// Trusted-proxy peer IPs (raw strings; parsed in `build_router`).
+    /// Mirrors `GatewayServerConfig::trusted_proxy.trusted_ips`.
+    pub trusted_proxy_ips: Vec<String>,
+    /// Mirrors `GatewayServerConfig::allow_insecure_remote`.
+    pub allow_insecure_remote: bool,
+    /// Mirrors `GatewayServerConfig::tls.enabled`.
+    pub tls_enabled: bool,
+    /// Mirrors `GatewayServerConfig::tls.cert_path`.
+    pub tls_cert_path: String,
+    /// Mirrors `GatewayServerConfig::tls.key_path`.
+    pub tls_key_path: String,
 }
 
 impl Default for GatewayConfig {
@@ -206,6 +230,12 @@ impl Default for GatewayConfig {
             idle_timeout_secs: 90,
             allowed_origins: Vec::new(),
             allow_any_origin: false,
+            trusted_proxy_enabled: false,
+            trusted_proxy_ips: vec!["127.0.0.1".to_string(), "::1".to_string()],
+            allow_insecure_remote: false,
+            tls_enabled: false,
+            tls_cert_path: String::new(),
+            tls_key_path: String::new(),
             lane: LaneConfig::default(),
             require_idempotency_key: false,
         }
@@ -309,6 +339,10 @@ pub struct GatewayServer {
     /// canonical instance; `None` in test/probe constructors ⇒ node-approval
     /// routing is inert (the handler refuses `node.approval.request`).
     pub exec_approval_manager: Option<Arc<crate::exec::manager::ExecApprovalManager>>,
+    /// Security audit log for remote-connection auth forensics. Installed by
+    /// [`GatewayServer::set_audit_log`] and cloned into `GatewaySharedState`.
+    /// `None` in test/probe constructors ⇒ auth events go unrecorded.
+    audit_log: Option<crate::security::audit::SecurityAuditLog>,
 }
 
 impl GatewayServer {
@@ -358,6 +392,7 @@ impl GatewayServer {
             security_store: None,
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
+            audit_log: None,
         }
     }
 
@@ -408,6 +443,7 @@ impl GatewayServer {
             security_store: None,
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
+            audit_log: None,
         }
     }
 
@@ -472,6 +508,14 @@ impl GatewayServer {
         self.security_store = Some(store);
     }
 
+    /// Install the `SecurityAuditLog` so the WS auth path records a forensic
+    /// trail of remote-connection auth failures and flood-guard closes. Fed by
+    /// a dedicated drain (see the start command); `None` leaves auth events
+    /// unrecorded, matching pre-wiring behavior.
+    pub fn set_audit_log(&mut self, log: crate::security::audit::SecurityAuditLog) {
+        self.audit_log = Some(log);
+    }
+
     /// Get the current number of active connections
     pub async fn connection_count(&self) -> usize {
         self.connections.read().await.len()
@@ -506,7 +550,11 @@ impl GatewayServer {
             lane_manager: self.lane_manager.clone(),
             idempotency_guard: self.idempotency_guard.clone(),
             event_scope_guard: self.event_scope_guard.clone(),
-            audit_log: None,
+            audit_log: self.audit_log.clone(),
+            trusted_proxy_enabled: self.config.trusted_proxy_enabled,
+            trusted_proxy_ips: handler::parse_trusted_ips(&self.config.trusted_proxy_ips),
+            allow_insecure_remote: self.config.allow_insecure_remote,
+            tls_enabled: self.config.tls_enabled,
             ready: self.ready.clone(),
             instance_id: self.instance_id.clone(),
             started_at_unix: self.started_at_unix,
@@ -628,6 +676,20 @@ impl GatewayServer {
         });
     }
 
+    /// Refuse to boot if the gateway would serve plaintext to the network.
+    /// Loopback / TLS / trusted-proxy / explicit-opt-out all pass.
+    fn check_network_exposure(&self) -> Result<(), GatewayError> {
+        if let Some(msg) = insecure_exposure_refused(
+            self.addr.ip().is_loopback(),
+            self.config.tls_enabled,
+            self.config.trusted_proxy_enabled,
+            self.config.allow_insecure_remote,
+        ) {
+            return Err(GatewayError::ConnectionError(msg));
+        }
+        Ok(())
+    }
+
     /// Run the Gateway server
     ///
     /// This method runs indefinitely, accepting new connections and
@@ -635,6 +697,37 @@ impl GatewayServer {
     pub async fn run(&self) -> Result<(), GatewayError> {
         self.spawn_background_tasks();
         let router = self.build_router();
+        self.check_network_exposure()?;
+
+        // Native TLS tiers terminate in-process via axum-server's own listener;
+        // plaintext binds its own listener below and stays on axum::serve. The
+        // bind is deliberately *not* hoisted above this branch — axum-server
+        // binds `self.addr` itself inside `.serve()`, so pre-binding here too
+        // would double-bind the port and fail with "address already in use".
+        if self.config.tls_enabled {
+            install_ring_provider();
+            let tls_cfg = crate::gateway::config::GatewayTlsConfig {
+                enabled: self.config.tls_enabled,
+                cert_path: self.config.tls_cert_path.clone(),
+                key_path: self.config.tls_key_path.clone(),
+            };
+            let tls_dir = crate::utils::paths::get_data_dir()
+                .map_err(|e| GatewayError::ConnectionError(format!("data dir: {e}")))?
+                .join("tls");
+            let (cert_pem, key_pem, fp) = crate::gateway::tls::load_or_generate(&tls_cfg, &tls_dir)
+                .await
+                .map_err(|e| GatewayError::ConnectionError(format!("TLS material: {e}")))?;
+            info!("Aleph listening on https://{} (wss:// on /ws), cert fp {fp}", self.addr);
+            let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem)
+                .await
+                .map_err(|e| GatewayError::ConnectionError(format!("rustls config: {e}")))?;
+            axum_server::bind_rustls(self.addr, tls)
+                .serve(router.into_make_service_with_connect_info::<SocketAddr>())
+                .await
+                .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
+            return Ok(());
+        }
+
         let listener = tokio::net::TcpListener::bind(&self.addr)
             .await
             .map_err(|e| GatewayError::BindFailed {
@@ -658,6 +751,47 @@ impl GatewayServer {
     ) -> Result<(), GatewayError> {
         self.spawn_background_tasks();
         let router = self.build_router();
+        self.check_network_exposure()?;
+
+        // Native TLS tiers terminate in-process via axum-server's own listener;
+        // plaintext binds its own listener below and stays on axum::serve. The
+        // bind is deliberately *not* hoisted above this branch — axum-server
+        // binds `self.addr` itself inside `.serve()`, so pre-binding here too
+        // would double-bind the port and fail with "address already in use".
+        if self.config.tls_enabled {
+            install_ring_provider();
+            let tls_cfg = crate::gateway::config::GatewayTlsConfig {
+                enabled: self.config.tls_enabled,
+                cert_path: self.config.tls_cert_path.clone(),
+                key_path: self.config.tls_key_path.clone(),
+            };
+            let tls_dir = crate::utils::paths::get_data_dir()
+                .map_err(|e| GatewayError::ConnectionError(format!("data dir: {e}")))?
+                .join("tls");
+            let (cert_pem, key_pem, fp) =
+                crate::gateway::tls::load_or_generate(&tls_cfg, &tls_dir)
+                    .await
+                    .map_err(|e| GatewayError::ConnectionError(format!("TLS material: {e}")))?;
+            info!("Aleph listening on https://{}", self.addr);
+            info!("  WebSocket: wss://{}/ws", self.addr);
+            info!("  TLS cert SHA-256 fingerprint: {fp}");
+            let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem)
+                .await
+                .map_err(|e| GatewayError::ConnectionError(format!("rustls config: {e}")))?;
+            let handle = axum_server::Handle::new();
+            let shutdown_handle = handle.clone();
+            tokio::spawn(async move {
+                let _ = shutdown.await;
+                shutdown_handle.graceful_shutdown(Some(Duration::from_secs(3)));
+            });
+            axum_server::bind_rustls(self.addr, tls)
+                .handle(handle)
+                .serve(router.into_make_service_with_connect_info::<SocketAddr>())
+                .await
+                .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
+            return Ok(());
+        }
+
         let listener = tokio::net::TcpListener::bind(&self.addr)
             .await
             .map_err(|e| GatewayError::BindFailed {
@@ -678,6 +812,42 @@ impl GatewayServer {
         .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
         Ok(())
     }
+}
+
+/// Install the process-wide rustls crypto provider once (idempotent). Native
+/// TLS tiers need a default `CryptoProvider` installed before the first
+/// `RustlsConfig::from_pem` call — both `ring` and `aws-lc-rs` are compiled
+/// into the dependency graph, so relying on a single-implementation default
+/// is not safe; pin `ring` explicitly. `install_default` returns `Err` if a
+/// provider is already installed (fine — idempotent, first writer wins).
+fn install_ring_provider() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
+/// Boot-time verdict: `Some(diagnostic)` when the server would expose plaintext
+/// to the network and must refuse to start. Loopback bind, any native-TLS tier,
+/// a trusted-proxy (TLS-terminating) upstream, or an explicit
+/// `allow_insecure_remote` all pass.
+fn insecure_exposure_refused(
+    host_is_loopback: bool,
+    tls_enabled: bool,
+    trusted_proxy_enabled: bool,
+    allow_insecure_remote: bool,
+) -> Option<String> {
+    if host_is_loopback || tls_enabled || trusted_proxy_enabled || allow_insecure_remote {
+        return None;
+    }
+    Some(
+        "gateway would serve PLAINTEXT on a non-loopback interface. Refusing to start. \
+         Fix: enable [gateway.tls], OR front it with a TLS reverse proxy and set \
+         [gateway.trusted_proxy] enabled = true, OR knowingly set \
+         [gateway] allow_insecure_remote = true."
+            .to_string(),
+    )
 }
 
 /// Gateway server errors
@@ -757,6 +927,20 @@ mod tests {
     async fn node_registry_is_empty_on_fresh_server() {
         let server = GatewayServer::new("127.0.0.1:0".parse().unwrap());
         assert!(server.node_registry.list_environments().is_empty());
+    }
+
+    #[test]
+    fn boot_gate_refuses_only_plaintext_non_loopback() {
+        // Default loopback install: allowed.
+        assert!(super::insecure_exposure_refused(true, false, false, false).is_none());
+        // Non-loopback plaintext, no proxy, not allowed ⇒ refuse.
+        assert!(super::insecure_exposure_refused(false, false, false, false).is_some());
+        // Non-loopback but native TLS ⇒ allowed.
+        assert!(super::insecure_exposure_refused(false, true, false, false).is_none());
+        // Non-loopback behind trusted proxy ⇒ allowed.
+        assert!(super::insecure_exposure_refused(false, false, true, false).is_none());
+        // Non-loopback plaintext but explicitly allowed ⇒ allowed.
+        assert!(super::insecure_exposure_refused(false, false, false, true).is_none());
     }
 }
 

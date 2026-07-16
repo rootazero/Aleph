@@ -340,16 +340,44 @@ pub struct DashboardState {
     pub connection_failure: RwSignal<Option<ConnectionFailure>>,
 }
 
+/// Build the gateway WS URL from a page protocol + host. `https:` ⇒ `wss://`.
+/// Plain `http:` is only allowed for a loopback host (zero-config desktop);
+/// a remote `http:` page is refused (`Err`) so the Panel never opens a
+/// plaintext socket to a remote gateway.
+fn ws_url_for(protocol: &str, host: &str) -> Result<String, ()> {
+    if protocol == "https:" {
+        return Ok(format!("wss://{host}/ws"));
+    }
+    let host_only = host.split(':').next().unwrap_or(host);
+    let is_loopback = host_only == "127.0.0.1" || host_only == "::1" || host_only == "localhost";
+    if is_loopback {
+        Ok(format!("ws://{host}/ws"))
+    } else {
+        Err(())
+    }
+}
+
 /// Derive the Gateway WebSocket URL from the current page location.
-/// Since the Panel UI and Gateway share the same port, we use same-origin.
+/// Same-origin (Panel UI and Gateway share a port). Remote-over-http is
+/// refused — callers must surface an "insecure transport, use https" error.
 fn derive_gateway_url() -> String {
     #[cfg(target_arch = "wasm32")]
     {
         if let Some(window) = web_sys::window() {
             let location = window.location();
             if let (Ok(protocol), Ok(host)) = (location.protocol(), location.host()) {
-                let ws_protocol = if protocol == "https:" { "wss:" } else { "ws:" };
-                return format!("{}//{}/ws", ws_protocol, host);
+                match ws_url_for(&protocol, &host) {
+                    Ok(url) => return url,
+                    Err(()) => {
+                        web_sys::console::error_1(
+                            &"Aleph Panel: refusing insecure transport — open this Panel over https"
+                                .into(),
+                        );
+                        // Non-connectable sentinel; connect() treats an empty
+                        // URL as a typed ConnectionFailure and opens no socket.
+                        return String::new();
+                    }
+                }
             }
         }
         "ws://127.0.0.1:18790/ws".to_string()
@@ -715,6 +743,19 @@ impl DashboardState {
     /// Connect to the gateway
     pub async fn connect(&self) -> Result<(), String> {
         let url = self.gateway_url.get();
+        if url.is_empty() {
+            // `derive_gateway_url()` refused to build a plaintext socket URL
+            // for a remote (non-loopback) http origin and returned this
+            // sentinel instead — never hand WasmConnector an empty address.
+            let detail =
+                "Insecure transport: open this Panel over https to reach a remote gateway"
+                    .to_string();
+            self.is_connected.set(false);
+            self.set_failure(ConnectionFailure::Unreachable {
+                detail: detail.clone(),
+            });
+            return Err(detail);
+        }
         let mut connector = WasmConnector::new();
 
         use futures::future::{select, Either};
@@ -1314,7 +1355,7 @@ pub fn DashboardContext(children: Children) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{role_is_operator, strip_token_param};
+    use super::{role_is_operator, strip_token_param, ws_url_for};
 
     #[test]
     fn strip_token_only_param_collapses_to_empty() {
@@ -1354,5 +1395,31 @@ mod tests {
     #[test]
     fn unknown_role_is_not_operator() {
         assert!(!role_is_operator(Some("node")));
+    }
+
+    #[test]
+    fn https_page_yields_wss() {
+        assert_eq!(
+            ws_url_for("https:", "app.example.com").unwrap(),
+            "wss://app.example.com/ws"
+        );
+    }
+
+    #[test]
+    fn loopback_http_yields_ws() {
+        assert_eq!(
+            ws_url_for("http:", "127.0.0.1:18790").unwrap(),
+            "ws://127.0.0.1:18790/ws"
+        );
+        assert_eq!(
+            ws_url_for("http:", "localhost:18790").unwrap(),
+            "ws://localhost:18790/ws"
+        );
+    }
+
+    #[test]
+    fn remote_http_is_refused() {
+        assert!(ws_url_for("http:", "app.example.com").is_err());
+        assert!(ws_url_for("http:", "203.0.113.9:18790").is_err());
     }
 }
