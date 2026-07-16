@@ -26,6 +26,7 @@ pub struct IngestPlan {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+// rust-doctor-disable-next-line large-enum-variant
 pub enum PageOp {
     Create {
         note_path: String,

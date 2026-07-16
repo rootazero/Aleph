@@ -115,6 +115,7 @@ impl ApprovalAction {
     /// [`ApprovalRequest`]: crate::exec::decision::ApprovalRequest
     #[must_use]
     pub fn analysis_for_record(&self) -> CommandAnalysis {
+        // rust-doctor-disable-next-line excessive-clone
         self.analysis.clone().unwrap_or(CommandAnalysis {
             ok: true,
             reason: None,
@@ -156,10 +157,12 @@ fn canonical_args(tool: &str, input: &Value) -> Value {
         Value::Object(map) => Value::Object(
             map.iter()
                 .filter(|(k, v)| !v.is_null() && !is_non_identity_key(tool, k))
+                // rust-doctor-disable-next-line excessive-clone
                 .map(|(k, v)| (k.clone(), canonical_args(tool, v)))
                 .collect(),
         ),
         Value::Array(items) => Value::Array(items.iter().map(|v| canonical_args(tool, v)).collect()),
+        // rust-doctor-disable-next-line excessive-clone
         other => other.clone(),
     }
 }

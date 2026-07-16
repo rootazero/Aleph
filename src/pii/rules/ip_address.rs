@@ -9,8 +9,8 @@ static IP_RE: OnceLock<Regex> = OnceLock::new();
 
 fn ip_regex() -> &'static Regex {
     IP_RE.get_or_init(|| {
-        // rust-doctor-disable-next-line unwrap-in-production
         Regex::new(r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b")
+            // rust-doctor-disable-next-line unwrap-in-production
             .expect("static IP regex compiles")
     })
 }

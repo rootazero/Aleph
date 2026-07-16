@@ -416,6 +416,7 @@ impl CompressionService {
                                     crate::memory::store::raw_memory::RawMemorySource::ToolInvocation { .. }
                                 );
                                 if !is_telemetry && now - r.created_at < RETRY_GRACE_SECS {
+                                    // rust-doctor-disable-next-line excessive-clone
                                     deferred_ids.insert(r.id.clone());
                                 }
                             }

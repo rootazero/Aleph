@@ -30,6 +30,7 @@ impl StateDatabase {
         // SAFETY: sqlite3_auto_extension expects an extern "C" extension entrypoint;
         // sqlite3_vec_init is that entrypoint, and transmuting from *const () is the
         // standard FFI pattern for SQLite auto-extension registration.
+        // rust-doctor-disable-next-line unsafe-block-audit
         unsafe {
             type SqliteVecInit = unsafe extern "C" fn(
                 *mut rusqlite::ffi::sqlite3,

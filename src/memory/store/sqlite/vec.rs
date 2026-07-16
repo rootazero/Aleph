@@ -18,6 +18,7 @@ use sqlite_vec::sqlite3_vec_init;
 pub fn register_sqlite_vec() {
     // SAFETY: sqlite3_vec_init is the C entrypoint for the extension.
     // sqlite3_auto_extension registers it to be loaded for all new connections.
+    // rust-doctor-disable-next-line unsafe-block-audit
     unsafe {
         rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<
             *const (),

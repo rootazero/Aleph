@@ -198,15 +198,22 @@ pub fn build_failover_chain(
         fallbacks,
         // rust-doctor-disable-next-line excessive-clone
         model_catalog.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         health.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         failover_config.clone(),
     )
+    // rust-doctor-disable-next-line excessive-clone
     .with_route(route_mode, allow_escalation, escalation_approval.clone())
+    // rust-doctor-disable-next-line excessive-clone
     .with_load_stats(load.clone())
+    // rust-doctor-disable-next-line excessive-clone
     .with_model_cooldown(model_cooldown.clone())
+    // rust-doctor-disable-next-line excessive-clone
     .with_provider_cooldown(provider_cooldown.clone());
     // A live handle (production) makes mode switches hot-apply; its absence
     // (tests) keeps the boot snapshot above — byte-identical to before.
+    // rust-doctor-disable-next-line excessive-clone
     let global_provider = match route_handle.clone() {
         Some(h) => global_provider.with_route_live(h),
         None => global_provider,
@@ -221,6 +228,7 @@ pub fn build_failover_chain(
         global_provider
     };
     let global: Arc<dyn AiProvider> = Arc::new(global_provider);
+    // rust-doctor-disable-next-line excessive-clone
     let default: Arc<dyn DefaultProviderHandle> = Arc::new(StaticDefault::new(global.clone()));
 
     // Per-`provider_hint` overrides: one FailoverProvider per non-primary
@@ -241,21 +249,30 @@ pub fn build_failover_chain(
                 vec![FailoverNode {
                     name: GLOBAL_CHAIN_NODE.to_string(),
                     models: Vec::new(),
+                    // rust-doctor-disable-next-line excessive-clone
                     provider: global.clone(),
                     // The global-chain wrapper is itself route-shaped; tag it
                     // Unknown so the pinned chain's own route policy never drops
                     // it (the global chain already enforced the tier policy).
                     tier: EndpointTier::Unknown,
                 }],
+                // rust-doctor-disable-next-line excessive-clone
                 model_catalog.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 health.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 failover_config.clone(),
             )
+            // rust-doctor-disable-next-line excessive-clone
             .with_route(route_mode, allow_escalation, escalation_approval.clone())
             .with_primary_tier(pin_tier)
+            // rust-doctor-disable-next-line excessive-clone
             .with_load_stats(load.clone())
+            // rust-doctor-disable-next-line excessive-clone
             .with_model_cooldown(model_cooldown.clone())
+            // rust-doctor-disable-next-line excessive-clone
             .with_provider_cooldown(provider_cooldown.clone());
+            // rust-doctor-disable-next-line excessive-clone
             let pinned = match route_handle.clone() {
                 Some(h) => pinned.with_route_live(h),
                 None => pinned,
@@ -311,6 +328,7 @@ fn assemble_fallbacks(
             .providers
             .get(name)
             .map_or(EndpointTier::Cloud, provider_tier),
+        // rust-doctor-disable-next-line excessive-clone
         provider: provider.clone(),
     };
 

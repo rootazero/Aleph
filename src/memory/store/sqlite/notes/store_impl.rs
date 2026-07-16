@@ -502,9 +502,9 @@ impl NoteStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("remove_note_index vec map lookup: {e}")))?;
         if let Some(rowid) = vec_rowid {
             for table in vec::ALL_NOTES_VEC_TABLES {
+                // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
+                // rust-doctor-disable-next-line sql-injection-risk
                 tx.execute(
-                    // rust-doctor-disable-next-line sql-injection-risk
-                    // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
                     &format!("DELETE FROM {table} WHERE rowid = ?1"),
                     params![rowid],
                 )
@@ -1129,9 +1129,9 @@ impl NoteStore for SqliteMemoryBackend {
 
         for rowid in &orphan_rowids {
             for table in vec::ALL_NOTES_VEC_TABLES {
+                // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
+                // rust-doctor-disable-next-line sql-injection-risk
                 tx.execute(
-                    // rust-doctor-disable-next-line sql-injection-risk
-                    // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
                     &format!("DELETE FROM {table} WHERE rowid = ?1"),
                     params![rowid],
                 )
@@ -1178,9 +1178,9 @@ impl NoteStore for SqliteMemoryBackend {
         // leaving a stale vector permanently occupying a KNN slot in the other
         // table. Mirrors the sweep in `remove_note_index`.
         for t in vec::ALL_NOTES_VEC_TABLES {
+            // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
+            // rust-doctor-disable-next-line sql-injection-risk
             conn.execute(
-                // rust-doctor-disable-next-line sql-injection-risk
-                // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
                 &format!("DELETE FROM {t} WHERE rowid = ?1"),
                 params![rowid],
             )
@@ -1189,9 +1189,9 @@ impl NoteStore for SqliteMemoryBackend {
 
         // Insert new embedding
         let blob = vec::embedding_to_blob(embedding);
+        // Table name is validated by `vec::notes_vec_table_for_dim` against a static allowlist.
+        // rust-doctor-disable-next-line sql-injection-risk
         conn.execute(
-            // rust-doctor-disable-next-line sql-injection-risk
-            // Table name is validated by `vec::notes_vec_table_for_dim` against a static allowlist.
             &format!("INSERT INTO {table}(rowid, embedding) VALUES (?1, ?2)"),
             params![rowid, blob],
         )
@@ -1631,6 +1631,7 @@ impl NoteStore for SqliteMemoryBackend {
 
         let mut nodes = Vec::with_capacity(node_meta.len());
         for (path, category) in node_meta {
+            // rust-doctor-disable-next-line unnecessary-allocation
             let mut sources = Vec::new();
             {
                 let mut s2 = conn

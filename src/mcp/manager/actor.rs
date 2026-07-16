@@ -119,6 +119,7 @@ impl McpManagerActor {
         let (event_tx, _) = broadcast::channel(64);
 
         // Create handle
+        // rust-doctor-disable-next-line excessive-clone
         let handle = McpManagerHandle::new(cmd_tx.clone(), event_tx.clone());
 
         let actor = Self {
@@ -143,6 +144,7 @@ impl McpManagerActor {
     /// Creates a new handle that can be used to send commands.
     #[must_use]
     pub fn handle(&self) -> McpManagerHandle {
+        // rust-doctor-disable-next-line excessive-clone
         McpManagerHandle::new(self.cmd_tx.clone(), self.event_tx.clone())
     }
 
@@ -306,6 +308,7 @@ impl McpManagerActor {
     /// Handle a single command
     ///
     /// Returns `false` if the actor should shutdown.
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn handle_command(&mut self, cmd: McpCommand) -> bool {
         match cmd {
             McpCommand::AddServer { config, respond_to } => {

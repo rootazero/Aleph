@@ -240,6 +240,7 @@ mod tests {
         let home = tempfile::TempDir::new().unwrap();
         let prev = std::env::var_os("ALEPH_HOME");
         // SAFETY: guarded single mutator; restored before the test returns.
+        // rust-doctor-disable-next-line unsafe-block-audit
         unsafe {
             std::env::set_var("ALEPH_HOME", home.path());
         }
@@ -306,6 +307,7 @@ mod tests {
         let out = MentionWeaveStage.execute(ctx).await.unwrap();
 
         // SAFETY: same guarded invariant as above.
+        // rust-doctor-disable-next-line unsafe-block-audit
         unsafe {
             match prev {
                 Some(v) => std::env::set_var("ALEPH_HOME", v),

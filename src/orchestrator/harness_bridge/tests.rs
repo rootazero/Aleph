@@ -300,6 +300,7 @@ async fn seed_session_history_replays_turns_and_adds_prompt() {
     // rust-doctor-disable-next-line unwrap-in-production
     .expect("seed History");
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let events = service.get_events(&sid, None, None).await.unwrap();
     let users: Vec<String> = events
         .iter()
@@ -336,6 +337,7 @@ async fn history_input_does_not_reseed_when_log_nonempty() {
     // Pre-seed ONE user message so the log is non-empty
     seed_session(service.as_ref(), &sid, FlowInput::Prompt("earlier".into()))
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
 
     // Then seed History with the SAME history turn + a new prompt
@@ -354,9 +356,11 @@ async fn history_input_does_not_reseed_when_log_nonempty() {
         },
     )
     .await
+    // rust-doctor-disable-next-line unwrap-in-production
     .unwrap();
 
     // Collect user texts from get_events
+    // rust-doctor-disable-next-line unwrap-in-production
     let events = service.get_events(&sid, None, None).await.unwrap();
     let user_texts: Vec<String> = events
         .iter()
@@ -391,8 +395,10 @@ async fn seed_session_multimodal_emits_one_user_per_entry() {
     ];
     super::session_seed::seed_session(service.as_ref(), &sid, FlowInput::Multimodal(msgs))
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("seed Multimodal");
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let events = service.get_events(&sid, None, None).await.unwrap();
     let users: Vec<String> = events
         .iter()

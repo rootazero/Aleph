@@ -51,6 +51,7 @@ impl GeminiProtocol {
         for msg in messages {
             match msg {
                 UnifiedMessage::User { content } => {
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     let mut parts = Vec::new();
                     for block in content {
                         match block {
@@ -81,6 +82,7 @@ impl GeminiProtocol {
                     });
                 }
                 UnifiedMessage::Assistant { content } => {
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     let mut parts = Vec::new();
                     for block in content {
                         match block {

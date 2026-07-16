@@ -522,6 +522,7 @@ mod tests {
         // SAFETY: sqlite3_auto_extension expects an extern "C" extension entrypoint;
         // sqlite3_vec_init is that entrypoint, and transmuting from *const () is the
         // standard FFI pattern for SQLite auto-extension registration.
+        // rust-doctor-disable-next-line unsafe-block-audit
         unsafe {
             rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
                 sqlite_vec::sqlite3_vec_init as *const (),

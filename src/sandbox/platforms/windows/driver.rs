@@ -316,12 +316,9 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                 } else {
                     1
                 };
+                // SAFETY: The returned SandboxJob owns the job-object handle and closes it on Drop.
                 Some(
-                    unsafe {
-                        // SAFETY: The returned SandboxJob owns the job-object handle
-                        // and closes it on Drop.
-                        SandboxJob::new(active_limit, profile.max_memory_mb)
-                    }
+                    unsafe { SandboxJob::new(active_limit, profile.max_memory_mb) }
                     .map_err(|e| SandboxError::ExecutionFailed(format!("job creation failed: {e}")))?,
                 )
             } else {
@@ -349,10 +346,8 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                 let assign = if handle.is_null() {
                     Err("child process handle unavailable for job assignment".to_string())
                 } else {
-                    unsafe {
-                        // SAFETY: `handle` is a valid, non-null child process handle.
-                        job.assign_process(handle as _)
-                    }
+                    // SAFETY: `handle` is a valid, non-null child process handle.
+                    unsafe { job.assign_process(handle as _) }
                 };
                 if let Err(e) = assign {
                     return Err(SandboxError::ExecutionFailed(format!(

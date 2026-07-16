@@ -70,6 +70,7 @@ impl WorktreeHandle {
 
         if let Some(sink) = self.trace_sink.as_ref() {
             sink.on_trace(&crate::harness::trace::LoopTraceEvent::WorktreeCleanedUp {
+                // rust-doctor-disable-next-line excessive-clone
                 path: self.path.clone(),
                 leaked: false,
             });
@@ -165,6 +166,7 @@ pub async fn create(
 
     if let Some(sink) = trace_sink.as_ref() {
         sink.on_trace(&crate::harness::trace::LoopTraceEvent::WorktreeCreated {
+            // rust-doctor-disable-next-line excessive-clone
             path: path.clone(),
         });
     }
@@ -252,6 +254,7 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
         // does not assume seatbelt/landlock enforcement when a subagent
         // delegates here.
         Some(crate::sandbox::summary::SandboxSummary::isolated_worktree(
+            // rust-doctor-disable-next-line excessive-clone
             self.worktree_path.clone(),
         ))
     }

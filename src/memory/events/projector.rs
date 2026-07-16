@@ -79,10 +79,14 @@ impl EventProjector {
                     let category = note_type.default_category();
 
                     fact = Some(MemoryFact {
+                        // rust-doctor-disable-next-line excessive-clone
                         id: note_path.clone(),
+                        // rust-doctor-disable-next-line excessive-clone
                         content: content.clone(),
+                        // rust-doctor-disable-next-line excessive-clone
                         note_type: note_type.clone(),
                         embedding: None,
+                        // rust-doctor-disable-next-line excessive-clone
                         source_memory_ids: source_memory_ids.clone(),
                         created_at: envelope.timestamp,
                         updated_at: envelope.timestamp,
@@ -91,9 +95,12 @@ impl EventProjector {
                         decay_invalidated_at: None,
                         specificity: FactSpecificity::default(),
                         temporal_scope: TemporalScope::default(),
+                        // rust-doctor-disable-next-line excessive-clone
                         namespace: namespace.clone(),
+                        // rust-doctor-disable-next-line excessive-clone
                         agent: workspace.clone(),
                         similarity_score: None,
+                        // rust-doctor-disable-next-line excessive-clone
                         path: path.clone(),
                         layer: MemoryLayer::default(),
                         category,
@@ -112,6 +119,7 @@ impl EventProjector {
                 }
 
                 MemoryEvent::NoteMigrated { snapshot, .. } => {
+                    // rust-doctor-disable-next-line excessive-clone
                     let migrated: MemoryFact =
                         serde_json::from_value(snapshot.clone()).map_err(|e| {
                             AlephError::Other {
@@ -133,6 +141,7 @@ impl EventProjector {
                 // --------------------------------------------------------
                 MemoryEvent::NoteContentUpdated { new_content, .. } => {
                     if let Some(ref mut f) = fact {
+                        // rust-doctor-disable-next-line excessive-clone
                         f.content = new_content.clone();
                         // rust-doctor-disable-next-line unnecessary-allocation
                         f.content_hash = String::new(); // recomputed at projection time
@@ -146,13 +155,16 @@ impl EventProjector {
                     if let Some(ref mut f) = fact {
                         match field.as_str() {
                             "path" => {
+                                // rust-doctor-disable-next-line excessive-clone
                                 f.path = new_value.clone();
                                 f.parent_path = compute_parent_path(new_value);
                             }
                             "namespace" => {
+                                // rust-doctor-disable-next-line excessive-clone
                                 f.namespace = new_value.clone();
                             }
                             "agent" => {
+                                // rust-doctor-disable-next-line excessive-clone
                                 f.agent = new_value.clone();
                             }
                             _ => {
@@ -173,6 +185,7 @@ impl EventProjector {
                 MemoryEvent::NoteInvalidated { reason, actor, .. } => {
                     if let Some(ref mut f) = fact {
                         f.is_valid = false;
+                        // rust-doctor-disable-next-line excessive-clone
                         f.invalidation_reason = Some(reason.clone());
                         if *actor == EventActor::Decay {
                             f.decay_invalidated_at = Some(envelope.timestamp);
@@ -197,6 +210,7 @@ impl EventProjector {
                     ..
                 } => {
                     if let Some(ref mut f) = fact {
+                        // rust-doctor-disable-next-line excessive-clone
                         f.content = consolidated_content.clone();
                         f.updated_at = envelope.timestamp;
                     }

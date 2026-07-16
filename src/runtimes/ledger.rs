@@ -170,6 +170,7 @@ impl CapabilityLedger {
 
     /// Insert or update a capability entry.
     pub fn update(&mut self, entry: CapabilityEntry) {
+        // rust-doctor-disable-next-line excessive-clone
         self.entries.insert(entry.name.clone(), entry);
     }
 

@@ -347,9 +347,13 @@ impl WorkingMemoryAssembler for HybridAssembler {
 
 fn candidate_to_item(c: &Candidate) -> EnvelopeItem {
     EnvelopeItem {
+        // rust-doctor-disable-next-line excessive-clone
         id: c.id.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         title: c.title.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         content: c.full_content.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         source: c.source.clone(),
         relevance: c.relevance,
         tokens: 0,

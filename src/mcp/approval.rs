@@ -71,6 +71,7 @@ impl ApprovalHandler {
     ///
     /// Returns the user's decision or Timeout if no response within timeout.
     pub async fn request_approval(&self, request: ApprovalRequest) -> Result<ApprovalDecision> {
+        // rust-doctor-disable-next-line excessive-clone
         let request_id = request.request_id.clone();
         let timeout_secs = request.timeout_seconds.unwrap_or_else(|| {
             self.default_timeout
@@ -87,8 +88,10 @@ impl ApprovalHandler {
         {
             let mut pending = self.pending.write().await;
             pending.insert(
+                // rust-doctor-disable-next-line excessive-clone
                 request_id.clone(),
                 PendingApproval {
+                    // rust-doctor-disable-next-line excessive-clone
                     request: request.clone(),
                     respond_to: tx,
                 },
@@ -193,6 +196,7 @@ impl ApprovalHandler {
     /// Get all pending approval requests
     pub async fn list_pending(&self) -> Vec<ApprovalRequest> {
         let pending = self.pending.read().await;
+        // rust-doctor-disable-next-line excessive-clone
         pending.values().map(|p| p.request.clone()).collect()
     }
 

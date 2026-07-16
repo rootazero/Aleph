@@ -58,6 +58,7 @@ pub(in crate::sandbox::windows_init) fn launch_with_app_container(
         let mut group_sids: *mut *mut core::ffi::c_void = std::ptr::null_mut();
         let mut group_count: u32 = 0;
         let mut sid_count: u32 = 0;
+        // SAFETY: `name_w` is NUL-terminated; output pointers are valid out-params.
         let ok = unsafe {
             DeriveCapabilitySidsFromName(
                 name_w.as_ptr(),
@@ -88,6 +89,7 @@ pub(in crate::sandbox::windows_init) fn launch_with_app_container(
 
     // ---------- 3. Create the AppContainer profile ----------
     let mut ac_sid: *mut core::ffi::c_void = std::ptr::null_mut();
+    // SAFETY: All input strings are NUL-terminated; `cap_attrs` is a valid array.
     let hr = unsafe {
         CreateAppContainerProfile(
             profile_name_w.as_ptr(),
@@ -105,9 +107,11 @@ pub(in crate::sandbox::windows_init) fn launch_with_app_container(
     if hr != 0 {
         // Cleanup capability SIDs.
         for sid in &cap_sids {
+            // SAFETY: `*sid` is a non-null SID returned by `DeriveCapabilitySidsFromName`.
             unsafe { LocalFree(*sid) };
         }
         for g in &group_sid_ptrs {
+            // SAFETY: `*g` is a non-null SID returned by `DeriveCapabilitySidsFromName`.
             unsafe { LocalFree(*g) };
         }
         return Err(LaunchError::AppContainerSetupFailed(format!(
@@ -137,6 +141,7 @@ pub(in crate::sandbox::windows_init) fn launch_with_app_container(
     let mut metadata_protection = MetadataProtection::default();
     if let Some(ref ws) = parsed.policy.workspace_path {
         use windows_sys::Win32::Foundation::GENERIC_ALL;
+        // SAFETY: `ws` is a canonical path and `ac_sid` is a valid AppContainer SID.
         if let Err(e) = unsafe {
             set_workspace_dacl_entry(
                 ws,
@@ -163,14 +168,15 @@ pub(in crate::sandbox::windows_init) fn launch_with_app_container(
 
     // ---------- 4. Build SECURITY_CAPABILITIES + attribute list ----------
     let mut attr_size: usize = 0;
+    // SAFETY: Calling with NULL list is the documented size-probing pattern.
     unsafe {
-        // First call with NULL probes for required size; sets last
-        // error to ERROR_INSUFFICIENT_BUFFER which we ignore.
         InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
     }
+    // SAFETY: `GetProcessHeap()` returns a valid heap; size was probed above.
     let attr_buffer = unsafe { HeapAlloc(GetProcessHeap(), 0, attr_size) };
     if attr_buffer.is_null() {
         cleanup_sids(&cap_sids, &group_sid_ptrs, ac_sid);
+        // SAFETY: `profile_name_w` is a valid NUL-terminated profile name.
         unsafe { DeleteAppContainerProfile(profile_name_w.as_ptr()) };
         return Err(LaunchError::AppContainerSetupFailed(
             "HeapAlloc for PROC_THREAD_ATTRIBUTE_LIST returned NULL".into(),
@@ -178,10 +184,13 @@ pub(in crate::sandbox::windows_init) fn launch_with_app_container(
     }
     let attr_list = attr_buffer as LPPROC_THREAD_ATTRIBUTE_LIST;
 
+    // SAFETY: `attr_list` and `attr_size` match the probed allocation.
     let ok = unsafe { InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) };
     if ok == 0 {
+        // SAFETY: `attr_buffer` is a non-null allocation from the process heap.
         unsafe { HeapFree(GetProcessHeap(), 0, attr_buffer) };
         cleanup_sids(&cap_sids, &group_sid_ptrs, ac_sid);
+        // SAFETY: `profile_name_w` is a valid NUL-terminated profile name.
         unsafe { DeleteAppContainerProfile(profile_name_w.as_ptr()) };
         return Err(LaunchError::AppContainerSetupFailed(
             "InitializeProcThreadAttributeList failed".into(),
@@ -199,6 +208,7 @@ pub(in crate::sandbox::windows_init) fn launch_with_app_container(
         Reserved: 0,
     };
 
+    // SAFETY: `attr_list` is initialized and `sec_caps` outlives the update.
     let ok = unsafe {
         UpdateProcThreadAttribute(
             attr_list,
@@ -211,6 +221,7 @@ pub(in crate::sandbox::windows_init) fn launch_with_app_container(
         )
     };
     if ok == 0 {
+        // SAFETY: All handles/allocs are valid owned resources from above.
         unsafe {
             DeleteProcThreadAttributeList(attr_list);
             HeapFree(GetProcessHeap(), 0, attr_buffer);
@@ -226,16 +237,22 @@ pub(in crate::sandbox::windows_init) fn launch_with_app_container(
     let cmd_line_str = build_command_line(&parsed.target, &parsed.target_args);
     let mut cmd_line: Vec<u16> = cmd_line_str.encode_utf16().chain(once(0)).collect();
 
+    // SAFETY: `STARTUPINFOEXW` is a plain struct and may be zero-initialized.
     let mut si: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
     si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
     si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    // SAFETY: Standard handle constants request inherited console handles.
     si.StartupInfo.hStdInput = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+    // SAFETY: Standard handle constants request inherited console handles.
     si.StartupInfo.hStdOutput = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    // SAFETY: Standard handle constants request inherited console handles.
     si.StartupInfo.hStdError = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
     si.lpAttributeList = attr_list;
 
+    // SAFETY: `PROCESS_INFORMATION` is a plain struct and may be zero-initialized.
     let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
 
+    // SAFETY: `cmd_line` is a valid mutable NUL-terminated command line; `si` is initialized.
     let spawn_ok = unsafe {
         CreateProcessW(
             std::ptr::null(),
@@ -252,7 +269,9 @@ pub(in crate::sandbox::windows_init) fn launch_with_app_container(
     };
 
     if spawn_ok == 0 {
+        // SAFETY: `GetLastError()` reads the calling thread's last-error code.
         let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+        // SAFETY: All handles/allocs are valid owned resources from above.
         unsafe {
             DeleteProcThreadAttributeList(attr_list);
             HeapFree(GetProcessHeap(), 0, attr_buffer);
@@ -265,6 +284,7 @@ pub(in crate::sandbox::windows_init) fn launch_with_app_container(
     }
 
     // ---------- 6. Wait + GetExitCode ----------
+    // SAFETY: `pi.hProcess` is a valid non-null process handle.
     let wait_result = unsafe { WaitForSingleObject(pi.hProcess, INFINITE) };
     let wait_err = if wait_result != 0 {
         Some(wait_result)
@@ -273,6 +293,7 @@ pub(in crate::sandbox::windows_init) fn launch_with_app_container(
     };
 
     let mut code: u32 = 0;
+    // SAFETY: `pi.hProcess` is a valid non-null process handle.
     let code_ok = unsafe { GetExitCodeProcess(pi.hProcess, &mut code) };
 
     // ---------- 6.5. SP-6 v2 + Cycle 3 + Cycle 5: undo DACL + stubs ----------
@@ -286,6 +307,7 @@ pub(in crate::sandbox::windows_init) fn launch_with_app_container(
     // workspace is left exactly as we found it.
     if let Some(ref ws) = parsed.policy.workspace_path {
         use windows_sys::Win32::Foundation::GENERIC_ALL;
+        // SAFETY: `ws` is a canonical path and `ac_sid` is a valid AppContainer SID.
         if let Err(e) = unsafe {
             set_workspace_dacl_entry(
                 ws,
@@ -301,6 +323,7 @@ pub(in crate::sandbox::windows_init) fn launch_with_app_container(
         }
         // Revoke each deny ACE we actually stamped earlier.
         for p in &metadata_protection.denied {
+            // SAFETY: `p` is a canonical path and `ac_sid` is a valid AppContainer SID.
             if let Err(e) = unsafe {
                 set_workspace_dacl_entry(
                     p,
@@ -440,6 +463,7 @@ fn ensure_protected_metadata_deny(
             }
             out.created_stubs.push(s.to_string());
         }
+        // SAFETY: `s` is a canonical path and `ac_sid` is a valid AppContainer SID.
         match unsafe { set_workspace_dacl_entry(s, ac_sid, DENY_ACCESS, mask) } {
             Ok(()) => out.denied.push(s.to_string()),
             Err(e) => eprintln!(
@@ -489,6 +513,7 @@ fn ensure_deny_read_globs(
             );
             continue;
         };
+        // SAFETY: `s` is a canonical path and `ac_sid` is a valid AppContainer SID.
         match unsafe { set_workspace_dacl_entry(s, ac_sid, DENY_ACCESS, GENERIC_READ) } {
             Ok(()) => denied.push(s.to_string()),
             Err(e) => eprintln!(

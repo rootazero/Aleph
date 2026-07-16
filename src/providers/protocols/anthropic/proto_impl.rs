@@ -60,6 +60,7 @@ impl AnthropicProtocol {
         while i < messages.len() {
             match &messages[i] {
                 UnifiedMessage::User { content } => {
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     let mut blocks = Vec::new();
                     for block in content {
                         match block {
@@ -68,6 +69,7 @@ impl AnthropicProtocol {
                                 cache_control,
                             } => {
                                 blocks.push(ContentBlock::Text {
+                                    // rust-doctor-disable-next-line excessive-clone
                                     text: text.clone(),
                                     cache_control: cache_control
                                         .map(|_| crate::thinker::cache::CacheControl::ephemeral()),
@@ -77,7 +79,9 @@ impl AnthropicProtocol {
                                 blocks.push(ContentBlock::Image {
                                     source: ImageSource {
                                         source_type: "base64".to_string(),
+                                        // rust-doctor-disable-next-line excessive-clone
                                         media_type: mime_type.clone(),
+                                        // rust-doctor-disable-next-line excessive-clone
                                         data: data.clone(),
                                     },
                                 });
@@ -114,6 +118,7 @@ impl AnthropicProtocol {
                             result.push(Message {
                                 role: "user".to_string(),
                                 content: MessageContent::Text {
+                                    // rust-doctor-disable-next-line excessive-clone
                                     content: text.clone(),
                                 },
                             });
@@ -128,6 +133,7 @@ impl AnthropicProtocol {
                     i += 1;
                 }
                 UnifiedMessage::Assistant { content } => {
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     let mut blocks = Vec::new();
                     // Track the most recent signed thinking block so we can inject
                     // reasoning_content into the next ToolUse when thinking is enabled.
@@ -140,6 +146,7 @@ impl AnthropicProtocol {
                             } => {
                                 if !text.trim().is_empty() {
                                     blocks.push(ContentBlock::Text {
+                                        // rust-doctor-disable-next-line excessive-clone
                                         text: text.clone(),
                                         cache_control: cache_control.map(|_| {
                                             crate::thinker::cache::CacheControl::ephemeral()
@@ -159,10 +166,13 @@ impl AnthropicProtocol {
                                 // OpenAI) never produce it for an Anthropic-bound turn.
                                 if !thinking.is_empty() {
                                     blocks.push(ContentBlock::Thinking {
+                                        // rust-doctor-disable-next-line excessive-clone
                                         thinking: thinking.clone(),
+                                        // rust-doctor-disable-next-line excessive-clone
                                         signature: sig.clone(),
                                     });
                                     // Remember this thinking for the next ToolCall
+                                    // rust-doctor-disable-next-line excessive-clone
                                     pending_thinking = Some(thinking.clone());
                                 }
                             }
@@ -191,6 +201,7 @@ impl AnthropicProtocol {
                                 //   "thinking is enabled but reasoning_content is missing
                                 //    in assistant tool call message".
                                 let mut input = if arguments.is_object() {
+                                    // rust-doctor-disable-next-line excessive-clone
                                     arguments.clone()
                                 } else {
                                     serde_json::json!({})
@@ -239,7 +250,9 @@ impl AnthropicProtocol {
                     // blocks in the same user turn — Anthropic accepts trailing
                     // images in a tool-result turn, and this is what finally lets
                     // a vision model see the screen it acted on.
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     let mut tool_blocks = Vec::new();
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     let mut image_blocks = Vec::new();
                     while i < messages.len() {
                         if let UnifiedMessage::ToolResult {
@@ -249,6 +262,7 @@ impl AnthropicProtocol {
                             ..
                         } = &messages[i]
                         {
+                            // rust-doctor-disable-next-line unnecessary-allocation
                             let mut parts = Vec::new();
                             for b in content {
                                 match b {

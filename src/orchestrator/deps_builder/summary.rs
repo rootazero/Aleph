@@ -78,6 +78,7 @@ pub fn build_cheap_summary_provider(
     } else {
         "preset aux_model"
     };
+    // rust-doctor-disable-next-line excessive-clone
     let mut cheap_cfg = base.clone();
     cheap_cfg.models = vec![summary_model.clone()];
     match create_provider(primary_provider_key, cheap_cfg) {
@@ -163,6 +164,7 @@ pub fn build_dream_provider(
     } else {
         "preset aux_model"
     };
+    // rust-doctor-disable-next-line excessive-clone
     let mut dream_cfg = base.clone();
     dream_cfg.models = vec![dream_model.clone()];
     match create_provider(primary_provider_key, dream_cfg) {
@@ -241,6 +243,7 @@ pub fn build_strategy_planner_provider(
         return None;
     }
 
+    // rust-doctor-disable-next-line excessive-clone
     let mut planner_cfg = base.clone();
     planner_cfg.models = vec![planner_model.clone()];
     match create_provider(primary_provider_key, planner_cfg) {

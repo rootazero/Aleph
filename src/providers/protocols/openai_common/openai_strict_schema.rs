@@ -110,9 +110,9 @@ pub fn ensure_openai_tool_envelope(schema: &mut Value) {
                 intersection = intersection.intersection(&set).cloned().collect();
             }
             if !intersection.is_empty() {
-                // rust-doctor-disable-next-line unnecessary-allocation
                 let root_req = map
                     .entry("required".to_string())
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     .or_insert_with(|| Value::Array(Vec::new()));
                 if let Value::Array(arr) = root_req {
                     let existing: std::collections::HashSet<String> = arr

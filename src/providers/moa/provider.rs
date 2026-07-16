@@ -109,12 +109,15 @@ pub fn try_build_for_run(
             // labelled "moa:<i>:<provider>:<model>", priced per advisor.
             let metered = Arc::new(MeteringProvider::new(
                 chain,
+                // rust-doctor-disable-next-line excessive-clone
                 sink.clone(),
                 format!("moa:{idx}:{label}"),
             )) as Arc<dyn AiProvider>;
             advisors.push(AdvisorSlot {
                 label,
+                // rust-doctor-disable-next-line excessive-clone
                 provider_key: slot.provider.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 model: slot.model.clone(),
                 chain: metered,
             });

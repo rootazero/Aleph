@@ -457,21 +457,25 @@ impl McpServerConnection {
 
     /// Get cached tools list
     pub async fn list_tools(&self) -> Vec<McpTool> {
+        // rust-doctor-disable-next-line excessive-clone
         self.cached_tools.read().await.clone()
     }
 
     /// Get cached resources list
     pub async fn list_resources(&self) -> Vec<crate::mcp::types::McpResource> {
+        // rust-doctor-disable-next-line excessive-clone
         self.cached_resources.read().await.clone()
     }
 
     /// Get cached prompts list
     pub async fn list_prompts(&self) -> Vec<crate::mcp::prompts::McpPrompt> {
+        // rust-doctor-disable-next-line excessive-clone
         self.cached_prompts.read().await.clone()
     }
 
     /// Get server-provided instructions (if any).
     pub async fn instructions(&self) -> Option<String> {
+        // rust-doctor-disable-next-line excessive-clone
         self.cached_instructions.read().await.clone()
     }
 

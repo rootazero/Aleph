@@ -464,7 +464,9 @@ fn ensure_tool_results_present(messages: &mut Vec<UnifiedMessage>) {
             synthetic.extend(content.iter().filter_map(|b| match b {
                 ContentBlock::ToolCall { id, name, .. } if !answered.contains(id) => {
                     Some(UnifiedMessage::tool_result(
+                        // rust-doctor-disable-next-line excessive-clone
                         id.clone(),
+                        // rust-doctor-disable-next-line excessive-clone
                         name.clone(),
                         "No result provided — tool call was interrupted",
                         true,

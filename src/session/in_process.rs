@@ -74,6 +74,7 @@ impl InProcessActorSessionService {
         // panic) is useless — evict it before creating a replacement.
         if let Some(sender) = senders.get(id) {
             if !sender.is_closed() {
+                // rust-doctor-disable-next-line excessive-clone
                 return Ok(sender.clone());
             }
             senders.remove(id);
@@ -83,16 +84,22 @@ impl InProcessActorSessionService {
         let (tx, rx) = mpsc::channel(COMMAND_BUFFER);
         let (bcast_tx, _) = broadcast::channel(BROADCAST_BUFFER);
         let actor = SessionActor::new(
+            // rust-doctor-disable-next-line excessive-clone
             id.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             self.store.clone(),
             rx,
+            // rust-doctor-disable-next-line excessive-clone
             bcast_tx.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             self.observer.clone(),
             self.idle_timeout,
         );
         tokio::spawn(actor.run());
 
+        // rust-doctor-disable-next-line excessive-clone
         senders.insert(id.clone(), tx.clone());
+        // rust-doctor-disable-next-line excessive-clone
         broadcasters.insert(id.clone(), bcast_tx);
         Ok(tx)
     }
@@ -243,6 +250,7 @@ impl SessionService for InProcessActorSessionService {
         })??;
 
         Ok(SessionHandle {
+            // rust-doctor-disable-next-line excessive-clone
             id: id.clone(),
             head_seq: new_head,
         })

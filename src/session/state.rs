@@ -36,6 +36,7 @@ impl SessionState {
     pub fn apply(&mut self, event: &SessionEvent) {
         match event {
             SessionEvent::SessionCreated { identity, .. } => {
+                // rust-doctor-disable-next-line excessive-clone
                 self.identity = Some(identity.clone());
             }
             SessionEvent::SessionWoken { .. } => {
@@ -85,8 +86,10 @@ impl SessionState {
             SessionEvent::ToolCallRequested { call_id, name, .. } => {
                 if let Some(turn) = self.current_turn.as_mut() {
                     turn.pending_tool_calls.insert(
+                        // rust-doctor-disable-next-line excessive-clone
                         call_id.clone(),
                         PendingToolCall {
+                            // rust-doctor-disable-next-line excessive-clone
                             name: name.clone(),
                             approved: None,
                         },
@@ -96,7 +99,7 @@ impl SessionState {
             SessionEvent::ToolCallApproved { call_id, by, .. } => {
                 if let Some(turn) = self.current_turn.as_mut() {
                     if let Some(pc) = turn.pending_tool_calls.get_mut(call_id) {
-                        pc.approved = Some(by.clone());
+                        pc.approved = Some(*by);
                     }
                 }
             }

@@ -53,6 +53,7 @@ impl HarnessRunner for AgentHarnessRunner {
         Some(self.default_max_iterations)
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn run(
         &self,
         session_key: String,

@@ -15,8 +15,8 @@ fn phone_regex() -> &'static Regex {
 
 fn timestamp_context_regex() -> &'static Regex {
     TIMESTAMP_CONTEXT_RE.get_or_init(|| {
-        // rust-doctor-disable-next-line unwrap-in-production
         Regex::new(r"(?i)(timestamp|time|date|created_at|updated_at|expires?_at|modified_at)\b")
+            // rust-doctor-disable-next-line unwrap-in-production
             .expect("static timestamp context regex compiles")
     })
 }

@@ -165,6 +165,7 @@ fn extend_path(base: &OsStr, candidates: &[PathBuf]) -> OsString {
     let mut prepended: Vec<PathBuf> = Vec::new();
     for cand in candidates {
         if cand.is_dir() && seen.insert(cand.as_path()) {
+            // rust-doctor-disable-next-line excessive-clone
             prepended.push(cand.clone());
         }
     }
@@ -361,10 +362,12 @@ static REGEX_CACHE: Lazy<Mutex<HashMap<&'static str, Regex>>> =
 fn get_compiled_regex(pattern: &'static str) -> Option<Regex> {
     let mut cache = REGEX_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(re) = cache.get(pattern) {
+        // rust-doctor-disable-next-line excessive-clone
         return Some(re.clone());
     }
     match Regex::new(pattern) {
         Ok(re) => {
+            // rust-doctor-disable-next-line excessive-clone
             cache.insert(pattern, re.clone());
             Some(re)
         }

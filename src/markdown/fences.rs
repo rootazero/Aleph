@@ -9,8 +9,8 @@ use std::sync::LazyLock;
 /// Regex for matching code fence opening/closing lines.
 /// Matches: optional indent (0-3 spaces) + fence marker (``` or ~~~) + optional language tag
 static FENCE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    // rust-doctor-disable-next-line panic-in-library
     Regex::new(r"^( {0,3})(`{3,}|~{3,})(.*)$")
+        // rust-doctor-disable-next-line panic-in-library
         .unwrap_or_else(|e| panic!("Invalid fence regex: {e}"))
 });
 

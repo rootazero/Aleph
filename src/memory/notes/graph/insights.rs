@@ -51,6 +51,7 @@ pub fn detect(g: &GraphIndex, c: &Communities) -> GraphInsights {
         if size[cid] >= SPARSE_MIN_SIZE && cohesion < SPARSE_COHESION_MAX {
             let exemplar = (0..g.len())
                 .find(|&i| c.of_node[i] == cid)
+                // rust-doctor-disable-next-line excessive-clone
                 .map(|i| g.nodes[i].path.clone())
                 .unwrap_or_default();
             sparse.push(SparseCommunity {
@@ -71,6 +72,7 @@ pub fn detect(g: &GraphIndex, c: &Communities) -> GraphInsights {
             comms.insert(c.of_node[nb]);
         }
         if comms.len() >= BRIDGE_MIN_COMMUNITIES {
+            // rust-doctor-disable-next-line excessive-clone
             bridges.push(g.nodes[i].path.clone());
         }
     }

@@ -28,16 +28,19 @@ pub fn project_messages(events: &[SessionEventRecord]) -> Vec<ProjectedMessage> 
         .filter_map(|record| match &record.event {
             SessionEvent::UserMessage { content, .. } => Some(ProjectedMessage {
                 role: MessageRole::User,
+                // rust-doctor-disable-next-line excessive-clone
                 text: content.text.clone(),
                 at_ms: record.created_at_ms,
             }),
             SessionEvent::AssistantMessage { content, .. } => Some(ProjectedMessage {
                 role: MessageRole::Assistant,
+                // rust-doctor-disable-next-line excessive-clone
                 text: content.text.clone(),
                 at_ms: record.created_at_ms,
             }),
             SessionEvent::SystemMessage { content, .. } => Some(ProjectedMessage {
                 role: MessageRole::System,
+                // rust-doctor-disable-next-line excessive-clone
                 text: content.clone(),
                 at_ms: record.created_at_ms,
             }),
@@ -65,10 +68,13 @@ pub fn project_row(event: &SessionEvent) -> Option<ProjectedRow> {
         tool_name: None,
     };
     match event {
+        // rust-doctor-disable-next-line excessive-clone
         SessionEvent::UserMessage { content, .. } => Some(plain("user", content.text.clone())),
         SessionEvent::AssistantMessage { content, .. } => {
+            // rust-doctor-disable-next-line excessive-clone
             Some(plain("assistant", content.text.clone()))
         }
+        // rust-doctor-disable-next-line excessive-clone
         SessionEvent::SystemMessage { content, .. } => Some(plain("system", content.clone())),
         SessionEvent::ToolCallRequested {
             call_id,
@@ -78,7 +84,9 @@ pub fn project_row(event: &SessionEvent) -> Option<ProjectedRow> {
         } => Some(ProjectedRow {
             role: "tool".into(),
             text: input.to_string(),
+            // rust-doctor-disable-next-line excessive-clone
             tool_call_id: Some(call_id.clone()),
+            // rust-doctor-disable-next-line excessive-clone
             tool_name: Some(name.clone()),
         }),
         SessionEvent::ToolResult {
@@ -86,12 +94,15 @@ pub fn project_row(event: &SessionEvent) -> Option<ProjectedRow> {
         } => Some(ProjectedRow {
             role: "tool".into(),
             text: output.value.to_string(),
+            // rust-doctor-disable-next-line excessive-clone
             tool_call_id: Some(call_id.clone()),
             tool_name: None,
         }),
         SessionEvent::ToolError { call_id, error, .. } => Some(ProjectedRow {
             role: "tool".into(),
+            // rust-doctor-disable-next-line excessive-clone
             text: error.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             tool_call_id: Some(call_id.clone()),
             tool_name: None,
         }),

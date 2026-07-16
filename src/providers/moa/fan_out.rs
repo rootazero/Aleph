@@ -90,8 +90,11 @@ pub(crate) fn emit_fanout_events(
             s.on_trace(&LoopTraceEvent::MoaAdvisor {
                 index: idx + 1,
                 count,
+                // rust-doctor-disable-next-line excessive-clone
                 label: r.outcome.label.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 text: r.outcome.text.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 error: r.error.clone(),
             });
         }

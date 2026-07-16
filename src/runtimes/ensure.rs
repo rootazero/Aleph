@@ -38,6 +38,7 @@ fn capability_lock(capability: &str) -> Arc<tokio::sync::Mutex<()>> {
     guard
         .entry(capability.to_string())
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        // rust-doctor-disable-next-line excessive-clone
         .clone()
 }
 
@@ -136,6 +137,7 @@ async fn ensure_capability_recursive(
         let mut guard = ledger.write().await;
         guard.update(CapabilityEntry {
             name: capability.to_string(),
+            // rust-doctor-disable-next-line excessive-clone
             bin_path: bin_path.clone(),
             version: probe_result.version.unwrap_or_default(),
             status: CapabilityStatus::Ready,
@@ -190,6 +192,7 @@ async fn ensure_capability_recursive(
             let mut guard = ledger.write().await;
             guard.update(CapabilityEntry {
                 name: capability.to_string(),
+                // rust-doctor-disable-next-line excessive-clone
                 bin_path: bin_path.clone(),
                 version,
                 status: CapabilityStatus::Ready,

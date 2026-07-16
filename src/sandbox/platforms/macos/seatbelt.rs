@@ -485,8 +485,7 @@ fn host_is_ip_literal(host: &str) -> bool {
 /// inherent method, so no `CommandExt` import is needed.
 fn apply_memory_rlimit(cmd: &mut Command, mb: u64) {
     let bytes = mb.saturating_mul(1024 * 1024);
-    // SAFETY: setrlimit with RLIMIT_AS is async-signal-safe and well-defined.
-    // No allocator, mutex, or other handler-unsafe call is made.
+    // SAFETY: setrlimit(RLIMIT_AS) is async-signal-safe and well-defined.
     unsafe {
         cmd.pre_exec(move || {
             let rlim = libc::rlimit {

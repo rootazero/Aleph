@@ -156,6 +156,7 @@ impl AuthProfileManager {
             if !in_cooldown {
                 all_in_cooldown = false;
                 // Found available profile - try to resolve API key
+                // rust-doctor-disable-next-line excessive-clone
                 match EffectiveProfile::from_config(profile_id.clone(), config) {
                     Ok(effective) => {
                         debug!(

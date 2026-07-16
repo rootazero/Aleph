@@ -517,13 +517,16 @@ async fn dispatch_forwards_tool_service_override() {
             think_level: None,
         })
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("dispatch ok");
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let _ = handle.completion.await.unwrap();
 
     let got = received_tool_service
         .lock()
         .unwrap_or_else(|e| e.into_inner())
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("harness must have been called");
     assert!(got, "tool_service_override must arrive as Some(_)");
 }
@@ -554,13 +557,16 @@ async fn dispatch_forwards_trace_sink() {
             think_level: None,
         })
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("dispatch ok");
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let _ = handle.completion.await.unwrap();
 
     let got = received_trace_sink
         .lock()
         .unwrap_or_else(|e| e.into_inner())
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("harness must have been called");
     assert!(got, "trace_sink must arrive as Some(_)");
 }

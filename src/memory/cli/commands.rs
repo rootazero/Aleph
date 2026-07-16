@@ -95,9 +95,13 @@ impl NoteSummary {
     #[must_use]
     pub fn from_entry(entry: &NoteIndexEntry) -> Self {
         Self {
+            // rust-doctor-disable-next-line excessive-clone
             path: entry.path.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             filename: entry.filename.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             category: entry.category.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             tags: entry.tags.clone(),
             link_count: entry.link_count,
             updated_at: entry.updated_at,
@@ -116,6 +120,7 @@ impl NoteSummary {
             let t: String = self.filename.chars().take(27).collect();
             format!("{t}...")
         } else {
+            // rust-doctor-disable-next-line excessive-clone
             self.filename.clone()
         };
         format!(

@@ -97,7 +97,6 @@ pub fn resolve_session(input: SessionResolveInput) -> Result<SessionResolution, 
         SessionStrategy::Child { parent_session_key } => {
             let parent = input
                 .parent_session
-                .clone()
                 .filter(|s| !s.is_empty())
                 .or(parent_session_key.filter(|s| !s.is_empty()))
                 .ok_or_else(|| {

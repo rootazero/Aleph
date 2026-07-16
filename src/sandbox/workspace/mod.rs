@@ -125,7 +125,12 @@ impl WorkspaceSandbox {
             baseline: SandboxCapabilities::strict(),
             granted_elevations: RwLock::new(HashSet::new()),
         });
-        sessions.insert(sid.clone(), ws.clone());
+        sessions.insert(
+            // rust-doctor-disable-next-line excessive-clone
+            sid.clone(),
+            // rust-doctor-disable-next-line excessive-clone
+            ws.clone(),
+        );
         Ok(ws)
     }
 }
@@ -168,6 +173,7 @@ impl Sandbox for WorkspaceSandbox {
         let ws = self.for_session(&cmd.session_id).await?;
 
         let cwd = match &cmd.cwd {
+            // rust-doctor-disable-next-line excessive-clone
             None => ws.cwd.clone(),
             Some(p) => {
                 let normalized = normalize_path(p, &ws.cwd);

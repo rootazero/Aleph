@@ -25,116 +25,140 @@ pub(super) async fn seed_session(
     input: FlowInput,
 ) -> Result<(), FlowError> {
     match input {
-        FlowInput::Prompt(text) => {
-            emit_message(
-                service,
-                session_id,
-                MessageContent {
-                    text,
+        FlowInput::Prompt(text) => seed_prompt(service, session_id, text).await,
+        FlowInput::Messages(msgs) => seed_messages(service, session_id, msgs).await,
+        FlowInput::History { turns, prompt } => {
+            seed_history(service, session_id, turns, prompt).await
+        }
+        FlowInput::Multimodal(msgs) => seed_multimodal(service, session_id, msgs).await,
+        FlowInput::Resume => Ok(()),
+    }
+}
+
+async fn seed_prompt(
+    service: &dyn SessionService,
+    session_id: &SessionId,
+    text: String,
+) -> Result<(), FlowError> {
+    emit_message(
+        service,
+        session_id,
+        MessageContent {
+            text,
+            blocks: Vec::new(),
+            thinking: None,
+            thinking_signature: None,
+        },
+        true,
+    )
+    .await
+}
+
+async fn seed_messages(
+    service: &dyn SessionService,
+    session_id: &SessionId,
+    msgs: Vec<MessageContent>,
+) -> Result<(), FlowError> {
+    for content in msgs {
+        emit_message(service, session_id, content, true).await?;
+    }
+    Ok(())
+}
+
+async fn seed_history(
+    service: &dyn SessionService,
+    session_id: &SessionId,
+    turns: Vec<FlowHistoryTurn>,
+    prompt: String,
+) -> Result<(), FlowError> {
+    // Only seed prior turns into a fresh (empty) log. For a continuation
+    // (log already non-empty) the turns are already persisted — re-seeding
+    // would duplicate the whole history. The new user turn below always runs.
+    let existing = service
+        .get_events(session_id, None, Some(1))
+        .await
+        .map(|e| !e.is_empty())
+        .unwrap_or(false);
+    if !existing {
+        for turn in turns {
+            match turn {
+                FlowHistoryTurn::User(content) => {
+                    emit_message(service, session_id, content, true).await?;
+                }
+                FlowHistoryTurn::Assistant(content) => {
+                    emit_message(service, session_id, content, false).await?;
+                }
+            }
+        }
+    }
+    // Announce a new user turn so the harness scans from the right
+    // tail boundary (see `tail_start_index` in agent.rs).
+    let turn_id = uuid::Uuid::new_v4();
+    service
+        .emit_event(
+            session_id,
+            SessionEvent::TurnStarted {
+                turn_id,
+                trigger: TurnTrigger::UserMessage,
+                at: now_ms(),
+            },
+        )
+        .await
+        .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
+    service
+        .emit_event(
+            session_id,
+            SessionEvent::UserMessage {
+                turn_id,
+                content: MessageContent {
+                    text: prompt,
                     blocks: Vec::new(),
                     thinking: None,
                     thinking_signature: None,
                 },
-                true,
+                at: now_ms(),
+                synthetic: false,
+            },
+        )
+        .await
+        .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
+    Ok(())
+}
+
+async fn seed_multimodal(
+    service: &dyn SessionService,
+    session_id: &SessionId,
+    msgs: Vec<MessageContent>,
+) -> Result<(), FlowError> {
+    // Same turn framing as `History`'s trailing prompt: a multimodal
+    // turn continues an existing conversation, so it must open its own
+    // turn — otherwise `current_turn_id` inherits the PREVIOUS turn's
+    // id and this turn's assistant reply is filed under it.
+    let turn_id = uuid::Uuid::new_v4();
+    service
+        .emit_event(
+            session_id,
+            SessionEvent::TurnStarted {
+                turn_id,
+                trigger: TurnTrigger::UserMessage,
+                at: now_ms(),
+            },
+        )
+        .await
+        .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
+    for content in msgs {
+        service
+            .emit_event(
+                session_id,
+                SessionEvent::UserMessage {
+                    turn_id,
+                    content,
+                    at: now_ms(),
+                    synthetic: false,
+                },
             )
-            .await?;
-        }
-        FlowInput::Messages(msgs) => {
-            for content in msgs {
-                emit_message(service, session_id, content, true).await?;
-            }
-        }
-        FlowInput::History { turns, prompt } => {
-            // Only seed prior turns into a fresh (empty) log. For a continuation
-            // (log already non-empty) the turns are already persisted — re-seeding
-            // would duplicate the whole history. The new user turn below always runs.
-            let existing = service
-                .get_events(session_id, None, Some(1))
-                .await
-                .map(|e| !e.is_empty())
-                .unwrap_or(false);
-            if !existing {
-                for turn in turns {
-                    match turn {
-                        FlowHistoryTurn::User(content) => {
-                            emit_message(service, session_id, content, true).await?;
-                        }
-                        FlowHistoryTurn::Assistant(content) => {
-                            emit_message(service, session_id, content, false).await?;
-                        }
-                    }
-                }
-            }
-            // Announce a new user turn so the harness scans from the right
-            // tail boundary (see `tail_start_index` in agent.rs).
-            let turn_id = uuid::Uuid::new_v4();
-            service
-                .emit_event(
-                    session_id,
-                    SessionEvent::TurnStarted {
-                        turn_id,
-                        trigger: TurnTrigger::UserMessage,
-                        at: now_ms(),
-                    },
-                )
-                .await
-                .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
-            service
-                .emit_event(
-                    session_id,
-                    SessionEvent::UserMessage {
-                        turn_id,
-                        content: MessageContent {
-                            text: prompt,
-                            blocks: Vec::new(),
-                            thinking: None,
-                            thinking_signature: None,
-                        },
-                        at: now_ms(),
-                        synthetic: false,
-                    },
-                )
-                .await
-                .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
-        }
-        FlowInput::Multimodal(msgs) => {
-            // Same turn framing as `History`'s trailing prompt: a multimodal
-            // turn continues an existing conversation, so it must open its own
-            // turn — otherwise `current_turn_id` inherits the PREVIOUS turn's
-            // id and this turn's assistant reply is filed under it.
-            let turn_id = uuid::Uuid::new_v4();
-            service
-                .emit_event(
-                    session_id,
-                    SessionEvent::TurnStarted {
-                        turn_id,
-                        trigger: TurnTrigger::UserMessage,
-                        at: now_ms(),
-                    },
-                )
-                .await
-                .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
-            for content in msgs {
-                service
-                    .emit_event(
-                        session_id,
-                        SessionEvent::UserMessage {
-                            turn_id,
-                            content,
-                            at: now_ms(),
-                            synthetic: false,
-                        },
-                    )
-                    .await
-                    .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
-            }
-        }
-        FlowInput::Resume => {
-            // No-op: the session log already contains the original
-            // UserMessage and the full prior trajectory. The harness
-            // replays it and continues; re-seeding would duplicate the
-            // user message.
-        }
+            .await
+            .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
     }
     Ok(())
 }

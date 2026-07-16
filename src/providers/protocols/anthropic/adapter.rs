@@ -377,6 +377,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             for td in tool_defs.iter() {
                 // Ensure input_schema has "type" field — required by strict
                 // backends like AWS Bedrock, which rejects schemas without it.
+                // rust-doctor-disable-next-line excessive-clone
                 let mut schema = td.parameters.clone();
                 if let Some(obj) = schema.as_object_mut() {
                     obj.entry("type")
@@ -389,6 +390,7 @@ impl ProtocolAdapter for AnthropicProtocol {
                 let sanitized = sanitize_anthropic_tool_name(&td.name);
                 if sanitized != td.name {
                     let mut map = self.name_map.write().unwrap_or_else(|e| e.into_inner());
+                    // rust-doctor-disable-next-line excessive-clone
                     if map.insert(sanitized.clone(), td.name.clone()).is_none() {
                         warn!(
                             original = %td.name,
@@ -399,6 +401,7 @@ impl ProtocolAdapter for AnthropicProtocol {
                 }
                 // Defense (2): dedup. Anthropic 400s on duplicate names; drop
                 // the second occurrence so the rest of the request still flies.
+                // rust-doctor-disable-next-line excessive-clone
                 if !seen.insert(sanitized.clone()) {
                     warn!(
                         original = %td.name,
@@ -410,6 +413,7 @@ impl ProtocolAdapter for AnthropicProtocol {
                 }
                 out.push(AnthropicTool {
                     name: sanitized,
+                    // rust-doctor-disable-next-line excessive-clone
                     description: td.description.clone(),
                     input_schema: schema,
                 });

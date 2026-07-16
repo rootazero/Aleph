@@ -14,8 +14,8 @@ fn ssh_key_regex() -> &'static Regex {
     SSH_KEY_RE.get_or_init(|| {
         // Match the full PEM block from BEGIN to END, including key body.
         // (?s) enables dot-matches-newline so .* spans across lines.
-        // rust-doctor-disable-next-line unwrap-in-production
         Regex::new(r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----")
+            // rust-doctor-disable-next-line unwrap-in-production
             .expect("static SSH key regex compiles")
     })
 }

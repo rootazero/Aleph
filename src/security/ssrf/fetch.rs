@@ -207,9 +207,12 @@ pub async fn safe_fetch(
         .map_err(|e| SsrfError::FetchFailed(e.to_string()))?;
 
     // Send the initial request
+    // rust-doctor-disable-next-line excessive-clone
     let mut req_builder = client.request(request.method.clone(), current_url.as_str());
+    // rust-doctor-disable-next-line excessive-clone
     req_builder = req_builder.headers(request.headers.clone());
     if let Some(body) = &request.body {
+        // rust-doctor-disable-next-line excessive-clone
         req_builder = req_builder.body(body.clone());
     }
 
@@ -220,6 +223,7 @@ pub async fn safe_fetch(
 
     // Redirect loop
     let mut visited: HashSet<Url> = HashSet::new();
+    // rust-doctor-disable-next-line excessive-clone
     visited.insert(current_url.clone());
     let mut redirect_count: u16 = 0;
     let mut current_method = request.method;
@@ -286,6 +290,7 @@ pub async fn safe_fetch(
             .build()
             .map_err(|e| SsrfError::FetchFailed(e.to_string()))?;
 
+        // rust-doctor-disable-next-line excessive-clone
         let mut req_builder = redirect_client.request(current_method.clone(), next_url.as_str());
         // rust-doctor-disable-next-line excessive-clone
         req_builder = req_builder.headers(current_headers.clone());
@@ -307,6 +312,7 @@ pub async fn safe_fetch(
 
     // Read response body
     let status = response.status();
+    // rust-doctor-disable-next-line excessive-clone
     let headers = response.headers().clone();
     let final_url = current_url.to_string();
     let body = response
@@ -348,6 +354,7 @@ async fn bypass_fetch(
         .map_err(|e| SsrfError::FetchFailed(e.to_string()))?;
 
     let status = response.status();
+    // rust-doctor-disable-next-line excessive-clone
     let headers = response.headers().clone();
     let final_url = response.url().to_string();
     let body = response

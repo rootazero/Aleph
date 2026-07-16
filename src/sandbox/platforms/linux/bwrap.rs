@@ -361,9 +361,8 @@ impl BubblewrapDriver {
     fn apply_no_new_privs(&self, cmd: &mut Command) {
         if self.options.no_new_privs {
             debug!("Applying PR_SET_NO_NEW_PRIVS via pre-exec");
+            // SAFETY: prctl(PR_SET_NO_NEW_PRIVS) is a well-defined Linux syscall.
             unsafe {
-                // SAFETY: prctl with PR_SET_NO_NEW_PRIVS is a well-defined
-                // Linux syscall that cannot fail with valid arguments.
                 cmd.pre_exec(|| {
                     let rc = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
                     if rc != 0 {
@@ -379,9 +378,7 @@ impl BubblewrapDriver {
     /// inherited by the eventual target binary via exec.
     fn apply_memory_rlimit(cmd: &mut Command, mb: u64) {
         let bytes = mb.saturating_mul(1024 * 1024);
-        // SAFETY: setrlimit with RLIMIT_AS is async-signal-safe and
-        // well-defined. No allocator, mutex, or other handler-unsafe
-        // call is made between fork and exec.
+        // SAFETY: setrlimit(RLIMIT_AS) is async-signal-safe and well-defined.
         unsafe {
             cmd.pre_exec(move || {
                 let rlim = libc::rlimit {
