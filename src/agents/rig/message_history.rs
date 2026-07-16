@@ -195,7 +195,7 @@ impl ChatMessage {
         if let Some(content) = &self.content {
             msg.as_object_mut()
                 .expect("invariant: msg is a JSON object")
-                .insert("content", Value::String(content.clone()));
+                .insert("content".to_string(), Value::String(content.clone()));
         }
 
         if let Some(tool_calls) = &self.tool_calls {
@@ -214,20 +214,20 @@ impl ChatMessage {
                 .collect();
             msg.as_object_mut()
                 .expect("invariant: msg is a JSON object")
-                .insert("tool_calls", Value::Array(calls));
+                .insert("tool_calls".to_string(), Value::Array(calls));
         }
 
         if let Some(tool_call_id) = &self.tool_call_id {
             msg.as_object_mut()
                 .expect("invariant: msg is a JSON object")
-                .insert("tool_call_id", Value::String(tool_call_id.clone()));
+                .insert("tool_call_id".to_string(), Value::String(tool_call_id.clone()));
         }
 
         if self.role == MessageRole::Tool {
             if let Some(name) = &self.name {
                 msg.as_object_mut()
                     .expect("invariant: msg is a JSON object")
-                    .insert("name", Value::String(name.clone()));
+                    .insert("name".to_string(), Value::String(name.clone()));
             }
         }
 
