@@ -78,9 +78,23 @@ fn wrap_value_with_hook_contexts(value: Value, contexts: &[String]) -> Value {
 struct ConfirmDenial {
     outcome: ApprovalOutcome,
     hint: Option<&'static str>,
+    /// The human's own free-text reason (`/deny <reason>` or the RPC `reason`
+    /// field), when they gave one. Relayed verbatim into the model-facing
+    /// error so the model re-plans on the user's actual objection.
+    user_reason: Option<String>,
     /// How long a human was actually given to answer. Zero for the denials
     /// that never showed a card (unattended auto-deny, ledger short-circuit).
     waited_ms: u64,
+}
+
+impl ConfirmDenial {
+    /// ` The user said: "<reason>".` when the human attached one, else empty.
+    fn user_reason_clause(&self) -> String {
+        self.user_reason
+            .as_deref()
+            .map(|r| format!(" The user said: \"{r}\"."))
+            .unwrap_or_default()
+    }
 }
 
 /// Which dispatch branch `execute_inner` is routing into. Kept as a
@@ -145,6 +159,16 @@ impl ScopedToolService {
         // originating connection's role rides in TURN_CONTEXT, stamped at run
         // start. Operator devices, the local no-auth daemon, and non-gateway
         // runs (cron/internal) all pass.
+        // True once the operator gate below has approved THIS call. The two
+        // gate tool-sets overlap (`vault_store` / `agent_delete` are both
+        // operator-gated and confirm-gated), and an operator's `AllowOnce`
+        // writes nothing into session memory — so without this flag the
+        // confirmation gate would re-prompt the very call the operator just
+        // read and approved, breaking `confirm_with_memory`'s one-decision-
+        // per-call contract. Operator authority subsumes the requester's own
+        // confirmation for the same action; a session grant already shares
+        // through the fingerprint stores.
+        let mut approved_by_operator_gate = false;
         if crate::gateway::method_authz::tool_requires_operator(name) {
             let is_operator = crate::tools::turn_context::current_turn_context()
                 .is_none_or(|t| t.caller_is_operator());
@@ -167,16 +191,18 @@ impl ScopedToolService {
                             ),
                         );
                         if let Err(denial) = self.confirm_with_memory(req, &action, &input).await {
+                            let said = denial.user_reason_clause();
                             return Err(ToolError::PermissionDenied {
                                 name: name.to_string(),
                                 reason: format!(
                                     "config change via `{name}` was not authorized by the server \
-                                     operator ({:?}). Do not retry until authorized.",
+                                     operator ({:?}).{said} Do not retry until authorized.",
                                     denial.outcome
                                 ),
                             });
                         }
                         // Approved → fall through to normal execution.
+                        approved_by_operator_gate = true;
                     }
                     None => {
                         return Err(ToolError::PermissionDenied {
@@ -202,10 +228,12 @@ impl ScopedToolService {
         // (the mechanism the exec tier's metadata rule feeds), or when the
         // call's ARGUMENTS trip the tier's destructive-argument filter — the
         // only gate that needs the input, because `file_ops` hides `delete`
-        // behind the same tool name as `list`.
-        if self.inner.requires_confirmation(name)
-            || self.is_permission_ask(name)
-            || self.tier_asks_for_arguments(name, &input)
+        // behind the same tool name as `list`. Skipped entirely when the
+        // operator gate above already approved this exact call.
+        if !approved_by_operator_gate
+            && (self.inner.requires_confirmation(name)
+                || self.is_permission_ask(name)
+                || self.tier_asks_for_arguments(name, &input))
         {
             match &self.approval_requester {
                 Some(requester) => {
@@ -230,13 +258,14 @@ impl ScopedToolService {
                             });
                         }
                         let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
+                        let said = denial.user_reason_clause();
                         return Err(ToolError::Execution {
                             name: name.to_string(),
                             cause: format!(
-                                "The user did not approve running `{name}` ({:?}). Do not retry \
-                                 this call, do not rewrite it, and do not attempt to achieve the \
-                                 same result by other means.{hint} Ask the user what they would \
-                                 like to do instead.",
+                                "The user did not approve running `{name}` ({:?}).{said} Do not \
+                                 retry this call, do not rewrite it, and do not attempt to \
+                                 achieve the same result by other means.{hint} Ask the user what \
+                                 they would like to do instead.",
                                 denial.outcome
                             ),
                         });
@@ -502,6 +531,7 @@ impl ScopedToolService {
                      goal(action='update', status='blocked') to hand back to the \
                      user.",
                 ),
+                user_reason: None,
                 waited_ms: 0,
             });
         }
@@ -546,6 +576,7 @@ impl ScopedToolService {
                 return Err(ConfirmDenial {
                     outcome: ApprovalOutcome::Denied,
                     hint: Some(reason_kind.agent_hint()),
+                    user_reason: None,
                     waited_ms: 0,
                 });
             }
@@ -583,9 +614,10 @@ impl ScopedToolService {
         // under the wrong tool and the user approves something they never read.
         let tool_call_id = self.newest_tool_call(name).await.map(|(_, id)| id);
         let asked_at = std::time::Instant::now();
-        let outcome =
+        let response =
             crate::approval::with_tool_call_id(tool_call_id, requester.request_approval(action))
                 .await;
+        let outcome = response.outcome;
         let waited_ms = u64::try_from(asked_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         if !outcome.is_approved() {
             let reason_kind = match outcome {
@@ -627,6 +659,7 @@ impl ScopedToolService {
             return Err(ConfirmDenial {
                 outcome,
                 hint: Some(reason_kind.agent_hint()),
+                user_reason: response.deny_reason,
                 waited_ms,
             });
         }
@@ -783,11 +816,12 @@ impl ScopedToolService {
                     if let Err(denial) = self.confirm_with_memory(requester, &action, &input).await
                     {
                         let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
+                        let said = denial.user_reason_clause();
                         return Err(ToolError::Execution {
                             name: name.to_string(),
                             cause: format!(
                                 "Hook requested user confirmation for `{name}` and the \
-                                 user did not approve ({:?}).{hint}",
+                                 user did not approve ({:?}).{said}{hint}",
                                 denial.outcome
                             ),
                         });

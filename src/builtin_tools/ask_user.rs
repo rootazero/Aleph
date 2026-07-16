@@ -426,6 +426,7 @@ mod tests {
             conversation_id: "user-1".to_string(),
             caller_role: None,
             channel_tool_permissions: None,
+            unattended: false,
         }
     }
 
@@ -463,6 +464,7 @@ mod tests {
             conversation_id: String::new(),
             caller_role: None,
             channel_tool_permissions: None,
+            unattended: false,
         };
         let err = TURN_CONTEXT
             .scope(non_channel_turn, async {

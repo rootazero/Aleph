@@ -915,6 +915,7 @@ mod escape_scope_tests {
             conversation_id: String::new(),
             caller_role: None,
             channel_tool_permissions: None,
+            unattended: false,
         }
     }
 

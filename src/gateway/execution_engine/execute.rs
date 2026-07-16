@@ -1573,7 +1573,16 @@ mod carry_policy_metadata_tests {
             Some(r#"{"default":"deny"}"#)
         );
         assert_eq!(cont.get(UNATTENDED_KEY).map(String::as_str), Some("true"));
-        assert_eq!(cont.len(), 3);
+        // The busy-input marker rides every continuation too (`Queue`, so a
+        // collision with a live run returns AgentBusy → rearm instead of
+        // steering the user's turn). Exactly these four keys — `platform`
+        // and anything else from the source map must NOT leak through.
+        assert_eq!(
+            cont.get(super::super::BUSY_INPUT_MODE_KEY)
+                .map(String::as_str),
+            Some("queue")
+        );
+        assert_eq!(cont.len(), 4);
     }
 
     /// The marker is written LAST and is unconditional: a source map that somehow

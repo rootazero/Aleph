@@ -4,4 +4,4 @@ pub mod gate;
 pub mod session_memory;
 
 pub use action::{grant_fingerprint, ApprovalAction};
-pub use gate::{ApprovalGate, ApprovalOutcome, ApprovalRequester};
+pub use gate::{ApprovalGate, ApprovalOutcome, ApprovalRequester, ApprovalResponse};

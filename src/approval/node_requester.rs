@@ -34,6 +34,11 @@ const fn decision_to_wire(decision: Option<ApprovalDecisionType>) -> &'static st
 /// Drive one node-initiated approval to a decision. Blocks on the operator
 /// decision (up to `DEFAULT_APPROVAL_TIMEOUT_MS`); callers MUST run this on a
 /// spawned task so the connection's select loop is not blocked.
+///
+/// Returns the wire outcome string plus the operator's free-text denial
+/// reason, if one was attached (`/deny <reason>` / RPC `reason`). The caller
+/// puts it on the reverse-RPC response as an optional `"deny_reason"` field —
+/// older nodes ignore unknown fields, newer ones relay it to their model.
 pub async fn run_node_approval(
     manager: &ExecApprovalManager,
     event_bus: &GatewayEventBus,
@@ -42,7 +47,7 @@ pub async fn run_node_approval(
     tool: &str,
     action: &str,
     reason: &str,
-) -> &'static str {
+) -> (&'static str, Option<String>) {
     // `action` is the node's redacted action summary — what will actually run.
     // An older node sends none; fall back to the tool name rather than an empty
     // card.
@@ -79,9 +84,10 @@ pub async fn run_node_approval(
         tracing::warn!(error = %e, "failed to publish ApprovalRequested for node approval");
     }
 
-    let decision = manager
+    let resolved = manager
         .await_registered(approval_id.clone(), rx, timeout)
         .await;
+    let decision = resolved.decision;
 
     let frame = match decision {
         Some(d) => GatewayEventFrame::ApprovalResolved {
@@ -99,7 +105,7 @@ pub async fn run_node_approval(
         tracing::warn!(error = %e, "failed to publish final approval event for node approval");
     }
 
-    decision_to_wire(decision)
+    (decision_to_wire(decision), resolved.deny_reason)
 }
 
 #[cfg(test)]
@@ -170,10 +176,8 @@ mod tests {
         // exec.approvals.pending handler reads).
         let pending = manager.list_pending();
         assert!(
-            pending
-                .iter()
-                .any(|p| p.record.command
-                    == "node 'worker': bash: curl https://example.com — needs network"),
+            pending.iter().any(|p| p.record.command
+                == "node 'worker': bash: curl https://example.com — needs network"),
             "pending record must carry node-context command, got {:?}",
             pending
                 .iter()
@@ -182,6 +186,6 @@ mod tests {
         );
         assert!(manager.resolve(&id, ApprovalDecisionType::AllowSession, None));
 
-        assert_eq!(handle.await.unwrap(), "approved_session");
+        assert_eq!(handle.await.unwrap(), ("approved_session", None));
     }
 }

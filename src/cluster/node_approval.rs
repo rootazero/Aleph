@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::cluster::ReverseRpcChannel;
-use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
+use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester, ApprovalResponse};
 use crate::sandbox::exec_approval::ApprovalAction;
 
 /// Shared, per-connection-refreshed channel slot. `run_session` writes
@@ -52,13 +52,13 @@ impl CenterApprovalRequester {
 
 #[async_trait]
 impl ApprovalRequester for CenterApprovalRequester {
-    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalOutcome {
+    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse {
         // Clone the channel out of the lock and drop the guard before awaiting —
         // a std RwLock guard is not Send.
         let channel = self.slot.read().unwrap_or_else(|e| e.into_inner()).clone();
         let Some(channel) = channel else {
             tracing::warn!("node approval requested with no live center channel; denying");
-            return ApprovalOutcome::Denied;
+            return ApprovalOutcome::Denied.into();
         };
         // `action` carries the redacted summary the center's operator card
         // renders — without it the operator approves a bare tool name.
@@ -78,12 +78,23 @@ impl ApprovalRequester for CenterApprovalRequester {
                     .and_then(|r| r.get("outcome"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("denied");
-                outcome_from_str(outcome)
+                // The operator's own words, when the center attached them to a
+                // denial — optional field, absent from older centers.
+                let deny_reason = resp
+                    .result
+                    .as_ref()
+                    .and_then(|r| r.get("deny_reason"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                ApprovalResponse {
+                    outcome: outcome_from_str(outcome),
+                    deny_reason,
+                }
             }
-            Ok(_) => ApprovalOutcome::Denied,
+            Ok(_) => ApprovalOutcome::Denied.into(),
             Err(e) => {
                 tracing::warn!(error = %e, "node approval reverse-rpc failed; denying");
-                ApprovalOutcome::Denied
+                ApprovalOutcome::Denied.into()
             }
         }
     }
@@ -134,7 +145,7 @@ mod tests {
         let slot: ApprovalSlot = Arc::new(RwLock::new(None));
         let requester = CenterApprovalRequester::new(slot);
         assert_eq!(
-            requester.request_approval(&bash_action()).await,
+            requester.request_approval(&bash_action()).await.outcome,
             ApprovalOutcome::Denied
         );
     }
@@ -154,10 +165,7 @@ mod tests {
             assert_eq!(req["params"]["reason"], "needs network");
             // The center's operator card renders this — a bare tool name is an
             // operator deciding blind.
-            assert_eq!(
-                req["params"]["action"],
-                "bash: curl https://example.com"
-            );
+            assert_eq!(req["params"]["action"], "bash: curl https://example.com");
             let id = req["id"].clone();
             let resp =
                 JsonRpcResponse::success(Some(id.clone()), json!({"outcome": "approved_session"}));
@@ -165,7 +173,7 @@ mod tests {
         });
 
         assert_eq!(
-            requester.request_approval(&bash_action()).await,
+            requester.request_approval(&bash_action()).await.outcome,
             ApprovalOutcome::ApprovedForSession
         );
     }
@@ -186,7 +194,7 @@ mod tests {
         });
 
         assert_eq!(
-            requester.request_approval(&bash_action()).await,
+            requester.request_approval(&bash_action()).await.outcome,
             ApprovalOutcome::Denied
         );
     }
@@ -199,7 +207,7 @@ mod tests {
         let slot: ApprovalSlot = Arc::new(RwLock::new(Some(channel)));
         let requester = CenterApprovalRequester::new(slot);
         assert_eq!(
-            requester.request_approval(&bash_action()).await,
+            requester.request_approval(&bash_action()).await.outcome,
             ApprovalOutcome::Denied
         );
     }

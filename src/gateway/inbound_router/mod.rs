@@ -959,11 +959,14 @@ impl InboundMessageRouter {
         let raw = strip_bot_mention(ctx.message.text.trim());
         let lower = raw.trim().to_lowercase();
 
-        // Approval reply: `/approve [once|session|always]` or `/deny`.
-        // A bare `/approve` (or any unrecognized suffix) stays the
-        // least-privilege `AllowOnce`; `session` widens the grant to the rest
-        // of the session. `always` is accepted for backwards compatibility but
-        // the manager clamps it to a session grant — nothing persists.
+        // Approval reply: `/approve [once|session|always]` or
+        // `/deny [reason…]`. A bare `/approve` (or any unrecognized suffix)
+        // stays the least-privilege `AllowOnce`; `session` widens the grant to
+        // the rest of the session. `always` is accepted for backwards
+        // compatibility but the manager clamps it to a session grant — nothing
+        // persists. Free text after `/deny` is the human's reason, relayed
+        // verbatim to the model so it re-plans on the actual objection
+        // instead of a bare "denied" (hermes parity).
         let is_approve = lower == "/approve" || lower.starts_with("/approve ");
         let is_deny = lower == "/deny" || lower.starts_with("/deny ");
         if is_approve || is_deny {
@@ -979,12 +982,26 @@ impl InboundMessageRouter {
                 } else {
                     ApprovalDecisionType::Deny
                 };
+                // Reason from the ORIGINAL (un-lowercased) text — the model
+                // should read the user's words, not a case-folded copy. The
+                // `/deny` prefix region is ASCII (the `starts_with` above
+                // matched its lowercase form), so slicing 5 bytes is safe.
+                let deny_reason = if is_deny {
+                    raw.trim()
+                        .get("/deny".len()..)
+                        .map(str::trim)
+                        .filter(|r| !r.is_empty())
+                        .map(String::from)
+                } else {
+                    None
+                };
                 // Reply with the EFFECTIVE decision: the manager clamps an
                 // `always` to a session grant, so never promise permanence.
                 let reply = match mgr.resolve_for_session(
                     &session_key,
                     decision,
                     ctx.message.sender_name.clone(),
+                    deny_reason,
                 ) {
                     Some(ApprovalDecisionType::AllowOnce) => "✅ Approved (once).",
                     Some(
