@@ -93,7 +93,7 @@ struct FixedProfile;
 #[async_trait]
 impl ProfileSynthesizer for FixedProfile {
     async fn bootstrap(&self, _agent_id: &str) -> Result<UserProfile, AlephError> {
-        unimplemented!()
+        unimplemented!() // rust-doctor-disable-line panic-in-library
     }
 
     async fn current(&self, _agent_id: &str) -> Result<Option<UserProfile>, AlephError> {
@@ -120,7 +120,7 @@ impl ProfileSynthesizer for FixedProfile {
         _agent_id: &str,
         _signal: crate::memory::notes::profile::types::SessionSignal,
     ) -> Result<crate::memory::notes::profile::types::UpdateOutcome, AlephError> {
-        unimplemented!()
+        unimplemented!() // rust-doctor-disable-line panic-in-library
     }
 }
 
@@ -312,8 +312,10 @@ async fn first_call_captures_snapshot_subsequent_calls_hit_cache() {
     // Pre-seed MEMORY.md (with trailing § so it's classified as curated,
     // not legacy — see Task 7's serialize-with-trailing-delimiter fix).
     let agent_dir = dir.path().join("agent-x");
-    std::fs::create_dir_all(&agent_dir).unwrap();
-    std::fs::write(agent_dir.join("MEMORY.md"), "fact one\n§\nfact two\n§\n").unwrap();
+    tokio::fs::create_dir_all(&agent_dir).await.unwrap();
+    tokio::fs::write(agent_dir.join("MEMORY.md"), "fact one\n§\nfact two\n§\n")
+        .await
+        .unwrap();
 
     let m1 = provider
         .build_curated_message("agent-x", "ses-1")
@@ -331,10 +333,11 @@ async fn first_call_captures_snapshot_subsequent_calls_hit_cache() {
     );
 
     // Mutate disk; same session_key must NOT reflect the change.
-    std::fs::write(
+    tokio::fs::write(
         agent_dir.join("MEMORY.md"),
         "fact one\n§\nfact two\n§\nfact three\n§\n",
     )
+    .await
     .unwrap();
     let m2 = provider
         .build_curated_message("agent-x", "ses-1")
@@ -384,10 +387,10 @@ async fn invalidate_curated_for_agent_drops_all_sessions_only_for_target() {
     // Pre-seed two agents, each with curated entries.
     let a_dir = dir.path().join("agent-A");
     let b_dir = dir.path().join("agent-B");
-    std::fs::create_dir_all(&a_dir).unwrap();
-    std::fs::create_dir_all(&b_dir).unwrap();
-    std::fs::write(a_dir.join("MEMORY.md"), "a-old\n§\n").unwrap();
-    std::fs::write(b_dir.join("MEMORY.md"), "b-old\n§\n").unwrap();
+    tokio::fs::create_dir_all(&a_dir).await.unwrap();
+    tokio::fs::create_dir_all(&b_dir).await.unwrap();
+    tokio::fs::write(a_dir.join("MEMORY.md"), "a-old\n§\n").await.unwrap();
+    tokio::fs::write(b_dir.join("MEMORY.md"), "b-old\n§\n").await.unwrap();
 
     // Prime caches: 2 sessions for agent-A, 1 for agent-B.
     provider

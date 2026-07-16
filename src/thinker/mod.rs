@@ -420,9 +420,10 @@ impl ProviderRegistry for MultiProviderRegistry {
             state.fallbacks.clone()
         };
 
+        let empty_model = String::new();
         for fb_provider_name in global_fallbacks {
             if state.providers.contains_key(&fb_provider_name) {
-                candidates.push((fb_provider_name, String::new()));
+                candidates.push((fb_provider_name, empty_model.clone()));
             }
         }
 

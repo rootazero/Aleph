@@ -180,12 +180,13 @@ mod tests {
 
     #[test]
     fn non_anthropic_baseline_has_tool_use_and_persistence() {
+        let layer = ProviderGuidanceLayer;
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let mut out = String::new();
         for behavior in ["openai", "gemini", "ollama", "strict", "unknown"] {
-            let layer = ProviderGuidanceLayer;
-            let config = PromptConfig::default();
-            let tools = vec![];
+            out.clear();
             let input = LayerInput::basic(&config, &tools).with_behavior_name_opt(Some(behavior));
-            let mut out = String::new();
             layer.inject(&mut out, &input);
             assert!(out.contains("## Tool-Use Enforcement"), "{behavior}");
             assert!(

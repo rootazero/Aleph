@@ -107,12 +107,13 @@ impl PromptPipeline {
     ) -> PromptResult {
         // 1. Collect sections from matching layers
         let mut sections: Vec<(u32, &str, String)> = Vec::new();
+        let mut section = String::new();
         for layer in &self.layers {
             if layer.paths().contains(&path) && layer.supports_mode(mode) {
-                let mut section = String::new();
+                section.clear();
                 layer.inject(&mut section, input);
                 if !section.is_empty() {
-                    sections.push((layer.priority(), layer.name(), section));
+                    sections.push((layer.priority(), layer.name(), section.clone()));
                 }
             }
         }
@@ -244,9 +245,10 @@ impl PromptPipeline {
         mode: PromptMode,
     ) -> Vec<LayerSize> {
         let mut out = Vec::new();
+        let mut section = String::new();
         for layer in &self.layers {
             if layer.paths().contains(&path) && layer.supports_mode(mode) {
-                let mut section = String::new();
+                section.clear();
                 layer.inject(&mut section, input);
                 if !section.is_empty() {
                     out.push(LayerSize {

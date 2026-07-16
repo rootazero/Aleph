@@ -105,6 +105,7 @@ impl BlockReplyChunker {
     /// Try to emit complete blocks
     fn try_emit_blocks(&mut self) -> Vec<String> {
         let mut blocks = Vec::new();
+        let mut spans = Vec::new();
 
         loop {
             if self.buffer.len() < self.config.min_block_size {
@@ -112,11 +113,10 @@ impl BlockReplyChunker {
             }
 
             // Parse fence spans for current buffer
-            let spans = if self.config.fence_aware {
-                parse_fence_spans(&self.buffer)
-            } else {
-                Vec::new()
-            };
+            spans.clear();
+            if self.config.fence_aware {
+                spans.extend(parse_fence_spans(&self.buffer));
+            }
 
             let boundary = self.find_boundary(&spans);
 

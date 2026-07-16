@@ -120,6 +120,8 @@ Your response should include:\n\
 /// behaviour transfers across harnesses. The model is expected to pick
 /// up mid-thought; "no apology, no recap" prevents wasted output tokens
 /// on regenerating context the model already produced.
+// rust-doctor-disable-next-line hardcoded-secrets
+// Not a secret: this is a steering prompt template, not a credential.
 pub const MAX_OUTPUT_TOKENS_RESUME_NUDGE: &str =
     "Output token limit hit. Resume directly — no apology, no recap of \
      what you were doing. Pick up mid-thought if that is where the cut \
