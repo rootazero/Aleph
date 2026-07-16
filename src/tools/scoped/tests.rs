@@ -628,7 +628,7 @@ async fn before_tool_hook_block_returns_execution_error() {
                 "unexpected cause: {cause}"
             );
         }
-        other => panic!("expected Execution error from block hook, got: {other:?}"),
+        other => panic!("expected Execution error from block hook, got: {other:?}"), // rust-doctor-disable-line panic-in-library
     }
 }
 
@@ -651,7 +651,7 @@ async fn before_tool_hook_deny_returns_permission_denied() {
                 "unexpected reason: {reason}"
             );
         }
-        other => panic!("expected PermissionDenied from deny hook, got: {other:?}"),
+        other => panic!("expected PermissionDenied from deny hook, got: {other:?}"), // rust-doctor-disable-line panic-in-library
     }
 }
 
@@ -1494,7 +1494,7 @@ async fn declared_confirmation_tool_blocked_when_denied() {
 
     match svc.execute("danger", json!({})).await {
         Err(ToolError::Execution { name, .. }) => assert_eq!(name, "danger"),
-        other => panic!("denied confirmation must block, got: {other:?}"),
+        other => panic!("denied confirmation must block, got: {other:?}"), // rust-doctor-disable-line panic-in-library
     }
     assert_eq!(requester.calls.load(Ordering::SeqCst), 1);
 }
@@ -1509,7 +1509,7 @@ async fn declared_confirmation_tool_fails_closed_without_requester() {
             assert_eq!(name, "danger");
             assert!(cause.contains("no approval"), "unexpected cause: {cause}");
         }
-        other => panic!("expected fail-closed Execution error, got: {other:?}"),
+        other => panic!("expected fail-closed Execution error, got: {other:?}"), // rust-doctor-disable-line panic-in-library
     }
 }
 
