@@ -55,7 +55,7 @@ pub(super) fn print_startup_banner(addr: SocketAddr, full_config: &FullGatewayCo
         env!("ALEPH_VERSION")
     );
     println!("╠═══════════════════════════════════════════════╣");
-    let ws_scheme = if full_config.gateway.tls.is_enabled() {
+    let ws_scheme = if full_config.gateway.tls.enabled {
         "wss"
     } else {
         "ws"

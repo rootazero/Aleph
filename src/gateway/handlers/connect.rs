@@ -151,6 +151,20 @@ pub fn connect_authorized(
     matches!(token, Some(t) if !t.is_empty() && validate(t))
 }
 
+/// Whether a resolved `connect` outcome should be recorded as an
+/// [`AuditEventType::AuthFailure`](crate::security::audit::AuditEventType) in
+/// the security audit log.
+///
+/// Only a rejected **remote** connect is auditable: loopback is the zero-config
+/// operator and its connects are never logged (the local user is not an
+/// intruder, and logging every local attach is noise/privacy). An authorized
+/// remote connect is a success, not a failure. Kept as a pure predicate so the
+/// "loopback is never audited" invariant is host-testable and regression-guarded.
+#[must_use]
+pub const fn should_audit_connect_failure(authorized: bool, is_loopback: bool) -> bool {
+    !authorized && !is_loopback
+}
+
 /// Handle "connect" — returns the session baseline. `server::handler` overlays
 /// the authorization verdict (`role` / `authorized` / `needs_token`) computed
 /// via [`resolve_connect_auth`]; the `role` here is just a default for any path
@@ -285,6 +299,17 @@ mod tests {
             &mgr,
         );
         assert!(matches!(outcome2, ConnectAuthOutcome::Unauthorized));
+    }
+
+    #[test]
+    fn only_remote_failures_are_audited() {
+        // Loopback is the zero-config operator: never audited, authorized or not.
+        assert!(!should_audit_connect_failure(false, true));
+        assert!(!should_audit_connect_failure(true, true));
+        // Authorized remote is a success, not a failure.
+        assert!(!should_audit_connect_failure(true, false));
+        // Rejected remote connect is the one auditable case.
+        assert!(should_audit_connect_failure(false, false));
     }
 
     #[test]

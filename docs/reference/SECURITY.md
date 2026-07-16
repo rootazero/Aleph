@@ -783,13 +783,22 @@ blocked_hosts = ["*.malware.com"]
 
 ## Trust model: network boundary + Gateway token {#auth-ux}
 
-The trust boundary is the network boundary, gated by a single shared
-**Gateway token**. Loopback is the implicit operator (zero-config); a remote
-connection must present the token at the `connect` handshake
-(`src/gateway/handlers/connect.rs::connect_authorized`). A valid token = full
-operator authority (single tier, identical to local); a missing / invalid one
-is walled (the WS dispatch refuses every method but `connect`). Revocation is
-token rotation (`gateway.token.rotate`).
+The trust boundary is the network boundary, gated by a **Gateway-token login
+wall**. Loopback is the implicit operator (zero-config, no credential). A
+remote connection must present a valid credential at the `connect` handshake,
+resolved by `src/gateway/handlers/connect.rs::resolve_connect_auth` in
+priority order: (1) loopback ⇒ operator; (2) **device token** (`aleph-dt-*`,
+long-lived, bound to a paired device, SHA-256-hashed at rest); (3) **bootstrap
+ticket** (`aleph-bt-*`, 5-min single-use, exchanged during onboarding for a
+fresh device token); (4) the legacy shared **Gateway token** (`aleph-<uuid>`,
+`SharedTokenManager`, HMAC-hashed, constant-time verified). A valid credential
+= full operator authority (single tier, identical to local); a missing /
+invalid one is walled (the WS dispatch refuses every method but `connect`, and
+a flood guard closes a connection that keeps probing). Revocation is token
+rotation (`gateway.token.rotate` — regenerates the shared token, revokes all
+paired Panel devices, and force-closes live remote sockets) or per-device
+revoke (`gateway.devices.revoke`). Rejected remote connects and flood-guard
+closes are recorded in the security audit log (`AuthFailure` / `RateLimited`).
 
 ### Network boundary = reachability
 
@@ -799,47 +808,147 @@ token rotation (`gateway.token.rotate`).
   is auto-authorized as operator.
 - **LAN opt-in.** Set `[gateway] host = "0.0.0.0"` in
   `~/.aleph/config.toml` to listen on every interface. A remote device on the
-  LAN can then reach the socket, but is **walled until it presents the Gateway
-  token** — so exposure of the socket no longer equals control of the agent.
-  Still, treat the token as the single key to everything (an authorized remote
-  has full operator authority, including PTY / shell): share it only over a
-  trusted channel, and rotate it if it may have leaked.
-- **Transport encryption — native TLS.** By default the LAN transport is
-  plaintext (the Gateway token rides an unencrypted WS on the local network).
-  Set `[gateway.tls] mode = "auto"` to serve HTTPS/WSS: a bring-your-own cert
-  (`cert_path`/`key_path`), or a cached self-signed cert auto-generated under
-  `~/.aleph/gateway/tls/` whose SHA-256 fingerprint is logged for pinning. See
-  [GATEWAY.md](GATEWAY.md) → *TLS (HTTPS / WSS)*. This protects the token (and
-  all traffic) in transit; it does not replace the token wall.
-- **Reverse-proxy trust.** If you front the gateway with a proxy (for TLS, SSO,
-  or internet exposure), you **must** list the proxy in `[gateway]
-  trusted_proxies` (IPs/CIDRs). This is not optional cosmetics: a proxy on the
-  *same host* makes every proxied client's socket peer `127.0.0.1`, which would
-  otherwise inherit the loopback ⇒ operator auto-trust and hand every remote
-  caller token-free control. With the proxy allow-listed, the real client IP is
-  resolved from `X-Forwarded-For` (fail-closed) and proxied connections are held
-  to the token wall like any other remote. See [GATEWAY.md](GATEWAY.md) →
-  *Trusted reverse proxies*.
-- **Beyond the LAN.** To reach Aleph across the internet, front it with your own
-  reverse proxy / VPN / SSH tunnel that terminates trust *upstream* of the
-  gateway (and list it in `trusted_proxies`). Aleph deliberately ships no
-  ACME/Let's Encrypt — public TLS is the proxy's job; native TLS is for
-  local/LAN encryption.
+  LAN can then reach the socket, but is **walled until it presents a valid
+  credential** (device token / bootstrap ticket / shared Gateway token) — so
+  exposure of the socket no longer equals control of the agent. The server
+  logs a one-line warning at startup when it binds a non-loopback interface.
+  Still, treat any accepted credential as a key to everything (an authorized
+  remote has full operator authority, including PTY / shell): share it only
+  over a trusted channel, and rotate it if it may have leaked.
+- **Beyond the LAN.** To reach Aleph across the internet, encrypt the
+  transport — either front it with your own TLS-terminating reverse proxy
+  (recommended) or enable Aleph's native in-process TLS. See
+  **[Remote-connection transport encryption](#remote-tls)** below. Plaintext
+  to a remote client is now refused by default (boot gate + per-connect gate).
 
-> **Known limitation (A2A).** The A2A surface (`[a2a]`, disabled by default) is
-> merged onto the **same** gateway listener but has an independent loopback-trust
-> path that does not yet resolve `X-Forwarded-For`
-> (`src/a2a/domain/security.rs::infer_from_addr`). If you enable A2A behind a
-> same-host reverse proxy, set `[a2a.server.security] local_bypass = false` (the server
-> logs a warning at startup when `trusted_proxies` is set while A2A
-> localhost-bypass is on). Threading full trusted-proxy resolution into A2A is a
-> tracked follow-up.
+### Remote-connection transport encryption (TLS) {#remote-tls}
 
-> **Known limitation (CLI over TLS).** With `[gateway.tls]` enabled the local
-> `aleph` CLI admin IPC (the discovery URL becomes `https://…`) cannot yet trust
-> the self-signed cert — client-side wss/TLS is the same tracked follow-up as the
-> Panel/CLI/cluster wss ripple. Keep TLS off if you rely on CLI write commands
-> against a running daemon, or drive it from the Panel.
+Reachability (above) controls *who can open the socket*; TLS controls *whether
+the bytes on the wire are readable*. The two are independent: the Gateway token
+authenticates, TLS encrypts. A `host = "0.0.0.0"` deployment without TLS ships
+the token and every message in cleartext, sniffable on any hop between client
+and server.
+
+**Enforcement (off-by-default; loopback always exempt).** Loopback
+(`127.0.0.1` / `::1`) stays plaintext `ws://` — the zero-config desktop / CLI
+/ same-host-proxy hop is unchanged. For a **non-loopback** bind Aleph is now
+fail-closed on plaintext:
+
+- **Boot gate** (`check_network_exposure`): a config that binds a non-loopback
+  `host` with no native TLS, no trusted proxy, and `allow_insecure_remote =
+  false` **refuses to start** with an actionable error. (This is the one
+  intentional breaking change — a previously-working `host = "0.0.0.0"`
+  plaintext config now must pick a remedy below.)
+- **Per-connect gate** (`refuse_insecure_remote`): a remote client whose leg is
+  unencrypted is rejected at the WS upgrade with `426 Upgrade Required`, even if
+  the boot gate passed on a permissive combo. "Encrypted" means native TLS
+  terminated in-process, or a trusted proxy that set `X-Forwarded-Proto: https`.
+
+Three ways to satisfy it:
+
+#### Tier ① — TLS reverse proxy (recommended; needs a domain)
+
+Aleph stays bound to **loopback**; a same-host Caddy/nginx terminates TLS and
+forwards to it. Keep the proxy config trivial — all the robustness lives in
+Aleph.
+
+`~/.aleph/config.toml`:
+
+```toml
+[gateway]
+host = "127.0.0.1"                       # aleph stays loopback; the proxy is same-host
+allowed_origins = ["https://your.domain.com"]   # domain Host is not auto-allowed (DNS-rebind guard)
+
+[gateway.trusted_proxy]
+enabled = true                            # honor the proxy's X-Forwarded-For / -Proto
+# trusted_ips defaults to ["127.0.0.1", "::1"] — correct for a same-host proxy
+```
+
+`Caddyfile` (the entire file — Caddy auto-provisions Let's Encrypt):
+
+```
+your.domain.com {
+    reverse_proxy 127.0.0.1:18790
+}
+```
+
+> **Why `trusted_proxy` is security-critical here, not just cosmetic.** The
+> proxy connects to Aleph over loopback, so *without* `trusted_proxy` every
+> remote client would appear to Aleph as `127.0.0.1` — i.e. **auto-authorized
+> as loopback operator**, a full auth bypass. With `trusted_proxy = true` Aleph
+> reads the real client IP from `X-Forwarded-For` (spoof-safe: only a peer in
+> `trusted_ips` is believed), so a remote client is correctly seen as remote
+> and must present a Gateway-token credential, and per-IP rate-limit / cap /
+> audit key on the real client. Enabling the proxy **without** setting
+> `trusted_proxy` is a mistake.
+
+> **`trusted_proxy` assumes a same-host proxy.** The default `trusted_ips` is
+> loopback, matching a co-located Caddy whose hop to Aleph never leaves the
+> machine. If you put the proxy on a *different* host you must (a) bind Aleph to
+> a LAN interface, (b) add the proxy's IP to `trusted_ips`, and (c) accept that
+> the proxy→Aleph hop and Aleph's non-`/ws` routes (Panel assets, `/health`,
+> `/metrics`) travel plaintext on that LAN segment. The Gateway token only ever
+> rides `/ws`, but prefer a same-host proxy so nothing sensitive is on the wire.
+
+#### Tier ② — Native self-signed TLS (no domain; weaker)
+
+No domain, no proxy — Aleph generates and persists a self-signed cert to
+`~/.aleph/data/tls/` on first boot and logs its SHA-256 fingerprint. Clients get
+a browser cert warning (accept-once, or pin the fingerprint). Encryption is
+real; the trust anchor is manual.
+
+```toml
+[gateway]
+host = "0.0.0.0"
+
+[gateway.tls]
+enabled = true          # empty cert/key paths ⇒ auto self-signed
+```
+
+The Panel hard-codes `wss://` for any non-loopback host and refuses a plaintext
+socket to a remote gateway, so remote Panels connect over TLS automatically.
+
+#### Tier ③ — Native TLS with a real cert (domain, no proxy)
+
+Point Aleph at operator-provided PEM files (e.g. certbot output). Aleph
+terminates TLS itself.
+
+```toml
+[gateway]
+host = "0.0.0.0"
+
+[gateway.tls]
+enabled = true
+cert_path = "/etc/letsencrypt/live/your.domain.com/fullchain.pem"
+key_path  = "/etc/letsencrypt/live/your.domain.com/privkey.pem"
+```
+
+#### Escape hatch — `allow_insecure_remote`
+
+```toml
+[gateway]
+host = "0.0.0.0"
+allow_insecure_remote = true    # DANGER: plaintext to remote clients
+```
+
+Restores pre-hardening LAN-plaintext behavior (boot gate + per-connect gate
+both stand down). Only for a trusted, isolated LAN where you knowingly accept
+cleartext. Never on a public interface.
+
+#### Debian production recipe (Tier ①, the user's ColoCrossing box)
+
+```bash
+# 1. aleph stays loopback + trusted_proxy on (config above), restart aleph-server
+# 2. install Caddy, drop in the one-line Caddyfile above, `systemctl reload caddy`
+# 3. firewall: expose only the proxy + SSH; aleph's 18790 is loopback-only already
+ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw enable
+# 4. rotate the Gateway token after enabling remote access
+#    (RPC: gateway.token.rotate — regenerates the shared token, revokes paired devices)
+```
+
+Verify: a remote browser gets a green-lock `wss://your.domain.com/ws`; a direct
+`http://<public-ip>:18790` attempt fails (loopback bind, not routable); the
+security audit log shows the **real** client IP, not the proxy's.
 
 ### The one remaining guardrail: WS Origin check
 
@@ -892,9 +1001,14 @@ unless you know why.
 
 ### Migration from the pre-revert auth model
 
-The device-authentication / pairing / token system (silent bootstrap,
-`/pair` 6-digit codes, `/login` form, `?token=` URLs, `aleph auth …` CLI)
-was removed in the LAN-trust revert. For operators upgrading:
+The original heavyweight device system (silent bootstrap, `/pair` 6-digit
+codes, `/login` form, `?token=` URLs, `aleph auth …` CLI) was removed in the
+LAN-trust revert. It was later **replaced by a leaner device model** — device
+tokens (`aleph-dt-*`) issued via one-time bootstrap tickets (`aleph-bt-*`,
+scanned as a `?bt=` QR), managed by `gateway.devices.*` RPC rather than a CLI.
+Long-lived credentials never ride in a URL or QR (only the single-use ticket
+does), which closes the old `?token=` leak vector. For operators upgrading
+from the pre-revert build:
 
 - **Old `[gateway.auth]` config is ignored, not rejected.** The config
   root has no `deny_unknown_fields`, so dead keys (`require_auth`,

@@ -116,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-cli"
-version = "26.7.7"
+version = "26.7.15"
 dependencies = [
  "aleph-client",
  "aleph-logging",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-desktop"
-version = "26.7.7"
+version = "26.7.15"
 dependencies = [
  "aleph-protocol",
  "async-trait",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-desktop-linux"
-version = "26.7.7"
+version = "26.7.15"
 dependencies = [
  "aleph-desktop",
  "aleph-protocol",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-desktop-macos"
-version = "26.7.7"
+version = "26.7.15"
 dependencies = [
  "aleph-desktop",
  "aleph-protocol",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-desktop-shell"
-version = "26.7.7"
+version = "26.7.15"
 dependencies = [
  "dirs 6.0.0",
  "futures-util",
@@ -266,7 +266,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-desktop-windows"
-version = "26.7.7"
+version = "26.7.15"
 dependencies = [
  "aleph-desktop",
  "aleph-protocol",
@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-logging"
-version = "26.7.7"
+version = "26.7.15"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -336,7 +336,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-tui"
-version = "26.7.7"
+version = "26.7.15"
 dependencies = [
  "aleph-client",
  "aleph-logging",
@@ -364,7 +364,7 @@ dependencies = [
 
 [[package]]
 name = "alephcore"
-version = "26.7.7"
+version = "26.7.15"
 dependencies = [
  "aes 0.8.4",
  "aes 0.9.1",
@@ -478,7 +478,6 @@ dependencies = [
  "teloxide",
  "tempfile",
  "thiserror 2.0.18",
- "time",
  "tokio",
  "tokio-stream",
  "tokio-tungstenite 0.26.2",
@@ -499,7 +498,7 @@ dependencies = [
  "which",
  "windows-sys 0.61.2",
  "wiremock",
- "x509-parser 0.17.0",
+ "x509-parser",
  "zeroize",
  "zip 2.4.2",
 ]
@@ -1332,7 +1331,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
 dependencies = [
- "bit-vec 0.8.0",
+ "bit-vec",
 ]
 
 [[package]]
@@ -1340,15 +1339,6 @@ name = "bit-vec"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
-
-[[package]]
-name = "bit-vec"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "bitflags"
@@ -10317,7 +10307,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b45fcc2344c680f5025fe57779faef368840d0bd1f42f216291f0dc4ace4744"
 dependencies = [
  "bit-set",
- "bit-vec 0.8.0",
+ "bit-vec",
  "bitflags 2.12.1",
  "num-traits",
  "rand 0.9.4",
@@ -10843,15 +10833,14 @@ dependencies = [
 
 [[package]]
 name = "rcgen"
-version = "0.14.8"
+version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57f6d249aad744e274e682777a50283a225a32705394ee6d5fcc01efa25e4055"
+checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
 dependencies = [
  "pem",
  "ring",
  "rustls-pki-types",
  "time",
- "x509-parser 0.18.1",
  "yasna",
 ]
 
@@ -17311,24 +17300,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "x509-parser"
-version = "0.18.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d43b0f71ce057da06bc0851b23ee24f3f86190b07203dd8f567d0b706a185202"
-dependencies = [
- "asn1-rs",
- "data-encoding",
- "der-parser",
- "lazy_static",
- "nom 7.1.3",
- "oid-registry",
- "ring",
- "rusticata-macros",
- "thiserror 2.0.18",
- "time",
-]
-
-[[package]]
 name = "xattr"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -17470,11 +17441,10 @@ checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "yasna"
-version = "0.6.0"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5f6765e852b9b4dc8e2a76843e4d64d1cea8e79bcde0b6901aea8e7c7f08282"
+checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
 dependencies = [
- "bit-vec 0.9.1",
  "time",
 ]
 

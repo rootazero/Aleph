@@ -34,7 +34,7 @@ impl PromptLayer for SkillInstructionsLayer {
                 let instructions = sanitize_for_prompt(instructions, SanitizeLevel::Moderate);
                 let instructions = sanitize_for_prompt(&instructions, SanitizeLevel::Light);
                 output.push_str("## Available Skills\n\n");
-                output.push_str("Invoke a skill via the `skill` tool to load specialized instructions for a task.\n\n");
+                output.push_str("Invoke a skill via the `skill_read` tool to load specialized instructions for a task.\n\n");
                 output.push_str(&instructions);
                 output.push_str("\n\n");
                 return;
@@ -83,7 +83,7 @@ impl PromptLayer for SkillInstructionsLayer {
         let xml = sanitize_for_prompt(&xml, SanitizeLevel::Moderate);
         output.push_str("## Available Skills\n\n");
         output.push_str(
-            "Invoke a skill via the `skill` tool to load specialized instructions for a task.\n",
+            "Invoke a skill via the `skill_read` tool to load specialized instructions for a task.\n",
         );
         output.push_str(crate::skill::prompt::DEFERRED_LOADING_GUIDANCE);
         output.push_str("\n\n");

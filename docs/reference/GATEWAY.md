@@ -307,22 +307,38 @@ When session exceeds token threshold:
 
 ## Security
 
-**LAN-trust model**: the gateway has no authentication step. The trust
-boundary is the network boundary — whoever can reach the socket is the
-owner. The default bind is `127.0.0.1` (loopback only); set
-`[gateway] host = "0.0.0.0"` to open the LAN, which grants every device on
-that network complete control over the agent. The only retained protocol
-guardrail is the WS Origin check (`src/gateway/origin_policy.rs`), which
-blocks public web pages from cross-origin-driving the local daemon. See
+**Network boundary + Gateway token**: the trust boundary is the network
+boundary, gated by a Gateway-token login wall. The default bind is
+`127.0.0.1` (loopback only); loopback is the zero-config operator and needs
+no token. Set `[gateway] host = "0.0.0.0"` to open the LAN — a remote device
+can then reach the socket but is **walled until it presents a valid
+credential** at `connect`. Authorization is resolved by
+`connect::resolve_connect_auth` in priority order: (1) loopback ⇒ operator;
+(2) a valid **device token** (`aleph-dt-*`, long-lived, bound to a paired
+device, SHA-256-hashed at rest); (3) a valid **bootstrap ticket**
+(`aleph-bt-*`, 5-min single-use, exchanged for a fresh device token during
+onboarding); (4) the legacy shared **Gateway token** (`aleph-<uuid>`,
+`SharedTokenManager`, HMAC-hashed, constant-time verified). A valid
+credential = full operator authority (identical to local); a missing/invalid
+one is walled — the WS dispatch refuses every method but `connect`.
+Revocation is token rotation (`gateway.token.rotate`, which also force-closes
+live remote sockets) or per-device revoke (`gateway.devices.revoke`). The WS
+Origin check (`src/gateway/origin_policy.rs`) additionally blocks public web
+pages from cross-origin-driving the local daemon. See
 [SECURITY.md#auth-ux](SECURITY.md#auth-ux) for the full model.
 
 ### Connect handshake
 
-The first frame on a `/ws` connection must be `connect`. The handshake
-carries no authentication — it only delivers a state-version baseline and
-keepalive policy, and always reports `role: operator`
-(`src/gateway/handlers/connect.rs`). Legacy `token` / `device_name` params
-from pre-revert clients are accepted and ignored, never validated.
+The first frame on a `/ws` connection must be `connect`. Loopback carries no
+credential (zero-config operator). A remote connection presents one of
+`device_token`, `bootstrap_ticket`, or `token` (the legacy shared Gateway
+token) in `connect` params; `resolve_connect_auth`
+(`src/gateway/handlers/connect.rs`) stamps the resolved role (`operator` when
+authorized, else `guest`) onto the connection state, and the response echoes
+`role` / `authorized` / `needs_token`. A bootstrap-ticket exchange also
+returns a freshly minted `device_token` the client persists for subsequent
+reconnects. A rejected remote `connect` is recorded in the security audit log
+(`AuditEventType::AuthFailure`, bounded by the `Auth`-scope rate limiter).
 
 ```json
 {
@@ -334,10 +350,17 @@ from pre-revert clients are accepted and ignored, never validated.
       "id": "macos-app",
       "version": "1.0.0",
       "platform": "macos"
-    }
+    },
+    "device_token": "aleph-dt-…",
+    "bootstrap_ticket": "aleph-bt-…"
   }
 }
 ```
+
+> Loopback clients omit the credential fields entirely. A remote client sends
+> `bootstrap_ticket` on first pairing (receiving a `device_token` back), then
+> `device_token` on every reconnect. `token` (the legacy shared Gateway token)
+> is accepted as a fallback.
 
 ---
 
@@ -392,77 +415,37 @@ per-IP concurrent-connection cap (`gateway.max_connections_per_ip`, default 64,
 `0` disables, loopback exempt) bounds slot-exhaustion — a remote peer
 opening many idle sockets.
 
-### Trusted reverse proxies
+### Reverse proxies (no X-Forwarded-For resolution)
 
-Configure `[gateway] trusted_proxies` with the proxy IPs/CIDRs you front the
-gateway with (e.g. `["10.0.0.0/8", "::1"]`). When — and **only** when — a
-connection's socket peer matches the allowlist, its real client IP is resolved
-from `X-Forwarded-For` (rightmost non-proxy hop; the right-to-left walk skips
-further allow-listed hops). Empty (default) ⇒ the socket peer is used verbatim
-and `X-Forwarded-For` is never trusted (it is client-spoofable, so the allowlist
-is the whole security boundary). Implemented in `src/gateway/trusted_proxy.rs`
-(resolved once at the `/ws` upgrade, `server/handler.rs`).
+The IP-keyed abuse protections (per-IP connection cap, rate limiter, `Auth`-scope
+lockout) key off the **raw socket peer address** (`peer_addr.ip()`, verbatim).
+`X-Forwarded-For` / trusted-proxy resolution was removed with the LAN-trust
+revert and is **not** reinstated — a `trusted_proxies` key in config is a
+silently-ignored legacy field, and there is no `src/gateway/trusted_proxy.rs`.
+Keeping the loopback check on the raw peer is deliberate: it means `is_loopback`
+(the zero-config-operator grant) can never be forged by a spoofed `X-Forwarded-For`
+header.
 
-This is a **security control, not just an abuse-keying nicety**. Two things key
-off the resolved client IP: (1) the IP-keyed abuse protections (per-IP cap, rate
-limiter) — behind a proxy every client otherwise collapses to one address; and
-(2) — critically — the **loopback ⇒ operator** auto-trust. Without this, a
-reverse proxy running on the *same host* makes every proxied connection's socket
-peer `127.0.0.1`, silently promoting every remote client to a token-free
-operator. The resolver is **fail-closed**: a connection arriving via a declared
-proxy can never resolve to a loopback address (a missing or unparseable
-`X-Forwarded-For` yields `0.0.0.0`, not the proxy's loopback), so it always
-falls to the login wall and must present a Gateway token like any other remote
-client. Trade-off: once you list a proxy, even a Panel on the proxy host reaches
-the gateway *through* the proxy and therefore needs a token — connect directly
-to the loopback port to keep zero-config operator.
-
-> A2A (`[a2a]`, off by default) is merged onto the **same** gateway listener but
-> has an independent loopback-trust path (`src/a2a/domain/security.rs::infer_from_addr`)
-> that does **not** yet resolve `X-Forwarded-For`. If you enable A2A behind a
-> same-host proxy, set `[a2a.server.security] local_bypass = false` (the server logs a
-> warning when `trusted_proxies` is set while A2A localhost-bypass is on). Full
-> trusted-proxy resolution for A2A is a tracked follow-up.
-
-### TLS (HTTPS / WSS)
-
-Native TLS termination is off by default (plaintext HTTP/WS). One knob turns it
-on:
-
-```toml
-[gateway.tls]
-mode = "auto"            # "off" (default) | "auto"
-# cert_path = "/etc/aleph/cert.pem"   # optional BYO cert (PEM chain)
-# key_path  = "/etc/aleph/key.pem"    # optional BYO key  (PEM)
-```
-
-`mode = "auto"` serves HTTPS + WSS on the same port. With `cert_path` +
-`key_path` set it loads that bring-your-own cert (e.g. a CA-signed cert from
-ACME or your proxy); otherwise it generates a self-signed cert once and caches
-it under `~/.aleph/gateway/tls/` (`cert.pem` + `key.pem`, key written `0600`).
-The leaf certificate's SHA-256 fingerprint is logged at startup so native
-clients can pin it (browsers show a one-time "proceed" warning for self-signed;
-CLI/desktop clients pin the fingerprint). Implemented in `src/gateway/tls.rs`
-(crypto provider is `ring`; `axum-server` serves the rustls listener while
-preserving `ConnectInfo<SocketAddr>` so the peer-IP trust path still works).
-
-Aleph deliberately ships **no ACME/Let's Encrypt** — public-internet TLS is the
-reverse proxy's job (terminate TLS at Caddy/nginx/Cloudflare, keep the gateway
-loopback-bound, and list the proxy in `trusted_proxies` above). Self-signed is
-for local/LAN use; "把复杂留给自己，把简单留给用户" — the cert lifecycle is
-internal, the user writes two lines.
+The trade-off: when the gateway is fronted by a reverse proxy, every client
+collapses to the proxy's socket address, so the per-IP protections bound the
+*proxy* rather than individual clients. Terminate client-identity trust upstream
+(the proxy) if you need per-client limits, and treat the Gateway token as the
+transport auth. (Restoring fail-closed, allowlist-gated trusted-proxy XFF
+resolution — never letting a forwarded header influence `is_loopback` — is
+tracked as a future enhancement.)
 
 ### Method-level authorization
 
-Under LAN-trust the per-RPC operator-vs-guest authorization gate is **inert**:
-every connection is an implicit `operator`, so there is no method-level
-barrier on the gateway surface. A classifier survives at the *tool-dispatch*
-tier (`src/gateway/method_authz.rs`, consumed by `ScopedToolService`) marking
-the self-management tools that mutate Aleph's own config — but because the
-caller role is always `operator`, that gate always passes. Limiting *what an
-agent may do* (as opposed to *who may connect*) is the job of the per-channel
-tool-permission layer (`ScopedToolService`), which is orthogonal to connection
-trust and unchanged by the revert.
+The connection-level barrier is the **login wall**: a remote connection that has
+not presented a valid Gateway credential is `guest` and may only issue `connect`
+(§Connect handshake). Once authorized it is `operator`, identical to local —
+there is no finer per-RPC operator-vs-guest tier on the Panel surface. A separate
+classifier survives at the *channel* tool-dispatch tier
+(`src/gateway/method_authz.rs`, consumed by `ScopedToolService`): the
+`inbound_router` caps a chat-tier channel (Telegram/Slack, default `guest`) so it
+cannot run Aleph's self-config tools. Limiting *what an agent may do* (vs *who may
+connect*) is the job of the per-channel tool-permission layer, orthogonal to
+connection trust.
 
 ### Distributed-trace correlation
 

@@ -49,6 +49,7 @@ pub mod shutdown_forensics;
 pub mod subagent_announce;
 pub mod subagent_tree_relay;
 pub mod surface;
+pub mod tls;
 pub mod tool_display;
 
 // ControlPlane: Embedded web UI

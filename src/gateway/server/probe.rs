@@ -86,6 +86,10 @@ mod tests {
             idempotency_guard: Arc::new(IdempotencyGuard::new(Duration::from_secs(300))),
             event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
             audit_log: None,
+            trusted_proxy_enabled: false,
+            trusted_proxy_ips: Vec::new(),
+            allow_insecure_remote: false,
+            tls_enabled: false,
             ready: Arc::new(AtomicBool::new(ready)),
             instance_id: "test-instance".to_string(),
             started_at_unix: chrono::Utc::now().timestamp(),
@@ -97,7 +101,6 @@ mod tests {
             security_store: None,
             middleware_chain: MiddlewareChain::new(handlers, rate_limiter),
             origin_policy: Arc::new(crate::gateway::origin_policy::OriginPolicy::loopback_only()),
-            trusted_proxies: crate::gateway::trusted_proxy::TrustedProxies::default(),
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
         })
