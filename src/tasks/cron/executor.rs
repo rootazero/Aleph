@@ -75,6 +75,8 @@ pub fn build_cron_alert_dispatcher_fn(delivery_engine: Arc<DeliveryEngine>) -> A
                 let payload = DeliveryPayload {
                     source_type: "cron".to_string(),
                     task_name: alert.job_name,
+                    // rust-doctor-disable-next-line unnecessary-allocation
+                    // Empty placeholder required by DeliveryPayload; String::new() has no heap allocation.
                     agent_id: String::new(),
                     // Gateway targets render `output` verbatim; keep the ⚠️
                     // prefix the previous dispatcher produced. Webhook targets
