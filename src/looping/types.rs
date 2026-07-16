@@ -206,12 +206,20 @@ impl LoopState {
         now_total_tokens.saturating_sub(self.tokens_at_start)
     }
 
-    /// True only when a budget is set and spend since baseline exceeds it.
+    /// True only when a budget is set, the baseline was captured, and spend
+    /// since baseline exceeds it.
+    ///
+    /// Without `baseline_captured`, `tokens_at_start` is the placeholder 0, so
+    /// `tokens_used` would return the session's ENTIRE lifetime token count and
+    /// a fresh loop in a long-running session would read as instantly over
+    /// budget. Every current caller holds this invariant by hand (the claim
+    /// path seeds before enforcing); making it a property of the type means no
+    /// future caller can get it wrong — mirrors `goal::Goal::over_budget`.
     #[must_use]
     pub fn over_budget(&self, now_total_tokens: u64) -> bool {
         match self.token_budget {
-            Some(b) => self.tokens_used(now_total_tokens) > b,
-            None => false,
+            Some(b) if self.baseline_captured => self.tokens_used(now_total_tokens) > b,
+            _ => false,
         }
     }
 
@@ -509,6 +517,15 @@ mod tests {
         assert!(l.over_budget(1_600), "600 spent over a 500 budget");
         // No budget → never over budget, even at u64::MAX.
         assert!(!sample().with_baseline(1_000).over_budget(u64::MAX));
+    }
+
+    #[test]
+    fn over_budget_is_inert_without_captured_baseline() {
+        // tokens_at_start is the placeholder 0 until the claim path seeds the
+        // baseline — the session's lifetime total must never read as loop
+        // spend (type-level guard, goal hardening ⑨ parity).
+        let l = sample().with_token_budget(Some(500));
+        assert!(!l.over_budget(u64::MAX));
     }
 
     /// `stable_summary` is the only renderer allowed into the system prompt, so
