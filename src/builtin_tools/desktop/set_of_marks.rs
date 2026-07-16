@@ -149,7 +149,9 @@ fn draw_outline(img: &mut RgbaImage, x: i64, y: i64, w: i64, h: i64, t: i64, col
 
 /// Render one digit (0–9) at `(x, y)` with each font-pixel scaled to `gs²`.
 fn draw_digit(img: &mut RgbaImage, x: i64, y: i64, digit: usize, gs: i64, color: Rgba<u8>) {
-    let glyph = &GLYPHS[digit];
+    let glyph = GLYPHS
+        .get(digit)
+        .expect("invariant: digit is derived from ASCII 0-9");
     for (row, bits) in glyph.iter().enumerate() {
         for col in 0..3 {
             if bits & (0b100 >> col) != 0 {
@@ -209,7 +211,9 @@ fn annotate(
     let ih = i64::from(img.height());
 
     for mark in marks {
-        let color = PALETTE[mark.index % PALETTE.len()];
+        let color = *PALETTE
+            .get(mark.index % PALETTE.len())
+            .expect("invariant: index is modulo palette length");
         let px = ((mark.x - origin.0) * scale).round() as i64;
         let py = ((mark.y - origin.1) * scale).round() as i64;
         let pw = (mark.w * scale).round() as i64;

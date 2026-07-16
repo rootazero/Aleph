@@ -69,7 +69,9 @@ impl AlephTool for HubFetchDocsTool {
 
         let truncated = bytes.len() > DOC_BYTE_BUDGET;
         let slice = if truncated {
-            &bytes[..DOC_BYTE_BUDGET]
+            bytes
+                .get(..DOC_BYTE_BUDGET)
+                .expect("invariant: truncated only when bytes exceed budget")
         } else {
             &bytes[..]
         };

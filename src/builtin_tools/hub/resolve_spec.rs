@@ -56,7 +56,6 @@ impl AlephTool for HubResolveSpecTool {
         let entry_id = args.entry_id;
         let spec = entry
             .install_spec
-            .clone()
             .ok_or_else(|| AlephError::other(format!("no install spec cached for {entry_id}")))?;
 
         let install_spec = serde_json::to_value(&spec)

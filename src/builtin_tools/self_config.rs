@@ -347,7 +347,9 @@ impl SelfConfigTool {
         // tests / before boot — the config-only view above still answers.
         let runtime_note = match crate::providers::route_observe::global_route_observability() {
             Some(obs) => {
-                data["runtime"] = obs.snapshot().await;
+                if let Some(obj) = data.as_object_mut() {
+                    obj.insert("runtime".to_string(), obs.snapshot().await);
+                }
                 " Live provider health (circuit breakers, cooldowns, in-flight \
                  load, latency, rolling rpm/tpm usage) and the failover chain \
                  are in data.runtime."

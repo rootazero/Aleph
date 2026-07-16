@@ -402,7 +402,9 @@ impl BrowserBackend for ChromeMcpBackend {
         };
         let mut args = json!({ "action": action_norm });
         if let Some(text) = prompt_text {
-            args["promptText"] = json!(text);
+            args.as_object_mut()
+                .ok_or_else(|| BrowserError::ActionFailed("args is not a JSON object".to_string()))?
+                .insert("promptText".to_string(), json!(text));
         }
         self.select_and_call(tab_id, "handle_dialog", args).await?;
         Ok(())

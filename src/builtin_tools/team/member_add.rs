@@ -156,7 +156,7 @@ impl AlephTool for TeamMemberAddTool {
                 // the active project root (then the server cwd) so the member is
                 // dispatchable; use `team_acp_member` to set an explicit cwd.
                 acp_cwd: Some(super::acp_default_cwd()),
-                acp_session_name: member_ref.session_name.clone(),
+                acp_session_name: member_ref.session_name,
             }
         } else {
             NewTeamMember::for_agent(

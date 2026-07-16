@@ -969,7 +969,7 @@ impl NoteManageTool {
                 path: e.path.clone(),
                 category: e.category.clone(),
                 filename: e.filename.clone(),
-                tags: e.tags.clone(),
+                tags: e.tags,
             })
             .collect();
 

@@ -85,10 +85,15 @@ where
                     let valid_up_to = e.utf8_error().valid_up_to();
                     let bytes = e.into_bytes();
                     // Safe: valid_up_to is guaranteed to be a valid UTF-8 boundary
-                    line_buf
-                        .push_str(std::str::from_utf8(&bytes[..valid_up_to]).unwrap_or_default());
+                    let valid_bytes = bytes
+                        .get(..valid_up_to)
+                        .expect("invariant: valid_up_to is a valid UTF-8 boundary");
+                    line_buf.push_str(std::str::from_utf8(valid_bytes).unwrap_or_default());
                     // Store incomplete trailing bytes for the next chunk
-                    carry = bytes[valid_up_to..].to_vec();
+                    carry = bytes
+                        .get(valid_up_to..)
+                        .expect("invariant: valid_up_to is a valid UTF-8 boundary")
+                        .to_vec();
                 }
             }
 

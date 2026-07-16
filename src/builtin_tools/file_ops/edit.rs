@@ -70,7 +70,10 @@ fn render_edit_snippet(new_content: &str, first_start: usize, replacement: &str)
 
     let push = |out: &mut String, idx: usize| {
         let lineno = idx + 1;
-        out.push_str(&format!("{lineno:>width$}\t{}\n", clamp_line(lines[idx])));
+        let line = lines
+            .get(idx)
+            .expect("invariant: idx is within the rendered snippet range");
+        out.push_str(&format!("{lineno:>width$}\t{}\n", clamp_line(line)));
     };
 
     let mut out = String::new();
@@ -257,7 +260,9 @@ impl FileEditTool {
         let applied = if args.replace_all {
             &ranges[..]
         } else {
-            &ranges[..1]
+            ranges
+                .get(..1)
+                .expect("invariant: ranges is non-empty when replace_all is false")
         };
         let replacements = applied.len();
         let new_content = apply_ranges(&content, applied, &replacement);
@@ -285,7 +290,14 @@ impl FileEditTool {
                 ""
             },
         );
-        let snippet = render_edit_snippet(&new_content, applied[0].0, &replacement);
+        let snippet = render_edit_snippet(
+            &new_content,
+            applied
+                .get(0)
+                .expect("invariant: at least one range was applied")
+                .0,
+            &replacement,
+        );
 
         info!(replacements, fuzzy, crlf, path = %path_str, "FileEditTool: edit complete");
         notify_tool_result("file_edit", &message, true);

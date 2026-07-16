@@ -290,7 +290,10 @@ pub(crate) fn interpret_reply(request: &ClarificationRequest, reply: &str) -> Cl
                 // 1-based numeric selection.
                 if let Ok(n) = trimmed.parse::<usize>() {
                     if n >= 1 && n <= options.len() {
-                        let opt = &options[n - 1];
+                        // The bounds check above guarantees this index is valid.
+                        let opt = options
+                            .get(n - 1)
+                            .expect("invariant: n is within 1..=options.len()");
                         return ClarificationResult::selected((n - 1) as u32, opt.value.clone());
                     }
                 }

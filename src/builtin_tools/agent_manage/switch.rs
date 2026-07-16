@@ -132,7 +132,7 @@ impl AlephTool for AgentSwitchTool {
             return Ok(AgentSwitchOutput {
                 agent_id: args.agent_id.clone(),
                 channel: channel.to_string(),
-                previous_agent: previous_agent.clone(),
+                previous_agent,
                 message: format!(
                     "Channel '{channel}' is already using agent '{}'.",
                     args.agent_id

@@ -201,7 +201,10 @@ impl A2AClient {
             "message": message,
         });
         if let Some(sid) = session_id {
-            params["sessionId"] = json!(sid);
+            params
+                .as_object_mut()
+                .expect("invariant: params created as a JSON object literal")
+                .insert("sessionId".to_string(), json!(sid));
         }
         let result = self.rpc_call("message/send", params).await?;
         serde_json::from_value(result).map_err(|e| A2AError::ParseError(e.to_string()))
@@ -224,7 +227,10 @@ impl A2AClient {
             "message": message,
         });
         if let Some(sid) = session_id {
-            params["sessionId"] = json!(sid);
+            params
+                .as_object_mut()
+                .expect("invariant: params created as a JSON object literal")
+                .insert("sessionId".to_string(), json!(sid));
         }
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -277,7 +283,10 @@ impl A2AClient {
     ) -> A2AResult<A2ATask> {
         let mut params = json!({ "id": task_id });
         if let Some(len) = history_length {
-            params["historyLength"] = json!(len);
+            params
+                .as_object_mut()
+                .expect("invariant: params created as a JSON object literal")
+                .insert("historyLength".to_string(), json!(len));
         }
         let result = self.rpc_call("tasks/get", params).await?;
         serde_json::from_value(result).map_err(|e| A2AError::ParseError(e.to_string()))

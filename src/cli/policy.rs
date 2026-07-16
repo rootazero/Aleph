@@ -161,6 +161,10 @@ where
         let lock = acquire_or_held(data_dir).inspect_err(|e| {
             if let Some(held) = e.downcast_ref::<LockHeldError>() {
                 eprintln!("{held}");
+                // TODO: clippy::exit — `with_policy` is documented as the production
+                // dispatch that exits cleanly on lock contention rather than returning
+                // an `Err` to the caller. Replacing this with `Result` propagation would
+                // change the public API contract and all callers, so it is left as-is.
                 std::process::exit(64);
             }
         })?;

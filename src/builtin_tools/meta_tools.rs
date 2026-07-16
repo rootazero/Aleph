@@ -36,27 +36,61 @@ pub(crate) fn levenshtein_distance(a: &str, b: &str) -> usize {
 
     let mut matrix = vec![vec![0usize; b_len + 1]; a_len + 1];
 
-    for (i, row) in matrix.iter_mut().enumerate().take(a_len + 1) {
-        row[0] = i;
+    for i in 0..=a_len {
+        *matrix
+            .get_mut(i)
+            .expect("invariant: matrix has a_len + 1 rows")
+            .get_mut(0)
+            .expect("invariant: each row has b_len + 1 columns") = i;
     }
-    for (j, val) in matrix[0].iter_mut().enumerate().take(b_len + 1) {
-        *val = j;
+    for j in 0..=b_len {
+        *matrix
+            .get_mut(0)
+            .expect("invariant: matrix has a_len + 1 rows")
+            .get_mut(j)
+            .expect("invariant: each row has b_len + 1 columns") = j;
     }
 
     for i in 1..=a_len {
         for j in 1..=b_len {
-            let cost = if a_chars[i - 1] == b_chars[j - 1] {
-                0
-            } else {
-                1
-            };
-            matrix[i][j] = (matrix[i - 1][j] + 1)
-                .min(matrix[i][j - 1] + 1)
-                .min(matrix[i - 1][j - 1] + cost);
+            let a_match = a_chars
+                .get(i - 1)
+                .expect("invariant: i is within a_chars length");
+            let b_match = b_chars
+                .get(j - 1)
+                .expect("invariant: j is within b_chars length");
+            let cost = if a_match == b_match { 0 } else { 1 };
+            let above = *matrix
+                .get(i - 1)
+                .expect("invariant: i - 1 is within matrix rows")
+                .get(j)
+                .expect("invariant: j is within matrix columns")
+                + 1;
+            let left = *matrix
+                .get(i)
+                .expect("invariant: i is within matrix rows")
+                .get(j - 1)
+                .expect("invariant: j - 1 is within matrix columns")
+                + 1;
+            let diag = *matrix
+                .get(i - 1)
+                .expect("invariant: i - 1 is within matrix rows")
+                .get(j - 1)
+                .expect("invariant: j - 1 is within matrix columns")
+                + cost;
+            *matrix
+                .get_mut(i)
+                .expect("invariant: i is within matrix rows")
+                .get_mut(j)
+                .expect("invariant: j is within matrix columns") = above.min(left).min(diag);
         }
     }
 
-    matrix[a_len][b_len]
+    *matrix
+        .get(a_len)
+        .expect("invariant: a_len is within matrix rows")
+        .get(b_len)
+        .expect("invariant: b_len is within matrix columns")
 }
 
 #[cfg(test)]

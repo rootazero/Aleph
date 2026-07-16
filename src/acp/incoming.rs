@@ -326,7 +326,11 @@ fn apply_line_window(content: &str, line: Option<u64>, limit: Option<u64>) -> St
             .min(lines.len()),
         None => lines.len(),
     };
-    lines[start..end].join("\n")
+    lines
+        .get(start..end)
+        // Safe: `start` is guarded by the check above, and `end` is clamped to `lines.len()`.
+        .expect("invariant: start/end are within line bounds")
+        .join("\n")
 }
 
 /// Pick the first option whose `kind` (or `name`) matches one of `wanted`,

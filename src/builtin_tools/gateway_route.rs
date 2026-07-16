@@ -122,7 +122,7 @@ impl AlephTool for GatewayRouteTool {
             account_id: args.account_id.clone(),
             peer,
             guild_id: args.guild_id.clone(),
-            team_id: args.team_id.clone(),
+            team_id: args.team_id,
         };
 
         let resolved: ResolvedRoute = resolve_route(

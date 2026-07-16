@@ -119,8 +119,15 @@ fn folded_match_ranges(haystack: &str, needle: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let mut i = 0;
     while i + ndl.len() <= hay.len() {
-        if hay[i..i + ndl.len()] == ndl[..] {
-            ranges.push((char_byte[i], char_byte[i + ndl.len()]));
+        if hay.get(i..i + ndl.len()) == Some(ndl.as_slice()) {
+            ranges.push((
+                *char_byte
+                    .get(i)
+                    .expect("invariant: i is within the folded haystack length"),
+                *char_byte
+                    .get(i + ndl.len())
+                    .expect("invariant: i + ndl.len() is within the char byte map"),
+            ));
             i += ndl.len(); // non-overlapping, matching `str::match_indices`
         } else {
             i += 1;
@@ -167,7 +174,15 @@ fn whitespace_near_match(content: &str, needle: &str) -> Option<(usize, usize)> 
     let needle_norm: Vec<String> = needle_lines.iter().map(|l| normalize_line(l)).collect();
     let mut first_hit = None;
     for start in 0..=content_lines.len() - n {
-        let matches = (0..n).all(|j| normalize_line(content_lines[start + j]) == needle_norm[j]);
+        let matches = (0..n).all(|j| {
+            let content_line = content_lines
+                .get(start + j)
+                .expect("invariant: start + j is within content_lines");
+            let needle_line = needle_norm
+                .get(j)
+                .expect("invariant: j is within needle_norm");
+            normalize_line(content_line) == *needle_line
+        });
         if matches {
             if first_hit.is_some() {
                 return None; // ambiguous — not a useful diagnostic
@@ -273,7 +288,18 @@ pub(super) fn locate_lines(content: &str, needle: &str, eof: bool) -> Option<(us
     .into_iter()
     .flatten()
     .next()
-    .map(|i| (spans[i].0, spans[i + pattern.len() - 1].1))
+    .map(|i| {
+        (
+            spans
+                .get(i)
+                .expect("invariant: i returned by scan is within spans")
+                .0,
+            spans
+                .get(i + pattern.len() - 1)
+                .expect("invariant: scan guarantees enough trailing spans")
+                .1,
+        )
+    })
 }
 
 /// Byte spans `(start, end)` for each line of `content` split on `'\n'`, where
@@ -306,8 +332,13 @@ fn scan(
     let last = spans.len() - pattern.len();
     (search_start..=last).find(|&i| {
         (0..pattern.len()).all(|j| {
-            let (s, e) = spans[i + j];
-            eq(&content[s..e], pattern[j])
+            let (s, e) = *spans
+                .get(i + j)
+                .expect("invariant: i + j is within spans during scan");
+            let pattern_line = pattern
+                .get(j)
+                .expect("invariant: j is within pattern during scan");
+            eq(&content[s..e], pattern_line)
         })
     })
 }

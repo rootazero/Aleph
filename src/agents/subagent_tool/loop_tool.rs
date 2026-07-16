@@ -864,7 +864,10 @@ fn error_with_trail(err: &str, progress: &[SubagentProgress]) -> String {
     let steps = progress.iter().map(|p| p.step).max().unwrap_or(0);
     let start = progress.len().saturating_sub(TRAIL_LINES);
     let mut out = format!("{head}\nTrajectory before failure ({steps} steps):");
-    for p in &progress[start..] {
+    for p in progress
+        .get(start..)
+        .expect("invariant: start is within progress bounds")
+    {
         let activity = crate::agents::background_tracker::progress_activity(p.kind);
         match &p.tool_name {
             Some(tool) => out.push_str(&format!("\n  step {}: {activity} {tool}", p.step)),

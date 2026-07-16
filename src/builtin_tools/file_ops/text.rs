@@ -29,7 +29,9 @@ const BINARY_SNIFF_BYTES: usize = 8192;
 /// degrade gracefully ("binary file, not displayable") instead of erroring
 /// out of `read_to_string` with an opaque message.
 pub(super) fn is_binary(bytes: &[u8]) -> bool {
-    let window = &bytes[..bytes.len().min(BINARY_SNIFF_BYTES)];
+    let window = bytes
+        .get(..bytes.len().min(BINARY_SNIFF_BYTES))
+        .expect("invariant: window end is clamped to bytes length");
     window.contains(&0)
 }
 

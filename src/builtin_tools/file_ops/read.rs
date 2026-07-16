@@ -194,7 +194,12 @@ fn render_window(text: &str, args: &FileReadArgs, size: u64, path: String) -> Fi
     let width = total_lines.to_string().len();
 
     let mut rendered = String::new();
-    for (idx, line) in lines[start..end].iter().enumerate() {
+    for (idx, line) in lines
+        .get(start..end)
+        .expect("invariant: start..end is clamped to lines length")
+        .iter()
+        .enumerate()
+    {
         let lineno = start + idx + 1;
         rendered.push_str(&format!("{lineno:>width$}\t{}\n", clamp_line(line)));
     }

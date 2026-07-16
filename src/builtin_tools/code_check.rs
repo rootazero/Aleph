@@ -343,7 +343,7 @@ fn interpret(
                 truncated: false,
             }
         }
-        _ => (plan.parser, plan.display_command.clone()),
+        _ => (plan.parser, plan.display_command),
     };
 
     let mut diags = match parser {

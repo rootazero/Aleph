@@ -590,7 +590,10 @@ impl BackgroundAgentTracker {
             .get(request_id)
             .map(|c| {
                 let start = c.progress_tail.len().saturating_sub(limit);
-                c.progress_tail[start..].to_vec()
+                c.progress_tail
+                    .get(start..)
+                    .expect("invariant: start is within progress_tail bounds")
+                    .to_vec()
             })
             .unwrap_or_default()
     }

@@ -394,7 +394,15 @@ impl WorkflowTool {
         tasks.sort_by(|a, b| {
             a.created_at
                 .cmp(&b.created_at)
-                .then_with(|| ranks[&a.id].cmp(&ranks[&b.id]))
+                .then_with(|| {
+                    let rank_a = ranks
+                        .get(&a.id)
+                        .expect("invariant: rank computed for every task");
+                    let rank_b = ranks
+                        .get(&b.id)
+                        .expect("invariant: rank computed for every task");
+                    rank_a.cmp(rank_b)
+                })
                 .then_with(|| a.id.cmp(&b.id))
         });
         Ok((selected, tasks))

@@ -208,8 +208,8 @@ fn parse_kwargs(body: &str) -> Result<Kwargs<'_>, ScriptParseError> {
 fn strip_quotes(s: &str) -> &str {
     let bytes = s.as_bytes();
     if bytes.len() >= 2
-        && ((bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'')
-            || (bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"'))
+        && ((bytes.first() == Some(&b'\'') && bytes.last() == Some(&b'\''))
+            || (bytes.first() == Some(&b'"') && bytes.last() == Some(&b'"')))
     {
         &s[1..s.len() - 1]
     } else {
@@ -439,7 +439,10 @@ pub fn parse_box_center(raw: &str) -> Option<(f64, f64)> {
     {
         let nums = parse_floats(inner);
         if nums.len() >= 2 {
-            return Some((nums[0], nums[1]));
+            return Some((
+                *nums.get(0).expect("invariant: length checked above"),
+                *nums.get(1).expect("invariant: length checked above"),
+            ));
         }
         return None;
     }
@@ -450,7 +453,14 @@ pub fn parse_box_center(raw: &str) -> Option<(f64, f64)> {
     {
         let nums = parse_floats(inner);
         if nums.len() >= 4 {
-            return Some(((nums[0] + nums[2]) / 2.0, (nums[1] + nums[3]) / 2.0));
+            return Some((
+                (*nums.get(0).expect("invariant: length checked above")
+                    + *nums.get(2).expect("invariant: length checked above"))
+                    / 2.0,
+                (*nums.get(1).expect("invariant: length checked above")
+                    + *nums.get(3).expect("invariant: length checked above"))
+                    / 2.0,
+            ));
         }
         return None;
     }
@@ -459,8 +469,18 @@ pub fn parse_box_center(raw: &str) -> Option<(f64, f64)> {
     let trimmed = raw.trim_matches(|c| c == '(' || c == ')' || c == '[' || c == ']');
     let nums = parse_floats(trimmed);
     match nums.len() {
-        2 => Some((nums[0], nums[1])),
-        4 => Some(((nums[0] + nums[2]) / 2.0, (nums[1] + nums[3]) / 2.0)),
+        2 => Some((
+            *nums.get(0).expect("invariant: length matched above"),
+            *nums.get(1).expect("invariant: length matched above"),
+        )),
+        4 => Some((
+            (*nums.get(0).expect("invariant: length matched above")
+                + *nums.get(2).expect("invariant: length matched above"))
+                / 2.0,
+            (*nums.get(1).expect("invariant: length matched above")
+                + *nums.get(3).expect("invariant: length matched above"))
+                / 2.0,
+        )),
         _ => None,
     }
 }

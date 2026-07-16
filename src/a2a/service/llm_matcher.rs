@@ -116,7 +116,10 @@ impl SemanticLlmMatcher {
         }
 
         Some(RoutingDecision {
-            agent: agents[idx].clone(),
+            agent: agents
+                .get(idx)
+                .expect("invariant: idx < agents.len() checked above")
+                .clone(),
             confidence: conf,
             method: RoutingMethod::LlmSemantic,
             reason,

@@ -311,7 +311,10 @@ impl crate::tools::AlephTool for ListModelsTool {
                 names
                     .into_iter()
                     .map(|name| {
-                        let p = &cfg.presets[name];
+                        let p = cfg
+                            .presets
+                            .get(name)
+                            .expect("invariant: name came from presets iterator");
                         MoaPresetSummary {
                             name: name.clone(),
                             advisors: p

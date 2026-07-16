@@ -355,7 +355,13 @@ impl ClawHubClient {
                 let body = resp
                     .bytes()
                     .await
-                    .map(|b| String::from_utf8_lossy(&b[..b.len().min(1024)]).into_owned())
+                    .map(|b| {
+                        // Invariant: end is `b.len().min(1024)`, so it is always within bounds.
+                        let preview = b
+                            .get(..b.len().min(1024))
+                            .expect("invariant: slice end <= bytes len");
+                        String::from_utf8_lossy(preview).into_owned()
+                    })
                     .unwrap_or_default();
                 let detail = if body.is_empty() {
                     String::new()

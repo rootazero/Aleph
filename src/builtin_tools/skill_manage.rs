@@ -232,7 +232,11 @@ impl SkillManageTool {
                 }
             }
         }
-        if components.len() < 2 || !ALLOWED_SUPPORT_DIRS.contains(&components[0].as_str()) {
+        if components.len() < 2
+            || !components
+                .first()
+                .map_or(false, |c| ALLOWED_SUPPORT_DIRS.contains(&c.as_str()))
+        {
             return Err(AlephError::tool(format!(
                 "file_name must live under one of: {}/ (e.g. 'references/api.md')",
                 ALLOWED_SUPPORT_DIRS.join("/, ")

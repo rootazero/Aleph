@@ -527,7 +527,7 @@ impl MemorySearchTool {
                     note_type: format!("{:?}", f.note_type),
                     confidence: f.similarity_score.unwrap_or(0.0),
                     similarity_score: f.similarity_score.unwrap_or(0.0),
-                    path: f.path.clone(),
+                    path: f.path,
                 })
                 .collect();
 

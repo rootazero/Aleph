@@ -361,7 +361,10 @@ impl MoaManageTool {
         let presets: Vec<serde_json::Value> = names
             .iter()
             .map(|name| {
-                let preset = &moa_cfg.presets[name];
+                let preset = moa_cfg
+                    .presets
+                    .get(name)
+                    .expect("invariant: name came from presets keys");
                 let is_default = moa_cfg.default_preset.as_deref() == Some(name.as_str());
                 serde_json::json!({
                     "name": name,

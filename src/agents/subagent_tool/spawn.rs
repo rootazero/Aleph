@@ -152,8 +152,8 @@ impl SubagentTool {
         let tracker = self.background_tracker.clone();
         let rid = request_id.clone();
         // Phase 1 — Settled emit captures (moved into the run task).
-        let root_session_for_done = root_session.clone();
-        let tree_agent_id_for_done = tree_agent_id.clone();
+        let root_session_for_done = root_session;
+        let tree_agent_id_for_done = tree_agent_id;
         let settle_started = std::time::Instant::now();
         tokio::spawn(async move {
             let runtime_config = AgentRuntimeConfig {

@@ -85,7 +85,12 @@ impl ContentFormat {
                 score += 1;
             }
             // Ordered list items: 1. item
-            if trimmed.len() > 2 && trimmed.as_bytes()[0].is_ascii_digit() && trimmed.contains(". ")
+            if trimmed.len() > 2
+                && trimmed
+                    .as_bytes()
+                    .get(0)
+                    .map_or(false, u8::is_ascii_digit)
+                && trimmed.contains(". ")
             {
                 score += 1;
             }

@@ -265,7 +265,13 @@ impl ArenaManifest {
             }
         }
 
-        let coord = coordinator.unwrap_or_else(|| agent_ids[0].clone());
+        // invariant: `agent_ids` is non-empty (checked above), so index 0 exists.
+        let coord = coordinator.unwrap_or_else(|| {
+            agent_ids
+                .get(0)
+                .cloned()
+                .expect("invariant: at least one agent ID")
+        });
 
         if !agent_ids.contains(&coord) {
             return Err(format!(
@@ -292,7 +298,12 @@ impl ArenaManifest {
                             agent_id: agent_id.clone(),
                             description: format!("Stage {}", i + 1),
                             depends_on: if i > 0 {
-                                vec![agent_ids[i - 1].clone()]
+                                // invariant: `i > 0` within an `enumerate()` over `agent_ids`,
+                                // so `i - 1` is a valid index.
+                                vec![agent_ids
+                                    .get(i - 1)
+                                    .cloned()
+                                    .expect("invariant: previous agent exists")]
                             } else {
                                 vec![]
                             },
