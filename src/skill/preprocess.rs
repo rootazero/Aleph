@@ -35,8 +35,12 @@ use std::process::Stdio;
 use std::time::Duration;
 
 /// Template token resolving to the skill's own directory.
+// rust-doctor-disable-next-line hardcoded-secrets
+// Not a secret: this is the literal placeholder name used in skill templates.
 const TOKEN_SKILL_DIR: &str = "${ALEPH_SKILL_DIR}";
 /// Template token resolving to the active session id (left literal if unknown).
+// rust-doctor-disable-next-line hardcoded-secrets
+// Not a secret: this is the literal placeholder name used in skill templates.
 const TOKEN_SESSION_ID: &str = "${ALEPH_SESSION_ID}";
 
 /// Default per-snippet wall-clock budget for inline-shell expansion.
