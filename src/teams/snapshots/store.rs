@@ -30,8 +30,10 @@ impl SqliteSnapshotStore {
     #[cfg(test)]
     pub async fn new_in_memory() -> Arc<Self> {
         use crate::agents::swarm::tasks::store::SqliteCoordTaskStore;
+        // rust-doctor-disable-next-line unwrap-in-production
         let conn = Connection::open_in_memory().expect("open in-memory db");
         let coord_store = SqliteCoordTaskStore::new(conn);
+        // rust-doctor-disable-next-line unwrap-in-production
         coord_store.migrate().await.expect("migrate");
         Arc::new(Self::new_from_shared(coord_store.connection_handle()))
     }

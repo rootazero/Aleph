@@ -299,6 +299,7 @@ fn split_subject(text: &str) -> (String, String) {
         match lines.next() {
             Some(l) if !l.trim().is_empty() => break l,
             Some(_) => continue,
+            // rust-doctor-disable-line unnecessary-allocation
             None => return (String::new(), String::new()),
         }
     };

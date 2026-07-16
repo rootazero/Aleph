@@ -153,8 +153,10 @@ impl SqliteMessageStore {
     /// Convenience constructor for tests — opens an in-memory database and migrates.
     #[cfg(test)]
     pub async fn new_in_memory() -> Self {
+        // rust-doctor-disable-next-line unwrap-in-production
         let conn = Connection::open_in_memory().expect("open in-memory db");
         let store = Self::new(conn);
+        // rust-doctor-disable-next-line unwrap-in-production
         store.migrate().await.expect("migrate");
         store
     }
@@ -1160,7 +1162,7 @@ mod tests {
                     team_id: team.to_string(),
                     from_agent: "alice".to_string(),
                     msg_type: MessageType::Message,
-                    subject: String::new(),
+                    subject: String::new(), // rust-doctor-disable-line unnecessary-allocation
                     content: body.to_string(),
                     recipients: vec![],
                     reply_to: None,
@@ -1188,7 +1190,7 @@ mod tests {
                 team_id: "t".to_string(),
                 from_agent: "user".to_string(),
                 msg_type: MessageType::Message,
-                subject: String::new(),
+                subject: String::new(), // rust-doctor-disable-line unnecessary-allocation
                 content: "remembered".to_string(),
                 recipients: vec![],
                 reply_to: None,
@@ -1213,7 +1215,7 @@ mod tests {
                     team_id: "team-A".to_string(),
                     from_agent: from.to_string(),
                     msg_type: MessageType::Message,
-                    subject: String::new(),
+                    subject: String::new(), // rust-doctor-disable-line unnecessary-allocation
                     content: from.to_string(),
                     recipients: vec![to_recipient("carol")],
                     reply_to: None,
@@ -1227,7 +1229,7 @@ mod tests {
                 team_id: "team-B".to_string(),
                 from_agent: "carol".to_string(),
                 msg_type: MessageType::Message,
-                subject: String::new(),
+                subject: String::new(), // rust-doctor-disable-line unnecessary-allocation
                 content: "team-B message".to_string(),
                 recipients: vec![to_recipient("alice")],
                 reply_to: None,
@@ -1262,7 +1264,7 @@ mod tests {
                     team_id: "t".to_string(),
                     from_agent: "a".to_string(),
                     msg_type: MessageType::Message,
-                    subject: String::new(),
+                    subject: String::new(), // rust-doctor-disable-line unnecessary-allocation
                     content: body.to_string(),
                     recipients: vec![],
                     reply_to: None,

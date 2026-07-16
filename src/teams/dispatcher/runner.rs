@@ -36,6 +36,8 @@ use crate::teams::types::{TeamMember, TeamMemberKind};
 /// Where a team member task is dispatched. Built by the caller (dispatcher
 /// or `team_delegate`) by inspecting the resolved [`TeamMember`].
 #[derive(Debug, Clone)]
+// rust-doctor-disable-next-line large-enum-variant
+// All variants are small String handles; boxing would complicate the public API without meaningful benefit.
 pub enum MemberDispatchTarget {
     /// Resolve `agent_id` against the in-process agent registry and run
     /// through the full Orchestrator → Harness path.

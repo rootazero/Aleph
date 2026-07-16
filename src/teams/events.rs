@@ -184,8 +184,10 @@ impl SqliteEventLogStore {
     /// Convenience constructor for tests — opens an in-memory database and migrates.
     #[cfg(test)]
     pub async fn new_in_memory() -> Self {
+        // rust-doctor-disable-next-line unwrap-in-production
         let conn = Connection::open_in_memory().expect("open in-memory db");
         let store = Self::new(conn);
+        // rust-doctor-disable-next-line unwrap-in-production
         store.migrate().await.expect("migrate");
         store
     }
