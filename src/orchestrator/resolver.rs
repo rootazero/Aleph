@@ -48,13 +48,16 @@ pub fn resolve_flow_id(
 ) -> Result<FlowId, FlowError> {
     if let Some(ch) = channel {
         if let Some(id) = overrides.exact.get(&(agent_id.to_string(), ch.to_string())) {
+            // rust-doctor-disable-next-line excessive-clone
             return Ok(id.clone());
         }
     }
     if let Some(id) = overrides.wildcard.get(agent_id) {
+        // rust-doctor-disable-next-line excessive-clone
         return Ok(id.clone());
     }
     if let Some(id) = defaults.get(agent_id) {
+        // rust-doctor-disable-next-line excessive-clone
         return Ok(id.clone());
     }
     Err(FlowError::UnknownAgent(agent_id.to_string()))

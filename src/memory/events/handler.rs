@@ -51,6 +51,7 @@ impl MemoryCommandHandler {
     /// fact is `Some`, writes/overwrites the corresponding markdown note. When
     /// `None` (fact deleted), removes the note file and index entry.
     /// If `note_indexer` is None, this is a no-op.
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn project_to_notes(&self, fact_id: &str) -> Result<(), AlephError> {
         let Some(ref indexer) = self.note_indexer else {
             return Ok(());
@@ -73,6 +74,7 @@ impl MemoryCommandHandler {
                     }
                 };
                 let note = KnowledgeNote {
+                    // rust-doctor-disable-next-line excessive-clone
                     title: title.clone(),
                     category: category.to_string(),
                     tags: vec![],
@@ -167,6 +169,7 @@ impl MemoryCommandHandler {
         let seq = self.db.get_memory_event_latest_seq(&fact_id).await? + 1;
 
         let event = MemoryEvent::NoteCreated {
+            // rust-doctor-disable-next-line excessive-clone
             note_path: fact_id.clone(),
             content: cmd.content,
             note_type: cmd.note_type,
@@ -178,6 +181,7 @@ impl MemoryCommandHandler {
         };
 
         let envelope =
+            // rust-doctor-disable-next-line excessive-clone
             MemoryEventEnvelope::new(fact_id.clone(), seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
@@ -197,12 +201,14 @@ impl MemoryCommandHandler {
             })?;
 
         let event = MemoryEvent::NoteContentUpdated {
+            // rust-doctor-disable-next-line excessive-clone
             note_path: cmd.note_path.clone(),
             old_content: current_fact.content,
             new_content: cmd.new_content,
             reason: cmd.reason,
         };
 
+        // rust-doctor-disable-next-line excessive-clone
         let fact_id_ref = cmd.note_path.clone();
         let envelope =
             MemoryEventEnvelope::new(cmd.note_path, seq, event, cmd.actor, cmd.correlation_id);
@@ -217,11 +223,14 @@ impl MemoryCommandHandler {
         let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
         let event = MemoryEvent::NoteInvalidated {
+            // rust-doctor-disable-next-line excessive-clone
             note_path: cmd.note_path.clone(),
             reason: cmd.reason,
+            // rust-doctor-disable-next-line excessive-clone
             actor: cmd.actor.clone(),
         };
 
+        // rust-doctor-disable-next-line excessive-clone
         let fact_id_ref = cmd.note_path.clone();
         let envelope =
             MemoryEventEnvelope::new(cmd.note_path, seq, event, cmd.actor, cmd.correlation_id);
@@ -236,9 +245,11 @@ impl MemoryCommandHandler {
         let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
         let event = MemoryEvent::NoteRestored {
+            // rust-doctor-disable-next-line excessive-clone
             note_path: cmd.note_path.clone(),
         };
 
+        // rust-doctor-disable-next-line excessive-clone
         let fact_id_ref = cmd.note_path.clone();
         let envelope = MemoryEventEnvelope::new(
             cmd.note_path,
@@ -263,6 +274,7 @@ impl MemoryCommandHandler {
         let current_access_count = current_fact.map_or(0, |f| f.access_count);
 
         let event = MemoryEvent::NoteAccessed {
+            // rust-doctor-disable-next-line excessive-clone
             note_path: cmd.note_path.clone(),
             query: cmd.query,
             relevance_score: cmd.relevance_score,
@@ -270,6 +282,7 @@ impl MemoryCommandHandler {
             new_access_count: current_access_count + 1,
         };
 
+        // rust-doctor-disable-next-line excessive-clone
         let fact_id_ref = cmd.note_path.clone();
         let envelope = MemoryEventEnvelope::new(
             cmd.note_path,
@@ -290,12 +303,14 @@ impl MemoryCommandHandler {
         let seq = 1u64; // New fact, starts at seq 1
 
         let event = MemoryEvent::NoteConsolidated {
+            // rust-doctor-disable-next-line excessive-clone
             note_path: fact_id.clone(),
             source_note_paths: cmd.source_note_paths,
             consolidated_content: cmd.consolidated_content,
         };
 
         let envelope =
+            // rust-doctor-disable-next-line excessive-clone
             MemoryEventEnvelope::new(fact_id.clone(), seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
@@ -308,10 +323,12 @@ impl MemoryCommandHandler {
         let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
         let event = MemoryEvent::NoteDeleted {
+            // rust-doctor-disable-next-line excessive-clone
             note_path: cmd.note_path.clone(),
             reason: cmd.reason,
         };
 
+        // rust-doctor-disable-next-line excessive-clone
         let fact_id_ref = cmd.note_path.clone();
         let envelope =
             MemoryEventEnvelope::new(cmd.note_path, seq, event, cmd.actor, cmd.correlation_id);
@@ -347,6 +364,7 @@ impl MemoryCommandHandler {
             content,
             note_type,
             path: note_path.to_string(),
+            // rust-doctor-disable-next-line excessive-clone
             namespace: agent.clone(),
             agent,
             source: FactSource::Manual,

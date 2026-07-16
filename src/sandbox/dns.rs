@@ -42,6 +42,7 @@ pub(crate) async fn resolve_hosts_in_capabilities(
     let mut resolved: BTreeSet<String> = BTreeSet::new();
     for host in hosts.iter() {
         if is_ip_literal(host) {
+            // rust-doctor-disable-next-line excessive-clone
             resolved.insert(host.clone());
             continue;
         }
@@ -51,12 +52,14 @@ pub(crate) async fn resolve_hosts_in_capabilities(
             Ok(Ok(addrs)) => addrs,
             Ok(Err(e)) => {
                 return Err(SandboxError::DnsResolutionFailed {
+                    // rust-doctor-disable-next-line excessive-clone
                     hostname: host.clone(),
                     source: e,
                 });
             }
             Err(_) => {
                 return Err(SandboxError::DnsResolutionFailed {
+                    // rust-doctor-disable-next-line excessive-clone
                     hostname: host.clone(),
                     source: std::io::Error::new(
                         std::io::ErrorKind::TimedOut,
@@ -71,6 +74,7 @@ pub(crate) async fn resolve_hosts_in_capabilities(
         }
         if resolved.len() == before {
             return Err(SandboxError::DnsResolutionFailed {
+                // rust-doctor-disable-next-line excessive-clone
                 hostname: host.clone(),
                 source: std::io::Error::new(
                     std::io::ErrorKind::NotFound,

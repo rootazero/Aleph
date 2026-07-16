@@ -140,6 +140,7 @@ pub fn infer_vendor(model: &str) -> Option<&'static str> {
 /// Substring-based (a provider name may embed the vendor, e.g.
 /// `vertex-anthropic`). Returns `None` for unrecognised providers.
 #[must_use]
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub fn canonical_provider_id(provider: &str) -> Option<&'static str> {
     let p = provider.trim().to_ascii_lowercase();
     // Vendor-native OpenAI-compatible endpoints (MiniMax / Moonshot ship both

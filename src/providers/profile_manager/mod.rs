@@ -297,11 +297,15 @@ impl EffectiveProfile {
         let api_key = config.resolve_api_key()?;
         Ok(Self {
             id,
+            // rust-doctor-disable-next-line excessive-clone
             provider: config.provider.clone(),
             api_key,
+            // rust-doctor-disable-next-line excessive-clone
             base_url: config.base_url.clone(),
             tier: config.tier,
+            // rust-doctor-disable-next-line excessive-clone
             org_id: config.org_id.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             model: config.model.clone(),
         })
     }

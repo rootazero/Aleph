@@ -45,8 +45,10 @@ impl crate::orchestrator::dispatch::HarnessRunner for MockHarness {
             "hi".into(),
         ));
         let _ = events.send(crate::orchestrator::dispatch::FlowStreamEvent::Complete(
+            // rust-doctor-disable-next-line excessive-clone
             self.outcome.clone(),
         ));
+        // rust-doctor-disable-next-line excessive-clone
         Ok(self.outcome.clone())
     }
 }
@@ -94,6 +96,7 @@ fn fixture_orchestrator() -> (Orchestrator, Arc<Mutex<Vec<String>>>) {
             iterations: 1,
             ..Default::default()
         },
+        // rust-doctor-disable-next-line excessive-clone
         invocations: invocations.clone(),
     });
 
@@ -411,6 +414,7 @@ impl crate::orchestrator::dispatch::HarnessRunner for CapturingHarness {
             ..Default::default()
         };
         let _ = events.send(crate::orchestrator::dispatch::FlowStreamEvent::Complete(
+            // rust-doctor-disable-next-line excessive-clone
             outcome.clone(),
         ));
         Ok(outcome)
@@ -448,7 +452,9 @@ fn fixture_capturing_orchestrator() -> (
     let received_trace_sink = Arc::new(Mutex::new(None::<bool>));
 
     let harness = Arc::new(CapturingHarness {
+        // rust-doctor-disable-next-line excessive-clone
         received_tool_service: received_tool_service.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         received_trace_sink: received_trace_sink.clone(),
     });
 

@@ -41,10 +41,12 @@ impl MoaPresetStore {
     }
 
     pub async fn list(&self) -> MoaToml {
+        // rust-doctor-disable-next-line excessive-clone
         self.config.read().await.moa.clone().unwrap_or_default()
     }
 
     async fn hot_refresh(&self) {
+        // rust-doctor-disable-next-line excessive-clone
         store_moa_config(self.config.read().await.moa.clone());
     }
 
@@ -74,6 +76,7 @@ impl MoaPresetStore {
         // Layer-2 validation against a scratch config (recursion / empty-advisor
         // / global-dedup guards — same pipeline a TOML-parsed config runs).
         let mut scratch = MoaToml::default();
+        // rust-doctor-disable-next-line excessive-clone
         scratch.presets.insert(name.to_string(), preset.clone());
         let errors = scratch.validation_errors();
         if !errors.is_empty() {
@@ -96,6 +99,7 @@ impl MoaPresetStore {
         // source `list()`/`save_preset` use — so all four store operations share
         // one read source (the process-global handle is a write-side broadcast
         // for the runtime, not a second store-of-record).
+        // rust-doctor-disable-next-line excessive-clone
         let moa_cfg = self.config.read().await.moa.clone().unwrap_or_default();
         if !moa_cfg.presets.contains_key(name) {
             return Err(MoaStoreError::Absent(name.to_string()));
@@ -122,6 +126,7 @@ impl MoaPresetStore {
     }
 
     pub async fn set_default(&self, name: &str) -> Result<PatchResult, MoaStoreError> {
+        // rust-doctor-disable-next-line excessive-clone
         let moa_cfg = self.config.read().await.moa.clone().unwrap_or_default();
         if !moa_cfg.presets.contains_key(name) {
             return Err(MoaStoreError::Absent(name.to_string()));

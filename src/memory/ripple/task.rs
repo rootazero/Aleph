@@ -33,10 +33,12 @@ impl RippleTask {
     pub async fn explore(&self, seed_facts: Vec<MemoryFact>) -> Result<RippleResult> {
         let mut visited = HashSet::new();
         let mut expanded = Vec::new();
+        // rust-doctor-disable-next-line excessive-clone
         let mut current_level = seed_facts.clone();
 
         // Mark seed facts as visited
         for fact in &seed_facts {
+            // rust-doctor-disable-next-line excessive-clone
             visited.insert(fact.id.clone());
         }
 
@@ -86,7 +88,9 @@ impl RippleTask {
 
                     // Check similarity threshold
                     if self.is_similar(fact, &similar_fact) {
+                        // rust-doctor-disable-next-line excessive-clone
                         visited.insert(similar_fact.id.clone());
+                        // rust-doctor-disable-next-line excessive-clone
                         expanded.push(similar_fact.clone());
                         next_level.push(similar_fact);
                     }

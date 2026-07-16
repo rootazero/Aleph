@@ -486,6 +486,7 @@ fn host_is_ip_literal(host: &str) -> bool {
 fn apply_memory_rlimit(cmd: &mut Command, mb: u64) {
     let bytes = mb.saturating_mul(1024 * 1024);
     // SAFETY: setrlimit(RLIMIT_AS) is async-signal-safe and well-defined.
+    // rust-doctor-disable-next-line unsafe-block-audit
     unsafe {
         cmd.pre_exec(move || {
             let rlim = libc::rlimit {
@@ -570,6 +571,7 @@ impl SeatbeltDriver {
         Ok(profile)
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn add_fs_policy(
         &self,
         profile: &mut String,

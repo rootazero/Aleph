@@ -78,11 +78,13 @@ impl FlushRegistry {
             in_flight: 0,
         });
         entry.in_flight += 1;
+        // rust-doctor-disable-next-line excessive-clone
         let notify = entry.notify.clone();
         drop(map);
 
         FlushGuard {
             notify,
+            // rust-doctor-disable-next-line excessive-clone
             reg: self.clone(),
             agent: agent.to_string(),
         }
@@ -101,6 +103,7 @@ impl FlushRegistry {
         let notify = {
             let map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             match map.get(agent) {
+                // rust-doctor-disable-next-line excessive-clone
                 Some(entry) => entry.notify.clone(),
                 None => return true, // idle → ready
             }

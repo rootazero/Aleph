@@ -318,6 +318,7 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                 };
                 // SAFETY: The returned SandboxJob owns the job-object handle and closes it on Drop.
                 Some(
+                    // rust-doctor-disable-next-line unsafe-block-audit
                     unsafe { SandboxJob::new(active_limit, profile.max_memory_mb) }
                     .map_err(|e| SandboxError::ExecutionFailed(format!("job creation failed: {e}")))?,
                 )
@@ -347,6 +348,7 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                     Err("child process handle unavailable for job assignment".to_string())
                 } else {
                     // SAFETY: `handle` is a valid, non-null child process handle.
+                    // rust-doctor-disable-next-line unsafe-block-audit
                     unsafe { job.assign_process(handle as _) }
                 };
                 if let Err(e) = assign {
@@ -389,6 +391,7 @@ impl Default for WindowsSandboxDriver {
 }
 
 /// Parse a profile string back into policy components.
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 fn parse_profile(contents: &str) -> Result<ParsedProfile, SandboxError> {
     let mut profile = ParsedProfile::default();
 

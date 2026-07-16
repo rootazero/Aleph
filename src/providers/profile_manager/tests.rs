@@ -21,6 +21,7 @@ fn create_test_config(temp_dir: &TempDir) -> std::path::PathBuf {
         api_key = "sk-openai-main"
         tier = "primary"
     "#;
+    // rust-doctor-disable-next-line unwrap-in-production
     std::fs::write(&config_path, content).unwrap();
     config_path
 }

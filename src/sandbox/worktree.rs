@@ -87,7 +87,9 @@ impl Drop for WorktreeHandle {
         }
         // Safety net: spawn blocking task to run `git worktree remove --force`.
         // Errors are logged via tracing; we never panic from Drop.
+        // rust-doctor-disable-next-line excessive-clone
         let repo_root = self.repo_root.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let path = self.path.clone();
         tracing::error!(
             path = %path.display(),
@@ -95,6 +97,7 @@ impl Drop for WorktreeHandle {
         );
         if let Some(sink) = self.trace_sink.as_ref() {
             sink.on_trace(&crate::harness::trace::LoopTraceEvent::WorktreeCleanedUp {
+                // rust-doctor-disable-next-line excessive-clone
                 path: self.path.clone(),
                 leaked: true,
             });

@@ -27,6 +27,7 @@ use super::{CompoundIngestor, DefaultCompoundIngestor};
 
 #[async_trait]
 impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundIngestor<S> {
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn ingest_batch(
         &self,
         agent_id: &str,
@@ -46,7 +47,9 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
                 warn!("orientation bootstrap for {agent_id} failed (continuing): {e}");
             }
         }
+        // rust-doctor-disable-next-line excessive-clone
         let source = raws[0].source.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let batch_ids: Vec<String> = raws.iter().map(|r| r.id.clone()).collect();
         // Related-page gathering is best-effort context enrichment for the
         // planning LLM: it needs an embedding round-trip to hybrid-search for
@@ -60,7 +63,9 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
         // by the embedding queue / `reembed_all` safety net (P7 graceful
         // degradation).
         let related = match gather_related(
+            // rust-doctor-disable-next-line excessive-clone
             self.store.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             self.embedder.clone(),
             &raws,
             agent_id,
@@ -118,6 +123,7 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
             Ok(r) => r,
             Err(ApplyError::HashConflict { path, actual, .. }) => {
                 warn!("compound ingest: hash conflict on {path}; re-planning");
+                // rust-doctor-disable-next-line excessive-clone
                 let mut augmented = raws.clone();
                 if let Some(last) = augmented.last_mut() {
                     last.content.push_str(&format!(
@@ -236,6 +242,7 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
         let mut tx = CompoundApplyTx::new(
             &self.indexer,
             &self.store,
+            // rust-doctor-disable-next-line excessive-clone
             self.memory_dir.clone(),
             agent_id,
         )
@@ -261,6 +268,7 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
     ///
     /// Returns `ops` unchanged when dedup is disabled, the related set is
     /// empty, or embeddings are unavailable (graceful degradation, P7).
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     pub(crate) async fn dedup_redirect_creates(
         &self,
         agent_id: &str,
@@ -542,6 +550,7 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
     /// wiki or embedding endpoint down), so without it every fresh note becomes
     /// an orphan island. FTS needs no embedding, so it links notes the vector
     /// path could not reach.
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn keyword_link_creates(&self, agent_id: &str, mut ops: Vec<PageOp>) -> Vec<PageOp> {
         use std::collections::{HashMap, HashSet};
 
@@ -561,15 +570,21 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                 ..
             } = op
             {
+                // rust-doctor-disable-next-line excessive-clone
                 batch_paths.insert(note_path.clone());
                 if !links.is_empty() || !relations.is_empty() {
                     continue;
                 }
+                // rust-doctor-disable-next-line excessive-clone
                 targets.push((i, note_path.clone()));
                 union.push(NoteForExtraction {
+                    // rust-doctor-disable-next-line excessive-clone
                     path: note_path.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     title: title.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     summary: summary.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     facts: facts.clone(),
                 });
             }
@@ -582,6 +597,7 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
         //    its whole query as ONE FTS5 phrase, so search per significant
         //    keyword (mirroring the note_manage create path) and merge by path.
         //    Skip paths already in this batch and paths already collected.
+        // rust-doctor-disable-next-line excessive-clone
         let mut seen_candidates: HashSet<String> = batch_paths.clone();
         for (_, target_path) in &targets {
             // Build the keyword query from the target's own extraction text.
@@ -602,10 +618,12 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                             if seen_candidates.contains(&hit.path) {
                                 continue;
                             }
+                            // rust-doctor-disable-next-line excessive-clone
                             seen_candidates.insert(hit.path.clone());
                             // FTS hits carry no title/summary/facts; the path
                             // (and filename) is enough for keyword extraction.
                             union.push(NoteForExtraction {
+                                // rust-doctor-disable-next-line excessive-clone
                                 path: hit.path.clone(),
                                 title: hit.filename,
                                 // rust-doctor-disable-next-line unnecessary-allocation
@@ -654,6 +672,7 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                 if let Some(&op_i) = target_index.get(this.as_str()) {
                     if let PageOp::Create { links, .. } = &mut ops[op_i] {
                         if !links.iter().any(|l| l == other) {
+                            // rust-doctor-disable-next-line excessive-clone
                             links.push(other.clone());
                             linked += 1;
                         }

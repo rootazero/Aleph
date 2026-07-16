@@ -788,9 +788,12 @@ impl Orchestrator {
         let tool_service_override = req.tool_service.clone();
         // rust-doctor-disable-next-line excessive-clone
         let trace_sink = req.trace_sink.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let interaction_manifest = req.interaction_manifest.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let workspace_override = req.workspace_override.clone();
         let max_iterations_override = req.max_iterations_override;
+        // rust-doctor-disable-next-line excessive-clone
         let transient_context = req.transient_context.clone();
         let think_level = req.think_level;
 
@@ -812,10 +815,12 @@ impl Orchestrator {
             // task-local loss as the project root): agent-scoped skill discovery
             // (`~/.aleph/agents/<id>/skills`) reads `current_agent_id()`. Capture
             // the id before `spec_clone` is moved into `harness.run`.
+            // rust-doctor-disable-next-line excessive-clone
             let agent_id_for_scope = spec_clone.agent.clone();
             let outcome = crate::agents::with_agent_id(
                 Some(agent_id_for_scope),
                 crate::projects::with_project_root(
+                    // rust-doctor-disable-next-line excessive-clone
                     workspace_override.clone(),
                     harness.run(
                         session_key,

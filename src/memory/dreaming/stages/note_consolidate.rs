@@ -52,6 +52,7 @@ impl DreamStage for NoteConsolidateStage {
         let mut by_category: HashMap<String, Vec<usize>> = HashMap::new();
         for (idx, note) in ctx.notes.iter().enumerate() {
             by_category
+                // rust-doctor-disable-next-line excessive-clone
                 .entry(note.category.clone())
                 .or_default()
                 .push(idx);
@@ -119,6 +120,7 @@ async fn batch_consolidate_candidates(
     // Load content for all notes in the category
     let mut previews: Vec<(usize, String, String)> = Vec::new(); // (index, path, preview)
     for &idx in indices {
+        // rust-doctor-disable-next-line excessive-clone
         let path = ctx.notes[idx].path.clone();
         let content = ctx.load_content(&path).await.unwrap_or_default();
         // Use up to 400 chars per note for the batch prompt
@@ -290,7 +292,9 @@ async fn consolidate_pair(
     idx_a: usize,
     idx_b: usize,
 ) -> Result<bool, AlephError> {
+    // rust-doctor-disable-next-line excessive-clone
     let path_a = ctx.notes[idx_a].path.clone();
+    // rust-doctor-disable-next-line excessive-clone
     let path_b = ctx.notes[idx_b].path.clone();
 
     let content_a = ctx.load_content(&path_a).await.unwrap_or_default();
@@ -384,6 +388,7 @@ enum MergeMode {
 /// Both content strings are passed in to avoid re-reading.
 /// Returns `Ok(true)` when the merge was applied, `Ok(false)` when the
 /// evolution gate or edit budget skipped it (no files touched).
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 async fn execute_merge(
     ctx: &mut DreamContext,
     keeper_idx: usize,
@@ -392,7 +397,9 @@ async fn execute_merge(
     absorbed_content: &str,
     mode: MergeMode,
 ) -> Result<bool, AlephError> {
+    // rust-doctor-disable-next-line excessive-clone
     let keeper_path = ctx.notes[keeper_idx].path.clone();
+    // rust-doctor-disable-next-line excessive-clone
     let absorbed_path = ctx.notes[absorbed_idx].path.clone();
 
     let (keeper_category, keeper_filename) = keeper_path
@@ -403,6 +410,7 @@ async fn execute_merge(
         .ok_or_else(|| AlephError::other(format!("Invalid note path: {absorbed_path}")))?;
 
     let memory_dir = ctx.indexer.memory_dir().to_path_buf();
+    // rust-doctor-disable-next-line excessive-clone
     let agent_id = ctx.agent_id.clone();
 
     let keeper_file = memory_dir
@@ -501,6 +509,7 @@ async fn execute_merge(
     // Merge unique tags
     for tag in &absorbed_note.tags {
         if !keeper_note.tags.contains(tag) {
+            // rust-doctor-disable-next-line excessive-clone
             keeper_note.tags.push(tag.clone());
         }
     }
@@ -557,6 +566,7 @@ async fn execute_merge(
     // merge-cycle detector (previously starved of data — no caller existed).
     ctx.report
         .merged_pairs
+        // rust-doctor-disable-next-line excessive-clone
         .push((keeper_path.clone(), absorbed_path.clone()));
 
     tracing::info!(

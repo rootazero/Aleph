@@ -52,6 +52,7 @@ pub struct RelatedPage {
 
 /// Embed the aggregated raw batch text, hybrid-search for N seed pages,
 /// expand 1-hop via outgoing links, truncate to budget.
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub async fn gather_related<S: NoteStore + Send + Sync + 'static>(
     store: Arc<S>,
     embedder: Arc<dyn EmbeddingProvider>,

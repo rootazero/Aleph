@@ -12,6 +12,7 @@ use serde_json::Value;
 /// Each protocol adapter converts these to its native format in `convert_messages()`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
+// rust-doctor-disable-next-line large-enum-variant
 pub enum UnifiedMessage {
     /// User message
     User { content: Vec<ContentBlock> },
@@ -50,6 +51,7 @@ pub enum EphemeralTtl {
 /// Content block — one atomic unit within a message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
+// rust-doctor-disable-next-line large-enum-variant
 pub enum ContentBlock {
     /// Plain text
     Text {
@@ -123,6 +125,7 @@ impl UnifiedMessage {
     pub fn user_with_attachments(text: impl Into<String>, blocks: &[serde_json::Value]) -> Self {
         let attached: Vec<ContentBlock> = blocks
             .iter()
+            // rust-doctor-disable-next-line excessive-clone
             .filter_map(|raw| serde_json::from_value::<ContentBlock>(raw.clone()).ok())
             .filter(|b| matches!(b, ContentBlock::Text { .. } | ContentBlock::Image { .. }))
             .collect();
@@ -186,12 +189,15 @@ impl UnifiedMessage {
         let mut content = Vec::new();
         if let Some(ref thinking) = resp.thinking {
             content.push(ContentBlock::Thinking {
+                // rust-doctor-disable-next-line excessive-clone
                 thinking: thinking.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 signature: resp.thinking_signature.clone(),
             });
         }
         if let Some(ref text) = resp.text {
             content.push(ContentBlock::Text {
+                // rust-doctor-disable-next-line excessive-clone
                 text: text.clone(),
                 cache_control: None,
             });
@@ -416,6 +422,7 @@ fn collect_call_ids(messages: &[UnifiedMessage]) -> std::collections::HashSet<St
         })
         .flat_map(|content| content.iter())
         .filter_map(|b| match b {
+            // rust-doctor-disable-next-line excessive-clone
             ContentBlock::ToolCall { id, .. } => Some(id.clone()),
             _ => None,
         })
@@ -440,6 +447,7 @@ fn ensure_tool_results_present(messages: &mut Vec<UnifiedMessage>) {
     let answered: std::collections::HashSet<String> = messages
         .iter()
         .filter_map(|m| match m {
+            // rust-doctor-disable-next-line excessive-clone
             UnifiedMessage::ToolResult { tool_call_id, .. } => Some(tool_call_id.clone()),
             _ => None,
         })

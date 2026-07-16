@@ -305,6 +305,7 @@ async fn seed_session_history_replays_turns_and_adds_prompt() {
     let users: Vec<String> = events
         .iter()
         .filter_map(|r| match &r.event {
+            // rust-doctor-disable-next-line excessive-clone
             SessionEvent::UserMessage { content, .. } => Some(content.text.clone()),
             _ => None,
         })
@@ -312,6 +313,7 @@ async fn seed_session_history_replays_turns_and_adds_prompt() {
     let assistants: Vec<String> = events
         .iter()
         .filter_map(|r| match &r.event {
+            // rust-doctor-disable-next-line excessive-clone
             SessionEvent::AssistantMessage { content, .. } => Some(content.text.clone()),
             _ => None,
         })
@@ -365,6 +367,7 @@ async fn history_input_does_not_reseed_when_log_nonempty() {
     let user_texts: Vec<String> = events
         .iter()
         .filter_map(|r| match &r.event {
+            // rust-doctor-disable-next-line excessive-clone
             SessionEvent::UserMessage { content, .. } => Some(content.text.clone()),
             _ => None,
         })
@@ -403,6 +406,7 @@ async fn seed_session_multimodal_emits_one_user_per_entry() {
     let users: Vec<String> = events
         .iter()
         .filter_map(|r| match &r.event {
+            // rust-doctor-disable-next-line excessive-clone
             SessionEvent::UserMessage { content, .. } => Some(content.text.clone()),
             _ => None,
         })

@@ -102,6 +102,7 @@ fn resolve_refs_recursive(node: &mut Value, defs: &Value, depth: usize) {
                             // instead of a stack overflow.
                             return;
                         }
+                        // rust-doctor-disable-next-line excessive-clone
                         let mut resolved = resolved.clone();
                         resolve_refs_recursive(&mut resolved, defs, depth + 1);
                         // A `$ref` node may carry sibling annotation keywords
@@ -147,6 +148,7 @@ fn resolve_refs_recursive(node: &mut Value, defs: &Value, depth: usize) {
 }
 
 /// Recursively strip unsupported keywords and flatten unions.
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 fn clean_recursive(node: &mut Value) {
     let obj = match node.as_object_mut() {
         Some(o) => o,

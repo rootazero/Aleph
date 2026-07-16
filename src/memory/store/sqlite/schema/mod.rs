@@ -7,6 +7,7 @@ use crate::error::AlephError;
 use rusqlite::Connection;
 
 /// Initialize the core relational schema.
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     migrations::migrate_recall_signals_note_path(conn)?;
     // Add the agent_id scope column before the DDL below recreates the

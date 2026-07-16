@@ -63,11 +63,13 @@ impl ProtocolLoader {
 
         // Create ConfigurableProtocol
         let protocol = ConfigurableProtocol::new(
+            // rust-doctor-disable-next-line excessive-clone
             def.clone(),
             crate::providers::protocols::http_client::build_provider_http_client(),
         )?;
 
         // Register in ProtocolRegistry
+        // rust-doctor-disable-next-line excessive-clone
         ProtocolRegistry::global().register(def.name.clone(), Arc::new(protocol))?;
 
         info!(
@@ -205,6 +207,7 @@ impl ProtocolLoader {
     /// Returns Debouncer that must be kept alive by caller.
     fn start_watching_dir(dir: &Path) -> Result<Option<Debouncer<RecommendedWatcher, FileIdMap>>> {
         let dir = dir.to_path_buf();
+        // rust-doctor-disable-next-line excessive-clone
         let dir_for_closure = dir.clone();
 
         // Create debounced watcher with 500ms delay (standard across codebase)

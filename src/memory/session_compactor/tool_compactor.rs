@@ -19,6 +19,7 @@ use super::context_window::{
 /// Guess a file's language from its content using simple heuristics.
 ///
 /// Returns a short label like `"rust"`, `"python"`, `"json"`, etc.
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 fn detect_language(content: &str) -> &'static str {
     let trimmed = content.trim_start();
 

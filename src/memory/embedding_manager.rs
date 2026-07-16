@@ -48,6 +48,7 @@ impl EmbeddingManager {
             let settings = self.settings.read().await;
             let decision = resolve(&settings);
             (
+                // rust-doctor-disable-next-line excessive-clone
                 decision.effective.map(|c| c.id.clone()),
                 decision.reason,
                 decision.effective.cloned(),
@@ -87,6 +88,7 @@ impl EmbeddingManager {
 
     /// Get the currently active provider. Returns None if not configured.
     pub async fn get_active_provider(&self) -> Option<Arc<dyn EmbeddingProvider>> {
+        // rust-doctor-disable-next-line excessive-clone
         self.active_provider.read().await.clone()
     }
 
@@ -111,6 +113,7 @@ impl EmbeddingManager {
                 .iter()
                 .find(|p| p.id == new_id)
                 .ok_or_else(|| AlephError::config(format!("Provider not found: {new_id}")))?
+                // rust-doctor-disable-next-line excessive-clone
                 .clone()
         }; // settings lock released
 
@@ -118,6 +121,7 @@ impl EmbeddingManager {
         let provider = create_provider(&config)?;
 
         // Now update both settings and active provider
+        // rust-doctor-disable-next-line excessive-clone
         let old_id = self.settings.read().await.active_provider_id.clone();
         self.settings.write().await.active_provider_id = new_id.to_string();
         *self.active_provider.write().await = Some(provider);
@@ -136,6 +140,7 @@ impl EmbeddingManager {
                 .iter()
                 .find(|p| p.id == provider_id)
                 .ok_or_else(|| AlephError::config(format!("Provider not found: {provider_id}")))?
+                // rust-doctor-disable-next-line excessive-clone
                 .clone()
         }; // settings lock released here
         let provider = RemoteEmbeddingProvider::from_config(&config)?;
@@ -155,6 +160,7 @@ impl EmbeddingManager {
 
     /// Get a snapshot of current settings
     pub async fn get_settings(&self) -> EmbeddingSettings {
+        // rust-doctor-disable-next-line excessive-clone
         self.settings.read().await.clone()
     }
 

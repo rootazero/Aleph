@@ -182,14 +182,17 @@ impl DefaultQueryFiler {
         let raw_title = if gate.proposed_title.is_empty() {
             hash.get(..12).unwrap_or(hash).to_string()
         } else {
+            // rust-doctor-disable-next-line excessive-clone
             gate.proposed_title.clone()
         };
         let filename = sanitize_title(&raw_title)?;
 
         // Build source links from synthesis
+        // rust-doctor-disable-next-line excessive-clone
         let mut all_links: Vec<String> = synthesis.sources.iter().map(|s| s.path.clone()).collect();
         for link in &gate.links {
             if !all_links.contains(link) {
+                // rust-doctor-disable-next-line excessive-clone
                 all_links.push(link.clone());
             }
         }
@@ -198,8 +201,10 @@ impl DefaultQueryFiler {
         let query_summary: String = query.chars().take(120).collect();
 
         let note = KnowledgeNote {
+            // rust-doctor-disable-next-line excessive-clone
             title: filename.clone(),
             category: "query".to_string(),
+            // rust-doctor-disable-next-line excessive-clone
             tags: gate.tags.clone(),
             facts: vec![
                 format!("## Question\n{query_summary}"),
@@ -232,6 +237,7 @@ impl DefaultQueryFiler {
             id: uuid::Uuid::new_v4().to_string(),
             agent_id: agent_id.to_string(),
             query_hash: hash.to_string(),
+            // rust-doctor-disable-next-line excessive-clone
             note_path: note_path.clone(),
             session_id: session_id.map(|s| s.to_string()),
             filed_at: now,

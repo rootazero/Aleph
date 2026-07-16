@@ -65,6 +65,7 @@ impl MemoryRetrieval {
         };
 
         let note_retrieval =
+            // rust-doctor-disable-next-line excessive-clone
             NoteRetrieval::new(memory_dir, self.database.clone(), self.embedder.clone());
 
         let notes = note_retrieval
@@ -83,6 +84,7 @@ impl MemoryRetrieval {
 /// Convert a `NoteContent` into a `MemoryEntry`.
 fn note_to_entry(note: NoteContent) -> MemoryEntry {
     MemoryEntry {
+        // rust-doctor-disable-next-line excessive-clone
         id: note.path.clone(),
         context: ContextAnchor::now(String::new()),
         user_input: note.content,

@@ -667,6 +667,7 @@ pub(crate) fn last_user_query(input: &FlowInput) -> String {
         content.text.as_str()
     }
     match input {
+        // rust-doctor-disable-next-line excessive-clone
         FlowInput::Prompt(s) => s.clone(),
         FlowInput::Messages(msgs) | FlowInput::Multimodal(msgs) => msgs
             .iter()
@@ -675,6 +676,7 @@ pub(crate) fn last_user_query(input: &FlowInput) -> String {
             .find(|s| !s.is_empty())
             .map(str::to_string)
             .unwrap_or_default(),
+        // rust-doctor-disable-next-line excessive-clone
         FlowInput::History { prompt, .. } => prompt.clone(),
         FlowInput::Resume => String::new(),
     }

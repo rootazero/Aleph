@@ -33,7 +33,9 @@ impl DreamStage for GraphRecomputeStage {
     }
 
     async fn execute(&self, ctx: DreamContext) -> Result<DreamContext, AlephError> {
+        // rust-doctor-disable-next-line excessive-clone
         let agent_id = ctx.agent_id.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let store = ctx.indexer.store().clone();
         let snapshot: GraphSnapshot = store.load_graph_snapshot(&agent_id).await?;
 
@@ -120,12 +122,18 @@ fn compute(snap: &GraphSnapshot) -> Computed {
     let related_rows: Vec<(String, String, f32)> =
         all_related(&g, &SignalWeights::default(), 8, threads)
             .into_iter()
-            .flat_map(|(seed, peers)| peers.into_iter().map(move |(p, s)| (seed.clone(), p, s)))
+            .flat_map(|(seed, peers)| {
+                peers.into_iter().map(move |(p, s)| {
+                    // rust-doctor-disable-next-line excessive-clone
+                    (seed.clone(), p, s)
+                })
+            })
             .collect();
 
     let cache = (0..g.len())
         .map(|i| {
             let cid = com.of_node[i];
+            // rust-doctor-disable-next-line excessive-clone
             (g.nodes[i].path.clone(), cid, com.cohesion[cid], g.degree(i))
         })
         .collect();

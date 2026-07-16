@@ -12,9 +12,9 @@ use super::types::{FactProvenance, ProvenanceOrigin};
 /// `\<!-- src: raw/abc, origin: raw_source, inferred: false -->`. The `src:`
 /// segment is optional (e.g. inferred facts have no source).
 pub static PROVENANCE_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    // rust-doctor-disable-next-line unwrap-in-production
     Regex::new(
         r"<!--\s*(?:src:\s*([^,]+?),\s*)?origin:\s*(raw_source|prior_note|inferred|legacy|system)\s*,\s*inferred:\s*(true|false)\s*-->",
+    // rust-doctor-disable-next-line unwrap-in-production
     ).unwrap()
 });
 

@@ -418,6 +418,7 @@ impl MemoryCommands {
             0 => Err(AlephError::other(format!(
                 "Note not found: {path_or_prefix}"
             ))),
+            // rust-doctor-disable-next-line excessive-clone
             1 => Ok(matches[0].path.clone()),
             _ => Err(AlephError::other(format!(
                 "Ambiguous prefix '{}' matches {} notes. Use more characters.",

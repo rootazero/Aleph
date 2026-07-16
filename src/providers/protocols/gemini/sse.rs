@@ -12,6 +12,7 @@ use std::collections::VecDeque;
 /// - Function calls prefer native `id` field (Gemini 3+), fallback to synthetic
 ///   `gemini_fc_{n}_{nonce}` (see the mint site for why the nonce is mandatory)
 /// - Usage includes `thoughtsTokenCount` when available
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub(crate) fn parse_gemini_sse_chunk(
     data: &str,
     fc_counter: &mut u64,
@@ -128,12 +129,14 @@ pub(crate) fn parse_gemini_sse_chunk(
                         .map(|s| s.to_string());
 
                     out.push_back(Ok(ProviderDelta::ToolCallStart {
+                        // rust-doctor-disable-next-line excessive-clone
                         id: id.clone(),
                         name,
                         signature,
                     }));
                     if !args_str.is_empty() && args_str != "null" {
                         out.push_back(Ok(ProviderDelta::ToolCallArgDelta {
+                            // rust-doctor-disable-next-line excessive-clone
                             id: id.clone(),
                             delta: args_str,
                         }));

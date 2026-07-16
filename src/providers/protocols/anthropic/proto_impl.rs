@@ -54,6 +54,7 @@ impl AnthropicProtocol {
     }
 
     /// Convert `UnifiedMessages` to Anthropic Messages
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     pub(super) fn convert_messages(messages: &[UnifiedMessage]) -> Vec<Message> {
         let mut result = Vec::new();
         let mut i = 0;
@@ -210,6 +211,7 @@ impl AnthropicProtocol {
                                     if let Some(obj) = input.as_object_mut() {
                                         obj.insert(
                                             "reasoning_content".to_string(),
+                                            // rust-doctor-disable-next-line excessive-clone
                                             serde_json::Value::String(reasoning.clone()),
                                         );
                                     }
@@ -268,6 +270,7 @@ impl AnthropicProtocol {
                                 match b {
                                     crate::providers::message::ContentBlock::Text {
                                         text, ..
+                                    // rust-doctor-disable-next-line excessive-clone
                                     } => parts.push(text.clone()),
                                     crate::providers::message::ContentBlock::Json { value } => {
                                         parts
@@ -279,7 +282,9 @@ impl AnthropicProtocol {
                                     } => image_blocks.push(ContentBlock::Image {
                                         source: ImageSource {
                                             source_type: "base64".to_string(),
+                                            // rust-doctor-disable-next-line excessive-clone
                                             media_type: mime_type.clone(),
+                                            // rust-doctor-disable-next-line excessive-clone
                                             data: data.clone(),
                                         },
                                     }),

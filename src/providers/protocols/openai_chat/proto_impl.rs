@@ -79,6 +79,7 @@ impl OpenAiProtocol {
                             .iter()
                             .filter_map(|b| match b {
                                 UCB::Text { text, .. } => {
+                                    // rust-doctor-disable-next-line excessive-clone
                                     Some(OaiContentBlock::Text { text: text.clone() })
                                 }
                                 UCB::Image { data, mime_type } => Some(OaiContentBlock::ImageUrl {
@@ -140,6 +141,7 @@ impl OpenAiProtocol {
                                 arguments,
                                 ..
                             } => Some(OpenAiToolCall {
+                                // rust-doctor-disable-next-line excessive-clone
                                 id: id.clone(),
                                 call_type: Some("function".to_string()),
                                 function: OpenAiFunctionCall {
@@ -180,6 +182,7 @@ impl OpenAiProtocol {
                         .iter()
                         .filter_map(|b| match b {
                             crate::providers::message::ContentBlock::Text { text, .. } => {
+                                // rust-doctor-disable-next-line excessive-clone
                                 Some(text.clone())
                             }
                             crate::providers::message::ContentBlock::Json { value } => {
@@ -190,6 +193,7 @@ impl OpenAiProtocol {
                         .collect::<Vec<_>>()
                         .join("\n");
                     // Each ToolResult as separate tool message with required tool_call_id
+                    // rust-doctor-disable-next-line excessive-clone
                     result.push(Message::tool_result(tool_call_id.clone(), output));
                 }
             }

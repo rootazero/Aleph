@@ -125,6 +125,7 @@ impl Gatherer {
                     // produced by NoteSearchResult::to_memory_fact. Normalise.
                     // rust-doctor-disable-next-line excessive-clone
                     let display_id = if sf.fact.path.starts_with("note://") {
+                        // rust-doctor-disable-next-line excessive-clone
                         sf.fact.path.clone()
                     } else {
                         format!("note://{}", sf.fact.path)

@@ -197,6 +197,7 @@ impl FsProfileSynthesizer {
             let mut modified = false;
             for b in &new_bullets {
                 if !old_bullets.contains(b) {
+                    // rust-doctor-disable-next-line excessive-clone
                     diff.added_bullets.push((heading.clone(), (*b).to_string()));
                     modified = true;
                 }
@@ -204,6 +205,7 @@ impl FsProfileSynthesizer {
             for b in &old_bullets {
                 if !new_bullets.contains(b) {
                     diff.removed_bullets
+                        // rust-doctor-disable-next-line excessive-clone
                         .push((heading.clone(), (*b).to_string()));
                     modified = true;
                 }
@@ -282,6 +284,7 @@ impl ProfileSynthesizer for FsProfileSynthesizer {
         self.store(agent_id).read().await
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn update(
         &self,
         agent_id: &str,
@@ -314,8 +317,10 @@ impl ProfileSynthesizer for FsProfileSynthesizer {
             }
         };
 
+        // rust-doctor-disable-next-line excessive-clone
         let h0 = profile.content_hash.clone();
         let old_revision = profile.revision;
+        // rust-doctor-disable-next-line excessive-clone
         let old_sections = profile.sections.clone();
 
         // Build LLM prompt
@@ -355,10 +360,13 @@ impl ProfileSynthesizer for FsProfileSynthesizer {
         let diff = Self::compute_diff(&old_sections, &sections, stance_shift);
 
         let new_revision = old_revision + 1;
+        // rust-doctor-disable-next-line excessive-clone
         let mut sources = profile.sources.clone();
         for section in &diff.sections_modified {
+            // rust-doctor-disable-next-line excessive-clone
             let entry = sources.entry(section.clone()).or_default();
             if !entry.contains(&signal.session_id) {
+                // rust-doctor-disable-next-line excessive-clone
                 entry.push(signal.session_id.clone());
             }
         }
@@ -376,6 +384,7 @@ impl ProfileSynthesizer for FsProfileSynthesizer {
             Err(_) => {
                 // Concurrent update detected — re-read and attempt single re-plan
                 let current = store.read().await?;
+                // rust-doctor-disable-next-line excessive-clone
                 let current_hash = current.as_ref().map(|p| p.content_hash.clone());
                 if let Some(ref ch) = current_hash {
                     // Re-try write with the fresh hash

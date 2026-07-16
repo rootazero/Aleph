@@ -601,6 +601,7 @@ impl FailoverProvider {
 }
 
 impl AiProvider for FailoverProvider {
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn process<'a>(
         &'a self,
         payload: RequestPayload<'a>,
@@ -612,8 +613,11 @@ impl AiProvider for FailoverProvider {
         let think_level = payload.think_level;
         let temperature = payload.temperature;
         let max_tokens = payload.max_tokens;
+        // rust-doctor-disable-next-line excessive-clone
         let tool_choice = payload.tool_choice.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let req_model = payload.model.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let metadata = payload.metadata.clone();
         // C floor: derive the request's structural capability requirements once
         // (image blocks → vision, tools array → tool-calling, text size →

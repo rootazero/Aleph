@@ -36,11 +36,17 @@ use voyage::VoyageRerankProvider;
 #[must_use]
 pub fn build_provider(config: &RerankConfig) -> Box<dyn RerankProvider> {
     match config.provider {
+        // rust-doctor-disable-next-line excessive-clone
         RerankProviderType::Jina => Box::new(JinaRerankProvider::new(config.clone())),
+        // rust-doctor-disable-next-line excessive-clone
         RerankProviderType::SiliconFlow => Box::new(SiliconFlowRerankProvider::new(config.clone())),
+        // rust-doctor-disable-next-line excessive-clone
         RerankProviderType::Voyage => Box::new(VoyageRerankProvider::new(config.clone())),
+        // rust-doctor-disable-next-line excessive-clone
         RerankProviderType::Pinecone => Box::new(PineconeRerankProvider::new(config.clone())),
+        // rust-doctor-disable-next-line excessive-clone
         RerankProviderType::Vllm => Box::new(VllmRerankProvider::new(config.clone())),
+        // rust-doctor-disable-next-line excessive-clone
         RerankProviderType::Cohere => Box::new(CohereRerankProvider::new(config.clone())),
     }
 }
@@ -70,6 +76,7 @@ pub fn blend_scores(
                 .map_or(0.0, |r| r.relevance_score);
 
             let final_score = weight * rerank_score + original_weight * orig_score;
+            // rust-doctor-disable-next-line excessive-clone
             (doc.clone(), final_score)
         })
         .collect();

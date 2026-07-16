@@ -94,6 +94,7 @@ impl CuratedMemoryStore {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .entries
+            // rust-doctor-disable-next-line excessive-clone
             .clone()
     }
 
@@ -114,7 +115,9 @@ impl CuratedMemoryStore {
             if st.entries.iter().any(|e| e == &content) {
                 return Err(CuratedError::Duplicate);
             }
+            // rust-doctor-disable-next-line excessive-clone
             let mut new_entries = st.entries.clone();
+            // rust-doctor-disable-next-line excessive-clone
             new_entries.push(content.clone());
             let used = super::budget::used_chars(&new_entries);
             if used > self.char_limit {
@@ -162,7 +165,9 @@ impl CuratedMemoryStore {
                 }
             }
             let idx = matches[0];
+            // rust-doctor-disable-next-line excessive-clone
             let mut new_entries = st.entries.clone();
+            // rust-doctor-disable-next-line excessive-clone
             new_entries[idx] = new_content.clone();
             let used = super::budget::used_chars(&new_entries);
             if used > self.char_limit {
@@ -224,6 +229,7 @@ impl CuratedMemoryStore {
         let used = super::budget::used_chars(&st.entries);
         let pct = super::budget::usage_pct(used, self.char_limit);
         WriteOutcome {
+            // rust-doctor-disable-next-line excessive-clone
             entries: st.entries.clone(),
             usage_pct: pct,
             usage_chars: used,

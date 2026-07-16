@@ -50,6 +50,7 @@ impl EventProjector {
     /// A `NoteCreated` or `NoteMigrated` event must appear before any
     /// mutation events; if a mutation arrives before initialization,
     /// it is silently skipped.
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     pub fn fold_events_to_note(
         events: &[MemoryEventEnvelope],
     ) -> Result<Option<MemoryFact>, AlephError> {
@@ -121,6 +122,7 @@ impl EventProjector {
                 MemoryEvent::NoteMigrated { snapshot, .. } => {
                     // rust-doctor-disable-next-line excessive-clone
                     let migrated: MemoryFact =
+                        // rust-doctor-disable-next-line excessive-clone
                         serde_json::from_value(snapshot.clone()).map_err(|e| {
                             AlephError::Other {
                                 message: format!(

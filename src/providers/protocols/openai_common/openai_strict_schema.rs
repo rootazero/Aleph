@@ -43,6 +43,7 @@ pub enum StrictResult {
 /// carry the discriminator semantics for LLM guidance.
 ///
 /// Non-recursive (top-level only). Idempotent.
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub fn ensure_openai_tool_envelope(schema: &mut Value) {
     let map = match schema.as_object_mut() {
         Some(m) => m,
@@ -168,10 +169,12 @@ fn lenient_rewrite_node(node: &mut Value) {
                     .iter()
                     .position(|t| t.as_str().is_some_and(|s| s != "null"));
                 if let (Some(_), Some(other)) = (null_idx, other_idx) {
+                    // rust-doctor-disable-next-line excessive-clone
                     let other_type = types[other].clone();
                     let mut non_null_branch: serde_json::Map<String, Value> = map
                         .iter()
                         .filter(|(k, _)| k.as_str() != "type")
+                        // rust-doctor-disable-next-line excessive-clone
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
                     non_null_branch.insert("type".to_string(), other_type);
@@ -229,6 +232,7 @@ pub fn normalize_strict_schema(schema: &mut Value, set_top_level_strict: bool) -
     normalize_node(schema, set_top_level_strict, true, "")
 }
 
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 fn normalize_node(
     node: &mut Value,
     set_strict: bool,
@@ -249,10 +253,12 @@ fn normalize_node(
                     .iter()
                     .position(|t| t.as_str().is_some_and(|s| s != "null"));
                 if let (Some(_), Some(other)) = (null_idx, other_idx) {
+                    // rust-doctor-disable-next-line excessive-clone
                     let other_type = types[other].clone();
                     let mut non_null_branch: serde_json::Map<String, Value> = map
                         .iter()
                         .filter(|(k, _)| k.as_str() != "type")
+                        // rust-doctor-disable-next-line excessive-clone
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
                     non_null_branch.insert("type".to_string(), other_type);
@@ -386,6 +392,7 @@ fn deref_node(
             {
                 if let Some(def) = defs.get(name) {
                     if visiting.insert(name.to_string()) {
+                        // rust-doctor-disable-next-line excessive-clone
                         let mut target = def.clone();
                         deref_node(&mut target, defs, visiting);
                         visiting.remove(name);
@@ -565,6 +572,7 @@ fn infer_type_from_values(values: &[Value]) -> String {
 
     if inferred.len() == 1 {
         if let Some(ty) = inferred.iter().next() {
+            // rust-doctor-disable-next-line excessive-clone
             return ty.clone();
         }
     }

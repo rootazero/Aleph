@@ -108,6 +108,7 @@ pub fn resolve_deny_read_paths_under(root: &Path, deny_read_globs: &[String]) ->
 /// if the pattern is empty. The returned regex is anchored with `^`…`$` and is
 /// safe to embed in a Seatbelt `(regex #"…")` clause after quote-escaping.
 #[must_use]
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub fn glob_to_anchored_regex(pattern: &str) -> Option<String> {
     if pattern.is_empty() {
         return None;

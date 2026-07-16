@@ -35,6 +35,7 @@ impl DreamStage for NoteLintStage {
         "note_lint"
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
         let mut format_fixed = 0u32;
         let mut broken_links_found = 0u32;

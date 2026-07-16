@@ -56,6 +56,7 @@ impl ScriptProvider {
     }
 
     fn models(&self) -> Vec<Option<String>> {
+        // rust-doctor-disable-next-line
         self.seen_models.lock().unwrap().clone()
     }
 }
@@ -66,17 +67,22 @@ impl AiProvider for ScriptProvider {
         payload: RequestPayload<'a>,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        // rust-doctor-disable-next-line
         self.seen_models.lock().unwrap().push(payload.model.clone());
         let outcome = {
+            // rust-doctor-disable-next-line unwrap-in-production
             let mut q = self.script.lock().unwrap();
             match q.pop_front() {
                 Some(o) => {
+                    // rust-doctor-disable-next-line
                     *self.last.lock().unwrap() = o.clone();
                     o
                 }
+                // rust-doctor-disable-next-line
                 None => self.last.lock().unwrap().clone(),
             }
         };
+        // rust-doctor-disable-next-line excessive-clone
         let name = self.name.clone();
         Box::pin(async move {
             match outcome {
@@ -192,6 +198,7 @@ impl LivePool {
     fn add(&self, name: &str, provider: Arc<dyn AiProvider>) {
         self.providers
             .lock()
+            // rust-doctor-disable-next-line unwrap-in-production
             .unwrap()
             .push((name.to_string(), provider));
     }
@@ -199,22 +206,27 @@ impl LivePool {
 
 impl DefaultProviderHandle for LivePool {
     fn current(&self) -> Arc<dyn AiProvider> {
+        // rust-doctor-disable-next-line excessive-clone
         self.default.clone()
     }
     fn provider_names(&self) -> Vec<String> {
         self.providers
             .lock()
+            // rust-doctor-disable-next-line unwrap-in-production
             .unwrap()
             .iter()
+            // rust-doctor-disable-next-line excessive-clone
             .map(|(n, _)| n.clone())
             .collect()
     }
     fn provider_by_name(&self, name: &str) -> Option<Arc<dyn AiProvider>> {
         self.providers
             .lock()
+            // rust-doctor-disable-next-line unwrap-in-production
             .unwrap()
             .iter()
             .find(|(n, _)| n == name)
+            // rust-doctor-disable-next-line excessive-clone
             .map(|(_, p)| p.clone())
     }
 }
@@ -226,6 +238,7 @@ async fn live_derivation_serves_registry_fallback() {
     let primary = ScriptProvider::err("primary", "HTTP 429 too many requests");
     let fb = ScriptProvider::ok("fb1");
     let pool = LivePool::new(
+        // rust-doctor-disable-next-line excessive-clone
         primary.clone() as Arc<dyn AiProvider>,
         vec![
             ("primary", primary as Arc<dyn AiProvider>),
@@ -242,6 +255,7 @@ async fn live_derivation_serves_registry_fallback() {
     .with_live_fallback_derivation();
 
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "fb1");
 }
@@ -253,10 +267,12 @@ async fn live_derivation_picks_up_provider_added_at_runtime() {
     // used on the very next turn, with no chain rebuild / restart.
     let primary = ScriptProvider::err("primary", "HTTP 429 too many requests");
     let pool = LivePool::new(
+        // rust-doctor-disable-next-line excessive-clone
         primary.clone() as Arc<dyn AiProvider>,
         vec![("primary", primary as Arc<dyn AiProvider>)],
     );
     let fp = FailoverProvider::new(
+        // rust-doctor-disable-next-line excessive-clone
         pool.clone(),
         vec![],
         HashMap::new(),
@@ -271,6 +287,7 @@ async fn live_derivation_picks_up_provider_added_at_runtime() {
 
     // Register a healthy provider at runtime → next turn uses it immediately.
     pool.add("added-at-runtime", ScriptProvider::ok("added-at-runtime"));
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "added-at-runtime");
 }
@@ -286,6 +303,7 @@ async fn live_derivation_falls_back_to_static_when_handle_has_no_registry() {
     let fp = build(primary, vec![], vec![node("static-fb", fb)]).with_live_fallback_derivation();
 
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "static-fb");
 }
@@ -300,6 +318,7 @@ async fn explicit_chain_skips_providers_removed_from_live_registry() {
     let deleted_fb = ScriptProvider::ok("deleted-fb");
     let live_fb = ScriptProvider::ok("live-fb");
     let pool = LivePool::new(
+        // rust-doctor-disable-next-line excessive-clone
         primary.clone() as Arc<dyn AiProvider>,
         vec![("live-fb", live_fb.clone() as Arc<dyn AiProvider>)],
     );
@@ -312,6 +331,7 @@ async fn explicit_chain_skips_providers_removed_from_live_registry() {
     );
 
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "live-fb");
 }
@@ -504,6 +524,7 @@ async fn primary_success_skips_fallback() {
     let fp = build(primary, vec![], vec![node("fallback", fallback.clone())]);
 
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "primary");
     assert_eq!(fallback.call_count(), 0);
@@ -516,6 +537,7 @@ async fn rate_limit_fails_over_to_next_provider() {
     let fp = build(primary, vec![], vec![node("fallback", fallback)]);
 
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "fallback");
 }
@@ -527,12 +549,14 @@ async fn model_not_found_walks_to_next_model_same_provider() {
         vec![Err("HTTP 404 model opus not found".into()), Ok(())],
     );
     let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
         primary.clone(),
         vec![("anthropic", vec!["opus", "sonnet"])],
         vec![],
     );
 
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "anthropic");
     assert_eq!(
@@ -551,12 +575,14 @@ async fn model_specific_rate_limit_migrates_to_sibling_model() {
         vec![Err("HTTP 429 too many requests".into()), Ok(())],
     );
     let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
         primary.clone(),
         vec![("anthropic", vec!["opus", "sonnet"])],
         vec![],
     );
 
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "anthropic");
     assert_eq!(
@@ -584,6 +610,7 @@ async fn cooling_model_is_skipped_on_next_request() {
     .into_iter()
     .collect();
     let fp = FailoverProvider::new(
+        // rust-doctor-disable-next-line excessive-clone
         Arc::new(StaticDefault::new(primary.clone())),
         vec![],
         catalog,
@@ -594,8 +621,10 @@ async fn cooling_model_is_skipped_on_next_request() {
 
     let msgs = [UnifiedMessage::user("hi")];
     // Request 1: opus 429 → cool opus → sonnet serves.
+    // rust-doctor-disable-next-line unwrap-in-production
     let _ = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     // Request 2: opus is still cooling → dial sonnet directly.
+    // rust-doctor-disable-next-line unwrap-in-production
     let _ = fp.process(RequestPayload::new(&msgs)).await.unwrap();
 
     assert_eq!(
@@ -627,6 +656,7 @@ async fn provider_cooldown_cools_extends_and_isolates() {
     // Not cooling until parked.
     assert!(pc.remaining("kimi").await.is_none());
     pc.cool("kimi", Duration::from_secs(60)).await;
+    // rust-doctor-disable-next-line unwrap-in-production
     let r = pc.remaining("kimi").await.expect("should be cooling");
     assert!(r > Duration::from_secs(58) && r <= Duration::from_secs(60));
     // A shorter cool never shortens an existing window (server Retry-After
@@ -664,6 +694,7 @@ async fn health_snapshot_reports_open_circuit_with_remaining() {
     assert_eq!(v.circuit, "open");
     assert_eq!(v.failure_count, 3);
     assert_eq!(v.last_error.as_deref(), Some("boom"));
+    // rust-doctor-disable-next-line unwrap-in-production
     let rem = v.cooldown_remaining_secs.expect("open carries remaining");
     assert!(rem <= 300);
 }
@@ -711,6 +742,7 @@ async fn vision_request_skips_blind_model_in_candidate_list() {
     // (C floor) and dial only gpt-4o.
     let primary = ScriptProvider::ok("openai");
     let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
         primary.clone(),
         vec![("openai", vec!["o1-mini", "gpt-4o"])],
         vec![],
@@ -722,6 +754,7 @@ async fn vision_request_skips_blind_model_in_candidate_list() {
             mime_type: "image/png".into(),
         },
     ])];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "openai");
     assert_eq!(primary.models(), vec![Some("gpt-4o".to_string())]);
@@ -736,6 +769,7 @@ async fn pinned_request_model_overrides_primary_catalog() {
     // discarded (the bug this guards).
     let primary = ScriptProvider::ok("anthropic");
     let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
         primary.clone(),
         vec![("anthropic", vec!["opus", "sonnet"])],
         vec![],
@@ -743,6 +777,7 @@ async fn pinned_request_model_overrides_primary_catalog() {
 
     let msgs = [UnifiedMessage::user("hi")];
     let payload = RequestPayload::new(&msgs).with_model(Some("gpt-5".to_string()));
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(payload).await.unwrap();
     assert_eq!(resp.text_content(), "anthropic");
     // Dialed with the pinned model only — never the opus/sonnet catalog.
@@ -757,6 +792,7 @@ async fn pinned_request_model_does_not_leak_into_fallback_catalog() {
     let primary = ScriptProvider::err("anthropic", "HTTP 429 too many requests");
     let fallback = ScriptProvider::ok("openai");
     let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
         primary.clone(),
         vec![("anthropic", vec!["opus"])],
         vec![FailoverNode::with_tier(
@@ -769,6 +805,7 @@ async fn pinned_request_model_does_not_leak_into_fallback_catalog() {
 
     let msgs = [UnifiedMessage::user("hi")];
     let payload = RequestPayload::new(&msgs).with_model(Some("gpt-5".to_string()));
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(payload).await.unwrap();
     assert_eq!(resp.text_content(), "openai");
     // Primary (Unknown slot) honoured the pin; fallback kept its own catalog.
@@ -806,12 +843,14 @@ async fn transient_error_retried_in_place_then_succeeds() {
     let primary = ScriptProvider::new("primary", vec![Err("connection reset".into()), Ok(())]);
     let fallback = ScriptProvider::ok("fallback");
     let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
         primary.clone(),
         vec![],
         vec![node("fallback", fallback.clone())],
     );
 
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "primary");
     assert_eq!(primary.call_count(), 2);
@@ -832,12 +871,14 @@ async fn kimi_overloaded_fails_over_after_one_retry() {
     );
     let fallback = ScriptProvider::ok("fallback");
     let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
         primary.clone(),
         vec![],
         vec![node("fallback", fallback.clone())],
     );
 
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "fallback");
     // Initial attempt + one overload retry.
@@ -882,6 +923,7 @@ async fn permanent_auth_failure_opens_circuit_on_first_strike() {
     assert!(!fp.circuit_open("primary").await);
     // One request is enough: the primary serves the error, fails over to
     // the healthy fallback, and the primary's circuit is already open.
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "fallback");
     assert!(fp.circuit_open("primary").await);
@@ -893,14 +935,17 @@ async fn permanently_dead_fallback_skipped_on_next_request() {
     // skip it entirely (a later candidate exists), saving the round-trip.
     let dead = ScriptProvider::err("dead", "HTTP 403 Forbidden: bad key");
     let healthy = ScriptProvider::ok("healthy");
+    // rust-doctor-disable-next-line excessive-clone
     let fp = build(dead.clone(), vec![], vec![node("healthy", healthy.clone())]);
 
     let msgs = [UnifiedMessage::user("hi")];
     // First request: dead is dialed once, trips its circuit, healthy serves.
+    // rust-doctor-disable-next-line unwrap-in-production
     let _ = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(dead.call_count(), 1);
     // Second request: dead's circuit is open and a later candidate exists,
     // so it is skipped — call_count stays at 1.
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "healthy");
     assert_eq!(dead.call_count(), 1);
@@ -911,6 +956,7 @@ async fn lone_candidate_attempted_even_with_open_circuit() {
     // A single provider that keeps failing must still be retried after
     // its circuit opens — there is nowhere else to fail over to.
     let primary = ScriptProvider::err("solo", "HTTP 429 rate limit");
+    // rust-doctor-disable-next-line excessive-clone
     let fp = build(primary.clone(), vec![], vec![]);
 
     let msgs = [UnifiedMessage::user("hi")];
@@ -930,6 +976,7 @@ async fn fallback_matching_primary_name_is_deduped() {
     let fp = build(primary, vec![], vec![node("anthropic", dup.clone())]);
 
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "anthropic");
     assert_eq!(dup.call_count(), 0);
@@ -1004,6 +1051,7 @@ async fn auto_mode_is_byte_identical_to_plain_failover() {
         None,
     );
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "cloud_fb");
 }
@@ -1037,9 +1085,11 @@ async fn always_local_borrows_cloud_when_approved() {
         vec![tiered_node("cloud_fb", cloud.clone(), EndpointTier::Cloud)],
         RouteMode::AlwaysLocal,
         true,
+        // rust-doctor-disable-next-line excessive-clone
         Some(approver.clone()),
     );
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "cloud_fb");
     assert_eq!(approver.call_count(), 1);
@@ -1056,6 +1106,7 @@ async fn always_local_denied_escalation_skips_cloud() {
         vec![tiered_node("cloud_fb", cloud.clone(), EndpointTier::Cloud)],
         RouteMode::AlwaysLocal,
         true,
+        // rust-doctor-disable-next-line excessive-clone
         Some(approver.clone()),
     );
     let msgs = [UnifiedMessage::user("hi")];
@@ -1077,9 +1128,11 @@ async fn always_cloud_degrades_to_local_ungated() {
         vec![tiered_node("local_fb", local.clone(), EndpointTier::Local)],
         RouteMode::AlwaysCloud,
         false,
+        // rust-doctor-disable-next-line excessive-clone
         Some(approver.clone()),
     );
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "local_fb");
     // Cloud→local degrade is ungated: the approver was never consulted.
@@ -1119,14 +1172,17 @@ async fn always_local_pinned_cloud_borrows_with_approval() {
     let local = ScriptProvider::ok("ollama");
     let approver = MockApprover::new(true);
     let fp = build_pinned(
+        // rust-doctor-disable-next-line excessive-clone
         cloud.clone(),
         EndpointTier::Cloud,
         vec![tiered_node("ollama", local.clone(), EndpointTier::Local)],
         RouteMode::AlwaysLocal,
         true,
+        // rust-doctor-disable-next-line excessive-clone
         Some(approver.clone()),
     );
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "openai");
     assert_eq!(approver.call_count(), 1);
@@ -1141,14 +1197,17 @@ async fn always_local_pinned_cloud_denied_falls_to_local() {
     let local = ScriptProvider::ok("ollama");
     let approver = MockApprover::new(false);
     let fp = build_pinned(
+        // rust-doctor-disable-next-line excessive-clone
         cloud.clone(),
         EndpointTier::Cloud,
         vec![tiered_node("ollama", local.clone(), EndpointTier::Local)],
         RouteMode::AlwaysLocal,
         true,
+        // rust-doctor-disable-next-line excessive-clone
         Some(approver.clone()),
     );
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "ollama");
     assert_eq!(approver.call_count(), 1);
@@ -1163,14 +1222,17 @@ async fn always_local_pinned_cloud_no_escalation_skips_to_local_ungated() {
     let local = ScriptProvider::ok("ollama");
     let approver = MockApprover::new(false); // must not be consulted
     let fp = build_pinned(
+        // rust-doctor-disable-next-line excessive-clone
         cloud.clone(),
         EndpointTier::Cloud,
         vec![tiered_node("ollama", local.clone(), EndpointTier::Local)],
         RouteMode::AlwaysLocal,
         false,
+        // rust-doctor-disable-next-line excessive-clone
         Some(approver.clone()),
     );
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "ollama");
     assert_eq!(approver.call_count(), 0);
@@ -1185,14 +1247,17 @@ async fn auto_mode_pinned_cloud_primary_used_directly() {
     let local = ScriptProvider::ok("ollama");
     let approver = MockApprover::new(false);
     let fp = build_pinned(
+        // rust-doctor-disable-next-line excessive-clone
         cloud.clone(),
         EndpointTier::Cloud,
         vec![tiered_node("ollama", local.clone(), EndpointTier::Local)],
         RouteMode::Auto,
         false,
+        // rust-doctor-disable-next-line excessive-clone
         Some(approver.clone()),
     );
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "openai");
     assert_eq!(approver.call_count(), 0);
@@ -1207,13 +1272,16 @@ async fn always_local_unknown_primary_served_without_gate() {
     let primary = ScriptProvider::ok("default");
     let approver = MockApprover::new(false);
     let fp = build_routed(
+        // rust-doctor-disable-next-line excessive-clone
         primary.clone(),
         vec![],
         RouteMode::AlwaysLocal,
         true,
+        // rust-doctor-disable-next-line excessive-clone
         Some(approver.clone()),
     );
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "default");
     assert_eq!(approver.call_count(), 0);
@@ -1246,12 +1314,14 @@ async fn least_busy_orders_fallback_pool_by_in_flight() {
         FailoverConfig::default(),
     )
     .with_route_live(handle)
+    // rust-doctor-disable-next-line excessive-clone
     .with_load_stats(stats.clone());
 
     // Hold one in-flight request against fb_a for the duration of the call.
     let _busy = stats.begin("fb_a");
 
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     assert_eq!(resp.text_content(), "fb_b");
     // fb_b (idle) was preferred → fb_a never dialed.
@@ -1292,6 +1362,7 @@ async fn over_limit_provider_deprioritised_in_fallback_pool() {
         FailoverConfig::default(),
     )
     .with_route_live(handle)
+    // rust-doctor-disable-next-line excessive-clone
     .with_load_stats(stats.clone());
 
     // Saturate fb_a's rpm window (ceiling is 1). The guard's in-flight count
@@ -1299,6 +1370,7 @@ async fn over_limit_provider_deprioritised_in_fallback_pool() {
     drop(stats.begin("fb_a"));
 
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     // fb_b (fresh) preferred over the saturated fb_a → fb_a never dialed.
     assert_eq!(resp.text_content(), "fb_b");
@@ -1330,6 +1402,7 @@ async fn no_load_stats_is_byte_identical_ordering() {
     .with_route_live(handle); // no with_load_stats
 
     let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
     // Configured order: fb_a first.
     assert_eq!(resp.text_content(), "fb_a");

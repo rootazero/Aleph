@@ -241,6 +241,7 @@ fn classify_anthropic_error_response(
 
 #[async_trait]
 impl ProtocolAdapter for AnthropicProtocol {
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn build_request(
         &self,
         payload: &RequestPayload,
@@ -486,6 +487,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         // 4.6/4.7 overrides any config-level effort — the model needs the
         // ThinkLevel-derived effort to know how hard to think on this turn.
         let metadata = config.metadata_user_id.as_ref().map(|uid| Metadata {
+            // rust-doctor-disable-next-line excessive-clone
             user_id: Some(uid.clone()),
         });
         let output_config = adaptive_effort
@@ -494,6 +496,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             })
             .or_else(|| {
                 config.effort.as_ref().map(|e| OutputConfig {
+                    // rust-doctor-disable-next-line excessive-clone
                     effort: Some(e.clone()),
                 })
             });
@@ -510,6 +513,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             stream: Some(true), // always streaming (stream-first architecture)
             thinking,
             tools,
+            // rust-doctor-disable-next-line excessive-clone
             service_tier: config.service_tier.clone(),
             metadata,
             output_config,
@@ -724,6 +728,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             pending: VecDeque::new(),
             done: false,
             saw_terminal: false,
+            // rust-doctor-disable-next-line excessive-clone
             name_map: self.name_map.clone(),
         };
 

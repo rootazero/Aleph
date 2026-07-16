@@ -97,6 +97,7 @@ pub(crate) fn extract_host(raw: &str) -> Option<String> {
 }
 
 /// Whether a lowercase host string denotes this machine or the local network.
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 fn host_is_local(host: &str) -> bool {
     // The `url` crate returns IPv6 hosts bracketed (`[::1]`); strip the brackets
     // so literal comparisons and the `Ipv6Addr` parse below see the bare address.

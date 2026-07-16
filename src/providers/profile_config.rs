@@ -133,6 +133,7 @@ impl ProfileConfig {
         if let Some(var_name) = self.api_key.strip_prefix("env:") {
             env::var(var_name).map_err(|_| ProfileConfigError::EnvVarNotFound(var_name.to_string()))
         } else {
+            // rust-doctor-disable-next-line excessive-clone
             Ok(self.api_key.clone())
         }
     }

@@ -128,6 +128,7 @@ impl SamplingHandler {
             // network round-trips in gather_context. Holding the read lock
             // across .await would block set_client writers for the duration of
             // the resource/tool listing (mirrors the callback clone below).
+            // rust-doctor-disable-next-line excessive-clone
             let client = self.client.read().await.clone();
             if let Some(client) = client {
                 let contexts =
@@ -207,7 +208,10 @@ pub fn sampling_messages_to_chat(messages: &[SamplingMessage]) -> Vec<(String, S
                 PromptRole::System => "system",
             };
             let content = match &m.content {
-                SamplingContent::Text { text } => text.clone(),
+                SamplingContent::Text { text } => {
+                    // rust-doctor-disable-next-line excessive-clone
+                    text.clone()
+                }
                 SamplingContent::Image { data, mime_type } => {
                     format!("[Image: {} ({} bytes)]", mime_type, data.len())
                 }
@@ -222,6 +226,7 @@ pub fn sampling_messages_to_chat(messages: &[SamplingMessage]) -> Vec<(String, S
 pub fn extract_system_prompt(request: &SamplingRequest) -> Option<String> {
     // First check explicit system_prompt field
     if let Some(ref system) = request.system_prompt {
+        // rust-doctor-disable-next-line excessive-clone
         return Some(system.clone());
     }
 

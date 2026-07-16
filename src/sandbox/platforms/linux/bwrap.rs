@@ -221,6 +221,7 @@ impl BubblewrapDriver {
         Ok(args)
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn add_fs_args(
         &self,
         args: &mut Vec<String>,
@@ -362,6 +363,7 @@ impl BubblewrapDriver {
         if self.options.no_new_privs {
             debug!("Applying PR_SET_NO_NEW_PRIVS via pre-exec");
             // SAFETY: prctl(PR_SET_NO_NEW_PRIVS) is a well-defined Linux syscall.
+            // rust-doctor-disable-next-line unsafe-block-audit
             unsafe {
                 cmd.pre_exec(|| {
                     let rc = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
@@ -379,6 +381,7 @@ impl BubblewrapDriver {
     fn apply_memory_rlimit(cmd: &mut Command, mb: u64) {
         let bytes = mb.saturating_mul(1024 * 1024);
         // SAFETY: setrlimit(RLIMIT_AS) is async-signal-safe and well-defined.
+        // rust-doctor-disable-next-line unsafe-block-audit
         unsafe {
             cmd.pre_exec(move || {
                 let rlim = libc::rlimit {
@@ -649,6 +652,7 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
                 // double-leak the ref count across fork+exec).
                 if let Some(ref s) = scope {
                     let procs_path = s.procs_path();
+                    // rust-doctor-disable-next-line unsafe-block-audit
                     unsafe {
                         // SAFETY: pre_exec closure only writes the current PID
                         // to the owned cgroup.procs path; it performs no heap

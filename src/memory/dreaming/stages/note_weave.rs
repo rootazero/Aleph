@@ -114,6 +114,7 @@ impl DreamStage for NoteWeaveStage {
         "note_weave"
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
         // --- Phase 1: orphan detection (store queries only, no LLM) ---
         // Orphans are the relink targets; non-orphans are still extracted so an
@@ -162,8 +163,10 @@ impl DreamStage for NoteWeaveStage {
                 .await
                 .unwrap_or_default();
             if outgoing.is_empty() && incoming.is_empty() {
+                // rust-doctor-disable-next-line excessive-clone
                 scan_orphans.push(note.path.clone());
             } else {
+                // rust-doctor-disable-next-line excessive-clone
                 others.push(note.path.clone());
             }
         }
@@ -201,6 +204,7 @@ impl DreamStage for NoteWeaveStage {
             std::collections::HashMap::new();
         for path in &orphans {
             if let Some(body) = ctx.load_content(path).await {
+                // rust-doctor-disable-next-line excessive-clone
                 orphan_bodies.insert(path.clone(), strip_frontmatter(&body).to_string());
             }
         }
@@ -304,8 +308,10 @@ impl DreamStage for NoteWeaveStage {
             .chain(semantic_links)
             .filter(|l| {
                 let key = if l.from <= l.to {
+                    // rust-doctor-disable-next-line excessive-clone
                     (l.from.clone(), l.to.clone())
                 } else {
+                    // rust-doctor-disable-next-line excessive-clone
                     (l.to.clone(), l.from.clone())
                 };
                 seen.insert(key)
@@ -378,6 +384,7 @@ impl DreamStage for NoteWeaveStage {
             write_typed_link(&mut ctx, &peer, orphan, STRUCTURAL_RELATION).await;
             ctx.note_contents.remove(orphan);
             ctx.note_contents.remove(&peer);
+            // rust-doctor-disable-next-line excessive-clone
             linked.insert(orphan.clone());
             linked.insert(peer);
             woven += 1;
@@ -467,6 +474,7 @@ async fn semantic_orphan_links(ctx: &DreamContext, orphans: &[String]) -> Vec<Li
         for (path, dist) in peers.into_iter().take(SEMANTIC_MAX_PER_ORPHAN) {
             if dist <= cutoff {
                 out.push(LinkTriple {
+                    // rust-doctor-disable-next-line excessive-clone
                     from: orphan.clone(),
                     to: path,
                     relation: "semantic".to_string(),

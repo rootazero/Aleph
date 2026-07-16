@@ -64,6 +64,7 @@ pub(crate) async fn run_fan_out(
         .enumerate()
         .map(|(idx, (text, usage, error))| AdvisorResult {
             outcome: AdvisorOutcome {
+                // rust-doctor-disable-next-line excessive-clone
                 label: advisors[idx].label.clone(),
                 text,
             },

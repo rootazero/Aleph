@@ -217,14 +217,17 @@ async fn reconcile_capability_tools(
         .any(|s| !matches!(s.transport, McpTransportType::Stdio));
 
     if want_resource != *resource_live {
+        // rust-doctor-disable-next-line excessive-clone
         let tool: Arc<dyn AlephToolDyn> = Arc::new(McpReadResourceTool::new(handle.clone()));
         *resource_live = set_builtin(registry, RESOURCE_TOOL, want_resource, tool);
     }
     if want_prompt != *prompt_live {
+        // rust-doctor-disable-next-line excessive-clone
         let tool: Arc<dyn AlephToolDyn> = Arc::new(McpGetPromptTool::new(handle.clone()));
         *prompt_live = set_builtin(registry, PROMPT_TOOL, want_prompt, tool);
     }
     if want_login != *login_live {
+        // rust-doctor-disable-next-line excessive-clone
         let tool: Arc<dyn AlephToolDyn> = Arc::new(McpLoginTool::new(handle.clone()));
         *login_live = set_builtin(registry, LOGIN_TOOL, want_login, tool);
     }

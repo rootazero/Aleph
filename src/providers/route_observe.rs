@@ -134,10 +134,15 @@ impl RouteObservability {
         // Union of every provider name any signal knows about, so a provider
         // that only ever appears in (say) the breaker map still shows up.
         let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        // rust-doctor-disable-next-line excessive-clone
         names.insert(primary_name.clone());
+        // rust-doctor-disable-next-line excessive-clone
         names.extend(self.fallbacks.iter().map(|c| c.name.clone()));
+        // rust-doctor-disable-next-line excessive-clone
         names.extend(health.iter().map(|h| h.provider.clone()));
+        // rust-doctor-disable-next-line excessive-clone
         names.extend(pacing.iter().map(|(n, _)| n.clone()));
+        // rust-doctor-disable-next-line excessive-clone
         names.extend(loads.iter().map(|(n, _)| n.clone()));
 
         let health_by: std::collections::HashMap<

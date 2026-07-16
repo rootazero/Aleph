@@ -127,16 +127,19 @@ fn fixture(reranker: Arc<StubReranker>, config: AssemblerConfig) -> Fixture {
     let embedder: Arc<dyn EmbeddingProvider> = Arc::new(FakeEmbedder);
     let indexer = Arc::new(NoteIndexer::new(
         tmp_mem.path().join("notes"),
+        // rust-doctor-disable-next-line excessive-clone
         backend.clone(),
     ));
     let retrieval = Arc::new(NoteFactRetrieval::new(indexer, embedder));
     let snapshots = Arc::new(SnapshotReader::new(tmp_snap.path()));
     let profile = UserProfileLoader::new(tmp_mem.path().join("notes"));
     let feedback_floor = FeedbackFloorLoader::new(tmp_mem.path().join("notes"));
+    // rust-doctor-disable-next-line excessive-clone
     let reranker_dyn: Arc<dyn LlmReranker> = reranker.clone();
     let assembler = HybridAssembler::new(
         retrieval,
         snapshots,
+        // rust-doctor-disable-next-line excessive-clone
         backend.clone(),
         profile,
         feedback_floor,
@@ -169,6 +172,7 @@ async fn seed_raw(backend: &MemoryBackend, session_id: &str, count: usize) {
 async fn path_tiny_pool_skips_llm() {
     // With zero candidates seeded, pool < 3 → tiny_pool fast-path; LLM untouched.
     let reranker = StubReranker::invalid_json();
+    // rust-doctor-disable-next-line excessive-clone
     let fx = fixture(reranker.clone(), default_cfg());
     let env = fx
         .assembler
@@ -194,6 +198,7 @@ async fn path_tiny_pool_skips_llm() {
 async fn path_llm_timeout_falls_back() {
     // Seed enough raw fragments to bypass the tiny_pool fast-path.
     let reranker = StubReranker::timing_out();
+    // rust-doctor-disable-next-line excessive-clone
     let fx = fixture(reranker.clone(), default_cfg());
     seed_raw(&fx.backend, "sess-a", 5).await;
     let env = fx
@@ -216,6 +221,7 @@ async fn path_llm_timeout_falls_back() {
 #[tokio::test]
 async fn path_llm_invalid_json_falls_back() {
     let reranker = StubReranker::invalid_json();
+    // rust-doctor-disable-next-line excessive-clone
     let fx = fixture(reranker.clone(), default_cfg());
     seed_raw(&fx.backend, "sess-b", 5).await;
     let env = fx
@@ -252,6 +258,7 @@ async fn path_happy_b_with_valid_response() {
     let reranker = StubReranker::ok(
         r#"{"slots":[{"kind":"relevant_notes","item_ids":["note://fake"],"tokens_budget":500}]}"#,
     );
+    // rust-doctor-disable-next-line excessive-clone
     let fx = fixture(reranker.clone(), default_cfg());
     seed_raw(&fx.backend, "sess-d", 5).await;
     let env = fx
@@ -277,6 +284,7 @@ async fn path_disabled_config_short_circuits() {
     let mut cfg = default_cfg();
     cfg.enabled = false;
     let reranker = StubReranker::invalid_json();
+    // rust-doctor-disable-next-line excessive-clone
     let fx = fixture(reranker.clone(), cfg);
     let env = fx
         .assembler
@@ -305,6 +313,7 @@ async fn path_force_fallback_bypasses_llm() {
     let mut cfg = default_cfg();
     cfg.force_fallback = true;
     let reranker = StubReranker::invalid_json();
+    // rust-doctor-disable-next-line excessive-clone
     let fx = fixture(reranker.clone(), cfg);
     seed_raw(&fx.backend, "sess-e", 5).await;
     let env = fx

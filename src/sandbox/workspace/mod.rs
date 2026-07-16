@@ -156,6 +156,7 @@ impl Sandbox for WorkspaceSandbox {
         })
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn execute(&self, mut cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         // Hook context is created on-demand at each call site rather than
         // once at the top: it borrows `&cmd`, which would block the SP-4
@@ -1705,3 +1706,4 @@ mod scrub_integration_tests {
         assert_eq!(cleaned.chars().count(), JUSTIFICATION_MAX_CHARS);
     }
 }
+

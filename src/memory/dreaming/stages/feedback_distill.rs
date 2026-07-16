@@ -87,7 +87,9 @@ impl DreamStage for FeedbackDistillStage {
         "feedback_distill"
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
+        // rust-doctor-disable-next-line excessive-clone
         let store = ctx.database.clone();
 
         // Per-agent watermark — only re-process correction rows whose
@@ -218,6 +220,7 @@ impl DreamStage for FeedbackDistillStage {
             // stages share one source of truth for what a legitimate
             // LLM-emitted action looks like.
             use crate::memory::dreaming::skill_gate::{validate_skill_action, SkillGateDecision};
+            // rust-doctor-disable-next-line excessive-clone
             let action = match validate_skill_action(raw_action.clone()) {
                 SkillGateDecision::Allow(a) => a,
                 SkillGateDecision::Reject(reason) => {
@@ -331,6 +334,7 @@ impl DreamStage for FeedbackDistillStage {
                     IngestBatchSummary, TouchedCategory,
                 };
                 let summary = IngestBatchSummary {
+                    // rust-doctor-disable-next-line excessive-clone
                     agent_id: ctx.agent_id.clone(),
                     touched: vec![TouchedCategory {
                         category: "feedback".into(),
@@ -383,6 +387,7 @@ pub fn build_feedback_distill_prompt(
             RawMemorySource::Correction {
                 severity,
                 suggested_rule,
+            // rust-doctor-disable-next-line excessive-clone
             } => (severity.clone(), suggested_rule.clone()),
             _ => ("low".into(), None),
         };

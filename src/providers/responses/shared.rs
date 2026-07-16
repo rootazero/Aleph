@@ -35,6 +35,7 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                         .iter()
                         .filter_map(|b| match b {
                             ContentBlock::Text { text, .. } => {
+                                // rust-doctor-disable-next-line excessive-clone
                                 Some(InputContentPart::InputText { text: text.clone() })
                             }
                             ContentBlock::Image { data, mime_type } => {
@@ -236,6 +237,7 @@ pub(crate) fn build_tools(
         tool_defs
             .iter()
             .map(|td| {
+                // rust-doctor-disable-next-line excessive-clone
                 let mut params = td.parameters.clone();
                 if let Some(obj) = params.as_object_mut() {
                     obj.remove("$schema");
@@ -257,6 +259,7 @@ pub(crate) fn build_tools(
                             // Reset params from the original (normalize_strict_schema may
                             // have partially mutated them before bailing) and apply the
                             // non-strict normalization path instead.
+                            // rust-doctor-disable-next-line excessive-clone
                             params = td.parameters.clone();
                             if let Some(obj) = params.as_object_mut() {
                                 obj.remove("$schema");
@@ -345,11 +348,12 @@ pub fn extract_tool_calls(response: &ResponseResource) -> Vec<NativeToolCall> {
                 "Responses API function_call: name={} call_id={} arguments={}",
                 name, call_id, arguments
             );
-            // rust-doctor-disable-next-line excessive-clone
             let args = serde_json::from_str(arguments)
+                // rust-doctor-disable-next-line excessive-clone
                 .unwrap_or_else(|_| serde_json::Value::String(arguments.clone()));
             calls.push(NativeToolCall {
                 thought_signature: None,
+                // rust-doctor-disable-next-line excessive-clone
                 id: call_id.clone(),
                 name: desanitize_tool_name_pub(name),
                 arguments: args,

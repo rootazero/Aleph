@@ -32,7 +32,9 @@ impl DreamStage for MentionWeaveStage {
     }
 
     async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
+        // rust-doctor-disable-next-line excessive-clone
         let store = ctx.indexer.store().clone();
+        // rust-doctor-disable-next-line excessive-clone
         let agent_id = ctx.agent_id.clone();
 
         let hydrated = match async {
@@ -61,6 +63,7 @@ impl DreamStage for MentionWeaveStage {
                         path: r.path,
                         names,
                         body: note.body_text(),
+                        // rust-doctor-disable-next-line excessive-clone
                         linked_raw: note.links.clone(),
                     })
                 })

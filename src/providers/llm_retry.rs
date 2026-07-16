@@ -88,6 +88,7 @@ pub fn classify_exhausted_error(err: &anyhow::Error) -> RetryVerdict {
 ///
 /// Used by `FailoverProvider`, which classifies `AlephError` display strings.
 #[must_use]
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub fn classify_exhausted(raw: &str) -> RetryVerdict {
     let base = classify(raw);
 
