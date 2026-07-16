@@ -27,7 +27,6 @@ pub mod context_window;
 pub mod fallback;
 pub mod summary_engine;
 pub mod summary_source;
-pub mod tool_compactor;
 
 pub use summary_source::SessionSummarySource;
 
@@ -52,7 +51,6 @@ mod chunker_tests;
 /// cross-thread ordering requirements.
 #[derive(Debug, Default)]
 pub struct CompactorMetrics {
-    pub tool_compactions: AtomicU64,
     pub d0_summaries_created: AtomicU64,
     pub d1_condensations: AtomicU64,
     pub d2_condensations: AtomicU64,
@@ -69,7 +67,6 @@ pub struct CompactorMetrics {
 pub struct SessionCompactorConfig {
     pub enabled: bool,
     pub fresh_tail_count: usize,
-    pub context_threshold: f64,
     pub leaf_chunk_tokens: usize,
     pub d1_min_fanout: usize,
     pub d2_min_fanout: usize,
@@ -84,7 +81,6 @@ impl Default for SessionCompactorConfig {
         Self {
             enabled: true,
             fresh_tail_count: 20,
-            context_threshold: 0.75,
             leaf_chunk_tokens: 1000,
             d1_min_fanout: 4,
             d2_min_fanout: 3,

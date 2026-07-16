@@ -307,18 +307,6 @@ impl UnifiedMessage {
         }
     }
 
-    /// Replace the content of a `ToolResult` message with a single text block.
-    ///
-    /// No-op if this is not a `ToolResult`.
-    pub fn replace_tool_result_content(&mut self, new_content: String) {
-        if let Self::ToolResult { content, .. } = self {
-            *content = vec![ContentBlock::Text {
-                text: new_content,
-                cache_control: None,
-            }];
-        }
-    }
-
     /// Check if this is a ToolCall-bearing Assistant message
     #[must_use]
     pub fn has_tool_calls(&self) -> bool {
