@@ -79,9 +79,22 @@ pub fn try_build_for_run(
             pref.preset.as_deref().unwrap_or("<default>")
         )
     })?;
-    let errs = cfg.validation_errors();
+    // Validate ONLY the preset this run resolved — against a scratch config,
+    // the exact mirror of `MoaPresetStore::save_preset`. Validating the whole
+    // [moa] table here meant one broken/unrelated preset (even a disabled
+    // one), or a dangling default_preset, poisoned EVERY activation: arm-time
+    // reported success and then every turn silently fell back to the normal
+    // provider chain.
+    let errs = {
+        let mut scratch = MoaToml::default();
+        scratch.presets.insert(preset_name.clone(), preset.clone());
+        scratch.validation_errors()
+    };
     if !errs.is_empty() {
-        return Err(format!("[moa] config invalid: {}", errs.join("; ")));
+        return Err(format!(
+            "[moa] preset '{preset_name}' invalid: {}",
+            errs.join("; ")
+        ));
     }
 
     let resolve_slot = |slot: &crate::config::types::moa::MoaSlot| {

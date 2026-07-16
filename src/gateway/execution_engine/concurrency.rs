@@ -121,8 +121,17 @@ impl ConcurrencyLimiter {
     }
 
     fn agent_sem(&self, agent_id: &str) -> Arc<Semaphore> {
-        let cap = self.per_agent_cap.load(Ordering::Acquire);
         let mut map = self.per_agent.lock().unwrap_or_else(|e| e.into_inner());
+        // The cap MUST be read while holding the map lock: `reconfigure`
+        // stores the new cap BEFORE it locks-and-clears the map, so an
+        // admission that loaded the cap outside the lock could interleave as
+        // load(OLD) → reconfigure stores NEW + clears → or_insert(Sem(OLD)) —
+        // installing a stale-cap semaphore into the fresh map that persists
+        // until the NEXT reconfigure (and skews `snapshot().per_agent`, which
+        // computes in_use against the NEW cap). Under the lock, either this
+        // insert happens before the clear (and is wiped), or after it (and
+        // reads the new cap) — the stale insert is impossible.
+        let cap = self.per_agent_cap.load(Ordering::Acquire);
         map.entry(agent_id.to_string())
             .or_insert_with(|| Arc::new(Semaphore::new(cap)))
             .clone()
