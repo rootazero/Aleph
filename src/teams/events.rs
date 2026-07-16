@@ -482,15 +482,9 @@ impl TeamEventLogger {
                 team_id.clone(),
                 serde_json::json!({}),
             )),
-            AlephEvent::TeamMessageSent(e) => Some((
-                TeamEventType::MessageSent,
-                e.team_id.clone(),
-                serde_json::json!({
-                    "message_id": e.message_id,
-                    "to_agents": e.to_agents,
-                    "subject": e.subject,
-                }),
-            )),
+            // NOTE: message sends are logged directly by `MessageRouter::send`
+            // (`TeamEventType::MessageSent`) — no global-bus event exists for
+            // them (the write-only `TeamMessageSent` chain was removed).
             _ => None,
         }
     }
@@ -512,7 +506,6 @@ impl EventHandler for TeamEventLogger {
             EventType::TeamTaskCompleted,
             EventType::TeamTaskFailed,
             EventType::TeamDisbanded,
-            EventType::TeamMessageSent,
         ]
     }
 

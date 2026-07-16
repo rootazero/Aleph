@@ -43,8 +43,6 @@ pub use types::{
     SubAgentRequest,
     SubAgentResult,
     TaskPlan,
-    // Team events
-    TeamMessageEvent,
     TimestampedEvent,
     // Token usage
     TokenUsage,

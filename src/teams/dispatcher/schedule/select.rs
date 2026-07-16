@@ -97,8 +97,13 @@ pub fn is_zombie(
 /// Staleness is anchored to `started_at` (the run start), a slight over-estimate
 /// of the actual review wait — so the warning fires no earlier than `ttl_secs`
 /// after the run began, which is the right side to err on for a coarse
-/// "stuck too long" signal and needs no extra run-history query. A `ttl_secs`
-/// of 0 disables the check, reusing the zombie-detection kill-switch.
+/// "stuck too long" signal and needs no extra run-history query. Because of
+/// that anchor the per-task timeout MUST be folded in exactly as [`is_zombie`]
+/// does: a review-gated task whose run legitimately ran longer than the global
+/// TTL (its own `timeout_secs` allows up to 24h) would otherwise be warned
+/// "review-stalled" the moment it parks — and the once-per-task dedup burns
+/// the single observability signal on that false alarm. A `ttl_secs` of 0
+/// disables the check, reusing the zombie-detection kill-switch.
 #[must_use]
 pub fn is_stale_review(task: &CoordTask, now_epoch: u64, ttl_secs: u64) -> bool {
     if ttl_secs == 0 {
@@ -113,7 +118,8 @@ pub fn is_stale_review(task: &CoordTask, now_epoch: u64, ttl_secs: u64) -> bool 
     let Some(started) = task.started_at else {
         return false;
     };
-    now_epoch.saturating_sub(started) > ttl_secs
+    let effective_ttl = ttl_secs.max(read_task_timeout(&task.metadata).unwrap_or(0));
+    now_epoch.saturating_sub(started) > effective_ttl
 }
 
 /// Pure scheduling filter: from `tasks`, pick those ready to run right now,
@@ -729,5 +735,21 @@ mod tests {
         let t = waiting_review_task("old", 1_000_000, true);
         // parked 61s ago, ttl 60s → stale
         assert!(is_stale_review(&t, 1_000_061, 60));
+    }
+
+    #[test]
+    fn stale_review_honours_longer_per_task_timeout() {
+        use crate::agents::swarm::tasks::timeout::with_task_timeout;
+        // Mirror of `zombie_detection_honours_longer_per_task_timeout`:
+        // staleness is anchored to the RUN start, so a review-gated task whose
+        // run legitimately consumed its own (longer) budget must not be warned
+        // the moment it parks — effective TTL = max(global, per-task).
+        let mut t = waiting_review_task("long_run", 1_000_000, true);
+        t.metadata = with_task_timeout(t.metadata, Some(1000));
+        // 500s since run start: past the 60s global TTL but inside the task's
+        // own 1000s budget → not stale (the review wait may be ~0s).
+        assert!(!is_stale_review(&t, 1_000_500, 60));
+        // Past even the per-task budget → finally stale.
+        assert!(is_stale_review(&t, 1_001_001, 60));
     }
 }
