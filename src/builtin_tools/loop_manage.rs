@@ -113,6 +113,18 @@ fn reject_zero_cap(value: Option<u32>, field: &str) -> std::result::Result<(), S
     Ok(())
 }
 
+/// u64 sibling of [`reject_zero_cap`] for `token_budget` — a 0 budget survives
+/// exactly one tick (the baseline seed) before stopping with a baffling
+/// "reached its token budget (0 tokens)".
+fn reject_zero_budget(value: Option<u64>) -> std::result::Result<(), String> {
+    if value == Some(0) {
+        return Err(
+            "token_budget must be at least 1 (omit it for no budget, do not pass 0)".to_string(),
+        );
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct LoopTool {
     registry: Arc<LoopRegistry>,
@@ -202,6 +214,7 @@ impl LoopTool {
         // Reject "born dead" zero caps at the boundary before building state.
         reject_zero_cap(args.max_iterations, "max_iterations")?;
         reject_zero_cap(args.timeout_minutes, "timeout_minutes")?;
+        reject_zero_budget(args.token_budget)?;
         let cadence = match &args.interval {
             Some(i) => Cadence::Fixed {
                 interval_ms: parse_interval_ms(i)?,
@@ -355,6 +368,7 @@ impl LoopTool {
         // Reject "born dead" zero caps at the boundary (same guard as `start`).
         reject_zero_cap(args.max_iterations, "max_iterations")?;
         reject_zero_cap(args.timeout_minutes, "timeout_minutes")?;
+        reject_zero_budget(args.token_budget)?;
         // Re-pace a Fixed loop (or convert model-paced → fixed) without a
         // stop/start cycle. `with_cadence` clears any stale next_wake.
         if let Some(i) = &args.interval {

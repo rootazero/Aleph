@@ -62,13 +62,15 @@ impl TeamTaskControlTool {
         Self { coord_store }
     }
 
-    async fn fetch_status(&self, task_id: &str) -> Result<CoordTaskStatus> {
-        let task = self
-            .coord_store
+    async fn fetch_task(&self, task_id: &str) -> Result<crate::agents::swarm::tasks::CoordTask> {
+        self.coord_store
             .get_task(task_id)
             .await?
-            .ok_or_else(|| AlephError::invalid_input(format!("task '{task_id}' not found")))?;
-        Ok(task.status)
+            .ok_or_else(|| AlephError::invalid_input(format!("task '{task_id}' not found")))
+    }
+
+    async fn fetch_status(&self, task_id: &str) -> Result<CoordTaskStatus> {
+        Ok(self.fetch_task(task_id).await?.status)
     }
 }
 
@@ -159,8 +161,8 @@ impl AlephTool for TeamTaskControlTool {
             }
             TeamTaskControlArgs::Retry { task_id } => {
                 debug!(task_id = %task_id, "team_task_control: retry");
-                let current = self.fetch_status(&task_id).await?;
-                if matches!(current, CoordTaskStatus::InProgress) {
+                let task = self.fetch_task(&task_id).await?;
+                if matches!(task.status, CoordTaskStatus::InProgress) {
                     return Err(AlephError::invalid_input(
                         "cannot retry an in-progress task — cancel it first".to_string(),
                     ));
@@ -175,7 +177,17 @@ impl AlephTool for TeamTaskControlTool {
                         },
                     )
                     .await?;
-                let _ = self.coord_store.release_lock(&task_id, "").await;
+                // Release any leftover claim with its ACTUAL holder — a crash
+                // between the failure write and run_task's teardown leaves
+                // `locked_by` set, and releasing with "" can never clear a
+                // genuinely held lock (the store checks holder equality), so
+                // the retried task would sit Pending-but-locked until
+                // release_stale_locks fires (15 min default).
+                if let Some(holder) = task.locked_by.as_deref() {
+                    if let Err(e) = self.coord_store.release_lock(&task_id, holder).await {
+                        tracing::warn!(task_id = %task_id, holder = %holder, error = %e, "team_task_control: retry could not release leftover lock");
+                    }
+                }
                 Ok(TeamTaskControlOutput {
                     task_id,
                     status: "pending".into(),
@@ -184,6 +196,31 @@ impl AlephTool for TeamTaskControlTool {
             }
             TeamTaskControlArgs::Skip { task_id } => {
                 debug!(task_id = %task_id, "team_task_control: skip");
+                // Validate instead of blind-writing, mirroring the cancel
+                // arm. Skipped is idempotent. Failed → Skipped stays allowed:
+                // it is the operator's explicit waiver ("don't redo this,
+                // don't block on it") and the only non-reexecuting remedy
+                // that unblocks the failed step's Unsatisfiable dependents.
+                // Completed already satisfies dependents (skip would only
+                // relabel it) and Cancelled was an explicit abort — both
+                // rejected with a pointer at retry.
+                let current = self.fetch_status(&task_id).await?;
+                match current {
+                    CoordTaskStatus::Skipped => {
+                        return Ok(TeamTaskControlOutput {
+                            task_id,
+                            status: "skipped".into(),
+                            action: "skip".into(),
+                        });
+                    }
+                    CoordTaskStatus::Completed | CoordTaskStatus::Cancelled => {
+                        return Err(AlephError::invalid_input(format!(
+                            "cannot skip task in status '{current}' — it already settled \
+                             (use retry for a fresh attempt)"
+                        )));
+                    }
+                    _ => {}
+                }
                 self.coord_store
                     .update_task(
                         &task_id,

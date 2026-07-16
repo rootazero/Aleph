@@ -236,6 +236,15 @@ impl InboundMessageRouter {
         };
         let old_key_resolved = old_key.with_epoch(current_epoch);
 
+        // Terminate the closed session's autonomous continuations BEFORE the
+        // epoch bump — after it, `/loop stop` / `goal clear` route to the new
+        // epoch and the old chain becomes uncancellable (shared seam with the
+        // Panel `sessions.new` RPC).
+        crate::gateway::continuation_lifecycle::terminate_session_continuations(
+            &old_key_resolved.to_key_string(),
+            "/new",
+        );
+
         let new_key = old_key.with_epoch(current_epoch + 1);
         if let Some(ref sm) = self.session_store {
             if let Err(e) = sm.get_or_create(&new_key).await {

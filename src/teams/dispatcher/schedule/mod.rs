@@ -8,6 +8,7 @@
 mod failure;
 mod reclaim;
 mod select;
+mod settle;
 
 pub use select::{
     is_dispatcher_managed, is_zombie, select_schedulable, MANAGED_BY_DISPATCHER, MANAGED_BY_KEY,
@@ -55,6 +56,17 @@ impl TeamDispatcher {
         //     destructive: warns only, never advances the verdict (R7 — the
         //     approve/reject call is the lead LLM's, not the dispatcher's).
         self.warn_stale_reviews().await;
+
+        // 2d. Push the terminal summary of any freshly-settled workflow run
+        //     to its origin channel (R5 — the launching user hears the end of
+        //     an autonomous run instead of polling `status`). Once-only via
+        //     in-process claim + durable `workflow_notified` marker.
+        self.notify_settled_workflow_runs().await;
+
+        // 2e. Reset clarify tasks stranded Paused by a crash between park and
+        //     delivery back to Pending so their question is re-delivered
+        //     (runs before step 3, so re-delivery can happen this very tick).
+        self.redeliver_stalled_clarify().await;
 
         // 3. List schedulable pending tasks. `derive_status` already excludes
         //    tasks with unsatisfied dependencies (those report as Blocked).
@@ -290,23 +302,26 @@ impl TeamDispatcher {
             tracing::warn!(task_id = %task_id, run_id = %run_id, error = %e, "dispatcher: finish_task_run failed");
         }
 
-        // Cancelled-while-in-flight guard: `task` is the snapshot claimed at
-        // dispatch time, so a cancel issued during the member run (workflow
-        // `cancel` / `team_task_control.cancel`) would otherwise be silently
-        // overwritten here and resurrect the task. The attempt itself is
-        // already recorded in coord_task_runs above; only the task's terminal
-        // status is preserved. A re-fetch failure proceeds normally (P7
-        // graceful degradation — same behaviour as before the guard).
-        let cancelled_mid_flight = matches!(
+        // Terminal-while-in-flight guard: `task` is the snapshot claimed at
+        // dispatch time, so a terminal transition issued during the member
+        // run — cancel (workflow `cancel` / `team_task_control.cancel`),
+        // skip, or a manual complete — would otherwise be silently
+        // overwritten here and resurrect the task (a skipped task's timed-out
+        // run would even loop it back to Pending and re-execute work the
+        // operator explicitly waived). The attempt itself is already recorded
+        // in coord_task_runs above; only the task's terminal status is
+        // preserved. A re-fetch failure proceeds normally (P7 graceful
+        // degradation — same behaviour as before the guard).
+        let terminal_mid_flight = matches!(
             self.coord_store.get_task(&task_id).await,
-            Ok(Some(t)) if t.status == CoordTaskStatus::Cancelled
+            Ok(Some(t)) if t.status.is_terminal()
         );
-        if cancelled_mid_flight {
-            tracing::info!(task_id = %task_id, "dispatcher: task was cancelled mid-flight; keeping it cancelled");
+        if terminal_mid_flight {
+            tracing::info!(task_id = %task_id, "dispatcher: task reached a terminal state mid-flight; keeping it");
         }
 
         match outcome.status {
-            _ if cancelled_mid_flight => {}
+            _ if terminal_mid_flight => {}
             MemberRunStatus::Completed => {
                 let reply = outcome.reply.unwrap_or_default();
                 // Review-gated tasks park in WaitingReview for the lead to

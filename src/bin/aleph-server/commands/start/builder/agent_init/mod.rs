@@ -1483,6 +1483,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 }
                 let dispatcher = Arc::new(dispatcher);
                 dispatcher.spawn_loop();
+                // Event-driven wake: any coord-task transition on the
+                // GlobalBus (review verdicts, admin controls, panel edits,
+                // clarify answers) pokes the loop immediately instead of
+                // waiting for the fallback tick.
+                dispatcher.subscribe_task_events();
                 if !daemon {
                     println!("  Team dispatcher started");
                 }

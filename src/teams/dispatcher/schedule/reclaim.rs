@@ -108,7 +108,7 @@ impl TeamDispatcher {
                     tracing::warn!(task_id = %task.id, error = %e, "dispatcher: release_lock failed during orphan reclaim");
                 }
             }
-            let _ = self
+            if let Err(e) = self
                 .coord_store
                 .update_task(
                     &task.id,
@@ -117,7 +117,13 @@ impl TeamDispatcher {
                         ..Default::default()
                     },
                 )
-                .await;
+                .await
+            {
+                // A persistent write failure would otherwise loop this orphan
+                // silently every tick until the zombie TTL force-fails it
+                // hours later, with no trace of why reclaim did nothing.
+                tracing::warn!(task_id = %task.id, error = %e, "dispatcher: orphan reset to Pending failed");
+            }
         }
     }
 
@@ -186,5 +192,81 @@ impl TeamDispatcher {
         // Prune ids that have since left WaitingReview so the dedup set stays
         // bounded and a task that returns to review later can warn again.
         warned.retain(|id| live.contains(id));
+    }
+
+    /// Re-deliver clarify questions stranded by a crash between park and send.
+    ///
+    /// `handle_clarify_task` parks the task `Paused` (with a
+    /// `clarify_delivery_pending` stamp) BEFORE delivering the question — if
+    /// the daemon dies in that window, the row stays Paused with a question
+    /// nobody ever received, dependents stay Blocked, and no other janitor
+    /// looks at Paused. This pass resets such tasks (past a short grace, so a
+    /// live in-flight delivery is never raced) back to `Pending`; the normal
+    /// selection loop then re-runs the delivery. A clarify task whose
+    /// delivery WAS confirmed carries `clarify_delivered_at` instead and is
+    /// left parked awaiting its answer; one an operator manually paused
+    /// carries neither stamp and is never touched (their pause, their
+    /// resume). Purely mechanical (R10 — a crash-recovery reset, no
+    /// reasoning).
+    pub(super) async fn redeliver_stalled_clarify(self: &Arc<Self>) {
+        /// A pending stamp younger than this is assumed to be a live delivery
+        /// still in flight on this process; older means the delivering tick
+        /// died. Generous — a channel send is sub-second.
+        const REDELIVERY_GRACE_SECS: u64 = 60;
+
+        let paused = match self
+            .coord_store
+            .list_tasks(CoordTaskFilter {
+                status: Some(CoordTaskStatus::Paused),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(error = %e, "dispatcher: redeliver_stalled_clarify list_tasks failed");
+                return;
+            }
+        };
+
+        let now = Self::now_epoch();
+        for task in paused {
+            if !is_dispatcher_managed(&task) || !crate::workflow::clarify::is_clarify_task(&task) {
+                continue;
+            }
+            let Some(pending_at) =
+                crate::workflow::clarify::clarify_delivery_pending_at(&task.metadata)
+            else {
+                continue; // delivered (awaiting answer) or manually paused
+            };
+            if now.saturating_sub(pending_at) < REDELIVERY_GRACE_SECS {
+                continue; // possibly a live delivery on this very tick
+            }
+            tracing::warn!(
+                task_id = %task.id,
+                parked_secs = now.saturating_sub(pending_at),
+                "dispatcher: clarify question parked but never delivered (crash window) — resetting for re-delivery"
+            );
+            let cleared = crate::agents::swarm::tasks::merge_metadata_patch(
+                &task.metadata,
+                serde_json::json!({
+                    crate::workflow::CLARIFY_DELIVERY_PENDING_KEY: serde_json::Value::Null
+                }),
+            );
+            if let Err(e) = self
+                .coord_store
+                .update_task(
+                    &task.id,
+                    CoordTaskUpdate {
+                        status: Some(CoordTaskStatus::Pending),
+                        metadata: Some(cleared),
+                        ..Default::default()
+                    },
+                )
+                .await
+            {
+                tracing::warn!(task_id = %task.id, error = %e, "dispatcher: clarify re-delivery reset failed");
+            }
+        }
     }
 }

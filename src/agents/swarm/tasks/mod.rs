@@ -162,6 +162,36 @@ impl CoordTaskStatus {
     pub const fn is_blocked_like(&self) -> bool {
         matches!(self, Self::Blocked | Self::Unsatisfiable)
     }
+
+    /// Whether this is a **stored terminal** state: the task's outcome is
+    /// decided and no dispatcher action can or should follow. Used as the
+    /// sticky guard on write-back paths — a task an operator/tool moved to a
+    /// terminal state mid-flight must never be resurrected or overwritten by
+    /// the run that was still executing it.
+    ///
+    /// `WaitingReview` is deliberately NOT terminal (parked for a verdict);
+    /// `Unsatisfiable` is derived, never stored, so it cannot appear on the
+    /// write-back paths this guards (see [`Self::is_settled`] for the
+    /// observer-side notion that includes it).
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Cancelled | Self::Skipped
+        )
+    }
+
+    /// Whether this status is **settled** from an observer's point of view:
+    /// terminal, or structurally dead (`Unsatisfiable` — a dependency
+    /// terminally failed, so the task can never run unless a lead retry of
+    /// the failed parent re-derives it back to `Blocked`). "All tasks
+    /// settled" is the honest completion predicate for a team / workflow run;
+    /// using [`Self::is_terminal`] there would wait forever on the
+    /// unsatisfiable corpses a failed step leaves behind.
+    #[must_use]
+    pub const fn is_settled(&self) -> bool {
+        self.is_terminal() || matches!(self, Self::Unsatisfiable)
+    }
 }
 
 impl std::fmt::Display for CoordTaskStatus {
@@ -215,7 +245,46 @@ pub struct CoordTaskUpdate {
     pub status: Option<CoordTaskStatus>,
     pub owner: Option<AgentId>,
     pub result: Option<String>,
+    /// Full replacement value for the task's metadata. The store writes this
+    /// verbatim (`metadata = ?`), so internal callers that own the whole
+    /// object (dispatcher retry stamps, claim pipelines) pass a value they
+    /// built from a fresh read. **Boundary callers** (the `task_update` tool,
+    /// the `teams.update_task` RPC) receive arbitrary partial patches from an
+    /// LLM/panel and must merge via [`merge_metadata_patch`] first — writing a
+    /// patch here directly wipes the dispatcher control keys (`managed_by`,
+    /// `max_retries`, `timeout_secs`, review/retry markers) and silently
+    /// drops the task out of scheduling.
     pub metadata: Option<serde_json::Value>,
+}
+
+/// Shallow JSON merge-patch (RFC 7386 semantics, one level deep) for task
+/// metadata: `patch`'s top-level keys are laid over a clone of `existing`;
+/// a `null` patch value deletes the key; keys absent from the patch are
+/// preserved. A non-object `patch` (or non-object `existing`) replaces
+/// wholesale — the caller explicitly sent a scalar and gets literal
+/// behaviour. Pure; the single source both metadata-patching boundaries
+/// (`task_update` tool, `teams.update_task` RPC) share so their semantics
+/// cannot drift.
+#[must_use]
+pub fn merge_metadata_patch(
+    existing: &serde_json::Value,
+    patch: serde_json::Value,
+) -> serde_json::Value {
+    let serde_json::Value::Object(patch_map) = patch else {
+        return patch; // scalar/array patch: explicit wholesale replace
+    };
+    let mut merged = match existing {
+        serde_json::Value::Object(map) => map.clone(),
+        _ => serde_json::Map::new(),
+    };
+    for (key, value) in patch_map {
+        if value.is_null() {
+            merged.remove(&key);
+        } else {
+            merged.insert(key, value);
+        }
+    }
+    serde_json::Value::Object(merged)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -558,6 +627,68 @@ pub trait CoordTaskStore: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_metadata_patch_preserves_unmentioned_keys() {
+        // The P0 this fn exists for: a partial patch must never wipe the
+        // dispatcher control keys.
+        let existing = serde_json::json!({
+            "managed_by": "dispatcher",
+            "max_retries": 2,
+            "timeout_secs": 600,
+        });
+        let merged = merge_metadata_patch(&existing, serde_json::json!({ "note": "hi" }));
+        assert_eq!(merged["managed_by"], "dispatcher");
+        assert_eq!(merged["max_retries"], 2);
+        assert_eq!(merged["timeout_secs"], 600);
+        assert_eq!(merged["note"], "hi");
+        // Immutable: the original is untouched.
+        assert!(existing.get("note").is_none());
+    }
+
+    #[test]
+    fn merge_metadata_patch_null_deletes_and_overwrite_wins() {
+        let existing = serde_json::json!({ "a": 1, "b": 2 });
+        let merged = merge_metadata_patch(
+            &existing,
+            serde_json::json!({ "a": serde_json::Value::Null, "b": 9 }),
+        );
+        assert!(merged.get("a").is_none(), "null deletes the key");
+        assert_eq!(merged["b"], 9, "explicit value overwrites");
+    }
+
+    #[test]
+    fn merge_metadata_patch_non_object_replaces_wholesale() {
+        let existing = serde_json::json!({ "a": 1 });
+        assert_eq!(
+            merge_metadata_patch(&existing, serde_json::json!("scalar")),
+            serde_json::json!("scalar")
+        );
+        // Non-object existing promotes to an object holding the patch keys.
+        let merged = merge_metadata_patch(&serde_json::Value::Null, serde_json::json!({"k": 1}));
+        assert_eq!(merged["k"], 1);
+    }
+
+    #[test]
+    fn terminal_and_settled_predicates_partition_statuses() {
+        use CoordTaskStatus as S;
+        for s in [S::Completed, S::Failed, S::Cancelled, S::Skipped] {
+            assert!(s.is_terminal(), "{s} terminal");
+            assert!(s.is_settled(), "{s} settled");
+        }
+        assert!(!S::Unsatisfiable.is_terminal());
+        assert!(S::Unsatisfiable.is_settled(), "structurally dead = settled");
+        for s in [
+            S::Pending,
+            S::Blocked,
+            S::InProgress,
+            S::WaitingReview,
+            S::Paused,
+        ] {
+            assert!(!s.is_terminal(), "{s} not terminal");
+            assert!(!s.is_settled(), "{s} not settled");
+        }
+    }
 
     /// SSOT drift-guard for the dependency-resolution rule.
     ///

@@ -66,6 +66,12 @@ pub struct AgentDeleteTool {
     event_bus: Option<Arc<GatewayEventBus>>,
     /// Catalog registry — used to detect built-in agents at delete time.
     agent_catalog: Arc<crate::agents::AgentRegistry>,
+    /// Persisted-definition manager (`[[agents.list]]` in config TOML).
+    /// Without it a "deleted" agent's definition survives on disk and boot
+    /// lazily re-registers it — the agent resurrects on the next daemon
+    /// restart. `None` (tests / embedded) skips persistence, mirroring
+    /// `AgentCreateTool::with_agent_manager`.
+    agent_manager: Option<Arc<crate::config::agent_manager::AgentManager>>,
 }
 
 impl AgentDeleteTool {
@@ -81,7 +87,19 @@ impl AgentDeleteTool {
             workspace_mgr,
             event_bus,
             agent_catalog,
+            agent_manager: None,
         }
+    }
+
+    /// Wire the persisted-definition manager (builder form keeps `new`
+    /// four-arg so every existing caller and test compiles unchanged).
+    #[must_use]
+    pub fn with_agent_manager(
+        mut self,
+        manager: Arc<crate::config::agent_manager::AgentManager>,
+    ) -> Self {
+        self.agent_manager = Some(manager);
+        self
     }
 }
 
@@ -122,12 +140,34 @@ impl AlephTool for AgentDeleteTool {
             )));
         }
 
-        // 3. Unbind agent from ALL channels bound to it. The binding model is
+        // 3. Remove the persisted definition FIRST — its guards (cannot
+        //    delete the config-default agent / the only configured agent)
+        //    must abort the whole operation BEFORE any destructive runtime
+        //    step, otherwise the tool unbinds channels and archives the
+        //    workspace and only then learns the delete is refused. A missing
+        //    row ("not found") is the benign runtime-only-agent case and
+        //    proceeds. Without removing the row, boot would lazily
+        //    re-register the "deleted" agent on the next daemon restart.
+        if let Some(ref manager) = self.agent_manager {
+            if let Err(e) = manager.delete(&args.agent_id) {
+                let msg = e.to_string();
+                if !msg.contains("not found") {
+                    return Err(crate::error::AlephError::other(format!(
+                        "Cannot delete agent '{}': {msg}",
+                        args.agent_id
+                    )));
+                }
+            }
+        }
+
+        // 3b. Unbind agent from ALL channels bound to it. The binding model is
         //    many-to-one (N channels → 1 agent), so clearing only the first
         //    bound channel (the prior single-channel reverse-lookup path) left
         //    the other channels pointing at the now-deleted agent — the inbound
         //    router would then resolve them to a ghost agent.
-        let _ = self.workspace_mgr.clear_bindings_for_agent(&args.agent_id);
+        if let Err(e) = self.workspace_mgr.clear_bindings_for_agent(&args.agent_id) {
+            warn!(agent_id = %args.agent_id, error = %e, "Failed to clear channel bindings for deleted agent");
+        }
 
         // 4. Remove from registry
         let removed = self.registry.remove(&args.agent_id).await;

@@ -275,8 +275,16 @@ pub fn canvas_to_new_tasks(doc: &Document, team_id: &str) -> Vec<NewCoordTask> {
         .map(|(node_id, text)| {
             let (subject, description) = split_subject(text);
             let blocked_by = deps.remove(node_id).unwrap_or_default();
+            // The dispatcher marker is load-bearing: `select_schedulable`
+            // requires it, and BOTH reclaim passes are gated on it — without
+            // it an imported canvas produces tasks the autonomous loop can
+            // never run (silent forever-Pending kanban), the same trap
+            // `handle_create_task` documents and stamps against. Ownerless
+            // tasks still wait until an owner is assigned; the marker just
+            // makes them dispatchable once one is.
             let metadata = serde_json::json!({
                 CANVAS_NODE_TASK_ID_KEY: node_id,
+                crate::teams::dispatcher::MANAGED_BY_KEY: crate::teams::dispatcher::MANAGED_BY_DISPATCHER,
             });
             NewCoordTask {
                 team_id: Some(team_id.to_string()),

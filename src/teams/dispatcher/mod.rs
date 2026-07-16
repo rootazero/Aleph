@@ -139,11 +139,19 @@ pub struct TeamDispatcher {
     /// warn again. Never drives a status transition — the approve/reject verdict
     /// is the lead LLM's call (R7); this only makes a silent stall visible.
     pub(crate) warned_stale_reviews: Arc<Mutex<HashSet<CoordTaskId>>>,
-    /// Channel registry used to deliver a workflow `clarify` step's question to
-    /// the originating channel. Held as a `OnceCell` because the registry is
-    /// injected after the dispatcher is constructed (the same deferred-injection
-    /// the tool registry uses). Unset / unfilled → clarify steps cannot reach a
-    /// user and are failed with a clear reason rather than stalling the DAG.
+    /// Workflow run ids whose terminal origin-channel notification has been
+    /// attempted this process (see `schedule::settle`). In-memory claim for
+    /// the send window; the durable `workflow_notified` metadata marker makes
+    /// delivery once-only across restarts. Pruned each sweep to runs still
+    /// live-and-unnotified so it stays bounded.
+    pub(crate) notified_workflow_runs: Arc<Mutex<HashSet<String>>>,
+    /// Channel registry used to reach a workflow run's originating channel:
+    /// delivers a `clarify` step's question, and pushes a settled run's
+    /// terminal summary (`schedule::settle`). Held as a `OnceCell` because the
+    /// registry is injected after the dispatcher is constructed (the same
+    /// deferred-injection the tool registry uses). Unset / unfilled → clarify
+    /// steps fail with a clear reason rather than stalling the DAG, and the
+    /// settle sweep stays silent.
     pub(crate) channels: Option<Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>>,
     /// Cooperative shutdown signal. Fires from `Self::shutdown()` and breaks
     /// the `spawn_loop` `tokio::select!` so the loop exits cleanly on
@@ -177,6 +185,7 @@ impl TeamDispatcher {
             semaphore,
             running: Arc::new(Mutex::new(HashMap::new())),
             warned_stale_reviews: Arc::new(Mutex::new(HashSet::new())),
+            notified_workflow_runs: Arc::new(Mutex::new(HashSet::new())),
             channels: None,
             shutdown_token: tokio_util::sync::CancellationToken::new(),
         }
@@ -197,6 +206,41 @@ impl TeamDispatcher {
     /// Wake the dispatch loop for one tick.
     pub fn signal(&self) {
         self.signal.notify_one();
+    }
+
+    /// Subscribe the dispatch loop to coordination-task transition events on
+    /// the `GlobalBus`, so ANY status write — builtin tool, panel RPC, review
+    /// verdict (`workflow_step_review` approve/retry/skip), admin control
+    /// (`team_task_control` resume/retry), clarify answer — wakes the loop
+    /// immediately. Before this, only the two tools that held the raw signal
+    /// (`task_create`, `workflow run`) were event-driven; every other
+    /// unblocking transition waited for the fallback tick (up to 60s of dead
+    /// time per review verdict in a gated pipeline), contradicting the module
+    /// doc's "no polling" promise. An idle wake is a cheap no-op tick, so no
+    /// filtering by transition kind is needed (R10 — mechanical, no
+    /// judgement). Call once after [`Self::spawn_loop`]; the subscription
+    /// lives for the process lifetime (the bus holds it, no RAII guard).
+    pub fn subscribe_task_events(self: &Arc<Self>) {
+        use crate::event::{EventFilter, EventType, GlobalBus};
+        let signal = Arc::clone(&self.signal);
+        tokio::spawn(async move {
+            GlobalBus::global()
+                .subscribe_async(
+                    EventFilter::new(vec![
+                        EventType::TeamTaskAssigned,
+                        EventType::TeamTaskUpdated,
+                        EventType::TeamTaskCompleted,
+                        EventType::TeamTaskFailed,
+                    ]),
+                    move |_event| {
+                        signal.notify_one();
+                    },
+                )
+                .await;
+            tracing::info!(
+                "TeamDispatcher subscribed to task transition events (event-driven wake)"
+            );
+        });
     }
 
     /// Trigger cooperative shutdown of the loop spawned by

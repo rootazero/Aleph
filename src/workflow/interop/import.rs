@@ -183,7 +183,9 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                     agent_type: call.opts.agent_type,
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
-                    review: false,
+                    review: call.opts.review,
+                    timeout_secs: call.opts.timeout_secs,
+                    max_retries: call.opts.max_retries,
                 });
                 // A sibling inside a parallel block extends the current group; a
                 // sequential step becomes the next singleton layer.
@@ -223,6 +225,8 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                     kind: crate::workflow::def::WorkflowStepKind::Clarify,
                     choices: call.choices,
                     review: false,
+                    timeout_secs: None,
+                    max_retries: None,
                 });
                 if parallel_depth > 0 {
                     parallel_group.push(i);
@@ -236,6 +240,20 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
         return Err(AlephError::invalid_input(
             "no agent() calls found in .workflow.js; nothing to import",
         ));
+    }
+    // Honesty at the boundary (P7): the bare scan cannot know which team
+    // member owns each call, so every agent step gets the placeholder owner
+    // "agent". Say so — otherwise a subsequent `run` fails team preflight on
+    // an owner the import invented, with no hint where it came from.
+    if steps
+        .iter()
+        .any(|s| s.kind == crate::workflow::def::WorkflowStepKind::Agent && s.agent == "agent")
+    {
+        dropped.push(
+            "agent owners unknown — steps assigned placeholder owner 'agent'; retarget the \
+             agents (edit + save) before running"
+                .to_string(),
+        );
     }
     let phases: Vec<WorkflowPhase> = phase_titles
         .into_iter()
@@ -477,6 +495,13 @@ struct AgentOpts {
     schema: Option<serde_json::Value>,
     isolation: Option<String>,
     agent_type: Option<String>,
+    /// Lead-review gate — parsed from the bare literal `review: true` so the
+    /// safety gate survives a header-stripped round-trip.
+    review: bool,
+    /// Per-step timeout — parsed from `timeoutSecs: <n>`.
+    timeout_secs: Option<u64>,
+    /// Per-step retry ceiling — parsed from `maxRetries: <n>`.
+    max_retries: Option<u32>,
 }
 
 /// Read the optional `, { label: "…", phase: "…", model: "…", schema: {…},
@@ -545,12 +570,35 @@ fn read_agent_opts(chars: &[char], start: usize) -> AgentOpts {
                 }
                 None => break,
             },
-            // Non-literal value (identifier, number, array, expression): skip to
-            // the next top-level `,`/`}`. The field stays unset (not guessed).
-            _ => i = skip_value(chars, i),
+            // Bare (non-string, non-object) value: capture the raw token so
+            // the executable-core opts export emits as bare literals —
+            // `review: true`, `timeoutSecs: 1800`, `maxRetries: 0` — round-trip
+            // instead of being silently dropped. Anything unrecognised is
+            // still skipped, not guessed.
+            _ => {
+                let end = skip_value(chars, i);
+                let raw: String = chars[i..end.min(chars.len())].iter().collect();
+                assign_bare_opt(&mut opts, &key, raw.trim());
+                i = end;
+            }
         }
     }
     opts
+}
+
+/// Assign a bare-literal opt value (boolean / number) by `.workflow.js` key.
+/// Unparseable values leave the field unset — never guessed.
+fn assign_bare_opt(opts: &mut AgentOpts, key: &str, raw: &str) {
+    match key {
+        "review" => {
+            if raw == "true" {
+                opts.review = true;
+            }
+        }
+        "timeoutSecs" => opts.timeout_secs = raw.parse::<u64>().ok().filter(|t| *t > 0),
+        "maxRetries" => opts.max_retries = raw.parse::<u32>().ok(),
+        _ => {}
+    }
 }
 
 /// Assign a decoded string literal to its opts field by `.workflow.js` key name.
@@ -862,6 +910,8 @@ mod tests {
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    timeout_secs: None,
+                    max_retries: None,
                 },
                 WorkflowManifestStep {
                     id: "b".into(),
@@ -877,6 +927,8 @@ mod tests {
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    timeout_secs: None,
+                    max_retries: None,
                 },
             ],
         }
@@ -970,6 +1022,8 @@ const r = await pipeline(items, s1, s2)
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
                 review: false,
+                timeout_secs: None,
+                max_retries: None,
             }],
         };
         let js = render_workflow_js(&original);
@@ -986,12 +1040,49 @@ const r = await pipeline(items, s1, s2)
         let src = "export const meta = { name: 'wf' }\n\
                    await agent('search for files if (any) exist; run pipeline(x) while waiting')";
         let outcome = parse_workflow_js(src).expect("scan bare js");
+        // The bare path always notes its placeholder owners (an honesty note,
+        // not an imperative-construct report) — filter it before asserting no
+        // needle fired on the prompt text.
+        let imperative: Vec<&String> = outcome
+            .dropped
+            .iter()
+            .filter(|d| !d.contains("placeholder owner"))
+            .collect();
         assert!(
-            outcome.dropped.is_empty(),
-            "prompt text must not trip imperative needles, got: {:?}",
-            outcome.dropped
+            imperative.is_empty(),
+            "prompt text must not trip imperative needles, got: {imperative:?}"
         );
         assert_eq!(outcome.manifest.steps.len(), 1);
+    }
+
+    #[test]
+    fn bare_scan_notes_placeholder_owners_once() {
+        let src = "export const meta = { name: 'wf' }\n\
+                   await agent('a')\nawait agent('b')";
+        let outcome = parse_workflow_js(src).expect("scan bare js");
+        assert_eq!(
+            outcome
+                .dropped
+                .iter()
+                .filter(|d| d.contains("placeholder owner"))
+                .count(),
+            1,
+            "exactly one honesty note regardless of step count"
+        );
+    }
+
+    #[test]
+    fn review_and_budget_opts_survive_bare_roundtrip() {
+        // The executable-core opts (review / timeoutSecs / maxRetries) must
+        // survive a header-STRIPPED export → import — losing a human-review
+        // safety gate silently is the wrong side to fail on.
+        let src = "export const meta = { name: 'wf' }\n\
+                   await agent('do it', { review: true, timeoutSecs: 1800, maxRetries: 0 })";
+        let outcome = parse_workflow_js(src).expect("scan bare js");
+        let step = &outcome.manifest.steps[0];
+        assert!(step.review, "review flag parsed from bare literal");
+        assert_eq!(step.timeout_secs, Some(1800));
+        assert_eq!(step.max_retries, Some(0));
     }
 
     #[test]
@@ -1164,6 +1255,8 @@ await agent('fix more')
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
                 review: false,
+                timeout_secs: None,
+                max_retries: None,
             }],
         };
         let js = render_workflow_js(&m);
@@ -1254,6 +1347,8 @@ await agent('fix more')
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
                 review: false,
+                timeout_secs: None,
+                max_retries: None,
             }],
         };
         let js = render_workflow_js(&m);
@@ -1355,6 +1450,8 @@ await agent('fix more')
             kind: crate::workflow::def::WorkflowStepKind::Agent,
             choices: vec![],
             review: false,
+            timeout_secs: None,
+            max_retries: None,
         }
     }
 
@@ -1564,6 +1661,8 @@ await agent('fix more')
                     kind: crate::workflow::def::WorkflowStepKind::Clarify,
                     choices: vec!["staging".into(), "prod".into()],
                     review: false,
+                    timeout_secs: None,
+                    max_retries: None,
                 },
                 WorkflowManifestStep {
                     id: "run".into(),
@@ -1579,6 +1678,8 @@ await agent('fix more')
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    timeout_secs: None,
+                    max_retries: None,
                 },
             ],
         };

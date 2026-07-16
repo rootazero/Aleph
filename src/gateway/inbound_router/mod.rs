@@ -435,8 +435,37 @@ impl InboundMessageRouter {
 
                 let router = self.clone();
                 tokio::spawn(async move {
+                    let (reply_channel, reply_conversation) =
+                        (msg.channel_id.clone(), msg.conversation_id.clone());
                     if let Err(e) = router.handle_message(msg).await {
                         error!("Failed to handle inbound message: {}", e);
+                        // Belt-and-braces honesty: an unroutable agent must
+                        // not be a silent black hole — the sender gets no
+                        // reply on EVERY message otherwise. One line telling
+                        // them what broke turns a bricked channel into a
+                        // self-explaining one. Best-effort (the channel may
+                        // itself be the broken part).
+                        if let RoutingError::AgentNotFound(agent) = &e {
+                            // Honest wording: workspace-binding ghosts are
+                            // auto-cleared by the resolver's existence gate,
+                            // but a route-binding or default-agent ghost is
+                            // config the router must not rewrite — so promise
+                            // nothing, just say what broke and how to fix it.
+                            let text = format!(
+                                "⚠️ This conversation is routed to agent '{agent}', which no \
+                                 longer exists. Try sending your message again; if this \
+                                 persists, rebind the conversation (agent_switch) or fix the \
+                                 route bindings / default agent in the config."
+                            );
+                            let out = crate::gateway::channel::OutboundMessage::text(
+                                reply_conversation.as_str(),
+                                &text,
+                            );
+                            if let Err(se) = router.channel_registry.send(&reply_channel, out).await
+                            {
+                                warn!("Failed to deliver agent-not-found notice: {se}");
+                            }
+                        }
                     }
                 });
             }
@@ -1112,6 +1141,18 @@ impl InboundMessageRouter {
                 continue;
             };
             if meta.session_key != session_key {
+                continue;
+            }
+            // A question mid-delivery (or crash-stranded before delivery)
+            // must not consume a reply: the dispatcher stamps
+            // `clarify_delivery_pending` at park time and swaps it for
+            // `clarify_delivered_at` after the confirmed send. Skipping ONLY
+            // pending-stamped rows (rather than requiring the delivered
+            // stamp) keeps rows parked by pre-marker daemon versions — whose
+            // questions were already delivered — answerable across an
+            // upgrade, and leaves manually-paused marker-less rows on their
+            // long-standing consume-on-reply behaviour.
+            if crate::workflow::clarify::clarify_delivery_pending_at(&task.metadata).is_some() {
                 continue;
             }
             // Interpret number / label / free-text exactly like `ask_user`.

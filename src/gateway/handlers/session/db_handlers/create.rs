@@ -91,6 +91,15 @@ pub async fn handle_new_session_db(
         }
     };
 
+    // Terminate the closing session's autonomous continuations BEFORE the
+    // epoch bump — a loop/goal keyed under the old epoch would otherwise keep
+    // its self-sustaining chain alive with no session left that can stop it
+    // (same seam as the channel `/new` command).
+    crate::gateway::continuation_lifecycle::terminate_session_continuations(
+        &legacy_key.to_key_string(),
+        "sessions.new",
+    );
+
     // Close old session
     if let Err(e) = manager.close_session(&legacy_key, topic.as_deref()).await {
         return JsonRpcResponse::error(

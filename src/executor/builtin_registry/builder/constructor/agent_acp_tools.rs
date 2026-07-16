@@ -110,12 +110,21 @@ impl BuiltinToolRegistry {
                 }
             };
             let list = agent_manage::AgentListTool::new(Arc::clone(ar), Arc::clone(wm));
-            let delete = agent_manage::AgentDeleteTool::new(
-                Arc::clone(ar),
-                Arc::clone(wm),
-                config.event_bus.clone(),
-                Arc::clone(&agent_catalog),
-            );
+            let delete = {
+                let tool = agent_manage::AgentDeleteTool::new(
+                    Arc::clone(ar),
+                    Arc::clone(wm),
+                    config.event_bus.clone(),
+                    Arc::clone(&agent_catalog),
+                );
+                // Same persistence wiring as create: without it the deleted
+                // agent's TOML definition survives and boot resurrects it.
+                if let Some(ref am) = config.agent_manager {
+                    tool.with_agent_manager(Arc::clone(am))
+                } else {
+                    tool
+                }
+            };
             let switch = agent_manage::AgentSwitchTool::new(
                 Arc::clone(ar),
                 Arc::clone(wm),

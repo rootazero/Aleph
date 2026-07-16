@@ -56,11 +56,15 @@ pub struct TeamNotifier {
     /// delivery. See the module docs.
     sink: Arc<Aggregator>,
     /// Teams whose terminal "Team work complete" notification has already been
-    /// claimed. Guards the concurrent dispatcher from firing the completion
-    /// message once per simultaneously-finishing task; the first handler to
-    /// insert a team id wins, the rest short-circuit. Monotonic — a team id is
-    /// only ever inserted once, bounding growth by the number of distinct teams
-    /// that complete over the daemon's lifetime.
+    /// claimed **for the current wave of work**. Guards the concurrent
+    /// dispatcher from firing the completion message once per
+    /// simultaneously-finishing task; the first handler to insert a team id
+    /// wins, the rest short-circuit. NOT monotonic: any non-settled task
+    /// transition on the team (new work created — the store always emits a
+    /// `pending` update on create — or a task reset/resumed) removes the claim,
+    /// re-arming exactly one completion notification for the next wave.
+    /// Without the re-arm, run #2+ of a workflow template on the same team —
+    /// the tool's documented re-run pattern — would complete in total silence.
     completed_teams: Mutex<HashSet<String>>,
 }
 
@@ -125,15 +129,12 @@ impl TeamNotifier {
         if tasks.is_empty() {
             return false;
         }
-        tasks.iter().all(|t| {
-            matches!(
-                t.status,
-                CoordTaskStatus::Completed
-                    | CoordTaskStatus::Failed
-                    | CoordTaskStatus::Cancelled
-                    | CoordTaskStatus::Skipped
-            )
-        })
+        // `is_settled`, not `is_terminal`: a failed step leaves its dependents
+        // derived-`Unsatisfiable` (stored as pending, never reaped), and no
+        // janitor finalises them. Requiring strictly-terminal here would make
+        // this predicate permanently false after any failure — killing the
+        // team's completion signal forever.
+        tasks.iter().all(|t| t.status.is_settled())
     }
 }
 
@@ -197,6 +198,29 @@ impl EventHandler for TeamNotifier {
                     ),
                 )
                 .await;
+            }
+            // Non-settled transition: new or reopened work on the team (task
+            // creation always emits a `pending` update; retries/resumes emit
+            // `pending`/`in_progress`). Re-arm the once-only completion claim
+            // so the NEXT settle of this team's work fires exactly one fresh
+            // "Team work complete" — without this, only the first wave per
+            // daemon lifetime was ever announced (R5 regression for every
+            // workflow re-run on the same team). Ordered AFTER the
+            // waiting_review arm: that status is also non-settled but must
+            // keep its dedicated review alert. Handlers run on spawned tasks,
+            // so a STALE non-settled event can arrive after the completion
+            // fired — re-check the live board and only re-arm when the team
+            // genuinely has open work, or the claim's once-only guarantee
+            // breaks under exactly the concurrency it guards.
+            AlephEvent::TeamTaskUpdated { team_id, status, .. }
+                if CoordTaskStatus::from_stored(status).is_some_and(|s| !s.is_settled()) =>
+            {
+                if !self.team_work_finished(team_id).await {
+                    self.completed_teams
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(team_id);
+                }
             }
             AlephEvent::TeamTaskCompleted {
                 team_id,

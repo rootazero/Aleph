@@ -77,6 +77,32 @@ pub enum WorkflowArgs {
         #[serde(default)]
         run_id: Option<String>,
     },
+    /// Suspend the not-yet-started steps of a workflow run: every pending /
+    /// blocked task is parked Paused so the dispatcher stops advancing the
+    /// DAG. A step already executing finishes on its own (its result is
+    /// kept); steps already settled are untouched. Undo with
+    /// `action='resume'`.
+    Pause {
+        /// Name of the workflow template the run was started from.
+        name: String,
+        /// Team hosting the run.
+        team_id: String,
+        /// Specific run to pause; omitted → the latest run.
+        #[serde(default)]
+        run_id: Option<String>,
+    },
+    /// Resume a paused workflow run: paused steps return to pending and the
+    /// dispatcher picks the DAG back up. A clarify step parked awaiting the
+    /// user's answer stays parked — it resumes when they reply.
+    Resume {
+        /// Name of the workflow template the run was started from.
+        name: String,
+        /// Team hosting the run.
+        team_id: String,
+        /// Specific run to resume; omitted → the latest run.
+        #[serde(default)]
+        run_id: Option<String>,
+    },
     /// Render a saved template into a Claude-Code-compatible `.workflow.js`.
     Export {
         /// Name of the saved template to render.
@@ -337,6 +363,15 @@ impl WorkflowTool {
             })
             .await?;
 
+        // Compare CANONICAL names on both sides: the store saves under
+        // `sanitise_name(name)` (so `list` shows e.g. `research_report`), but
+        // materialisation stamps the manifest's raw inner name (`research
+        // report`). A raw string compare against the only discoverable
+        // (sanitised) name would report "no runs found" for every template
+        // whose name contains a char outside [A-Za-z0-9._-] — right after a
+        // successful `run`. Canonicalising both sides matches every historic
+        // row regardless of which form was stamped.
+        let wanted = crate::canvas_io::sanitise_name(name);
         let mut groups: std::collections::HashMap<String, Vec<CoordTask>> =
             std::collections::HashMap::new();
         for task in tasks {
@@ -344,7 +379,9 @@ impl WorkflowTool {
                 .metadata
                 .get(WORKFLOW_NAME_KEY)
                 .and_then(|v| v.as_str())
-                != Some(name)
+                .map(crate::canvas_io::sanitise_name)
+                .as_deref()
+                != Some(wanted.as_str())
             {
                 continue;
             }
@@ -547,11 +584,14 @@ impl AlephTool for WorkflowTool {
          dependencies); running it compiles the steps into a coordination-task \
          DAG that executes concurrently where dependencies allow. \
          Actions: save / list / describe / delete / run / status / cancel / \
-         export / import / proposals / describe_proposal / accept_proposal. \
+         pause / resume / export / import / proposals / describe_proposal / \
+         accept_proposal. \
          `run` returns a run_id; `status` reports the per-step task states of \
          a run (latest by default) and `cancel` aborts its unfinished steps — \
          finished steps keep their results, and a step caught mid-execution \
-         finishes its member run but stays cancelled. \
+         finishes its member run but stays cancelled. `pause` parks a run's \
+         not-yet-started steps and `resume` releases them (a clarify step \
+         awaiting the user's reply stays parked). \
          `export` renders a template to a Claude-Code-compatible .workflow.js; \
          `import` parses one back into a template. `proposals` lists MetaSkill \
          drafts the dream pipeline auto-grew from recurring skill use; \
@@ -573,6 +613,8 @@ impl AlephTool for WorkflowTool {
             "workflow(action='run', name='research-report', team_id='team-42', input='quantum error correction')".into(),
             "workflow(action='status', name='research-report', team_id='team-42')".into(),
             "workflow(action='cancel', name='research-report', team_id='team-42', run_id='1f2e…')".into(),
+            "workflow(action='pause', name='research-report', team_id='team-42')".into(),
+            "workflow(action='resume', name='research-report', team_id='team-42')".into(),
             "workflow(action='delete', name='research-report')".into(),
             "workflow(action='export', name='research-report')".into(),
             r#"workflow(action='import', source='export const meta = { name: \"x\" }\nawait agent(\"do it\")', save=true)"#.into(),
@@ -675,6 +717,28 @@ impl AlephTool for WorkflowTool {
                         conversation_id: t.conversation_id.clone(),
                         session_key: t.session_key.to_string(),
                     });
+                // Preflight: a clarify-bearing template launched with no
+                // routable channel is born dead — the dispatcher would fail
+                // each clarify step ("no originating channel") and cascade
+                // its dependents Unsatisfiable, all AFTER this tool already
+                // reported success. Reject before any coord_task exists (P7
+                // boundary validation, same contract as team coverage above).
+                if clarify_ctx.is_none() {
+                    let clarify_steps: Vec<&str> = def
+                        .steps
+                        .iter()
+                        .filter(|s| s.is_clarify())
+                        .map(|s| s.id.as_str())
+                        .collect();
+                    if !clarify_steps.is_empty() {
+                        return Err(AlephError::invalid_input(format!(
+                            "workflow '{name}' has clarify step(s) [{}] but this run has no \
+                             interactive channel to ask the user on — run it from a channel \
+                             conversation, or remove/replace the clarify step(s)",
+                            clarify_steps.join(", "),
+                        )));
+                    }
+                }
                 // Plan ONCE before materialisation: the planner sees the run
                 // input + WorkflowDef and produces a run-global Strategy. It does
                 // not need the run_id (minted inside materialize). Fail-soft.
@@ -689,17 +753,12 @@ impl AlephTool for WorkflowTool {
                     strategy.as_ref(),
                 )
                 .await?;
-                // Persist under the now-known run_id so continuations read it via
-                // active_strategy/workflow_key. Best-effort; write only when the
-                // slot is provably empty (Ok(None)) — never on Ok(Some)/Err (P7).
-                if let Some(strategy) = &strategy {
-                    if let Some(store) = crate::strategy::global() {
-                        let key = crate::strategy::workflow_key(&mat.run_id);
-                        if matches!(store.get(&key), Ok(None)) {
-                            let _ = store.put(&key, strategy);
-                        }
-                    }
-                }
+                // NOTE: no run-keyed strategy-store row is written here. The
+                // strategy frame the member runs actually consume is the
+                // WORKFLOW_STRATEGY_KEY task metadata rendered by
+                // build_handoff_context; a `workflow:<run_id>` store row had
+                // zero readers and no lifecycle delete, so it was removed
+                // (R10 YAGNI).
                 if let Some(signal) = &self.dispatch_signal {
                     signal.notify_one();
                 }
@@ -741,16 +800,58 @@ impl AlephTool for WorkflowTool {
             } => {
                 debug!(name = %name, team_id = %team_id, "workflow: cancel");
                 let (run_id, tasks) = self.run_tasks(&name, &team_id, run_id.as_deref()).await?;
+                // Mark-then-cancel: the cancelling user already knows this
+                // run's fate, so stamp the durable notified marker BEFORE any
+                // Cancelled write. The status writes below wake the
+                // event-driven dispatcher within milliseconds — stamping
+                // afterwards leaves a live window where the settle sweep sees
+                // a fully-settled, unmarked run and pushes exactly the
+                // redundant terminal summary this marker suppresses. A cancel
+                // that errors midway leaves the marker set, which is fine —
+                // the user initiated the cancel and has this tool's output.
+                if let Some(anchor) = tasks.iter().min_by(|a, b| a.id.cmp(&b.id)) {
+                    // Epoch-seconds value (not `true`): the settle sweep's
+                    // reopen re-arm grace-gates on the stamp's age.
+                    let stamped_at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs());
+                    let merged = crate::agents::swarm::tasks::merge_metadata_patch(
+                        &anchor.metadata,
+                        serde_json::json!({ crate::workflow::WORKFLOW_NOTIFIED_KEY: stamped_at }),
+                    );
+                    if let Err(e) = self
+                        .coord_store
+                        .update_task(
+                            &anchor.id,
+                            CoordTaskUpdate {
+                                metadata: Some(merged),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                    {
+                        tracing::warn!(run_id = %run_id, error = %e, "workflow cancel: failed to stamp notified marker");
+                    }
+                }
                 let mut cancelled: Vec<String> = Vec::new();
                 let mut in_flight = 0usize;
                 let mut finished = 0usize;
                 for task in &tasks {
-                    match task.status {
+                    // Re-fetch immediately before writing: a step completing
+                    // between the run_tasks snapshot and this iteration must
+                    // not be clobbered Completed → Cancelled (mirror of the
+                    // dispatcher's terminal-sticky guard). A fetch failure
+                    // falls back to the snapshot status (P7 degradation).
+                    let live_status = self
+                        .coord_store
+                        .get_task(&task.id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map_or(task.status, |t| t.status);
+                    match live_status {
                         // Terminal — already settled, leave untouched.
-                        CoordTaskStatus::Completed
-                        | CoordTaskStatus::Failed
-                        | CoordTaskStatus::Cancelled
-                        | CoordTaskStatus::Skipped => finished += 1,
+                        s if s.is_terminal() => finished += 1,
                         status => {
                             if status == CoordTaskStatus::InProgress {
                                 in_flight += 1;
@@ -782,6 +883,123 @@ impl AlephTool for WorkflowTool {
                     task_ids: Some(cancelled),
                     run_id: Some(run_id),
                     ..WorkflowToolOutput::msg("cancel", message)
+                })
+            }
+            WorkflowArgs::Pause {
+                name,
+                team_id,
+                run_id,
+            } => {
+                debug!(name = %name, team_id = %team_id, "workflow: pause");
+                let (run_id, tasks) = self.run_tasks(&name, &team_id, run_id.as_deref()).await?;
+                let mut paused: Vec<String> = Vec::new();
+                let mut in_flight = 0usize;
+                for task in &tasks {
+                    // Re-fetch immediately before writing (mirror of the
+                    // cancel arm): a step that completed / was cancelled /
+                    // started between the snapshot and this iteration must not
+                    // be clobbered to Paused — resume would then RE-EXECUTE
+                    // finished work, and a paused terminal step blocks the
+                    // run's settle accounting forever.
+                    let live_status = self
+                        .coord_store
+                        .get_task(&task.id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map_or(task.status, |t| t.status);
+                    match live_status {
+                        // Not yet started — park it. (Unsatisfiable, though
+                        // also stored as pending, is structurally dead and is
+                        // deliberately NOT parked: pausing it would flip a
+                        // settled corpse back to unsettled and block the
+                        // run's terminal accounting.)
+                        CoordTaskStatus::Pending | CoordTaskStatus::Blocked => {
+                            self.coord_store
+                                .update_task(
+                                    &task.id,
+                                    CoordTaskUpdate {
+                                        status: Some(CoordTaskStatus::Paused),
+                                        ..Default::default()
+                                    },
+                                )
+                                .await?;
+                            paused.push(task.id.clone());
+                        }
+                        CoordTaskStatus::InProgress => in_flight += 1,
+                        _ => {}
+                    }
+                }
+                let mut message = format!(
+                    "paused {} step(s) of workflow '{name}' run {run_id}",
+                    paused.len()
+                );
+                if in_flight > 0 {
+                    message.push_str(&format!(
+                        "; {in_flight} in-flight member run(s) will finish on their own — their \
+                         downstream steps are paused"
+                    ));
+                }
+                message.push_str(" (resume with action='resume')");
+                Ok(WorkflowToolOutput {
+                    task_ids: Some(paused),
+                    run_id: Some(run_id),
+                    ..WorkflowToolOutput::msg("pause", message)
+                })
+            }
+            WorkflowArgs::Resume {
+                name,
+                team_id,
+                run_id,
+            } => {
+                debug!(name = %name, team_id = %team_id, "workflow: resume");
+                let (run_id, tasks) = self.run_tasks(&name, &team_id, run_id.as_deref()).await?;
+                let mut resumed: Vec<String> = Vec::new();
+                let mut awaiting_reply = 0usize;
+                for task in &tasks {
+                    if task.status != CoordTaskStatus::Paused {
+                        continue;
+                    }
+                    // A clarify step the dispatcher parked is Paused because it
+                    // AWAITS the user's reply (delivered marker) or is mid-
+                    // delivery (pending marker, the janitor's business) — its
+                    // Paused state is not ours to undo.
+                    if crate::workflow::clarify::clarify_delivered(&task.metadata) {
+                        awaiting_reply += 1;
+                        continue;
+                    }
+                    if crate::workflow::clarify::clarify_delivery_pending_at(&task.metadata)
+                        .is_some()
+                    {
+                        continue;
+                    }
+                    self.coord_store
+                        .update_task(
+                            &task.id,
+                            CoordTaskUpdate {
+                                status: Some(CoordTaskStatus::Pending),
+                                ..Default::default()
+                            },
+                        )
+                        .await?;
+                    resumed.push(task.id.clone());
+                }
+                if let Some(signal) = &self.dispatch_signal {
+                    signal.notify_one();
+                }
+                let mut message = format!(
+                    "resumed {} step(s) of workflow '{name}' run {run_id}",
+                    resumed.len()
+                );
+                if awaiting_reply > 0 {
+                    message.push_str(&format!(
+                        "; {awaiting_reply} clarify step(s) stay parked awaiting the user's reply"
+                    ));
+                }
+                Ok(WorkflowToolOutput {
+                    task_ids: Some(resumed),
+                    run_id: Some(run_id),
+                    ..WorkflowToolOutput::msg("resume", message)
                 })
             }
             WorkflowArgs::Export { name, write_file } => {
@@ -931,6 +1149,8 @@ mod tests {
                     kind: crate::workflow::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    timeout_secs: None,
+                    max_retries: None,
                 },
                 WorkflowStepDef {
                     id: "write".into(),
@@ -940,6 +1160,8 @@ mod tests {
                     kind: crate::workflow::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    timeout_secs: None,
+                    max_retries: None,
                 },
             ],
         }
@@ -1486,6 +1708,8 @@ mod tests {
                     kind: crate::workflow::WorkflowStepKind::Clarify,
                     choices: vec!["staging".into(), "prod".into()],
                     review: false,
+                    timeout_secs: None,
+                    max_retries: None,
                 },
                 WorkflowStepDef {
                     id: "run".into(),
@@ -1495,6 +1719,8 @@ mod tests {
                     kind: crate::workflow::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
+                    timeout_secs: None,
+                    max_retries: None,
                 },
             ],
         };
