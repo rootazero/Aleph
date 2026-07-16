@@ -754,8 +754,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // Forward the harness trace stream to this run's WebSocket as
             // `agent_trace` notifications so the WebChat Panel can segment the
             // chat per Think→Act step and populate the workspace timeline.
-            // Outermost wrap: it sees every event and forwards to the inner
-            // (persistence + scratchpad) sink unchanged.
+            // Forwards to the inner (persistence + scratchpad) sink unchanged;
+            // on unattended runs the redacting sink below wraps OUTSIDE this
+            // one, so every event is masked before reaching any of them.
             let trace_sink: Arc<dyn crate::harness::TraceSink> =
                 Arc::new(super::super::AgentTraceEmitSink::new(
                     trace_sink,

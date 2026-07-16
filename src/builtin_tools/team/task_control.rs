@@ -175,7 +175,10 @@ impl AlephTool for TeamTaskControlTool {
                         },
                     )
                     .await?;
-                let _ = self.coord_store.release_lock(&task_id, "").await;
+                // No lock release here: `release_lock` is holder-checked, so a
+                // call with an empty holder was a provable no-op. Lingering
+                // locks are the janitors' job (`release_stale_locks` in
+                // dispatch_once step 1 + `reclaim_orphaned`).
                 Ok(TeamTaskControlOutput {
                     task_id,
                     status: "pending".into(),

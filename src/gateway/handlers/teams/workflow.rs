@@ -400,9 +400,9 @@ pub async fn handle_workflow_retry_step(
             format!("Failed to reset task to pending: {e}"),
         );
     }
-    // Best-effort lock release — failure here is non-fatal (lock may
-    // have expired naturally or never been acquired).
-    let _ = coord_store.release_lock(&params.task_id, "").await;
+    // No lock release here: `release_lock` is holder-checked, so a call with
+    // an empty holder was a provable no-op. Lingering locks are the janitors'
+    // job (`release_stale_locks` in dispatch_once step 1 + `reclaim_orphaned`).
     JsonRpcResponse::success(request.id, json!({ "status": "pending" }))
 }
 
@@ -605,7 +605,8 @@ pub async fn handle_task_retry(
             format!("Failed to retry task: {e}"),
         );
     }
-    let _ = coord_store.release_lock(&params.task_id, "").await;
+    // No lock release: holder-checked `release_lock` with an empty holder was
+    // a provable no-op; the dispatcher janitors own lock hygiene.
     JsonRpcResponse::success(request.id, json!({ "status": "pending" }))
 }
 

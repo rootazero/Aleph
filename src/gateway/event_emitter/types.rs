@@ -3,12 +3,10 @@
 //! Contains all enum variants, structs, and helper types used by the
 //! event emitter subsystem.
 
-use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::providers::health::ModelInfo;
-use crate::sync_primitives::{AtomicU64, Ordering};
 
 /// Error type for event emission
 #[derive(Debug, thiserror::Error)]
@@ -407,40 +405,6 @@ pub struct ToolErrorItem {
     pub tool_name: String,
     pub error: String,
     pub tool_id: String,
-}
-
-/// Per-RunId sequence counter manager
-pub struct RunSequenceManager {
-    sequences: DashMap<String, AtomicU64>,
-}
-
-impl RunSequenceManager {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            sequences: DashMap::new(),
-        }
-    }
-
-    /// Get next sequence number for a run
-    #[must_use]
-    pub fn next_seq(&self, run_id: &str) -> u64 {
-        self.sequences
-            .entry(run_id.to_string())
-            .or_insert_with(|| AtomicU64::new(0))
-            .fetch_add(1, Ordering::SeqCst)
-    }
-
-    /// Cleanup sequences for completed run
-    pub fn cleanup(&self, run_id: &str) {
-        self.sequences.remove(run_id);
-    }
-}
-
-impl Default for RunSequenceManager {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 /// Output mode for controlling response delivery behavior

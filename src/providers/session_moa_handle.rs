@@ -110,15 +110,22 @@ pub fn clear_session_moa(session_key: &str) {
 
 /// Refill a consumed one-shot when run construction failed BEFORE MoA could
 /// engage (preset deleted / slot unresolvable) — the user's single activation
-/// must not burn on a run that never used it. Only fills an EMPTY slot: an
-/// activation written meanwhile wins. Post-construction failures/cancels do
-/// NOT restore (structural zero-leak, round-1 surpass item ④ unchanged).
+/// must not burn on a run that never used it. Fills an EMPTY slot, and — the
+/// displaced-sticky case — undoes `take_for_run`'s reinstatement: when the
+/// slot holds exactly the sticky this one-shot had stashed (i.e. what
+/// `take_for_run` put back while consuming it), the one-shot is re-stacked,
+/// stash included. Any OTHER occupant is a genuinely newer activation and
+/// wins. Post-construction failures/cancels do NOT restore (structural
+/// zero-leak, round-1 surpass item ④ unchanged).
 pub fn restore_one_shot(session_key: &str, pref: SessionMoaPref) {
-    map()
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
-        .entry(session_key.to_string())
-        .or_insert(pref);
+    let mut guard = map().write().unwrap_or_else(|e| e.into_inner());
+    let undo_reinstate = match guard.get(session_key) {
+        None => true,
+        Some(current) => pref.restore.as_deref() == Some(current),
+    };
+    if undo_reinstate {
+        guard.insert(session_key.to_string(), pref);
+    }
 }
 
 #[cfg(test)]
@@ -209,6 +216,37 @@ mod tests {
         let stored = get_session_moa(key).unwrap();
         assert_eq!(stored.preset.as_deref(), Some("deep"));
         assert!(!stored.one_shot);
+        clear_session_moa(key);
+    }
+
+    #[test]
+    fn restore_one_shot_undoes_reinstated_sticky() {
+        // MOA-2: one-shot displaced sticky A; take_for_run consumed it and
+        // reinstated A. A build failure then restores — the one-shot must
+        // re-stack over the reinstated A (undoing the consume), NOT no-op and
+        // silently burn the user's single activation on a run that never
+        // engaged MoA.
+        let key = "test:moa:restore-over-reinstated";
+        set_session_moa(key, Some("deep".to_string()), false); // sticky A
+        set_session_moa_one_shot(key, Some("once".to_string()));
+        let taken = take_for_run(key).unwrap();
+        assert!(taken.one_shot);
+        // take_for_run reinstated the sticky.
+        assert_eq!(
+            get_session_moa(key).unwrap().preset.as_deref(),
+            Some("deep")
+        );
+        // Build failed before MoA engaged → restore re-stacks the one-shot.
+        restore_one_shot(key, taken);
+        let stored = get_session_moa(key).unwrap();
+        assert!(stored.one_shot, "one-shot must survive the failed build");
+        assert_eq!(stored.preset.as_deref(), Some("once"));
+        // …and the stash is intact: the NEXT consume reinstates A again.
+        let _ = take_for_run(key).unwrap();
+        assert_eq!(
+            get_session_moa(key).unwrap().preset.as_deref(),
+            Some("deep")
+        );
         clear_session_moa(key);
     }
 

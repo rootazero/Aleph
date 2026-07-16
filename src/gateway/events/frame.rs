@@ -403,14 +403,30 @@ impl From<StreamEvent> for GatewayEventFrame {
             StreamEvent::RunComplete {
                 run_id,
                 seq,
-                summary,
+                mut summary,
                 total_duration_ms,
-            } => Self::RunComplete {
-                run_id,
-                seq,
-                summary,
-                total_duration_ms,
-            },
+            } => {
+                // Sanitize ONCE at the wire boundary (§4.7 invariant: any path
+                // delivering `final_response` to a surface must pass the single
+                // sanitize atom). The source is RAW — `runner_impl` copies
+                // `content.text` verbatim and even falls back to
+                // `content.thinking` — so without this, every WS consumer
+                // (Panel `finalize_answer` bubble overwrite + voice TTS, CLI
+                // no-stream fallback and `--output-last-message`) re-leaked
+                // `<think>` reasoning that the live-chunk scrubber had already
+                // stripped. Pure-thinking summaries sanitize to `None`, so a
+                // client keeps its (scrubbed) streamed text instead.
+                summary.final_response = summary
+                    .final_response
+                    .as_deref()
+                    .and_then(crate::gateway::reply_emitter::sanitize_final_response);
+                Self::RunComplete {
+                    run_id,
+                    seq,
+                    summary,
+                    total_duration_ms,
+                }
+            }
             StreamEvent::RunError {
                 run_id,
                 seq,
