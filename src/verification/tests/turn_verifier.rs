@@ -157,11 +157,11 @@ async fn concurrent_verify_vs_disable_all_is_consistent() {
     }
 
     for r in readers {
-        r.await.unwrap_or_else(|e| panic!("reader task: {e}"));
+        r.await.unwrap_or_else(|e| panic!("reader task: {e}")); // rust-doctor-disable-line panic-in-library
     }
     toggler
         .await
-        .unwrap_or_else(|e| panic!("toggler task: {e}"));
+        .unwrap_or_else(|e| panic!("toggler task: {e}")); // rust-doctor-disable-line panic-in-library
 
     let total = blocks.load(Ordering::Relaxed) + allows.load(Ordering::Relaxed);
     assert_eq!(total, READERS * ITERS);
