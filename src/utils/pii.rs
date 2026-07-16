@@ -26,7 +26,10 @@ static PII_PATTERNS: OnceLock<PiiPatterns> = OnceLock::new();
 /// pattern is invalid. All PII patterns are static constants that should
 /// always compile; the fallback keeps `scrub_pii` infallible.
 fn compile_regex(pattern: &str) -> Regex {
-    Regex::new(pattern).unwrap_or_else(|_| Regex::new("a^").expect("fallback regex is valid"))
+    Regex::new(pattern).unwrap_or_else(|_| {
+        // rust-doctor-disable-next-line unwrap-in-production
+        Regex::new("a^").expect("fallback regex is valid")
+    })
 }
 
 /// Get or initialize PII patterns

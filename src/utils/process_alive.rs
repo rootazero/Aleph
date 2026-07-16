@@ -29,6 +29,7 @@ pub fn is_process_alive(pid: i32) -> bool {
 fn is_alive_impl(pid: i32) -> bool {
     // SAFETY: `kill(pid, 0)` performs error checking without sending a signal.
     // It is async-signal-safe and the canonical existence probe on Unix.
+    // rust-doctor-disable-next-line unsafe-block-audit
     let result = unsafe { libc::kill(pid, 0) };
     if result == 0 {
         true
