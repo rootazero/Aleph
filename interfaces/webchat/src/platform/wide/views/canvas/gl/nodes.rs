@@ -69,6 +69,11 @@ const CORNERS: [f32; 12] = [
 ];
 
 impl NodeRenderer {
+    /// # Safety
+    ///
+    /// This renderer uses `js_sys::Float32Array::view` to upload geometry
+    /// without copying. The caller must ensure the source slice is not moved or
+    /// dropped until the upload call returns.
     pub fn new(gl: &Gl) -> Result<NodeRenderer, String> {
         let prog = compile_program(
             gl,
@@ -193,6 +198,11 @@ impl NodeRenderer {
     }
 }
 
+/// # Safety
+///
+/// Uses `js_sys::Float32Array::view` on `data`. The view is consumed by the
+/// WebGL buffer upload before this function returns, so `data` must remain
+/// valid and un-moved for the duration of the call.
 fn upload_f32(gl: &Gl, buf: &WebGlBuffer, data: &[f32]) {
     gl.bind_buffer(Gl::ARRAY_BUFFER, Some(buf));
     unsafe {

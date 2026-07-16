@@ -615,6 +615,7 @@ fn add_dir_to_zip(
     dir: &Path,
     options: &zip::write::SimpleFileOptions,
 ) -> CliResult<()> {
+    let mut buf = Vec::new();
     for entry in std::fs::read_dir(dir).map_err(CliError::Io)? {
         let entry = entry.map_err(CliError::Io)?;
         let path = entry.path();
@@ -637,7 +638,7 @@ fn add_dir_to_zip(
             zip.start_file(&relative_str, *options)
                 .map_err(|e| CliError::Other(format!("Zip error: {e}")))?;
             let mut f = std::fs::File::open(&path).map_err(CliError::Io)?;
-            let mut buf = Vec::new();
+            buf.clear();
             f.read_to_end(&mut buf).map_err(CliError::Io)?;
             zip.write_all(&buf).map_err(CliError::Io)?;
         }

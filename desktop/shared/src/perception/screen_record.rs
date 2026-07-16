@@ -166,10 +166,15 @@ fn sc_recording_output_record(
                 let msg = if error.is_null() {
                     "Unknown error getting shareable content".to_string()
                 } else {
+                    // SAFETY: `error` is a non-null `NSError` pointer passed by
+                    // the framework completion handler.
                     unsafe { &*error }.to_string()
                 };
                 let _ = content_tx.send(Err(msg));
             } else {
+                // SAFETY: `content` is a non-null `SCShareableContent` pointer
+                // owned by the framework callback; `Retained::retain` transfers
+                // it into a safe retained reference.
                 match unsafe { Retained::retain(content) } {
                     Some(r) => {
                         let _ = content_tx.send(Ok(r));
@@ -182,6 +187,8 @@ fn sc_recording_output_record(
             }
         },
     );
+    // SAFETY: `content_block` outlives this synchronous call; the framework
+    // invokes the handler before returning.
     unsafe {
         SCShareableContent::getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler(
             true, true, &content_block,
@@ -197,17 +204,23 @@ fn sc_recording_output_record(
         })?;
 
     // 2. Pick primary display (first in the list)
+    // SAFETY: `content` is a retained `SCShareableContent` from the framework;
+    // accessing its displays is the documented API pattern.
     let displays = unsafe { content.displays() };
     if displays.count() == 0 {
         return Err(DesktopError::ScreenCapture("No displays found".into()));
     }
     let display = displays.objectAtIndex(0);
 
+    // SAFETY: `display` is a valid object retrieved from `displays` above.
     let display_width = unsafe { display.width() } as usize;
+    // SAFETY: `display` is a valid object retrieved from `displays` above.
     let display_height = unsafe { display.height() } as usize;
 
     // 3. Create content filter (capture entire display, no excluded windows)
     let empty_windows: Retained<NSArray<objc2_screen_capture_kit::SCWindow>> = NSArray::new();
+    // SAFETY: `display` is a valid `SCDisplay`; `empty_windows` is a freshly
+    // allocated empty array. This is the documented initializer pattern.
     let filter = unsafe {
         SCContentFilter::initWithDisplay_excludingWindows(
             SCContentFilter::alloc(),
@@ -217,10 +230,14 @@ fn sc_recording_output_record(
     };
 
     // 4. Create stream configuration
+    // SAFETY: `SCStreamConfiguration::new()` is the documented allocator for
+    // this mutable configuration object.
     let stream_config = unsafe { SCStreamConfiguration::new() };
 
     // Use 2x scale for retina displays
     let scale: usize = 2;
+    // SAFETY: `stream_config` is a freshly allocated mutable configuration;
+    // these setters are the documented way to populate it.
     unsafe {
         stream_config.setWidth(display_width * scale);
         stream_config.setHeight(display_height * scale);
@@ -235,12 +252,16 @@ fn sc_recording_output_record(
     }
 
     // 5. Create recording output configuration
+    // SAFETY: `SCRecordingOutputConfiguration::new()` is the documented
+    // allocator for this mutable configuration object.
     let recording_config = unsafe { SCRecordingOutputConfiguration::new() };
     let file_url = {
         let path_str = output_path.to_string_lossy();
         let ns_str = objc2_foundation::NSString::from_str(&path_str);
         NSURL::fileURLWithPath(&ns_str)
     };
+    // SAFETY: `recording_config` is a freshly allocated mutable configuration
+    // and `file_url` is a valid `NSURL` for the output path.
     unsafe {
         recording_config.setOutputURL(&file_url);
     }
@@ -258,12 +279,16 @@ fn sc_recording_output_record(
     };
     let delegate: Retained<SCRecordingDelegate> = {
         let alloc = SCRecordingDelegate::alloc().set_ivars(delegate_ivars);
+        // SAFETY: `alloc` is a freshly allocated instance with ivars set;
+        // `init` is the designated initializer inherited from `NSObject`.
         unsafe { objc2::msg_send![super(alloc), init] }
     };
 
     // 7. Create SCRecordingOutput
     let delegate_proto: &ProtocolObject<dyn SCRecordingOutputDelegate> =
         ProtocolObject::from_ref(&*delegate);
+    // SAFETY: `recording_config` and `delegate_proto` are valid objects; this
+    // is the documented initializer pattern.
     let recording_output = unsafe {
         SCRecordingOutput::initWithConfiguration_delegate(
             SCRecordingOutput::alloc(),
@@ -273,6 +298,8 @@ fn sc_recording_output_record(
     };
 
     // 8. Create SCStream and add recording output
+    // SAFETY: `filter` and `stream_config` are valid objects built above; no
+    // stream delegate is required for recording.
     let stream = unsafe {
         SCStream::initWithFilter_configuration_delegate(
             SCStream::alloc(),
@@ -282,6 +309,7 @@ fn sc_recording_output_record(
         )
     };
 
+    // SAFETY: `recording_output` is a valid `SCRecordingOutput` created above.
     unsafe {
         stream
             .addRecordingOutput_error(&recording_output)
@@ -296,9 +324,13 @@ fn sc_recording_output_record(
         if error.is_null() {
             let _ = start_tx.send(Ok(()));
         } else {
+            // SAFETY: `error` is a non-null `NSError` pointer passed by the
+            // framework completion handler.
             let _ = start_tx.send(Err(unsafe { &*error }.to_string()));
         }
     });
+    // SAFETY: `start_block` outlives this synchronous call; the framework
+    // invokes the handler before returning.
     unsafe {
         stream.startCaptureWithCompletionHandler(Some(&start_block));
     }
@@ -316,9 +348,13 @@ fn sc_recording_output_record(
         if error.is_null() {
             let _ = stop_tx.send(Ok(()));
         } else {
+            // SAFETY: `error` is a non-null `NSError` pointer passed by the
+            // framework completion handler.
             let _ = stop_tx.send(Err(unsafe { &*error }.to_string()));
         }
     });
+    // SAFETY: `stop_block` outlives this synchronous call; the framework
+    // invokes the handler before returning.
     unsafe {
         stream.stopCaptureWithCompletionHandler(Some(&stop_block));
     }

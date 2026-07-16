@@ -174,18 +174,15 @@ pub fn AgentsSidebar() -> impl IntoView {
                         let current_filter = filter.get();
                         let current_bindings = bindings.get();
 
-                        // Apply filter
-                        let filtered: Vec<AgentSummary> = agents.get().into_iter().filter(|agent| {
-                            match current_filter.as_str() {
-                                "channel" => current_bindings.contains_key(&agent.id),
-                                "standalone" => !current_bindings.contains_key(&agent.id),
-                                _ => true, // "all"
-                            }
-                        }).collect();
-
                         view! {
                             <div class="py-1">
-                                {filtered.into_iter().map(|agent| {
+                                {agents.get().into_iter().filter(|agent| {
+                                    match current_filter.as_str() {
+                                        "channel" => current_bindings.contains_key(&agent.id),
+                                        "standalone" => !current_bindings.contains_key(&agent.id),
+                                        _ => true, // "all"
+                                    }
+                                }).map(|agent| {
                                     let agent_path = format!("/agents/{}/overview", agent.id);
                                     let is_active = current_path.starts_with(&format!("/agents/{}", agent.id));
                                     let is_default = agent.is_default;

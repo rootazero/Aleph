@@ -58,12 +58,15 @@ pub async fn output_capped(mut cmd: Command, timeout: Duration) -> Result<Output
 /// process eventually exits, so a finished background process never lingers as
 /// a zombie. The process itself runs independently of that task.
 pub async fn spawn_background(mut cmd: Command, log_path: &str) -> Result<u32> {
-    let log = std::fs::File::create(log_path).map_err(|e| {
+    let log = tokio::fs::File::create(log_path).await.map_err(|e| {
         DesktopError::InputFailed(format!("cannot create log file {log_path}: {e}"))
     })?;
     let log_err = log
         .try_clone()
+        .await
         .map_err(|e| DesktopError::InputFailed(format!("cannot duplicate log handle: {e}")))?;
+    let log = log.into_std().await;
+    let log_err = log_err.into_std().await;
 
     cmd.stdin(Stdio::null())
         .stdout(Stdio::from(log))
@@ -130,13 +133,13 @@ mod tests {
         // The process runs detached; poll the log until it flushes the line.
         let mut contents = String::new();
         for _ in 0..40 {
-            contents = std::fs::read_to_string(&log_path).unwrap_or_default();
+            contents = tokio::fs::read_to_string(&log_path).await.unwrap_or_default();
             if contents.contains("bg-hello") {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         assert!(contents.contains("bg-hello"), "log was: {contents:?}");
-        let _ = std::fs::remove_file(&log_path);
+        let _ = tokio::fs::remove_file(&log_path).await;
     }
 }

@@ -270,7 +270,6 @@ fn PresetCard(
     on_activate: impl Fn() + 'static + Send,
 ) -> impl IntoView {
     let slot_chip = |slot: &MoaSlotDto| format!("{} / {}", slot.provider, slot.model);
-    let advisor_chips: Vec<String> = preset.advisors.iter().map(slot_chip).collect();
     let aggregator_chip = slot_chip(&preset.aggregator);
     let enabled = preset.enabled;
     // Model calls per turn: each advisor + the aggregator (disabled = aggregator
@@ -351,8 +350,11 @@ fn PresetCard(
                 </div>
             </div>
             <div class="flex flex-wrap items-center gap-1.5 text-xs">
-                {advisor_chips.into_iter().map(|chip| view! {
-                    <span class="px-2 py-1 rounded bg-info/10 text-info">{chip}</span>
+                {preset.advisors.iter().map(|slot| {
+                    let chip = slot_chip(slot);
+                    view! {
+                        <span class="px-2 py-1 rounded bg-info/10 text-info">{chip}</span>
+                    }
                 }).collect_view()}
                 <span class="px-2 py-1 rounded bg-primary/10 text-primary">{format!("Σ {aggregator_chip}")}</span>
                 <span

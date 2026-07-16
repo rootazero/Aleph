@@ -64,7 +64,7 @@ pub fn control_action(url: &Url) -> Option<UpdateControl> {
 /// block it; the buttons navigate via `location.href`, which is unaffected by
 /// script-CSP. On macOS (`data-platform="macos"`) the bar is offset below the
 /// overlay-titlebar traffic lights.
-const BANNER_TEMPLATE: &str = r#"(function(){
+const BANNER_TEMPLATE: &str = r"(function(){
 var ID='__aleph-update-banner';
 var old=document.getElementById(ID); if(old) old.remove();
 var mac=document.documentElement.getAttribute('data-platform')==='macos';
@@ -80,7 +80,7 @@ close.style.cssText='cursor:pointer;border:0;background:transparent;color:inheri
 close.addEventListener('click',function(){ window.location.href=__DISMISS__; });
 bar.appendChild(msg); bar.appendChild(act); bar.appendChild(close);
 (document.body||document.documentElement).appendChild(bar);
-})();"#;
+})();";
 
 /// Build the banner-injection JS for a staged `version`. `self_install`
 /// distinguishes platforms that can self-update (macOS / Windows / Linux

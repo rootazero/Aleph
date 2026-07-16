@@ -4,6 +4,10 @@ version.workspace = true
 edition = "2021"
 description = "Aleph TUI - Interactive terminal interface for Aleph"
 license = "MIT"
+repository.workspace = true
+readme = "README.md"
+categories = ["command-line-utilities", "development-tools"]
+keywords = ["aleph", "tui", "terminal", "interface", "websocket"]
 
 # IMPORTANT: This crate MUST NOT depend on alephcore
 # It communicates with Aleph Gateway via WebSocket using aleph-protocol types.
@@ -24,14 +28,9 @@ aleph-protocol = { path = "../../shared/protocol" }
 # Async runtime
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "io-util", "signal", "net"] }
 
-# WebSocket client
-tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
-futures-util = "0.3"
-
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.8"
 
 # CLI interface
 clap = { version = "4.4", features = ["derive"] }
@@ -43,10 +42,6 @@ tui-textarea = "0.7"
 unicode-width = "0.2"
 textwrap = "0.16"
 
-# Error handling
-thiserror = "2.0"
-anyhow = "1.0"
-
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -55,4 +50,3 @@ aleph-logging = { path = "../../shared/logging" }
 # Utilities
 uuid = { version = "1.7", features = ["v4"] }
 chrono = "0.4"
-dirs = "6.0"

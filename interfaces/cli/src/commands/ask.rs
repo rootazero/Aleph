@@ -84,7 +84,7 @@ pub async fn run(
     .await;
 
     if let Some(path) = output_last_message {
-        if let Err(e) = std::fs::write(path, &outcome.final_text) {
+        if let Err(e) = tokio::fs::write(path, &outcome.final_text).await {
             eprintln!("warning: failed to write --output-last-message to {path}: {e}");
         }
     }

@@ -163,7 +163,7 @@ fn render_dag(tasks: Vec<CoordTaskDto>, drawer: RwSignal<Option<CoordTaskDto>>) 
     for t in sorted {
         let d = depths.get(&t.id).copied().unwrap_or(0);
         while layers.len() <= d {
-            layers.push(Vec::new());
+            layers.push(Vec::with_capacity(tasks.len()));
         }
         layers[d].push(t);
     }

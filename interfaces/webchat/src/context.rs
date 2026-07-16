@@ -44,11 +44,15 @@ pub(crate) fn role_is_operator(role: Option<&str>) -> bool {
 
 /// localStorage key holding the legacy shared Gateway token. Kept for backward
 /// compatibility with old `?token=` links and manually-entered tokens.
+/// This is a key name, not a credential value.
+// rust-doctor-disable-next-line hardcoded-secrets
 #[cfg(target_arch = "wasm32")]
 const GATEWAY_LEGACY_TOKEN_KEY: &str = "aleph_gateway_token";
 
 /// localStorage key holding the long-lived device token issued after a
 /// bootstrap ticket is exchanged.
+/// This is a key name, not a credential value.
+// rust-doctor-disable-next-line hardcoded-secrets
 #[cfg(target_arch = "wasm32")]
 const GATEWAY_DEVICE_TOKEN_KEY: &str = "aleph_device_token";
 

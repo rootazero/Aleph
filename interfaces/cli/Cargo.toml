@@ -5,6 +5,9 @@ edition = "2021"
 description = "Aleph CLI - Reference implementation of Aleph Protocol client"
 license = "MIT"
 readme = "README.md"
+repository.workspace = true
+categories = ["command-line-utilities"]
+keywords = ["aleph", "cli", "assistant", "automation"]
 
 # IMPORTANT: This crate MUST NOT depend on alephcore
 # It serves as a reference implementation showing how to build
@@ -23,7 +26,7 @@ aleph-tui = { path = "../tui" }
 # aleph-sdk = { path = "../shared" }
 
 # Async runtime
-tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "io-util", "signal", "net", "process"] }
+tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "io-util", "signal", "net", "process", "fs"] }
 
 # WebSocket client
 tokio-tungstenite = { version = "0.26", features = ["native-tls"] }

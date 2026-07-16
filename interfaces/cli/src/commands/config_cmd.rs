@@ -136,7 +136,7 @@ pub async fn schema(
 
     if let Some(path) = output_path {
         let content = serde_json::to_string_pretty(&schema)?;
-        std::fs::write(path, content)?;
+        tokio::fs::write(path, content).await?;
         println!("Schema written to {path}");
     } else if json {
         output::print_json(&schema);

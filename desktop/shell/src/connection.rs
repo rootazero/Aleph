@@ -293,8 +293,7 @@ pub fn set_connection_target(app: tauri::AppHandle, raw: String) -> Result<(), S
 /// Priority: `?bt=` (bootstrap ticket) > `?token=` (legacy shared token).
 /// Pure (no I/O) so the extraction is unit-testable without touching the filesystem.
 fn credential_from_url(url: &Url) -> Option<String> {
-    let mut pairs = url.query_pairs().peekable();
-    pairs
+    url.query_pairs()
         .find(|(k, _)| k.as_ref() == "bt")
         .map(|(_, v)| v.into_owned())
         .filter(|t| !t.is_empty())

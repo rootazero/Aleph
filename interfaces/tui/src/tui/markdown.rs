@@ -387,13 +387,14 @@ fn wrap_line_spans(spans: &[Span<'static>], width: usize) -> Vec<Line<'static>> 
     let wrapped = textwrap::wrap(&plain, width);
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(wrapped.len());
     let mut cursor = 0usize;
+    let mut row_spans: Vec<Span<'static>> = Vec::new();
     for row in &wrapped {
         let row = row.as_ref();
         let row_start = plain[cursor..].find(row).map_or(cursor, |off| cursor + off);
         let row_end = row_start + row.len();
         cursor = row_end;
 
-        let mut row_spans: Vec<Span<'static>> = Vec::new();
+        row_spans.clear();
         for (seg_start, seg_end, style) in &segments {
             let lo = (*seg_start).max(row_start);
             let hi = (*seg_end).min(row_end);
@@ -408,7 +409,7 @@ fn wrap_line_spans(spans: &[Span<'static>], width: usize) -> Vec<Line<'static>> 
         if row_spans.is_empty() {
             row_spans.push(Span::raw(row.to_string()));
         }
-        lines.push(Line::from(row_spans));
+        lines.push(Line::from(std::mem::take(&mut row_spans)));
     }
 
     if lines.is_empty() {

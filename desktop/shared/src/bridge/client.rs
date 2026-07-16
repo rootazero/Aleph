@@ -567,8 +567,10 @@ done
             m = marker.display(),
             rest = fake_helper_script().trim_start_matches("#!/bin/sh\n"),
         );
-        std::fs::write(&path, body).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        tokio::fs::write(&path, body).await.unwrap();
+        tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .await
+            .unwrap();
 
         let bridge = SwiftBridge::new(path);
         // First call races a premature exit: either the call fails fast or

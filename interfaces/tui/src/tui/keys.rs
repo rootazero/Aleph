@@ -222,11 +222,7 @@ fn handle_input_key(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
 
             if let Some(idx) = next_index {
                 state.history_index = Some(idx);
-                let history_text = state
-                    .send_history
-                    .get(idx)
-                    .cloned()
-                    .expect("history index was just validated");
+                let history_text = state.send_history.get(idx).cloned().unwrap_or_default();
                 textarea.select_all();
                 textarea.delete_char();
                 textarea.insert_str(&history_text);
@@ -246,11 +242,7 @@ fn handle_input_key(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
             if let Some(idx) = state.history_index {
                 if idx + 1 < state.send_history.len() {
                     state.history_index = Some(idx + 1);
-                    let history_text = state
-                        .send_history
-                        .get(idx + 1)
-                        .cloned()
-                        .expect("history index was just validated");
+                    let history_text = state.send_history.get(idx + 1).cloned().unwrap_or_default();
                     textarea.select_all();
                     textarea.delete_char();
                     textarea.insert_str(&history_text);

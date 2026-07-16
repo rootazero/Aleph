@@ -68,10 +68,10 @@ fn grant_windows(pview: &tauri::webview::PlatformWebview) {
     use webview2_com::PermissionRequestedEventHandler;
 
     let controller = pview.controller();
-    // SAFETY: `controller` is a live `ICoreWebView2Controller` COM interface
-    // owned by the Tauri webview; the COM calls below (`CoreWebView2`,
-    // `add_PermissionRequested`) operate on that valid interface, and each
-    // returns a `Result` so any failure is handled rather than dereferenced.
+    // `controller` is a live `ICoreWebView2Controller` COM interface owned by
+    // the Tauri webview; the COM calls below operate on that valid interface,
+    // and each returns a `Result` so any failure is handled rather than dereferenced.
+    // SAFETY: the COM interface is valid and all calls return a `Result`.
     unsafe {
         let core = match controller.CoreWebView2() {
             Ok(core) => core,

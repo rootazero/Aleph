@@ -48,15 +48,9 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
     ])
     .split(inner);
 
-    let question_area = chunks
-        .get(1)
-        .copied()
-        .expect("dialog layout has question area");
-    let options_area = chunks
-        .get(3)
-        .copied()
-        .expect("dialog layout has options area");
-    let hint_area = chunks.get(4).copied().expect("dialog layout has hint area");
+    let question_area = chunks.get(1).copied().unwrap_or_default();
+    let options_area = chunks.get(3).copied().unwrap_or_default();
+    let hint_area = chunks.get(4).copied().unwrap_or_default();
 
     // Render question
     let question = Paragraph::new(Line::from(Span::styled(
@@ -129,9 +123,9 @@ pub fn render_approval(frame: &mut Frame, approval: &ApprovalState, area: Rect) 
     ])
     .split(inner);
 
-    let question_area = chunks.get(1).copied().expect("approval layout has question");
-    let options_area = chunks.get(3).copied().expect("approval layout has options");
-    let hint_area = chunks.get(4).copied().expect("approval layout has hint");
+    let question_area = chunks.get(1).copied().unwrap_or_default();
+    let options_area = chunks.get(3).copied().unwrap_or_default();
+    let hint_area = chunks.get(4).copied().unwrap_or_default();
 
     // Command being gated, plus the server's reason (dim) when present.
     let mut question_lines = vec![Line::from(Span::styled(

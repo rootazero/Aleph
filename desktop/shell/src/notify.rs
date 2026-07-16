@@ -166,14 +166,17 @@ fn connect_request(target: &crate::connection::ConnectionTarget) -> String {
         "channel_kind": "desktop",
     });
     if matches!(target, crate::connection::ConnectionTarget::Remote(_)) {
-        if let Some(credential) = crate::connection::load_gateway_token() {
-            if credential.starts_with("aleph-bt-") {
-                params["bootstrap_ticket"] = json!(credential);
+        if let (Some(credential), Some(obj)) =
+            (crate::connection::load_gateway_token(), params.as_object_mut())
+        {
+            let key = if credential.starts_with("aleph-bt-") {
+                "bootstrap_ticket"
             } else if credential.starts_with("aleph-dt-") {
-                params["device_token"] = json!(credential);
+                "device_token"
             } else {
-                params["token"] = json!(credential);
-            }
+                "token"
+            };
+            obj.insert(key.to_owned(), json!(credential));
         }
     }
     json!({

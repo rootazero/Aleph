@@ -92,14 +92,14 @@ mod macos {
                     }
 
                     // Transition: denied → granted → restart daemon.
-                    if !previous.unwrap() && granted {
+                    if previous == Some(false) && granted {
                         tracing::info!(
                             "permission {:?} granted — restarting daemon to pick it up",
                             kind
                         );
                         restart_daemon(&handle).await;
                         state.set(kind, granted);
-                    } else if previous.unwrap() != granted {
+                    } else if previous != Some(granted) {
                         // Any other change (granted → denied, etc.) just record.
                         state.set(kind, granted);
                     }

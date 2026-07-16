@@ -608,11 +608,9 @@ fn ProviderDetailPanel(
     }
 
     let on_test = move |_| {
-        let sel = selected.get();
-        if sel.is_none() {
+        let Some(provider_name) = selected.get() else {
             return;
-        }
-        let provider_name = sel.unwrap();
+        };
 
         testing.set(true);
         test_success.set(None);
@@ -680,11 +678,9 @@ fn ProviderDetailPanel(
     };
 
     let on_save = move |_| {
-        let sel = selected.get();
-        if sel.is_none() {
+        let Some(provider_name) = selected.get() else {
             return;
-        }
-        let provider_name = sel.unwrap();
+        };
 
         saving.set(true);
         error.set(None);
@@ -722,11 +718,9 @@ fn ProviderDetailPanel(
     };
 
     let on_set_active = move |_| {
-        let sel = selected.get();
-        if sel.is_none() {
+        let Some(provider_name) = selected.get() else {
             return;
-        }
-        let provider_name = sel.unwrap();
+        };
 
         saving.set(true);
         error.set(None);
@@ -762,11 +756,9 @@ fn ProviderDetailPanel(
 
     let confirming = RwSignal::new(false);
     let on_confirm_delete = move || {
-        let sel = selected.get();
-        if sel.is_none() {
+        let Some(provider_name) = selected.get() else {
             return;
-        }
-        let provider_name = sel.unwrap();
+        };
 
         deleting.set(true);
         error.set(None);
@@ -791,8 +783,7 @@ fn ProviderDetailPanel(
     view! {
         <div class="flex flex-col h-full">
             {move || {
-                let sel = selected.get();
-                if sel.is_none() {
+                let Some(sel_name) = selected.get() else {
                     return view! {
                         <div class="flex flex-col items-center justify-center flex-1 text-text-tertiary">
                             <svg class="w-12 h-12 mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -802,9 +793,7 @@ fn ProviderDetailPanel(
                             <span class="text-sm">{t!(i18n, settings.search.select_to_configure)}</span>
                         </div>
                     }.into_any();
-                }
-
-                let sel_name = sel.unwrap();
+                };
                 let preset = find_preset(&sel_name);
                 let is_active = {
                     let dp = config.get().default_provider;

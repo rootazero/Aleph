@@ -96,10 +96,9 @@ mod role_map {
             CT_BUTTON => "AXButton",
             CT_SPLITBUTTON => "AXMenuButton",
             CT_CHECKBOX => "AXCheckBox",
-            CT_RADIOBUTTON => "AXRadioButton",
             // A UIA tab item is selected like a macOS radio button (AX models
             // tabs as a radio group), so it belongs in the actionable set.
-            CT_TABITEM => "AXRadioButton",
+            CT_RADIOBUTTON | CT_TABITEM => "AXRadioButton",
             CT_COMBOBOX => "AXComboBox",
             CT_EDIT => "AXTextField",
             CT_HYPERLINK => "AXLink",
@@ -108,16 +107,13 @@ mod role_map {
             CT_SPINNER => "AXIncrementor",
             // ── non-interactable containers / decoration ──
             CT_WINDOW => "AXWindow",
-            CT_PANE => "AXGroup",
-            CT_GROUP => "AXGroup",
+            CT_PANE | CT_GROUP => "AXGroup",
             CT_MENU => "AXMenu",
             CT_MENUBAR => "AXMenuBar",
             CT_TOOLBAR => "AXToolbar",
             CT_LIST => "AXList",
-            CT_LISTITEM => "AXRow",
             CT_TREE => "AXOutline",
-            CT_TREEITEM => "AXRow",
-            CT_DATAITEM => "AXRow",
+            CT_LISTITEM | CT_TREEITEM | CT_DATAITEM => "AXRow",
             CT_TAB => "AXTabGroup",
             CT_TEXT => "AXStaticText",
             CT_IMAGE => "AXImage",
@@ -171,7 +167,7 @@ pub fn rank_candidates(cands: &[RankCandidate], loc: &AxLocator) -> Option<usize
         let dist = match loc.center {
             Some([x, y]) => {
                 let (dx, dy) = (c.center.0 - x, c.center.1 - y);
-                (dx * dx + dy * dy).sqrt()
+                dx.hypot(dy)
             }
             None => 0.0,
         };
@@ -521,6 +517,7 @@ mod imp {
             if *count >= MAX_NODES {
                 break;
             }
+            // SAFETY: walker sibling traversal; terminates at end of child list.
             next = unsafe { walker.GetNextSiblingElement(&child) };
         }
     }
@@ -552,9 +549,11 @@ mod imp {
             role: cand.role.clone(),
             title: cand.title.clone(),
             value: value_of(el),
+            // SAFETY: read-only UIA bounding-rectangle property getter.
             bounds: unsafe { el.CurrentBoundingRectangle() }
                 .ok()
                 .map(rect_to_region),
+            // SAFETY: read-only UIA process-id property getter.
             pid: unsafe { el.CurrentProcessId() }.unwrap_or(0),
             ..Default::default()
         };

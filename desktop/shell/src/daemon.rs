@@ -110,7 +110,10 @@ pub async fn reconcile_for_version(version: &str) {
     let Some(marker) = version_marker() else {
         return;
     };
-    if std::fs::read_to_string(&marker).is_ok_and(|v| v.trim() == version) {
+    if tokio::fs::read_to_string(&marker)
+        .await
+        .is_ok_and(|v| v.trim() == version)
+    {
         return; // already reconciled for this app version — fast path
     }
     tracing::info!("reconciling daemon for app version {version}");
@@ -120,9 +123,9 @@ pub async fn reconcile_for_version(version: &str) {
     wait_until_port_closed().await;
 
     if let Some(parent) = marker.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        let _ = tokio::fs::create_dir_all(parent).await;
     }
-    if let Err(e) = std::fs::write(&marker, version) {
+    if let Err(e) = tokio::fs::write(&marker, version).await {
         tracing::warn!("could not record daemon-version marker: {e}");
     }
 }
@@ -305,7 +308,7 @@ async fn http_get_status_inner(path: &str) -> Option<u16> {
     // The status line lives in the first packet; 512 bytes is ample.
     let mut chunk = [0u8; 512];
     let n = stream.read(&mut chunk).await.ok()?;
-    let head = String::from_utf8_lossy(&chunk[..n]);
+    let head = String::from_utf8_lossy(chunk.get(..n)?);
     // e.g. "HTTP/1.1 200 OK"
     head.split_whitespace().nth(1)?.parse().ok()
 }

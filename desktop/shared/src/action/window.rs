@@ -448,7 +448,11 @@ fn macos_window_list() -> Result<Vec<WindowInfo>> {
             })
         };
 
+        // SAFETY: `kCGWindowName` is a framework constant valid for the
+        // process lifetime; `get_str` retains it safely.
         let title = unsafe { get_str(kCGWindowName) };
+        // SAFETY: `kCGWindowLayer` is a framework constant valid for the
+        // process lifetime; `get_i64` retains it safely.
         let layer = unsafe { get_i64(kCGWindowLayer) };
 
         // Skip windows with empty title and non-zero layer (menu extras, etc.)
@@ -456,8 +460,14 @@ fn macos_window_list() -> Result<Vec<WindowInfo>> {
             continue;
         }
 
+        // SAFETY: `kCGWindowNumber` is a framework constant valid for the
+        // process lifetime; `get_i64` retains it safely.
         let id = unsafe { get_i64(kCGWindowNumber) } as u64;
+        // SAFETY: `kCGWindowOwnerName` is a framework constant valid for the
+        // process lifetime; `get_str` retains it safely.
         let owner = unsafe { get_str(kCGWindowOwnerName) };
+        // SAFETY: `kCGWindowOwnerPID` is a framework constant valid for the
+        // process lifetime; `get_i64` retains it safely.
         let pid = unsafe { get_i64(kCGWindowOwnerPID) } as u64;
 
         windows.push(WindowInfo {
@@ -529,9 +539,9 @@ fn macos_set_window_bounds(
 
     // The two operations share the same window-resolution preamble; the
     // trailing setter line differs. `{0}` is replaced with the AX setter.
-    let setter = match (position, size) {
-        (Some(_), None) => "set position of tw to {a, b}",
-        (None, Some(_)) => "set size of tw to {a, b}",
+    let ((a, b), setter) = match (position, size) {
+        (Some((a, b)), None) => ((a, b), "set position of tw to {a, b}"),
+        (None, Some((a, b))) => ((a, b), "set size of tw to {a, b}"),
         // The public `move_window` / `resize_window` entry points only ever
         // pass exactly one of the two; reject anything else defensively.
         _ => {
@@ -540,9 +550,6 @@ fn macos_set_window_bounds(
             ))
         }
     };
-    let (a, b) = position
-        .or(size)
-        .expect("exactly one of position/size is Some");
 
     let script = format!(
         r#"on run argv

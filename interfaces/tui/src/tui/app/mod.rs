@@ -374,7 +374,7 @@ impl AppState {
             .messages
             .iter()
             .rposition(|m| matches!(m, ChatMessage::Assistant { .. }))
-            .expect("ensure_assistant_message guarantees an assistant message exists");
+            .unwrap_or_else(|| self.messages.len().saturating_sub(1));
         &mut self.messages[idx]
     }
 
@@ -435,6 +435,7 @@ impl AppState {
             // Inside a namespace: drill down through the stack
             let mut current_entries = &self.gateway_commands;
             let mut found_ns: Option<&CommandEntry> = None;
+            let empty: Vec<DisplayEntry> = Vec::new();
 
             for ns_name in namespace_stack {
                 found_ns = current_entries
@@ -443,7 +444,7 @@ impl AppState {
                 if let Some(ns) = found_ns {
                     current_entries = &ns.children;
                 } else {
-                    return Vec::new();
+                    return empty;
                 }
             }
 

@@ -72,7 +72,8 @@ pub async fn set(
 ) -> CliResult<()> {
     let content = match (content, file) {
         (Some(c), None) => c.to_string(),
-        (None, Some(path)) => std::fs::read_to_string(path)
+        (None, Some(path)) => tokio::fs::read_to_string(path)
+            .await
             .map_err(|e| CliError::Other(format!("Failed to read {path}: {e}")))?,
         (Some(_), Some(_)) => {
             return Err(CliError::Other(

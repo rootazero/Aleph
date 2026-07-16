@@ -84,6 +84,11 @@ pub struct EdgeRenderer {
 }
 
 impl EdgeRenderer {
+    /// # Safety
+    ///
+    /// This renderer uses `js_sys::Float32Array::view` to upload geometry
+    /// without copying. The caller must ensure the source slice is not moved or
+    /// dropped until the upload call returns.
     pub fn new(gl: &Gl) -> Result<EdgeRenderer, String> {
         let prog = compile_program(
             gl,
@@ -297,6 +302,11 @@ mod tests {
     }
 }
 
+/// # Safety
+///
+/// Uses `js_sys::Float32Array::view` on `data`. The view is consumed by the
+/// WebGL buffer upload before this function returns, so `data` must remain
+/// valid and un-moved for the duration of the call.
 fn bind_upload(gl: &Gl, buf: &WebGlBuffer, data: &[f32]) {
     gl.bind_buffer(Gl::ARRAY_BUFFER, Some(buf));
     unsafe {

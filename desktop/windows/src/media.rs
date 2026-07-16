@@ -297,7 +297,7 @@ impl MediaCapability for WindowsMedia {
             img.dimensions()
         });
 
-        let _ = std::fs::remove_file(&out_str);
+        let _ = tokio::fs::remove_file(&out_str).await;
 
         Ok(CameraSnapResult {
             image_base64: general_purpose::STANDARD.encode(&bytes),

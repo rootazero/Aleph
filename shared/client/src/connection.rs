@@ -295,18 +295,16 @@ impl AlephClient {
         }
 
         // Wait for response with timeout
-        let result = tokio::time::timeout(timeout, rx)
-            .await
-            .map_err(|e| {
-                // Remove pending request on timeout
-                let pending = self.pending.clone();
-                let id = id.clone();
-                tokio::spawn(async move {
-                    pending.write().await.remove(&id);
-                });
-                CliError::Timeout(e.to_string())
-            })?
-            .map_err(|e| CliError::Disconnected(e.to_string()))?;
+        let result = match tokio::time::timeout(timeout, rx).await {
+            Ok(result) => result,
+            Err(e) => {
+                // Remove pending request on timeout so the map doesn't leak
+                // across repeated failures.
+                self.pending.write().await.remove(&id);
+                return Err(CliError::Timeout(e.to_string()));
+            }
+        }
+        .map_err(|e| CliError::Disconnected(e.to_string()))?;
 
         match result {
             Ok(value) => {
@@ -330,8 +328,8 @@ impl AlephClient {
     /// can surface it.
     pub async fn handshake(&self, config: &CliConfig) -> CliResult<String> {
         #[derive(Serialize)]
-        struct ConnectParams {
-            device_name: String,
+        struct ConnectParams<'a> {
+            device_name: &'a str,
         }
 
         #[derive(serde::Deserialize)]
@@ -341,7 +339,7 @@ impl AlephClient {
         }
 
         let params = ConnectParams {
-            device_name: config.device_name.clone(),
+            device_name: &config.device_name,
         };
 
         let result: ConnectResult = self.call("connect", Some(params)).await?;

@@ -96,6 +96,9 @@ impl SystemCapability for WindowsSystem {
 
                 // SAFETY: EnumWindows callback follows documented signature.
                 extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+                    // SAFETY: `lparam` carries the `&mut EnumState` we pass to
+                    // `EnumWindows`, which outlives this synchronous enumeration;
+                    // remaining calls are documented Win32 APIs.
                     unsafe {
                         if IsWindowVisible(hwnd).as_bool() {
                             let mut buf = [0u16; 512];

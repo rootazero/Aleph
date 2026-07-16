@@ -636,11 +636,10 @@ fn capped_diff(
     let cap = surface.cap();
     let total = lines.len();
     let hidden = total.saturating_sub(cap);
-    let shown: Vec<DiffLine> = lines.into_iter().take(cap).collect();
     view! {
         <div>
             <div class=format!("{MONO_BLOCK} rounded-md glass-inset overflow-x-auto")>
-                {shown.into_iter().map(|l| {
+                {lines.into_iter().take(cap).map(|l| {
                     let cls = match l.sign {
                         '+' => "block px-2 bg-success/10 text-success",
                         '-' => "block px-2 bg-danger/10 text-danger",
@@ -810,13 +809,12 @@ fn search_body(
     let cap = surface.cap();
     let total = hits.len();
     let hidden = total.saturating_sub(cap);
-    let shown: Vec<_> = hits.into_iter().take(cap).collect();
     view! {
         <div class="flex flex-col gap-1 text-xs">
             <span class="text-[10px] uppercase tracking-wider text-text-tertiary">
                 {format!("{total} results")}
             </span>
-            {shown.into_iter().map(|(title, url)| view! {
+            {hits.into_iter().take(cap).map(|(title, url)| view! {
                 <div class="flex flex-col">
                     <span class="text-text-primary truncate">{title}</span>
                     {url.map(|u| view! {
@@ -856,10 +854,9 @@ fn default_body(
     let cap = surface.cap();
     let total = kv.len();
     let hidden = total.saturating_sub(cap);
-    let shown: Vec<_> = kv.into_iter().take(cap).collect();
     view! {
         <div class="flex flex-col gap-0.5 text-xs font-mono">
-            {shown.into_iter().map(|(k, val)| view! {
+            {kv.into_iter().take(cap).map(|(k, val)| view! {
                 <div class="flex gap-2 min-w-0">
                     <span class="text-text-tertiary shrink-0">{format!("{k}:")}</span>
                     <span class="text-text-secondary truncate">{val}</span>

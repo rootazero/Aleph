@@ -94,7 +94,7 @@ pub fn build_rows(
                     let a = acc.get_or_insert_with(|| ExploreAcc {
                         key: format!("explore:{run}:{}", t.tool_id),
                         run_id: run.clone(),
-                        tools: Vec::new(),
+                        tools: Vec::with_capacity(m.tool_calls.len()),
                         streaming: false,
                     });
                     a.tools.push(t.clone());

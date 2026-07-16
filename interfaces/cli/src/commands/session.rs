@@ -313,7 +313,7 @@ pub async fn export(
 
     match output_path {
         Some(path) => {
-            std::fs::write(path, &rendered)?;
+            tokio::fs::write(path, &rendered).await?;
             let count = result
                 .get("count")
                 .and_then(serde_json::Value::as_u64)

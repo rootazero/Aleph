@@ -43,7 +43,7 @@ fn remove_pid_file() {
 /// Check if a process with the given PID is running
 #[cfg(unix)]
 fn is_process_running(pid: u32) -> bool {
-    // kill(pid, 0) checks existence without sending a signal
+    // SAFETY: pid is a positive u32 cast to i32; kill(0) checks existence only.
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
@@ -67,6 +67,8 @@ fn pid_belongs_to_server(pid: u32) -> bool {
 /// Send a signal to a process (Unix only)
 #[cfg(unix)]
 fn send_signal(pid: u32, signal: i32) -> bool {
+    // SAFETY: `pid` is a positive `u32` cast to `i32`. The caller is Unix-gated and
+    // `signal` is a valid Unix signal constant.
     unsafe { libc::kill(pid as i32, signal) == 0 }
 }
 

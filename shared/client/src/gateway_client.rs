@@ -100,7 +100,7 @@ impl GatewayClient {
         let request = json!({
             "jsonrpc": "2.0",
             "method": method,
-            "params": params.unwrap_or(json!({})),
+            "params": params.unwrap_or_else(|| json!({})),
             "id": request_id
         });
 
@@ -125,7 +125,7 @@ impl GatewayClient {
                     .map_err(|e| CliError::Other(format!("Invalid response: {e}")))?;
 
                 let json: Value = serde_json::from_str(text)?;
-                if json.get("id").and_then(|id| id.as_i64()) == Some(request_id) {
+                if json.get("id").and_then(serde_json::Value::as_i64) == Some(request_id) {
                     return Ok::<Value, CliError>(json);
                 }
             }
