@@ -55,7 +55,12 @@ pub(super) fn print_startup_banner(addr: SocketAddr, full_config: &FullGatewayCo
         env!("ALEPH_VERSION")
     );
     println!("╠═══════════════════════════════════════════════╣");
-    println!("║  WebSocket: ws://{addr}          ║");
+    let ws_scheme = if full_config.gateway.tls.is_enabled() {
+        "wss"
+    } else {
+        "ws"
+    };
+    println!("║  WebSocket: {ws_scheme}://{addr}          ║");
     println!("║  Protocol:  JSON-RPC 2.0                      ║");
     println!("╚═══════════════════════════════════════════════╝");
     println!();

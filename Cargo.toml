@@ -228,6 +228,16 @@ futures-util = "0.3"
 clap = { version = "4.4", features = ["derive", "env"] }
 tower-http = { version = "0.6", features = ["fs", "cors", "compression-gzip"] }
 axum = { version = "0.8", features = ["ws"] }
+# Native TLS termination for the gateway (self-signed autogen + BYO cert).
+# `tls-rustls-no-provider` keeps aws-lc-rs OUT of the tree — we install the
+# `ring` provider ourselves (ring is already a transitive dep; aws-lc-rs is a
+# heavy native build we deliberately avoid per R3). `rcgen` (ring backend)
+# generates the self-signed cert; `rustls` is pinned direct only to expose
+# `rustls::crypto::ring` for the one-time provider install.
+axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+time = "0.3"
 tower = "0.5"
 mime_guess = "2.0"
 mdns-sd = { workspace = true }

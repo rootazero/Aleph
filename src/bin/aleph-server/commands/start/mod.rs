@@ -161,6 +161,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         require_idempotency_key: full_config.gateway.require_idempotency_key,
         allowed_origins: full_config.gateway.allowed_origins.clone(),
         allow_any_origin: full_config.gateway.allow_any_origin,
+        trusted_proxies: full_config.gateway.trusted_proxies.clone(),
+        tls: full_config.gateway.tls.clone(),
     };
     let mut server = GatewayServer::with_config(addr, server_config);
 
@@ -1634,6 +1636,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         drop(app_cfg);
 
         if a2a_config.enabled {
+            // A2A shares the gateway listener but does NOT resolve
+            // X-Forwarded-For, so a same-host reverse proxy makes every A2A
+            // caller appear as loopback and take the localhost auth bypass.
+            // Warn when both are on so the operator can close it.
+            if !full_config.gateway.trusted_proxies.is_empty()
+                && a2a_config.server.security.local_bypass
+            {
+                tracing::warn!(
+                    "A2A is enabled with [a2a.server.security] local_bypass = true while \
+                     [gateway] trusted_proxies is set. A2A does not resolve X-Forwarded-For, so a \
+                     same-host reverse proxy lets remote callers reach A2A as unauthenticated \
+                     localhost. Set [a2a.server.security] local_bypass = false to require credentials."
+                );
+            }
             use alephcore::a2a::adapter::auth::TieredAuthenticator;
             use alephcore::a2a::adapter::client::A2AClientPool;
             use alephcore::a2a::adapter::server::A2AServerState;
@@ -2608,11 +2624,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     if !args.daemon {
         let addr_display = format_socket_addr(&final_bind, final_port);
+        let (http, ws) = if full_config.gateway.tls.is_enabled() {
+            ("https", "wss")
+        } else {
+            ("http", "ws")
+        };
         println!();
         println!("Aleph Server:");
-        println!("  - URL:       http://{addr_display}");
-        println!("  - WebSocket: ws://{addr_display}/ws");
-        println!("  - Panel UI:  http://{addr_display}/");
+        println!("  - URL:       {http}://{addr_display}");
+        println!("  - WebSocket: {ws}://{addr_display}/ws");
+        println!("  - Panel UI:  {http}://{addr_display}/");
         println!();
     }
 
@@ -2640,7 +2661,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
     if let Some(dir) = ipc_data_dir.as_deref() {
-        let endpoint = alephcore::cli::endpoint::IpcEndpoint::current(format!("http://{addr}"));
+        // Advertise the true scheme. NOTE: under TLS the local CLI admin IPC
+        // client cannot yet trust the self-signed cert (client-side wss/TLS is a
+        // tracked follow-up) — the URL is kept truthful so the failure is
+        // diagnosable rather than a silent plaintext-vs-TLS mismatch.
+        let scheme = if full_config.gateway.tls.is_enabled() {
+            "https"
+        } else {
+            "http"
+        };
+        let endpoint =
+            alephcore::cli::endpoint::IpcEndpoint::current(format!("{scheme}://{addr}"));
         if let Err(e) = alephcore::cli::endpoint::write_endpoint(dir, &endpoint) {
             tracing::warn!(error = %e, "failed to write IPC endpoint discovery file");
         }

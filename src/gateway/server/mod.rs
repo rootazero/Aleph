@@ -150,6 +150,11 @@ pub struct GatewaySharedState {
     /// operator-allow-listed — the DNS-rebinding / cross-origin-WebSocket
     /// guard. Native clients (no `Origin` header) are unaffected.
     pub origin_policy: Arc<crate::gateway::origin_policy::OriginPolicy>,
+    /// Reverse-proxy trust allowlist. Resolves the effective client IP at the
+    /// `/ws` upgrade so a connection arriving via a declared proxy cannot
+    /// inherit loopback (operator) trust. Empty ⇒ socket peer used verbatim.
+    /// See [`crate::gateway::trusted_proxy`].
+    pub trusted_proxies: crate::gateway::trusted_proxy::TrustedProxies,
     /// Cluster node registry (shared Arc with `GatewayServer`). Center-side view
     /// of connected `role:node` peers; populated by the connect handler.
     pub node_registry: Arc<crate::cluster::NodeRegistry>,
@@ -194,6 +199,13 @@ pub struct GatewayConfig {
     /// Trust every Origin on the `/ws` upgrade (reverse-proxy escape
     /// hatch). Mirrors `GatewayServerConfig::allow_any_origin`.
     pub allow_any_origin: bool,
+    /// Reverse-proxy trust allowlist (IPs / CIDRs). Populated by the binary
+    /// from TOML `[gateway] trusted_proxies`. Mirrors
+    /// `GatewayServerConfig::trusted_proxies`; see [`crate::gateway::trusted_proxy`].
+    pub trusted_proxies: Vec<String>,
+    /// Native TLS termination config. Populated by the binary from TOML
+    /// `[gateway.tls]`. Default off. See [`crate::gateway::tls`].
+    pub tls: crate::gateway::tls::TlsConfig,
 }
 
 impl Default for GatewayConfig {
@@ -208,6 +220,8 @@ impl Default for GatewayConfig {
             allow_any_origin: false,
             lane: LaneConfig::default(),
             require_idempotency_key: false,
+            trusted_proxies: Vec::new(),
+            tls: crate::gateway::tls::TlsConfig::default(),
         }
     }
 }
@@ -524,6 +538,9 @@ impl GatewayServer {
                     self.config.allowed_origins.clone(),
                 )
             }),
+            trusted_proxies: crate::gateway::trusted_proxy::TrustedProxies::from_config(
+                &self.config.trusted_proxies,
+            ),
             node_registry: self.node_registry.clone(),
             exec_approval_manager: self.exec_approval_manager.clone(),
         });
@@ -633,22 +650,7 @@ impl GatewayServer {
     /// This method runs indefinitely, accepting new connections and
     /// processing messages. Each connection is handled in its own task.
     pub async fn run(&self) -> Result<(), GatewayError> {
-        self.spawn_background_tasks();
-        let router = self.build_router();
-        let listener = tokio::net::TcpListener::bind(&self.addr)
-            .await
-            .map_err(|e| GatewayError::BindFailed {
-                addr: self.addr,
-                source: e,
-            })?;
-        info!("Aleph listening on http://{}", self.addr);
-        axum::serve(
-            listener,
-            router.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
-        Ok(())
+        self.serve(None).await
     }
 
     /// Run the server with graceful shutdown support
@@ -656,27 +658,93 @@ impl GatewayServer {
         &self,
         shutdown: tokio::sync::oneshot::Receiver<()>,
     ) -> Result<(), GatewayError> {
+        self.serve(Some(shutdown)).await
+    }
+
+    /// Bind and serve, choosing the plaintext or TLS listener based on
+    /// `[gateway.tls]`. Both listeners preserve
+    /// `into_make_service_with_connect_info::<SocketAddr>` so the WS upgrade
+    /// handler and the A2A peer extractor still see the socket peer address
+    /// (they fail closed without it). `shutdown` (when present) drives a
+    /// graceful drain on either path.
+    async fn serve(
+        &self,
+        shutdown: Option<tokio::sync::oneshot::Receiver<()>>,
+    ) -> Result<(), GatewayError> {
         self.spawn_background_tasks();
-        let router = self.build_router();
-        let listener = tokio::net::TcpListener::bind(&self.addr)
-            .await
-            .map_err(|e| GatewayError::BindFailed {
-                addr: self.addr,
-                source: e,
-            })?;
-        info!("Aleph listening on http://{}", self.addr);
-        info!("  WebSocket: ws://{}/ws", self.addr);
-        info!("  Panel UI:  http://{}/", self.addr);
-        axum::serve(
-            listener,
-            router.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(async {
-            let _ = shutdown.await;
-        })
-        .await
-        .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
+        let make_service = self
+            .build_router()
+            .into_make_service_with_connect_info::<SocketAddr>();
+
+        if self.config.tls.is_enabled() {
+            let tls = self.load_tls().await?;
+            // Bind ourselves (as the plaintext path does) so a port-in-use error
+            // is reported as BindFailed with the addr + hint, not an opaque
+            // ConnectionError. axum-server drives the std listener.
+            let std_listener = std::net::TcpListener::bind(self.addr)
+                .and_then(|l| l.set_nonblocking(true).map(|()| l))
+                .map_err(|e| GatewayError::BindFailed {
+                    addr: self.addr,
+                    source: e,
+                })?;
+            info!("Aleph listening on https://{}", self.addr);
+            info!("  WebSocket: wss://{}/ws", self.addr);
+            info!("  Panel UI:  https://{}/", self.addr);
+            info!("  TLS cert SHA-256: {}", tls.fingerprint_sha256);
+            let handle = axum_server::Handle::new();
+            if let Some(shutdown) = shutdown {
+                let handle = handle.clone();
+                tokio::spawn(async move {
+                    // Wait until the server is actually listening before we can
+                    // signal graceful shutdown, so an immediate shutdown (fast
+                    // restart) is not lost to the notify-before-waiter race.
+                    handle.listening().await;
+                    let _ = shutdown.await;
+                    handle.graceful_shutdown(Some(std::time::Duration::from_secs(3)));
+                });
+            }
+            axum_server::from_tcp_rustls(std_listener, tls.rustls_config)
+                .handle(handle)
+                .serve(make_service)
+                .await
+                .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
+        } else {
+            let listener = tokio::net::TcpListener::bind(&self.addr)
+                .await
+                .map_err(|e| GatewayError::BindFailed {
+                    addr: self.addr,
+                    source: e,
+                })?;
+            info!("Aleph listening on http://{}", self.addr);
+            info!("  WebSocket: ws://{}/ws", self.addr);
+            info!("  Panel UI:  http://{}/", self.addr);
+            match shutdown {
+                Some(shutdown) => axum::serve(listener, make_service)
+                    .with_graceful_shutdown(async {
+                        let _ = shutdown.await;
+                    })
+                    .await
+                    .map_err(|e| GatewayError::ConnectionError(e.to_string()))?,
+                None => axum::serve(listener, make_service)
+                    .await
+                    .map_err(|e| GatewayError::ConnectionError(e.to_string()))?,
+            }
+        }
         Ok(())
+    }
+
+    /// Load the gateway TLS material (BYO cert or cached self-signed).
+    ///
+    /// The self-signed cache lives under `~/.aleph/gateway/tls/` (honoring
+    /// `ALEPH_HOME`).
+    async fn load_tls(&self) -> Result<crate::gateway::tls::GatewayTls, GatewayError> {
+        let cache_dir = crate::utils::paths::get_config_dir()
+            .map_err(|e| GatewayError::TlsSetup(format!("resolving config dir: {e}")))?
+            .join("gateway")
+            .join("tls");
+        crate::gateway::tls::load_or_generate(&self.config.tls, &cache_dir)
+            .await
+            .map_err(|e| GatewayError::TlsSetup(format!("{e:#}")))
     }
 }
 
@@ -694,6 +762,9 @@ pub enum GatewayError {
 
     #[error("Protocol error: {0}")]
     ProtocolError(String),
+
+    #[error("TLS setup failed: {0}")]
+    TlsSetup(String),
 }
 
 #[cfg(test)]

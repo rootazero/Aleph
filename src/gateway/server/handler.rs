@@ -80,8 +80,11 @@ struct ConnectionContext {
     security_store: Option<Arc<SecurityStore>>,
     /// Device-token manager for bootstrap-ticket / per-device-token auth.
     device_token_mgr: Option<Arc<crate::gateway::security::DeviceTokenManager>>,
-    /// Socket peer IP. Used for the per-IP connection cap and rate-limit
-    /// identity.
+    /// Resolved effective client IP: the socket peer, or — when the peer is a
+    /// declared trusted proxy (or a loopback peer carrying `X-Forwarded-For`) —
+    /// the real client resolved from `X-Forwarded-For`, guaranteed non-loopback.
+    /// Drives the per-IP cap, rate-limit identity, and every `is_loopback` trust
+    /// decision. See [`crate::gateway::trusted_proxy`].
     client_ip: IpAddr,
     /// Cluster node registry (shared Arc). The connect handler registers a
     /// `role:node` connection here and cleanup deregisters it.
@@ -98,10 +101,37 @@ pub(super) async fn ws_upgrade_handler(
     State(state): State<Arc<GatewaySharedState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
-    // IP-keyed abuse protections (per-IP cap, rate limiting) key off the
-    // socket peer address verbatim. The trusted-proxy / X-Forwarded-For
-    // resolution died with the LAN-trust revert.
-    let client_ip = peer_addr.ip();
+    // Resolve the *effective* client IP. With no `[gateway] trusted_proxies`
+    // configured (the default) this is the socket peer verbatim. When the
+    // socket peer is a declared reverse proxy, the real client is read from
+    // `X-Forwarded-For` and the result is guaranteed non-loopback — so a
+    // connection arriving through a same-host proxy can never inherit the
+    // loopback auto-operator trust (it must present a Gateway token). Every
+    // downstream trust/abuse decision below keys off this value. See
+    // [`crate::gateway::trusted_proxy`].
+    // Join every `X-Forwarded-For` header line (a client can split the chain
+    // across multiple lines; only reading the first would let it hide the
+    // proxy-appended real-client hop from the right-to-left walk).
+    let xff_joined = headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect::<Vec<_>>()
+        .join(",");
+    let client_ip = crate::gateway::trusted_proxy::resolve_effective_client_ip(
+        peer_addr.ip(),
+        (!xff_joined.is_empty()).then_some(xff_joined.as_str()),
+        &state.trusted_proxies,
+    );
+    if client_ip.is_unspecified() {
+        // Only reached when a proxied connection could not yield a real client
+        // IP (proxy not forwarding X-Forwarded-For). Held to the login wall.
+        warn!(
+            peer = %peer_addr,
+            "trusted-proxy connection could not resolve a real client IP from X-Forwarded-For; \
+             treating as unauthenticated remote (is the proxy forwarding the header?)"
+        );
+    }
 
     // Cross-origin / DNS-rebinding guard. A browser always attaches an
     // `Origin` header to a WS upgrade and cannot forge it, so a malicious page
@@ -164,7 +194,9 @@ pub(super) async fn ws_upgrade_handler(
     // on the reserved desktop semaphore pool; everyone else falls back to
     // the shared pool. See `ConnectionContext::channel_class` for the
     // accepted trade-off.
-    let channel_class = if peer_addr.ip().is_loopback() {
+    // Use the resolved client IP (not the raw socket peer) so a proxied
+    // connection is not mis-classed as a local Desktop peer.
+    let channel_class = if client_ip.is_loopback() {
         ChannelClass::Desktop
     } else {
         ChannelClass::Bot

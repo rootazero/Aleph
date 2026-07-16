@@ -804,10 +804,42 @@ token rotation (`gateway.token.rotate`).
   Still, treat the token as the single key to everything (an authorized remote
   has full operator authority, including PTY / shell): share it only over a
   trusted channel, and rotate it if it may have leaked.
-- **Beyond the LAN.** To reach Aleph across the internet, front it with
-  your own reverse proxy / VPN / SSH tunnel that terminates trust
-  *upstream* of the gateway. The Gateway token is the only transport auth
-  Aleph itself provides.
+- **Transport encryption — native TLS.** By default the LAN transport is
+  plaintext (the Gateway token rides an unencrypted WS on the local network).
+  Set `[gateway.tls] mode = "auto"` to serve HTTPS/WSS: a bring-your-own cert
+  (`cert_path`/`key_path`), or a cached self-signed cert auto-generated under
+  `~/.aleph/gateway/tls/` whose SHA-256 fingerprint is logged for pinning. See
+  [GATEWAY.md](GATEWAY.md) → *TLS (HTTPS / WSS)*. This protects the token (and
+  all traffic) in transit; it does not replace the token wall.
+- **Reverse-proxy trust.** If you front the gateway with a proxy (for TLS, SSO,
+  or internet exposure), you **must** list the proxy in `[gateway]
+  trusted_proxies` (IPs/CIDRs). This is not optional cosmetics: a proxy on the
+  *same host* makes every proxied client's socket peer `127.0.0.1`, which would
+  otherwise inherit the loopback ⇒ operator auto-trust and hand every remote
+  caller token-free control. With the proxy allow-listed, the real client IP is
+  resolved from `X-Forwarded-For` (fail-closed) and proxied connections are held
+  to the token wall like any other remote. See [GATEWAY.md](GATEWAY.md) →
+  *Trusted reverse proxies*.
+- **Beyond the LAN.** To reach Aleph across the internet, front it with your own
+  reverse proxy / VPN / SSH tunnel that terminates trust *upstream* of the
+  gateway (and list it in `trusted_proxies`). Aleph deliberately ships no
+  ACME/Let's Encrypt — public TLS is the proxy's job; native TLS is for
+  local/LAN encryption.
+
+> **Known limitation (A2A).** The A2A surface (`[a2a]`, disabled by default) is
+> merged onto the **same** gateway listener but has an independent loopback-trust
+> path that does not yet resolve `X-Forwarded-For`
+> (`src/a2a/domain/security.rs::infer_from_addr`). If you enable A2A behind a
+> same-host reverse proxy, set `[a2a.server.security] local_bypass = false` (the server
+> logs a warning at startup when `trusted_proxies` is set while A2A
+> localhost-bypass is on). Threading full trusted-proxy resolution into A2A is a
+> tracked follow-up.
+
+> **Known limitation (CLI over TLS).** With `[gateway.tls]` enabled the local
+> `aleph` CLI admin IPC (the discovery URL becomes `https://…`) cannot yet trust
+> the self-signed cert — client-side wss/TLS is the same tracked follow-up as the
+> Panel/CLI/cluster wss ripple. Keep TLS off if you rely on CLI write commands
+> against a running daemon, or drive it from the Panel.
 
 ### The one remaining guardrail: WS Origin check
 

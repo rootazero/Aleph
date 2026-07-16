@@ -65,7 +65,6 @@ pub mod session_manager;
 pub mod session_projector;
 pub mod session_store;
 // loop_callback_adapter removed (depended on old OTAF agent_loop types)
-pub mod bind_mode;
 pub mod channel;
 pub mod channel_approval;
 pub mod channel_chunking;
@@ -109,10 +108,11 @@ pub mod resume_coordinator;
 pub mod run_event_bus;
 pub mod state_version;
 pub mod streaming;
-pub mod tailscale;
+pub mod tls;
 pub mod tools_invalidation;
 pub mod trace_context;
 pub mod trace_protocol;
+pub mod trusted_proxy;
 pub mod voice;
 pub mod webhook_receiver;
 pub mod webhooks;
@@ -136,7 +136,6 @@ pub use execution_engine::{
 };
 pub use session_manager::{SessionManager, SessionManagerConfig};
 // EventEmittingCallback, ResponseChunkEmitter, UserQuestion removed (old OTAF types)
-pub use bind_mode::BindMode;
 pub use channel::{
     Attachment, Channel, ChannelCapabilities, ChannelConfig, ChannelError, ChannelFactory,
     ChannelHealth, ChannelId, ChannelInfo, ChannelResult, ChannelStatus, ConversationId,

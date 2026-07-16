@@ -166,6 +166,25 @@ pub struct GatewayServerConfig {
     /// [`crate::gateway::channel_registry::SendRetryPolicy`].
     #[serde(default)]
     pub send_retry: crate::gateway::channel_registry::SendRetryTomlConfig,
+    /// Reverse-proxy trust allowlist: IPs or CIDR blocks of the reverse
+    /// proxies you front the gateway with (e.g. `["127.0.0.1"]` for a
+    /// same-host Caddy/nginx — listing either loopback family auto-covers both
+    /// `127.0.0.1` and `::1` — or `["10.0.0.0/8"]` for a LAN proxy). When a
+    /// connection's socket peer matches one of these, its real client IP is
+    /// resolved from `X-Forwarded-For` and it can **no longer inherit the
+    /// loopback auto-operator trust** — it must present a Gateway token like
+    /// any other remote client. (A loopback peer that carries `X-Forwarded-For`
+    /// is treated as proxied even if the allowlist is empty.) Empty (default)
+    /// keeps the historical behavior (socket peer IP used verbatim). See
+    /// [`crate::gateway::trusted_proxy`].
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
+    /// Native TLS termination (`[gateway.tls]`). Default off (plaintext
+    /// HTTP/WS). `mode = "auto"` serves HTTPS/WSS with a cached self-signed
+    /// cert, or a BYO cert via `cert_path`/`key_path`. See
+    /// [`crate::gateway::tls`].
+    #[serde(default)]
+    pub tls: crate::gateway::tls::TlsConfig,
 }
 
 const fn default_memory_monitor_secs() -> u64 {
@@ -199,6 +218,8 @@ impl Default for GatewayServerConfig {
             channel_health: crate::gateway::channel_health_monitor::ChannelHealthConfig::default(),
             delivery_queue: crate::gateway::delivery_queue::DeliveryQueueTomlConfig::default(),
             send_retry: crate::gateway::channel_registry::SendRetryTomlConfig::default(),
+            trusted_proxies: Vec::new(),
+            tls: crate::gateway::tls::TlsConfig::default(),
         }
     }
 }
@@ -647,7 +668,6 @@ require_auth = true
 enable_pairing = false
 allow_guest = false
 require_challenge = true
-trusted_proxies = ["10.0.0.0/8"]
 
 [gateway.auth]
 mode = "token"
@@ -667,6 +687,33 @@ model = "test"
         // it to the gateway root themselves (documented in the release note).
         assert!(config.gateway.allowed_origins.is_empty());
         assert!(!config.gateway.allow_any_origin);
+    }
+
+    #[test]
+    fn trusted_proxies_and_tls_parse_from_gateway() {
+        let toml = r#"
+[agents.main]
+model = "test"
+
+[gateway]
+trusted_proxies = ["127.0.0.1", "10.0.0.0/8"]
+
+[gateway.tls]
+mode = "auto"
+"#;
+        let config = GatewayConfig::from_toml(toml).expect("tls/proxy config loads");
+        assert_eq!(
+            config.gateway.trusted_proxies,
+            vec!["127.0.0.1".to_string(), "10.0.0.0/8".to_string()]
+        );
+        assert!(config.gateway.tls.is_enabled());
+        assert_eq!(config.gateway.tls.mode, crate::gateway::tls::TlsMode::Auto);
+
+        // Absent tables ⇒ safe defaults (empty allowlist, TLS off).
+        let bare = GatewayConfig::from_toml("[agents.main]\nmodel = \"test\"\n")
+            .expect("bare config loads");
+        assert!(bare.gateway.trusted_proxies.is_empty());
+        assert!(!bare.gateway.tls.is_enabled());
     }
 
     #[test]

@@ -394,14 +394,63 @@ opening many idle sockets.
 
 ### Trusted reverse proxies
 
-The IP-keyed abuse protections (per-IP cap, rate limiter, auth-failure lockout)
-key off the client IP. Behind a reverse proxy the socket peer is the *proxy*, so
-every client collapses to one address. Configure `gateway.trusted_proxies` with
-the proxy IPs/CIDRs (e.g. `["10.0.0.0/8", "::1"]`) and, **only** when the socket
-peer matches the allowlist, the real client IP is read from `X-Forwarded-For`
-(rightmost non-proxy hop). Empty (default) ⇒ the socket peer is used verbatim and
-`X-Forwarded-For` is never trusted (it is client-spoofable, so the allowlist is
-the whole security boundary). Implemented in `src/gateway/trusted_proxy.rs`.
+Configure `[gateway] trusted_proxies` with the proxy IPs/CIDRs you front the
+gateway with (e.g. `["10.0.0.0/8", "::1"]`). When — and **only** when — a
+connection's socket peer matches the allowlist, its real client IP is resolved
+from `X-Forwarded-For` (rightmost non-proxy hop; the right-to-left walk skips
+further allow-listed hops). Empty (default) ⇒ the socket peer is used verbatim
+and `X-Forwarded-For` is never trusted (it is client-spoofable, so the allowlist
+is the whole security boundary). Implemented in `src/gateway/trusted_proxy.rs`
+(resolved once at the `/ws` upgrade, `server/handler.rs`).
+
+This is a **security control, not just an abuse-keying nicety**. Two things key
+off the resolved client IP: (1) the IP-keyed abuse protections (per-IP cap, rate
+limiter) — behind a proxy every client otherwise collapses to one address; and
+(2) — critically — the **loopback ⇒ operator** auto-trust. Without this, a
+reverse proxy running on the *same host* makes every proxied connection's socket
+peer `127.0.0.1`, silently promoting every remote client to a token-free
+operator. The resolver is **fail-closed**: a connection arriving via a declared
+proxy can never resolve to a loopback address (a missing or unparseable
+`X-Forwarded-For` yields `0.0.0.0`, not the proxy's loopback), so it always
+falls to the login wall and must present a Gateway token like any other remote
+client. Trade-off: once you list a proxy, even a Panel on the proxy host reaches
+the gateway *through* the proxy and therefore needs a token — connect directly
+to the loopback port to keep zero-config operator.
+
+> A2A (`[a2a]`, off by default) is merged onto the **same** gateway listener but
+> has an independent loopback-trust path (`src/a2a/domain/security.rs::infer_from_addr`)
+> that does **not** yet resolve `X-Forwarded-For`. If you enable A2A behind a
+> same-host proxy, set `[a2a.server.security] local_bypass = false` (the server logs a
+> warning when `trusted_proxies` is set while A2A localhost-bypass is on). Full
+> trusted-proxy resolution for A2A is a tracked follow-up.
+
+### TLS (HTTPS / WSS)
+
+Native TLS termination is off by default (plaintext HTTP/WS). One knob turns it
+on:
+
+```toml
+[gateway.tls]
+mode = "auto"            # "off" (default) | "auto"
+# cert_path = "/etc/aleph/cert.pem"   # optional BYO cert (PEM chain)
+# key_path  = "/etc/aleph/key.pem"    # optional BYO key  (PEM)
+```
+
+`mode = "auto"` serves HTTPS + WSS on the same port. With `cert_path` +
+`key_path` set it loads that bring-your-own cert (e.g. a CA-signed cert from
+ACME or your proxy); otherwise it generates a self-signed cert once and caches
+it under `~/.aleph/gateway/tls/` (`cert.pem` + `key.pem`, key written `0600`).
+The leaf certificate's SHA-256 fingerprint is logged at startup so native
+clients can pin it (browsers show a one-time "proceed" warning for self-signed;
+CLI/desktop clients pin the fingerprint). Implemented in `src/gateway/tls.rs`
+(crypto provider is `ring`; `axum-server` serves the rustls listener while
+preserving `ConnectInfo<SocketAddr>` so the peer-IP trust path still works).
+
+Aleph deliberately ships **no ACME/Let's Encrypt** — public-internet TLS is the
+reverse proxy's job (terminate TLS at Caddy/nginx/Cloudflare, keep the gateway
+loopback-bound, and list the proxy in `trusted_proxies` above). Self-signed is
+for local/LAN use; "把复杂留给自己，把简单留给用户" — the cert lifecycle is
+internal, the user writes two lines.
 
 ### Method-level authorization
 
