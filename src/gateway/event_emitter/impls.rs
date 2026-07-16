@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicU64, Ordering};
 
-use super::instant_buffer::{plan_instant, InstantOutcome};
+use super::instant_buffer::{plan_instant, InstantOutcome, InstantState};
 use super::types::{EventEmitError, OutputMode, StreamEvent};
 use super::EventEmitter;
 use crate::gateway::event_bus::GatewayEventBus;
@@ -27,8 +27,8 @@ use crate::gateway::events::GatewayEventFrame;
 pub struct GatewayEventEmitter {
     pub(super) event_bus: Arc<GatewayEventBus>,
     pub(super) seq_counter: AtomicU64,
-    // Instant mode buffer for accumulating all chunks
-    pub(super) instant_buffer: Mutex<String>,
+    // Instant mode planner state (delta accumulator + final-emitted marker)
+    pub(super) instant_buffer: Mutex<InstantState>,
     /// Output mode: typewriter (streaming) or instant (all-at-once)
     pub(super) output_mode: OutputMode,
 }
@@ -39,7 +39,7 @@ impl GatewayEventEmitter {
         Self {
             event_bus,
             seq_counter: AtomicU64::new(0),
-            instant_buffer: Mutex::new(String::new()),
+            instant_buffer: Mutex::new(InstantState::default()),
             output_mode: OutputMode::Typewriter,
         }
     }
@@ -50,7 +50,7 @@ impl GatewayEventEmitter {
         Self {
             event_bus,
             seq_counter: AtomicU64::new(0),
-            instant_buffer: Mutex::new(String::new()),
+            instant_buffer: Mutex::new(InstantState::default()),
             output_mode,
         }
     }

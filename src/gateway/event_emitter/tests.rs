@@ -216,9 +216,9 @@ async fn test_instant_mode_buffers_non_final_chunks() {
         .await;
 
     // Check that content is buffered in instant_buffer
-    let buffer = emitter.instant_buffer.lock().await;
-    assert_eq!(*buffer, "Hello World");
-    drop(buffer);
+    let state = emitter.instant_buffer.lock().await;
+    assert_eq!(state.buffer, "Hello World");
+    drop(state);
 
     // Final chunk should flush everything
     let _ = emitter
@@ -233,12 +233,14 @@ async fn test_instant_mode_buffers_non_final_chunks() {
         })
         .await;
 
-    // Buffer should be empty after final
-    let buffer = emitter.instant_buffer.lock().await;
+    // Buffer should be empty after final (and the final-emitted marker set,
+    // so the RunComplete summary fallback cannot double-deliver).
+    let state = emitter.instant_buffer.lock().await;
     assert!(
-        buffer.is_empty(),
+        state.buffer.is_empty(),
         "Instant buffer should be empty after final chunk"
     );
+    assert!(state.final_emitted, "final chunk must set the marker");
 }
 
 #[tokio::test]
