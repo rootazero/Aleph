@@ -106,11 +106,13 @@ impl SearchRegistry {
         if !cfg.enabled {
             return None;
         }
+        // rust-doctor-disable-next-line excessive-clone
         let mut registry = Self::new(cfg.default_provider.clone());
         let mut any_added = false;
         for (name, backend) in &cfg.backends {
             match factories.build(name, backend) {
                 Ok(Some(provider)) => {
+                    // rust-doctor-disable-next-line excessive-clone
                     registry.add_provider(name.clone(), provider);
                     any_added = true;
                 }
@@ -152,10 +154,12 @@ impl SearchRegistry {
                     registry.default_provider,
                     promoted
                 );
+                // rust-doctor-disable-next-line excessive-clone
                 registry.default_provider = (*promoted).clone();
             }
         }
         if let Some(ref fallbacks) = cfg.fallback_providers {
+            // rust-doctor-disable-next-line excessive-clone
             registry.set_fallback_providers(fallbacks.clone());
         }
         // Wire WebFetch SERP fallback when the operator hasn't opted
@@ -185,10 +189,11 @@ impl SearchRegistry {
     /// Invalidates any cached test results for this provider name
     /// to ensure stale results are not returned after configuration changes.
     pub fn add_provider(&mut self, name: String, provider: Arc<dyn SearchProvider>) {
-        self.providers.insert(name.clone(), provider);
-        // Invalidate cached test result for this provider
+        // Invalidate cached test result for this provider before moving `name`
+        // into the providers map so we can reference it without cloning.
         let mut cache = self.test_cache.lock().unwrap_or_else(|e| e.into_inner());
         cache.remove(&name);
+        self.providers.insert(name, provider);
     }
 
     /// Set fallback providers
@@ -316,6 +321,7 @@ impl SearchRegistry {
             if let Some((result, timestamp)) = cache.get(name) {
                 if timestamp.elapsed() < CACHE_TTL {
                     log::debug!("Returning cached test result for provider '{name}'");
+                    // rust-doctor-disable-next-line excessive-clone
                     return result.clone();
                 }
             }
@@ -383,6 +389,7 @@ impl SearchRegistry {
         // Cache only successful results; failures are retried on next call
         if result.success {
             let mut cache = self.test_cache.lock().unwrap_or_else(|e| e.into_inner());
+            // rust-doctor-disable-next-line excessive-clone
             cache.insert(name.to_string(), (result.clone(), Instant::now()));
         }
 

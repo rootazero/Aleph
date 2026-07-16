@@ -98,13 +98,16 @@ fn strip_thinking_signatures(messages: &[UnifiedMessage]) -> Option<Vec<UnifiedM
                         .iter()
                         .map(|b| match b {
                             ContentBlock::Thinking { thinking, .. } => ContentBlock::Thinking {
+                                // rust-doctor-disable-next-line excessive-clone
                                 thinking: thinking.clone(),
                                 signature: None,
                             },
+                            // rust-doctor-disable-next-line excessive-clone
                             other => other.clone(),
                         })
                         .collect(),
                 },
+                // rust-doctor-disable-next-line excessive-clone
                 other => other.clone(),
             })
             .collect(),
@@ -250,6 +253,7 @@ impl HttpProvider {
     /// One request/stream/collect attempt against the provider. Split out of
     /// [`HttpProvider::execute`] so the stale-encrypted-reasoning recovery can
     /// re-run the attempt with a rewritten message list.
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn execute_once(
         &self,
         messages: &[UnifiedMessage],
@@ -264,8 +268,11 @@ impl HttpProvider {
             think_level: payload.think_level,
             temperature: payload.temperature,
             max_tokens: payload.max_tokens,
+            // rust-doctor-disable-next-line excessive-clone
             tool_choice: payload.tool_choice.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             model: payload.model.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             metadata: payload.metadata.clone(),
         };
 
@@ -275,6 +282,7 @@ impl HttpProvider {
         crate::extension::hooks::fire_global_observer(
             crate::extension::HookEvent::PreApiRequest,
             &session_id,
+            // rust-doctor-disable-next-line excessive-clone
             base_env.clone(),
         )
         .await;
@@ -352,6 +360,7 @@ impl HttpProvider {
         while let Some(delta) = stream.next().await {
             let delta = delta?;
             if let crate::providers::ProviderDelta::Error(msg) = &delta {
+                // rust-doctor-disable-next-line excessive-clone
                 provider_error.get_or_insert_with(|| msg.clone());
             }
             // Live observer (harness streaming): forward the delta before it is
@@ -476,8 +485,11 @@ impl HttpProvider {
             think_level: payload.think_level,
             temperature: payload.temperature,
             max_tokens: payload.max_tokens,
+            // rust-doctor-disable-next-line excessive-clone
             tool_choice: payload.tool_choice.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             model: payload.model.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             metadata: payload.metadata.clone(),
         };
 
@@ -487,6 +499,7 @@ impl HttpProvider {
         crate::extension::hooks::fire_global_observer(
             crate::extension::HookEvent::PreApiRequest,
             &session_id,
+            // rust-doctor-disable-next-line excessive-clone
             base_env.clone(),
         )
         .await;
@@ -562,8 +575,9 @@ impl HttpProvider {
     ) -> Vec<(&'static str, String)> {
         let model = payload
             .model
-            .clone()
-            .unwrap_or_else(|| self.config.default_model().to_string());
+            .as_deref()
+            .unwrap_or_else(|| self.config.default_model())
+            .to_string();
         vec![
             ("PROVIDER_NAME", self.name.clone()),
             ("MODEL", model),

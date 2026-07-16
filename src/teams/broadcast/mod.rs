@@ -69,6 +69,7 @@ use crate::gateway::reply_emitter::extract_final_response;
 use crate::routing::session_key::SessionKey;
 use crate::sync_primitives::Arc;
 use crate::teams::messages::{MessageStore, MessageType, NewMessage};
+use crate::teams::types::TeamMemberKind;
 use crate::teams::TeamStore;
 
 /// 是否已达/超过接话深度上限。`max` 由 [`BroadcastConfig::max_chain_depth`] 提供。
@@ -247,11 +248,6 @@ impl GroupChatBroadcaster {
         budget: Arc<AtomicUsize>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(async move {
-            if over_depth(chain_depth, self.config.max_chain_depth) {
-                self.post_system(&team_id, "讨论已达深度上限,等你接话。")
-                    .await;
-                return;
-            }
             let Some(team) = self.team_store.get_team(&team_id).await.ok().flatten() else {
                 return;
             };
@@ -271,6 +267,18 @@ impl GroupChatBroadcaster {
                 leader_first,
                 self.config.max_fanout_width,
             );
+            if over_depth(chain_depth, self.config.max_chain_depth) {
+                // Post the boundary notice only when the gate actually
+                // suppressed someone — a reply with no @ ends its chain
+                // naturally at any depth and a "深度上限" message for it is
+                // false-alarm noise (the activation gate's exactly-once
+                // discipline, applied to the depth gate).
+                if !targets.is_empty() {
+                    self.post_system(&team_id, "讨论已达深度上限,等你接话。")
+                        .await;
+                }
+                return;
+            }
             if leader_first && user_triggered && content.contains('@') {
                 self.post_system(&team_id, "已交由 leader 统筹:先规划任务分配,再分派给成员。")
                     .await;
@@ -288,6 +296,18 @@ impl GroupChatBroadcaster {
             // 并发跑本轮每个目标 agent;各自完成后递归回流。
             let mut handles = Vec::new();
             for agent_id in targets {
+                // ACP 成员(外部 CLI)只在 dispatcher 的 coord-task 路径可执行
+                // (`runner.rs` 经 AcpAdapterManager),AgentRegistry 解析不到——
+                // 在领取风暴预算槽之前跳过,否则 `@all` 会为一个永远沉默的成员
+                // 白烧一个 activation 槽位且零日志。
+                if members
+                    .iter()
+                    .any(|m| m.agent_id == agent_id && m.kind == TeamMemberKind::AcpSession)
+                {
+                    tracing::debug!(team_id = %team_id, agent_id = %agent_id,
+                        "group-chat: ACP member is dispatcher-only (not chat-capable); skipped without consuming an activation slot");
+                    continue;
+                }
                 // 防风暴第三闸:整棵树累计唤醒封顶。`fetch_add` 原子领取一个槽位,
                 // 越界即跳过本成员;恰好跨越上限的那一次(且仅那一次)发一句系统提示
                 // —— `claimed == MAX` 在所有并发分支里只会被命中一次,天然去重不刷屏。
@@ -351,6 +371,12 @@ impl GroupChatBroadcaster {
         budget: Arc<AtomicUsize>,
     ) {
         let Some(agent) = self.ctx.agent_registry().get(&agent_id).await else {
+            // The dispatch loop already filters ACP-kind members, so reaching
+            // here means a roster member SHOULD be resolvable — a silent
+            // return made such a member vanish from the conversation with no
+            // trace (while its activation slot was already spent).
+            tracing::warn!(team_id = %team_id, agent_id = %agent_id,
+                "group-chat: roster member not resolvable in the agent registry; skipped");
             return;
         };
 
@@ -436,10 +462,43 @@ impl GroupChatBroadcaster {
             return;
         }
 
+        // 先提取并持久化本成员的回复——必须在 F2-retrigger 之前:leader 复审
+        // 拉的是 msg_store transcript,若 nudge 先行,leader 审的是缺了提交者
+        // 收尾陈述(自述/告警/工件指针)的记录,且 review 裁决在 transcript 里
+        // 排在触发它的提交之前(因果倒序永久入库)。
+        let reply = extract_final_response(&collector.events().await)
+            .filter(|r| !r.trim().is_empty());
+        if let Some(reply) = &reply {
+            // 长 TTL:群 transcript 是持久记录,不走 inbox 的短 TTL。持久化
+            // 失败必须可见——静默丢失让后续轮次和 Panel 历史出现无迹之洞(P7)。
+            if let Err(e) = self
+                .msg_store
+                .send_message_with_ttl(
+                    NewMessage {
+                        team_id: team_id.clone(),
+                        from_agent: agent_id.clone(),
+                        msg_type: MessageType::Message,
+                        subject: String::new(),
+                        content: reply.clone(),
+                        recipients: Vec::new(),
+                        reply_to: None,
+                        attachments: Vec::new(),
+                    },
+                    chrono::Duration::days(3650),
+                )
+                .await
+            {
+                tracing::warn!(team_id = %team_id, agent_id = %agent_id, error = %e,
+                    "group-chat: failed to persist member reply into the team transcript");
+            }
+        }
+
         // F2-retrigger: any task this member just moved into WaitingReview ⇒
         // synthetically @-nudge the leader to review it. Goes through `dispatch`
         // directly (an inert team_messages row would never re-trigger anyone),
         // carrying the live budget + depth. Skipped for the leader (self-review).
+        // Runs AFTER the reply persistence above so the leader's review sees
+        // the member's closing message.
         if let (Some(cs), false) = (&self.coord_task_store, is_leader) {
             let review_post: Vec<String> = cs
                 .list_tasks(CoordTaskFilter {
@@ -467,31 +526,9 @@ impl GroupChatBroadcaster {
             }
         }
 
-        let Some(reply) = extract_final_response(&collector.events().await) else {
+        let Some(reply) = reply else {
             return;
         };
-        if reply.trim().is_empty() {
-            return;
-        }
-
-        // 存回复进 transcript(广播气泡已由 emitter 发出;这里持久化 + 给下一轮注入)。
-        // 长 TTL:群 transcript 是持久记录,不走 inbox 的短 TTL。
-        let _ = self
-            .msg_store
-            .send_message_with_ttl(
-                NewMessage {
-                    team_id: team_id.clone(),
-                    from_agent: agent_id.clone(),
-                    msg_type: MessageType::Message,
-                    subject: String::new(),
-                    content: reply.clone(),
-                    recipients: Vec::new(),
-                    reply_to: None,
-                    attachments: Vec::new(),
-                },
-                chrono::Duration::days(3650),
-            )
-            .await;
 
         // 回流:解析回复里的@,递归(agent 触发→没@不兜底)。深度+1。
         // dispatch 返回显式 boxed future(打破 async 递归的 opaque 类型循环)。

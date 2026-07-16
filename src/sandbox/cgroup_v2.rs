@@ -255,6 +255,8 @@ impl CgroupV2Scope {
         path_buf[..path_bytes.len()].copy_from_slice(path_bytes);
         path_buf[path_bytes.len()] = b'\0';
 
+        // SAFETY: `path_buf` is a NUL-terminated byte array with valid open flags.
+        // rust-doctor-disable-next-line unsafe-block-audit
         let fd = unsafe {
             libc::open(
                 path_buf.as_ptr() as *const i8,
@@ -282,6 +284,8 @@ impl CgroupV2Scope {
         let pid_slice = &pid_buf[14 - (i - 1)..16];
         let mut written = 0;
         while written < pid_slice.len() {
+            // SAFETY: `fd` is valid and `pid_slice` is a contiguous byte buffer.
+            // rust-doctor-disable-next-line unsafe-block-audit
             let ret = unsafe {
                 libc::write(
                     fd,
@@ -290,11 +294,15 @@ impl CgroupV2Scope {
                 )
             };
             if ret < 0 {
+                // SAFETY: `fd` is a valid open file descriptor.
+                // rust-doctor-disable-next-line unsafe-block-audit
                 let _ = unsafe { libc::close(fd) };
                 return Err(std::io::Error::last_os_error());
             }
             written += ret as usize;
         }
+        // SAFETY: `fd` is a valid open file descriptor.
+        // rust-doctor-disable-next-line unsafe-block-audit
         let _ = unsafe { libc::close(fd) };
         Ok(())
     }

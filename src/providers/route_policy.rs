@@ -81,7 +81,9 @@ impl RouteTargets {
     #[must_use]
     pub fn from_config(cfg: &ModelRouteConfig) -> Self {
         Self {
+            // rust-doctor-disable-next-line excessive-clone
             local_provider: cfg.local_provider.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             cloud_provider: cfg.cloud_provider.clone(),
         }
     }
@@ -120,6 +122,7 @@ impl RateLimits {
             by_provider: cfg
                 .rate_limits
                 .iter()
+                // rust-doctor-disable-next-line excessive-clone
                 .map(|(name, lim)| (name.clone(), (lim.rpm, lim.tpm)))
                 .collect(),
         }

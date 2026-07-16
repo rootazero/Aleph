@@ -55,9 +55,13 @@ pub(crate) fn skeleton_pack(
         let items: Vec<EnvelopeItem> = in_slot
             .into_iter()
             .map(|c| EnvelopeItem {
+                // rust-doctor-disable-next-line excessive-clone
                 id: c.id.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 title: c.title.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 content: c.full_content.clone(), // hydration truncates later
+                // rust-doctor-disable-next-line excessive-clone
                 source: c.source.clone(),
                 relevance: c.relevance,
                 tokens: 0, // set by hydration

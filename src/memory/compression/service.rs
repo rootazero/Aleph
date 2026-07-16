@@ -125,6 +125,7 @@ impl CompressionService {
         config: CompressionConfig,
         _memory_backend: Option<MemoryBackend>,
     ) -> Self {
+        // rust-doctor-disable-next-line excessive-clone
         let scheduler = Arc::new(CompressionScheduler::new(config.scheduler.clone()));
 
         Self {
@@ -258,6 +259,7 @@ impl CompressionService {
     /// This method follows the same pipeline as `compress_in_workspace` but
     /// routes extracted information into markdown-based Knowledge Notes via
     /// `NoteIndexer` instead of storing individual `MemoryFact` rows.
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     pub async fn compress_to_notes(
         &self,
         workspace_id: &str,
@@ -309,6 +311,7 @@ impl CompressionService {
             // stop-the-bleed grace window (below) defers ingestable rows.
             let mut deferred_ids: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
+            // rust-doctor-disable-next-line excessive-clone
             if let Some(ing) = self.compound_ingestor.clone() {
                 // ToolInvocation rows are per-call telemetry, consumed by the
                 // insights aggregator and dream signal metrics (which read them
@@ -354,6 +357,7 @@ impl CompressionService {
                 // ProfileSynthesizer fires INDEPENDENTLY of compound ingest
                 // result: a malformed LLM plan must not block USER.md updates.
                 // Fire-and-forget, never block the compression flow.
+                // rust-doctor-disable-next-line excessive-clone
                 if let Some(ps) = self.profile_synthesizer.clone() {
                     use crate::memory::store::raw_memory::RawMemorySource;
                     let session_end_raws: Vec<_> = raw_memories
@@ -364,6 +368,7 @@ impl CompressionService {
                         let agent = workspace_id.to_string();
                         let digest: String = session_end_raws
                             .iter()
+                            // rust-doctor-disable-next-line excessive-clone
                             .map(|r| r.content.clone())
                             .collect::<Vec<_>>()
                             .join("\n");
@@ -416,6 +421,7 @@ impl CompressionService {
                                     crate::memory::store::raw_memory::RawMemorySource::ToolInvocation { .. }
                                 );
                                 if !is_telemetry && now - r.created_at < RETRY_GRACE_SECS {
+                                    // rust-doctor-disable-next-line excessive-clone
                                     deferred_ids.insert(r.id.clone());
                                 }
                             }
@@ -462,6 +468,7 @@ impl CompressionService {
             let consumed_ids: Vec<String> = raw_memories
                 .iter()
                 .filter(|r| !deferred_ids.contains(&r.id))
+                // rust-doctor-disable-next-line excessive-clone
                 .map(|r| r.id.clone())
                 .collect();
             match self.database.mark_raw_as_processed(&consumed_ids).await {

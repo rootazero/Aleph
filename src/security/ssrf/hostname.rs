@@ -96,34 +96,40 @@ pub(crate) fn is_blocklisted(hostname: &str, blocked_hosts: &[String]) -> bool {
 pub(crate) fn is_legacy_ip_literal(hostname: &str) -> bool {
     let lower = hostname.to_lowercase();
 
-    // Hex IP: starts with 0x and rest is hex digits
-    if lower.starts_with("0x")
-        && lower.len() > 2
-        && lower[2..].chars().all(|c| c.is_ascii_hexdigit())
-    {
-        return true;
+    is_hex_ip_literal(&lower)
+        || is_decimal_ip_literal(&lower)
+        || is_octal_or_short_ipv4(&lower)
+}
+
+fn is_hex_ip_literal(s: &str) -> bool {
+    s.starts_with("0x")
+        && s.len() > 2
+        && s[2..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn is_decimal_ip_literal(s: &str) -> bool {
+    !s.contains('.') && s.len() > 3 && s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn is_octal_or_short_ipv4(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    if !(2..=4).contains(&parts.len()) {
+        return false;
     }
 
-    // Decimal integer: all digits, more than 3 digits, no dots
-    // (normal IPs like "8.8.8.8" have dots; "2130706433" is suspicious)
-    if !lower.contains('.') && lower.len() > 3 && lower.chars().all(|c| c.is_ascii_digit()) {
-        return true;
-    }
-
-    // Octal: any component starts with leading zero (e.g., 0177.0.0.1)
-    let parts: Vec<&str> = lower.split('.').collect();
-    if parts.len() >= 2 && parts.len() <= 4 {
-        for part in &parts {
-            if part.len() > 1 && part.starts_with('0') && part.chars().all(|c| c.is_ascii_digit()) {
-                return true;
-            }
+    // Octal: any component starts with a leading zero (e.g., 0177.0.0.1)
+    for part in &parts {
+        if part.len() > 1
+            && part.starts_with('0')
+            && part.chars().all(|c| c.is_ascii_digit())
+        {
+            return true;
         }
     }
 
     // Short-form IPv4: fewer than 4 dot-separated parts but looks numeric
     // e.g., "127.1" → resolves to 127.0.0.1 on many systems
-    if parts.len() >= 2
-        && parts.len() < 4
+    if parts.len() < 4
         && parts
             .iter()
             .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))

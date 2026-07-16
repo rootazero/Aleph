@@ -26,6 +26,7 @@ pub fn to_chat_response_format(fmt: &ResponseFormat, supports_strict: bool) -> O
                 // support strict schemas (most third-party OpenAI-compat backends)
                 return Some(json!({"type": "json_object"}));
             }
+            // rust-doctor-disable-next-line excessive-clone
             let mut normalized = schema.clone();
             // Cycle 3: run user schema through the same normalizer tool
             // definitions use (injects additionalProperties: false recursively).
@@ -56,9 +57,11 @@ pub fn to_responses_text_format(fmt: &ResponseFormat, supports_strict: bool) -> 
             if !supports_strict {
                 return Some(TextFormat::JsonObject);
             }
+            // rust-doctor-disable-next-line excessive-clone
             let mut normalized = schema.clone();
             let _ = normalize_strict_schema(&mut normalized, false);
             Some(TextFormat::JsonSchema {
+                // rust-doctor-disable-next-line excessive-clone
                 name: name.clone(),
                 schema: normalized,
             })

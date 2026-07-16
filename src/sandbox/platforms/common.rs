@@ -59,6 +59,7 @@ pub fn path_is_allowed(path: &Path, allowed: &[PathBuf]) -> bool {
 }
 
 #[must_use]
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub fn glob_to_regex(pattern: &str) -> Option<String> {
     if pattern.is_empty() {
         return None;

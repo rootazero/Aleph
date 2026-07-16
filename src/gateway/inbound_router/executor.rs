@@ -381,7 +381,7 @@ impl InboundMessageRouter {
         );
 
         // Spawn the execution task (non-blocking)
-        // When the agent is busy, hold a per-agent FIFO ticket and poll until
+        // When the session is busy, hold a per-session FIFO ticket and poll until
         // the slot frees instead of surfacing the error to the user. The FIFO
         // gate (see `busy_queue`) keeps bursts delivering in arrival order —
         // the old per-message exponential back-off let a later message wake
@@ -421,13 +421,17 @@ impl InboundMessageRouter {
                 // Lane full — reject newest immediately so the sender hears
                 // back now, not after the 30-minute deadline.
                 None => Some(ExecutionError::AgentBusy(agent_id.clone())),
+                // The guard is RAII: dropped on every exit from this arm —
+                // including a panic inside the adapter — so a dead waiter can
+                // never leave a corpse ticket wedging the lane (mirrors the
+                // engine's `RunSlot` session claim).
                 Some(ticket) => {
                     let mut last_busy: Option<ExecutionError> = None;
-                    let outcome = loop {
+                    loop {
                         // FIFO gate: only the front ticket attempts delivery;
                         // the rest poll cheaply behind it so arrival order is
                         // preserved when the slot frees.
-                        if super::busy_queue::is_front(&session_key, ticket) {
+                        if ticket.is_front() {
                             match execution_adapter
                                 .execute(request.clone(), agent.clone(), emitter.clone())
                                 .await
@@ -438,7 +442,7 @@ impl InboundMessageRouter {
                                         tracing::info!(
                                             run_id = %run_id,
                                             session = %session_key,
-                                            ticket,
+                                            ticket = ticket.id(),
                                             "Agent busy; message queued for FIFO delivery"
                                         );
                                     }
@@ -459,9 +463,7 @@ impl InboundMessageRouter {
                             );
                         }
                         tokio::time::sleep(tokio::time::Duration::from_millis(BUSY_POLL_MS)).await;
-                    };
-                    super::busy_queue::remove(&session_key, ticket);
-                    outcome
+                    }
                 }
             };
 

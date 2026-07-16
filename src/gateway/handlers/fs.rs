@@ -443,9 +443,9 @@ mod tests {
     async fn list_dir_returns_only_in_scope_entries() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().to_path_buf();
-        std::fs::create_dir(root.join("alpha")).unwrap();
-        std::fs::create_dir(root.join(".hidden")).unwrap();
-        std::fs::File::create(root.join("readme.txt")).unwrap();
+        tokio::fs::create_dir(root.join("alpha")).await.unwrap();
+        tokio::fs::create_dir(root.join(".hidden")).await.unwrap();
+        tokio::fs::File::create(root.join("readme.txt")).await.unwrap();
 
         let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
         let r = req("fs.list_dir", json!({ "path": root.to_string_lossy() }));
@@ -466,7 +466,7 @@ mod tests {
     async fn list_dir_show_hidden_includes_dotfiles() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().to_path_buf();
-        std::fs::create_dir(root.join(".hidden")).unwrap();
+        tokio::fs::create_dir(root.join(".hidden")).await.unwrap();
 
         let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
         let r = req(
@@ -483,8 +483,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let scope = tmp.path().join("scope");
         let outside = tmp.path().join("outside");
-        std::fs::create_dir(&scope).unwrap();
-        std::fs::create_dir(&outside).unwrap();
+        tokio::fs::create_dir(&scope).await.unwrap();
+        tokio::fs::create_dir(&outside).await.unwrap();
 
         let cfg = cfg_with_roots(vec![scope.to_string_lossy().to_string()]);
         let r = req("fs.list_dir", json!({ "path": outside.to_string_lossy() }));
@@ -498,8 +498,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let scope = tmp.path().join("scope");
         let outside = tmp.path().join("outside");
-        std::fs::create_dir(&scope).unwrap();
-        std::fs::create_dir(&outside).unwrap();
+        tokio::fs::create_dir(&scope).await.unwrap();
+        tokio::fs::create_dir(&outside).await.unwrap();
 
         let cfg = cfg_with_roots(vec![scope.to_string_lossy().to_string()]);
         // Use `..` to try to climb out of `scope`. canonicalize will collapse
@@ -516,7 +516,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().to_path_buf();
         let child = root.join("child");
-        std::fs::create_dir(&child).unwrap();
+        tokio::fs::create_dir(&child).await.unwrap();
 
         let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
 
@@ -580,7 +580,7 @@ mod tests {
     async fn create_dir_rejects_existing_target() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().to_path_buf();
-        std::fs::create_dir(root.join("already")).unwrap();
+        tokio::fs::create_dir(root.join("already")).await.unwrap();
         let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
 
         let r = req(
@@ -622,7 +622,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().to_path_buf();
         let file_path = root.join("hello.txt");
-        std::fs::write(&file_path, "hi there").unwrap();
+        tokio::fs::write(&file_path, "hi there").await.unwrap();
 
         let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
         let r = req(
@@ -640,10 +640,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let scope = tmp.path().join("scope");
         let outside = tmp.path().join("outside");
-        std::fs::create_dir(&scope).unwrap();
-        std::fs::create_dir(&outside).unwrap();
+        tokio::fs::create_dir(&scope).await.unwrap();
+        tokio::fs::create_dir(&outside).await.unwrap();
         let outside_file = outside.join("not-in-root.txt");
-        std::fs::write(&outside_file, "secret").unwrap();
+        tokio::fs::write(&outside_file, "secret").await.unwrap();
 
         let cfg = cfg_with_roots(vec![scope.to_string_lossy().to_string()]);
         let r = req(
@@ -660,7 +660,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().to_path_buf();
         let file_path = root.join("big.txt");
-        std::fs::write(&file_path, vec![b'a'; READ_FILE_CAP + 1]).unwrap();
+        tokio::fs::write(&file_path, vec![b'a'; READ_FILE_CAP + 1])
+            .await
+            .unwrap();
 
         let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
         let r = req(

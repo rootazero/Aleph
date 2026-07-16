@@ -117,8 +117,11 @@ impl TokenRefreshManager {
                 .iter()
                 .map(|(name, server)| {
                     (
+                        // rust-doctor-disable-next-line excessive-clone
                         name.clone(),
+                        // rust-doctor-disable-next-line excessive-clone
                         server.client_id.clone(),
+                        // rust-doctor-disable-next-line excessive-clone
                         server.metadata.clone(),
                     )
                 })
@@ -164,6 +167,7 @@ impl TokenRefreshManager {
 
         // Create provider and refresh
         let provider = OAuthProvider::new(
+            // rust-doctor-disable-next-line excessive-clone
             self.storage.clone(),
             server_name,
             "", // Server URL not needed for refresh

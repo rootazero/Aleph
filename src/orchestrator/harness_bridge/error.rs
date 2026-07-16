@@ -33,18 +33,21 @@ pub(super) fn classify_harness_error(err: HarnessError, provider: &str) -> FlowE
 }
 
 fn is_transient_harness_message(msg: &str) -> bool {
-    // Network / connection.
-    let is_network = msg.contains("Network error")
-        || msg.contains("error sending request")
-        || msg.contains("connection")
-        || msg.contains("dns")
-        || msg.contains("timed out");
-    // Auth — Gateway treats 401/403 as retryable (switch provider).
-    let is_auth = msg.contains("401") || msg.contains("403") || msg.contains("Unauthorized");
-    // Server — match 500/502/503 with word boundaries to avoid matching "4500".
-    let is_server = contains_http_status(msg, 500)
-        || contains_http_status(msg, 502)
-        || contains_http_status(msg, 503);
+    const NETWORK_MARKERS: &[&str] = &[
+        "Network error",
+        "error sending request",
+        "connection",
+        "dns",
+        "timed out",
+    ];
+    const AUTH_MARKERS: &[&str] = &["401", "403", "Unauthorized"];
+    const RATE_LIMIT_MARKERS: &[&str] = &[
+        "rate limit",
+        "Rate limit",
+        "rate_limit",
+        "receiving too many requests",
+    ];
+
     // Rate limit (429). A 429 that escapes here means the FailoverProvider
     // already exhausted its in-place retry budget AND every chained
     // provider/model (deep backoff + per-model cooldown + chain advance). At
@@ -53,12 +56,17 @@ fn is_transient_harness_message(msg: &str) -> bool {
     // take another spaced attempt instead of surfacing a fatal error to the
     // user. The earlier "rate limits are not retryable" stance assumed an empty
     // chain; with chain self-heal a 429 here is a load signal, not a dead end.
-    let is_rate_limited = contains_http_status(msg, 429)
-        || msg.contains("rate limit")
-        || msg.contains("Rate limit")
-        || msg.contains("rate_limit")
-        || msg.contains("receiving too many requests");
-    is_network || is_auth || is_server || is_rate_limited
+    has_any_marker(msg, NETWORK_MARKERS)
+        || has_any_marker(msg, AUTH_MARKERS)
+        || contains_http_status(msg, 500)
+        || contains_http_status(msg, 502)
+        || contains_http_status(msg, 503)
+        || contains_http_status(msg, 429)
+        || has_any_marker(msg, RATE_LIMIT_MARKERS)
+}
+
+fn has_any_marker(msg: &str, markers: &[&str]) -> bool {
+    markers.iter().any(|m| msg.contains(m))
 }
 
 fn contains_http_status(msg: &str, code: u16) -> bool {

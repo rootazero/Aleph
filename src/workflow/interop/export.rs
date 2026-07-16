@@ -202,6 +202,13 @@ fn render_agent_call(step: &WorkflowManifestStep) -> String {
     if let Some(at) = &step.agent_type {
         opts.push(format!("agentType: {}", js_str(at)));
     }
+    if step.review {
+        // The lead-review gate is an oversight attribute — silently dropping
+        // it on a header-stripped re-import would auto-complete steps that
+        // were meant to park in WaitingReview. Omitted when false (serde
+        // `skip_serializing_if` parity keeps ungated steps byte-identical).
+        opts.push("review: true".to_string());
+    }
     if opts.is_empty() {
         format!("agent({})", render_prompt_arg(&step.prompt))
     } else {

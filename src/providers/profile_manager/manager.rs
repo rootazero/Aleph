@@ -156,6 +156,7 @@ impl AuthProfileManager {
             if !in_cooldown {
                 all_in_cooldown = false;
                 // Found available profile - try to resolve API key
+                // rust-doctor-disable-next-line excessive-clone
                 match EffectiveProfile::from_config(profile_id.clone(), config) {
                     Ok(effective) => {
                         debug!(
@@ -204,6 +205,7 @@ impl AuthProfileManager {
                     "All profiles in cooldown, returning profile with shortest cooldown"
                 );
                 // Still try to return it - caller can wait or handle as needed
+                // rust-doctor-disable-next-line excessive-clone
                 if let Ok(effective) = EffectiveProfile::from_config(profile_id.clone(), config) {
                     return Ok(effective);
                 }
@@ -320,7 +322,9 @@ impl AuthProfileManager {
                 let key_resolvable = config.resolve_api_key().is_ok();
 
                 ProfileInfo {
+                    // rust-doctor-disable-next-line excessive-clone
                     id: id.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     provider: config.provider.clone(),
                     tier: config.tier,
                     in_cooldown,
@@ -387,10 +391,12 @@ impl AuthProfileManager {
         // Use write lock with entry API to avoid TOCTOU race between read and write
         let mut agent_states = self.agent_states.write().unwrap_or_else(|e| e.into_inner());
         let state = match agent_states.entry(agent_id.to_string()) {
+            // rust-doctor-disable-next-line excessive-clone
             std::collections::hash_map::Entry::Occupied(e) => e.get().clone(),
             std::collections::hash_map::Entry::Vacant(e) => {
                 let path = self.agent_state_path(agent_id);
                 let loaded = AgentState::load(&path)?;
+                // rust-doctor-disable-next-line excessive-clone
                 e.insert(loaded.clone());
                 loaded
             }

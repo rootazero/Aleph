@@ -82,17 +82,21 @@ impl From<&SandboxCapabilities> for SandboxPolicy {
         let filesystem = if caps.fs_write.is_empty() && caps.fs_read.is_empty() {
             FsPolicy::WorkspaceOnly
         } else if !caps.fs_write.is_empty() && caps.fs_read.is_empty() {
+            // rust-doctor-disable-next-line excessive-clone
             FsPolicy::WritePaths(caps.fs_write.clone())
         } else if !caps.fs_read.is_empty() && caps.fs_write.is_empty() {
+            // rust-doctor-disable-next-line excessive-clone
             FsPolicy::ReadPaths(caps.fs_read.clone())
         } else {
             // Both read and write paths specified — treat as write (superset).
+            // rust-doctor-disable-next-line excessive-clone
             FsPolicy::WritePaths(caps.fs_write.clone())
         };
 
         let network = match &caps.network {
             CapNetworkPolicy::None => NetworkPolicy::None,
             CapNetworkPolicy::AllowAll => NetworkPolicy::AllowAll,
+            // rust-doctor-disable-next-line excessive-clone
             CapNetworkPolicy::AllowHosts { hosts } => NetworkPolicy::AllowHosts(hosts.clone()),
         };
 

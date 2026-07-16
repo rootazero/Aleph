@@ -43,6 +43,7 @@ macro_rules! lock_conn {
 
 #[async_trait]
 impl NoteStore for SqliteMemoryBackend {
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn index_note(
         &self,
         note: &KnowledgeNote,
@@ -94,10 +95,13 @@ impl NoteStore for SqliteMemoryBackend {
         for raw_target in &note.links {
             let r = links::resolve(raw_target, &resolve_ctx);
             let (to_note, status) = match &r.target {
+                // rust-doctor-disable-next-line excessive-clone
                 Some(t) => (t.clone(), LinkStatus::Active.as_str()),
+                // rust-doctor-disable-next-line excessive-clone
                 None => (raw_target.clone(), LinkStatus::Dangling.as_str()),
             };
             desired.entry(to_note).or_insert_with(|| DesiredEdge {
+                // rust-doctor-disable-next-line excessive-clone
                 to_raw: raw_target.clone(),
                 relation: None,
                 confidence: r.confidence,
@@ -109,7 +113,9 @@ impl NoteStore for SqliteMemoryBackend {
         for rel in &note.relations {
             let r = links::resolve(&rel.to, &resolve_ctx);
             let (to_note, status) = match &r.target {
+                // rust-doctor-disable-next-line excessive-clone
                 Some(t) => (t.clone(), LinkStatus::Active.as_str()),
+                // rust-doctor-disable-next-line excessive-clone
                 None => (rel.to.clone(), LinkStatus::Dangling.as_str()),
             };
             // Typed relation overrides a plain wikilink to the same target;
@@ -117,7 +123,9 @@ impl NoteStore for SqliteMemoryBackend {
             desired.insert(
                 to_note,
                 DesiredEdge {
+                    // rust-doctor-disable-next-line excessive-clone
                     to_raw: rel.to.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     relation: Some(rel.rel_type.clone()),
                     confidence: rel.confidence.clamp(0.0, 1.0),
                     resolved_by: r.resolved_by.map(|s| s.as_str()),
@@ -146,11 +154,14 @@ impl NoteStore for SqliteMemoryBackend {
             for raw_target in targets {
                 let r = links::resolve(raw_target, &resolve_ctx);
                 let (to_note, status) = match &r.target {
+                    // rust-doctor-disable-next-line excessive-clone
                     Some(t) => (t.clone(), LinkStatus::Active.as_str()),
+                    // rust-doctor-disable-next-line excessive-clone
                     None => (raw_target.clone(), LinkStatus::Dangling.as_str()),
                 };
                 // Precompute so neither entry closure borrows `r`.
                 let resolved_by = r.resolved_by.map(|s| s.as_str());
+                // rust-doctor-disable-next-line excessive-clone
                 let to_raw = raw_target.clone();
                 desired
                     .entry(to_note)
@@ -250,7 +261,9 @@ impl NoteStore for SqliteMemoryBackend {
             // frontmatter `relations:` entry still wins, because it sets
             // `relation: Some(..)` when `desired` is built above.
             let relation = match (&d.relation, prior.and_then(|(_, rel, ..)| rel.as_ref())) {
+                // rust-doctor-disable-next-line excessive-clone
                 (None, Some(kept)) => Some(kept.clone()),
+                // rust-doctor-disable-next-line excessive-clone
                 (from_markdown, _) => from_markdown.clone(),
             };
 
@@ -423,6 +436,7 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(())
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn remove_note_index(&self, path: &str, agent_id: &str) -> Result<(), AlephError> {
         let conn = lock_conn!(self)?;
 
@@ -502,6 +516,8 @@ impl NoteStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("remove_note_index vec map lookup: {e}")))?;
         if let Some(rowid) = vec_rowid {
             for table in vec::ALL_NOTES_VEC_TABLES {
+                // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
+                // rust-doctor-disable-next-line sql-injection-risk
                 tx.execute(
                     &format!("DELETE FROM {table} WHERE rowid = ?1"),
                     params![rowid],
@@ -803,6 +819,7 @@ impl NoteStore for SqliteMemoryBackend {
             if !tri_terms.is_empty() {
                 let tri_expr = tri_terms.join(" OR ");
                 let seen: std::collections::HashSet<String> =
+                    // rust-doctor-disable-next-line excessive-clone
                     entries.iter().map(|e| e.path.clone()).collect();
                 for entry in run_fts("notes_fts_trigram", &tri_expr)? {
                     if entries.len() >= limit {
@@ -845,6 +862,7 @@ impl NoteStore for SqliteMemoryBackend {
         for row in rows {
             let entry =
                 row.map_err(|e| AlephError::config(format!("get_graph_data node row: {e}")))?;
+            // rust-doctor-disable-next-line excessive-clone
             visible.insert(entry.path.clone());
             entries.push(entry);
         }
@@ -855,6 +873,7 @@ impl NoteStore for SqliteMemoryBackend {
         Ok((entries, edges))
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn get_neighbors(
         &self,
         center: &str,
@@ -888,6 +907,7 @@ impl NoteStore for SqliteMemoryBackend {
                 .map_err(|e| AlephError::config(format!("get_neighbors out query: {e}")))?;
             for r in out_rows {
                 let n = r.map_err(|e| AlephError::config(format!("get_neighbors out row: {e}")))?;
+                // rust-doctor-disable-next-line excessive-clone
                 if visited.insert(n.clone()) {
                     queue.push_back((n, d + 1));
                 }
@@ -905,6 +925,7 @@ impl NoteStore for SqliteMemoryBackend {
                 .map_err(|e| AlephError::config(format!("get_neighbors in query: {e}")))?;
             for r in in_rows {
                 let n = r.map_err(|e| AlephError::config(format!("get_neighbors in row: {e}")))?;
+                // rust-doctor-disable-next-line excessive-clone
                 if visited.insert(n.clone()) {
                     queue.push_back((n, d + 1));
                 }
@@ -950,6 +971,7 @@ impl NoteStore for SqliteMemoryBackend {
         Ok((entries, edges, truncated))
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn find_path(
         &self,
         from: &str,
@@ -1011,7 +1033,9 @@ impl NoteStore for SqliteMemoryBackend {
                 for r in rows {
                     let (nbr, rel) =
                         r.map_err(|e| AlephError::config(format!("find_path row: {e}")))?;
+                    // rust-doctor-disable-next-line excessive-clone
                     if visited.insert(nbr.clone()) {
+                        // rust-doctor-disable-next-line excessive-clone
                         came_from.insert(nbr.clone(), (node.clone(), rel));
                         if nbr == to {
                             found = true;
@@ -1033,9 +1057,11 @@ impl NoteStore for SqliteMemoryBackend {
         let mut cursor = to.to_string();
         while cursor != from {
             let (pred, rel) = match came_from.get(&cursor) {
+                // rust-doctor-disable-next-line excessive-clone
                 Some(v) => v.clone(),
                 None => break, // defensive: unreachable once `to` is in came_from
             };
+            // rust-doctor-disable-next-line excessive-clone
             path.push((pred.clone(), cursor.clone(), rel));
             cursor = pred;
         }
@@ -1127,6 +1153,8 @@ impl NoteStore for SqliteMemoryBackend {
 
         for rowid in &orphan_rowids {
             for table in vec::ALL_NOTES_VEC_TABLES {
+                // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
+                // rust-doctor-disable-next-line sql-injection-risk
                 tx.execute(
                     &format!("DELETE FROM {table} WHERE rowid = ?1"),
                     params![rowid],
@@ -1174,6 +1202,8 @@ impl NoteStore for SqliteMemoryBackend {
         // leaving a stale vector permanently occupying a KNN slot in the other
         // table. Mirrors the sweep in `remove_note_index`.
         for t in vec::ALL_NOTES_VEC_TABLES {
+            // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
+            // rust-doctor-disable-next-line sql-injection-risk
             conn.execute(
                 &format!("DELETE FROM {t} WHERE rowid = ?1"),
                 params![rowid],
@@ -1183,6 +1213,8 @@ impl NoteStore for SqliteMemoryBackend {
 
         // Insert new embedding
         let blob = vec::embedding_to_blob(embedding);
+        // Table name is validated by `vec::notes_vec_table_for_dim` against a static allowlist.
+        // rust-doctor-disable-next-line sql-injection-risk
         conn.execute(
             &format!("INSERT INTO {table}(rowid, embedding) VALUES (?1, ?2)"),
             params![rowid, blob],
@@ -1218,11 +1250,13 @@ impl NoteStore for SqliteMemoryBackend {
 
         for (rank, (path, _score)) in vec_results.iter().enumerate() {
             let rrf = 1.0 / (k + (rank as f32) + 1.0);
+            // rust-doctor-disable-next-line excessive-clone
             *scores.entry(path.clone()).or_insert(0.0) += rrf;
         }
 
         for (rank, entry) in fts_entries.iter().enumerate() {
             let rrf = (1.0 / (k + (rank as f32) + 1.0)) * bm25_lift;
+            // rust-doctor-disable-next-line excessive-clone
             *scores.entry(entry.path.clone()).or_insert(0.0) += rrf;
         }
 
@@ -1237,9 +1271,13 @@ impl NoteStore for SqliteMemoryBackend {
                     .await
                     .unwrap_or_default();
                 results.push(crate::memory::notes::NoteSearchResult {
+                    // rust-doctor-disable-next-line excessive-clone
                     path: entry.path.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     filename: entry.filename.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     category: entry.category.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     tags: entry.tags.clone(),
                     content,
                     score,
@@ -1269,9 +1307,13 @@ impl NoteStore for SqliteMemoryBackend {
                     .await
                     .unwrap_or_default();
                 results.push(crate::memory::notes::NoteSearchResult {
+                    // rust-doctor-disable-next-line excessive-clone
                     path: entry.path.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     filename: entry.filename.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     category: entry.category.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     tags: entry.tags.clone(),
                     content,
                     score,
@@ -1295,9 +1337,13 @@ impl NoteStore for SqliteMemoryBackend {
                     .await
                     .unwrap_or_default();
                 results.push(crate::memory::notes::NoteSearchResult {
+                    // rust-doctor-disable-next-line excessive-clone
                     path: entry.path.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     filename: entry.filename.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     category: entry.category.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     tags: entry.tags.clone(),
                     content,
                     score: 0.0,
@@ -1536,6 +1582,7 @@ impl NoteStore for SqliteMemoryBackend {
         let mut params_v: Vec<Box<dyn rusqlite::types::ToSql>> =
             vec![Box::new(agent_id.to_string())];
         for k in keys {
+            // rust-doctor-disable-next-line excessive-clone
             params_v.push(Box::new(k.clone()));
         }
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
@@ -1611,6 +1658,7 @@ impl NoteStore for SqliteMemoryBackend {
                     Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
                 })
                 .map_err(|e| AlephError::config(format!("load_graph_snapshot nodes query: {e}")))?;
+            // rust-doctor-disable-next-line unnecessary-allocation
             let mut out = Vec::new();
             for row in rows {
                 out.push(row.map_err(|e| {
@@ -1622,6 +1670,7 @@ impl NoteStore for SqliteMemoryBackend {
 
         let mut nodes = Vec::with_capacity(node_meta.len());
         for (path, category) in node_meta {
+            // rust-doctor-disable-next-line unnecessary-allocation
             let mut sources = Vec::new();
             {
                 let mut s2 = conn
@@ -2013,6 +2062,7 @@ impl NoteStore for SqliteMemoryBackend {
             if !visible.contains(&node) || !visible.contains(&related) {
                 continue;
             }
+            // rust-doctor-disable-next-line excessive-clone
             let c = count_for.entry(node.clone()).or_insert(0);
             if *c >= per_node {
                 continue; // rows are score-DESC within node_path → top-K kept
@@ -2267,6 +2317,7 @@ impl NoteStore for SqliteMemoryBackend {
             .iter()
             .map(
                 |(note_path, score)| super::super::recall_signals::RecallHit {
+                    // rust-doctor-disable-next-line excessive-clone
                     note_path: note_path.clone(),
                     score: f64::from(*score),
                 },

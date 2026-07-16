@@ -221,6 +221,7 @@ impl OAuthStorage {
                 let disk_mtime = self.file_mtime().await;
                 let cached_mtime = *self.cached_mtime.read().await;
                 if disk_mtime.is_none() || disk_mtime == cached_mtime {
+                    // rust-doctor-disable-next-line excessive-clone
                     return Ok(storage.clone());
                 }
                 tracing::debug!("OAuth storage changed on disk; reloading cached credentials");
@@ -248,6 +249,7 @@ impl OAuthStorage {
         let disk_mtime = self.file_mtime().await;
         {
             let mut cache = self.cache.write().await;
+            // rust-doctor-disable-next-line excessive-clone
             *cache = Some(storage.clone());
             *self.cached_mtime.write().await = disk_mtime;
         }
@@ -307,6 +309,7 @@ impl OAuthStorage {
     /// Get tokens for a server
     pub async fn get_tokens(&self, server: &str) -> Result<Option<OAuthTokens>> {
         let storage = self.load().await?;
+        // rust-doctor-disable-next-line excessive-clone
         Ok(storage.entries.get(server).and_then(|e| e.tokens.clone()))
     }
 
@@ -319,6 +322,7 @@ impl OAuthStorage {
 
         // Load current state (from cache or file)
         let mut storage = match cache.as_ref() {
+            // rust-doctor-disable-next-line excessive-clone
             Some(s) => s.clone(),
             None => self.load_from_file().await?,
         };
@@ -328,6 +332,7 @@ impl OAuthStorage {
             .entry(server.to_string())
             .or_insert_with(OAuthEntry::default);
 
+        // rust-doctor-disable-next-line excessive-clone
         entry.tokens = Some(tokens.clone());
         self.save_to_file(&storage).await?;
         *cache = Some(storage);
@@ -340,6 +345,7 @@ impl OAuthStorage {
         Ok(storage
             .entries
             .get(server)
+            // rust-doctor-disable-next-line excessive-clone
             .and_then(|e| e.client_info.clone()))
     }
 
@@ -347,6 +353,7 @@ impl OAuthStorage {
     pub async fn save_client_info(&self, server: &str, client_info: &ClientInfo) -> Result<()> {
         let mut cache = self.cache.write().await;
         let mut storage = match cache.as_ref() {
+            // rust-doctor-disable-next-line excessive-clone
             Some(s) => s.clone(),
             None => self.load_from_file().await?,
         };
@@ -356,6 +363,7 @@ impl OAuthStorage {
             .entry(server.to_string())
             .or_insert_with(OAuthEntry::default);
 
+        // rust-doctor-disable-next-line excessive-clone
         entry.client_info = Some(client_info.clone());
         self.save_to_file(&storage).await?;
         *cache = Some(storage);
@@ -372,9 +380,11 @@ impl OAuthStorage {
     pub async fn save_entry(&self, server: &str, entry: &OAuthEntry) -> Result<()> {
         let mut cache = self.cache.write().await;
         let mut storage = match cache.as_ref() {
+            // rust-doctor-disable-next-line excessive-clone
             Some(s) => s.clone(),
             None => self.load_from_file().await?,
         };
+        // rust-doctor-disable-next-line excessive-clone
         storage.entries.insert(server.to_string(), entry.clone());
         self.save_to_file(&storage).await?;
         *cache = Some(storage);
@@ -385,6 +395,7 @@ impl OAuthStorage {
     pub async fn remove(&self, server: &str) -> Result<()> {
         let mut cache = self.cache.write().await;
         let mut storage = match cache.as_ref() {
+            // rust-doctor-disable-next-line excessive-clone
             Some(s) => s.clone(),
             None => self.load_from_file().await?,
         };

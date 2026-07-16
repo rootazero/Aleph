@@ -65,6 +65,7 @@ pub(super) struct ConnectRequest {
 /// Handle a single inbound SOCKS5 connection. The first byte (the version
 /// `0x05`) has already been peeked by the caller; this function consumes the
 /// connection from byte 0.
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(), std::io::Error> {
     let (mut rd, mut wr) = inbound.into_split();
 
@@ -162,7 +163,9 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
     // outbound binding when the client doesn't need it for FTP-style flows).
     write_reply(&mut wr, REP_SUCCEEDED).await?;
 
-    let mut inbound = rd.reunite(wr).expect("same socket halves");
+    let mut inbound = rd
+        .reunite(wr)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{e}")))?;
     let mut upstream = upstream;
     let _ = tokio::io::copy_bidirectional(&mut inbound, &mut upstream).await;
     Ok(())

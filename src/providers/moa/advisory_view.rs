@@ -74,16 +74,16 @@ fn text_of(blocks: &[ContentBlock]) -> String {
 
 fn render_tool_calls(blocks: &[ContentBlock]) -> Vec<String> {
     let mut lines = Vec::new();
+    let mut args = String::new();
     for block in blocks {
         if let ContentBlock::ToolCall {
             name, arguments, ..
         } = block
         {
-            let args = if arguments.is_null() {
-                String::new()
-            } else {
-                arguments.to_string()
-            };
+            args.clear();
+            if !arguments.is_null() {
+                args.push_str(&arguments.to_string());
+            }
             if args.is_empty() {
                 lines.push(format!("[called tool: {name}]"));
             } else {
@@ -109,6 +109,7 @@ fn append_to_last_assistant(rendered: &mut Vec<UnifiedMessage>, block: String) {
 pub(crate) fn build_advisory_view(messages: &[UnifiedMessage]) -> Vec<UnifiedMessage> {
     let mut rendered: Vec<UnifiedMessage> = Vec::new();
     let mut last_user_text: Option<String> = None;
+    let mut parts: Vec<String> = Vec::new();
 
     for msg in messages {
         match msg {
@@ -120,7 +121,7 @@ pub(crate) fn build_advisory_view(messages: &[UnifiedMessage]) -> Vec<UnifiedMes
                 rendered.push(UnifiedMessage::user(text));
             }
             UnifiedMessage::Assistant { content } => {
-                let mut parts: Vec<String> = Vec::new();
+                parts.clear();
                 let text = text_of(content);
                 if !text.trim().is_empty() {
                     parts.push(text.trim().to_string());

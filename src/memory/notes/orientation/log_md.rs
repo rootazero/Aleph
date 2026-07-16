@@ -217,10 +217,14 @@ mod tests {
             .await
             .unwrap();
         assert!(new_log.contains("continued from log-"));
-        let dated = std::fs::read_dir(dir.path())
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .any(|e| e.file_name().to_string_lossy().starts_with("log-"));
+        let mut read_dir = tokio::fs::read_dir(dir.path()).await.unwrap();
+        let mut dated = false;
+        while let Ok(Some(entry)) = read_dir.next_entry().await {
+            if entry.file_name().to_string_lossy().starts_with("log-") {
+                dated = true;
+                break;
+            }
+        }
         assert!(dated);
     }
 

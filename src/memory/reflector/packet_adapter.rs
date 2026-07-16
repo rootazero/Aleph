@@ -51,6 +51,7 @@ pub fn envelope_to_synthesis_context(envelope: &MemoryEnvelope) -> SynthesisCont
             lookup.insert(
                 key,
                 NoteMeta {
+                    // rust-doctor-disable-next-line excessive-clone
                     title: item.title.clone(),
                     relevance: item.relevance,
                 },
@@ -69,7 +70,9 @@ pub fn envelope_to_synthesis_context(envelope: &MemoryEnvelope) -> SynthesisCont
 /// - everything else       → the item id    (e.g. `"note://raw/xyz"`)
 fn item_key(item: &EnvelopeItem) -> String {
     match &item.source {
+        // rust-doctor-disable-next-line excessive-clone
         ItemSource::Note { path, .. } => path.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         _ => item.id.clone(),
     }
 }

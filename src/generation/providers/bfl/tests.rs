@@ -50,42 +50,45 @@ fn supports_image_only() {
 }
 
 #[tokio::test]
-async fn rejects_wrong_generation_type() {
-    let p = BflProvider::new("k", None, None).unwrap();
+async fn rejects_wrong_generation_type() -> Result<(), GenerationError> {
+    let p = BflProvider::new("k", None, None)?;
     let request = GenerationRequest::speech("hello");
     let err = p.generate(request).await.unwrap_err();
     assert!(matches!(
         err,
         GenerationError::UnsupportedGenerationTypeError { .. }
     ));
+    Ok(())
 }
 
 #[tokio::test]
-async fn rejects_empty_prompt() {
-    let p = BflProvider::new("k", None, None).unwrap();
+async fn rejects_empty_prompt() -> Result<(), GenerationError> {
+    let p = BflProvider::new("k", None, None)?;
     let request = GenerationRequest::image("");
     let err = p.generate(request).await.unwrap_err();
     assert!(matches!(
         err,
         GenerationError::InvalidParametersError { .. }
     ));
+    Ok(())
 }
 
 #[tokio::test]
-async fn rejects_oversized_prompt() {
+async fn rejects_oversized_prompt() -> Result<(), GenerationError> {
     let text = "a".repeat(MAX_PROMPT_CHARS + 1);
-    let p = BflProvider::new("k", None, None).unwrap();
+    let p = BflProvider::new("k", None, None)?;
     let request = GenerationRequest::image(text);
     let err = p.generate(request).await.unwrap_err();
     assert!(matches!(
         err,
         GenerationError::InvalidParametersError { .. }
     ));
+    Ok(())
 }
 
 #[tokio::test]
-async fn rejects_unknown_format() {
-    let p = BflProvider::new("k", None, None).unwrap();
+async fn rejects_unknown_format() -> Result<(), GenerationError> {
+    let p = BflProvider::new("k", None, None)?;
     let params = GenerationParams::builder().format("webp").build();
     let request = GenerationRequest::image("a cat").with_params(params);
     let err = p.generate(request).await.unwrap_err();
@@ -93,6 +96,7 @@ async fn rejects_unknown_format() {
         err,
         GenerationError::UnsupportedFormatError { .. }
     ));
+    Ok(())
 }
 
 #[test]

@@ -122,6 +122,7 @@ impl AgentHarnessRunner {
             let capped = truncate_chars(&content, budget);
             total += capped.chars().count();
             out.push(ExtraPromptFile {
+                // rust-doctor-disable-next-line excessive-clone
                 name: raw.clone(),
                 content: capped,
             });
@@ -151,6 +152,7 @@ impl AgentHarnessRunner {
     /// codex initial-context / hermes frozen-system-prompt parity). The
     /// curated envelope stays in the Stable prefix — it is session-scoped
     /// and rarely changes.
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     pub(crate) async fn build_system_prompt(
         &self,
         agent_id: &str,
@@ -430,95 +432,14 @@ impl AgentHarnessRunner {
         // schemas via native tool_use rather than the prompt;
         // `disabled_tools` therefore stays empty too.
         let context_phase_start = Instant::now();
-        let default_manifest;
-        let manifest_ref = match channel_manifest {
-            Some(m) => m,
-            None => {
-                default_manifest = crate::thinker::InteractionManifest::new(
-                    crate::thinker::InteractionParadigm::Background,
-                );
-                &default_manifest
-            }
-        };
-        let security_ctx =
-            crate::thinker::security_context::SecurityContext::for_paradigm(manifest_ref.paradigm);
-        let mut resolved_context =
-            crate::thinker::context::ContextAggregator::resolve(manifest_ref, &security_ctx, &[]);
-        // Phase 4 (F1): populate `runtime_context` so `RuntimeContextLayer`
-        // surfaces shell / arch / hostname / timezone / model. EnvironmentLayer
-        // emits OS/cwd in a Markdown list (Stable, priority 300);
-        // `RuntimeContext::to_prompt_section()` emits a pipe-separated
-        // single-line summary (Dynamic, priority 1720) — formats deliberately
-        // differ. We accept the minor OS/cwd overlap; the unique fields
-        // (arch, shell, repo_root, model, hostname, timezone, current_time)
-        // carry the value. Phase 5 (F3) populates `repo_root` via a
-        // `OnceLock`-cached `.git` walk-up — process-lifetime amortized,
-        // no `git` subprocess.
-        resolved_context.runtime_context = Some(
-            crate::thinker::runtime_context::RuntimeContext::collect(provider.name()),
-        );
-        // Populate runtime-state fragments from the tool catalog's
-        // `ToolHealthCache`. Each currently-cached `Unhealthy` entry becomes
-        // a `RuntimeStateFragment::unavailable(name, reason)` that
-        // `ToolRuntimeStateLayer` @502 renders into `<tool_runtime_state>`.
-        // `None` tool_catalog (test / early boot) → empty vec → the
-        // layer emits nothing.
-        resolved_context.runtime_state_blocks =
-            compute_runtime_state_blocks(self.tool_catalog.as_ref());
-        // Codex-inspired: surface active sandbox posture (backend tag,
-        // policy tier, writable roots, network state) to the LLM so it
-        // can plan within its envelope instead of probing limits at runtime.
-        // `Sandbox::summary()` defaults to `None`, so mock/noop sandboxes
-        // in tests leave this absent and the SecurityLayer skips the
-        // sandbox bullet block.
-        resolved_context.sandbox_summary = sandbox.summary();
-        // Re-surface the session's active scratchpad execution list so the
-        // live plan stays in context across long tool-only stretches where
-        // the model never re-calls the `scratchpad` tool. Reuses the same
-        // `scratchpad_registry` binding the tool / steering / stop-verifier
-        // already key off — a mechanical lookup, no reasoning. `None` (no
-        // active plan with pending work) leaves the prompt byte-identical;
-        // `ExecutionPlanLayer` @1755 renders it as `<execution_plan>`.
-        //
-        // The execution-plan, standing-goal, and strategy lookups are
-        // independent session-keyed reads (a scratchpad file read, a goal-store
-        // read with a wall-clock stamp, and a strategy-store read). Run them
-        // concurrently with `tokio::join!` so prompt assembly — on the hot
-        // per-turn path — pays the max of the three latencies, not their sum.
-        // `join!` polls all on the current task, so there is no spawn cost and
-        // no extra `Send` bound; all futures take a shared `&session_key_str`
-        // borrow, which co-exist fine.
-        let (exec_plan, standing, timer_loop, strategy) = tokio::join!(
-            active_execution_plan(&session_key_str),
-            active_standing_goal(&session_key_str),
-            active_timer_loop(&session_key_str),
-            active_strategy(&session_key_str),
-        );
-        resolved_context.execution_plan = exec_plan;
-        resolved_context.standing_goal = standing;
-        resolved_context.timer_loop = timer_loop;
-        // Render the welded Strategy into its two prompt surfaces: the full
-        // `<strategy>` body for the Stable `StrategyLayer` (cacheable head) and
-        // the guardrail-only echo for the Dynamic `StrategyPointerLayer` (per-
-        // turn tail near the read head). Both renders are pure/deterministic
-        // (no timestamps). `None` Strategy leaves both fields `None`, so both
-        // layers emit nothing and the prompt is byte-identical.
-        if let Some(s) = strategy {
-            resolved_context.strategy = Some(crate::strategy::render_strategy_summary(&s));
-            resolved_context.strategy_guardrails =
-                Some(crate::strategy::render_guardrails_only(&s));
-        }
-        // Voice mode: read the session-keyed flag the gateway inbound router set
-        // for this turn so `VoiceModeLayer` (priority 1710) injects the
-        // spoken-reply guidelines. Mirrors `execution_plan` / `standing_goal` —
-        // a mechanical session-keyed lookup, no judgment. `Off` (no voice)
-        // leaves the prompt byte-identical; the `transcribed` bit distinguishes
-        // a spoken-only turn from one whose input was ASR-transcribed.
-        resolved_context.voice = match crate::gateway::voice::session_mode::get(&session_key_str) {
-            None => crate::thinker::context::VoiceContext::Off,
-            Some(false) => crate::thinker::context::VoiceContext::Spoken,
-            Some(true) => crate::thinker::context::VoiceContext::SpokenTranscribed,
-        };
+        let resolved_context = resolve_prompt_context(
+            &session_key_str,
+            channel_manifest,
+            provider,
+            sandbox,
+            self.tool_catalog.as_ref(),
+        )
+        .await;
         builder = builder.with_resolved_context(resolved_context);
         let context_phase_ms = context_phase_start.elapsed().as_millis() as u64;
 
@@ -599,6 +520,107 @@ impl AgentHarnessRunner {
     }
 }
 
+/// Resolve the channel/runtime context block that feeds
+/// `with_resolved_context`. Extracted from `build_system_prompt` to keep the
+/// latter's cyclomatic complexity under control.
+async fn resolve_prompt_context(
+    session_key_str: &str,
+    channel_manifest: Option<&crate::thinker::InteractionManifest>,
+    provider: &dyn AiProvider,
+    sandbox: &dyn Sandbox,
+    tool_catalog: Option<&Arc<crate::tool_metadata::ToolCatalog>>,
+) -> crate::thinker::context::ResolvedContext {
+    let default_manifest;
+    let manifest_ref = match channel_manifest {
+        Some(m) => m,
+        None => {
+            default_manifest = crate::thinker::InteractionManifest::new(
+                crate::thinker::InteractionParadigm::Background,
+            );
+            &default_manifest
+        }
+    };
+    let security_ctx =
+        crate::thinker::security_context::SecurityContext::for_paradigm(manifest_ref.paradigm);
+    let mut resolved_context =
+        crate::thinker::context::ContextAggregator::resolve(manifest_ref, &security_ctx, &[]);
+    // Phase 4 (F1): populate `runtime_context` so `RuntimeContextLayer`
+    // surfaces shell / arch / hostname / timezone / model. EnvironmentLayer
+    // emits OS/cwd in a Markdown list (Stable, priority 300);
+    // `RuntimeContext::to_prompt_section()` emits a pipe-separated
+    // single-line summary (Dynamic, priority 1720) — formats deliberately
+    // differ. We accept the minor OS/cwd overlap; the unique fields
+    // (arch, shell, repo_root, model, hostname, timezone, current_time)
+    // carry the value. Phase 5 (F3) populates `repo_root` via a
+    // `OnceLock`-cached `.git` walk-up — process-lifetime amortized,
+    // no `git` subprocess.
+    resolved_context.runtime_context = Some(
+        crate::thinker::runtime_context::RuntimeContext::collect(provider.name()),
+    );
+    // Populate runtime-state fragments from the tool catalog's
+    // `ToolHealthCache`. Each currently-cached `Unhealthy` entry becomes
+    // a `RuntimeStateFragment::unavailable(name, reason)` that
+    // `ToolRuntimeStateLayer` @502 renders into `<tool_runtime_state>`.
+    // `None` tool_catalog (test / early boot) → empty vec → the
+    // layer emits nothing.
+    resolved_context.runtime_state_blocks = compute_runtime_state_blocks(tool_catalog);
+    // Codex-inspired: surface active sandbox posture (backend tag,
+    // policy tier, writable roots, network state) to the LLM so it
+    // can plan within its envelope instead of probing limits at runtime.
+    // `Sandbox::summary()` defaults to `None`, so mock/noop sandboxes
+    // in tests leave this absent and the SecurityLayer skips the
+    // sandbox bullet block.
+    resolved_context.sandbox_summary = sandbox.summary();
+    // Re-surface the session's active scratchpad execution list so the
+    // live plan stays in context across long tool-only stretches where
+    // the model never re-calls the `scratchpad` tool. Reuses the same
+    // `scratchpad_registry` binding the tool / steering / stop-verifier
+    // already key off — a mechanical lookup, no reasoning. `None` (no
+    // active plan with pending work) leaves the prompt byte-identical;
+    // `ExecutionPlanLayer` @1755 renders it as `<execution_plan>`.
+    //
+    // The execution-plan, standing-goal, and strategy lookups are
+    // independent session-keyed reads (a scratchpad file read, a goal-store
+    // read with a wall-clock stamp, and a strategy-store read). Run them
+    // concurrently with `tokio::join!` so prompt assembly — on the hot
+    // per-turn path — pays the max of the three latencies, not their sum.
+    // `join!` polls all on the current task, so there is no spawn cost and
+    // no extra `Send` bound; all futures take a shared `&session_key_str`
+    // borrow, which co-exist fine.
+    let (exec_plan, standing, timer_loop, strategy) = tokio::join!(
+        active_execution_plan(session_key_str),
+        active_standing_goal(session_key_str),
+        active_timer_loop(session_key_str),
+        active_strategy(session_key_str),
+    );
+    resolved_context.execution_plan = exec_plan;
+    resolved_context.standing_goal = standing;
+    resolved_context.timer_loop = timer_loop;
+    // Render the welded Strategy into its two prompt surfaces: the full
+    // `<strategy>` body for the Stable `StrategyLayer` (cacheable head) and
+    // the guardrail-only echo for the Dynamic `StrategyPointerLayer` (per-
+    // turn tail near the read head). Both renders are pure/deterministic
+    // (no timestamps). `None` Strategy leaves both fields `None`, so both
+    // layers emit nothing and the prompt is byte-identical.
+    if let Some(s) = strategy {
+        resolved_context.strategy = Some(crate::strategy::render_strategy_summary(&s));
+        resolved_context.strategy_guardrails =
+            Some(crate::strategy::render_guardrails_only(&s));
+    }
+    // Voice mode: read the session-keyed flag the gateway inbound router set
+    // for this turn so `VoiceModeLayer` (priority 1710) injects the
+    // spoken-reply guidelines. Mirrors `execution_plan` / `standing_goal` —
+    // a mechanical session-keyed lookup, no judgment. `Off` (no voice)
+    // leaves the prompt byte-identical; the `transcribed` bit distinguishes
+    // a spoken-only turn from one whose input was ASR-transcribed.
+    resolved_context.voice = match crate::gateway::voice::session_mode::get(session_key_str) {
+        None => crate::thinker::context::VoiceContext::Off,
+        Some(false) => crate::thinker::context::VoiceContext::Spoken,
+        Some(true) => crate::thinker::context::VoiceContext::SpokenTranscribed,
+    };
+    resolved_context
+}
+
 /// Resolve the hard per-run iteration cap for the harness loop.
 ///
 /// D2 precedence (highest → lowest, first positive value wins):
@@ -645,6 +667,7 @@ pub(crate) fn last_user_query(input: &FlowInput) -> String {
         content.text.as_str()
     }
     match input {
+        // rust-doctor-disable-next-line excessive-clone
         FlowInput::Prompt(s) => s.clone(),
         FlowInput::Messages(msgs) | FlowInput::Multimodal(msgs) => msgs
             .iter()
@@ -653,6 +676,7 @@ pub(crate) fn last_user_query(input: &FlowInput) -> String {
             .find(|s| !s.is_empty())
             .map(str::to_string)
             .unwrap_or_default(),
+        // rust-doctor-disable-next-line excessive-clone
         FlowInput::History { prompt, .. } => prompt.clone(),
         FlowInput::Resume => String::new(),
     }

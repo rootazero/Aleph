@@ -147,19 +147,51 @@ where
                     // the busy queue.
                     let target = if !super::steering::has_steering_content(request) {
                         None
-                    } else if !super::steering::session_is_interruptible(&request.session_key) {
-                        info!(
-                            session = %request.session_key.to_key_string(),
-                            "busy-input interrupt: session has an active sub-agent fan-out; demoting to the follow-up queue (protecting in-flight parallel work) — message will restart as a fresh run once the current run finishes",
-                        );
-                        None
                     } else {
                         let runs = self.active_runs.read().await;
-                        super::steering::find_steering_target_id(
+                        match super::steering::find_steering_target_id(
                             &runs,
                             run_id,
                             &request.session_key,
-                        )
+                        ) {
+                            None => None,
+                            Some(target_id) => {
+                                // Demotion is STICKY per target run: the busy
+                                // queue re-runs this whole decision every ~2s
+                                // poll with unchanged metadata, so a guard that
+                                // only read the LIVE sub-agent signal protected
+                                // the run merely while children were in flight
+                                // — the instant the last one exited, the next
+                                // poll cancelled the parent mid-synthesis and
+                                // destroyed the very results the demote had
+                                // protected. Once demoted, always demoted (for
+                                // this run); the flag dies with the run entry.
+                                let already_demoted = runs.get(&target_id).is_some_and(|r| {
+                                    r.demote_protected
+                                        .load(std::sync::atomic::Ordering::Relaxed)
+                                });
+                                if already_demoted
+                                    || !super::steering::session_is_interruptible(
+                                        &request.session_key,
+                                    )
+                                {
+                                    if let Some(r) = runs.get(&target_id) {
+                                        r.demote_protected
+                                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                                    }
+                                    if !already_demoted {
+                                        info!(
+                                            session = %request.session_key.to_key_string(),
+                                            target_run = %target_id,
+                                            "busy-input interrupt: session has an active sub-agent fan-out; demoting to the follow-up queue (protecting in-flight parallel work) — message will restart as a fresh run once the current run finishes",
+                                        );
+                                    }
+                                    None
+                                } else {
+                                    Some(target_id)
+                                }
+                            }
+                        }
                     };
                     if let Some(target_id) = target {
                         let _ = self.cancel(&target_id).await;
@@ -248,6 +280,7 @@ where
                     cancel_tx: Some(cancel_tx),
                     seq_counter: crate::sync_primitives::AtomicU64::new(0),
                     chunk_counter: crate::sync_primitives::AtomicU32::new(0),
+                    demote_protected: std::sync::atomic::AtomicBool::new(false),
                 },
             );
         }

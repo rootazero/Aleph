@@ -221,6 +221,7 @@ impl BubblewrapDriver {
         Ok(args)
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn add_fs_args(
         &self,
         args: &mut Vec<String>,
@@ -361,10 +362,10 @@ impl BubblewrapDriver {
     fn apply_no_new_privs(&self, cmd: &mut Command) {
         if self.options.no_new_privs {
             debug!("Applying PR_SET_NO_NEW_PRIVS via pre-exec");
+            // SAFETY: prctl(PR_SET_NO_NEW_PRIVS) is a well-defined Linux syscall.
+            // rust-doctor-disable-next-line unsafe-block-audit
             unsafe {
                 cmd.pre_exec(|| {
-                    // SAFETY: prctl with PR_SET_NO_NEW_PRIVS is a well-defined
-                    // Linux syscall that cannot fail with valid arguments.
                     let rc = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
                     if rc != 0 {
                         return Err(std::io::Error::last_os_error());
@@ -379,10 +380,9 @@ impl BubblewrapDriver {
     /// inherited by the eventual target binary via exec.
     fn apply_memory_rlimit(cmd: &mut Command, mb: u64) {
         let bytes = mb.saturating_mul(1024 * 1024);
+        // SAFETY: setrlimit(RLIMIT_AS) is async-signal-safe and well-defined.
+        // rust-doctor-disable-next-line unsafe-block-audit
         unsafe {
-            // SAFETY: setrlimit with RLIMIT_AS is async-signal-safe and
-            // well-defined. No allocator, mutex, or other handler-unsafe
-            // call is made between fork and exec.
             cmd.pre_exec(move || {
                 let rlim = libc::rlimit {
                     rlim_cur: bytes as libc::rlim_t,
@@ -652,7 +652,11 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
                 // double-leak the ref count across fork+exec).
                 if let Some(ref s) = scope {
                     let procs_path = s.procs_path();
+                    // rust-doctor-disable-next-line unsafe-block-audit
                     unsafe {
+                        // SAFETY: pre_exec closure only writes the current PID
+                        // to the owned cgroup.procs path; it performs no heap
+                        // allocation or locking and is safe after fork.
                         cmd.pre_exec(move || {
                             crate::sandbox::cgroup_v2::CgroupV2Scope::write_current_pid_to_path(
                                 &procs_path,

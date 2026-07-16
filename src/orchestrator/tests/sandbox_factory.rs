@@ -32,8 +32,9 @@ async fn deny_all_sandbox_rejects_exec_class() {
 #[tokio::test]
 async fn factory_for_none_returns_deny_all() {
     let factory = build_sandbox_factory(Arc::new(|_session_key| {
-        panic!("Workspace builder should not be invoked for SandboxKind::None")
+        Err("Workspace builder should not be invoked for SandboxKind::None".into())
     }));
+    // rust-doctor-disable-next-line unwrap-in-production
     let sb = factory(SandboxKind::None, "sess-abc").expect("deny-all");
     let err = sb.execute(mk_test_cmd("ls", &[])).await.unwrap_err();
     assert!(

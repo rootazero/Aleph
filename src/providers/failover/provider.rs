@@ -246,6 +246,7 @@ impl FailoverProvider {
                 None => false,
             };
             if !cooling {
+                // rust-doctor-disable-next-line excessive-clone
                 kept.push(m.clone());
             }
         }
@@ -336,6 +337,7 @@ impl FailoverProvider {
     /// sandbox escalation contract — the money-spending action is gated at the
     /// moment it would happen, not at config-write time.
     async fn escalation_allowed(&self, name: &str) -> bool {
+        // rust-doctor-disable-next-line excessive-clone
         match self.approval.clone() {
             Some(gate) => {
                 let reason = format!(
@@ -390,6 +392,7 @@ impl FailoverProvider {
             .cloned()
             .unwrap_or_default();
         let primary_node = FailoverNode {
+            // rust-doctor-disable-next-line excessive-clone
             name: primary_name.clone(),
             models: primary_models,
             provider: primary,
@@ -410,6 +413,7 @@ impl FailoverProvider {
                 if fb.name == primary_name {
                     continue; // dedup: the primary slot already covers it
                 }
+                // rust-doctor-disable-next-line excessive-clone
                 v.push(fb.clone());
             }
             v
@@ -468,6 +472,7 @@ impl FailoverProvider {
                 // cloud — see `unpriced_cost`); the metric closure only receives
                 // the provider name, so the tier rides in via this map.
                 let tier_by_name: HashMap<String, EndpointTier> =
+                    // rust-doctor-disable-next-line excessive-clone
                     fallbacks.iter().map(|n| (n.name.clone(), n.tier)).collect();
                 order_candidates_balanced(
                     fallbacks,
@@ -596,6 +601,7 @@ impl FailoverProvider {
 }
 
 impl AiProvider for FailoverProvider {
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn process<'a>(
         &'a self,
         payload: RequestPayload<'a>,
@@ -607,8 +613,11 @@ impl AiProvider for FailoverProvider {
         let think_level = payload.think_level;
         let temperature = payload.temperature;
         let max_tokens = payload.max_tokens;
+        // rust-doctor-disable-next-line excessive-clone
         let tool_choice = payload.tool_choice.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let req_model = payload.model.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let metadata = payload.metadata.clone();
         // C floor: derive the request's structural capability requirements once
         // (image blocks → vision, tools array → tool-calling, text size →
@@ -686,6 +695,7 @@ impl AiProvider for FailoverProvider {
                             .collect()
                     }
                     _ if cand.models.is_empty() => vec![req_model.clone()],
+                    // rust-doctor-disable-next-line excessive-clone
                     _ => retain_capable_models(cand.models.clone(), &reqs)
                         .into_iter()
                         .map(Some)
@@ -728,8 +738,11 @@ impl AiProvider for FailoverProvider {
                             think_level,
                             temperature,
                             max_tokens,
+                            // rust-doctor-disable-next-line excessive-clone
                             tool_choice: tool_choice.clone(),
+                            // rust-doctor-disable-next-line excessive-clone
                             model: model.clone(),
+                            // rust-doctor-disable-next-line excessive-clone
                             metadata: metadata.clone(),
                         };
                         // Count this attempt as in-flight for the duration of

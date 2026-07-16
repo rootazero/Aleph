@@ -29,6 +29,7 @@ pub async fn graph_expand<S: NoteStore + Send + Sync>(
     }
 
     // Dedup target: never re-surface a path already among the direct hits.
+    // rust-doctor-disable-next-line excessive-clone
     let mut seen: HashSet<String> = hits.iter().map(|h| h.path.clone()).collect();
     // (peer_path, propagated_score) in discovery order. Seeds iterate in hit
     // (RRF-desc) order, so a peer tied to multiple seeds is captured via its
@@ -58,6 +59,7 @@ pub async fn graph_expand<S: NoteStore + Send + Sync>(
             if collected.len() >= cfg.max_expanded {
                 break 'outer;
             }
+            // rust-doctor-disable-next-line excessive-clone
             if seen.insert(peer.clone()) {
                 let propagated = seed.score * cfg.weight * (edge / seed_top_edge);
                 collected.push((peer, propagated));
@@ -71,6 +73,7 @@ pub async fn graph_expand<S: NoteStore + Send + Sync>(
 
     // Hydrate content for the collected peers (they need full content for the
     // agent and the optional reranker). Missing/deleted paths are dropped.
+    // rust-doctor-disable-next-line excessive-clone
     let paths: Vec<String> = collected.iter().map(|(p, _)| p.clone()).collect();
     let hydrated = match store.get_notes_with_content(agent_id, &paths).await {
         Ok(h) => h,

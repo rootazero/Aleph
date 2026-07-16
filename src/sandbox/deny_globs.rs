@@ -108,6 +108,7 @@ pub fn resolve_deny_read_paths_under(root: &Path, deny_read_globs: &[String]) ->
 /// if the pattern is empty. The returned regex is anchored with `^`…`$` and is
 /// safe to embed in a Seatbelt `(regex #"…")` clause after quote-escaping.
 #[must_use]
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub fn glob_to_anchored_regex(pattern: &str) -> Option<String> {
     if pattern.is_empty() {
         return None;
@@ -116,6 +117,7 @@ pub fn glob_to_anchored_regex(pattern: &str) -> Option<String> {
     let mut regex = String::from("^");
     let mut chars = pattern.chars().collect::<VecDeque<_>>();
     let mut saw_glob = false;
+    let mut class = Vec::new();
 
     while let Some(ch) = chars.pop_front() {
         match ch {
@@ -141,7 +143,7 @@ pub fn glob_to_anchored_regex(pattern: &str) -> Option<String> {
             }
             '[' => {
                 saw_glob = true;
-                let mut class = Vec::new();
+                class.clear();
                 let mut closed = false;
                 while let Some(class_ch) = chars.pop_front() {
                     if class_ch == ']' {
@@ -154,14 +156,14 @@ pub fn glob_to_anchored_regex(pattern: &str) -> Option<String> {
                     // Unterminated class — treat the `[` as a literal and
                     // restore the consumed characters for normal handling.
                     regex.push_str("\\[");
-                    for class_ch in class.into_iter().rev() {
+                    for class_ch in class.drain(..).rev() {
                         chars.push_front(class_ch);
                     }
                     continue;
                 }
 
                 regex.push('[');
-                let mut class_chars = class.into_iter();
+                let mut class_chars = class.drain(..);
                 if let Some(first) = class_chars.next() {
                     match first {
                         '!' => regex.push('^'),

@@ -48,13 +48,16 @@ pub fn resolve_flow_id(
 ) -> Result<FlowId, FlowError> {
     if let Some(ch) = channel {
         if let Some(id) = overrides.exact.get(&(agent_id.to_string(), ch.to_string())) {
+            // rust-doctor-disable-next-line excessive-clone
             return Ok(id.clone());
         }
     }
     if let Some(id) = overrides.wildcard.get(agent_id) {
+        // rust-doctor-disable-next-line excessive-clone
         return Ok(id.clone());
     }
     if let Some(id) = defaults.get(agent_id) {
+        // rust-doctor-disable-next-line excessive-clone
         return Ok(id.clone());
     }
     Err(FlowError::UnknownAgent(agent_id.to_string()))
@@ -97,7 +100,6 @@ pub fn resolve_session(input: SessionResolveInput) -> Result<SessionResolution, 
         SessionStrategy::Child { parent_session_key } => {
             let parent = input
                 .parent_session
-                .clone()
                 .filter(|s| !s.is_empty())
                 .or(parent_session_key.filter(|s| !s.is_empty()))
                 .ok_or_else(|| {

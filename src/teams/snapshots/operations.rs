@@ -136,12 +136,19 @@ pub async fn restore_snapshot(
     } else {
         Vec::new()
     };
-    let live_tasks = coord_store
-        .list_tasks(CoordTaskFilter {
-            team_id: Some(team_id.clone()),
-            ..Default::default()
-        })
-        .await?;
+    // Like members: when the team itself is gone, tasks still rowed under the
+    // stale team_id are orphans, not live state — matching against them would
+    // classify every snapshot task as "already live" and skip recreation.
+    let live_tasks = if live_team.is_some() {
+        coord_store
+            .list_tasks(CoordTaskFilter {
+                team_id: Some(team_id.clone()),
+                ..Default::default()
+            })
+            .await?
+    } else {
+        Vec::new()
+    };
     let current_task_count = live_tasks.len();
 
     // --- Member diff -------------------------------------------------------
@@ -222,16 +229,24 @@ pub async fn restore_snapshot(
     }
 
     // --- Apply mutations ---------------------------------------------------
-    // 1. Team config: recreate if missing.
-    if live_team.is_none() {
-        team_store
+    // 1. Team config: recreate if missing. `create_team` mints a FRESH id
+    //    (`NewTeam` carries none), so every write below must target the
+    //    recreated id — writing against the snapshot's stale `meta.team_id`
+    //    made the first `add_member` fail NotFound, aborting the whole restore
+    //    (the exact scenario this branch exists for) and leaking one orphan
+    //    shell team per retry.
+    let effective_team_id = if live_team.is_none() {
+        let recreated = team_store
             .create_team(NewTeam {
                 name: payload.team.name.clone(),
                 description: payload.team.description.clone(),
                 leader_id: payload.team.leader_id.clone(),
             })
             .await?;
-    }
+        recreated.id
+    } else {
+        team_id.clone()
+    };
 
     // 2. Members. Preserve `kind` and ACP routing fields so external CLI
     // members survive snapshot/restore round-trips.
@@ -246,7 +261,7 @@ pub async fn restore_snapshot(
         })?;
         team_store
             .add_member(NewTeamMember {
-                team_id: team_id.clone(),
+                team_id: effective_team_id.clone(),
                 agent_id: agent_id.clone(),
                 role: snap_m.role.clone(),
                 kind: snap_m.kind.clone(),
@@ -259,9 +274,9 @@ pub async fn restore_snapshot(
     for agent_id in &members_to_remove {
         // remove_member errors if the agent is the leader — we already
         // filtered that out, but be defensive: log & continue.
-        if let Err(e) = team_store.remove_member(team_id, agent_id).await {
+        if let Err(e) = team_store.remove_member(&effective_team_id, agent_id).await {
             tracing::warn!(
-                team_id = %team_id,
+                team_id = %effective_team_id,
                 agent_id = %agent_id,
                 error = %e,
                 "snapshot restore: remove_member failed; skipping"
@@ -302,7 +317,7 @@ pub async fn restore_snapshot(
         }
         let created = coord_store
             .create_task(NewCoordTask {
-                team_id: Some(team_id.clone()),
+                team_id: Some(effective_team_id.clone()),
                 subject: snap.subject.clone(),
                 description: snap.description.clone(),
                 owner: snap.owner.clone(),
@@ -314,5 +329,9 @@ pub async fn restore_snapshot(
         id_map.insert(snap.id.clone(), created.id);
     }
 
+    // Point the caller at the team the restore actually landed on (differs
+    // from the snapshot's team_id only in the recreate-after-delete case).
+    let mut diff = diff;
+    diff.team_id = effective_team_id;
     Ok(diff)
 }

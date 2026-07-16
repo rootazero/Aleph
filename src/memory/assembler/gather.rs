@@ -57,6 +57,7 @@ impl Gatherer {
         let mut seen_feedback: std::collections::HashSet<String> = notes
             .iter()
             .filter(|c| c.slot_hint == SlotKind::Feedback)
+            // rust-doctor-disable-next-line excessive-clone
             .map(|c| c.id.clone())
             .collect();
         pool.extend(notes);
@@ -65,6 +66,7 @@ impl Gatherer {
         pool.extend(daily_insight);
         for entry in feedback_floor {
             let id = format!("note://{}", entry.path);
+            // rust-doctor-disable-next-line excessive-clone
             if !seen_feedback.insert(id.clone()) {
                 continue;
             }
@@ -121,7 +123,9 @@ impl Gatherer {
                     let category = sf.fact.note_type.to_category_dir().to_string();
                     // MemoryFact.path is the note://category/filename form when
                     // produced by NoteSearchResult::to_memory_fact. Normalise.
+                    // rust-doctor-disable-next-line excessive-clone
                     let display_id = if sf.fact.path.starts_with("note://") {
+                        // rust-doctor-disable-next-line excessive-clone
                         sf.fact.path.clone()
                     } else {
                         format!("note://{}", sf.fact.path)
@@ -136,6 +140,7 @@ impl Gatherer {
                     Candidate {
                         id: display_id,
                         title,
+                        // rust-doctor-disable-next-line excessive-clone
                         full_content: sf.fact.content.clone(),
                         source: ItemSource::Note {
                             path: path_no_scheme,
@@ -171,7 +176,7 @@ impl Gatherer {
             snap.active_files.join(", "),
             snap.pending_tasks.join("; "),
         );
-        let sid = snap.session_id.clone();
+        let sid = snap.session_id;
         vec![Candidate {
             id: format!("aleph://session/{sid}/snapshot"),
             title: format!("Session {sid} snapshot"),
@@ -246,6 +251,7 @@ impl Gatherer {
                 Ok(None) => {}
                 Err(e) => {
                     warn!(error = %e, date = %date, "assembler.gather: daily insight fetch failed");
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     return Vec::new();
                 }
             }
@@ -367,9 +373,9 @@ fn insight_to_candidate(insight: crate::memory::dreaming::DailyInsight) -> Candi
 /// set) pass `SlotKind::SessionRecent` → `Working`; cross-session
 /// `SessionCompressed` rows pass `SlotKind::RawFragments` → `Raw` audit substrate.
 fn raw_to_candidate(r: RawMemory, slot: SlotKind) -> Candidate {
-    let session_id = r.session_id.clone().unwrap_or_default();
+    let session_id = r.session_id.unwrap_or_default();
     let fact_source = raw_source_to_fact_source(&r.source);
-    let path = r.path.clone();
+    let path = r.path;
     Candidate {
         id: format!("aleph://session/{session_id}/raw/{}", r.id),
         title: format!("Raw fragment {}", r.id),

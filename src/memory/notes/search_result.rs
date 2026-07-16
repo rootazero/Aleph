@@ -30,7 +30,9 @@ impl NoteSearchResult {
     #[must_use]
     pub fn to_memory_fact(&self, agent_id: &str) -> MemoryFact {
         let note_type = NoteType::from_str_or_other(&self.category);
+        // rust-doctor-disable-next-line excessive-clone
         let mut fact = MemoryFact::new(self.content.clone(), note_type, self.tags.clone());
+        // rust-doctor-disable-next-line excessive-clone
         fact.id = self.path.clone();
         fact.path = format!("note://{}", self.path);
         fact.agent = agent_id.to_string();

@@ -14,6 +14,7 @@ use super::types::{FactProvenance, ProvenanceOrigin};
 pub static PROVENANCE_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(
         r"<!--\s*(?:src:\s*([^,]+?),\s*)?origin:\s*(raw_source|prior_note|inferred|legacy|system)\s*,\s*inferred:\s*(true|false)\s*-->",
+    // rust-doctor-disable-next-line unwrap-in-production
     ).unwrap()
 });
 
@@ -200,6 +201,7 @@ pub fn parse_date_to_unix(date: &Option<String>) -> Result<i64, AlephError> {
         suggestion: Some("Use RFC3339 or YYYY-MM-DD format".to_string()),
     })?;
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let dt = nd.and_hms_opt(0, 0, 0).expect("midnight is always valid");
     Ok(dt.and_utc().timestamp())
 }

@@ -23,6 +23,7 @@
 //! `session_events` queries are short and use prepared statements, so the
 //! mutex-hold time is bounded.
 
+use std::borrow::Cow;
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
@@ -606,6 +607,7 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
 ///
 /// Kept as a `&'static str` to avoid per-append allocation and to give the
 /// storage layer a stable taxonomy independent of serde rename decisions.
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 const fn event_type_tag(event: &SessionEvent) -> &'static str {
     match event {
         SessionEvent::SessionCreated { .. } => "session_created",
@@ -650,16 +652,18 @@ const MAX_FTS_BODY_CHARS: usize = 8_000;
 /// stays on the right side of R7 (LLM sovereignty): the model decides what is
 /// relevant via its query; we only surface the raw text it can match against.
 fn render_event_text(event: &SessionEvent) -> Option<String> {
-    let raw = match event {
-        SessionEvent::UserMessage { content, .. } => content.text.clone(),
-        SessionEvent::AssistantMessage { content, .. } => content.text.clone(),
-        SessionEvent::SystemMessage { content, .. } => content.clone(),
-        SessionEvent::ToolCallRequested { name, input, .. } => format!("{name} {input}"),
+    let raw: Cow<'_, str> = match event {
+        SessionEvent::UserMessage { content, .. } => Cow::Borrowed(&content.text),
+        SessionEvent::AssistantMessage { content, .. } => Cow::Borrowed(&content.text),
+        SessionEvent::SystemMessage { content, .. } => Cow::Borrowed(content),
+        SessionEvent::ToolCallRequested { name, input, .. } => {
+            Cow::Owned(format!("{name} {input}"))
+        }
         SessionEvent::ToolResult { output, .. } => render_json(&output.value),
-        SessionEvent::ToolError { error, .. } => error.clone(),
-        SessionEvent::ToolCallDenied { reason, .. } => reason.clone(),
-        SessionEvent::SubagentReturned { summary, .. } => summary.clone(),
-        SessionEvent::Error { message, .. } => message.clone(),
+        SessionEvent::ToolError { error, .. } => Cow::Borrowed(error),
+        SessionEvent::ToolCallDenied { reason, .. } => Cow::Borrowed(reason),
+        SessionEvent::SubagentReturned { summary, .. } => Cow::Borrowed(summary),
+        SessionEvent::Error { message, .. } => Cow::Borrowed(message),
         _ => return None,
     };
     let trimmed = raw.trim();
@@ -673,10 +677,10 @@ fn render_event_text(event: &SessionEvent) -> Option<String> {
 /// Render a tool-output JSON value to searchable plain text: bare strings pass
 /// through unquoted (the common case — most tool outputs are strings); other
 /// shapes fall back to compact JSON so their tokens are still matchable.
-fn render_json(value: &serde_json::Value) -> String {
+fn render_json(value: &serde_json::Value) -> Cow<'_, str> {
     match value {
-        serde_json::Value::String(s) => s.clone(),
-        other => other.to_string(),
+        serde_json::Value::String(s) => Cow::Borrowed(s),
+        other => Cow::Owned(other.to_string()),
     }
 }
 

@@ -167,8 +167,10 @@ impl LoadStats {
     /// (all-zero) entry; later touches return the shared `Arc`.
     fn handle(&self, name: &str) -> Arc<ProviderLoad> {
         if let Some(load) = self.providers.get(name) {
+            // rust-doctor-disable-next-line excessive-clone
             return load.clone();
         }
+        // rust-doctor-disable-next-line excessive-clone
         self.providers.entry(name.to_string()).or_default().clone()
     }
 
@@ -206,6 +208,7 @@ impl LoadStats {
         let mut out: Vec<(String, LoadMetric)> = self
             .providers
             .iter()
+            // rust-doctor-disable-next-line excessive-clone
             .map(|e| (e.key().clone(), e.value().metric()))
             .collect();
         out.sort_by(|a, b| a.0.cmp(&b.0));

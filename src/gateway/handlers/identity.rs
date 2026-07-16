@@ -112,7 +112,7 @@ pub async fn handle_get(request: JsonRpcRequest, ctx: SharedIdentityCtx) -> Json
     };
 
     let soul_path = agent_dir.join(DEFAULT_IDENTITY_FILE);
-    let soul_md = std::fs::read_to_string(&soul_path).ok();
+    let soul_md = tokio::fs::read_to_string(&soul_path).await.ok();
     // Structured preview parsed from the live SOUL.md. Best-effort: an
     // unparseable or absent file still returns its raw text (or null).
     let parsed = SoulManifest::from_file(&soul_path).ok();
@@ -233,7 +233,7 @@ pub async fn handle_clear(request: JsonRpcRequest, ctx: SharedIdentityCtx) -> Js
     }
 
     let backup = backup_identity_file(&agent_dir, &file_name, &path);
-    match std::fs::remove_file(&path) {
+    match tokio::fs::remove_file(&path).await {
         Ok(()) => JsonRpcResponse::success(
             request.id,
             json!({
@@ -322,7 +322,9 @@ mod tests {
         assert_eq!(set_resp.result.unwrap()["success"], true);
 
         // The write landed in the live SOUL.md the prompt reads.
-        let live = std::fs::read_to_string(tmp.path().join("main").join("SOUL.md")).unwrap();
+        let live = tokio::fs::read_to_string(tmp.path().join("main").join("SOUL.md"))
+            .await
+            .unwrap();
         assert_eq!(live, "You are Aleph, calm and precise.");
 
         // identity.get now returns it.
@@ -397,7 +399,9 @@ mod tests {
     async fn clear_backs_up_and_removes_then_is_idempotent() {
         let tmp = TempDir::new().unwrap();
         let ctx = ctx_with_agent(tmp.path(), "main");
-        std::fs::write(tmp.path().join("main").join("SOUL.md"), "custom").unwrap();
+        tokio::fs::write(tmp.path().join("main").join("SOUL.md"), "custom")
+            .await
+            .unwrap();
 
         let resp = handle_clear(
             JsonRpcRequest::with_id("identity.clear", None, json!(1)),
@@ -423,7 +427,9 @@ mod tests {
     async fn list_reports_all_identity_files() {
         let tmp = TempDir::new().unwrap();
         let ctx = ctx_with_agent(tmp.path(), "main");
-        std::fs::write(tmp.path().join("main").join("SOUL.md"), "hi").unwrap();
+        tokio::fs::write(tmp.path().join("main").join("SOUL.md"), "hi")
+            .await
+            .unwrap();
 
         let resp = handle_list(
             JsonRpcRequest::with_id("identity.list", None, json!(1)),

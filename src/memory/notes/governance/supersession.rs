@@ -15,6 +15,7 @@ use crate::memory::notes::KnowledgeNote;
 // rejected them, so those supersessions never promoted to a `superseded_by`
 // edge. The bare form (written by `NoteDrift::mark_contradictory`) still matches.
 static SUPERSEDED_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    // rust-doctor-disable-next-line unwrap-in-production
     regex::Regex::new(r"(?m)^## Superseded by \[\[([^\]]+)\]\](?:\s*\([^)]*\))?\s*$").unwrap()
 });
 

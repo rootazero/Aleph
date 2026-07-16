@@ -133,6 +133,7 @@ impl ProfileConfig {
         if let Some(var_name) = self.api_key.strip_prefix("env:") {
             env::var(var_name).map_err(|_| ProfileConfigError::EnvVarNotFound(var_name.to_string()))
         } else {
+            // rust-doctor-disable-next-line excessive-clone
             Ok(self.api_key.clone())
         }
     }
@@ -276,17 +277,20 @@ impl ProfilesConfig {
             if config.uses_env_var() {
                 if let Err(e) = config.resolve_api_key() {
                     warn!(profile_id = %id, error = %e, "Profile API key cannot be resolved");
+                    // rust-doctor-disable-next-line excessive-clone
                     issues.push((id.clone(), e.to_string()));
                 }
             }
 
             // Check if API key is empty
             if config.api_key.is_empty() {
+                // rust-doctor-disable-next-line excessive-clone
                 issues.push((id.clone(), "API key is empty".to_string()));
             }
 
             // Check if provider is empty
             if config.provider.trim().is_empty() {
+                // rust-doctor-disable-next-line excessive-clone
                 issues.push((id.clone(), "Provider is empty".to_string()));
             }
         }

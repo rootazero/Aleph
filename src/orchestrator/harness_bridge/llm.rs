@@ -25,6 +25,7 @@ pub(super) fn pick_llm(
         BrainRef::Default => Ok(default_provider.current()),
         BrainRef::Preferred { provider } => {
             if let Some(llm) = named.get(provider) {
+                // rust-doctor-disable-next-line excessive-clone
                 Ok(llm.clone())
             } else {
                 // Silent fallback is intentional — Preferred means "use this if
@@ -41,9 +42,11 @@ pub(super) fn pick_llm(
             let llm = named
                 .get(provider)
                 .cloned()
+                // rust-doctor-disable-next-line excessive-clone
                 .ok_or_else(|| FlowError::ProviderUnavailable(provider.clone()))?;
             // Pin the model too when specified — stamp it onto every request.
             Ok(match model {
+                // rust-doctor-disable-next-line excessive-clone
                 Some(m) => Arc::new(crate::providers::ModelOverrideProvider::new(llm, m.clone())),
                 None => llm,
             })

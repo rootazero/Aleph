@@ -267,7 +267,7 @@ mod tests {
         // to `created_at` (otherwise the freshly recorded `last_used_at`
         // makes the skills look brand new).
         let path = tmp.path().join(".usage.json");
-        let bytes = std::fs::read(&path).unwrap();
+        let bytes = tokio::fs::read(&path).await.unwrap();
         let mut map: std::collections::HashMap<String, crate::skill::UsageStats> =
             serde_json::from_slice(&bytes).unwrap();
         let ancient = (Utc::now() - chrono::Duration::days(60)).to_rfc3339();
@@ -277,7 +277,9 @@ mod tests {
             stats.last_viewed_at = None;
             stats.last_patched_at = None;
         }
-        std::fs::write(&path, serde_json::to_vec_pretty(&map).unwrap()).unwrap();
+        tokio::fs::write(&path, serde_json::to_vec_pretty(&map).unwrap())
+            .await
+            .unwrap();
 
         // Re-implement the per-dir loop from `execute()` without needing
         // a full DreamContext — the fs side-effect is what we assert.

@@ -411,6 +411,7 @@ fn salvage_malformed_args(raw: &str) -> Option<Value> {
 ///
 /// Outside string literals:
 /// * a comma whose next non-whitespace character is `}` or `]` is dropped
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 fn repair_json_emission_defects(raw: &str) -> Option<String> {
     let chars: Vec<char> = raw.chars().collect();
     let mut out = String::with_capacity(raw.len() + 16);

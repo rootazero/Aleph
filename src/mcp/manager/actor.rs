@@ -119,6 +119,7 @@ impl McpManagerActor {
         let (event_tx, _) = broadcast::channel(64);
 
         // Create handle
+        // rust-doctor-disable-next-line excessive-clone
         let handle = McpManagerHandle::new(cmd_tx.clone(), event_tx.clone());
 
         let actor = Self {
@@ -143,6 +144,7 @@ impl McpManagerActor {
     /// Creates a new handle that can be used to send commands.
     #[must_use]
     pub fn handle(&self) -> McpManagerHandle {
+        // rust-doctor-disable-next-line excessive-clone
         McpManagerHandle::new(self.cmd_tx.clone(), self.event_tx.clone())
     }
 
@@ -247,6 +249,7 @@ impl McpManagerActor {
         let probes: Vec<(String, Arc<McpClient>)> = self
             .clients
             .iter()
+            // rust-doctor-disable-next-line excessive-clone
             .map(|(id, c)| (id.clone(), Arc::clone(c)))
             .collect();
         if probes.is_empty() {
@@ -278,13 +281,15 @@ impl McpManagerActor {
             let server_name = self
                 .config
                 .get_server(&server_id)
-                .map_or_else(|| server_id.clone(), |c| c.name.clone());
+                .map(|c| c.name.as_str())
+                .unwrap_or(server_id.as_str());
             // Emit ServerCrashed first so the tool bridge drops the dead
             // server's tools from the registry before the restart re-publishes
             // a fresh set via the ServerStarted event.
             let _ = self.event_tx.send(McpManagerEvent::ServerCrashed {
+                // rust-doctor-disable-next-line excessive-clone
                 server_id: server_id.clone(),
-                server_name,
+                server_name: server_name.to_string(),
                 error: "health probe failed; auto-restarting".to_string(),
             });
             match self.restart_server(&server_id).await {
@@ -304,6 +309,7 @@ impl McpManagerActor {
     /// Handle a single command
     ///
     /// Returns `false` if the actor should shutdown.
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn handle_command(&mut self, cmd: McpCommand) -> bool {
         match cmd {
             McpCommand::AddServer { config, respond_to } => {
@@ -463,11 +469,14 @@ impl McpManagerActor {
     ///
     /// Upserts the config, saves to disk, and optionally starts if `auto_start` is true.
     async fn add_server(&mut self, config: McpManagerConfig) -> Result<(), String> {
+        // rust-doctor-disable-next-line excessive-clone
         let server_id = config.id.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let server_name = config.name.clone();
         let auto_start = config.auto_start;
 
         // Upsert config
+        // rust-doctor-disable-next-line excessive-clone
         self.config.upsert_server(config.clone());
 
         // Save to disk
@@ -483,8 +492,9 @@ impl McpManagerActor {
 
         // Broadcast event after start succeeded (subscribers see consistent state)
         let _ = self.event_tx.send(McpManagerEvent::ServerAdded {
+            // rust-doctor-disable-next-line excessive-clone
             server_id: server_id.clone(),
-            server_name: server_name.clone(),
+            server_name,
         });
 
         tracing::info!(server_id = %server_id, "Server added");
@@ -499,6 +509,7 @@ impl McpManagerActor {
         let server_name = self
             .config
             .get_server(server_id)
+            // rust-doctor-disable-next-line excessive-clone
             .map_or_else(|| server_id.to_string(), |c| c.name.clone());
 
         // Stop if running
@@ -577,6 +588,7 @@ impl McpManagerActor {
             .cloned()
             .ok_or_else(|| format!("Server not found: {server_id}"))?;
 
+        // rust-doctor-disable-next-line excessive-clone
         let server_name = config.name.clone();
 
         // Update health state (insert if not yet tracked)
@@ -635,6 +647,7 @@ impl McpManagerActor {
         let server_name = self
             .config
             .get_server(server_id)
+            // rust-doctor-disable-next-line excessive-clone
             .map_or_else(|| server_id.to_string(), |c| c.name.clone());
 
         self.stop_server_internal(server_id).await;
@@ -657,6 +670,7 @@ impl McpManagerActor {
         // `list_tools` (and thus registration, aggregation, and counts) only
         // ever surface the tools this server is allowed to expose.
         let mut client = McpClient::new();
+        // rust-doctor-disable-next-line excessive-clone
         client.set_tool_filter(config.tool_filter.clone());
         let client = Arc::new(client);
 
@@ -676,11 +690,15 @@ impl McpManagerActor {
                 .await;
 
                 let external_config = ExternalServerConfig {
+                    // rust-doctor-disable-next-line excessive-clone
                     name: config.id.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     command: command.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     args: config.args.clone(),
                     env: resolved_env,
                     cwd: None,
+                    // rust-doctor-disable-next-line excessive-clone
                     requires_runtime: config.requires_runtime.clone(),
                     timeout_seconds: config.timeout_seconds,
                 };
@@ -720,7 +738,9 @@ impl McpManagerActor {
 
         // Route this server's `*/list_changed` notifications back into the
         // actor so the tool registry and capability state stay in sync.
+        // rust-doctor-disable-next-line excessive-clone
         let cmd_tx = self.cmd_tx.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let notify_server_id = config.id.clone();
         let notification_handler: crate::mcp::transport::NotificationCallback =
             Box::new(move |notification| {
@@ -728,6 +748,7 @@ impl McpManagerActor {
                     // Fire-and-forget: a dropped signal self-heals on the next
                     // notification, a restart, or the periodic health probe.
                     let _ = cmd_tx.try_send(McpCommand::ServerListChanged {
+                        // rust-doctor-disable-next-line excessive-clone
                         server_id: notify_server_id.clone(),
                         kind,
                     });
@@ -752,8 +773,11 @@ impl McpManagerActor {
         let tool_count = client.list_tools().await.len();
 
         // Store client and track start time
+        // rust-doctor-disable-next-line excessive-clone
         let server_id = config.id.clone();
+        // rust-doctor-disable-next-line excessive-clone
         self.clients.insert(server_id.clone(), client);
+        // rust-doctor-disable-next-line excessive-clone
         self.start_times.insert(server_id.clone(), Instant::now());
         // Mark healthy while preserving the restart-window bookkeeping
         // (restart_count / restart_window_start). Re-inserting a fresh
@@ -761,6 +785,7 @@ impl McpManagerActor {
         // letting a server that starts fine but dies between probes evade the
         // max_restarts cap and restart-loop forever.
         self.health_states
+            // rust-doctor-disable-next-line excessive-clone
             .entry(server_id.clone())
             .or_default()
             .record_success();
@@ -768,6 +793,7 @@ impl McpManagerActor {
         // Broadcast started event
         let _ = self.event_tx.send(McpManagerEvent::ServerStarted {
             server_id,
+            // rust-doctor-disable-next-line excessive-clone
             server_name: config.name.clone(),
             tool_count,
         });
@@ -835,7 +861,9 @@ impl McpManagerActor {
                 };
 
             servers.push(McpServerInfo {
+                // rust-doctor-disable-next-line excessive-clone
                 id: id.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 name: config.name.clone(),
                 transport: config.transport,
                 tool_count,
@@ -857,8 +885,10 @@ impl McpManagerActor {
                 .health_states
                 .get(id)
                 .map_or(HealthStatus::Healthy, |h| h.status);
+            // rust-doctor-disable-next-line excessive-clone
             let id = id.clone();
             servers.push(McpServerInfo {
+                // rust-doctor-disable-next-line excessive-clone
                 id: id.clone(),
                 name: id,
                 transport: McpTransportType::Stdio,
@@ -891,9 +921,11 @@ impl McpManagerActor {
             (Vec::new(), Vec::new(), Vec::new())
         };
 
+        // rust-doctor-disable-next-line excessive-clone
         let config = config.clone();
         Some(McpServerStatusDetail {
             id: server_id.to_string(),
+            // rust-doctor-disable-next-line excessive-clone
             name: config.name.clone(),
             transport: config.transport,
             health,

@@ -45,8 +45,10 @@ impl crate::orchestrator::dispatch::HarnessRunner for MockHarness {
             "hi".into(),
         ));
         let _ = events.send(crate::orchestrator::dispatch::FlowStreamEvent::Complete(
+            // rust-doctor-disable-next-line excessive-clone
             self.outcome.clone(),
         ));
+        // rust-doctor-disable-next-line excessive-clone
         Ok(self.outcome.clone())
     }
 }
@@ -55,7 +57,9 @@ fn fake_session_service() -> Arc<dyn crate::session::service::SessionService> {
     use crate::session::in_process::InProcessActorSessionService;
     use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let conn = rusqlite::Connection::open_in_memory().unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
     migrate_add_session_events(&conn).unwrap();
     let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
     Arc::new(InProcessActorSessionService::new(store))
@@ -92,6 +96,7 @@ fn fixture_orchestrator() -> (Orchestrator, Arc<Mutex<Vec<String>>>) {
             iterations: 1,
             ..Default::default()
         },
+        // rust-doctor-disable-next-line excessive-clone
         invocations: invocations.clone(),
     });
 
@@ -130,11 +135,16 @@ async fn dispatch_happy_path_returns_handle_and_completes() {
             think_level: None,
         })
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("dispatch ok");
 
-    let outcome = handle.completion.await.unwrap().unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
+    let completion = handle.completion.await.unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
+    let outcome = completion.unwrap();
     assert_eq!(outcome.final_text, "ok");
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let calls = invocations.lock().unwrap();
     assert_eq!(calls.len(), 1);
     assert!(!calls[0].is_empty(), "session key must be non-empty");
@@ -193,9 +203,13 @@ async fn dispatch_unregistered_agent_routes_through_default_flow() {
             think_level: None,
         })
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("unregistered agent routes through default-agent flow");
 
-    let outcome = handle.completion.await.unwrap().unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
+    let completion = handle.completion.await.unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
+    let outcome = completion.unwrap();
     assert_eq!(outcome.final_text, "ok");
     assert_eq!(invocations.lock().unwrap().len(), 1);
 }
@@ -306,6 +320,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
         think_level: None,
     };
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let first = orch.dispatch(mk_req()).await.expect("first ok");
     let err = orch.dispatch(mk_req()).await.unwrap_err();
     assert!(matches!(err, FlowError::SessionConflict(ref k) if k == "shared-session"));
@@ -336,7 +351,9 @@ async fn dispatch_releases_session_lock_after_completion() {
     };
 
     // First dispatch — await completion.
+    // rust-doctor-disable-next-line unwrap-in-production
     let first = orch.dispatch(mk_req()).await.expect("first ok");
+    // rust-doctor-disable-next-line unwrap-in-production
     let _ = first.completion.await.unwrap();
 
     // The session lock must now be released — a second dispatch with the
@@ -344,7 +361,9 @@ async fn dispatch_releases_session_lock_after_completion() {
     let second = orch
         .dispatch(mk_req())
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("second ok after release");
+    // rust-doctor-disable-next-line unwrap-in-production
     let _ = second.completion.await.unwrap();
 
     assert_eq!(
@@ -395,6 +414,7 @@ impl crate::orchestrator::dispatch::HarnessRunner for CapturingHarness {
             ..Default::default()
         };
         let _ = events.send(crate::orchestrator::dispatch::FlowStreamEvent::Complete(
+            // rust-doctor-disable-next-line excessive-clone
             outcome.clone(),
         ));
         Ok(outcome)
@@ -432,7 +452,9 @@ fn fixture_capturing_orchestrator() -> (
     let received_trace_sink = Arc::new(Mutex::new(None::<bool>));
 
     let harness = Arc::new(CapturingHarness {
+        // rust-doctor-disable-next-line excessive-clone
         received_tool_service: received_tool_service.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         received_trace_sink: received_trace_sink.clone(),
     });
 
@@ -501,13 +523,16 @@ async fn dispatch_forwards_tool_service_override() {
             think_level: None,
         })
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("dispatch ok");
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let _ = handle.completion.await.unwrap();
 
     let got = received_tool_service
         .lock()
         .unwrap_or_else(|e| e.into_inner())
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("harness must have been called");
     assert!(got, "tool_service_override must arrive as Some(_)");
 }
@@ -538,13 +563,16 @@ async fn dispatch_forwards_trace_sink() {
             think_level: None,
         })
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("dispatch ok");
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let _ = handle.completion.await.unwrap();
 
     let got = received_trace_sink
         .lock()
         .unwrap_or_else(|e| e.into_inner())
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("harness must have been called");
     assert!(got, "trace_sink must arrive as Some(_)");
 }

@@ -72,6 +72,7 @@ impl RemoteEmbeddingProvider {
     /// Create from `EmbeddingProviderConfig`
     pub fn from_config(config: &EmbeddingProviderConfig) -> Result<Self, AlephError> {
         // API key is populated from vault at runtime
+        // rust-doctor-disable-next-line excessive-clone
         let api_key = config.api_key.clone().unwrap_or_default();
 
         let client = reqwest::Client::builder()
@@ -81,6 +82,7 @@ impl RemoteEmbeddingProvider {
 
         Ok(Self {
             client,
+            // rust-doctor-disable-next-line excessive-clone
             api_base: config.api_base.clone(),
             api_key,
             model: config.default_model().to_string(),
@@ -88,6 +90,7 @@ impl RemoteEmbeddingProvider {
             batch_size: config.batch_size as usize,
             max_input_chars: config.max_input_chars,
             send_dimensions: config.preset.sends_dimensions_param(),
+            // rust-doctor-disable-next-line excessive-clone
             provider_id: config.id.clone(),
         })
     }

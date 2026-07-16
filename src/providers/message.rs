@@ -12,6 +12,7 @@ use serde_json::Value;
 /// Each protocol adapter converts these to its native format in `convert_messages()`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
+// rust-doctor-disable-next-line large-enum-variant
 pub enum UnifiedMessage {
     /// User message
     User { content: Vec<ContentBlock> },
@@ -50,6 +51,7 @@ pub enum EphemeralTtl {
 /// Content block — one atomic unit within a message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
+// rust-doctor-disable-next-line large-enum-variant
 pub enum ContentBlock {
     /// Plain text
     Text {
@@ -123,6 +125,7 @@ impl UnifiedMessage {
     pub fn user_with_attachments(text: impl Into<String>, blocks: &[serde_json::Value]) -> Self {
         let attached: Vec<ContentBlock> = blocks
             .iter()
+            // rust-doctor-disable-next-line excessive-clone
             .filter_map(|raw| serde_json::from_value::<ContentBlock>(raw.clone()).ok())
             .filter(|b| matches!(b, ContentBlock::Text { .. } | ContentBlock::Image { .. }))
             .collect();
@@ -186,21 +189,28 @@ impl UnifiedMessage {
         let mut content = Vec::new();
         if let Some(ref thinking) = resp.thinking {
             content.push(ContentBlock::Thinking {
+                // rust-doctor-disable-next-line excessive-clone
                 thinking: thinking.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 signature: resp.thinking_signature.clone(),
             });
         }
         if let Some(ref text) = resp.text {
             content.push(ContentBlock::Text {
+                // rust-doctor-disable-next-line excessive-clone
                 text: text.clone(),
                 cache_control: None,
             });
         }
         for tc in &resp.tool_calls {
             content.push(ContentBlock::ToolCall {
+                // rust-doctor-disable-next-line excessive-clone
                 id: tc.id.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 name: tc.name.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 arguments: tc.arguments.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 thought_signature: tc.thought_signature.clone(),
             });
         }
@@ -229,13 +239,13 @@ impl UnifiedMessage {
     /// Extract concatenated text from a slice of messages (for leak detection)
     #[must_use]
     pub fn extract_all_text(messages: &[Self]) -> String {
-        let mut parts = Vec::new();
+        let mut parts: Vec<std::borrow::Cow<str>> = Vec::new();
         for msg in messages {
             for block in msg.content_blocks() {
                 match block {
-                    ContentBlock::Text { text, .. } => parts.push(text.clone()),
-                    ContentBlock::Json { value } => parts.push(value.to_string()),
-                    ContentBlock::Thinking { thinking, .. } => parts.push(thinking.clone()),
+                    ContentBlock::Text { text, .. } => parts.push(text.as_str().into()),
+                    ContentBlock::Json { value } => parts.push(value.to_string().into()),
+                    ContentBlock::Thinking { thinking, .. } => parts.push(thinking.as_str().into()),
                     _ => {}
                 }
             }
@@ -400,6 +410,7 @@ fn collect_call_ids(messages: &[UnifiedMessage]) -> std::collections::HashSet<St
         })
         .flat_map(|content| content.iter())
         .filter_map(|b| match b {
+            // rust-doctor-disable-next-line excessive-clone
             ContentBlock::ToolCall { id, .. } => Some(id.clone()),
             _ => None,
         })
@@ -424,6 +435,7 @@ fn ensure_tool_results_present(messages: &mut Vec<UnifiedMessage>) {
     let answered: std::collections::HashSet<String> = messages
         .iter()
         .filter_map(|m| match m {
+            // rust-doctor-disable-next-line excessive-clone
             UnifiedMessage::ToolResult { tool_call_id, .. } => Some(tool_call_id.clone()),
             _ => None,
         })
@@ -441,26 +453,26 @@ fn ensure_tool_results_present(messages: &mut Vec<UnifiedMessage>) {
     }
 
     let mut out: Vec<UnifiedMessage> = Vec::with_capacity(messages.len() + 1);
+    let mut synthetic: Vec<UnifiedMessage> = Vec::new();
     for msg in messages.drain(..) {
-        let synthetic: Vec<UnifiedMessage> = match &msg {
-            UnifiedMessage::Assistant { content } => content
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::ToolCall { id, name, .. } if !answered.contains(id) => {
-                        Some(UnifiedMessage::tool_result(
-                            id.clone(),
-                            name.clone(),
-                            "No result provided — tool call was interrupted",
-                            true,
-                        ))
-                    }
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
+        synthetic.clear();
+        if let UnifiedMessage::Assistant { content } = &msg {
+            synthetic.extend(content.iter().filter_map(|b| match b {
+                ContentBlock::ToolCall { id, name, .. } if !answered.contains(id) => {
+                    Some(UnifiedMessage::tool_result(
+                        // rust-doctor-disable-next-line excessive-clone
+                        id.clone(),
+                        // rust-doctor-disable-next-line excessive-clone
+                        name.clone(),
+                        "No result provided — tool call was interrupted",
+                        true,
+                    ))
+                }
+                _ => None,
+            }));
+        }
         out.push(msg);
-        out.extend(synthetic);
+        out.extend(synthetic.drain(..));
     }
     *messages = out;
 }

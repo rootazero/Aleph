@@ -186,7 +186,7 @@ mod tests {
     async fn ctx() -> (Arc<RwLock<Config>>, Arc<ConfigPatcher>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, "").unwrap();
+        tokio::fs::write(&path, "").await.unwrap();
         let config = Arc::new(RwLock::new(Config::default()));
         let backup = ConfigBackup::new(dir.path().join("backups"), 10);
         let patcher = Arc::new(ConfigPatcher::new(Arc::clone(&config), path, backup));

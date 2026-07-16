@@ -56,6 +56,7 @@ pub enum NoteType {
 impl NoteType {
     /// Convert to string representation
     #[must_use]
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     pub const fn as_str(&self) -> &str {
         match self {
             Self::Preference => "preference",
@@ -82,6 +83,7 @@ impl NoteType {
     /// Matches the names in `CATEGORY_DIRS` (uses hyphens for subagent variants,
     /// not underscores as `as_str()` does).
     #[must_use]
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     pub const fn to_category_dir(&self) -> &'static str {
         match self {
             Self::Preference => "preference",
@@ -152,6 +154,7 @@ impl NoteType {
 impl std::str::FromStr for NoteType {
     type Err = String;
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "preference" => Ok(Self::Preference),

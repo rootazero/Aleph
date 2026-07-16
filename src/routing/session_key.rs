@@ -175,6 +175,7 @@ impl SessionKey {
     ) -> Self {
         let task_type = normalize_agent_id(&task_type.into());
         if matches!(task_type.as_str(), "peer" | "dm" | "ephemeral") {
+            // rust-doctor-disable-next-line panic-in-library
             panic!("reserved task_type `{task_type}` would produce an ambiguous session key");
         }
         Self::Task {
@@ -272,60 +273,30 @@ impl SessionKey {
     /// Return a clone with the given epoch (legacy compatibility alias).
     #[must_use]
     pub fn with_epoch(&self, epoch: u32) -> Self {
-        match self {
-            Self::Main {
-                agent_id, main_key, ..
-            } => Self::Main {
-                agent_id: agent_id.clone(),
-                main_key: main_key.clone(),
-                epoch,
-            },
-            Self::DirectMessage {
-                agent_id,
-                channel,
-                peer_id,
-                dm_scope,
-                ..
-            } => Self::DirectMessage {
-                agent_id: agent_id.clone(),
-                channel: channel.clone(),
-                peer_id: peer_id.clone(),
-                dm_scope: *dm_scope,
-                epoch,
-            },
-            other => other.clone(),
+        let mut cloned = self.clone();
+        match cloned {
+            Self::Main { epoch: ref mut e, .. } => *e = epoch,
+            Self::DirectMessage { epoch: ref mut e, .. } => *e = epoch,
+            _ => {}
         }
+        cloned
     }
 
     /// Return a clone with epoch incremented by 1.
     /// For non-epoch types (Group, Task, Subagent, Ephemeral), returns clone unchanged.
     #[must_use]
     pub fn with_next_epoch(&self) -> Self {
-        match self {
-            Self::Main {
-                agent_id,
-                main_key,
-                epoch,
-            } => Self::Main {
-                agent_id: agent_id.clone(),
-                main_key: main_key.clone(),
-                epoch: epoch.saturating_add(1),
-            },
-            Self::DirectMessage {
-                agent_id,
-                channel,
-                peer_id,
-                dm_scope,
-                epoch,
-            } => Self::DirectMessage {
-                agent_id: agent_id.clone(),
-                channel: channel.clone(),
-                peer_id: peer_id.clone(),
-                dm_scope: *dm_scope,
-                epoch: epoch.saturating_add(1),
-            },
-            other => other.clone(),
+        let mut cloned = self.clone();
+        match cloned {
+            Self::Main { ref mut epoch, .. } => {
+                *epoch = epoch.saturating_add(1);
+            }
+            Self::DirectMessage { ref mut epoch, .. } => {
+                *epoch = epoch.saturating_add(1);
+            }
+            _ => {}
         }
+        cloned
     }
 
     /// Return the base key string WITHOUT epoch suffix (for SQL LIKE queries).

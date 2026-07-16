@@ -82,100 +82,80 @@ pub fn resolve_route(
         .filter(|b| matches_account(&b.match_rule, account_id))
         .collect();
 
-    let build =
-        |agent_id: &str, matched_by: MatchedBy, workspace: Option<String>| -> ResolvedRoute {
-            let agent_id = normalize_agent_id(agent_id);
-            let session_key = build_session_key(
-                &agent_id,
-                &channel,
-                input.peer.as_ref(),
-                session_cfg.dm_scope,
-                &session_cfg.identity_links,
-            );
-            let main_session_key = SessionKey::Main {
-                agent_id: agent_id.clone(),
-                main_key: DEFAULT_MAIN_KEY.to_string(),
-                epoch: 0,
-            };
-            ResolvedRoute {
-                agent_id,
-                channel: channel.clone(),
-                account_id: account_id.to_string(),
-                session_key,
-                main_session_key,
-                matched_by,
-                workspace,
-            }
-        };
+    // Select the highest-priority matching binding, if any.
+    let mut matched: Option<(&RouteBinding, MatchedBy)> = None;
 
-    // 1. Peer match
     if let Some(peer) = &input.peer {
-        if let Some(b) = candidates
+        matched = candidates
             .iter()
             .find(|b| matches_peer(&b.match_rule, peer))
-        {
-            return build(&b.agent_id, MatchedBy::Peer, b.match_rule.workspace.clone());
+            .map(|&b| (b, MatchedBy::Peer));
+    }
+
+    if matched.is_none() {
+        if let Some(guild_id) = &input.guild_id {
+            matched = candidates
+                .iter()
+                .find(|b| matches_guild(&b.match_rule, guild_id))
+                .map(|&b| (b, MatchedBy::Guild));
         }
     }
 
-    // 2. Guild match
-    if let Some(guild_id) = &input.guild_id {
-        if let Some(b) = candidates
-            .iter()
-            .find(|b| matches_guild(&b.match_rule, guild_id))
-        {
-            return build(
-                &b.agent_id,
-                MatchedBy::Guild,
-                b.match_rule.workspace.clone(),
-            );
+    if matched.is_none() {
+        if let Some(team_id) = &input.team_id {
+            matched = candidates
+                .iter()
+                .find(|b| matches_team(&b.match_rule, team_id))
+                .map(|&b| (b, MatchedBy::Team));
         }
     }
 
-    // 3. Team match
-    if let Some(team_id) = &input.team_id {
-        if let Some(b) = candidates
-            .iter()
-            .find(|b| matches_team(&b.match_rule, team_id))
-        {
-            return build(&b.agent_id, MatchedBy::Team, b.match_rule.workspace.clone());
-        }
+    if matched.is_none() {
+        matched = candidates.iter().find(|b| {
+            b.match_rule.account_id.as_ref().is_some_and(|a| a != "*")
+                && b.match_rule.peer.is_none()
+                && b.match_rule.guild_id.is_none()
+                && b.match_rule.team_id.is_none()
+        }).map(|&b| (b, MatchedBy::Account));
     }
 
-    // 4. Account match (specific, not wildcard)
-    if let Some(b) = candidates.iter().find(|b| {
-        b.match_rule.account_id.as_ref().is_some_and(|a| a != "*")
-            && b.match_rule.peer.is_none()
-            && b.match_rule.guild_id.is_none()
-            && b.match_rule.team_id.is_none()
-    }) {
-        return build(
-            &b.agent_id,
-            MatchedBy::Account,
-            b.match_rule.workspace.clone(),
+    if matched.is_none() {
+        matched = candidates.iter().find(|b| {
+            b.match_rule.account_id.as_ref().is_none_or(|a| a == "*")
+                && b.match_rule.peer.is_none()
+                && b.match_rule.guild_id.is_none()
+                && b.match_rule.team_id.is_none()
+        }).map(|&b| (b, MatchedBy::Channel));
+    }
+
+    let build = |agent_id: &str, matched_by: MatchedBy, workspace: Option<String>| -> ResolvedRoute {
+        let agent_id = normalize_agent_id(agent_id);
+        let session_key = build_session_key(
+            &agent_id,
+            &channel,
+            input.peer.as_ref(),
+            session_cfg.dm_scope,
+            &session_cfg.identity_links,
         );
-    }
+        ResolvedRoute {
+            agent_id: agent_id.clone(),
+            channel,
+            account_id: account_id.to_string(),
+            session_key,
+            main_session_key: SessionKey::Main {
+                agent_id,
+                main_key: DEFAULT_MAIN_KEY.to_string(),
+                epoch: 0,
+            },
+            matched_by,
+            workspace,
+        }
+    };
 
-    // 5. Channel match (wildcard or unscoped account).
-    // `None` account_id reaches here only when the input account is "default"
-    // (see `matches_account`), so an account-less `{ channel = "..." }` binding
-    // is a legitimate channel-level default route — treat it like "*" rather
-    // than dropping it to the default agent.
-    if let Some(b) = candidates.iter().find(|b| {
-        b.match_rule.account_id.as_ref().is_none_or(|a| a == "*")
-            && b.match_rule.peer.is_none()
-            && b.match_rule.guild_id.is_none()
-            && b.match_rule.team_id.is_none()
-    }) {
-        return build(
-            &b.agent_id,
-            MatchedBy::Channel,
-            b.match_rule.workspace.clone(),
-        );
+    match matched {
+        Some((b, matched_by)) => build(&b.agent_id, matched_by, b.match_rule.workspace.clone()),
+        None => build(default_agent, MatchedBy::Default, None),
     }
-
-    // 6. Default (no binding matched, no workspace override)
-    build(default_agent, MatchedBy::Default, None)
 }
 
 fn build_session_key(
@@ -195,10 +175,10 @@ fn build_session_key(
 
     match peer.kind {
         RoutePeerKind::Dm => {
-            let peer_id = resolve_linked_peer_id(identity_links, channel, &peer.id)
-                .unwrap_or_else(|| peer.id.clone());
+            let linked = resolve_linked_peer_id(identity_links, channel, &peer.id);
+            let peer_id = linked.as_deref().unwrap_or(peer.id.as_str());
 
-            SessionKey::dm(agent_id, channel, &peer_id, dm_scope)
+            SessionKey::dm(agent_id, channel, peer_id, dm_scope)
         }
         RoutePeerKind::Group => SessionKey::group(agent_id, channel, PeerKind::Group, &peer.id),
         RoutePeerKind::Channel => SessionKey::group(agent_id, channel, PeerKind::Channel, &peer.id),

@@ -237,6 +237,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         &event_store,
         &team_session_store,
         &artifact_store,
+        &team_store,
     );
 
     // Generation provider registry (TTS / image / video) — independent of

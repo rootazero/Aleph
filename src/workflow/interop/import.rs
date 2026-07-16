@@ -183,7 +183,7 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                     agent_type: call.opts.agent_type,
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
-                    review: false,
+                    review: call.opts.review,
                 });
                 // A sibling inside a parallel block extends the current group; a
                 // sequential step becomes the next singleton layer.
@@ -477,6 +477,10 @@ struct AgentOpts {
     schema: Option<serde_json::Value>,
     isolation: Option<String>,
     agent_type: Option<String>,
+    /// Lead-review gate (`review: true`). Recovered on the bare path so a
+    /// header-stripped round-trip cannot silently drop an oversight gate
+    /// (a step meant to park in WaitingReview would auto-complete).
+    review: bool,
 }
 
 /// Read the optional `, { label: "…", phase: "…", model: "…", schema: {…},
@@ -545,6 +549,15 @@ fn read_agent_opts(chars: &[char], start: usize) -> AgentOpts {
                 }
                 None => break,
             },
+            // Bare boolean `true` for the review gate (export renders exactly
+            // `review: true`; false is omitted). Any other identifier value
+            // still falls through to skip_value below.
+            Some('t')
+                if key == "review" && chars[i..].iter().take(4).collect::<String>() == "true" =>
+            {
+                opts.review = true;
+                i += 4;
+            }
             // Non-literal value (identifier, number, array, expression): skip to
             // the next top-level `,`/`}`. The field stays unset (not guessed).
             _ => i = skip_value(chars, i),
@@ -1253,7 +1266,7 @@ await agent('fix more')
                 agent_type: Some("code-reviewer".into()),
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
-                review: false,
+                review: true,
             }],
         };
         let js = render_workflow_js(&m);
@@ -1274,6 +1287,10 @@ await agent('fix more')
             s.schema,
             Some(serde_json::json!({"type": "object", "required": ["x"]}))
         );
+        // The oversight gate must survive a header-stripped round-trip — a
+        // silently dropped `review: true` auto-completes a step that was meant
+        // to park in WaitingReview for lead approval.
+        assert!(s.review, "lead-review gate lost in bare round-trip");
     }
 
     #[test]

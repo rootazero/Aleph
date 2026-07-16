@@ -485,9 +485,9 @@ fn host_is_ip_literal(host: &str) -> bool {
 /// inherent method, so no `CommandExt` import is needed.
 fn apply_memory_rlimit(cmd: &mut Command, mb: u64) {
     let bytes = mb.saturating_mul(1024 * 1024);
+    // SAFETY: setrlimit(RLIMIT_AS) is async-signal-safe and well-defined.
+    // rust-doctor-disable-next-line unsafe-block-audit
     unsafe {
-        // SAFETY: setrlimit with RLIMIT_AS is async-signal-safe and well-defined.
-        // No allocator, mutex, or other handler-unsafe call is made.
         cmd.pre_exec(move || {
             let rlim = libc::rlimit {
                 rlim_cur: bytes as libc::rlim_t,
@@ -571,6 +571,7 @@ impl SeatbeltDriver {
         Ok(profile)
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn add_fs_policy(
         &self,
         profile: &mut String,

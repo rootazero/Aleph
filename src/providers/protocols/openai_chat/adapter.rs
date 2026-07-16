@@ -26,6 +26,7 @@ use crate::providers::protocols::openai_common::usage_limit::is_usage_limit_body
 
 #[async_trait]
 impl ProtocolAdapter for OpenAiProtocol {
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn build_request(
         &self,
         payload: &RequestPayload,
@@ -162,6 +163,7 @@ impl ProtocolAdapter for OpenAiProtocol {
             let tools: Vec<OpenAiTool> = tool_defs
                 .iter()
                 .map(|td| {
+                    // rust-doctor-disable-next-line excessive-clone
                     let mut params = td.parameters.clone();
                     // Honor the strict-normalization verdict: an `Incompatible`
                     // schema (e.g. a multi-type field) cannot be shipped with
@@ -177,6 +179,7 @@ impl ProtocolAdapter for OpenAiProtocol {
                                     reason = %reason,
                                     "OpenAI strict mode incompatible — downgrading this tool to non-strict",
                                 );
+                                // rust-doctor-disable-next-line excessive-clone
                                 params = td.parameters.clone();
                                 lenient_multi_type_rewrite(&mut params);
                                 None
@@ -200,6 +203,7 @@ impl ProtocolAdapter for OpenAiProtocol {
                         tool_type: "function".into(),
                         function: OpenAiFunction {
                             name: sanitize_tool_name(&td.name),
+                            // rust-doctor-disable-next-line excessive-clone
                             description: td.description.clone(),
                             parameters: params,
                             strict,

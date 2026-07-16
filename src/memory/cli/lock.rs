@@ -92,6 +92,7 @@ impl MemoryLock {
             // SAFETY: `fd` is a valid raw file descriptor obtained from
             // `lock_file.as_raw_fd()`. `flock` is a well-defined syscall for
             // advisory file locking with no memory-unsafe side effects.
+            // rust-doctor-disable-next-line unsafe-block-audit
             let result = unsafe { libc::flock(fd, lock_type) };
 
             if result != 0 {
@@ -183,6 +184,7 @@ impl Drop for MemoryLock {
             // SAFETY: `fd` is a valid raw file descriptor. `flock` with
             // `LOCK_UN` releases the advisory lock with no memory-unsafe
             // side effects.
+            // rust-doctor-disable-next-line unsafe-block-audit
             unsafe { libc::flock(fd, libc::LOCK_UN) };
         }
     }

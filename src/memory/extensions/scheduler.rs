@@ -41,6 +41,7 @@ impl MemoryProducerScheduler {
     /// Spawn the tokio background task. Returns a `JoinHandle` so the caller
     /// can abort it on shutdown.
     pub fn spawn(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
+        // rust-doctor-disable-next-line excessive-clone
         let this = self.clone();
         tokio::spawn(async move {
             let mut tick_interval = interval(this.tick_duration);
@@ -69,10 +70,14 @@ impl MemoryProducerScheduler {
             match res {
                 Ok(raws) => {
                     for raw in raws {
+                        // rust-doctor-disable-next-line excessive-clone
+                        let agent_id = raw.agent_id.clone();
+                        // rust-doctor-disable-next-line excessive-clone
+                        let session_id = raw.session_id.clone();
                         let capture_ctx = CaptureCtx {
-                            agent_id: raw.agent_id.clone(),
+                            agent_id,
                             namespace: NamespaceScope::Owner,
-                            session_id: raw.session_id.clone(),
+                            session_id,
                             source_hint: raw.source.as_str().to_string(),
                         };
                         if let Err(e) = insert_with_capture_filter(
@@ -230,3 +235,4 @@ mod agent_id_unification_tests {
         assert_eq!(DEFAULT_AGENT_ID, "main");
     }
 }
+

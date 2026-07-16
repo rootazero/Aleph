@@ -170,6 +170,7 @@ impl CapabilityLedger {
 
     /// Insert or update a capability entry.
     pub fn update(&mut self, entry: CapabilityEntry) {
+        // rust-doctor-disable-next-line excessive-clone
         self.entries.insert(entry.name.clone(), entry);
     }
 
@@ -227,6 +228,7 @@ impl CapabilityLedger {
         for entry in ready_entries {
             if let Some(parent) = entry.bin_path.parent() {
                 let parent_buf = parent.to_path_buf();
+                // rust-doctor-disable-next-line excessive-clone
                 if seen.insert(parent_buf.clone()) {
                     paths.push(parent_buf);
                 }
@@ -236,6 +238,7 @@ impl CapabilityLedger {
         // Append system PATH
         if let Ok(system_path) = std::env::var("PATH") {
             for p in std::env::split_paths(&system_path) {
+                // rust-doctor-disable-next-line excessive-clone
                 if seen.insert(p.clone()) {
                     paths.push(p);
                 }
@@ -333,6 +336,7 @@ pub fn migrate_from_legacy(runtimes_dir: &Path) -> std::io::Result<CapabilityLed
                             .to_string();
 
                         ledger.update(CapabilityEntry {
+                            // rust-doctor-disable-next-line excessive-clone
                             name: id.clone(),
                             bin_path: PathBuf::new(), // Legacy didn't store paths
                             version,

@@ -68,8 +68,11 @@ impl AiProviderBridge {
     /// Convert a loop `ToolDefinition` to the `tool_metadata` `ToolDefinition`.
     fn convert_tool_def(def: &LoopToolDefinition) -> MetadataToolDefinition {
         MetadataToolDefinition {
+            // rust-doctor-disable-next-line excessive-clone
             name: def.name.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             description: def.description.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             parameters: def.parameters.clone(),
             // Forward the tool's own declaration instead of hard-coding false
             // so the metadata catalog honestly reflects confirmation-required
@@ -110,6 +113,7 @@ impl LoopProvider for AiProviderBridge {
             } else {
                 Some(&metadata_tools)
             },
+            // rust-doctor-disable-next-line excessive-clone
             model: self.model.clone(),
             ..Default::default()
         };

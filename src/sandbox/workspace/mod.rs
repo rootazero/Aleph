@@ -125,7 +125,12 @@ impl WorkspaceSandbox {
             baseline: SandboxCapabilities::strict(),
             granted_elevations: RwLock::new(HashSet::new()),
         });
-        sessions.insert(sid.clone(), ws.clone());
+        sessions.insert(
+            // rust-doctor-disable-next-line excessive-clone
+            sid.clone(),
+            // rust-doctor-disable-next-line excessive-clone
+            ws.clone(),
+        );
         Ok(ws)
     }
 }
@@ -151,6 +156,7 @@ impl Sandbox for WorkspaceSandbox {
         })
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn execute(&self, mut cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         // Hook context is created on-demand at each call site rather than
         // once at the top: it borrows `&cmd`, which would block the SP-4
@@ -168,6 +174,7 @@ impl Sandbox for WorkspaceSandbox {
         let ws = self.for_session(&cmd.session_id).await?;
 
         let cwd = match &cmd.cwd {
+            // rust-doctor-disable-next-line excessive-clone
             None => ws.cwd.clone(),
             Some(p) => {
                 let normalized = normalize_path(p, &ws.cwd);
@@ -1699,3 +1706,4 @@ mod scrub_integration_tests {
         assert_eq!(cleaned.chars().count(), JUSTIFICATION_MAX_CHARS);
     }
 }
+

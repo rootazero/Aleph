@@ -58,9 +58,12 @@ pub struct TeamNotifier {
     /// Teams whose terminal "Team work complete" notification has already been
     /// claimed. Guards the concurrent dispatcher from firing the completion
     /// message once per simultaneously-finishing task; the first handler to
-    /// insert a team id wins, the rest short-circuit. Monotonic — a team id is
-    /// only ever inserted once, bounding growth by the number of distinct teams
-    /// that complete over the daemon's lifetime.
+    /// insert a team id wins, the rest short-circuit. The claim is scoped
+    /// per WORK BATCH, not per team forever: any non-terminal task activity
+    /// (a new task created → `TeamTaskUpdated{pending}`, a task re-entering
+    /// progress/review) re-arms the team, so a reusable team's second batch
+    /// completes with a notification too. Growth stays bounded by the number
+    /// of distinct teams (re-arming removes, never adds).
     completed_teams: Mutex<HashSet<String>>,
 }
 
@@ -107,6 +110,17 @@ impl TeamNotifier {
                 attachments: vec![],
             })
             .await;
+    }
+
+    /// New (non-terminal) task activity on a team: release its completion
+    /// claim so the next all-terminal moment notifies again. No-op for teams
+    /// that never completed a batch.
+    fn rearm_completion_claim(&self, team_id: &str) {
+        let mut done = self
+            .completed_teams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        done.remove(team_id);
     }
 
     /// Whether every task on the team has reached a terminal state.
@@ -175,13 +189,14 @@ impl EventHandler for TeamNotifier {
             // Review-gated task parked by the dispatcher. The gate only
             // resolves through `workflow_step_review`, so the leader must be
             // told now — otherwise the DAG stalls with nobody polling the
-            // board. Other status transitions on this event are noise here.
+            // board.
             AlephEvent::TeamTaskUpdated {
                 team_id,
                 task_id,
                 status,
                 ..
             } if status.as_str() == "waiting_review" => {
+                self.rearm_completion_claim(team_id);
                 self.notify_leader(
                     team_id,
                     "Team task awaiting review",
@@ -197,6 +212,22 @@ impl EventHandler for TeamNotifier {
                     ),
                 )
                 .await;
+            }
+            // Any other NON-terminal activity (a freshly created task emits
+            // `TeamTaskUpdated{pending}`, a retry re-enters `in_progress`, a
+            // pause/resume…) means the team's work batch is live again: re-arm
+            // the completion claim so the NEXT time all tasks go terminal the
+            // "Team work complete" notification fires again. Without this the
+            // claim was per-team-forever and a reusable team's second batch
+            // finished in silence (R5 regression).
+            AlephEvent::TeamTaskUpdated {
+                team_id, status, ..
+            } if !matches!(
+                status.as_str(),
+                "completed" | "failed" | "cancelled" | "skipped"
+            ) =>
+            {
+                self.rearm_completion_claim(team_id);
             }
             AlephEvent::TeamTaskCompleted {
                 team_id,

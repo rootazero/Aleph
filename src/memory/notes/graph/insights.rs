@@ -38,6 +38,7 @@ pub fn detect(g: &GraphIndex, c: &Communities) -> GraphInsights {
     // Isolated: degree <= 1.
     let isolated = (0..g.len())
         .filter(|&i| g.degree(i) <= 1)
+        // rust-doctor-disable-next-line excessive-clone
         .map(|i| g.nodes[i].path.clone())
         .collect();
 
@@ -51,6 +52,7 @@ pub fn detect(g: &GraphIndex, c: &Communities) -> GraphInsights {
         if size[cid] >= SPARSE_MIN_SIZE && cohesion < SPARSE_COHESION_MAX {
             let exemplar = (0..g.len())
                 .find(|&i| c.of_node[i] == cid)
+                // rust-doctor-disable-next-line excessive-clone
                 .map(|i| g.nodes[i].path.clone())
                 .unwrap_or_default();
             sparse.push(SparseCommunity {
@@ -71,6 +73,7 @@ pub fn detect(g: &GraphIndex, c: &Communities) -> GraphInsights {
             comms.insert(c.of_node[nb]);
         }
         if comms.len() >= BRIDGE_MIN_COMMUNITIES {
+            // rust-doctor-disable-next-line excessive-clone
             bridges.push(g.nodes[i].path.clone());
         }
     }
@@ -90,7 +93,9 @@ pub fn detect(g: &GraphIndex, c: &Communities) -> GraphInsights {
                 let base = if cross_comm { 1.0 } else { 0.0 } + if cross_type { 0.5 } else { 0.0 };
                 let score = base * (1.0 / di + 1.0 / dj);
                 surprising.push(SurprisingEdge {
+                    // rust-doctor-disable-next-line excessive-clone
                     from: g.nodes[i].path.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     to: g.nodes[j].path.clone(),
                     score,
                 });

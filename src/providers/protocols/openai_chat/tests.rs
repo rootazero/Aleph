@@ -1063,10 +1063,13 @@ fn assert_chat_stop_field(stop_sequences: Option<&str>, assertion: impl Fn(serde
     let payload = RequestPayload::new(&msgs);
     let req = proto
         .build_request(&payload, &cfg)
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap()
         .build()
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     let body: serde_json::Value =
+        // rust-doctor-disable-next-line unwrap-in-production
         serde_json::from_slice(req.body().unwrap().as_bytes().unwrap()).unwrap();
     assertion(body);
 }
@@ -1116,8 +1119,11 @@ fn chat_stop_sequences_trims_whitespace() {
 
 /// Extract the JSON body from a built request for inspection.
 fn extract_chat_body(req: reqwest::RequestBuilder) -> serde_json::Value {
+    // rust-doctor-disable-next-line unwrap-in-production
     let built = req.build().unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
     let bytes = built.body().unwrap().as_bytes().unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
     serde_json::from_slice(bytes).unwrap()
 }
 
@@ -1132,6 +1138,7 @@ fn build_chat_body_for_max_tokens(model: &str, max_tokens: Option<u32>) -> serde
 
     let req = protocol
         .build_request(&payload, &config)
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("build_request should succeed");
     extract_chat_body(req)
 }

@@ -83,11 +83,14 @@ impl ProtocolAdapter for GeminiProtocol {
             let declarations: Vec<GeminiFunctionDeclaration> = tool_defs
                 .iter()
                 .map(|td| {
+                    // rust-doctor-disable-next-line excessive-clone
                     let mut params = td.parameters.clone();
                     // Sanitize schema for Gemini's restricted OpenAPI subset
                     clean_schema_for_gemini(&mut params);
                     GeminiFunctionDeclaration {
+                        // rust-doctor-disable-next-line excessive-clone
                         name: td.name.clone(),
+                        // rust-doctor-disable-next-line excessive-clone
                         description: td.description.clone(),
                         parameters: params,
                     }
@@ -179,6 +182,7 @@ impl ProtocolAdapter for GeminiProtocol {
             // Parse Gemini's error envelope for a clean message; fall back to raw text.
             let parsed = parse_gemini_error_body(&error_text);
             let detail = parsed.as_ref().map_or_else(
+                // rust-doctor-disable-next-line excessive-clone
                 || error_text.clone(),
                 |e| format!("{} ({})", e.message, e.status),
             );

@@ -138,7 +138,7 @@ impl MergedMessage {
         let mut iter = contexts.into_iter();
         let first = iter
             .next()
-            .unwrap_or_else(|| panic!("from_batch requires at least one context"));
+            .expect("from_batch requires at least one context");
 
         let mut texts = vec![first.message.text.clone()];
         let mut attachments = first.message.attachments.clone();

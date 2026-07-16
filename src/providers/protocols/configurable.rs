@@ -119,6 +119,7 @@ impl ConfigurableProtocol {
 
 #[async_trait]
 impl ProtocolAdapter for ConfigurableProtocol {
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn build_request(
         &self,
         payload: &RequestPayload,

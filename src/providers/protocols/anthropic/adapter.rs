@@ -241,6 +241,7 @@ fn classify_anthropic_error_response(
 
 #[async_trait]
 impl ProtocolAdapter for AnthropicProtocol {
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn build_request(
         &self,
         payload: &RequestPayload,
@@ -377,6 +378,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             for td in tool_defs.iter() {
                 // Ensure input_schema has "type" field — required by strict
                 // backends like AWS Bedrock, which rejects schemas without it.
+                // rust-doctor-disable-next-line excessive-clone
                 let mut schema = td.parameters.clone();
                 if let Some(obj) = schema.as_object_mut() {
                     obj.entry("type")
@@ -389,6 +391,7 @@ impl ProtocolAdapter for AnthropicProtocol {
                 let sanitized = sanitize_anthropic_tool_name(&td.name);
                 if sanitized != td.name {
                     let mut map = self.name_map.write().unwrap_or_else(|e| e.into_inner());
+                    // rust-doctor-disable-next-line excessive-clone
                     if map.insert(sanitized.clone(), td.name.clone()).is_none() {
                         warn!(
                             original = %td.name,
@@ -399,6 +402,7 @@ impl ProtocolAdapter for AnthropicProtocol {
                 }
                 // Defense (2): dedup. Anthropic 400s on duplicate names; drop
                 // the second occurrence so the rest of the request still flies.
+                // rust-doctor-disable-next-line excessive-clone
                 if !seen.insert(sanitized.clone()) {
                     warn!(
                         original = %td.name,
@@ -410,6 +414,7 @@ impl ProtocolAdapter for AnthropicProtocol {
                 }
                 out.push(AnthropicTool {
                     name: sanitized,
+                    // rust-doctor-disable-next-line excessive-clone
                     description: td.description.clone(),
                     input_schema: schema,
                 });
@@ -482,6 +487,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         // 4.6/4.7 overrides any config-level effort — the model needs the
         // ThinkLevel-derived effort to know how hard to think on this turn.
         let metadata = config.metadata_user_id.as_ref().map(|uid| Metadata {
+            // rust-doctor-disable-next-line excessive-clone
             user_id: Some(uid.clone()),
         });
         let output_config = adaptive_effort
@@ -490,6 +496,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             })
             .or_else(|| {
                 config.effort.as_ref().map(|e| OutputConfig {
+                    // rust-doctor-disable-next-line excessive-clone
                     effort: Some(e.clone()),
                 })
             });
@@ -506,6 +513,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             stream: Some(true), // always streaming (stream-first architecture)
             thinking,
             tools,
+            // rust-doctor-disable-next-line excessive-clone
             service_tier: config.service_tier.clone(),
             metadata,
             output_config,
@@ -720,6 +728,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             pending: VecDeque::new(),
             done: false,
             saw_terminal: false,
+            // rust-doctor-disable-next-line excessive-clone
             name_map: self.name_map.clone(),
         };
 

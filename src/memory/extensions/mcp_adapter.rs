@@ -53,6 +53,7 @@ impl McpMemoryExtension {
     /// `bind_memory_callers` will route this plugin's hook calls to.
     #[must_use]
     pub fn new_unbound(name: String, server_id: Option<String>) -> Self {
+        // rust-doctor-disable-next-line excessive-clone
         let caller: Arc<dyn McpCaller> = Arc::new(UnboundMcpCaller::new(name.clone()));
         Self {
             name,
@@ -94,6 +95,7 @@ impl MemoryExtension for McpMemoryExtension {
         // Response shape: { "additions": [EnvelopeItem, ...] } — optional.
         if let Some(additions) = resp.get("additions").and_then(|v| v.as_array()) {
             for a in additions {
+                // rust-doctor-disable-next-line excessive-clone
                 if let Ok(item) = serde_json::from_value::<EnvelopeItem>(a.clone()) {
                     // Merge into first slot if it exists; otherwise drop.
                     // The plan's richer "create an Extension slot" semantic
@@ -123,6 +125,7 @@ impl MemoryExtension for McpMemoryExtension {
         // Optional modified raw: { "modified": RawMemory } — apply before
         // returning the decision so Allow+modified propagates through the chain.
         if let Some(modified) = resp.get("modified") {
+            // rust-doctor-disable-next-line excessive-clone
             if let Ok(new_raw) = serde_json::from_value::<RawMemory>(modified.clone()) {
                 *raw = new_raw;
             }

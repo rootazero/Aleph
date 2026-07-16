@@ -206,6 +206,7 @@ impl SearchFilter {
     /// Returns `None` when no constraints are set, meaning "match everything".
     /// String values use single quotes as required by `DataFusion`.
     #[must_use]
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     pub fn to_lance_filter(&self) -> Option<String> {
         let mut clauses: Vec<String> = Vec::new();
 

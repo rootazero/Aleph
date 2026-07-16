@@ -1115,7 +1115,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         EventType::TeamTaskCompleted,
                         EventType::TeamTaskFailed,
                         EventType::TeamDisbanded,
-                        EventType::TeamMessageSent,
                     ]),
                     move |global_event| {
                         let handler = team_logger_clone.clone();

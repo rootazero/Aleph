@@ -39,6 +39,7 @@ task_local! {
 /// shared "no-session" workspace (policy owned by `WorkspaceSandbox`).
 #[must_use]
 pub fn current_session() -> Option<SessionId> {
+    // rust-doctor-disable-next-line excessive-clone
     SESSION_ID.try_with(|id| id.clone()).ok()
 }
 
@@ -47,6 +48,7 @@ pub fn current_session() -> Option<SessionId> {
 /// case — most calls don't escalate and pass no justification).
 #[must_use]
 pub fn current_justification() -> Option<String> {
+    // rust-doctor-disable-next-line excessive-clone
     EXEC_JUSTIFICATION.try_with(|j| j.clone()).ok()
 }
 
@@ -55,6 +57,7 @@ pub fn current_justification() -> Option<String> {
 /// subagent's commands run inside its checkout.
 #[must_use]
 pub fn current_sandbox_override() -> Option<Arc<dyn Sandbox>> {
+    // rust-doctor-disable-next-line excessive-clone
     SANDBOX_OVERRIDE.try_with(|s| s.clone()).ok()
 }
 

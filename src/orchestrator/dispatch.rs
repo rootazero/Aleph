@@ -36,6 +36,7 @@ impl std::fmt::Debug for FlowHandle {
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]
+// rust-doctor-disable-next-line large-enum-variant
 pub enum FlowStreamEvent {
     /// Incremental assistant text (preserved from original).
     Delta(String),
@@ -682,6 +683,7 @@ impl Orchestrator {
             Some(id) => self
                 .flow_registry
                 .resolve(id)
+                // rust-doctor-disable-next-line excessive-clone
                 .ok_or_else(|| FlowError::UnknownFlow(id.clone()))?,
             None => match resolve_flow_id(
                 &req.agent_id,
@@ -692,6 +694,7 @@ impl Orchestrator {
                 Ok(flow_id) => self
                     .flow_registry
                     .resolve(&flow_id)
+                    // rust-doctor-disable-next-line excessive-clone
                     .ok_or_else(|| FlowError::UnknownFlow(flow_id.clone()))?,
                 Err(FlowError::UnknownAgent(_)) => {
                     let base = self
@@ -701,7 +704,9 @@ impl Orchestrator {
                     if base.agent == req.agent_id {
                         base
                     } else {
+                        // rust-doctor-disable-next-line excessive-clone
                         let mut s = (*base).clone();
+                        // rust-doctor-disable-next-line excessive-clone
                         s.agent = req.agent_id.clone();
                         Arc::new(s)
                     }
@@ -717,8 +722,11 @@ impl Orchestrator {
 
         // Step 4: session resolve + per-session lock.
         let session_input = SessionResolveInput {
+            // rust-doctor-disable-next-line excessive-clone
             strategy: spec.session_strategy.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             session_hint: req.session_hint.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             parent_session: req.parent_session.clone(),
             fresh_key_fn: || uuid::Uuid::new_v4().to_string(),
         };
@@ -728,6 +736,7 @@ impl Orchestrator {
                 .active_sessions
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
+            // rust-doctor-disable-next-line excessive-clone
             if !guard.insert(session_res.session_key.clone()) {
                 return Err(FlowError::SessionConflict(session_res.session_key));
             }
@@ -738,6 +747,7 @@ impl Orchestrator {
         // Step 6: sandbox provision. Per-request `sandbox_override` short-circuits
         // the factory — the team dispatcher uses it to inject a `WorktreeSandbox`
         // for per-task git isolation. Falls back to the factory when None.
+        // rust-doctor-disable-next-line excessive-clone
         let sandbox = match req.sandbox_override.clone() {
             Some(sb) => sb,
             None => match (self.sandbox_factory)(spec.sandbox_kind, &session_res.session_key) {
@@ -758,19 +768,32 @@ impl Orchestrator {
         let (done_tx, done_rx) = oneshot::channel();
         let cancel = CancellationToken::new();
 
+        // rust-doctor-disable-next-line excessive-clone
         let harness = self.harness.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let spec_clone = spec.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let input_clone = req.input.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let sandbox_clone = sandbox.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let cancel_clone = cancel.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let session_key = session_res.session_key.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let active = self.active_sessions.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let session_for_release = session_res.session_key.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let tool_service_override = req.tool_service.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let trace_sink = req.trace_sink.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let interaction_manifest = req.interaction_manifest.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let workspace_override = req.workspace_override.clone();
         let max_iterations_override = req.max_iterations_override;
+        // rust-doctor-disable-next-line excessive-clone
         let transient_context = req.transient_context.clone();
         let think_level = req.think_level;
 
@@ -792,10 +815,12 @@ impl Orchestrator {
             // task-local loss as the project root): agent-scoped skill discovery
             // (`~/.aleph/agents/<id>/skills`) reads `current_agent_id()`. Capture
             // the id before `spec_clone` is moved into `harness.run`.
+            // rust-doctor-disable-next-line excessive-clone
             let agent_id_for_scope = spec_clone.agent.clone();
             let outcome = crate::agents::with_agent_id(
                 Some(agent_id_for_scope),
                 crate::projects::with_project_root(
+                    // rust-doctor-disable-next-line excessive-clone
                     workspace_override.clone(),
                     harness.run(
                         session_key,

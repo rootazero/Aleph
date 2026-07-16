@@ -35,6 +35,7 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                         .iter()
                         .filter_map(|b| match b {
                             ContentBlock::Text { text, .. } => {
+                                // rust-doctor-disable-next-line excessive-clone
                                 Some(InputContentPart::InputText { text: text.clone() })
                             }
                             ContentBlock::Image { data, mime_type } => {
@@ -112,6 +113,7 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                     } = block
                     {
                         items.push(InputItem::FunctionCall {
+                            // rust-doctor-disable-next-line excessive-clone
                             call_id: id.clone(),
                             name: sanitize_tool_name_pub(name),
                             arguments: serde_json::to_string(arguments)
@@ -128,15 +130,18 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                 let output = content
                     .iter()
                     .filter_map(|b| match b {
-                        ContentBlock::Text { text, .. } => Some(text.clone()),
-                        ContentBlock::Json { value } => {
-                            Some(serde_json::to_string(value).unwrap_or_default())
+                        ContentBlock::Text { text, .. } => {
+                            Some(std::borrow::Cow::Borrowed(text.as_str()))
                         }
+                        ContentBlock::Json { value } => Some(std::borrow::Cow::Owned(
+                            serde_json::to_string(value).unwrap_or_default(),
+                        )),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
                 items.push(InputItem::FunctionCallOutput {
+                    // rust-doctor-disable-next-line excessive-clone
                     call_id: tool_call_id.clone(),
                     output,
                 });
@@ -232,6 +237,7 @@ pub(crate) fn build_tools(
         tool_defs
             .iter()
             .map(|td| {
+                // rust-doctor-disable-next-line excessive-clone
                 let mut params = td.parameters.clone();
                 if let Some(obj) = params.as_object_mut() {
                     obj.remove("$schema");
@@ -253,6 +259,7 @@ pub(crate) fn build_tools(
                             // Reset params from the original (normalize_strict_schema may
                             // have partially mutated them before bailing) and apply the
                             // non-strict normalization path instead.
+                            // rust-doctor-disable-next-line excessive-clone
                             params = td.parameters.clone();
                             if let Some(obj) = params.as_object_mut() {
                                 obj.remove("$schema");
@@ -309,12 +316,12 @@ pub(crate) fn map_tool_choice(choice: Option<&ToolChoice>) -> Option<serde_json:
 /// Extract text content from a completed `ResponseResource`
 #[must_use]
 pub fn extract_text(response: &ResponseResource) -> Option<String> {
-    let mut texts = Vec::new();
+    let mut texts: Vec<&str> = Vec::new();
     for item in &response.output {
         if let OutputItem::Message { content, .. } = item {
             for part in content {
                 if !part.text.is_empty() {
-                    texts.push(part.text.clone());
+                    texts.push(part.text.as_str());
                 }
             }
         }
@@ -342,9 +349,11 @@ pub fn extract_tool_calls(response: &ResponseResource) -> Vec<NativeToolCall> {
                 name, call_id, arguments
             );
             let args = serde_json::from_str(arguments)
+                // rust-doctor-disable-next-line excessive-clone
                 .unwrap_or_else(|_| serde_json::Value::String(arguments.clone()));
             calls.push(NativeToolCall {
                 thought_signature: None,
+                // rust-doctor-disable-next-line excessive-clone
                 id: call_id.clone(),
                 name: desanitize_tool_name_pub(name),
                 arguments: args,

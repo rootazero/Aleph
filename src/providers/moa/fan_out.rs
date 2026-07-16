@@ -42,8 +42,10 @@ pub(crate) async fn run_fan_out(
             Ok(Ok(resp)) => {
                 let text = resp
                     .text
-                    .clone()
+                    .as_ref()
+                    .map(|t| t.as_str())
                     .filter(|t| !t.trim().is_empty())
+                    .map(|t| t.to_string())
                     .unwrap_or_else(|| "(empty response)".to_string());
                 (text, resp.usage, None::<String>)
             }
@@ -62,6 +64,7 @@ pub(crate) async fn run_fan_out(
         .enumerate()
         .map(|(idx, (text, usage, error))| AdvisorResult {
             outcome: AdvisorOutcome {
+                // rust-doctor-disable-next-line excessive-clone
                 label: advisors[idx].label.clone(),
                 text,
             },
@@ -88,8 +91,11 @@ pub(crate) fn emit_fanout_events(
             s.on_trace(&LoopTraceEvent::MoaAdvisor {
                 index: idx + 1,
                 count,
+                // rust-doctor-disable-next-line excessive-clone
                 label: r.outcome.label.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 text: r.outcome.text.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 error: r.error.clone(),
             });
         }

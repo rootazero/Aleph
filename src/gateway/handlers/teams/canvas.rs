@@ -44,16 +44,26 @@ pub async fn handle_workflow_export_canvas(
     };
 
     use crate::agents::swarm::tasks::CoordTaskStatus;
-    let status_filter = params.status.as_deref().and_then(|s| match s {
-        "pending" => Some(CoordTaskStatus::Pending),
-        "blocked" => Some(CoordTaskStatus::Blocked),
-        "in_progress" => Some(CoordTaskStatus::InProgress),
-        "completed" => Some(CoordTaskStatus::Completed),
-        "failed" => Some(CoordTaskStatus::Failed),
-        "cancelled" => Some(CoordTaskStatus::Cancelled),
-        "unsatisfiable" => Some(CoordTaskStatus::Unsatisfiable),
-        _ => None,
-    });
+    // Single-source filter vocabulary (all 10 variants); unknown strings are
+    // an explicit error, not a silently unfiltered board — mirrors
+    // `handle_list_tasks` and the `team_workflow_canvas` tool.
+    let status_filter = match params.status.as_deref() {
+        None => None,
+        Some(s) => match CoordTaskStatus::from_filter_str(s) {
+            Some(status) => Some(status),
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!(
+                        "Unknown status filter '{s}'. Expected one of: pending, blocked, \
+                         in_progress, waiting_review, completed, failed, cancelled, skipped, \
+                         paused, unsatisfiable."
+                    ),
+                );
+            }
+        },
+    };
     let filter = CoordTaskFilter {
         team_id: Some(params.team_id.clone()),
         status: status_filter,
@@ -313,7 +323,10 @@ pub async fn handle_chat_send(
     // Persist the user message into the shared transcript (single source of
     // truth). Long TTL: the transcript is a durable record, not short-lived
     // inbox traffic (recipient-less messages would otherwise expire in 30 min).
-    let _ = msg_store
+    // A persistence failure must be visible — the fan-out below still runs,
+    // but the triggering message would be a silent hole in the durable
+    // transcript (P7).
+    if let Err(e) = msg_store
         .send_message_with_ttl(
             crate::teams::messages::NewMessage {
                 team_id: params.team_id.clone(),
@@ -327,7 +340,11 @@ pub async fn handle_chat_send(
             },
             chrono::Duration::days(3650),
         )
-        .await;
+        .await
+    {
+        warn!(team_id = %params.team_id, error = %e,
+            "team chat: failed to persist user message into the team transcript");
+    }
 
     // First-message auto-name: if this team was created with a blank name
     // (auto_name flag set), generate an LLM topic now that we have content.

@@ -280,8 +280,8 @@ fn voice_list_uses_modern_taxonomy() {
 // === Async guards (return before any network call) ===
 
 #[tokio::test]
-async fn rejects_wrong_generation_type() {
-    let p = MinimaxTtsProvider::new("k", None, None, None).unwrap();
+async fn rejects_wrong_generation_type() -> Result<(), GenerationError> {
+    let p = MinimaxTtsProvider::new("k", None, None, None)?;
     let err = p
         .generate(GenerationRequest::image("a cat"))
         .await
@@ -290,22 +290,24 @@ async fn rejects_wrong_generation_type() {
         err,
         GenerationError::UnsupportedGenerationTypeError { .. }
     ));
+    Ok(())
 }
 
 #[tokio::test]
-async fn rejects_empty_input() {
-    let p = MinimaxTtsProvider::new("k", None, None, None).unwrap();
+async fn rejects_empty_input() -> Result<(), GenerationError> {
+    let p = MinimaxTtsProvider::new("k", None, None, None)?;
     let err = p.generate(GenerationRequest::speech("")).await.unwrap_err();
     assert!(matches!(
         err,
         GenerationError::InvalidParametersError { .. }
     ));
+    Ok(())
 }
 
 #[tokio::test]
-async fn rejects_oversized_input() {
+async fn rejects_oversized_input() -> Result<(), GenerationError> {
     let text = "a".repeat(MAX_INPUT_CHARS + 1);
-    let p = MinimaxTtsProvider::new("k", None, None, None).unwrap();
+    let p = MinimaxTtsProvider::new("k", None, None, None)?;
     let err = p
         .generate(GenerationRequest::speech(text))
         .await
@@ -314,11 +316,12 @@ async fn rejects_oversized_input() {
         err,
         GenerationError::InvalidParametersError { .. }
     ));
+    Ok(())
 }
 
 #[tokio::test]
-async fn rejects_unknown_format() {
-    let p = MinimaxTtsProvider::new("k", None, None, None).unwrap();
+async fn rejects_unknown_format() -> Result<(), GenerationError> {
+    let p = MinimaxTtsProvider::new("k", None, None, None)?;
     let params = GenerationParams::builder().format("ogg").build();
     let request = GenerationRequest::speech("hi").with_params(params);
     let err = p.generate(request).await.unwrap_err();
@@ -326,4 +329,5 @@ async fn rejects_unknown_format() {
         err,
         GenerationError::UnsupportedFormatError { .. }
     ));
+    Ok(())
 }
