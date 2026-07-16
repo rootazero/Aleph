@@ -65,16 +65,6 @@ pub trait ToolRegistry: Send + Sync {
         None
     }
 
-    /// Get the shared tool policy handle for per-agent tool access control.
-    ///
-    /// When set, `execute_tool()` checks this policy before dispatching.
-    /// Default `ToolPolicy` (empty whitelist/blacklist) allows all tools.
-    fn tool_policy_handle(
-        &self,
-    ) -> Option<Arc<tokio::sync::RwLock<crate::builtin_tools::agent_manage::ToolPolicy>>> {
-        None
-    }
-
     /// Get the shared tool context handle for workspace-scoped output paths.
     ///
     /// The execution engine writes the active agent's `ToolContext` here so

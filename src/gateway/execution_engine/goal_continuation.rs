@@ -41,26 +41,19 @@ pub(super) fn now_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
-/// The session's live cumulative token total — read ONLY when the goal carries a
+/// The goal's live cumulative token total — read ONLY when the goal carries a
 /// budget, so the common no-budget path touches no session state. `None` → the
 /// budget goes unenforced this round (the iteration/deadline caps still bind).
+/// With enrolled delegation members (tree budget v1) this is the TREE total:
+/// own session plus each member's spend since it joined.
 async fn live_tokens(
     session_manager: &SessionManager,
     session_key: &SessionKey,
-    goal_has_budget: bool,
+    goal: &crate::goal::Goal,
 ) -> Option<u64> {
-    if !goal_has_budget {
-        return None;
-    }
+    goal.token_budget?; // no budget → touch no session state (common path).
     let sm = session_manager.as_ref()?;
-    match sm.get_total_tokens(session_key).await {
-        Ok(total) => total,
-        Err(e) => {
-            warn!(error = %e, session = %session_key.to_key_string(),
-                "goal pursuit: session token read failed; budget unenforced this round");
-            None
-        }
-    }
+    crate::gateway::goal_budget::tree_tokens(sm, goal, session_key).await
 }
 
 /// Resolve the session's bound origin channel for a stop/halt notice (R5).
@@ -106,7 +99,7 @@ pub(super) async fn post_run(
         }
     };
     let gate_configured = deps.gate.is_some() || peek.gate_command.is_some();
-    let tokens = live_tokens(session_manager, session_key, peek.token_budget.is_some()).await;
+    let tokens = live_tokens(session_manager, session_key, &peek).await;
     let now = now_ms();
 
     let decision = match store.try_claim_continuation(&session, tokens, now, gate_configured) {

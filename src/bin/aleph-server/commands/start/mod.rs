@@ -2437,6 +2437,38 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 channel_adapter,
                 operator_requester.clone(),
             ));
+        // Optional LLM risk triage in front of the human transports (codex
+        // Guardian port, escalate-don't-deny): clearly-safe actions
+        // auto-approve; everything else — judge errors and timeouts included
+        // — reaches the human exactly as without the guardian. Off by
+        // default (`[policies] guardian_review = true` + a default provider).
+        let human_requester: Arc<dyn alephcore::sandbox::exec_approval::gate::ApprovalRequester> =
+            match (
+                app_config_snapshot.policies.guardian_review,
+                agent_result.default_provider.clone(),
+            ) {
+                (true, Some(provider)) => {
+                    if !args.daemon {
+                        println!(
+                            "  Guardian review enabled (LLM risk triage before approval prompts)"
+                        );
+                    }
+                    Arc::new(
+                        alephcore::approval::guardian_requester::GuardianApprovalRequester::new(
+                            provider,
+                            human_requester,
+                        ),
+                    )
+                }
+                (true, None) => {
+                    tracing::warn!(
+                        "[policies] guardian_review = true but no default provider is configured; \
+                         approvals go straight to the human"
+                    );
+                    human_requester
+                }
+                _ => human_requester,
+            };
         approval_gate.set_requester(human_requester.clone());
         alephcore::gateway::execution_engine::set_confirmation_requester(human_requester);
 

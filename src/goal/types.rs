@@ -117,7 +117,54 @@ pub struct Goal {
     /// payloads read `None`.
     #[serde(default)]
     pub pending_continuation_ms: Option<u64>,
+    /// Wait barrier (hermes `wait_for_seconds` parity): park autonomous
+    /// pursuit until this wall-clock instant (Unix epoch ms). The MODEL parks
+    /// itself in-turn via `goal(update, wait_minutes=…)` (R7 — the decision
+    /// to wait is the model's; the store only compares clocks). While set and
+    /// in the future, the claim pipeline arms an exact timer wake instead of
+    /// the next step. Mutually exclusive with [`Self::waiting_on_task`].
+    /// `#[serde(default)]` → old payloads read `None`.
+    #[serde(default)]
+    pub waiting_until_ms: Option<u64>,
+    /// Wait barrier (hermes `waiting_on_session` analog): park autonomous
+    /// pursuit until this coordination task reaches a settled state. Wake is
+    /// event-driven (`GoalWakeService` on the GlobalBus task-settle events)
+    /// plus a boot recheck; fail-open — an unknown/vanished task reads as
+    /// settled so a stale barrier can never wedge the pursuit forever.
+    /// `#[serde(default)]` → old payloads read `None`.
+    #[serde(default)]
+    pub waiting_on_task: Option<String>,
+    /// Why the pursuit parked (model-supplied, surfaced in renders).
+    #[serde(default)]
+    pub waiting_reason: Option<String>,
+    /// Delegation sessions whose token spend counts against this goal's
+    /// `token_budget` (codex `RolloutBudget` mapped onto A3's single
+    /// persistent source: the tree total is the goal session's own live
+    /// total plus each member's delta since it joined — summed from
+    /// `SessionStore::get_total_tokens`, no in-memory shared counter).
+    /// Registered by the `session_send` delegation seam when the calling
+    /// session carries an active budgeted goal. Ring-capped at
+    /// [`MAX_BUDGET_MEMBERS`]. `#[serde(default)]` → old payloads read empty.
+    #[serde(default)]
+    pub budget_members: Vec<BudgetMember>,
 }
+
+/// One delegation session enrolled in a goal's shared token budget.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BudgetMember {
+    /// The member's session key string (gateway form).
+    pub session_id: String,
+    /// The member session's cumulative token total at enrollment — only
+    /// spend AFTER joining counts against the shared budget (the per-member
+    /// twin of `tokens_at_start`).
+    pub tokens_at_join: u64,
+}
+
+/// Cap on enrolled budget members, bounding the goal row and the per-claim
+/// token-summing fan-out. Oldest kept (first writer wins) — a pursuit
+/// delegating to more than this many DISTINCT sessions has bigger problems
+/// than accounting.
+pub const MAX_BUDGET_MEMBERS: usize = 32;
 
 /// Ring cap on accumulated lessons kept per goal (newest retained). Bounds the
 /// state file so an unbounded loop cannot grow the goal row without limit.
@@ -148,7 +195,55 @@ impl Goal {
             deadline_ms: None,
             baseline_captured: false,
             pending_continuation_ms: None,
+            waiting_until_ms: None,
+            waiting_on_task: None,
+            waiting_reason: None,
+            budget_members: Vec::new(),
         }
+    }
+
+    /// Park pursuit until `until_ms` (clears any task barrier — the two wait
+    /// kinds are mutually exclusive, hermes parity).
+    #[must_use]
+    pub fn with_wait_until(mut self, until_ms: u64, reason: Option<String>, now_ms: u64) -> Self {
+        self.waiting_until_ms = Some(until_ms);
+        self.waiting_on_task = None;
+        self.waiting_reason = reason;
+        self.updated_at_ms = now_ms;
+        self
+    }
+
+    /// Park pursuit until the given coordination task settles (clears any
+    /// deadline barrier).
+    #[must_use]
+    pub fn with_wait_on_task(
+        mut self,
+        task_id: String,
+        reason: Option<String>,
+        now_ms: u64,
+    ) -> Self {
+        self.waiting_on_task = Some(task_id);
+        self.waiting_until_ms = None;
+        self.waiting_reason = reason;
+        self.updated_at_ms = now_ms;
+        self
+    }
+
+    /// Drop any wait barrier (explicit un-park, barrier satisfaction, or a
+    /// lifecycle transition that makes waiting meaningless).
+    #[must_use]
+    pub fn without_wait(mut self, now_ms: u64) -> Self {
+        self.waiting_until_ms = None;
+        self.waiting_on_task = None;
+        self.waiting_reason = None;
+        self.updated_at_ms = now_ms;
+        self
+    }
+
+    /// Whether any wait barrier is configured (regardless of satisfaction).
+    #[must_use]
+    pub const fn has_wait_barrier(&self) -> bool {
+        self.waiting_until_ms.is_some() || self.waiting_on_task.is_some()
     }
 
     /// Stamp (or clear) the in-flight continuation marker. Scheduling state, not

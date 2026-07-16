@@ -77,6 +77,15 @@ pub struct PoliciesConfig {
     #[serde(default)]
     pub exec_tier: ExecTier,
 
+    /// LLM risk triage in front of human approval prompts (codex Guardian
+    /// port, escalate-don't-deny variant): actions the judge finds clearly
+    /// safe (low risk) auto-approve without interrupting the human;
+    /// everything else — including judge errors and timeouts — still reaches
+    /// the human exactly as before. Off by default; needs a configured
+    /// default provider.
+    #[serde(default)]
+    pub guardian_review: bool,
+
     /// Tool permission levels (Allow / Ask / Deny)
     #[serde(default)]
     pub tool_permissions: ToolPermissionsConfig,

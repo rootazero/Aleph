@@ -345,6 +345,27 @@ pub struct InstallSpec {
 
 impl ValueObject for InstallSpec {}
 
+/// A scheduled-automation declaration carried in a skill's frontmatter
+/// (`automation:` block) — the hermes "blueprint" pattern. The skill IS the
+/// automation; the schedule is just a suggested cron job. Declaring it never
+/// schedules anything: install surfaces relay it as a one-sentence notice and
+/// the model asks the user, then creates the job via the existing
+/// `cron_manage` tool on consent (R7/R8 — the chat is the suggestion
+/// surface, no second job engine, no suggestion ledger).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationSpec {
+    /// Suggested schedule, in any form `cron_manage` accepts (cron expr /
+    /// `every …` / timestamp). NOT validated at parse time — `cron_manage`'s
+    /// create-time validation is the single validator.
+    pub schedule: String,
+    /// Optional task instruction for the scheduled run. Defaults to
+    /// "invoke the skill and follow it" phrasing at suggestion time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+impl ValueObject for AutomationSpec {}
+
 // ---------------------------------------------------------------------------
 // InvocationPolicy / DispatchSpec / ArgMode
 // ---------------------------------------------------------------------------
@@ -493,6 +514,8 @@ pub struct SkillManifest {
     emoji: Option<String>,
     /// Trigger hint — describes when this skill should be proactively invoked.
     when_to_use: Option<String>,
+    /// Declared scheduled automation (frontmatter `automation:` block).
+    automation: Option<AutomationSpec>,
 }
 
 impl SkillManifest {
@@ -520,6 +543,7 @@ impl SkillManifest {
             homepage: None,
             emoji: None,
             when_to_use: None,
+            automation: None,
         }
     }
 
@@ -609,6 +633,12 @@ impl SkillManifest {
         self.when_to_use.as_deref()
     }
 
+    /// The declared scheduled automation, if any.
+    #[must_use]
+    pub const fn automation(&self) -> Option<&AutomationSpec> {
+        self.automation.as_ref()
+    }
+
     /// Override priority (delegates to `SkillSource::priority()`).
     #[must_use]
     pub fn priority(&self) -> u8 {
@@ -682,6 +712,11 @@ impl SkillManifest {
     /// Set the `when_to_use` trigger hint.
     pub fn set_when_to_use(&mut self, hint: String) {
         self.when_to_use = Some(hint);
+    }
+
+    /// Set the declared scheduled automation.
+    pub fn set_automation(&mut self, automation: AutomationSpec) {
+        self.automation = Some(automation);
     }
 }
 

@@ -50,6 +50,37 @@ pub(super) async fn finish_task_run(
     Ok(())
 }
 
+pub(super) async fn abandon_orphaned_runs(
+    store: &SqliteCoordTaskStore,
+    live_task_ids: &[String],
+) -> crate::error::Result<usize> {
+    let conn = store.conn.lock().await;
+    let now = now_epoch();
+    // Set-based close keyed on the runs table itself: a `running` row whose
+    // task is not currently in flight in-process can never finish (its tokio
+    // worker died with a previous daemon incarnation, or finish_task_run's
+    // UPDATE was lost). Task status is deliberately NOT consulted — that is
+    // what lets cancel-then-crash orphans (terminal task, stuck row) close.
+    let placeholders = vec!["?"; live_task_ids.len()].join(", ");
+    let sql = format!(
+        "UPDATE coord_task_runs \
+         SET status = 'abandoned', ended_at = ?1, \
+             error = 'interrupted: run never finished (process restart or lost worker)' \
+         WHERE status = 'running'{}",
+        if live_task_ids.is_empty() {
+            String::new()
+        } else {
+            format!(" AND task_id NOT IN ({placeholders})")
+        }
+    );
+    let mut params: Vec<&dyn rusqlite::ToSql> = vec![&now];
+    for id in live_task_ids {
+        params.push(id);
+    }
+    let affected = conn.execute(&sql, params.as_slice()).map_err(db_err)?;
+    Ok(affected)
+}
+
 pub(super) async fn list_task_runs(
     store: &SqliteCoordTaskStore,
     task_id: &str,

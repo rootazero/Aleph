@@ -194,6 +194,35 @@ impl TeamDispatcher {
         warned.retain(|id| live.contains(id));
     }
 
+    /// Close `running` run rows whose worker is gone as `Abandoned`.
+    ///
+    /// The task-status janitors above ([`Self::reclaim_zombies`] /
+    /// [`Self::reclaim_orphaned`]) recover the TASK, but neither closes the
+    /// stuck `running` row in `coord_task_runs` — and both are keyed on
+    /// `InProgress`, so a cancel-then-crash orphan (task already terminal,
+    /// row still `running`) is invisible to them forever. This pass keys on
+    /// the runs table instead: any `running` row whose task id is not in
+    /// this process's `running` set can never finish (its tokio worker died
+    /// with a previous daemon incarnation). Race-free because the running-set
+    /// insert precedes the spawn and removal follows `finish_task_run`, so a
+    /// live row is always covered. The startup `dispatch_once` gives a free
+    /// boot-time full sweep while the set is empty.
+    pub(super) async fn abandon_orphaned_runs(self: &Arc<Self>) {
+        let live: Vec<String> = self.running.lock().await.keys().cloned().collect();
+        match self.coord_store.abandon_orphaned_runs(&live).await {
+            Ok(0) => {}
+            Ok(n) => {
+                tracing::info!(
+                    closed = n,
+                    "dispatcher: closed orphaned running run rows as abandoned"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "dispatcher: abandon_orphaned_runs failed");
+            }
+        }
+    }
+
     /// Re-deliver clarify questions stranded by a crash between park and send.
     ///
     /// `handle_clarify_task` parks the task `Paused` (with a

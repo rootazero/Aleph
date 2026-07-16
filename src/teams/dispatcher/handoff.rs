@@ -84,8 +84,12 @@ async fn build_recovery_section(coord_store: &Arc<dyn CoordTaskStore>, task: &Co
             (_, Some(sum)) if !sum.is_empty() => truncate_utf8(sum, MAX_SECTION_BYTES),
             _ => match run.status {
                 // A run still marked Running here never reached `finish_task_run`
-                // — the process died mid-task and was reclaimed.
-                TaskRunStatus::Running => "interrupted before a clean exit".to_string(),
+                // — the process died mid-task and was reclaimed. Abandoned is
+                // the same fate after the run-row janitor closed it (it
+                // normally carries an error string; this arm is defense).
+                TaskRunStatus::Running | TaskRunStatus::Abandoned => {
+                    "interrupted before a clean exit".to_string()
+                }
                 _ => "(no detail recorded)".to_string(),
             },
         };

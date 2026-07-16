@@ -36,9 +36,8 @@ impl ToolRegistry for BuiltinToolRegistry {
 
     fn smart_recall_config_handle(
         &self,
-    ) -> Option<
-        Arc<RwLock<HashMap<String, crate::config::types::profile::SmartRecallConfig>>>,
-    > {
+    ) -> Option<Arc<RwLock<HashMap<String, crate::config::types::profile::SmartRecallConfig>>>>
+    {
         self.memory_search_tool
             .as_ref()
             .map(|t| t.smart_recall_config_handle())
@@ -48,12 +47,6 @@ impl ToolRegistry for BuiltinToolRegistry {
         &self,
     ) -> Option<Arc<RwLock<crate::builtin_tools::agent_manage::SessionContext>>> {
         self.session_context_handle.clone()
-    }
-
-    fn tool_policy_handle(
-        &self,
-    ) -> Option<Arc<RwLock<crate::builtin_tools::agent_manage::ToolPolicy>>> {
-        self.tool_policy_handle.clone()
     }
 
     fn tool_context_handle(&self) -> Option<crate::tools::ToolContextHandle> {
@@ -71,31 +64,10 @@ impl ToolRegistry for BuiltinToolRegistry {
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
         debug!(tool = tool_name, "Executing builtin tool");
 
-        // Enforce per-agent tool policy. Uses try_read() (non-blocking) since
-        // this is a synchronous function. Fail CLOSED on lock contention: a
-        // writer racing the read (e.g. an agent_switch/policy update) makes
-        // try_read() return Err, and skipping the check would let a denied tool
-        // (bash, file_write, code_exec) run — a security fail-open.
-        if let Some(ref policy_handle) = self.tool_policy_handle {
-            match policy_handle.try_read() {
-                Ok(policy) if policy.is_allowed(tool_name) => {}
-                Ok(_) => {
-                    let msg = format!(
-                        "Tool '{tool_name}' is not allowed for the current agent. \
-                         Use agent.list to check available tools, or switch to an agent that has access."
-                    );
-                    return Box::pin(async move { Err(AlephError::tool(msg)) });
-                }
-                Err(_) => {
-                    return Box::pin(async move {
-                        Err(AlephError::tool(
-                            "Tool policy is temporarily unavailable (lock contention); \
-                             denied to fail closed. Retry shortly.",
-                        ))
-                    });
-                }
-            }
-        }
+        // Per-agent tool filtering happens before dispatch reaches here:
+        // AgentProfile whitelist at registry build (run_loop) and the
+        // src/tools/scoped/ enforcement point. (A parallel ToolPolicy rail
+        // that never had a writer was withdrawn — R10 YAGNI.)
 
         // Use AlephTool::call_json directly for migrated tools
         // This simplifies the code by avoiding intermediate execute_* methods

@@ -46,6 +46,7 @@ pub mod adapters;
 mod audit;
 pub mod callback_sink;
 mod config;
+pub mod guardian_requester;
 pub mod node_requester;
 pub mod operator_requester;
 mod policy;

@@ -274,6 +274,10 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         runs::list_task_runs(self, task_id).await
     }
 
+    async fn abandon_orphaned_runs(&self, live_task_ids: &[String]) -> crate::error::Result<usize> {
+        runs::abandon_orphaned_runs(self, live_task_ids).await
+    }
+
     async fn record_run_review(
         &self,
         task_id: &str,
@@ -382,6 +386,54 @@ mod review_tests {
         assert_eq!(last.review_verdict, Some(ReviewVerdict::Approved));
         assert_eq!(last.reviewer_kind, Some(ReviewerKind::User));
         assert_eq!(last.reviewer_id.as_deref(), Some("alice"));
+    }
+
+    #[tokio::test]
+    async fn abandon_orphaned_runs_closes_only_dead_rows() {
+        let store = make_store().await;
+        let mk = |subject: &str| NewCoordTask {
+            team_id: Some("t1".into()),
+            subject: subject.into(),
+            description: String::new(),
+            owner: Some("worker".into()),
+            priority: Priority::Normal,
+            blocked_by: Vec::new(),
+            metadata: serde_json::json!({}),
+        };
+        let live = store.create_task(mk("live")).await.unwrap();
+        let dead = store.create_task(mk("dead")).await.unwrap();
+        let live_run = store.start_task_run(&live.id, "worker").await.unwrap();
+        let _dead_run = store.start_task_run(&dead.id, "worker").await.unwrap();
+
+        // Sweep with only `live` in flight → dead's row closes as Abandoned.
+        let closed = store
+            .abandon_orphaned_runs(std::slice::from_ref(&live.id))
+            .await
+            .unwrap();
+        assert_eq!(closed, 1);
+
+        let dead_runs = store.list_task_runs(&dead.id).await.unwrap();
+        assert_eq!(dead_runs.len(), 1);
+        assert_eq!(dead_runs[0].status, TaskRunStatus::Abandoned);
+        assert!(dead_runs[0].ended_at.is_some());
+        assert!(dead_runs[0]
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("interrupted"));
+
+        // Live row untouched — and still finishable afterwards.
+        let live_runs = store.list_task_runs(&live.id).await.unwrap();
+        assert_eq!(live_runs[0].status, TaskRunStatus::Running);
+        store
+            .finish_task_run(&live_run, TaskRunStatus::Completed, None, None)
+            .await
+            .unwrap();
+
+        // Empty live set (boot sweep) closes everything still running.
+        let _r2 = store.start_task_run(&dead.id, "worker").await.unwrap();
+        let closed = store.abandon_orphaned_runs(&[]).await.unwrap();
+        assert_eq!(closed, 1);
     }
 
     #[tokio::test]

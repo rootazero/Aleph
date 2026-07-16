@@ -420,8 +420,8 @@ mod tests {
                 result.ok_or_else(|| crate::error::AlephError::tool_not_found(&name))
             })
         }
-        // workspace_handle, smart_recall_config_handle, session_context_handle,
-        // tool_policy_handle all have default implementations returning None
+        // workspace_handle, smart_recall_config_handle, session_context_handle
+        // all have default implementations returning None
     }
 
     fn make_unified_tool(name: &str, desc: &str) -> UnifiedTool {

@@ -54,6 +54,21 @@ pub const MAX_RETRIES_CEILING: u32 = 20;
 /// it, so it never needs explicit clearing.
 pub const RETRY_NOT_BEFORE_METADATA_KEY: &str = "retry_not_before";
 
+/// Metadata key under which an **operator hard-retry** re-arms the retry
+/// budget. The retry budget is consumed by the *lifetime* count of
+/// failed/timed-out rows in `coord_task_runs` — history that is preserved by
+/// design across an operator retry. Without a baseline, a task retried after
+/// going terminal runs its one fresh attempt with a permanently-exhausted
+/// budget: the first failure re-counts every historical failure and gives up
+/// immediately, so the step's configured transient-failure protection
+/// (bounded retry + backoff) never applies to any operator-initiated rerun.
+///
+/// Operator retry surfaces stamp the failed-attempt count *at retry time*
+/// here; [`fail_or_retry`] subtracts it, so each hard retry grants the full
+/// per-step `max_retries` budget to the fresh intervention. Absent key reads
+/// as `0` → byte-identical legacy behaviour.
+pub const RETRY_ATTEMPTS_BASE_METADATA_KEY: &str = "retry_attempts_base";
+
 /// What the dispatcher should do with a task whose attempt just failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryDecision {
@@ -235,6 +250,37 @@ pub fn with_retry_not_before(metadata: Value, not_before: u64) -> Value {
     value
 }
 
+/// Read the operator-retry budget baseline from a task's `metadata`, if any.
+/// Tolerant like [`read_max_retries`]: a missing key or non-integer value
+/// reads as `None` (no baseline → the full lifetime count consumes budget).
+#[must_use]
+pub fn read_retry_attempts_base(metadata: &Value) -> Option<u32> {
+    metadata
+        .get(RETRY_ATTEMPTS_BASE_METADATA_KEY)
+        .and_then(Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
+}
+
+/// Count the budget-consuming attempts in a task's run history: clean
+/// `Failed`/`Timeout` rows only. `Abandoned` (crash orphans) and `Running`
+/// rows are deliberately excluded — an interrupted attempt is not the task's
+/// fault. Single source of truth shared by the dispatcher's failure path and
+/// the operator retry surfaces that stamp
+/// [`RETRY_ATTEMPTS_BASE_METADATA_KEY`].
+#[must_use]
+pub fn count_failed_attempts(runs: &[super::CoordTaskRun]) -> u32 {
+    let n = runs
+        .iter()
+        .filter(|r| {
+            matches!(
+                r.status,
+                super::TaskRunStatus::Failed | super::TaskRunStatus::Timeout
+            )
+        })
+        .count();
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
 /// Whether a task may be (re-)dispatched at `now_epoch` given any pending
 /// backoff deadline in its `metadata`.
 ///
@@ -386,6 +432,49 @@ mod tests {
         assert!(original.get(RETRY_NOT_BEFORE_METADATA_KEY).is_none()); // immutable
         assert_eq!(read_retry_not_before(&stamped), Some(1_700_000_000));
         assert_eq!(read_max_retries(&stamped), Some(2)); // sibling preserved
+    }
+
+    #[test]
+    fn retry_attempts_base_reads_tolerantly() {
+        assert_eq!(read_retry_attempts_base(&json!({})), None);
+        assert_eq!(
+            read_retry_attempts_base(&json!({ RETRY_ATTEMPTS_BASE_METADATA_KEY: "3" })),
+            None
+        );
+        assert_eq!(
+            read_retry_attempts_base(&json!({ RETRY_ATTEMPTS_BASE_METADATA_KEY: -1 })),
+            None
+        );
+        assert_eq!(
+            read_retry_attempts_base(&json!({ RETRY_ATTEMPTS_BASE_METADATA_KEY: 4 })),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn count_failed_attempts_excludes_interrupted_rows() {
+        use crate::agents::swarm::tasks::{CoordTaskRun, TaskRunStatus};
+        let run = |status: TaskRunStatus| CoordTaskRun {
+            id: String::new(),
+            task_id: String::new(),
+            agent_id: String::new(),
+            started_at: 0,
+            ended_at: None,
+            status,
+            summary: None,
+            error: None,
+            review_verdict: None,
+            reviewer_kind: None,
+            reviewer_id: None,
+        };
+        let runs = vec![
+            run(TaskRunStatus::Failed),
+            run(TaskRunStatus::Timeout),
+            run(TaskRunStatus::Completed),
+            run(TaskRunStatus::Running),
+            run(TaskRunStatus::Abandoned), // crash orphan — not the task's fault
+        ];
+        assert_eq!(count_failed_attempts(&runs), 2);
     }
 
     #[test]

@@ -73,6 +73,17 @@ pub struct GoalArgs {
     /// FRESH deadline from now — use it (with `status='active'`) to resume a
     /// goal blocked at its deadline. None = leave unchanged (no time limit).
     pub timeout_minutes: Option<u32>,
+    /// Park the autonomous pursuit for this many minutes — for `update` on an
+    /// active autonomous goal, when the next step is blocked on slow external
+    /// work (a rate-limit cooldown, a long build). The pursuit wakes with an
+    /// exact timer instead of burning iterations polling. Pass a `note`
+    /// explaining why. Mutually exclusive with `wait_for_task`.
+    pub wait_minutes: Option<u32>,
+    /// Park the autonomous pursuit until this coordination task id settles
+    /// (completes / fails / is cancelled or skipped) — for `update`, when the
+    /// goal's next step depends on a team/workflow task. Wakes on the task's
+    /// settle event. Mutually exclusive with `wait_minutes`.
+    pub wait_for_task: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -135,6 +146,12 @@ impl GoalTool {
         );
         if let Some(b) = goal.token_budget {
             s.push_str(&format!(", token_budget={b}"));
+            if !goal.budget_members.is_empty() {
+                s.push_str(&format!(
+                    " (shared with {} delegated session(s))",
+                    goal.budget_members.len()
+                ));
+            }
         }
         if let PursuitMode::Active { max_iterations } = goal.pursuit {
             s.push_str(&format!(
@@ -158,6 +175,23 @@ impl GoalTool {
         if let Some(note) = goal.note.as_deref() {
             if !note.is_empty() {
                 s.push_str(&format!("\nnote: {note}"));
+            }
+        }
+        // Parked state: name the barrier and (for a timer) the remaining wait,
+        // so `get` never shows a silently-idle pursuit with no explanation.
+        if let Some(task_id) = goal.waiting_on_task.as_deref() {
+            s.push_str(&format!("\nwaiting: parked until task '{task_id}' settles"));
+        } else if let Some(until) = goal.waiting_until_ms {
+            if now_ms != 0 && until > now_ms {
+                s.push_str(&format!(
+                    "\nwaiting: parked for ~{}m more",
+                    (until - now_ms).div_ceil(60_000)
+                ));
+            }
+        }
+        if let Some(reason) = goal.waiting_reason.as_deref() {
+            if goal.has_wait_barrier() && !reason.is_empty() {
+                s.push_str(&format!(" — {reason}"));
             }
         }
         if goal.gate_command.is_some() {
@@ -199,6 +233,9 @@ impl GoalTool {
                 " | autonomous {}/{max_iterations}",
                 goal.continuations_used
             ));
+        }
+        if goal.has_wait_barrier() {
+            s.push_str(" | parked (waiting)");
         }
         if let Some(b) = goal.token_budget {
             s.push_str(&format!(" | budget={b}"));
@@ -328,6 +365,48 @@ fn reject_zero_caps(args: &GoalArgs) -> Result<()> {
                 .to_string(),
         ));
     }
+    if args.wait_minutes == Some(0) {
+        return Err(AlephError::tool(
+            "wait_minutes must be at least 1 — a zero wait parks and wakes in the \
+             same instant. Omit it to continue immediately."
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Boundary validation for the wait-barrier parameters (P7): they only make
+/// sense on an update of a still-active AUTONOMOUS goal — the continuation
+/// path is the barrier's sole consumer, so parking a passive/terminal goal
+/// would silently do nothing and the model must learn that here, not never.
+fn validate_wait_args(args: &GoalArgs, goal: &Goal) -> Result<()> {
+    if args.wait_minutes.is_none() && args.wait_for_task.is_none() {
+        return Ok(());
+    }
+    if args.wait_minutes.is_some() && args.wait_for_task.is_some() {
+        return Err(AlephError::tool(
+            "pass either wait_minutes or wait_for_task, not both — a pursuit \
+             parks on exactly one barrier."
+                .to_string(),
+        ));
+    }
+    if !matches!(goal.pursuit, PursuitMode::Active { .. }) {
+        return Err(AlephError::tool(
+            "wait barriers only apply to autonomous goals (set with \
+             pursuit_max_iterations) — an interactive goal has no continuation \
+             loop to park."
+                .to_string(),
+        ));
+    }
+    if args
+        .wait_for_task
+        .as_deref()
+        .is_some_and(|t| t.trim().is_empty())
+    {
+        return Err(AlephError::tool(
+            "wait_for_task requires a non-empty coordination task id.".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -402,6 +481,12 @@ without losing accumulated progress (continuation count, lessons) — to resume 
 goal blocked at its iteration cap / deadline / token budget, update status='active' \
 together with a higher pursuit_max_iterations / fresh timeout_minutes / higher \
 token_budget. \
+         On an autonomous goal, action='update' with wait_minutes=N parks the \
+         pursuit until an exact timer wake (use when blocked on slow external \
+         work — a rate-limit cooldown, a long build — instead of burning \
+         iterations polling), and wait_for_task='<coord task id>' parks it until \
+         that team/workflow task settles; pass a note saying why. \
+         status='active' un-parks. \
          Read it with action='get'. When \
          you have achieved the objective, self-report with action='update', \
          status='complete'; if you are stuck and need the user, use \
@@ -423,6 +508,8 @@ token_budget. \
             "goal(action='update', status='complete', note='all endpoints migrated and tests green')".into(),
             "goal(action='update', lesson='remember to run db migrations before tests')".into(),
             "goal(action='update', status='active', pursuit_max_iterations=15)".into(),
+            "goal(action='update', wait_minutes=20, note='provider rate-limited; resume after cooldown')".into(),
+            "goal(action='update', wait_for_task='task-abc123', note='next step needs the research task result')".into(),
             "goal(action='list')".into(),
             "goal(action='clear')".into(),
         ])
@@ -444,6 +531,14 @@ token_budget. \
                     AlephError::tool("goal 'set' requires 'objective'".to_string())
                 })?;
                 reject_zero_caps(&args)?;
+                if args.wait_minutes.is_some() || args.wait_for_task.is_some() {
+                    return Err(AlephError::tool(
+                        "wait_minutes / wait_for_task apply to action='update' — a \
+                         goal is never born parked; set it first, then park when \
+                         the pursuit actually hits the wait."
+                            .to_string(),
+                    ));
+                }
                 if let Some(cmd) = args.gate_command.as_deref() {
                     if !cmd.trim().is_empty() {
                         validate_gate_command(cmd)?;
@@ -524,9 +619,30 @@ token_budget. \
                     .get(&session)?
                     .ok_or_else(|| AlephError::tool("no standing goal to update".to_string()))?;
                 reject_zero_caps(&args)?;
+                validate_wait_args(&args, &goal)?;
                 let prev_status = goal.status;
+                // The armed timer instant BEFORE this update mutates the
+                // barrier. A parked timer's continuation is claimed at the
+                // parking run's post_run (pending_continuation_ms == the wake
+                // instant), and that marker is store-owned — `without_wait` /
+                // `with_wait_until` never touch it, and `commit_field_update`
+                // preserves it. So an explicit un-park (or re-park) that only
+                // clears the barrier would leave the detached timer armed:
+                // the un-parking run's post_run would hit the in-flight
+                // pending gate and stay Idle until the ORIGINAL wake. Capture
+                // it here; after the commit, supersede that stale marker so
+                // the fresh claim can fire immediately.
+                let pre_wait_until = goal.waiting_until_ms;
+                let barrier_touched = args.status.is_some()
+                    || args.wait_minutes.is_some()
+                    || args.wait_for_task.is_some();
                 if let Some(status) = args.status {
                     goal = goal.with_status(status, now);
+                    // ANY explicit status write drops a wait barrier: away
+                    // from Active it is meaningless (hermes: pause/clear drop
+                    // it), and an explicit `status='active'` on a parked goal
+                    // is the un-park command.
+                    goal = goal.without_wait(now);
                     if status != GoalStatus::Complete {
                         // `Passed` is the objective gate's verdict on ONE completion
                         // claim, and `awaiting_gate` skips the gate whenever it is
@@ -584,6 +700,20 @@ token_budget. \
                 if let Some(lesson) = args.lesson.clone() {
                     goal = goal.with_lesson_appended(lesson, now);
                 }
+                // Wait barrier (model self-park, R7): the continuation hook
+                // turns a deadline barrier into an exact timer wake and a
+                // task barrier into an event-driven wake. The wake run costs
+                // one iteration like any autonomous run.
+                if let Some(minutes) = args.wait_minutes {
+                    goal = goal.with_wait_until(
+                        now.saturating_add((minutes as u64).saturating_mul(60_000)),
+                        args.note.clone(),
+                        now,
+                    );
+                }
+                if let Some(task_id) = args.wait_for_task.clone() {
+                    goal = goal.with_wait_on_task(task_id, args.note.clone(), now);
+                }
                 // Honest report on a resume that cannot actually take — checked
                 // BEFORE persisting. Re-activating a goal whose binding limit is
                 // still spent leaves it Active for exactly one hook, which
@@ -615,6 +745,19 @@ token_budget. \
                                   nothing to update. Set a new goal if you still need one."
                             .to_string(),
                     });
+                }
+                // Supersede a stale timer marker left armed by a barrier this
+                // update just cleared/replaced (see `pre_wait_until` above), so
+                // the un-parking run's post_run claims immediately instead of
+                // waiting out the original wake. No-op unless the pre-update
+                // barrier was a claimed timer (marker == its wake instant).
+                if let Some(armed) = pre_wait_until {
+                    if barrier_touched {
+                        if let Err(e) = self.store.supersede_wait_timer(&session, armed) {
+                            info!(session = %session, error = %e,
+                                "goal: failed to supersede stale wait timer on un-park (ignored)");
+                        }
+                    }
                 }
                 // Clear the welded plan on a tool-owned authoritative termination
                 // so the stale plan does not bleed into later plain turns of this
@@ -719,6 +862,8 @@ mod tests {
             gate_command: None,
             lesson: None,
             timeout_minutes: None,
+            wait_minutes: None,
+            wait_for_task: None,
         }
     }
 
@@ -735,6 +880,8 @@ mod tests {
             gate_command: None,
             lesson: None,
             timeout_minutes: None,
+            wait_minutes: None,
+            wait_for_task: None,
         })
         .await
         .unwrap();
@@ -750,6 +897,8 @@ mod tests {
                 gate_command: None,
                 lesson: None,
                 timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await
             .unwrap();
@@ -770,6 +919,8 @@ mod tests {
             gate_command: None,
             lesson: None,
             timeout_minutes: None,
+            wait_minutes: None,
+            wait_for_task: None,
         })
         .await
         .unwrap();
@@ -784,6 +935,8 @@ mod tests {
                 gate_command: None,
                 lesson: None,
                 timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await
             .unwrap();
@@ -804,6 +957,8 @@ mod tests {
             gate_command: None,
             lesson: None,
             timeout_minutes: None,
+            wait_minutes: None,
+            wait_for_task: None,
         })
         .await
         .unwrap();
@@ -818,6 +973,8 @@ mod tests {
                 gate_command: None,
                 lesson: None,
                 timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await
             .unwrap();
@@ -841,6 +998,8 @@ mod tests {
                 gate_command: None,
                 lesson: None,
                 timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await
             .unwrap();
@@ -862,6 +1021,8 @@ mod tests {
                 gate_command: None,
                 lesson: None,
                 timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await;
         assert!(err.is_err(), "set without objective must error");
@@ -880,6 +1041,8 @@ mod tests {
             gate_command: None,
             lesson: None,
             timeout_minutes: None,
+            wait_minutes: None,
+            wait_for_task: None,
         })
         .await
         .unwrap();
@@ -893,6 +1056,8 @@ mod tests {
             gate_command: None,
             lesson: None,
             timeout_minutes: None,
+            wait_minutes: None,
+            wait_for_task: None,
         })
         .await
         .unwrap();
@@ -907,6 +1072,8 @@ mod tests {
                 gate_command: None,
                 lesson: None,
                 timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await
             .unwrap();
@@ -926,6 +1093,8 @@ mod tests {
             gate_command: Some("cargo test".into()),
             lesson: None,
             timeout_minutes: None,
+            wait_minutes: None,
+            wait_for_task: None,
         })
         .await
         .unwrap();
@@ -940,6 +1109,8 @@ mod tests {
                 gate_command: None,
                 lesson: None,
                 timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await
             .unwrap();
@@ -959,6 +1130,8 @@ mod tests {
             gate_command: None,
             lesson: None,
             timeout_minutes: None,
+            wait_minutes: None,
+            wait_for_task: None,
         })
         .await
         .unwrap();
@@ -973,6 +1146,8 @@ mod tests {
                 gate_command: None,
                 lesson: Some("don't skip lint".into()),
                 timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await
             .unwrap();
@@ -993,6 +1168,8 @@ mod tests {
             gate_command: None,
             lesson: None,
             timeout_minutes: Some(30),
+            wait_minutes: None,
+            wait_for_task: None,
         })
         .await
         .unwrap();
@@ -1007,6 +1184,8 @@ mod tests {
                 gate_command: None,
                 lesson: None,
                 timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await
             .unwrap();
@@ -1094,6 +1273,8 @@ mod tests {
             .call(GoalArgs {
                 token_budget: Some(80_000),
                 timeout_minutes: Some(45),
+                wait_minutes: None,
+                wait_for_task: None,
                 ..args(GoalAction::Update)
             })
             .await
@@ -1194,6 +1375,110 @@ mod tests {
             "stale note kept: {}",
             out.message
         );
+    }
+
+    #[tokio::test]
+    async fn wait_minutes_parks_and_status_active_unparks() {
+        let (tool, _d) = tool_with_session("sess-wait-tool");
+        tool.call(GoalArgs {
+            objective: Some("long haul".into()),
+            pursuit_max_iterations: Some(5),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        let out = tool
+            .call(GoalArgs {
+                wait_minutes: Some(20),
+                note: Some("provider cooldown".into()),
+                ..args(GoalAction::Update)
+            })
+            .await
+            .unwrap();
+        assert!(out.success);
+        assert!(
+            out.message.contains("waiting: parked"),
+            "got: {}",
+            out.message
+        );
+        assert!(
+            out.message.contains("provider cooldown"),
+            "got: {}",
+            out.message
+        );
+
+        // Explicit re-activate un-parks.
+        let out = tool
+            .call(GoalArgs {
+                status: Some(GoalStatus::Active),
+                ..args(GoalAction::Update)
+            })
+            .await
+            .unwrap();
+        assert!(
+            !out.message.contains("waiting: parked"),
+            "got: {}",
+            out.message
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_rejected_on_interactive_goal_and_on_set() {
+        let (tool, _d) = tool_with_session("sess-wait-rej");
+        // Born parked → rejected at set.
+        let err = tool
+            .call(GoalArgs {
+                objective: Some("x".into()),
+                wait_minutes: Some(5),
+                ..args(GoalAction::Set)
+            })
+            .await
+            .unwrap_err();
+        assert!(format!("{err}").contains("update"));
+        // Passive (interactive) goal cannot park.
+        tool.call(GoalArgs {
+            objective: Some("x".into()),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        let err = tool
+            .call(GoalArgs {
+                wait_minutes: Some(5),
+                ..args(GoalAction::Update)
+            })
+            .await
+            .unwrap_err();
+        assert!(format!("{err}").contains("autonomous"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn wait_args_are_mutually_exclusive_and_nonzero() {
+        let (tool, _d) = tool_with_session("sess-wait-both");
+        tool.call(GoalArgs {
+            objective: Some("x".into()),
+            pursuit_max_iterations: Some(3),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+        let err = tool
+            .call(GoalArgs {
+                wait_minutes: Some(5),
+                wait_for_task: Some("t1".into()),
+                ..args(GoalAction::Update)
+            })
+            .await
+            .unwrap_err();
+        assert!(format!("{err}").contains("not both"), "got: {err}");
+        let err = tool
+            .call(GoalArgs {
+                wait_minutes: Some(0),
+                ..args(GoalAction::Update)
+            })
+            .await
+            .unwrap_err();
+        assert!(format!("{err}").contains("at least 1"), "got: {err}");
     }
 
     #[tokio::test]
@@ -1653,6 +1938,8 @@ mod tests {
                 gate_command: None,
                 lesson: None,
                 timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await
             .expect_err("a 0-iteration pursuit is exhausted before its first step");
@@ -1675,6 +1962,8 @@ mod tests {
                 gate_command: None,
                 lesson: None,
                 timeout_minutes: Some(0),
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await
             .expect_err("a 0-minute deadline is already in the past");
@@ -1695,6 +1984,8 @@ mod tests {
                 gate_command: Some("cargo build && cargo test".into()),
                 lesson: None,
                 timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await
             .expect_err("shell metacharacters make the gate unrunnable");
@@ -1725,6 +2016,8 @@ mod tests {
                 gate_command: None,
                 lesson: None,
                 timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await
             .unwrap();
@@ -1758,6 +2051,8 @@ mod tests {
                 gate_command: None,
                 lesson: None,
                 timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await
             .unwrap();
@@ -1784,6 +2079,8 @@ mod tests {
                 gate_command: None,
                 lesson: None,
                 timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await
             .unwrap();
@@ -1806,6 +2103,8 @@ mod tests {
                 gate_command: None,
                 lesson: None,
                 timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
             })
             .await
             .unwrap();

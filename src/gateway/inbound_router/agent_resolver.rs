@@ -132,13 +132,36 @@ impl InboundMessageRouter {
                 }
             }
 
-            debug!(
-                "Route resolved: channel='{}' → agent='{}' (matched_by={:?})",
-                msg.channel_id.as_str(),
-                resolved.agent_id,
-                resolved.matched_by,
-            );
-            return Some((resolved.agent_id.clone(), Some(resolved)));
+            // Existence gate for SPECIFIC route-binding matches (Peer / Guild /
+            // Team / Account / Channel): `[[bindings]]` is config-TOML
+            // snapshotted at boot — `agents.delete` cannot touch it (the
+            // router must not rewrite routing config), so a binding naming a
+            // deleted agent would brick every conversation it governs: each
+            // message resolves to the ghost → AgentNotFound → error notice,
+            // forever, with no restart cure. Fall through to the already-gated
+            // Tier 2 / Tier 3 instead. Deliberately NOT clear_stale_binding —
+            // that clears the *workspace* store, a different (possibly valid)
+            // binding. Recreating an agent with the same id instantly restores
+            // the route (the gate is per-message).
+            if resolved.matched_by != crate::routing::resolve::MatchedBy::Default
+                && !self.bound_agent_exists(&resolved.agent_id).await
+            {
+                tracing::warn!(
+                    channel = %msg.channel_id.as_str(),
+                    agent_id = %resolved.agent_id,
+                    matched_by = ?resolved.matched_by,
+                    "route binding targets an agent that no longer exists — falling back to workspace binding / default agent; fix [[bindings]] in config"
+                );
+                // fall through to Tier 2
+            } else {
+                debug!(
+                    "Route resolved: channel='{}' → agent='{}' (matched_by={:?})",
+                    msg.channel_id.as_str(),
+                    resolved.agent_id,
+                    resolved.matched_by,
+                );
+                return Some((resolved.agent_id.clone(), Some(resolved)));
+            }
         }
 
         // Tier 2: Fallback to workspace_manager (backward compat for zero-config)
