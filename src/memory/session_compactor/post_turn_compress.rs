@@ -75,8 +75,7 @@ impl SessionCompactor {
             self.config.leaf_chunk_tokens,
             ratio,
         );
-        let semantic_chunks =
-            chunker.chunk(&units, &compressible_messages, compressible_messages.len());
+        let semantic_chunks = chunker.chunk(&units, &compressible_messages);
 
         if semantic_chunks.is_empty() {
             return Ok(CompressResult::default());

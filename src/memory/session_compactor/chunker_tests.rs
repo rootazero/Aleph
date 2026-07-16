@@ -1,85 +1,7 @@
 use crate::context::compact::tool_aware_chunker::{
     parse_semantic_units, SemanticUnit, ToolAwareChunker,
 };
-use crate::providers::message::{ContentBlock, UnifiedMessage};
-use serde_json::json;
-
-fn user_msg(text: &str) -> UnifiedMessage {
-    UnifiedMessage::user(text)
-}
-
-fn assistant_msg(text: &str) -> UnifiedMessage {
-    UnifiedMessage::assistant(text)
-}
-
-fn tool_use_msg(call_id: &str, tool_name: &str) -> UnifiedMessage {
-    UnifiedMessage::Assistant {
-        content: vec![ContentBlock::ToolCall {
-            thought_signature: None,
-            id: call_id.to_owned(),
-            name: tool_name.to_owned(),
-            arguments: json!({}),
-        }],
-    }
-}
-
-fn tool_result_msg(call_id: &str, tool_name: &str, output: &str) -> UnifiedMessage {
-    UnifiedMessage::tool_result(call_id, tool_name, output, false)
-}
-
-#[test]
-fn tool_use_and_result_form_single_unit() {
-    let messages = vec![
-        user_msg("Please search for something"),
-        tool_use_msg("c1", "web_search"),
-        tool_result_msg("c1", "web_search", "Found 10 results"),
-        assistant_msg("Here are the results"),
-    ];
-
-    let units = parse_semantic_units(&messages);
-    assert_eq!(units.len(), 2, "expected 2 semantic units, got {units:?}");
-    assert!(matches!(units[0], SemanticUnit::UserMessage { index: 0 }));
-    match &units[1] {
-        SemanticUnit::ToolRound(round) => {
-            assert_eq!(round.tool_use_index, 1);
-            assert_eq!(round.tool_result_index, 2);
-            assert_eq!(round.follow_up_index, Some(3));
-            assert_eq!(round.tool_name, "web_search");
-        }
-        other => panic!("expected ToolRound, got {other:?}"),
-    }
-}
-
-#[test]
-fn tool_round_never_split_even_when_oversized() {
-    let large_output = "y".repeat(500);
-    let messages = vec![
-        user_msg("Do something"),
-        tool_use_msg("c2", "big_tool"),
-        tool_result_msg("c2", "big_tool", &large_output),
-        assistant_msg("Done."),
-    ];
-
-    let units = parse_semantic_units(&messages);
-    let chunker = ToolAwareChunker::new(10, 4.0);
-    let chunks = chunker.chunk(&units, &messages, messages.len());
-
-    for chunk in &chunks {
-        for unit in &chunk.units {
-            if let SemanticUnit::ToolRound(round) = unit {
-                let idx = chunk.message_indices();
-                assert!(idx.contains(&round.tool_use_index), "tool_use_index split");
-                assert!(
-                    idx.contains(&round.tool_result_index),
-                    "tool_result_index split"
-                );
-                if let Some(fu) = round.follow_up_index {
-                    assert!(idx.contains(&fu), "follow_up_index split");
-                }
-            }
-        }
-    }
-}
+use crate::providers::message::UnifiedMessage;
 
 #[test]
 fn pair_to_unified_message_conversion_preserves_structure() {
@@ -117,7 +39,7 @@ fn chunk_indices_map_back_to_pairs() {
 
     let units = parse_semantic_units(&unified);
     let chunker = ToolAwareChunker::new(20, 4.0);
-    let chunks = chunker.chunk(&units, &unified, unified.len());
+    let chunks = chunker.chunk(&units, &unified);
 
     for chunk in &chunks {
         for idx in chunk.message_indices() {

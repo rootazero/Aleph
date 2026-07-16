@@ -138,12 +138,25 @@ pub async fn compact_to_fit(
 
     // 3. Deterministic floor. Target = critical fraction of the message budget,
     //    minus the fixed overhead (system + tools) so the floor accounts for
-    //    what the LLM call will actually carry.
+    //    what the LLM call will actually carry. `p` (and the post-condition
+    //    ratio) live in CALIBRATED space — `peek_pressure` applies the EWMA
+    //    factor — while `truncate_to_fit`'s eviction loop measures RAW
+    //    estimates, so the target must be divided back into raw space:
+    //    post-condition f·(raw_msgs + raw_overhead) < critical·budget with
+    //    p.overhead_tokens = f·raw_overhead gives
+    //    raw_msgs < (critical·budget − p.overhead_tokens) / f. With f > 1 a
+    //    calibrated-space target stopped evicting while the calibrated ratio
+    //    was still ≥ critical, pinning `before_turn` on CompactToFit forever.
+    //    The budget clamps f to [0.25, 4.0]; guard non-finite anyway. At
+    //    f = 1.0 (uncalibrated) this is byte-identical to the old arithmetic.
     let budget_tokens = budget.token_budget() as usize;
-    let overhead = p.overhead_tokens;
-    let target = ((budget_tokens as f64 * critical) as usize)
-        .saturating_sub(overhead)
-        .saturating_sub(1); // strict: guarantee ratio < critical, not <=
+    let factor = match budget.calibration() {
+        Some(f) if f.is_finite() && f > 0.0 => f,
+        _ => 1.0,
+    };
+    let headroom = (budget_tokens as f64 * critical) - p.overhead_tokens as f64;
+    // `- 1` keeps it strict: guarantee ratio < critical, not <=.
+    let target = ((headroom / factor).floor() as usize).saturating_sub(1);
     truncate_to_fit(messages, target, budget.fresh_tail_count(), ratio);
 }
 
@@ -288,6 +301,51 @@ mod tests {
         assert!(
             !msgs.first().unwrap().is_tool_result(),
             "surviving list must not begin with an orphaned tool_result"
+        );
+    }
+
+    #[tokio::test]
+    async fn floor_converts_target_into_raw_space_when_calibrated() {
+        use crate::context::budget::{ContextBudget, ContextBudgetConfig};
+        let config = ContextBudgetConfig {
+            token_budget: 1000,
+            warning_threshold: 0.70,
+            critical_threshold: 0.85,
+            token_estimate_ratio: 1.0,
+            fresh_tail_count: 1,
+            circuit_breaker_max: 2,
+            diminishing_window: 3,
+            diminishing_threshold: 100,
+            max_splits: 3,
+        };
+        let mut budget = ContextBudget::new(&config);
+        // Push the EWMA calibration factor to exactly 2.0: the provider
+        // reports twice the raw estimate on the first observation.
+        let seed = vec![text_user(&"s".repeat(500))];
+        budget.before_turn(&seed, "", 0);
+        let estimated = budget.last_pressure().unwrap().used_tokens;
+        budget.observe_actual_usage(estimated * 2);
+        assert!((budget.calibration().unwrap() - 2.0).abs() < 1e-9);
+
+        // Raw total ~804 tokens: UNDER the calibrated-space floor target
+        // (0.85·1000 − 1 = 849 raw) but 2×-calibrated far ABOVE critical
+        // (1608 ≥ 850). A floor comparing raw estimates against that
+        // calibrated-space target evicts nothing here and leaves the
+        // calibrated ratio pinned ≥ critical forever.
+        let mut msgs: Vec<UnifiedMessage> = (0..8).map(|_| text_user(&"a".repeat(100))).collect();
+        msgs.push(text_user("tail"));
+        let raw = total(&msgs, 1.0);
+        assert!(
+            (425..=849).contains(&raw),
+            "premise: raw total must sit between the raw and calibrated targets, got {raw}"
+        );
+
+        compact_to_fit(None, &budget, &mut msgs, "", 0, None).await;
+        let p = budget.peek_pressure(&msgs, "", 0);
+        assert!(
+            p.ratio < 0.85,
+            "post-condition must hold in CALIBRATED space, got {}",
+            p.ratio
         );
     }
 

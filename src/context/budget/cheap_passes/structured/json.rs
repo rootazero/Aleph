@@ -60,8 +60,8 @@ pub(super) fn looks_like_json(lines: &[&str]) -> bool {
 /// when nothing was oversized (all signal — not worth a header), or when the
 /// reduced form is not actually smaller than the input.
 pub(super) fn reduce_json(text: &str) -> Option<Reduction> {
-    let total_lines = text.lines().count();
-    let value: Value = serde_json::from_str(text.trim()).ok()?;
+    let trimmed = text.trim();
+    let value: Value = serde_json::from_str(trimmed).ok()?;
 
     let (reduced, changed) = shrink(&value, 0);
     if !changed {
@@ -71,15 +71,20 @@ pub(super) fn reduce_json(text: &str) -> Option<Reduction> {
     // Pretty-printing can re-inflate a densely packed blob; only keep the
     // reduction when it genuinely shrinks the payload (the caller also guards
     // on tokens, this guards on bytes so a no-win never emits a header).
-    if body.len() >= text.trim().len() {
+    if body.len() >= trimmed.len() {
         return None;
     }
-    let kept_lines = body.lines().count();
+    // JSON tallies are chars, not lines: the body is re-pretty-printed, so
+    // its line count is unrelated to the input's (a dense blob re-renders as
+    // dozens of lines and the old "kept 43/1 lines" header lied). See the
+    // unit note on [`Reduction::kept_lines`] and the char-unit header arm in
+    // `Reduction::render`.
+    let kept_chars = body.chars().count();
     Some(Reduction {
         kind: ContentKind::Json,
         body,
-        kept_lines,
-        total_lines,
+        kept_lines: kept_chars,
+        total_lines: trimmed.chars().count(),
     })
 }
 
@@ -178,6 +183,34 @@ mod tests {
         let r = reduce(&s).expect("large array should reduce");
         assert!(r.body.contains("…(+42 more items)"), "got:\n{}", r.body);
         assert!(serde_json::from_str::<serde_json::Value>(&r.body).is_ok());
+    }
+
+    #[test]
+    fn header_tallies_chars_not_bogus_lines() {
+        // A dense single-line blob: the old header claimed "kept N/1 lines"
+        // with N = the pretty-printed body's line count (kept > total, wrong
+        // unit). Chars are the honest unit for a re-serialized document.
+        let big = "x".repeat(1000);
+        let s = format!("{{\"status\": \"error\", \"body\": \"{big}\"}}");
+        let r = reduce_json(&s).expect("oversized single-line JSON should reduce");
+        let rendered = r.render();
+        assert!(
+            rendered.starts_with("[compacted json: reduced "),
+            "got: {rendered}"
+        );
+        assert!(
+            rendered.contains(" chars]"),
+            "header unit must be chars; got: {rendered}"
+        );
+        // The tallies count what they report: original vs kept chars.
+        assert_eq!(r.total_lines, s.chars().count());
+        assert_eq!(r.kept_lines, r.body.chars().count());
+        assert!(
+            r.kept_lines < r.total_lines,
+            "kept ({}) must be smaller than total ({})",
+            r.kept_lines,
+            r.total_lines
+        );
     }
 
     #[test]

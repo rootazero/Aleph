@@ -6,11 +6,34 @@
 //! verbatim fresh tail. The parent session's log is frozen — never re-read
 //! by the loop — so per-turn cost resets to bounded.
 
+use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::compact::compactor::ContextCompactor;
 use crate::providers::message::UnifiedMessage;
 use crate::session::epoch_registrar::SessionEpochRegistrar;
 use crate::session::events::{SessionEvent, SessionEventRecord};
 use crate::session::service::{SessionId, SessionService};
+
+/// Token budget for the pre-tail summarizer input. Mirrors the compactor's
+/// `SUMMARIZER_INPUT_TOKEN_BUDGET` (48k) — kept as a local constant because
+/// that constant is private to `compactor.rs` and this module needs only the
+/// same number, not the compactor's window-selection machinery. Splits fire
+/// precisely when the log is huge, so an unclamped pre-tail would overflow
+/// the side-channel summarizer's window and degrade every split to the
+/// deterministic one-line-per-event dump.
+const PRETAIL_SUMMARY_INPUT_TOKEN_BUDGET: usize = 48_000;
+
+/// Per-message char cap used when estimating a message's contribution to the
+/// summarizer input. Mirrors the compactor's `TRANSCRIPT_MSG_MAX_CHARS`: the
+/// transcript serializer caps each message body at this many chars, so
+/// estimating on the raw text would over-count huge tool results and elide
+/// far more history than the transcript actually costs.
+const PRETAIL_MSG_ESTIMATE_MAX_CHARS: usize = 2000;
+
+/// Hard ceiling on the seeded summary's line count. The compactor's
+/// deterministic fallback renders one line per message, so even a
+/// budget-clamped pre-tail of tiny events could otherwise seed the child
+/// with thousands of lines. A real LLM summary never comes close to this.
+const MAX_SEED_SUMMARY_LINES: usize = 200;
 
 /// Outcome of a successful split.
 #[derive(Debug, Clone)]
@@ -196,6 +219,13 @@ async fn summarize_pretail(
         .filter_map(|r| event_to_message(&r.event))
         .collect();
 
+    // Bound the summarizer input: keep the NEWEST budget-worth of pre-tail
+    // messages so the side-channel call cannot overflow, and note the elision
+    // honestly (the elided span was already covered by earlier in-place
+    // compaction summaries where they exist).
+    let elided = clamp_start_to_budget(&messages, PRETAIL_SUMMARY_INPUT_TOKEN_BUDGET);
+    let kept = &messages[elided..];
+
     // Live-task anchor: scan the kept tail back-to-front for the latest user
     // turn. Mapped through the same `event_to_message` filter so non-dialogue
     // events are skipped consistently with the summarized body.
@@ -205,7 +235,56 @@ async fn summarize_pretail(
         .collect();
     let focus = super::summary_utils::latest_user_task(&tail_messages);
 
-    compactor.summarize_slice(&messages, focus.as_deref()).await
+    let summary = compactor.summarize_slice(kept, focus.as_deref()).await?;
+    // Cap the seeded summary's size regardless of origin: the compactor's
+    // deterministic fallback is one line per message, which even the clamped
+    // slice can blow into thousands of lines when the events are tiny.
+    let summary = cap_summary_lines(summary, MAX_SEED_SUMMARY_LINES);
+    if elided > 0 {
+        return Ok(format!(
+            "[{elided} earlier events elided from this summary]\n{summary}"
+        ));
+    }
+    Ok(summary)
+}
+
+/// Index into `messages` where the newest budget-worth of summarizer input
+/// begins: walk newest-first, accumulating each message's (per-message-capped)
+/// token estimate, and stop once `budget_tokens` is filled. Always keeps at
+/// least the newest message, so a single oversized turn cannot elide
+/// everything. Returns the count of elided (older) messages.
+fn clamp_start_to_budget(messages: &[UnifiedMessage], budget_tokens: usize) -> usize {
+    let mut acc = 0usize;
+    let mut start = messages.len();
+    while start > 0 {
+        let text = messages[start - 1].text_content();
+        // Char-based cap (P7 UTF-8 safety) matching what the transcript
+        // serializer will actually send for this message.
+        let end = text
+            .char_indices()
+            .nth(PRETAIL_MSG_ESTIMATE_MAX_CHARS)
+            .map_or(text.len(), |(byte_idx, _)| byte_idx);
+        let cost = estimate_tokens_smart(&text[..end]);
+        if start < messages.len() && acc.saturating_add(cost) > budget_tokens {
+            break;
+        }
+        acc = acc.saturating_add(cost);
+        start -= 1;
+    }
+    start
+}
+
+/// Keep at most the NEWEST `max_lines` lines of `summary`, prefixed with an
+/// honest elision header when anything was dropped. The deterministic
+/// fallback dump is chronological, so the kept tail is the newest content.
+fn cap_summary_lines(summary: String, max_lines: usize) -> String {
+    let total = summary.lines().count();
+    if total <= max_lines {
+        return summary;
+    }
+    let dropped = total - max_lines;
+    let kept: Vec<&str> = summary.lines().skip(dropped).collect();
+    format!("[{dropped} earlier summary lines elided]\n{}", kept.join("\n"))
 }
 
 /// Convert a single `SessionEvent` to a `UnifiedMessage` for summarization.
@@ -546,6 +625,76 @@ mod tests {
             SessionEvent::RunStarted { .. } => {}
             other => panic!("expected RunStarted on child, got {other:?}"),
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Pre-tail summarization is bounded (CTX: splits fire when the log is huge)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn clamp_start_keeps_newest_budget_worth() {
+        // 2000 messages × ~50 tokens each ≫ the 48k budget: the oldest must be
+        // elided and the kept slice must fit the summarizer budget.
+        let messages: Vec<UnifiedMessage> = (0..2000)
+            .map(|i| UnifiedMessage::user(format!("event {i} {}", "payload ".repeat(25))))
+            .collect();
+        let start = clamp_start_to_budget(&messages, PRETAIL_SUMMARY_INPUT_TOKEN_BUDGET);
+        assert!(start > 0, "a pre-tail this large must elide older events");
+        let kept_tokens: usize = messages[start..]
+            .iter()
+            .map(|m| estimate_tokens_smart(&m.text_content()))
+            .sum();
+        assert!(
+            kept_tokens <= PRETAIL_SUMMARY_INPUT_TOKEN_BUDGET,
+            "kept slice must fit the summarizer budget, got {kept_tokens}"
+        );
+        // The newest message always survives.
+        assert!(messages[start..]
+            .iter()
+            .any(|m| m.text_content().contains("event 1999")));
+        // A small pre-tail is untouched.
+        let small: Vec<UnifiedMessage> = (0..3)
+            .map(|i| UnifiedMessage::user(format!("msg {i}")))
+            .collect();
+        assert_eq!(
+            clamp_start_to_budget(&small, PRETAIL_SUMMARY_INPUT_TOKEN_BUDGET),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn huge_pretail_fallback_is_capped_and_notes_elision() {
+        // Thousands of pre-tail events with a failing summarizer LLM: the
+        // compactor falls back to its one-line-per-message deterministic dump.
+        // The seeded summary must stay bounded and honest — never a
+        // many-thousand-line dump copied into the child session.
+        let events: Vec<SessionEventRecord> = (0..3000)
+            .map(|i| user_record(i as u64, &format!("event {i} {}", "payload ".repeat(25))))
+            .collect();
+        let provider = AlephArc::new(
+            MockProvider::new("ignored").with_error(crate::providers::mock::MockError::Timeout),
+        );
+        let compactor = ContextCompactor::new(provider, CompactorConfig::default());
+
+        let summary = summarize_pretail(&compactor, &events, events.len())
+            .await
+            .expect("fallback path must still produce a summary");
+
+        assert!(
+            summary.starts_with('[') && summary.contains("elided from this summary"),
+            "expected an honest elision note, got: {}",
+            summary.lines().next().unwrap_or("")
+        );
+        let lines = summary.lines().count();
+        assert!(
+            lines <= MAX_SEED_SUMMARY_LINES + 2,
+            "seed summary must be line-capped, got {lines} lines"
+        );
+        // Newest-first retention: the most recent event survives the caps.
+        assert!(
+            summary.contains("event 2999"),
+            "the newest pre-tail event must survive both caps"
+        );
     }
 
     // -------------------------------------------------------------------------

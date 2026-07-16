@@ -4,12 +4,20 @@
 //! stripping helper, and the single-source summarization prompt builder used by
 //! both [`super::compactor`] and the session-split seed path.
 
+use super::preserve::is_summary_text;
+use crate::memory::assembler::context_block::MEMORY_CONTEXT_OPEN;
 use crate::providers::message::UnifiedMessage;
 
 /// Maximum characters of the live-task focus anchor embedded in a summarization
 /// prompt. Bounds prompt growth so task-anchoring never bloats the side-channel
 /// summarizer call; the anchor points at the active task, it does not carry it.
 const FOCUS_ANCHOR_MAX_CHARS: usize = 600;
+
+/// Opening fence of the transient `<live-status>` strand the harness bridge
+/// joins into the trailing recall message. The bridge formats the tag inline
+/// (`orchestrator::harness_bridge::prompt_build`) — no shared constant exists
+/// for it, unlike [`MEMORY_CONTEXT_OPEN`].
+const LIVE_STATUS_OPEN: &str = "<live-status>";
 
 /// Appended to every summarization prompt to instruct the LLM to copy
 /// technical identifiers verbatim rather than paraphrasing them.
@@ -245,19 +253,32 @@ pub fn build_summary_update_prompt(
     )
 }
 
-/// The user's current active task: text of the most recent `User` message in
-/// `tail`, or `None` when the tail carries no user turn.
+/// The user's current active task: text of the most recent *genuine* `User`
+/// message in `tail`, or `None` when the tail carries no such turn.
 ///
 /// The compactor passes the kept fresh tail here — the live task is already in
 /// the message list it owns, so task-anchoring needs no new plumbing from the
-/// caller. Returns an owned `String` because [`UnifiedMessage::text_content`]
-/// reconstructs the text from content blocks.
+/// caller. Machinery riding the list as user turns is skipped: compaction
+/// summaries and the transient fenced recall strands (`<memory-context>` /
+/// `<live-status>`) the harness appends as the LAST user message before
+/// compaction runs — anchoring the focus to those would carry the recall fence
+/// into `<conversation_focus>` instead of the user's real request. Returns an
+/// owned `String` because [`UnifiedMessage::text_content`] reconstructs the
+/// text from content blocks.
 #[must_use]
 pub fn latest_user_task(tail: &[UnifiedMessage]) -> Option<String> {
     tail.iter().rev().find_map(|m| match m {
         UnifiedMessage::User { .. } => {
             let text = m.text_content();
-            (!text.trim().is_empty()).then_some(text)
+            let trimmed = text.trim();
+            if trimmed.is_empty()
+                || is_summary_text(&text)
+                || trimmed.starts_with(MEMORY_CONTEXT_OPEN)
+                || trimmed.starts_with(LIVE_STATUS_OPEN)
+            {
+                return None;
+            }
+            Some(text)
         }
         _ => None,
     })
@@ -401,6 +422,35 @@ mod tests {
         ];
         assert_eq!(latest_user_task(&tail), None);
         assert_eq!(latest_user_task(&[]), None);
+    }
+
+    #[test]
+    fn latest_user_task_skips_trailing_fenced_recall_message() {
+        // The harness appends the per-run recall context as the LAST user
+        // message before compaction (think.rs). The focus must fall through to
+        // the user's real request, not anchor on the recall fence.
+        let tail = vec![
+            UnifiedMessage::user("the real task"),
+            UnifiedMessage::assistant("working"),
+            UnifiedMessage::user(
+                "<memory-context>\n[System note: recalled memory]\nfacts\n</memory-context>",
+            ),
+        ];
+        assert_eq!(latest_user_task(&tail).as_deref(), Some("the real task"));
+    }
+
+    #[test]
+    fn latest_user_task_none_when_tail_is_only_fenced_or_summary_messages() {
+        // No genuine user turn at all: summaries and both fenced strand
+        // flavours must all be skipped, yielding None (no focus block).
+        let tail = vec![
+            UnifiedMessage::user("[Context Summary]\nolder work"),
+            UnifiedMessage::user(
+                "<live-status>\nReference data, not user input.\nT-minus 5m\n</live-status>",
+            ),
+            UnifiedMessage::user("<memory-context>\nrecalled\n</memory-context>"),
+        ];
+        assert_eq!(latest_user_task(&tail), None);
     }
 
     #[test]

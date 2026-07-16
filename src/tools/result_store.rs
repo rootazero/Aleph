@@ -73,31 +73,31 @@ static GLOBAL_STORE: OnceLock<Arc<ToolResultStore>> = OnceLock::new();
 /// are silently ignored so multiple boot paths cannot stomp each other.
 ///
 /// First-call side effect: spawns the periodic TTL sweeper
-/// ([`spawn_periodic_sweeper`]) rooted at the store's `tool_results/` parent
-/// directory. The sweeper opportunistically reclaims orphaned session dirs
-/// left behind by hard crashes (where `Drop` cleanup never ran) and stale
-/// dirs from previous runs of the process. Mirrors opencode's `Truncate`
-/// background cleanup loop.
+/// ([`spawn_periodic_sweeper`]) over the store's blob root. The sweeper
+/// opportunistically reclaims stale per-session dirs left behind by hard
+/// crashes (where `Drop` cleanup never ran) and by previous runs of the
+/// process, and clears the removed sessions' index rows. Mirrors opencode's
+/// `Truncate` background cleanup loop.
 ///
 /// The sweeper is intentionally fire-and-forget: it has no shutdown handle
 /// and is dropped only when the process exits. Test boot paths that want
-/// deterministic GC should call [`sweep_stale_tool_result_dirs`] directly.
+/// deterministic GC should call [`ToolResultStore::sweep_stale`] directly.
 pub fn set_global_tool_result_store(store: Arc<ToolResultStore>) {
     // `OnceLock::set` errors if a prior install won — in that case we
     // intentionally do nothing (the existing sweeper is fine).
     let installed_now = GLOBAL_STORE.set(store.clone()).is_ok();
     if installed_now {
-        // The sweeper walks the parent of the store root
-        // (`~/.aleph/data/tool_results/`) so roots left by earlier runs are
-        // visible. `parent()` is `None` only for fs roots — never the case
-        // for our `~/.aleph/data/tool_results/<root>` layout.
-        if let Some(parent) = store.inner.base_dir.parent().map(Path::to_path_buf) {
-            spawn_periodic_sweeper(
-                parent,
-                DEFAULT_TOOL_RESULT_RETENTION,
-                DEFAULT_TOOL_RESULT_SWEEP_INTERVAL,
-            );
-        }
+        // Sweep the blob root itself: per-session dirs are its *children*
+        // (`blob_dir()` = `base_dir/<sanitized session>`). Rooting the sweep
+        // one level up (at `tool_results/`) made the live root the sweep's
+        // only entry — session dirs were never GC'd individually, and once
+        // every file under the root aged past the TTL the sweep deleted the
+        // root itself, `index.db` included, out from under the open index.
+        spawn_periodic_sweeper(
+            store,
+            DEFAULT_TOOL_RESULT_RETENTION,
+            DEFAULT_TOOL_RESULT_SWEEP_INTERVAL,
+        );
     }
 }
 
@@ -326,7 +326,15 @@ impl ToolResultStore {
         content: &str,
     ) -> Option<IndexOutcome> {
         let idx = self.index()?;
-        match idx.index_text(&self.session, tool_call_id, tool_name, content) {
+        // Label the rows `{tool_name}:{short_id}` rather than the bare call
+        // id: a hit's `source` is surfaced to the model as "the tool call the
+        // section came from", and a naked UUID says nothing about which tool
+        // produced it. The id suffix keeps the label unique, so re-indexing
+        // the same call still replaces its own chunks (the `(source,
+        // chunk_no)` identity) instead of colliding with another call of the
+        // same tool.
+        let source = format!("{tool_name}:{}", short_call_id(tool_call_id));
+        match idx.index_text(&self.session, &source, tool_name, content) {
             Ok(out) => Some(out),
             Err(e) => {
                 tracing::warn!(
@@ -340,22 +348,54 @@ impl ToolResultStore {
         }
     }
 
-    /// BM25-search tool output previously offloaded **by this session**.
-    /// Returns up to `limit` hits, most relevant first. Empty when nothing is
-    /// indexed or the index is unavailable — never errors out to the caller.
-    pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
-        match self.index() {
-            Some(idx) => idx.search(&self.session, query, limit).unwrap_or_default(),
-            None => Vec::new(),
+    /// Session keys this handle reads under: its own key plus every earlier
+    /// epoch of the same base session key. A compaction-driven session split
+    /// (`epoch + 1`) seeds the child with the parent's `[Full output
+    /// persisted: …]` markers verbatim while the index rows stay keyed to the
+    /// parent epoch — without the widened read scope, `ctx_search` in the
+    /// child finds nothing for exactly the content its in-context markers
+    /// advertise. Epochs of one base key are one trust domain (same agent,
+    /// same conversation), so the widening cannot cross INV-ISO; writes and
+    /// purges stay exact-key. Non-epoch and unparseable keys degrade to the
+    /// single exact key.
+    fn read_scope_keys(&self) -> Vec<String> {
+        let mut keys = vec![self.session.clone()];
+        if let Some(parsed) = crate::routing::session_key::SessionKey::parse(&self.session) {
+            for epoch in 0..parsed.epoch() {
+                let key = parsed.with_epoch(epoch).to_key_string();
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
         }
+        keys
     }
 
-    /// Number of indexed sections across this session's offloaded outputs. `0`
-    /// when the index is empty or unavailable.
+    /// BM25-search tool output previously offloaded **by this session** —
+    /// including earlier epochs of the same base session key (see
+    /// [`Self::read_scope_keys`]). Returns up to `limit` hits, most relevant
+    /// first. Empty when nothing is indexed or the index is unavailable —
+    /// never errors out to the caller.
+    pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
+        let Some(idx) = self.index() else {
+            return Vec::new();
+        };
+        let keys = self.read_scope_keys();
+        let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        idx.search_sessions(&key_refs, query, limit)
+            .unwrap_or_default()
+    }
+
+    /// Number of indexed sections readable by this handle — its own session
+    /// plus earlier epochs of the same base key (see
+    /// [`Self::read_scope_keys`]). `0` when the index is empty or unavailable.
     pub fn indexed_sections(&self) -> usize {
-        self.index()
-            .and_then(|idx| idx.len(&self.session).ok())
-            .unwrap_or(0)
+        let Some(idx) = self.index() else {
+            return 0;
+        };
+        let keys = self.read_scope_keys();
+        let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        idx.len_sessions(&key_refs).unwrap_or(0)
     }
 
     /// Remove the shared base directory and all its contents — *every*
@@ -422,6 +462,56 @@ impl ToolResultStore {
             }
         }
     }
+
+    /// One-shot TTL GC pass over the **shared blob root**: remove per-session
+    /// dirs whose newest file is older than `cutoff`, then clear the removed
+    /// sessions' FTS index rows — so `ctx_search` cannot return hits whose
+    /// backing blobs are gone, and the index cannot grow without bound.
+    /// Returns the number of directories removed.
+    ///
+    /// Directory names are `sanitize_for_filename(session_key)`, which is not
+    /// invertible; rather than guess the key back from the dir name, the
+    /// distinct session ids are listed from the index and matched *forward*
+    /// through the same sanitizer. Process-wide by design (the TTL is not a
+    /// per-session policy). This is the synchronous core of
+    /// [`spawn_periodic_sweeper`], exposed so test and admin bootstraps can
+    /// trigger deterministic GC.
+    pub fn sweep_stale(&self, cutoff: Duration) -> usize {
+        let removed = sweep_stale_dirs_collect(&self.inner.base_dir, cutoff);
+        if removed.is_empty() {
+            return 0;
+        }
+        // Index-row GC for the sessions whose blob dirs just went away. The
+        // lazy open is fine here: a failure degrades to blob-only GC and the
+        // rows are retried on the next sweep.
+        if let Some(idx) = self.index() {
+            match idx.list_sessions() {
+                Ok(sessions) => {
+                    for session in sessions {
+                        if removed
+                            .iter()
+                            .any(|dir| *dir == sanitize_for_filename(&session))
+                        {
+                            if let Err(e) = idx.clear(&session) {
+                                tracing::warn!(
+                                    session = %session,
+                                    error = %e,
+                                    "tool_result sweep: failed to clear index rows for removed session"
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "tool_result sweep: failed to list indexed sessions"
+                    );
+                }
+            }
+        }
+        removed.len()
+    }
 }
 
 // =============================================================================
@@ -448,35 +538,45 @@ pub fn extract_persisted_ref(text: &str) -> Option<&str> {
 /// are logged at WARN and skipped so a single permission denial cannot stall
 /// the sweep.
 ///
-/// This is the synchronous core of [`spawn_periodic_sweeper`]. It is exposed
-/// publicly so test bootstraps and tools (e.g. an admin `aleph` CLI) can
-/// trigger a one-shot GC pass without owning the background task.
+/// This is the directory-only convenience wrapper around the sweep core; it
+/// does **not** clear index rows (it has no store handle). Production GC goes
+/// through [`ToolResultStore::sweep_stale`], which does both. Exposed publicly
+/// so test bootstraps and tools (e.g. an admin `aleph` CLI) can trigger a
+/// one-shot dir GC pass without owning the background task.
 pub fn sweep_stale_tool_result_dirs(root: &Path, cutoff: Duration) -> usize {
+    sweep_stale_dirs_collect(root, cutoff).len()
+}
+
+/// Core of the sweep: removes stale per-session dirs under `root` and returns
+/// the *names* of the directories removed, so [`ToolResultStore::sweep_stale`]
+/// can clear the matching sessions' index rows.
+fn sweep_stale_dirs_collect(root: &Path, cutoff: Duration) -> Vec<String> {
     let entries = match std::fs::read_dir(root) {
         Ok(it) => it,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return 0,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
         Err(e) => {
             tracing::warn!(
                 root = %root.display(),
                 error = %e,
                 "tool_result sweep: read_dir failed"
             );
-            return 0;
+            return Vec::new();
         }
     };
     let now = SystemTime::now();
-    let mut removed = 0usize;
+    let mut removed = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         // The store layout is one directory per session_id; ignore stray
-        // files at the root so we never delete user-placed artifacts.
+        // files at the root (`index.db` included) so we never delete
+        // user-placed artifacts or the live retrieval index.
         let is_dir = entry.file_type().is_ok_and(|ft| ft.is_dir());
         if !is_dir {
             continue;
         }
         if dir_is_stale(&path, now, cutoff) {
             match std::fs::remove_dir_all(&path) {
-                Ok(()) => removed += 1,
+                Ok(()) => removed.push(entry.file_name().to_string_lossy().into_owned()),
                 Err(e) => {
                     tracing::warn!(
                         dir = %path.display(),
@@ -514,19 +614,23 @@ fn dir_is_stale(dir: &Path, now: SystemTime, cutoff: Duration) -> bool {
 }
 
 /// Spawn a background Tokio task that periodically calls
-/// [`sweep_stale_tool_result_dirs`] on `root`.
+/// [`ToolResultStore::sweep_stale`] on the store's blob root.
 ///
-/// Fire-and-forget: the task is detached. Multiple calls with the same
-/// `root` will spawn multiple sweepers — callers should invoke this once
-/// per `root` (the [`set_global_tool_result_store`] entry point enforces
-/// that via `OnceLock`).
+/// Fire-and-forget: the task is detached (and keeps the store's shared inner
+/// alive). Multiple calls with the same store will spawn multiple sweepers —
+/// callers should invoke this once per store (the
+/// [`set_global_tool_result_store`] entry point enforces that via `OnceLock`).
 ///
 /// No-op if there is no running Tokio runtime — log at DEBUG and return so
 /// that non-async test bootstraps don't panic.
-pub fn spawn_periodic_sweeper(root: PathBuf, retention: Duration, interval: Duration) {
+pub fn spawn_periodic_sweeper(
+    store: Arc<ToolResultStore>,
+    retention: Duration,
+    interval: Duration,
+) {
     if tokio::runtime::Handle::try_current().is_err() {
         tracing::debug!(
-            root = %root.display(),
+            root = %store.inner.base_dir.display(),
             "tool_result sweeper not spawned: no Tokio runtime"
         );
         return;
@@ -539,24 +643,32 @@ pub fn spawn_periodic_sweeper(root: PathBuf, retention: Duration, interval: Dura
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            let root = root.clone();
+            let store = Arc::clone(&store);
             // Move the blocking fs walk off the async runtime.
-            let removed = match tokio::task::spawn_blocking(move || {
-                sweep_stale_tool_result_dirs(&root, retention)
-            })
-            .await
-            {
-                Ok(count) => count,
-                Err(e) => {
-                    tracing::warn!(error = %e, "tool_result sweeper task failed");
-                    0
-                }
-            };
+            let removed =
+                match tokio::task::spawn_blocking(move || store.sweep_stale(retention)).await {
+                    Ok(count) => count,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "tool_result sweeper task failed");
+                        0
+                    }
+                };
             if removed > 0 {
                 tracing::info!(removed, "tool_result sweeper reclaimed stale session dirs");
             }
         }
     });
+}
+
+/// Last 8 chars of a tool call id (char-safe). Call-id *prefixes* are constant
+/// (`toolu_…`, `call_…`), so the tail is the distinctive part — the head would
+/// collide across every call of the run.
+fn short_call_id(id: &str) -> &str {
+    let skip = id.chars().count().saturating_sub(8);
+    match id.char_indices().nth(skip) {
+        Some((byte_idx, _)) => &id[byte_idx..],
+        None => id,
+    }
 }
 
 /// Replace characters unsafe for filenames with underscores.
@@ -872,5 +984,149 @@ mod tests {
         assert!(!missing.exists());
         let removed = sweep_stale_tool_result_dirs(&missing, DEFAULT_TOOL_RESULT_RETENTION);
         assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn sweep_at_store_root_removes_stale_sessions_but_keeps_root_and_index() {
+        // The sweeper used to root at the *parent* of the blob root, so its
+        // only entry was the live root itself: once every file under it aged
+        // past the TTL, `remove_dir_all` deleted the root INCLUDING index.db
+        // out from under the open index connection. Rooted correctly, an
+        // all-stale sweep removes the per-session dirs and nothing else.
+        let (root_store, base) = test_store("sweep_correct_root");
+        let root = Arc::new(root_store);
+        let a = ToolResultStore::for_session(&root, "agent:main:sess-a");
+        let text = "stale payload ".repeat(200);
+        assert!(a.persist_if_large("call_a", "bash", &text, 1).is_some());
+        let _ = a.index_output("call_a", "bash", &text);
+
+        let sess_dir = base.join(sanitize_for_filename("agent:main:sess-a"));
+        assert!(sess_dir.exists());
+        // 14 days old, retention 7 days → stale.
+        touch_old(&sess_dir, 14 * 24 * 60 * 60);
+
+        let removed = root.sweep_stale(DEFAULT_TOOL_RESULT_RETENTION);
+        assert_eq!(removed, 1, "the stale session dir should be removed");
+        assert!(!sess_dir.exists());
+        assert!(base.exists(), "the live blob root must survive an all-stale sweep");
+        assert!(
+            base.join(INDEX_DB_NAME).exists(),
+            "index.db must survive the sweep"
+        );
+        // The index connection is still usable after the sweep.
+        let fresh = ToolResultStore::for_session(&root, "agent:main:sess-fresh");
+        let fresh_text = "freshterm payload ".repeat(200);
+        let _ = fresh.index_output("call_f", "bash", &fresh_text);
+        assert!(
+            !fresh.search("freshterm", 5).is_empty(),
+            "store must remain functional after the sweep"
+        );
+    }
+
+    #[test]
+    fn sweep_clears_index_rows_of_removed_sessions_only() {
+        // Index rows used to be keyed forever: sweeping a session's blobs left
+        // its rows behind, so ctx_search returned hits whose backing blobs
+        // were gone and the index grew without bound.
+        let (root_store, base) = test_store("sweep_index_gc");
+        let root = Arc::new(root_store);
+        let a = ToolResultStore::for_session(&root, "agent:main:sess-a");
+        let b = ToolResultStore::for_session(&root, "agent:main:sess-b");
+        let a_text = "alphaonly payload ".repeat(200);
+        let b_text = "betaonly payload ".repeat(200);
+        assert!(a.persist_if_large("call_a", "bash", &a_text, 1).is_some());
+        let _ = a.index_output("call_a", "bash", &a_text);
+        assert!(b.persist_if_large("call_b", "bash", &b_text, 1).is_some());
+        let _ = b.index_output("call_b", "bash", &b_text);
+        assert!(a.indexed_sections() > 0);
+
+        // Only A's dir goes stale; B stays fresh.
+        touch_old(
+            &base.join(sanitize_for_filename("agent:main:sess-a")),
+            14 * 24 * 60 * 60,
+        );
+
+        let removed = root.sweep_stale(DEFAULT_TOOL_RESULT_RETENTION);
+        assert_eq!(removed, 1);
+        assert_eq!(
+            a.indexed_sections(),
+            0,
+            "the removed session's index rows must be GC'd with its blobs"
+        );
+        assert!(
+            a.search("alphaonly", 5).is_empty(),
+            "ctx_search must not surface hits whose backing blobs are gone"
+        );
+        assert!(b.indexed_sections() > 0, "a live session's rows must survive");
+        assert!(!b.search("betaonly", 5).is_empty());
+    }
+
+    // -------------------------------------------------------------------
+    // Epoch-aware retrieval (session split) + hit source labeling
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn child_epoch_search_finds_parent_epoch_rows() {
+        // A compaction-driven session split moves the run to epoch+1 but seeds
+        // the child with the parent's `[Full output persisted: …]` markers
+        // verbatim. The child's read scope must therefore cover earlier epochs
+        // of the same base key, or ctx_search finds nothing for exactly the
+        // content the inherited markers advertise.
+        let (root, _base) = test_store("epoch_aware_search");
+        let root = Arc::new(root);
+        let parent_key = crate::routing::session_key::SessionKey::Main {
+            agent_id: "agent-a".to_string(),
+            main_key: "main".to_string(),
+            epoch: 0,
+        };
+        let child_key = parent_key.with_next_epoch();
+        let parent = ToolResultStore::for_session(&root, parent_key.to_key_string());
+        let child = ToolResultStore::for_session(&root, child_key.to_key_string());
+
+        let text = "epochblob payload ".repeat(200);
+        assert!(parent.persist_if_large("call_p", "bash", &text, 1).is_some());
+        let _ = parent.index_output("call_p", "bash", &text);
+
+        assert!(
+            !child.search("epochblob", 5).is_empty(),
+            "child epoch must retrieve rows indexed under the parent epoch"
+        );
+        assert!(
+            child.indexed_sections() > 0,
+            "inherited rows must count as indexed for the child"
+        );
+        // A different base key still sees nothing (INV-ISO across agents).
+        let other = ToolResultStore::for_session(&root, "agent:other:main:s1");
+        assert!(other.search("epochblob", 5).is_empty());
+    }
+
+    #[test]
+    fn search_hit_source_names_the_originating_tool() {
+        // The hit `source` is surfaced to the model as "the tool call the
+        // section came from" — a bare call-id UUID says nothing. It must lead
+        // with the tool name and keep an id suffix for reindex identity.
+        let (store, _base) = test_store("source_label");
+        let text = "labelcheck payload ".repeat(200);
+        let _ = store.index_output("toolu_01ABCDEFGH", "web_fetch", &text);
+        let hits = store.search("labelcheck", 3);
+        assert!(!hits.is_empty());
+        assert!(
+            hits[0].source.starts_with("web_fetch:"),
+            "hit source must lead with the tool name, got {}",
+            hits[0].source
+        );
+        assert!(
+            hits[0].source.ends_with("ABCDEFGH"),
+            "hit source must keep an id suffix for uniqueness, got {}",
+            hits[0].source
+        );
+        // Re-indexing the same call replaces its chunks (same composed source).
+        let before = store.indexed_sections();
+        let _ = store.index_output("toolu_01ABCDEFGH", "web_fetch", &text);
+        assert_eq!(
+            store.indexed_sections(),
+            before,
+            "re-indexing the same call must replace, not append"
+        );
     }
 }

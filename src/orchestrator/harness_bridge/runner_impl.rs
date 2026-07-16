@@ -376,7 +376,19 @@ impl HarnessRunner for AgentHarnessRunner {
             .as_ref()
         {
             Some(cfg) => {
-                let budget = Arc::new(Mutex::new(ContextBudget::new(cfg)));
+                let mut budget_inner = ContextBudget::new(cfg);
+                // Seed ONLY the tokenizer-calibration factor from the previous
+                // run on the same model (see CALIBRATION_CARRYOVER below): the
+                // fresh per-run budget keeps breaker / diminishing counters
+                // isolated, while the FIRST before_turn — carrying the full
+                // accumulated history, where heuristic drift is largest — no
+                // longer starts uncalibrated.
+                if let Some(seed) =
+                    calibration_seed_for_model(&CALIBRATION_CARRYOVER, &gauge_model)
+                {
+                    budget_inner.seed_calibration(seed);
+                }
+                let budget = Arc::new(Mutex::new(budget_inner));
                 let mut compactor_inner = ContextCompactor::new(
                     llm.clone(),
                     CompactorConfig {
@@ -386,10 +398,20 @@ impl HarnessRunner for AgentHarnessRunner {
                 );
                 // Wire the zero-API-cost session-summary reuse path: the
                 // memory backend holding the d0/d1/d2 facts plus the owning
-                // agent id they were written under.
+                // agent id they were written under. The writes resolve the
+                // storage id via `scoped_or_base` (post_turn_compress /
+                // prepare_history), so the read side must resolve identically —
+                // the bare agent id matches nothing when project scoping is on.
+                // `current_project_root()` is task-local and re-established
+                // inside this run's spawned task, so build-time resolution here
+                // sees the same root the writes see at call time.
                 if let Some(backend) = self.memory_backend.clone() {
-                    compactor_inner =
-                        compactor_inner.with_summary_reuse(backend, spec.agent.to_string());
+                    let reuse_agent_id = crate::memory::project_scope::scoped_or_base(
+                        &spec.agent,
+                        self.memory_project_scoped,
+                        crate::projects::current_project_root().as_deref(),
+                    );
+                    compactor_inner = compactor_inner.with_summary_reuse(backend, reuse_agent_id);
                 }
                 // Cheap-tier summarization (Reasonix parity).
                 // When the bridge was built with `with_cheap_provider(...)`
@@ -438,6 +460,9 @@ impl HarnessRunner for AgentHarnessRunner {
             }
             None => (None, None, None),
         };
+        // Retained past the HarnessDeps move so the post-run read-back below
+        // can observe the calibration factor this run's budget converged to.
+        let budget_for_carryover = context_budget.clone();
         // Per-model loop-watchdog thresholds. Resolve from the active
         // provider's behavior family (same key the prompt layer uses).
         // Must be resolved before the HarnessDeps literal (which moves `llm`).
@@ -634,6 +659,17 @@ impl HarnessRunner for AgentHarnessRunner {
         // Flush the trace sink regardless of success or error (no-op when None).
         if let Some(sink) = trace_sink.as_ref() {
             sink.flush();
+        }
+
+        // Write the learned calibration factor back to the cross-run carry-over
+        // slot, keyed by the same `gauge_model` the seed read used. Runs on
+        // success, error and cancel alike — a factor observed mid-run stays
+        // valid regardless of how the run ended. No observation this run → the
+        // slot is left untouched (an older same-model factor stays usable).
+        if let Some(budget) = budget_for_carryover.as_ref() {
+            if let Some(factor) = budget.lock().await.calibration() {
+                store_calibration_carryover(&CALIBRATION_CARRYOVER, &gauge_model, factor);
+            }
         }
 
         // Session-split adoption: if the harness performed a compaction-driven
@@ -933,5 +969,111 @@ impl HarnessRunner for AgentHarnessRunner {
             Some(cfg) => est::cap_by_compaction(raw, cfg.warning_threshold),
             None => raw,
         })
+    }
+}
+
+/// Cross-run tokenizer-calibration carry-over slot, keyed by serving model id.
+///
+/// H2 builds a FRESH `ContextBudget` per run so circuit-breaker /
+/// diminishing-returns / split counters can never leak across runs — but that
+/// also discarded the EWMA calibration factor, leaving the first `before_turn`
+/// of every run (the one carrying the full accumulated history, where
+/// heuristic drift is largest) permanently uncalibrated. Only the calibration
+/// factor carries over; it is keyed by model id so a factor learned under one
+/// tokenizer is never applied to another — a model switch simply misses the
+/// slot and the new run starts uncalibrated, exactly as before. Process-wide
+/// because the production bridge is a boot-time singleton; a stale factor
+/// self-corrects anyway (the EWMA re-converges within a few observed turns).
+/// Never persisted to disk.
+static CALIBRATION_CARRYOVER: crate::sync_primitives::Mutex<Option<(String, f64)>> =
+    crate::sync_primitives::Mutex::new(None);
+
+/// Read the carried-over calibration factor for `model`, if the slot holds one
+/// learned under the SAME model id. Slot-parametric so tests can exercise the
+/// model-switch invalidation without touching the process-global.
+fn calibration_seed_for_model(
+    slot: &crate::sync_primitives::Mutex<Option<(String, f64)>>,
+    model: &str,
+) -> Option<f64> {
+    let guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+    match guard.as_ref() {
+        Some((m, f)) if m == model => Some(*f),
+        _ => None,
+    }
+}
+
+/// Store the factor a completed run converged to, keyed by `model`. Overwrites
+/// whatever model held the slot before (single-slot: the next run on THIS
+/// model seeds from it; any other model misses and starts uncalibrated).
+fn store_calibration_carryover(
+    slot: &crate::sync_primitives::Mutex<Option<(String, f64)>>,
+    model: &str,
+    factor: f64,
+) {
+    let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some((model.to_string(), factor));
+}
+
+#[cfg(test)]
+mod calibration_carryover_tests {
+    use super::*;
+    use crate::context::budget::{ContextBudgetConfig, LoopDirective};
+    use crate::providers::message::UnifiedMessage;
+
+    fn slot() -> crate::sync_primitives::Mutex<Option<(String, f64)>> {
+        crate::sync_primitives::Mutex::new(None)
+    }
+
+    fn budget_config() -> ContextBudgetConfig {
+        ContextBudgetConfig {
+            token_budget: 1000,
+            warning_threshold: 0.70,
+            critical_threshold: 0.95,
+            token_estimate_ratio: 1.0,
+            fresh_tail_count: 6,
+            circuit_breaker_max: 3,
+            diminishing_window: 4,
+            diminishing_threshold: 500,
+            max_splits: 3,
+        }
+    }
+
+    /// Regression (CTX-11): the seed read is keyed by model id — a factor
+    /// learned under one tokenizer must never apply to another, and a run on
+    /// a different model invalidates the slot on write-back.
+    #[test]
+    fn carryover_slot_is_keyed_by_model_id() {
+        let slot = slot();
+        assert_eq!(calibration_seed_for_model(&slot, "model-a"), None);
+        store_calibration_carryover(&slot, "model-a", 1.4);
+        assert_eq!(calibration_seed_for_model(&slot, "model-a"), Some(1.4));
+        // Different model id → miss (invalidate-on-model-switch).
+        assert_eq!(calibration_seed_for_model(&slot, "model-b"), None);
+        // A run on another model overwrites the slot; the old model now misses.
+        store_calibration_carryover(&slot, "model-b", 0.8);
+        assert_eq!(calibration_seed_for_model(&slot, "model-a"), None);
+        assert_eq!(calibration_seed_for_model(&slot, "model-b"), Some(0.8));
+    }
+
+    /// Regression (CTX-11): a seeded budget applies the carried factor to its
+    /// FIRST `before_turn`. 600 chars @ ratio 1.0 = 60% raw — under the 70%
+    /// warning line, so an unseeded fresh budget lets the turn through — but
+    /// the previous run learned the estimate runs 1.5× low, so the seeded
+    /// first turn must already see ~90% and request compaction instead of
+    /// running a full turn uncalibrated.
+    #[test]
+    fn seeded_budget_first_turn_is_calibrated() {
+        let config = budget_config();
+        let msgs = vec![UnifiedMessage::user("x".repeat(600))];
+
+        let mut fresh = ContextBudget::new(&config);
+        assert_eq!(fresh.before_turn(&msgs, "", 0), LoopDirective::Continue);
+
+        let mut seeded = ContextBudget::new(&config);
+        seeded.seed_calibration(1.5);
+        assert_eq!(
+            seeded.before_turn(&msgs, "", 0),
+            LoopDirective::CompactAndContinue
+        );
     }
 }
