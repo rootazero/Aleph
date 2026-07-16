@@ -201,6 +201,7 @@ mod tests {
                 rationale: "used in 3 notes".into(),
             }],
         };
+        // rust-doctor-disable-next-line unwrap-in-production
         let j = serde_json::to_string(&plan).unwrap();
         let back: IngestPlan = serde_json::from_str(&j).unwrap();
         assert_eq!(back.ops.len(), ops.len());

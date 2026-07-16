@@ -737,8 +737,10 @@ impl HarnessRunner for AgentHarnessRunner {
                     // that may put output in the `thinking` field on a
                     // text-empty assistant turn) keep the explicit fallback.
                     final_text = if content.text.is_empty() {
+                        // rust-doctor-disable-next-line excessive-clone
                         content.thinking.clone().unwrap_or_default()
                     } else {
+                        // rust-doctor-disable-next-line excessive-clone
                         content.text.clone()
                     };
                     iterations = iterations.saturating_add(1);

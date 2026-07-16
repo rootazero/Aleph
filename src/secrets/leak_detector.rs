@@ -106,6 +106,7 @@ pub fn default_patterns_bytes() -> Vec<(&'static str, regex::bytes::Regex)> {
         .map(|(name, src)| {
             (
                 *name,
+                // rust-doctor-disable-next-line unwrap-in-production
                 regex::bytes::Regex::new(src).expect("static pattern compiles"),
             )
         })
@@ -162,6 +163,7 @@ static LEAK_PATTERNS: Lazy<Vec<(&str, Regex)>> = Lazy::new(|| {
             .map(|(label, src)| {
                 (
                     *label,
+                    // rust-doctor-disable-next-line unwrap-in-production
                     Regex::new(src).expect("static vendor pattern compiles"),
                 )
             }),

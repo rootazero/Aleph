@@ -756,7 +756,7 @@ mod tests {
 
     async fn build_decay_ctx() -> (DreamContext, Arc<SqliteMemoryBackend>) {
         let temp = std::env::temp_dir().join(format!("aleph_decay_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&temp).unwrap();
+        tokio::fs::create_dir_all(&temp).await.unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
         let provider: std::sync::Arc<dyn crate::providers::AiProvider> =

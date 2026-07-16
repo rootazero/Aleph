@@ -150,8 +150,6 @@ mod tests {
                     .chars()
                     .rev()
                     .take(40)
-                    .collect::<Vec<_>>()
-                    .into_iter()
                     .rev()
                     .collect();
                 let next_start: String = chunks[i + 1].chars().take(40).collect();

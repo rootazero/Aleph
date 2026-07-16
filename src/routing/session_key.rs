@@ -175,6 +175,7 @@ impl SessionKey {
     ) -> Self {
         let task_type = normalize_agent_id(&task_type.into());
         if matches!(task_type.as_str(), "peer" | "dm" | "ephemeral") {
+            // rust-doctor-disable-next-line panic-in-library
             panic!("reserved task_type `{task_type}` would produce an ambiguous session key");
         }
         Self::Task {

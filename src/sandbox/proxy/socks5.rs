@@ -162,7 +162,9 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
     // outbound binding when the client doesn't need it for FTP-style flows).
     write_reply(&mut wr, REP_SUCCEEDED).await?;
 
-    let mut inbound = rd.reunite(wr).expect("same socket halves");
+    let mut inbound = rd
+        .reunite(wr)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{e}")))?;
     let mut upstream = upstream;
     let _ = tokio::io::copy_bidirectional(&mut inbound, &mut upstream).await;
     Ok(())

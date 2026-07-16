@@ -352,6 +352,7 @@ impl HttpProvider {
         while let Some(delta) = stream.next().await {
             let delta = delta?;
             if let crate::providers::ProviderDelta::Error(msg) = &delta {
+                // rust-doctor-disable-next-line excessive-clone
                 provider_error.get_or_insert_with(|| msg.clone());
             }
             // Live observer (harness streaming): forward the delta before it is

@@ -5,8 +5,10 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 /// Regex matching `[[target]]` and `[[target|alias]]` wikilinks.
-static WIKILINK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[\[([^\]\|]+)(?:\|([^\]]*))?\]\]").unwrap());
+static WIKILINK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    // rust-doctor-disable-next-line unwrap-in-production
+    Regex::new(r"\[\[([^\]\|]+)(?:\|([^\]]*))?\]\]").unwrap()
+});
 
 /// Extract all wikilink targets from `text`.
 ///

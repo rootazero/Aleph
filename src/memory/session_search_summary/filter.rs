@@ -157,7 +157,7 @@ mod integration_tests {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("mem.db");
         let notes_dir = tmp.path().join("notes");
-        std::fs::create_dir_all(&notes_dir).unwrap();
+        tokio::fs::create_dir_all(&notes_dir).await.unwrap();
 
         let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::new(&db_path).unwrap());
 

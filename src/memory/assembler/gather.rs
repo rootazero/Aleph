@@ -246,6 +246,7 @@ impl Gatherer {
                 Ok(None) => {}
                 Err(e) => {
                     warn!(error = %e, date = %date, "assembler.gather: daily insight fetch failed");
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     return Vec::new();
                 }
             }

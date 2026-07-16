@@ -62,6 +62,7 @@ pub async fn ensure_capability(
 
 const MAX_BOOTSTRAP_DEPTH: usize = 10;
 
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 async fn ensure_capability_recursive(
     capability: &str,
     ledger: &Arc<RwLock<CapabilityLedger>>,
@@ -115,10 +116,10 @@ async fn ensure_capability_recursive(
         guard.update_status(capability, CapabilityStatus::Probing);
     }
 
-    let probe_result = probe::probe(capability);
+    let mut probe_result = probe::probe(capability);
 
     if probe_result.found {
-        let bin_path = match probe_result.bin_path.clone() {
+        let bin_path = match probe_result.bin_path.take() {
             Some(path) => path,
             None => {
                 return Err(AlephError::other(format!(

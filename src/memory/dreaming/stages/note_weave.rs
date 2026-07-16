@@ -470,6 +470,7 @@ async fn semantic_orphan_links(ctx: &DreamContext, orphans: &[String]) -> Vec<Li
                     from: orphan.clone(),
                     to: path,
                     relation: "semantic".to_string(),
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     via_keyword: String::new(),
                 });
             }
@@ -641,7 +642,7 @@ mod tests {
         // it (db_path.is_dir() branch) — otherwise `temp` itself becomes the DB
         // file and append_to_note can't mkdir `temp/<agent>/<cat>/`.
         let temp = std::env::temp_dir().join(format!("aleph_weave_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&temp).unwrap();
+        tokio::fs::create_dir_all(&temp).await.unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
         let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
@@ -726,7 +727,7 @@ mod tests {
             {"path":"learning/b","keywords":["shared-entity","beta"]}
         ]}"#;
         let temp = std::env::temp_dir().join(format!("aleph_weave_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&temp).unwrap();
+        tokio::fs::create_dir_all(&temp).await.unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
         let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
@@ -805,7 +806,7 @@ mod tests {
         // A single orphan: even with extracted keywords there is no second note
         // to pair against → pair_by_overlap yields nothing → zero woven.
         let temp = std::env::temp_dir().join(format!("aleph_weave_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&temp).unwrap();
+        tokio::fs::create_dir_all(&temp).await.unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
         let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
@@ -1017,7 +1018,7 @@ mod tests {
             {"path":"learning/beta","keywords":["beta-only"]}
         ]}"#;
         let temp = std::env::temp_dir().join(format!("aleph_weave_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&temp).unwrap();
+        tokio::fs::create_dir_all(&temp).await.unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
         let provider: std::sync::Arc<dyn crate::providers::AiProvider> =

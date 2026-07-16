@@ -229,6 +229,7 @@ pub fn extract_system_prompt(request: &SamplingRequest) -> Option<String> {
     for msg in &request.messages {
         if matches!(msg.role, PromptRole::System) {
             if let SamplingContent::Text { ref text } = msg.content {
+                // rust-doctor-disable-next-line excessive-clone
                 return Some(text.clone());
             }
         }

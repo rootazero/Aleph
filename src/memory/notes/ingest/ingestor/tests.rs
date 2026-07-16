@@ -88,6 +88,7 @@ async fn plan_parses_valid_json() {
     assert_eq!(plan.ops.len(), 1);
     match &plan.ops[0] {
         PageOp::Create { note_path, .. } => assert_eq!(note_path, "learning/tokio"),
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!(),
     }
 }
@@ -200,6 +201,7 @@ async fn plan_keeps_seed_create_when_all_link_tokens_hallucinated() {
             assert_eq!(note_path, "system/video-config");
             assert!(links.is_empty(), "hallucinated link token must be stripped");
         }
+        // rust-doctor-disable-next-line panic-in-library
         other => panic!("expected surviving Create, got {other:?}"),
     }
 }
@@ -249,6 +251,7 @@ async fn plan_resolves_reference_token_to_canonical_path() {
     assert_eq!(plan.ops.len(), 1);
     match &plan.ops[0] {
         PageOp::Append { note_path, .. } => assert_eq!(note_path, "preference/coding-style"),
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!("expected append"),
     }
 }
@@ -521,7 +524,7 @@ async fn ingest_batch_refreshes_index_md_at_tail() {
         index_md_path.exists(),
         "index.md must exist after ingest_batch"
     );
-    let body = std::fs::read_to_string(&index_md_path).unwrap();
+    let body = tokio::fs::read_to_string(&index_md_path).await.unwrap();
     assert!(
         body.contains("preference"),
         "index.md must list the touched 'preference' category; got:\n{body}"
@@ -827,6 +830,7 @@ async fn dedup_redirects_near_duplicate_create_to_append() {
             assert!(new_facts.iter().any(|f| f.contains("event loop")));
             assert_eq!(new_links, &vec!["learning/rust".to_string()]);
         }
+        // rust-doctor-disable-next-line panic-in-library
         other => panic!("expected Append redirect, got {other:?}"),
     }
 }
@@ -1100,6 +1104,7 @@ async fn repairs_linkless_create_with_valid_token() {
         .await;
     match &ops[0] {
         PageOp::Create { links, .. } => assert_eq!(links, &vec!["learning/b".to_string()]),
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!("expected create"),
     }
 }
@@ -1114,6 +1119,7 @@ async fn out_of_range_token_dropped_and_op_passes_through() {
         .await;
     match &ops[0] {
         PageOp::Create { links, .. } => assert!(links.is_empty()),
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!("expected create"),
     }
 }
@@ -1127,6 +1133,7 @@ async fn explicit_isolation_is_accepted() {
         .await;
     match &ops[0] {
         PageOp::Create { links, .. } => assert!(links.is_empty()),
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!("expected create"),
     }
 }
@@ -1142,6 +1149,7 @@ async fn empty_related_skips_repair_entirely() {
         .await;
     match &ops[0] {
         PageOp::Create { links, .. } => assert!(links.is_empty()),
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!("expected create"),
     }
 }
@@ -1156,6 +1164,7 @@ async fn malformed_llm_response_passes_through() {
     assert_eq!(ops.len(), 1);
     match &ops[0] {
         PageOp::Create { links, .. } => assert!(links.is_empty()),
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!("expected create"),
     }
 }
@@ -1257,6 +1266,7 @@ async fn enforce_link_contract_links_via_keywords_when_related_empty() {
                 "keyword overlap must link the create even with empty related; got {links:?}"
             );
         }
+        // rust-doctor-disable-next-line panic-in-library
         other => panic!("expected create, got {other:?}"),
     }
 }
@@ -1277,6 +1287,7 @@ async fn already_linked_create_not_touched() {
         PageOp::Create { links, .. } => {
             assert_eq!(links, &vec!["learning/existing".to_string()])
         }
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!("expected create"),
     }
 }

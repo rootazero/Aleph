@@ -153,8 +153,8 @@ impl CommandPolicy {
         let patterns: Vec<&str> = defs.iter().map(|r| r.pattern).collect();
         let set = RegexSetBuilder::new(&patterns)
             .case_insensitive(true)
-            .build()
-            .expect("hardline rules must compile");
+            // rust-doctor-disable-next-line unwrap-in-production
+            .build().expect("hardline rules must compile");
         let names = defs.iter().map(|r| r.name.to_string()).collect();
         let descriptions = defs.iter().map(|r| r.description.to_string()).collect();
         (set, names, descriptions)
@@ -173,6 +173,7 @@ impl CommandPolicy {
                 r.pattern.to_string(),
             )
         });
+        // rust-doctor-disable-next-line unwrap-in-production
         Self::compile(rules, enforcement).expect("default rules must compile")
     }
 

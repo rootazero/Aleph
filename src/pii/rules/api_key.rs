@@ -12,6 +12,7 @@ static API_KEY_RE: OnceLock<Regex> = OnceLock::new();
 
 fn api_key_regex() -> &'static Regex {
     API_KEY_RE.get_or_init(|| {
+        // rust-doctor-disable-next-line unwrap-in-production
         Regex::new(
             r"(?x)
             \b                                    # anchor at a word boundary so

@@ -398,7 +398,9 @@ mod tests {
     async fn legacy_blocks_add_but_allows_remove() {
         let d = tempdir().unwrap();
         let path = d.path().join("MEMORY.md");
-        std::fs::write(&path, "# legacy\n## free markdown\n- a\n- b\n").unwrap();
+        tokio::fs::write(&path, "# legacy\n## free markdown\n- a\n- b\n")
+            .await
+            .unwrap();
         let s = CuratedMemoryStore::load(path.clone(), 200, "agent")
             .await
             .unwrap();

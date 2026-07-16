@@ -98,8 +98,10 @@ impl EventProjector {
                         layer: MemoryLayer::default(),
                         category,
                         fact_source: *source,
+                        // rust-doctor-disable-next-line unnecessary-allocation
                         content_hash: String::new(), // recomputed at projection time
                         parent_path,
+                        // rust-doctor-disable-next-line unnecessary-allocation
                         embedding_model: String::new(), // set at projection time
                         persona_id: None,
                         access_count: 0,
@@ -132,6 +134,7 @@ impl EventProjector {
                 MemoryEvent::NoteContentUpdated { new_content, .. } => {
                     if let Some(ref mut f) = fact {
                         f.content = new_content.clone();
+                        // rust-doctor-disable-next-line unnecessary-allocation
                         f.content_hash = String::new(); // recomputed at projection time
                         f.updated_at = envelope.timestamp;
                     }

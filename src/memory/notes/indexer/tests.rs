@@ -364,6 +364,7 @@ async fn full_rebuild_parallel_matches_serial_results() {
                 title: format!("n-{cat}-{i}"),
                 category: (*cat).into(),
                 facts: vec![format!("fact {i}")],
+                // rust-doctor-disable-next-line unnecessary-allocation
                 content_hash: String::new(),
                 ..Default::default()
             };

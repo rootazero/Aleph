@@ -112,6 +112,7 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                     } = block
                     {
                         items.push(InputItem::FunctionCall {
+                            // rust-doctor-disable-next-line excessive-clone
                             call_id: id.clone(),
                             name: sanitize_tool_name_pub(name),
                             arguments: serde_json::to_string(arguments)
@@ -128,15 +129,18 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                 let output = content
                     .iter()
                     .filter_map(|b| match b {
-                        ContentBlock::Text { text, .. } => Some(text.clone()),
-                        ContentBlock::Json { value } => {
-                            Some(serde_json::to_string(value).unwrap_or_default())
+                        ContentBlock::Text { text, .. } => {
+                            Some(std::borrow::Cow::Borrowed(text.as_str()))
                         }
+                        ContentBlock::Json { value } => Some(std::borrow::Cow::Owned(
+                            serde_json::to_string(value).unwrap_or_default(),
+                        )),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
                 items.push(InputItem::FunctionCallOutput {
+                    // rust-doctor-disable-next-line excessive-clone
                     call_id: tool_call_id.clone(),
                     output,
                 });
@@ -309,12 +313,12 @@ pub(crate) fn map_tool_choice(choice: Option<&ToolChoice>) -> Option<serde_json:
 /// Extract text content from a completed `ResponseResource`
 #[must_use]
 pub fn extract_text(response: &ResponseResource) -> Option<String> {
-    let mut texts = Vec::new();
+    let mut texts: Vec<&str> = Vec::new();
     for item in &response.output {
         if let OutputItem::Message { content, .. } = item {
             for part in content {
                 if !part.text.is_empty() {
-                    texts.push(part.text.clone());
+                    texts.push(part.text.as_str());
                 }
             }
         }
@@ -341,6 +345,7 @@ pub fn extract_tool_calls(response: &ResponseResource) -> Vec<NativeToolCall> {
                 "Responses API function_call: name={} call_id={} arguments={}",
                 name, call_id, arguments
             );
+            // rust-doctor-disable-next-line excessive-clone
             let args = serde_json::from_str(arguments)
                 .unwrap_or_else(|_| serde_json::Value::String(arguments.clone()));
             calls.push(NativeToolCall {

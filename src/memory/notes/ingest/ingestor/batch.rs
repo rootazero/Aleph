@@ -608,7 +608,9 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                             union.push(NoteForExtraction {
                                 path: hit.path.clone(),
                                 title: hit.filename,
+                                // rust-doctor-disable-next-line unnecessary-allocation
                                 summary: String::new(),
+                                // rust-doctor-disable-next-line unnecessary-allocation
                                 facts: Vec::new(),
                             });
                         }

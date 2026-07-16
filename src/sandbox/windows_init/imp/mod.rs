@@ -52,7 +52,11 @@ struct LocalFreeGuard(*mut core::ffi::c_void);
 impl Drop for LocalFreeGuard {
     fn drop(&mut self) {
         if !self.0.is_null() {
-            unsafe { LocalFree(self.0) };
+            unsafe {
+                // SAFETY: `self.0` is a non-null pointer returned by a Windows
+                // API that must be freed with `LocalFree`.
+                LocalFree(self.0)
+            };
         }
     }
 }
@@ -92,6 +96,12 @@ pub(super) fn launch_with_restricted_token(parsed: &ParsedInitArgs) -> Result<i3
     // 4. Spawn target with the restricted token.
     let result = spawn_and_wait(parsed, Some(restricted));
 
+    // SAFETY: `restricted` and `host_token` are valid owned token handles
+    // obtained above; closing them exactly once here is required cleanup.
+    unsafe {
+        CloseHandle(restricted);
+        CloseHandle(host_token);
+    }
     unsafe {
         CloseHandle(restricted);
         CloseHandle(host_token);

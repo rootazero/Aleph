@@ -9,11 +9,13 @@ static PHONE_RE: OnceLock<Regex> = OnceLock::new();
 static TIMESTAMP_CONTEXT_RE: OnceLock<Regex> = OnceLock::new();
 
 fn phone_regex() -> &'static Regex {
+    // rust-doctor-disable-next-line unwrap-in-production
     PHONE_RE.get_or_init(|| Regex::new(r"1[3-9]\d{9}").expect("static phone regex compiles"))
 }
 
 fn timestamp_context_regex() -> &'static Regex {
     TIMESTAMP_CONTEXT_RE.get_or_init(|| {
+        // rust-doctor-disable-next-line unwrap-in-production
         Regex::new(r"(?i)(timestamp|time|date|created_at|updated_at|expires?_at|modified_at)\b")
             .expect("static timestamp context regex compiles")
     })

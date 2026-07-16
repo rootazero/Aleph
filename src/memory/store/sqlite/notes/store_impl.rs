@@ -503,6 +503,8 @@ impl NoteStore for SqliteMemoryBackend {
         if let Some(rowid) = vec_rowid {
             for table in vec::ALL_NOTES_VEC_TABLES {
                 tx.execute(
+                    // rust-doctor-disable-next-line sql-injection-risk
+                    // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
                     &format!("DELETE FROM {table} WHERE rowid = ?1"),
                     params![rowid],
                 )
@@ -1128,6 +1130,8 @@ impl NoteStore for SqliteMemoryBackend {
         for rowid in &orphan_rowids {
             for table in vec::ALL_NOTES_VEC_TABLES {
                 tx.execute(
+                    // rust-doctor-disable-next-line sql-injection-risk
+                    // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
                     &format!("DELETE FROM {table} WHERE rowid = ?1"),
                     params![rowid],
                 )
@@ -1175,6 +1179,8 @@ impl NoteStore for SqliteMemoryBackend {
         // table. Mirrors the sweep in `remove_note_index`.
         for t in vec::ALL_NOTES_VEC_TABLES {
             conn.execute(
+                // rust-doctor-disable-next-line sql-injection-risk
+                // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
                 &format!("DELETE FROM {t} WHERE rowid = ?1"),
                 params![rowid],
             )
@@ -1184,6 +1190,8 @@ impl NoteStore for SqliteMemoryBackend {
         // Insert new embedding
         let blob = vec::embedding_to_blob(embedding);
         conn.execute(
+            // rust-doctor-disable-next-line sql-injection-risk
+            // Table name is validated by `vec::notes_vec_table_for_dim` against a static allowlist.
             &format!("INSERT INTO {table}(rowid, embedding) VALUES (?1, ?2)"),
             params![rowid, blob],
         )
@@ -1611,6 +1619,7 @@ impl NoteStore for SqliteMemoryBackend {
                     Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
                 })
                 .map_err(|e| AlephError::config(format!("load_graph_snapshot nodes query: {e}")))?;
+            // rust-doctor-disable-next-line unnecessary-allocation
             let mut out = Vec::new();
             for row in rows {
                 out.push(row.map_err(|e| {

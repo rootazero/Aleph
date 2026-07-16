@@ -122,6 +122,7 @@ impl AgentHarnessRunner {
             let capped = truncate_chars(&content, budget);
             total += capped.chars().count();
             out.push(ExtraPromptFile {
+                // rust-doctor-disable-next-line excessive-clone
                 name: raw.clone(),
                 content: capped,
             });

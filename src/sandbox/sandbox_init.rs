@@ -453,9 +453,11 @@ fn parse_init_args(args: &[String]) -> Result<ParsedInitArgs, String> {
 
 #[cfg(target_os = "linux")]
 fn set_no_new_privs() -> Result<(), std::io::Error> {
-    // SAFETY: prctl(PR_SET_NO_NEW_PRIVS, 1) is documented as always-safe;
-    // it cannot fail except on impossibly old kernels (< 3.5).
-    let rc = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1u64, 0u64, 0u64, 0u64) };
+    let rc = unsafe {
+        // SAFETY: prctl(PR_SET_NO_NEW_PRIVS, 1) is documented as always-safe;
+        // it cannot fail except on impossibly old kernels (< 3.5).
+        libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1u64, 0u64, 0u64, 0u64)
+    };
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -519,11 +521,13 @@ fn spawn_local_bridge(uds_path: &std::path::Path) -> std::io::Result<u16> {
     use std::os::fd::FromRawFd as _;
 
     let (read_fd, write_fd) = create_ready_pipe()?;
-    // SAFETY: `fork()` in a single-threaded process (sandbox-init is
-    // dispatched in main() before any tokio runtime). The child touches only
-    // async-signal-safe-after-fork state because no other thread holds the
-    // allocator/locks; it then runs ordinary Rust without exec'ing.
-    let pid = unsafe { libc::fork() };
+    let pid = unsafe {
+        // SAFETY: `fork()` in a single-threaded process (sandbox-init is
+        // dispatched in main() before any tokio runtime). The child touches only
+        // async-signal-safe-after-fork state because no other thread holds the
+        // allocator/locks; it then runs ordinary Rust without exec'ing.
+        libc::fork()
+    };
     if pid < 0 {
         let err = std::io::Error::last_os_error();
         let _ = close_fd(read_fd);
@@ -535,19 +539,33 @@ fn spawn_local_bridge(uds_path: &std::path::Path) -> std::io::Result<u16> {
         // Child: close the read end, run the bridge forever. Any failure →
         // _exit(1) so the parent's read_exact sees EOF and surfaces an error.
         if close_fd(read_fd).is_err() {
-            unsafe { libc::_exit(1) };
+            unsafe {
+                // SAFETY: `_exit` is async-signal-safe and terminates the child
+                // immediately without running global destructors.
+                libc::_exit(1)
+            };
         }
         if run_local_bridge(uds_path, write_fd).is_err() {
-            unsafe { libc::_exit(1) };
+            unsafe {
+                // SAFETY: `_exit` is async-signal-safe and terminates the child
+                // immediately without running global destructors.
+                libc::_exit(1)
+            };
         }
-        unsafe { libc::_exit(0) };
+        unsafe {
+            // SAFETY: `_exit` is async-signal-safe and terminates the child
+            // successfully after the bridge is running.
+            libc::_exit(0)
+        };
     }
 
     // Parent: read the bound port the child reports once it is listening.
     close_fd(write_fd)?;
     let mut port_bytes = [0u8; 2];
-    // SAFETY: `read_fd` is a freshly-created, owned pipe read end.
-    let mut read_file = unsafe { File::from_raw_fd(read_fd) };
+    let mut read_file = unsafe {
+        // SAFETY: `read_fd` is a freshly-created, owned pipe read end.
+        File::from_raw_fd(read_fd)
+    };
     read_file.read_exact(&mut port_bytes)?;
     Ok(u16::from_be_bytes(port_bytes))
 }
@@ -569,8 +587,10 @@ fn run_local_bridge(uds_path: &std::path::Path, ready_fd: libc::c_int) -> std::i
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
     let port = listener.local_addr()?.port();
 
-    // SAFETY: `ready_fd` is the owned write end of the readiness pipe.
-    let mut ready_file = unsafe { File::from_raw_fd(ready_fd) };
+    let mut ready_file = unsafe {
+        // SAFETY: `ready_fd` is the owned write end of the readiness pipe.
+        File::from_raw_fd(ready_fd)
+    };
     ready_file.write_all(&port.to_be_bytes())?;
     drop(ready_file);
 
@@ -613,8 +633,10 @@ fn proxy_bidirectional(
 #[cfg(target_os = "linux")]
 fn create_ready_pipe() -> std::io::Result<(libc::c_int, libc::c_int)> {
     let mut fds = [0; 2];
-    // SAFETY: `pipe2` writes exactly two fds into the provided array.
-    let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+    let rc = unsafe {
+        // SAFETY: `pipe2` writes exactly two fds into the provided array.
+        libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC)
+    };
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -623,8 +645,10 @@ fn create_ready_pipe() -> std::io::Result<(libc::c_int, libc::c_int)> {
 
 #[cfg(target_os = "linux")]
 fn close_fd(fd: libc::c_int) -> std::io::Result<()> {
-    // SAFETY: closing an owned fd exactly once.
-    let rc = unsafe { libc::close(fd) };
+    let rc = unsafe {
+        // SAFETY: closing an owned fd exactly once.
+        libc::close(fd)
+    };
     if rc < 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -635,11 +659,16 @@ fn close_fd(fd: libc::c_int) -> std::io::Result<()> {
 /// crashed `sandbox-init` never leaks a bridge process. Mirrors codex.
 #[cfg(target_os = "linux")]
 fn set_parent_death_signal() -> std::io::Result<()> {
-    // SAFETY: prctl(PR_SET_PDEATHSIG) only sets a per-task attribute.
-    let rc = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) };
+    let rc = unsafe {
+        // SAFETY: prctl(PR_SET_PDEATHSIG) only sets a per-task attribute.
+        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM)
+    };
     if rc != 0 {
         Err(std::io::Error::last_os_error())
-    } else if unsafe { libc::getppid() } == 1 {
+    } else if unsafe {
+        // SAFETY: `getppid` returns the parent PID without side effects.
+        libc::getppid()
+    } == 1 {
         // Parent already reaped between fork and prctl → bail so we don't
         // linger as an orphan serving a bridge nobody will tear down.
         Err(std::io::Error::other("parent process already exited"))

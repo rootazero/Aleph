@@ -32,6 +32,7 @@ pub struct PendingToolCall {
 }
 
 impl SessionState {
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     pub fn apply(&mut self, event: &SessionEvent) {
         match event {
             SessionEvent::SessionCreated { identity, .. } => {

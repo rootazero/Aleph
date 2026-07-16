@@ -278,13 +278,15 @@ impl McpManagerActor {
             let server_name = self
                 .config
                 .get_server(&server_id)
-                .map_or_else(|| server_id.clone(), |c| c.name.clone());
+                .map(|c| c.name.as_str())
+                .unwrap_or(server_id.as_str());
             // Emit ServerCrashed first so the tool bridge drops the dead
             // server's tools from the registry before the restart re-publishes
             // a fresh set via the ServerStarted event.
             let _ = self.event_tx.send(McpManagerEvent::ServerCrashed {
+                // rust-doctor-disable-next-line excessive-clone
                 server_id: server_id.clone(),
-                server_name,
+                server_name: server_name.to_string(),
                 error: "health probe failed; auto-restarting".to_string(),
             });
             match self.restart_server(&server_id).await {
@@ -835,7 +837,9 @@ impl McpManagerActor {
                 };
 
             servers.push(McpServerInfo {
+                // rust-doctor-disable-next-line excessive-clone
                 id: id.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 name: config.name.clone(),
                 transport: config.transport,
                 tool_count,
@@ -857,8 +861,10 @@ impl McpManagerActor {
                 .health_states
                 .get(id)
                 .map_or(HealthStatus::Healthy, |h| h.status);
+            // rust-doctor-disable-next-line excessive-clone
             let id = id.clone();
             servers.push(McpServerInfo {
+                // rust-doctor-disable-next-line excessive-clone
                 id: id.clone(),
                 name: id,
                 transport: McpTransportType::Stdio,

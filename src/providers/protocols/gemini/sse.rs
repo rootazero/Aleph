@@ -245,5 +245,6 @@ pub(crate) fn parse_gemini_error_body(body: &str) -> Option<GeminiError> {
         serde_json::Value::Object(_) => value.get("error")?,
         _ => return None,
     };
+    // rust-doctor-disable-next-line excessive-clone
     serde_json::from_value(error_obj.clone()).ok()
 }

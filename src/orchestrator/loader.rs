@@ -53,6 +53,7 @@ pub async fn load_user_flows_from_dir(dir: &Path) -> Result<FlowSet, FlowError> 
             .map_err(|e| FlowError::InvalidConfig(format!("read {path:?}: {e}")))?;
         let parsed = load_user_flows_from_str(&src)?;
         for (id, spec) in parsed {
+            // rust-doctor-disable-next-line excessive-clone
             if merged.insert(id.clone(), spec).is_some() {
                 return Err(FlowError::InvalidConfig(format!(
                     "duplicate flow id across files: {id}"
@@ -67,7 +68,9 @@ fn parse_flow_file(src: &str) -> Result<FlowSet, String> {
     let file: FlowFile = toml::from_str(src).map_err(|e| e.to_string())?;
     let mut out = FlowSet::new();
     for spec in file.flows {
+        // rust-doctor-disable-next-line excessive-clone
         let id = spec.id.clone();
+        // rust-doctor-disable-next-line excessive-clone
         if out.insert(id.clone(), Arc::new(spec)).is_some() {
             return Err(format!("duplicate flow id: {id}"));
         }

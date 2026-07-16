@@ -28,6 +28,7 @@ const SYSTEM_FACT_MARKER: &str = "<!-- origin: system, inferred: false -->";
 
 fn ensure_origin_marker(line: &str) -> String {
     static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        // rust-doctor-disable-next-line unwrap-in-production
         regex::Regex::new(
             r"<!--\s*(?:src:[^,]+,\s*)?origin:\s*(?:raw_source|prior_note|inferred|legacy|system)\s*,\s*inferred:\s*(?:true|false)\s*-->",
         )

@@ -53,9 +53,10 @@ impl DreamStage for NoteSynthesisStage {
             })
             .collect();
 
+        let mut previews = Vec::new();
         for (category, note_paths) in &categories_to_synthesize {
             // Load content previews (cap at 15 notes to limit LLM context)
-            let mut previews = Vec::new();
+            previews.clear();
             for path in note_paths.iter().take(15) {
                 let content = ctx.load_content(path).await.unwrap_or_default();
                 let preview: String = content.chars().take(300).collect();

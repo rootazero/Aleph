@@ -70,6 +70,7 @@ pub(crate) async fn backfill_events_from_messages(
                 turn_id: uuid::Uuid::new_v4(),
                 content: MessageContent {
                     text: msg.content.clone(),
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     blocks: Vec::new(),
                     thinking: None,
                     thinking_signature: None,
@@ -81,6 +82,7 @@ pub(crate) async fn backfill_events_from_messages(
                 turn_id: uuid::Uuid::new_v4(),
                 content: MessageContent {
                     text: msg.content.clone(),
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     blocks: Vec::new(),
                     thinking: None,
                     thinking_signature: None,

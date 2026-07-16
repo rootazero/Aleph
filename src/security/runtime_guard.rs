@@ -156,6 +156,7 @@ impl RuntimeSecurityGuard {
 
     /// Process outbound content before sending to LLM.
     #[tracing::instrument(level = "debug", skip_all, fields(platform = ?context.platform_name, provider = ?context.provider_name))]
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     pub async fn process_outbound(
         &self,
         text: &str,

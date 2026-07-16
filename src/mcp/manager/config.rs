@@ -186,16 +186,13 @@ impl McpPersistentConfig {
     /// - URL
     pub fn expand_env_vars(&mut self) {
         for config in self.servers.values_mut() {
-            // Expand in env values
-            let expanded_env: HashMap<String, String> = config
-                .env
-                .iter()
-                .map(|(k, v)| {
-                    let expanded = expand_env_var(v).unwrap_or_else(|| v.clone());
-                    (k.clone(), expanded)
-                })
-                .collect();
-            config.env = expanded_env;
+            // Expand in env values in place to avoid cloning keys/values that do
+            // not contain `${VAR}` patterns.
+            for value in config.env.values_mut() {
+                if let Some(expanded) = expand_env_var(value) {
+                    *value = expanded;
+                }
+            }
 
             // Expand in command
             if let Some(ref cmd) = config.command {
@@ -204,12 +201,13 @@ impl McpPersistentConfig {
                 }
             }
 
-            // Expand in args
-            config.args = config
-                .args
-                .iter()
-                .map(|arg| expand_env_var(arg).unwrap_or_else(|| arg.clone()))
-                .collect();
+            // Expand in args in place to avoid cloning arguments that do not
+            // contain `${VAR}` patterns.
+            for arg in &mut config.args {
+                if let Some(expanded) = expand_env_var(arg) {
+                    *arg = expanded;
+                }
+            }
 
             // Expand in URL
             if let Some(ref url) = config.url {

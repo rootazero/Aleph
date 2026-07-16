@@ -231,7 +231,9 @@ use crate::session::in_process::InProcessActorSessionService;
 use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
 
 fn fresh_service() -> std::sync::Arc<dyn SessionService> {
+    // rust-doctor-disable-next-line unwrap-in-production
     let conn = rusqlite::Connection::open_in_memory().unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
     migrate_add_session_events(&conn).unwrap();
     let store: std::sync::Arc<dyn SessionEventStore> =
         std::sync::Arc::new(SqliteEventStore::new(conn));
@@ -244,8 +246,10 @@ async fn seed_session_prompt_emits_one_user_message() {
     let sid = SessionKey::ephemeral("seed-prompt");
     super::session_seed::seed_session(service.as_ref(), &sid, FlowInput::Prompt("hello".into()))
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("seed Prompt");
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let events = service.get_events(&sid, None, None).await.unwrap();
     let user_count = events
         .iter()
@@ -293,6 +297,7 @@ async fn seed_session_history_replays_turns_and_adds_prompt() {
         },
     )
     .await
+    // rust-doctor-disable-next-line unwrap-in-production
     .expect("seed History");
 
     let events = service.get_events(&sid, None, None).await.unwrap();

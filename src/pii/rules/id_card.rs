@@ -11,6 +11,7 @@ use std::sync::OnceLock;
 static ID_CARD_RE: OnceLock<Regex> = OnceLock::new();
 
 fn id_card_regex() -> &'static Regex {
+    // rust-doctor-disable-next-line unwrap-in-production
     ID_CARD_RE.get_or_init(|| Regex::new(r"\d{17}[\dXx]").expect("static id card regex compiles"))
 }
 

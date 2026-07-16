@@ -41,8 +41,9 @@ impl RippleTask {
         }
 
         // Perform BFS traversal using vector similarity
+        let mut next_level = Vec::new();
         for _hop in 0..self.config.max_hops {
-            let mut next_level = Vec::new();
+            next_level.clear();
 
             for fact in &current_level {
                 // Skip facts without embeddings
@@ -93,7 +94,7 @@ impl RippleTask {
             }
 
             // Move to next level
-            current_level = next_level;
+            std::mem::swap(&mut current_level, &mut next_level);
 
             // Stop if no more facts to explore
             if current_level.is_empty() {

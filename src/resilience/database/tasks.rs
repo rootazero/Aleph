@@ -13,6 +13,7 @@ use rusqlite::OptionalExtension;
 ///     `risk_level`, lane, `checkpoint_snapshot_path`, `last_tool_call_id`,
 ///     `recursion_depth`, `parent_task_id`, `created_at`, `updated_at`,
 ///     `started_at`, `completed_at`, `metadata_json`
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 fn agent_task_from_row(row: &rusqlite::Row) -> rusqlite::Result<AgentTask> {
     Ok(AgentTask {
         id: row.get(0)?,

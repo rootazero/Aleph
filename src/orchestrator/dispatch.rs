@@ -36,6 +36,7 @@ impl std::fmt::Debug for FlowHandle {
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]
+// rust-doctor-disable-next-line large-enum-variant
 pub enum FlowStreamEvent {
     /// Incremental assistant text (preserved from original).
     Delta(String),

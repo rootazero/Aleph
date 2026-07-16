@@ -198,9 +198,13 @@ impl UnifiedMessage {
         }
         for tc in &resp.tool_calls {
             content.push(ContentBlock::ToolCall {
+                // rust-doctor-disable-next-line excessive-clone
                 id: tc.id.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 name: tc.name.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 arguments: tc.arguments.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 thought_signature: tc.thought_signature.clone(),
             });
         }
@@ -229,13 +233,13 @@ impl UnifiedMessage {
     /// Extract concatenated text from a slice of messages (for leak detection)
     #[must_use]
     pub fn extract_all_text(messages: &[Self]) -> String {
-        let mut parts = Vec::new();
+        let mut parts: Vec<std::borrow::Cow<str>> = Vec::new();
         for msg in messages {
             for block in msg.content_blocks() {
                 match block {
-                    ContentBlock::Text { text, .. } => parts.push(text.clone()),
-                    ContentBlock::Json { value } => parts.push(value.to_string()),
-                    ContentBlock::Thinking { thinking, .. } => parts.push(thinking.clone()),
+                    ContentBlock::Text { text, .. } => parts.push(text.as_str().into()),
+                    ContentBlock::Json { value } => parts.push(value.to_string().into()),
+                    ContentBlock::Thinking { thinking, .. } => parts.push(thinking.as_str().into()),
                     _ => {}
                 }
             }
@@ -453,26 +457,24 @@ fn ensure_tool_results_present(messages: &mut Vec<UnifiedMessage>) {
     }
 
     let mut out: Vec<UnifiedMessage> = Vec::with_capacity(messages.len() + 1);
+    let mut synthetic: Vec<UnifiedMessage> = Vec::new();
     for msg in messages.drain(..) {
-        let synthetic: Vec<UnifiedMessage> = match &msg {
-            UnifiedMessage::Assistant { content } => content
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::ToolCall { id, name, .. } if !answered.contains(id) => {
-                        Some(UnifiedMessage::tool_result(
-                            id.clone(),
-                            name.clone(),
-                            "No result provided — tool call was interrupted",
-                            true,
-                        ))
-                    }
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
+        synthetic.clear();
+        if let UnifiedMessage::Assistant { content } = &msg {
+            synthetic.extend(content.iter().filter_map(|b| match b {
+                ContentBlock::ToolCall { id, name, .. } if !answered.contains(id) => {
+                    Some(UnifiedMessage::tool_result(
+                        id.clone(),
+                        name.clone(),
+                        "No result provided — tool call was interrupted",
+                        true,
+                    ))
+                }
+                _ => None,
+            }));
+        }
         out.push(msg);
-        out.extend(synthetic);
+        out.extend(synthetic.drain(..));
     }
     *messages = out;
 }

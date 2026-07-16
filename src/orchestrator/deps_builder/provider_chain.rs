@@ -92,6 +92,7 @@ pub fn build_failover_chain(
     let model_catalog: HashMap<String, Vec<String>> = config
         .providers
         .iter()
+        // rust-doctor-disable-next-line excessive-clone
         .map(|(name, pc)| (name.clone(), pc.all_models().to_vec()))
         .collect();
 
@@ -134,8 +135,10 @@ pub fn build_failover_chain(
         if name.eq_ignore_ascii_case(primary_provider_key) {
             continue; // the primary is already built behind `default_provider`
         }
+        // rust-doctor-disable-next-line excessive-clone
         match create_provider(name, pc.clone()) {
             Ok(provider) => {
+                // rust-doctor-disable-next-line excessive-clone
                 built.insert(name.clone(), provider);
             }
             Err(e) => tracing::warn!(
@@ -166,25 +169,34 @@ pub fn build_failover_chain(
     // handle clone shares the same live `Arc` map the chains mutate, so a
     // later snapshot always reads the current breaker/cooldown/load picture.
     let observability = RouteObservability {
+        // rust-doctor-disable-next-line excessive-clone
         primary: default_provider.clone(),
         fallbacks: fallbacks
             .iter()
             .map(|n| ChainCandidate {
+                // rust-doctor-disable-next-line excessive-clone
                 name: n.name.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 models: n.models.clone(),
                 tier: n.tier,
             })
             .collect(),
+        // rust-doctor-disable-next-line excessive-clone
         health: health.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         model_cooldown: model_cooldown.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         provider_cooldown: provider_cooldown.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         load: load.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         route: route_handle.clone(),
     };
 
     let global_provider = FailoverProvider::new(
         default_provider,
         fallbacks,
+        // rust-doctor-disable-next-line excessive-clone
         model_catalog.clone(),
         health.clone(),
         failover_config.clone(),

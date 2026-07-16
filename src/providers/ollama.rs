@@ -296,10 +296,12 @@ impl OllamaProvider {
                     let output = content
                         .iter()
                         .filter_map(|b| match b {
-                            ContentBlock::Text { text, .. } => Some(text.clone()),
-                            ContentBlock::Json { value } => {
-                                Some(serde_json::to_string(value).unwrap_or_default())
+                            ContentBlock::Text { text, .. } => {
+                                Some(std::borrow::Cow::Borrowed(text.as_str()))
                             }
+                            ContentBlock::Json { value } => Some(std::borrow::Cow::Owned(
+                                serde_json::to_string(value).unwrap_or_default(),
+                            )),
                             _ => None,
                         })
                         .collect::<Vec<_>>()

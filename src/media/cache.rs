@@ -79,99 +79,117 @@ impl MediaCache {
         attachment: &Attachment,
         session_id: &str,
     ) -> Result<CachedMedia, CacheError> {
-        // Priority 1: inline bytes
         if let Some(ref data) = attachment.data {
-            let size = data.len() as u64;
-            if size > MAX_FILE_SIZE {
-                return Err(CacheError::TooLarge { size });
-            }
-            let dir = ensure_session_dir(session_id).await?;
-            let filename =
-                sanitize_filename(attachment.filename.as_deref().unwrap_or(&attachment.id));
-            let path = dir.join(filename);
-            tokio::fs::write(&path, data).await?;
-            debug!(path = %path.display(), "cached inline attachment");
-            return Ok(CachedMedia {
-                local_path: path,
-                mime_type: attachment.mime_type.clone(),
-                size,
-            });
+            return Self::resolve_inline(data, attachment, session_id).await;
         }
-
-        // Priority 2: local path — use directly
         if let Some(ref p) = attachment.path {
-            let path = expand_tilde(p);
-            let meta = tokio::fs::metadata(&path).await?;
-            let size = meta.len();
-            if size > MAX_FILE_SIZE {
-                return Err(CacheError::TooLarge { size });
-            }
-            return Ok(CachedMedia {
-                local_path: path,
-                mime_type: attachment.mime_type.clone(),
-                size,
-            });
+            return Self::resolve_local_path(p, attachment.mime_type.clone()).await;
         }
-
-        // Priority 3: URL download
         if let Some(ref url) = attachment.url {
-            let dir = ensure_session_dir(session_id).await?;
+            return self.resolve_url(url, attachment, session_id).await;
+        }
+        Err(CacheError::NoSource)
+    }
 
-            let resp = self
-                .client
-                .get(url)
-                .send()
-                .await
-                .map_err(|e| CacheError::Download(e.to_string()))?;
+    async fn resolve_inline(
+        data: &[u8],
+        attachment: &Attachment,
+        session_id: &str,
+    ) -> Result<CachedMedia, CacheError> {
+        let size = data.len() as u64;
+        if size > MAX_FILE_SIZE {
+            return Err(CacheError::TooLarge { size });
+        }
+        let dir = ensure_session_dir(session_id).await?;
+        let filename =
+            sanitize_filename(attachment.filename.as_deref().unwrap_or(&attachment.id));
+        let path = dir.join(filename);
+        tokio::fs::write(&path, data).await?;
+        debug!(path = %path.display(), "cached inline attachment");
+        Ok(CachedMedia {
+            local_path: path,
+            mime_type: attachment.mime_type.clone(),
+            size,
+        })
+    }
 
-            if !resp.status().is_success() {
-                return Err(CacheError::Download(format!("HTTP {}", resp.status())));
-            }
+    async fn resolve_local_path(
+        path: &str,
+        mime_type: String,
+    ) -> Result<CachedMedia, CacheError> {
+        let path = expand_tilde(path);
+        let meta = tokio::fs::metadata(&path).await?;
+        let size = meta.len();
+        if size > MAX_FILE_SIZE {
+            return Err(CacheError::TooLarge { size });
+        }
+        Ok(CachedMedia {
+            local_path: path,
+            mime_type,
+            size,
+        })
+    }
 
-            // Pre-check Content-Length to avoid downloading oversized files
-            if let Some(content_length) = resp.content_length() {
-                if content_length > MAX_FILE_SIZE {
-                    return Err(CacheError::TooLarge {
-                        size: content_length,
-                    });
-                }
-            }
+    async fn resolve_url(
+        &self,
+        url: &str,
+        attachment: &Attachment,
+        session_id: &str,
+    ) -> Result<CachedMedia, CacheError> {
+        let dir = ensure_session_dir(session_id).await?;
 
-            let filename =
-                sanitize_filename(attachment.filename.as_deref().unwrap_or(&attachment.id));
-            let path = dir.join(&filename);
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| CacheError::Download(e.to_string()))?;
 
-            // Stream response body to file with incremental size check
-            // (guards against servers that lie about Content-Length or omit it)
-            use tokio::io::AsyncWriteExt;
-            let mut file = tokio::fs::File::create(&path).await?;
-            let mut stream = resp.bytes_stream();
-            let mut total_size: u64 = 0;
-
-            while let Some(result) = stream.next().await {
-                let chunk = result.map_err(|e| CacheError::Download(e.to_string()))?;
-                total_size += chunk.len() as u64;
-                if total_size > MAX_FILE_SIZE {
-                    // Clean up partially-written file
-                    drop(file);
-                    let _ = tokio::fs::remove_file(&path).await;
-                    return Err(CacheError::TooLarge { size: total_size });
-                }
-                file.write_all(&chunk).await?;
-            }
-            // Flush buffered writes before the handle is dropped — tokio's
-            // File does not guarantee buffered data is submitted on drop.
-            file.flush().await?;
-
-            debug!(path = %path.display(), size = total_size, "downloaded attachment from URL");
-            return Ok(CachedMedia {
-                local_path: path,
-                mime_type: attachment.mime_type.clone(),
-                size: total_size,
-            });
+        if !resp.status().is_success() {
+            return Err(CacheError::Download(format!("HTTP {}", resp.status())));
         }
 
-        Err(CacheError::NoSource)
+        // Pre-check Content-Length to avoid downloading oversized files
+        if let Some(content_length) = resp.content_length() {
+            if content_length > MAX_FILE_SIZE {
+                return Err(CacheError::TooLarge {
+                    size: content_length,
+                });
+            }
+        }
+
+        let filename =
+            sanitize_filename(attachment.filename.as_deref().unwrap_or(&attachment.id));
+        let path = dir.join(&filename);
+
+        // Stream response body to file with incremental size check
+        // (guards against servers that lie about Content-Length or omit it)
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::File::create(&path).await?;
+        let mut stream = resp.bytes_stream();
+        let mut total_size: u64 = 0;
+
+        while let Some(result) = stream.next().await {
+            let chunk = result.map_err(|e| CacheError::Download(e.to_string()))?;
+            total_size += chunk.len() as u64;
+            if total_size > MAX_FILE_SIZE {
+                // Clean up partially-written file
+                drop(file);
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err(CacheError::TooLarge { size: total_size });
+            }
+            file.write_all(&chunk).await?;
+        }
+        // Flush buffered writes before the handle is dropped — tokio's
+        // File does not guarantee buffered data is submitted on drop.
+        file.flush().await?;
+
+        debug!(path = %path.display(), size = total_size, "downloaded attachment from URL");
+        Ok(CachedMedia {
+            local_path: path,
+            mime_type: attachment.mime_type.clone(),
+            size: total_size,
+        })
     }
 
     /// Read a cached file and return its base64-encoded content.

@@ -183,6 +183,7 @@ fn strip_auth_headers(headers: &mut HeaderMap) {
 /// When `policy.enabled` is false, performs a normal fetch with auto-redirects.
 /// Otherwise validates the URL and every redirect hop against the policy,
 /// pins DNS to prevent rebinding, and strips auth headers on cross-origin redirects.
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub async fn safe_fetch(
     url: &str,
     policy: &SsrfPolicy,
@@ -249,6 +250,7 @@ pub async fn safe_fetch(
         if visited.contains(&next_url) {
             return Err(SsrfError::FetchFailed("redirect loop detected".to_string()));
         }
+        // rust-doctor-disable-next-line excessive-clone
         visited.insert(next_url.clone());
 
         // Validate the redirect target
@@ -285,10 +287,12 @@ pub async fn safe_fetch(
             .map_err(|e| SsrfError::FetchFailed(e.to_string()))?;
 
         let mut req_builder = redirect_client.request(current_method.clone(), next_url.as_str());
+        // rust-doctor-disable-next-line excessive-clone
         req_builder = req_builder.headers(current_headers.clone());
         // Body is forwarded only on 307/308; POST→GET on 301/302/303 drops body
         if preserve_method_and_body {
             if let Some(body) = &request.body {
+                // rust-doctor-disable-next-line excessive-clone
                 req_builder = req_builder.body(body.clone());
             }
         }

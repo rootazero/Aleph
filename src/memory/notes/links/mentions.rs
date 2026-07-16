@@ -100,10 +100,11 @@ pub fn scan_mentions(docs: &[MentionDoc]) -> Vec<(String, String)> {
     });
 
     let mut out: Vec<(String, String)> = Vec::new();
+    let mut hits: Vec<(String, String)> = Vec::new();
     for d in docs {
         let body_norm = normalize_link_key(&d.body);
         let linked: Vec<String> = d.linked_raw.iter().map(|s| normalize_link_key(s)).collect();
-        let mut hits: Vec<(String, String)> = Vec::new();
+        hits.clear();
         for (name_norm, owners) in &dict {
             let target = owners[0];
             if target == d.path {
@@ -137,7 +138,7 @@ pub fn scan_mentions(docs: &[MentionDoc]) -> Vec<(String, String)> {
         hits.sort();
         hits.dedup();
         hits.truncate(MAX_MENTIONS_PER_NOTE);
-        out.extend(hits);
+        out.extend(std::mem::take(&mut hits));
     }
     out.sort();
     out

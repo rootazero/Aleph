@@ -8,99 +8,77 @@ pub fn detect_by_extension(ext: &str) -> Result<MediaType, MediaError> {
     let ext_lower = ext.to_ascii_lowercase();
     let ext_clean = ext_lower.trim_start_matches('.');
 
-    match ext_clean {
-        // Images
-        "png" => Ok(MediaType::Image {
-            format: MediaImageFormat::Png,
-            width: None,
-            height: None,
-        }),
-        "jpg" | "jpeg" => Ok(MediaType::Image {
-            format: MediaImageFormat::Jpeg,
-            width: None,
-            height: None,
-        }),
-        "webp" => Ok(MediaType::Image {
-            format: MediaImageFormat::WebP,
-            width: None,
-            height: None,
-        }),
-        "gif" => Ok(MediaType::Image {
-            format: MediaImageFormat::Gif,
-            width: None,
-            height: None,
-        }),
-        "svg" => Ok(MediaType::Image {
-            format: MediaImageFormat::Svg,
-            width: None,
-            height: None,
-        }),
-        "heic" | "heif" => Ok(MediaType::Image {
-            format: MediaImageFormat::Heic,
-            width: None,
-            height: None,
-        }),
-        // Audio
-        "mp3" => Ok(MediaType::Audio {
-            format: AudioFormat::Mp3,
-            duration_secs: None,
-        }),
-        "wav" => Ok(MediaType::Audio {
-            format: AudioFormat::Wav,
-            duration_secs: None,
-        }),
-        "ogg" => Ok(MediaType::Audio {
-            format: AudioFormat::Ogg,
-            duration_secs: None,
-        }),
-        "flac" => Ok(MediaType::Audio {
-            format: AudioFormat::Flac,
-            duration_secs: None,
-        }),
-        "m4a" => Ok(MediaType::Audio {
-            format: AudioFormat::M4a,
-            duration_secs: None,
-        }),
-        // Video
-        "mp4" => Ok(MediaType::Video {
-            format: VideoFormat::Mp4,
-            duration_secs: None,
-        }),
-        "webm" => Ok(MediaType::Video {
-            format: VideoFormat::WebM,
-            duration_secs: None,
-        }),
-        "mov" => Ok(MediaType::Video {
-            format: VideoFormat::Mov,
-            duration_secs: None,
-        }),
-        // Documents
-        "pdf" => Ok(MediaType::Document {
-            format: DocFormat::Pdf,
-            pages: None,
-        }),
-        "docx" => Ok(MediaType::Document {
-            format: DocFormat::Docx,
-            pages: None,
-        }),
-        "xlsx" => Ok(MediaType::Document {
-            format: DocFormat::Xlsx,
-            pages: None,
-        }),
-        "txt" => Ok(MediaType::Document {
-            format: DocFormat::Txt,
-            pages: None,
-        }),
-        "md" | "markdown" => Ok(MediaType::Document {
-            format: DocFormat::Markdown,
-            pages: None,
-        }),
-        "html" | "htm" => Ok(MediaType::Document {
-            format: DocFormat::Html,
-            pages: None,
-        }),
-        _ => Err(MediaError::UnsupportedFormat(ext_clean.to_string())),
+    if let Some(ty) = detect_image_extension(ext_clean) {
+        return Ok(ty);
     }
+    if let Some(ty) = detect_audio_extension(ext_clean) {
+        return Ok(ty);
+    }
+    if let Some(ty) = detect_video_extension(ext_clean) {
+        return Ok(ty);
+    }
+    if let Some(ty) = detect_document_extension(ext_clean) {
+        return Ok(ty);
+    }
+    Err(MediaError::UnsupportedFormat(ext_clean.to_string()))
+}
+
+fn detect_image_extension(ext: &str) -> Option<MediaType> {
+    let format = match ext {
+        "png" => MediaImageFormat::Png,
+        "jpg" | "jpeg" => MediaImageFormat::Jpeg,
+        "webp" => MediaImageFormat::WebP,
+        "gif" => MediaImageFormat::Gif,
+        "svg" => MediaImageFormat::Svg,
+        "heic" | "heif" => MediaImageFormat::Heic,
+        _ => return None,
+    };
+    Some(MediaType::Image {
+        format,
+        width: None,
+        height: None,
+    })
+}
+
+fn detect_audio_extension(ext: &str) -> Option<MediaType> {
+    let format = match ext {
+        "mp3" => AudioFormat::Mp3,
+        "wav" => AudioFormat::Wav,
+        "ogg" => AudioFormat::Ogg,
+        "flac" => AudioFormat::Flac,
+        "m4a" => AudioFormat::M4a,
+        _ => return None,
+    };
+    Some(MediaType::Audio {
+        format,
+        duration_secs: None,
+    })
+}
+
+fn detect_video_extension(ext: &str) -> Option<MediaType> {
+    let format = match ext {
+        "mp4" => VideoFormat::Mp4,
+        "webm" => VideoFormat::WebM,
+        "mov" => VideoFormat::Mov,
+        _ => return None,
+    };
+    Some(MediaType::Video {
+        format,
+        duration_secs: None,
+    })
+}
+
+fn detect_document_extension(ext: &str) -> Option<MediaType> {
+    let format = match ext {
+        "pdf" => DocFormat::Pdf,
+        "docx" => DocFormat::Docx,
+        "xlsx" => DocFormat::Xlsx,
+        "txt" => DocFormat::Txt,
+        "md" | "markdown" => DocFormat::Markdown,
+        "html" | "htm" => DocFormat::Html,
+        _ => return None,
+    };
+    Some(MediaType::Document { format, pages: None })
 }
 
 /// Detect media type from file magic bytes (first 16 bytes).
@@ -110,120 +88,143 @@ pub fn detect_by_magic(bytes: &[u8]) -> MediaType {
         return MediaType::Unknown;
     }
 
+    detect_image_magic(bytes)
+        .or_else(|| detect_document_magic(bytes))
+        .or_else(|| detect_audio_magic(bytes))
+        .or_else(|| detect_ftyp_magic(bytes))
+        .or_else(|| detect_video_magic(bytes))
+        .unwrap_or(MediaType::Unknown)
+}
+
+fn detect_image_magic(bytes: &[u8]) -> Option<MediaType> {
     // PNG: 89 50 4E 47
     if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
-        return MediaType::Image {
+        return Some(MediaType::Image {
             format: MediaImageFormat::Png,
             width: None,
             height: None,
-        };
+        });
     }
     // JPEG: FF D8 FF
     if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        return MediaType::Image {
+        return Some(MediaType::Image {
             format: MediaImageFormat::Jpeg,
             width: None,
             height: None,
-        };
+        });
     }
     // GIF: GIF87a or GIF89a
     if bytes.starts_with(b"GIF8") {
-        return MediaType::Image {
+        return Some(MediaType::Image {
             format: MediaImageFormat::Gif,
             width: None,
             height: None,
-        };
+        });
     }
     // WebP: RIFF....WEBP
     if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
-        return MediaType::Image {
+        return Some(MediaType::Image {
             format: MediaImageFormat::WebP,
             width: None,
             height: None,
-        };
+        });
     }
+    None
+}
+
+fn detect_document_magic(bytes: &[u8]) -> Option<MediaType> {
     // PDF: %PDF
     if bytes.starts_with(b"%PDF") {
-        return MediaType::Document {
+        return Some(MediaType::Document {
             format: DocFormat::Pdf,
             pages: None,
-        };
+        });
     }
     // ZIP-based (DOCX/XLSX/PPTX/JAR/etc): PK\x03\x04
     // Cannot distinguish DOCX from XLSX/PPTX/ZIP by magic bytes alone;
     // precise detection requires parsing the ZIP's [Content_Types].xml.
     // Default to Docx as the most common document format.
     if bytes.starts_with(&[0x50, 0x4B, 0x03, 0x04]) {
-        return MediaType::Document {
+        return Some(MediaType::Document {
             format: DocFormat::Docx,
             pages: None,
-        };
+        });
     }
+    None
+}
+
+fn detect_audio_magic(bytes: &[u8]) -> Option<MediaType> {
     // MP3: ID3 tag or sync word
     if bytes.starts_with(b"ID3") || (bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0) {
-        return MediaType::Audio {
+        return Some(MediaType::Audio {
             format: AudioFormat::Mp3,
             duration_secs: None,
-        };
+        });
     }
     // WAV: RIFF....WAVE
     if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WAVE" {
-        return MediaType::Audio {
+        return Some(MediaType::Audio {
             format: AudioFormat::Wav,
             duration_secs: None,
-        };
+        });
     }
     // OGG: OggS
     if bytes.starts_with(b"OggS") {
-        return MediaType::Audio {
+        return Some(MediaType::Audio {
             format: AudioFormat::Ogg,
             duration_secs: None,
-        };
+        });
     }
     // FLAC: fLaC
     if bytes.starts_with(b"fLaC") {
-        return MediaType::Audio {
+        return Some(MediaType::Audio {
             format: AudioFormat::Flac,
             duration_secs: None,
-        };
+        });
     }
-    // ftyp-based containers (MP4/MOV/M4A/HEIC)
-    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
-        let brand = &bytes[8..12];
-        if brand == b"M4A " || brand == b"M4B " {
-            return MediaType::Audio {
-                format: AudioFormat::M4a,
-                duration_secs: None,
-            };
-        }
-        if brand == b"qt  " {
-            return MediaType::Video {
-                format: VideoFormat::Mov,
-                duration_secs: None,
-            };
-        }
-        // HEIC/HEIF image formats
-        if brand == b"heic" || brand == b"mif1" || brand == b"msf1" || brand == b"heix" {
-            return MediaType::Image {
-                format: MediaImageFormat::Heic,
-                width: None,
-                height: None,
-            };
-        }
-        return MediaType::Video {
-            format: VideoFormat::Mp4,
+    None
+}
+
+fn detect_ftyp_magic(bytes: &[u8]) -> Option<MediaType> {
+    if bytes.len() < 12 || &bytes[4..8] != b"ftyp" {
+        return None;
+    }
+    let brand = &bytes[8..12];
+    if brand == b"M4A " || brand == b"M4B " {
+        return Some(MediaType::Audio {
+            format: AudioFormat::M4a,
             duration_secs: None,
-        };
+        });
     }
+    if brand == b"qt  " {
+        return Some(MediaType::Video {
+            format: VideoFormat::Mov,
+            duration_secs: None,
+        });
+    }
+    // HEIC/HEIF image formats
+    if brand == b"heic" || brand == b"mif1" || brand == b"msf1" || brand == b"heix" {
+        return Some(MediaType::Image {
+            format: MediaImageFormat::Heic,
+            width: None,
+            height: None,
+        });
+    }
+    Some(MediaType::Video {
+        format: VideoFormat::Mp4,
+        duration_secs: None,
+    })
+}
+
+fn detect_video_magic(bytes: &[u8]) -> Option<MediaType> {
     // WebM: EBML header
     if bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
-        return MediaType::Video {
+        return Some(MediaType::Video {
             format: VideoFormat::WebM,
             duration_secs: None,
-        };
+        });
     }
-
-    MediaType::Unknown
+    None
 }
 
 /// Detect from file path: try magic bytes first, fall back to extension.

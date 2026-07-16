@@ -139,6 +139,7 @@ impl Drop for SandboxJob {
     fn drop(&mut self) {
         if !self.handle.is_null() {
             unsafe {
+                // SAFETY: `self.handle` is a valid, non-null job object handle.
                 CloseHandle(self.handle);
             }
         }

@@ -130,6 +130,7 @@ pub async fn gather_related<S: NoteStore + Send + Sync + 'static>(
 
     let mut out: Vec<RelatedPage> = Vec::new();
     let mut running_bytes: usize = 0;
+    let mut preview = String::new();
     for (path, score) in ranked.into_iter().take(budget.max_related_pages) {
         let Some(entry) = store.get_note_index(&path, agent_id).await? else {
             continue;
@@ -139,11 +140,10 @@ pub async fn gather_related<S: NoteStore + Send + Sync + 'static>(
             .find(|s| s.path == path)
             .map(|s| s.content.clone())
             .unwrap_or_default();
-        let preview: String = if full.is_empty() {
-            String::new()
-        } else {
-            full.chars().take(budget.preview_char_cap).collect()
-        };
+        preview.clear();
+        if !full.is_empty() {
+            preview.extend(full.chars().take(budget.preview_char_cap));
+        }
         let summary_first_bullet = first_body_bullet(&full).unwrap_or_default();
 
         let rp_bytes = preview.len() + entry.path.len() + summary_first_bullet.len() + 64;
@@ -156,7 +156,7 @@ pub async fn gather_related<S: NoteStore + Send + Sync + 'static>(
             path: entry.path.clone(),
             title: entry.filename.clone(),
             summary: summary_first_bullet,
-            content_preview: preview,
+            content_preview: std::mem::take(&mut preview),
             tags: entry.tags.clone(),
             content_hash: entry.content_hash.clone(),
             score,

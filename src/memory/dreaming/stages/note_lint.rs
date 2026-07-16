@@ -494,7 +494,7 @@ category: preference
         // Create the dir first: a nonexistent path is treated as the DB *file*
         // by SqliteMemoryBackend::new, which would make memory_dir a file and
         // break tests that mkdir note categories under it (NotADirectory).
-        std::fs::create_dir_all(&temp).unwrap();
+        tokio::fs::create_dir_all(&temp).await.unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
         let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
@@ -699,13 +699,16 @@ category: preference
     #[tokio::test]
     async fn lint_records_pass_to_log_when_frontmatter_fixed() {
         let temp = std::env::temp_dir().join(format!("aleph_lintlog_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(temp.join("default/preference")).unwrap();
+        tokio::fs::create_dir_all(temp.join("default/preference"))
+            .await
+            .unwrap();
         // Note file missing frontmatter — the frontmatter rule will patch it,
         // so the pass does real work and must be recorded.
-        std::fs::write(
+        tokio::fs::write(
             temp.join("default/preference/x.md"),
             "- the user prefers vim\n",
         )
+        .await
         .unwrap();
 
         let mut ctx = ctx_with_orientation(&temp).await;
@@ -760,11 +763,12 @@ category: preference
         let agent = ctx.agent_id.clone();
         // On-disk source note whose body carries [[gone]].
         let dir = ctx.indexer.memory_dir().join(&agent).join("plan");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(
             dir.join("keeper.md"),
             "---\ncategory: plan\ntags: []\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\nsee [[gone]]\n",
         )
+        .await
         .unwrap();
         ctx.indexer
             .index_file(&agent, "plan", &dir.join("keeper.md"))
@@ -790,7 +794,7 @@ category: preference
         }];
         NoteLintStage.execute(lint_ctx).await.unwrap();
 
-        let body = std::fs::read_to_string(dir.join("keeper.md")).unwrap();
+        let body = tokio::fs::read_to_string(dir.join("keeper.md")).await.unwrap();
         assert!(body.contains("[[gone]]"), "tombstoned link text must survive lint");
     }
 }

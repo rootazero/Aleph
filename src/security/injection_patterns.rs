@@ -266,6 +266,7 @@ static COMPILED: Lazy<Vec<CompiledPattern>> = Lazy::new(|| {
         .iter()
         .map(|def| CompiledPattern {
             regex: Regex::new(def.regex)
+                // rust-doctor-disable-next-line panic-in-library
                 .unwrap_or_else(|e| panic!("injection_patterns: bad regex {}: {e}", def.id)),
             id: def.id,
             category: def.category,

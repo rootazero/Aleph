@@ -50,6 +50,7 @@ pub(super) const MAX_CACHE_BREAKPOINTS: usize = 4;
 /// `SystemBlock::cached_text` marker at "ephemeral, no TTL"; this lets the
 /// 1h ephemeral variant take over without re-walking the entire system array.
 pub(super) fn promote_system_marker_ttl(payload: &mut serde_json::Value, cc: CacheControl) {
+    // rust-doctor-disable-next-line unwrap-in-production
     let cc_json = serde_json::to_value(cc).expect("CacheControl serialize is infallible");
     let Some(arr) = payload.get_mut("system").and_then(|v| v.as_array_mut()) else {
         return;
@@ -81,6 +82,7 @@ pub(super) fn inject_cache_control_into_system_array(
     payload: &mut serde_json::Value,
     cc: CacheControl,
 ) -> bool {
+    // rust-doctor-disable-next-line unwrap-in-production
     let cc_json = serde_json::to_value(cc).expect("CacheControl serialize is infallible");
 
     match payload.get_mut("system") {
@@ -132,6 +134,7 @@ pub(super) fn inject_cache_control_into_recent_messages(
     if max_breakpoints == 0 {
         return;
     }
+    // rust-doctor-disable-next-line unwrap-in-production
     let cc_json = serde_json::to_value(cc).expect("CacheControl serialize is infallible");
 
     let Some(messages) = payload.get_mut("messages").and_then(|v| v.as_array_mut()) else {

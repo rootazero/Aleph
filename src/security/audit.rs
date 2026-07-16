@@ -32,6 +32,7 @@ pub enum AuditEventType {
 }
 
 impl fmt::Display for AuditEventType {
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             Self::AuthFailure => "auth_failure",

@@ -256,6 +256,8 @@ impl CgroupV2Scope {
         path_buf[path_bytes.len()] = b'\0';
 
         let fd = unsafe {
+            // SAFETY: `path_buf` is a NUL-terminated byte array whose length was
+            // checked to fit, and `O_WRONLY | O_CLOEXEC` are valid open flags.
             libc::open(
                 path_buf.as_ptr() as *const i8,
                 libc::O_WRONLY | libc::O_CLOEXEC,
@@ -283,6 +285,8 @@ impl CgroupV2Scope {
         let mut written = 0;
         while written < pid_slice.len() {
             let ret = unsafe {
+                // SAFETY: `fd` is a valid open file descriptor and `pid_slice`
+                // is a contiguous byte buffer of the exact size supplied.
                 libc::write(
                     fd,
                     pid_slice[written..].as_ptr() as *const libc::c_void,
@@ -290,12 +294,18 @@ impl CgroupV2Scope {
                 )
             };
             if ret < 0 {
-                let _ = unsafe { libc::close(fd) };
+                let _ = unsafe {
+                    // SAFETY: `fd` is a valid open file descriptor.
+                    libc::close(fd)
+                };
                 return Err(std::io::Error::last_os_error());
             }
             written += ret as usize;
         }
-        let _ = unsafe { libc::close(fd) };
+        let _ = unsafe {
+            // SAFETY: `fd` is a valid open file descriptor.
+            libc::close(fd)
+        };
         Ok(())
     }
 
