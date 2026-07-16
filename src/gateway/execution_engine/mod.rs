@@ -148,7 +148,7 @@ pub enum BusyInputMode {
     /// `AgentBusy` delivery path; no new dispatch machinery.
     Interrupt,
     /// Never disturb the running task: no mid-loop injection, no cancellation.
-    /// The message waits in the inbound router's per-agent FIFO busy queue and
+    /// The message waits in the inbound router's per-session FIFO busy queue and
     /// is delivered as a fresh run once the current one finishes — the
     /// follow-up lane every reference harness exposes (openclaw `followup`,
     /// hermes `queue`, Pi `followUp`, `OpenSquilla` `followup`). Bounded wait:
@@ -318,6 +318,12 @@ pub(crate) struct ActiveRun {
     pub(crate) cancel_tx: Option<mpsc::Sender<()>>,
     pub(crate) seq_counter: AtomicU64,
     pub(crate) chunk_counter: AtomicU32,
+    /// Sticky Interrupt-demotion marker (`gate.rs`): once an `Interrupt` was
+    /// demoted to the follow-up queue to protect this run's sub-agent fan-out,
+    /// every later poll of that queued message keeps demoting — even after the
+    /// last child exits — so the run's synthesis turn survives. Atomic so the
+    /// gate can stamp it under the `active_runs` READ lock; dies with the run.
+    pub(crate) demote_protected: std::sync::atomic::AtomicBool,
 }
 
 impl ActiveRun {

@@ -499,6 +499,7 @@ mod tests {
                 cancel_tx: None,
                 seq_counter: AtomicU64::new(0),
                 chunk_counter: AtomicU32::new(0),
+                demote_protected: std::sync::atomic::AtomicBool::new(false),
             },
         )
     }
