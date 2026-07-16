@@ -145,13 +145,13 @@ mod tests {
         if chunks.len() > 1 {
             // Check that consecutive chunks have overlap
             for i in 0..chunks.len() - 1 {
-                // Use char-based slicing to avoid panics on multi-byte chars
-                let current_end: String = chunks[i]
-                    .chars()
-                    .rev()
-                    .take(40)
-                    .rev()
-                    .collect();
+                // Use char-based slicing to avoid panics on multi-byte chars.
+                // `Take<Rev<Chars>>` is not a `DoubleEndedIterator` (Chars is
+                // not ExactSize), so collect the last 40 chars reversed, then
+                // reverse back into reading order.
+                let mut tail: Vec<char> = chunks[i].chars().rev().take(40).collect();
+                tail.reverse();
+                let current_end: String = tail.into_iter().collect();
                 let next_start: String = chunks[i + 1].chars().take(40).collect();
 
                 // There should be some common text
