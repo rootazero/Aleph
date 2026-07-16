@@ -44,14 +44,13 @@ pub struct LayerSize {
 /// include the requested path, appending each layer's output to a
 /// single `String`.
 ///
-/// Cross-build reuse of the stable prefix is provided by the explicit,
-/// input-keyed snapshot path ([`execute_stable_only`](Self::execute_stable_only)
-/// / `PromptBuilder::capture_snapshot`) and the cached two-part split
-/// (`PromptBuilder::build_system_prompt_cached_with_mode`), not by an internal
-/// name-keyed cache — a fresh builder is constructed per prompt build, so an
-/// in-pipeline cache never served a cross-call hit and could only ever return
-/// stale sections if a builder were reused. The pipeline therefore holds no
-/// mutable cache state.
+/// Cross-build reuse of the stable prefix is provided by the cached two-part
+/// split (`PromptBuilder::build_system_prompt_cached_with_mode`), which emits
+/// the Stable layers as one cacheable [`SystemPromptPart`] and the Dynamic
+/// layers as a marker-free tail — not by an internal name-keyed cache. A fresh
+/// builder is constructed per prompt build, so an in-pipeline cache never
+/// served a cross-call hit and could only ever return stale sections if a
+/// builder were reused. The pipeline therefore holds no mutable cache state.
 pub struct PromptPipeline {
     layers: Vec<Box<dyn PromptLayer>>,
 }
@@ -153,34 +152,6 @@ impl PromptPipeline {
             truncation_stats: stats,
             mode,
         }
-    }
-
-    /// Execute only stable layers for the given path and input.
-    ///
-    /// Returns the assembled string from layers whose
-    /// [`stability()`](PromptLayer::stability) is [`LayerStability::Stable`].
-    pub fn execute_stable_only(&self, path: AssemblyPath, input: &LayerInput) -> String {
-        let mut output = String::with_capacity(16384);
-        for layer in &self.layers {
-            if layer.paths().contains(&path) && layer.stability() == LayerStability::Stable {
-                layer.inject(&mut output, input);
-            }
-        }
-        output
-    }
-
-    /// Execute only dynamic layers for the given path and input.
-    ///
-    /// Returns the assembled string from layers whose
-    /// [`stability()`](PromptLayer::stability) is [`LayerStability::Dynamic`].
-    pub fn execute_dynamic_only(&self, path: AssemblyPath, input: &LayerInput) -> String {
-        let mut output = String::with_capacity(4096);
-        for layer in &self.layers {
-            if layer.paths().contains(&path) && layer.stability() == LayerStability::Dynamic {
-                layer.inject(&mut output, input);
-            }
-        }
-        output
     }
 
     /// Execute only stable layers with mode filtering.
@@ -521,7 +492,6 @@ mod mode_tests {
             "runtime_context",
             "environment",
             "runtime_capabilities",
-            "poe_success_criteria",
             "protocol_tokens",
             "heartbeat",
             "operational_guidelines",
@@ -538,7 +508,6 @@ mod mode_tests {
             "multi_step_conduct",
             "guidelines",
             "thinking_guidance",
-            "skill_mode",
         ];
         for layer in &pipeline.layers {
             if excluded_in_compact.contains(&layer.name()) {
@@ -564,13 +533,7 @@ mod mode_tests {
         // longer registered). `curated_memory` added to align with reality —
         // CuratedMemoryLayer (commit a89af2844) inherits the default
         // `supports_mode = true`, so it implicitly participates in Minimal.
-        let included_in_minimal = [
-            "soul",
-            "curated_memory",
-            "tools",
-            "hydrated_tools",
-            "language",
-        ];
+        let included_in_minimal = ["soul", "curated_memory", "tools", "language"];
         for layer in &pipeline.layers {
             if included_in_minimal.contains(&layer.name()) {
                 assert!(
@@ -745,6 +708,7 @@ mod stability_tests {
     use super::*;
     use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::prompt_layer::LayerStability;
+    use crate::thinker::prompt_mode::PromptMode;
 
     #[test]
     fn stable_layers_come_before_dynamic() {
@@ -835,15 +799,22 @@ mod stability_tests {
     }
 
     #[test]
-    fn execute_stable_only_excludes_dynamic() {
+    fn stable_plus_dynamic_reconstructs_full() {
+        // The stable/dynamic split is the prompt-cache breakpoint: the two
+        // halves must concatenate back to the full assembly with no overlap or
+        // gap. Asserted on the LIVE `_with_mode` methods that the cached
+        // production path (`build_system_prompt_cached_with_mode`) actually
+        // uses.
         let pipeline = PromptPipeline::default_layers();
         let config = crate::thinker::prompt_builder::PromptConfig::default();
         let tools = vec![];
         let input = LayerInput::basic(&config, &tools);
 
-        let stable = pipeline.execute_stable_only(AssemblyPath::Basic, &input);
-        let dynamic = pipeline.execute_dynamic_only(AssemblyPath::Basic, &input);
-        let full = pipeline.execute(AssemblyPath::Basic, &input);
+        let stable =
+            pipeline.execute_stable_with_mode(AssemblyPath::Basic, &input, PromptMode::Full);
+        let dynamic =
+            pipeline.execute_dynamic_with_mode(AssemblyPath::Basic, &input, PromptMode::Full);
+        let full = pipeline.execute_with_mode(AssemblyPath::Basic, &input, PromptMode::Full);
 
         // stable + dynamic should reconstruct the full output
         let combined = format!("{}{}", stable, dynamic);

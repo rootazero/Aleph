@@ -13,7 +13,6 @@ use crate::sync_primitives::Mutex;
 struct MonitorState {
     consecutive_misses: u32,
     total_calls: u64,
-    total_hits: u64,
 }
 
 impl MonitorState {
@@ -21,7 +20,6 @@ impl MonitorState {
         Self {
             consecutive_misses: 0,
             total_calls: 0,
-            total_hits: 0,
         }
     }
 }
@@ -62,7 +60,6 @@ impl CacheMonitor {
 
         let is_hit = cache_read_tokens.is_some_and(|t| t > 0);
         if is_hit {
-            state.total_hits += 1;
             state.consecutive_misses = 0;
         } else {
             state.consecutive_misses += 1;
@@ -85,17 +82,6 @@ impl CacheMonitor {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.consecutive_misses = 0;
     }
-
-    /// Return the cache hit rate as a percentage in [0.0, 100.0].
-    ///
-    /// Returns `100.0` when no calls have been recorded yet.
-    pub fn hit_rate(&self) -> f64 {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if state.total_calls == 0 {
-            return 100.0;
-        }
-        (state.total_hits as f64 / state.total_calls as f64) * 100.0
-    }
 }
 
 impl Default for CacheMonitor {
@@ -109,8 +95,8 @@ impl Default for CacheMonitor {
 // =============================================================================
 //
 // The cache monitor is wired into the metering provider — every LLM call
-// reports its `cache_read_tokens` to the singleton. Aggregate hit-rate is
-// observable without threading the monitor through every layer.
+// reports its `cache_read_tokens` to the singleton, which warns on a run of
+// consecutive misses (a hint the stable prefix changed unexpectedly).
 //
 // Same `OnceLock` shape as `pricing` / `tool_result_store`: lazy install on
 // first read, `&'static` reads on the hot path.
@@ -129,20 +115,6 @@ pub fn global_cache_monitor() -> &'static CacheMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hit_rate_tracks_correctly() {
-        let monitor = CacheMonitor::new();
-        // 3 hits
-        monitor.record_cache_usage(Some(100));
-        monitor.record_cache_usage(Some(200));
-        monitor.record_cache_usage(Some(50));
-        // 1 miss
-        monitor.record_cache_usage(None);
-
-        // 3 hits out of 4 total = 75%
-        assert!((monitor.hit_rate() - 75.0).abs() < f64::EPSILON);
-    }
 
     #[test]
     fn compaction_resets_consecutive_misses() {
@@ -165,11 +137,5 @@ mod tests {
             state.consecutive_misses, 1,
             "miss count should restart from 1 after compaction"
         );
-    }
-
-    #[test]
-    fn hit_rate_is_100_when_no_calls() {
-        let monitor = CacheMonitor::new();
-        assert!((monitor.hit_rate() - 100.0).abs() < f64::EPSILON);
     }
 }

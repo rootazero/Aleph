@@ -52,9 +52,20 @@ pub fn sanitize_for_prompt(value: &str, level: SanitizeLevel) -> String {
 /// Check for Unicode format characters (category Cf) and line/paragraph separators.
 ///
 /// Includes:
-/// - Unicode Cf (format) characters: zero-width spaces, joiners, direction marks, etc.
-/// - U+2028 (Line Separator) and U+2029 (Paragraph Separator)
-const fn is_format_char(c: char) -> bool {
+/// - The shared invisible / bidi / tag class, delegated to
+///   `crate::security::unicode_guard::is_invisible_char` (the single source of
+///   truth) so this prompt-facing catalog can never drift from it. This adds
+///   the Hangul fillers (U+3164/115F/1160) and variation selectors
+///   (U+FE00-FE0F) the hand-rolled ranges below omitted.
+/// - A local supplement the SSOT deliberately omits: U+2028/U+2029 (Zl/Zp
+///   separators) and the wider Cf ranges (soft hyphen, Arabic marks,
+///   deprecated + astral-plane format chars).
+fn is_format_char(c: char) -> bool {
+    // Shared invisible class — single source of truth, no drift.
+    if crate::security::unicode_guard::is_invisible_char(c) {
+        return true;
+    }
+
     // U+2028 and U+2029 are line/paragraph separators (category Zl/Zp)
     if c == '\u{2028}' || c == '\u{2029}' {
         return true;

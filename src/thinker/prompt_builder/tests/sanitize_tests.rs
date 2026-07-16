@@ -117,20 +117,3 @@ fn test_sanitize_security_notes_light() {
     assert!(!prompt.contains("</system>"));
     assert!(prompt.contains("Sandbox active"));
 }
-
-#[test]
-fn test_sanitize_user_profile_light() {
-    use crate::thinker::user_profile::UserProfile;
-    let builder = PromptBuilder::new(PromptConfig::default());
-    let mut prompt = String::new();
-
-    let profile = UserProfile {
-        preferred_name: Some("Alice".to_string()),
-        ..Default::default()
-    };
-
-    builder.append_user_profile(&mut prompt, &profile);
-
-    // Just verify it produces valid output with sanitization applied
-    assert!(prompt.contains("Alice"));
-}
