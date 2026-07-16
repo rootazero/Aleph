@@ -11,7 +11,7 @@ use crate::sync_primitives::{Arc, Mutex};
 use crate::sync_primitives::{AtomicU64, Ordering};
 
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 
@@ -102,9 +102,18 @@ pub enum ReverseRpcError {
     /// 出站通道已关闭（对端连接已断）。
     #[error("reverse-rpc transport closed")]
     TransportClosed,
-    /// 在超时内没等到响应。
-    #[error("reverse-rpc call timed out after {0}ms")]
+    /// 帧**已投递**给节点，但在预算内没等到响应——节点健康、只是命令慢。
+    /// 与 [`OutboundWedged`](Self::OutboundWedged) 类型级区分：调用方据此可知
+    /// 是「等结果超时」而非「socket 死」，长命令（大 `timeout_ms`）落此支属正常。
+    #[error("reverse-rpc call timed out after {0}ms (no response)")]
     Timeout(u64),
+    /// 帧**压不进出站队列**：writer 卡在 `send` 上（对端 TCP 停止收字节 = 慢消费者/
+    /// 半开连接），有界 mpsc 灌满、`send().await` 整段预算内都拿不到容量。这是
+    /// socket 级背压失败，映射 openclaw `rejectSlowNodeSocket` 的 `bufferedAmount`
+    /// 信号——与「节点慢」（[`Timeout`](Self::Timeout)）性质不同：装了 close 信号的
+    /// 中心侧通道会据此**主动关掉这条卡死连接**（见 [`ReverseRpcChannel::with_close`]）。
+    #[error("reverse-rpc outbound wedged after {0}ms (node socket not draining)")]
+    OutboundWedged(u64),
     /// 等待端被丢弃：连接清理时 [`PendingInvokes::cancel_all`] 取消了所有 pending。
     /// 节点掉线后在途 `node_invoke` / `node_file` / 审批调用即时收到此错误（fail-fast），
     /// 不再空等满 `timeout_ms`。
@@ -121,15 +130,38 @@ pub enum ReverseRpcError {
 pub struct ReverseRpcChannel {
     outbound: mpsc::Sender<String>,
     pending: Arc<PendingInvokes>,
+    /// 可选的「关连接」信号。装了它的通道在出站卡死（[`ReverseRpcError::OutboundWedged`]）
+    /// 时会 `notify_one()`，让拥有这条连接的读循环退出、跑完整清理（deregister +
+    /// `node.disconnected` 事件 + `cancel_all` + 关 socket），节点随后退避重连自愈。
+    /// `None`（[`new`](Self::new)）= 纯传输语义，卡死只回错误不关连接（节点侧 / 测试）。
+    close: Option<Arc<Notify>>,
 }
 
 impl ReverseRpcChannel {
-    /// 用一条连接的出站发送端构造通道（新建独立的 pending 表）。
+    /// 用一条连接的出站发送端构造通道（新建独立的 pending 表）。无 close 信号：
+    /// 出站卡死只回 [`ReverseRpcError::OutboundWedged`]、不触发关连接（节点侧拨出
+    /// 通道与单测用此——重连由各自的 run loop 自管）。
     #[must_use]
     pub fn new(outbound: mpsc::Sender<String>) -> Self {
         Self {
             outbound,
             pending: Arc::new(PendingInvokes::new()),
+            close: None,
+        }
+    }
+
+    /// 同 [`new`](Self::new)，但绑定一个「关连接」信号（中心侧每连接一个）。出站
+    /// 卡死时 [`call`](Self::call) 除回 [`OutboundWedged`](ReverseRpcError::OutboundWedged)
+    /// 外还 `notify_one()` 该信号，令连接读循环退出并跑完整清理——把半开/慢消费者
+    /// 连接从舰队里摘除（映射 openclaw `rejectSlowNodeSocket`）。idle-watchdog 只看
+    /// 入站活动，对「center→node 写死、node→center 读活」的半开卡死永不触发，故这条
+    /// 主动关闭是唯一能收走该僵尸连接的路径。
+    #[must_use]
+    pub fn with_close(outbound: mpsc::Sender<String>, close: Arc<Notify>) -> Self {
+        Self {
+            outbound,
+            pending: Arc::new(PendingInvokes::new()),
+            close: Some(close),
         }
     }
 
@@ -147,7 +179,10 @@ impl ReverseRpcChannel {
     /// （慢消费者 / 半开连接），writer 会卡在 `send` 上、队列灌满，此时
     /// `outbound.send().await` 会**无限期挂起**——旧实现在这里没有超时，等于把
     /// `timeout_ms` 契约悄悄作废，调用方（`node_invoke` / 审批）永久挂死。现在入队
-    /// 也在预算内，满队列到点即 `Timeout`。
+    /// 也在预算内，满队列到点即 [`OutboundWedged`](ReverseRpcError::OutboundWedged)
+    /// （与「等响应超时」= [`Timeout`](ReverseRpcError::Timeout) 类型级区分）；若本通道
+    /// 经 [`with_close`](Self::with_close) 装了 close 信号，还会**主动关掉这条卡死连接**，
+    /// 把它从舰队摘除、放节点退避重连——否则半开写卡死会无限占着 registry 一个在线位。
     pub async fn call(
         &self,
         method: &str,
@@ -167,10 +202,18 @@ impl ReverseRpcChannel {
                 self.pending.cancel(&id);
                 return Err(ReverseRpcError::TransportClosed);
             }
-            // Never got the frame queued within the budget — a wedged peer.
+            // Never got the frame queued within the budget — a wedged peer
+            // (writer stuck on a socket the peer stopped draining). Distinct from
+            // a slow *response*: the frame did not even reach the wire. Ask the
+            // owning connection to tear itself down so the zombie is reaped now
+            // rather than occupying a registry slot until (or past) the inbound
+            // idle-watchdog, which never fires for a half-open write-wedge.
             Err(_) => {
                 self.pending.cancel(&id);
-                return Err(ReverseRpcError::Timeout(timeout_ms));
+                if let Some(close) = &self.close {
+                    close.notify_one();
+                }
+                return Err(ReverseRpcError::OutboundWedged(timeout_ms));
             }
             Ok(Ok(())) => {}
         }
@@ -321,7 +364,54 @@ mod tests {
             .call("tool.call", json!({}), 50)
             .await
             .expect_err("a wedged queue must time out, not hang");
+        // Enqueue-wedge is typed distinctly from a slow *response* (Timeout): the
+        // frame never reached the wire. A plain `new` channel just reports it.
+        assert!(matches!(err, ReverseRpcError::OutboundWedged(50)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn wedged_outbound_notifies_close_signal_on_with_close_channel() {
+        // A with_close channel over a wedged queue must, in addition to returning
+        // OutboundWedged, fire its close signal so the owning connection tears
+        // down (maps openclaw rejectSlowNodeSocket). A slow *response* would not.
+        let (out_tx, _never_drained) = tokio::sync::mpsc::channel::<String>(1);
+        out_tx.send("stale frame".to_string()).await.unwrap();
+        let close = Arc::new(Notify::new());
+        let channel = ReverseRpcChannel::with_close(out_tx, close.clone());
+
+        let err = channel
+            .call("tool.call", json!({}), 50)
+            .await
+            .expect_err("wedged queue must error");
+        assert!(matches!(err, ReverseRpcError::OutboundWedged(50)), "{err:?}");
+        // notify_one() before the waiter still leaves a stored permit, so this
+        // resolves immediately — no lost wakeup.
+        tokio::time::timeout(Duration::from_secs(1), close.notified())
+            .await
+            .expect("close signal must have been fired by the wedge");
+    }
+
+    #[tokio::test]
+    async fn slow_response_does_not_fire_close_signal() {
+        // Frame enqueues fine (receiver alive, capacity 8) but no response comes:
+        // that's a healthy-but-slow node (Timeout), NOT a wedge — the connection
+        // must NOT be torn down, so the close signal must stay unfired.
+        let (out_tx, _keepalive) = tokio::sync::mpsc::channel::<String>(8);
+        let close = Arc::new(Notify::new());
+        let channel = ReverseRpcChannel::with_close(out_tx, close.clone());
+
+        let err = channel
+            .call("tool.call", json!({}), 50)
+            .await
+            .expect_err("must time out waiting for response");
         assert!(matches!(err, ReverseRpcError::Timeout(50)), "{err:?}");
+        // No permit stored → notified() is still pending → times out here.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), close.notified())
+                .await
+                .is_err(),
+            "a slow response must not tear down the connection"
+        );
     }
 
     #[tokio::test]

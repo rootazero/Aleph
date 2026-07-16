@@ -300,9 +300,22 @@ approve/deny → 决策作 JSON-RPC 响应下行。
   在途 `node_invoke` / `node_file` / 审批调用即时收到 `RecvError` → 映射
   `ReverseRpcError::Cancelled` **立即返回**,而非空等满 `timeout_ms`。
 - **`timeout_ms` 是整次调用的预算**,覆盖「把帧压进出站队列」+「等响应」两段。出站是
-  有界 mpsc;对端 TCP 停止收字节时(慢消费者 / 半开连接)writer 会卡住、队列灌满,
-  此时 `outbound.send().await` 会**无限期挂起**——旧实现在入队这一段没有超时,等于把
-  `timeout_ms` 契约悄悄作废,调用方永久挂死。现在入队也在预算内。
+  有界 mpsc(容量 64);对端 TCP 停止收字节时(慢消费者 / 半开连接)writer 会卡住、
+  队列灌满,此时 `outbound.send().await` 会**无限期挂起**——旧实现在入队这一段没有
+  超时,等于把 `timeout_ms` 契约悄悄作废,调用方永久挂死。现在入队也在预算内,满队列
+  到点回 `ReverseRpcError::OutboundWedged`(与「等响应超时」= `Timeout` 类型级区分:
+  帧根本没上线 vs 节点慢)。
+- **卡死连接自动摘除**(慢消费者踢除,映射 openclaw `rejectSlowNodeSocket`):中心侧每
+  条连接的 `ReverseRpcChannel` 经 `with_close` 绑一个 close 信号;`call()` 命中入队卡死
+  时除回 `OutboundWedged` 外还 `notify` 它,令该连接读循环退出、跑**现有全套** cleanup
+  (`cancel_all` + `deregister` + `node.disconnected` 事件 + `touch_device` + 关 socket),
+  节点随后退避重连自愈。**为何非踢不可**:入站 idle-watchdog 只看 `last_activity_at`
+  (peer 自动 Pong 刷新),对「center→node 写死、node→center 读活」的**半开写卡死**
+  永不触发——不主动踢,这条僵尸连接会**无限**占着 registry 一个在线位,`node_list` 报它
+  online、发给它的调用全超时。**不误杀**:只在**入队**卡死(容量 64 满满整段预算=强背压
+  信号)触发,绝不碰响应超时(长命令落 `Timeout`,安全);且踢除=关连接→节点秒级重连,
+  即便偶发误判也自愈,严格优于留着僵尸。节点侧拨出通道用 `new`(无 close 信号),重连由其
+  `run_session` 自管。
 - 重连安全:`NodeRegistry::register` 同 `node_id` 重连覆盖旧会话并清旧 `conn`
   映射;`deregister` 仅当当前会话确属该 `conn_id` 时才移除(旧连接 cleanup 不误删
   新会话)。
@@ -402,8 +415,8 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 | 重连退避 | 1s → ×2 → 30s,**无 jitter**(`client.ts:1506`;全仓 grep `jitter` 零命中) | 2s → ×2 → 60s,**±25% jitter** + 仅在活过 30s 的会话后重置 | 🟢 **超越**(N 节点不齐步撞门;不对"接受即关闭"的中心热转) |
 | 扇出 | **没有**——`invoke()` 只收单个 `nodeId`(`src/gateway/node-registry.ts:606`) | `node_invoke_many` 按 tag AND 并发扇出 + 部分失败容忍 + 结果确定序 | 🟢 **超越**(openclaw 无对应物) |
 | 并发调度 | 无(每 invoke 各自 Promise,无资源模型) | `ExclusiveScope::Nodes`——不同机器的 `node_invoke` 并行,同机器串行 | 🟢 **超越**(利用已有 `ConcurrencyClaim` 基建,Rust 侧独有) |
-| 出站背压 | `bufferedAmount > MAX_BUFFERED_BYTES` ⇒ **直接关 socket**(`node-registry.ts:894` `rejectSlowNodeSocket`) | 有界 mpsc + **入队纳入 `timeout_ms` 预算**(调用方不再挂死);卡死的 socket 靠 90s idle-watchdog 收走 | ⚠️ **部分对齐,残留缺口**——见下 |
-| 超时语义 | 解析为 `{ok:false, error:{code:"TIMEOUT"}}`(值) | `ReverseRpcError::Timeout` (类型化 Err) | **分道**(Rust 类型安全表达,调用方无法忽略) |
+| 出站背压 | `bufferedAmount > MAX_BUFFERED_BYTES` ⇒ **直接关 socket**(`node-registry.ts:894` `rejectSlowNodeSocket`) | 有界 mpsc(容量 64)+ **入队纳入 `timeout_ms` 预算**;入队卡死回 `OutboundWedged` **并触发关连接**(`with_close` 信号→读循环退出→全套 cleanup),节点退避重连 | **对齐**(2026-07-17 闭合;见下「存活性」节) |
+| 超时语义 | 解析为 `{ok:false, error:{code:"TIMEOUT"}}`(值) | `Timeout`(等响应超时)与 `OutboundWedged`(入队卡死)**两个类型化 Err**——「节点慢」与「socket 死」不再混为一谈 | 🟢 **超越**(Rust 类型安全 + 比 openclaw 单一 TIMEOUT 更细粒度,调用方/模型可分辨) |
 | 取消帧 | **无**(靠中心 deadline + 节点自杀子进程 + 断线) | 无(节点侧 bash 自带 60s 超时兜底) | **对齐** |
 
 ### 有意不移植(YAGNI / 红线)
@@ -416,14 +429,21 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 | `idempotencyKey` | openclaw 自己的 node-host **也完全忽略它**(只用于 pending 去重),移植即死代码 |
 | 三段式 exec 审批(prepare → approve → run + 计划绑定) | Aleph 复用**已有** `ExecApprovalManager` + Panel 审批卡,`node.approval.request` 一跳搞定(更薄,R10) |
 
-### 尚未闭合(诚实记账)
+### 已闭合(记账)
 
-- **慢消费者不踢 socket**:openclaw 在出站缓冲超限时**主动关掉**那条坏连接
-  (`rejectSlowNodeSocket`),把坏节点从舰队里摘掉。Aleph 现在只做到「调用方不再被
-  拖死」(入队有预算),但**卡死的节点 socket 仍占着 registry 一个在线位**,要等
-  90s idle-watchdog 才被收走——期间 `node_list` 会把它报成 online,发给它的调用会
-  全部超时。补法:在 `ReverseRpcChannel::call` 的入队超时路径上标记该会话不健康并
-  `NodeRegistry::forget`。**未做**——需要先想清楚「一次超时就摘除」会不会误杀。
+- **慢消费者踢除(2026-07-17 闭合,比原设想更彻底)**:openclaw 在出站缓冲超限时
+  **主动关掉**坏连接(`rejectSlowNodeSocket`)把坏节点摘掉。此前 Aleph 只做到「调用方
+  不再被拖死」(入队有预算),但**卡死的节点 socket 仍占着 registry 一个在线位**——原本
+  以为 90s idle-watchdog 会收走,但复核发现 watchdog **只看入站** `last_activity_at`,
+  对「center→node 写死、node→center 读活」的**半开写卡死永不触发**,僵尸会**无限**占位。
+  原设想的补法(入队超时路径 `NodeRegistry::forget`)只去路由、留着僵尸 socket,且怕
+  「一次超时误杀」。**实际采用更彻底也更省的路径**:给中心侧每连接的 `ReverseRpcChannel`
+  绑一个 close 信号(`with_close`),`call()` 命中入队卡死时 `notify` 它 → 连接读循环退出
+  → 跑**现有全套** cleanup(`cancel_all`+`deregister`+`node.disconnected`+关 socket),
+  节点退避重连自愈。**误杀顾虑已解**:只在**入队**卡死(容量 64 满满整段预算 = 强背压)触发、
+  绝不碰响应超时(长命令安全),且关连接→节点秒级重连,偶发误判也自愈。四个 LLM 工具与
+  `NodeRegistry` **零改动**(纯传输层收口)。锚点 `cluster/reverse_rpc.rs::with_close` +
+  `gateway/server/handler.rs` 的 `rpc_close` select arm。
 
 ## 与「一核多端」的边界
 

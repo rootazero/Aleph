@@ -16,7 +16,7 @@ use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Notify, RwLock};
 use tokio::time::{interval_at, Instant as TokioInstant, MissedTickBehavior};
 use tracing::{debug, error, info, warn};
 
@@ -345,7 +345,15 @@ async fn handle_connection(
     // approval task sends its JSON-RPC response here; the select arm below
     // writes it to the socket.
     let rpc_out_tx_replies = rpc_out_tx.clone();
-    let rpc_channel = crate::cluster::ReverseRpcChannel::new(rpc_out_tx);
+    // Slow-consumer teardown: a reverse-RPC call whose outbound queue wedges (the
+    // peer stopped draining = half-open / slow consumer) fires this so the select
+    // loop below exits and runs the normal cleanup — reaping a zombie the inbound
+    // idle-watchdog would miss for a write-only wedge. Maps openclaw
+    // `rejectSlowNodeSocket`. Non-node connections never have their channel pulled
+    // from the NodeRegistry, so their `call()` never runs and this never fires.
+    let rpc_close = Arc::new(Notify::new());
+    let rpc_channel =
+        crate::cluster::ReverseRpcChannel::with_close(rpc_out_tx, rpc_close.clone());
     let rpc_pending = rpc_channel.pending();
     // The channel reaches the outside world exactly one way: a node-shaped
     // connect (params carrying `commands`/`tags`) stores this clone inside its
@@ -1240,6 +1248,19 @@ async fn handle_connection(
                         rpc_open = false;
                     }
                 }
+            }
+            // Slow-consumer teardown: a reverse-RPC call detected the outbound
+            // queue wedged (peer stopped draining = half-open / slow consumer) and
+            // fired this. Break to the shared cleanup below, which deregisters the
+            // node, emits `node.disconnected`, cancels in-flight calls and drops
+            // the socket — so the node reconnects instead of holding a registry
+            // slot the inbound idle-watchdog can't reclaim for a write-only wedge.
+            _ = rpc_close.notified() => {
+                warn!(
+                    "Reverse-RPC outbound wedged for {}; closing connection (slow consumer)",
+                    conn_id
+                );
+                break;
             }
             // Server-initiated WS Ping + inbound idle watchdog
             _ = ping_timer.tick() => {
