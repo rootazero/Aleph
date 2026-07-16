@@ -717,6 +717,44 @@ impl ChannelRegistry {
             }
         }
     }
+
+    /// Most-recently dead-lettered outbound deliveries (newest first), or `None`
+    /// when no durable store is attached. Detail-on-demand counterpart to the
+    /// `dead_lettered` **count** in [`delivery_queue_stats`](Self::delivery_queue_stats):
+    /// surfaces *which* proactive pushes were permanently lost, to whom, and why
+    /// — reading back the forensic trail `record_dead_letter` preserves (R8/R5).
+    /// A query error degrades to an empty list (still `Some`, so callers can
+    /// distinguish "no store" from "store present, nothing to show").
+    pub fn recent_dead_letters(
+        &self,
+        limit: usize,
+    ) -> Option<Vec<super::delivery_queue::DeadLetter>> {
+        let store = self.delivery_store.as_ref()?;
+        match store.recent_dead_letters(limit) {
+            Ok(letters) => Some(letters),
+            Err(e) => {
+                warn!(error = %e, "delivery queue: recent_dead_letters query failed");
+                Some(Vec::new())
+            }
+        }
+    }
+
+    /// Move dead-lettered deliveries back into the live outbound queue for
+    /// another delivery pass — the recovery half of the dead-letter trail (R5).
+    /// `channel` optionally restricts the redrive to one transport. Returns the
+    /// number redriven, or `None` when no durable store is attached. Safe by
+    /// construction (every dead letter was a duplicate-safe transient failure —
+    /// see [`super::delivery_queue::DeliveryStore::redrive_dead_letters`]).
+    pub fn redrive_dead_letters(&self, channel: Option<&str>) -> Option<u64> {
+        let store = self.delivery_store.as_ref()?;
+        match store.redrive_dead_letters(super::delivery_queue::now_secs(), channel) {
+            Ok(n) => Some(n),
+            Err(e) => {
+                warn!(error = %e, "delivery queue: redrive_dead_letters failed");
+                Some(0)
+            }
+        }
+    }
 }
 
 impl Default for ChannelRegistry {

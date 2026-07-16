@@ -566,6 +566,80 @@ impl DeliveryStore {
         }
         Ok(out)
     }
+
+    /// Move dead-lettered deliveries back into the live queue for another
+    /// delivery pass — the recovery half of the forensic trail (`record_dead_letter`
+    /// preserves *what* was lost; this replays it once the transport is healthy
+    /// again, R5). Optionally restricted to a single `channel`; `None` redrives
+    /// every dead letter. Returns the number of records moved.
+    ///
+    /// **Safe by construction**: a record only reaches `dead_letters` after
+    /// exhausting retries for a *duplicate-safe* transient error
+    /// ([`should_enqueue`] admits only `NotConnected` / `RateLimited`), so
+    /// replaying it can never produce a duplicate — the property that lets Aleph
+    /// expose a redrive neither openclaw nor hermes offers.
+    ///
+    /// Each moved record is reset to a fresh budget (`attempts = 0`) and made
+    /// immediately due (`next_attempt_at = created_at = now`), preserving its
+    /// prior `last_error` as context. The whole batch moves in one transaction,
+    /// and the live queue's `max_queue_len` cap is enforced once afterward
+    /// (oldest `created_at` evicted first, matching [`enqueue`](Self::enqueue));
+    /// since redriven rows carry `created_at = now` they never starve genuinely
+    /// older pending work.
+    pub fn redrive_dead_letters(&self, now: i64, channel: Option<&str>) -> rusqlite::Result<u64> {
+        fn map_row(r: &rusqlite::Row) -> rusqlite::Result<(i64, String, String, Option<String>)> {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        }
+
+        let mut conn = self.guard();
+        let tx = conn.transaction()?;
+
+        // Snapshot the dead letters to move (optionally filtered by channel)
+        // before mutating either table, so the statement is released first.
+        let rows: Vec<(i64, String, String, Option<String>)> = match channel {
+            Some(ch) => {
+                let mut stmt = tx.prepare(
+                    "SELECT id, channel_id, payload, last_error
+                     FROM dead_letters WHERE channel_id = ?1",
+                )?;
+                let mapped = stmt.query_map(params![ch], map_row)?;
+                mapped.collect::<rusqlite::Result<Vec<_>>>()?
+            }
+            None => {
+                let mut stmt =
+                    tx.prepare("SELECT id, channel_id, payload, last_error FROM dead_letters")?;
+                let mapped = stmt.query_map([], map_row)?;
+                mapped.collect::<rusqlite::Result<Vec<_>>>()?
+            }
+        };
+
+        let mut moved = 0u64;
+        for (id, channel_id, payload, last_error) in &rows {
+            tx.execute(
+                "INSERT INTO outbound_deliveries
+                    (channel_id, payload, attempts, next_attempt_at, created_at, last_error)
+                 VALUES (?1, ?2, 0, ?3, ?3, ?4)",
+                params![channel_id, payload, now, last_error],
+            )?;
+            tx.execute("DELETE FROM dead_letters WHERE id = ?1", params![id])?;
+            moved += 1;
+        }
+
+        // Enforce the live-queue bound once after the batch (CWE-400).
+        let len: i64 =
+            tx.query_row("SELECT COUNT(*) FROM outbound_deliveries", [], |r| r.get(0))?;
+        if len > self.config.max_queue_len {
+            let overflow = len - self.config.max_queue_len;
+            tx.execute(
+                "DELETE FROM outbound_deliveries WHERE id IN (
+                    SELECT id FROM outbound_deliveries ORDER BY created_at ASC LIMIT ?1)",
+                params![overflow],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(moved)
+    }
 }
 
 /// Drive one pass over all currently-due records: claim, attempt delivery via
@@ -607,19 +681,20 @@ async fn drain_once(registry: &ChannelRegistry, store: &DeliveryStore) {
                     // Exhausted: dead-letter rather than hard-delete so the lost
                     // push leaves a forensic trail (R5 correctness). Fall back to
                     // a plain drop if the move itself fails so the record can
-                    // never wedge the queue.
-                    if let Err(dl_err) =
-                        store.record_dead_letter(rec.id, attempts, &format!("{e:?}"))
-                    {
-                        warn!(id = rec.id, error = %dl_err, "delivery queue: dead-letter failed; dropping");
-                        let _ = store.drop_record(rec.id, "dead-letter failed");
+                    // never wedge the queue — and report the outcome accurately
+                    // (a fallen-back drop is *not* a dead letter to inspect later).
+                    match store.record_dead_letter(rec.id, attempts, &format!("{e:?}")) {
+                        Ok(()) => warn!(
+                            id = rec.id,
+                            channel = %rec.channel_id,
+                            attempts,
+                            "delivery queue: giving up after exhausting retries (dead-lettered)"
+                        ),
+                        Err(dl_err) => {
+                            warn!(id = rec.id, error = %dl_err, "delivery queue: dead-letter failed; dropping");
+                            let _ = store.drop_record(rec.id, "dead-letter failed");
+                        }
                     }
-                    warn!(
-                        id = rec.id,
-                        channel = %rec.channel_id,
-                        attempts,
-                        "delivery queue: giving up after exhausting retries (dead-lettered)"
-                    );
                 } else {
                     // Floor at 1s: a sub-second backoff truncates to 0 through
                     // `as_secs()`, which would reschedule the record as
@@ -966,5 +1041,83 @@ mod tests {
             !texts.contains(&"1".to_string()),
             "oldest dead letter evicted"
         );
+    }
+
+    #[test]
+    fn redrive_moves_dead_letters_back_to_live_queue() {
+        let s = store();
+        let now = now_secs();
+        // Dead-letter two records.
+        for t in ["a", "b"] {
+            let id = s.enqueue("telegram", &msg(t), "NotConnected", now).unwrap();
+            s.record_dead_letter(id, 10, "exhausted").unwrap();
+        }
+        assert_eq!(s.stats(now).unwrap().dead_lettered, 2);
+        assert!(s.is_empty(), "no live records before redrive");
+
+        // Redrive: both move back, immediately due, fresh budget.
+        let moved = s.redrive_dead_letters(now, None).unwrap();
+        assert_eq!(moved, 2);
+        assert_eq!(
+            s.stats(now).unwrap().dead_lettered,
+            0,
+            "dead letters cleared"
+        );
+
+        let due = s.claim_due(now, 10).unwrap();
+        assert_eq!(due.len(), 2, "both are live and due");
+        assert!(
+            due.iter().all(|r| r.attempts == 0),
+            "redriven records get a fresh retry budget"
+        );
+    }
+
+    #[test]
+    fn redrive_can_filter_by_channel() {
+        let s = store();
+        let now = now_secs();
+        for (ch, t) in [("telegram", "x"), ("signal", "y")] {
+            let id = s.enqueue(ch, &msg(t), "NotConnected", now).unwrap();
+            s.record_dead_letter(id, 10, "exhausted").unwrap();
+        }
+
+        // Only telegram is redriven; signal stays dead-lettered.
+        let moved = s.redrive_dead_letters(now, Some("telegram")).unwrap();
+        assert_eq!(moved, 1);
+        assert_eq!(s.stats(now).unwrap().dead_lettered, 1);
+
+        let due = s.claim_due(now, 10).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].channel_id, "telegram");
+
+        let remaining = s.recent_dead_letters(10).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].channel_id, "signal");
+    }
+
+    #[test]
+    fn redrive_on_empty_is_zero() {
+        let s = store();
+        assert_eq!(s.redrive_dead_letters(now_secs(), None).unwrap(), 0);
+    }
+
+    #[test]
+    fn redrive_respects_live_queue_bound() {
+        let mut c = cfg();
+        c.max_queue_len = 2;
+        let s = DeliveryStore::open_in_memory(c).unwrap();
+        let now = now_secs();
+        // Dead-letter three records (the dead_letters table itself is capped at
+        // 2, so only the two newest survive to be redriven).
+        for t in ["1", "2", "3"] {
+            let id = s.enqueue("ch", &msg(t), "NotConnected", now).unwrap();
+            s.record_dead_letter(id, 10, "exhausted").unwrap();
+        }
+        assert_eq!(s.stats(now).unwrap().dead_lettered, 2);
+
+        let moved = s.redrive_dead_letters(now, None).unwrap();
+        assert_eq!(moved, 2);
+        // Live queue honors its own cap.
+        assert!(s.len().unwrap() <= 2, "redrive cannot blow the live bound");
     }
 }
