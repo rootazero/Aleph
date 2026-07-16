@@ -329,13 +329,18 @@ async fn main_loop(
                     }
                 }
             }
-            Action::RespondToDialog { run_id, choice } => {
+            Action::RespondToDialog { session_key, reply } => {
+                // The AskUser answer resolves the clarification the server's
+                // `ask_user` tool is parked on — keyed by session, not run
+                // (`agent.respondToInput` never existed server-side; this was a
+                // dead wire that timed every TUI answer out after 600s). Same
+                // RPC the Panel and CLI use.
                 let params = json!({
-                    "run_id": run_id,
-                    "response": choice,
+                    "session_key": session_key,
+                    "reply": reply,
                 });
                 match client
-                    .call::<_, Value>("agent.respondToInput", Some(params))
+                    .call::<_, Value>("clarification.resolve", Some(params))
                     .await
                 {
                     Ok(_) => {}

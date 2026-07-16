@@ -170,13 +170,13 @@ fn close_overlay_resets_focus() {
 fn show_dialog_sets_focus() {
     let mut state = AppState::new("s".into(), "m".into());
     state.show_dialog(
-        "run-1".into(),
+        "telegram:bot:1:u1".into(),
         "Approve?".into(),
         vec!["Yes".into(), "No".into()],
     );
     assert_eq!(state.focus, Focus::Dialog);
     let dialog = state.dialog.as_ref().unwrap();
-    assert_eq!(dialog.run_id, "run-1");
+    assert_eq!(dialog.session_key, "telegram:bot:1:u1");
     assert_eq!(dialog.question, "Approve?");
     assert_eq!(dialog.options.len(), 2);
     assert_eq!(dialog.selected, 0);
@@ -746,6 +746,7 @@ fn handle_ask_user_shows_dialog() {
     let event = StreamEvent::AskUser {
         run_id: "run-1".into(),
         seq: 3,
+        session_key: "telegram:bot:1:u1".into(),
         question: "Allow file write?".into(),
         options: vec!["Allow".into(), "Deny".into()],
     };
@@ -753,7 +754,8 @@ fn handle_ask_user_shows_dialog() {
 
     assert_eq!(state.focus, Focus::Dialog);
     let dialog = state.dialog.as_ref().unwrap();
-    assert_eq!(dialog.run_id, "run-1");
+    // The dialog keeps the clarification key so the answer can resolve it.
+    assert_eq!(dialog.session_key, "telegram:bot:1:u1");
     assert_eq!(dialog.question, "Allow file write?");
 }
 

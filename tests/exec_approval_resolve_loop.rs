@@ -44,8 +44,11 @@ async fn approve_callback_wakes_blocked_waiter() {
         .expect("approval callback");
     assert!(out.resolved, "pending approval must resolve");
 
-    let decision = waiter.await.unwrap();
-    assert_eq!(decision, Some(ApprovalDecisionType::AllowOnce));
+    // `await_registered` returns a `ResolvedDecision { decision, deny_reason }`
+    // since the round-4 `/deny <reason>` plumbing; an approval carries no reason.
+    let resolved = waiter.await.unwrap();
+    assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
+    assert!(resolved.deny_reason.is_none());
 }
 
 #[tokio::test]
@@ -65,7 +68,10 @@ async fn deny_callback_wakes_blocked_waiter() {
         .await
         .expect("approval callback");
 
-    assert_eq!(waiter.await.unwrap(), Some(ApprovalDecisionType::Deny));
+    assert_eq!(
+        waiter.await.unwrap().decision,
+        Some(ApprovalDecisionType::Deny)
+    );
 }
 
 #[tokio::test]
@@ -74,7 +80,13 @@ async fn timeout_when_no_callback_arrives() {
     let record = manager.create(&request("rec-timeout"), 100); // 100ms 超时
                                                                // 不发回调 → await_registered 应在超时后返回 None。
     let (id, rx, wait_timeout) = manager.register_pending(record);
-    assert_eq!(manager.await_registered(id, rx, wait_timeout).await, None);
+    assert_eq!(
+        manager
+            .await_registered(id, rx, wait_timeout)
+            .await
+            .decision,
+        None
+    );
 }
 
 #[tokio::test]

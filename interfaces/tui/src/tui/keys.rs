@@ -415,9 +415,9 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
             let idx = (c as usize) - ('1' as usize);
             if let Some(dialog) = &state.dialog {
                 if idx < dialog.options.len() {
-                    let run_id = dialog.run_id.clone();
-                    let choice = dialog.options[idx].clone();
-                    return Action::RespondToDialog { run_id, choice };
+                    let session_key = dialog.session_key.clone();
+                    let reply = dialog.options[idx].clone();
+                    return Action::RespondToDialog { session_key, reply };
                 }
             }
             Action::DialogSelect(idx)
@@ -446,8 +446,8 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
                 .options
                 .get(dialog.selected)
                 .map_or(Action::None, |choice| Action::RespondToDialog {
-                    run_id: dialog.run_id.clone(),
-                    choice: choice.clone(),
+                    session_key: dialog.session_key.clone(),
+                    reply: choice.clone(),
                 })
         }
         _ => Action::None,

@@ -20,7 +20,9 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 
 use alephcore::routing::session_key::SessionKey;
-use alephcore::sandbox::exec_approval::{ApprovalGate, ApprovalOutcome, ApprovalRequester};
+use alephcore::sandbox::exec_approval::{
+    ApprovalGate, ApprovalOutcome, ApprovalRequester, ApprovalResponse,
+};
 use alephcore::sandbox::rate_limit::SandboxRateLimitConfig;
 use alephcore::sandbox::{
     build_sandbox, NetworkPolicy, OsSandboxDriverTrait, OsSandboxProfile, Sandbox,
@@ -141,9 +143,11 @@ impl ApprovalRequester for FixedRequester {
     async fn request_approval(
         &self,
         _action: &alephcore::sandbox::exec_approval::ApprovalAction,
-    ) -> ApprovalOutcome {
+    ) -> ApprovalResponse {
         *self.calls.write().await += 1;
-        self.outcome
+        // A fixed outcome carries no denial reason; `From<ApprovalOutcome>`
+        // wraps it (round-4 widened the trait return to `ApprovalResponse`).
+        self.outcome.into()
     }
 }
 

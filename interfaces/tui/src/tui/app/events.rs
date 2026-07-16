@@ -167,12 +167,12 @@ impl AppState {
             }
 
             StreamEvent::AskUser {
-                run_id,
+                session_key,
                 question,
                 options,
                 ..
             } => {
-                self.show_dialog(run_id, question, options);
+                self.show_dialog(session_key, question, options);
                 Action::None
             }
 

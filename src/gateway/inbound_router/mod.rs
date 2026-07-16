@@ -1045,29 +1045,33 @@ impl InboundMessageRouter {
             return true;
         }
 
-        // Control/built-in commands must always reach their dedicated handlers
-        // below (/stop, /new, /voice, /btw, /groupchat …). A pending `ask_user`
-        // clarification or workflow-clarify step must never swallow them —
-        // otherwise the documented "always stoppable" escape hatch breaks.
-        let is_control_command = lower == "/stop"
-            || lower == "/abort"
-            || lower == "/new"
-            || lower == "/session new"
-            || lower == "/btw"
-            || lower.starts_with("/voice")
-            || lower.starts_with("/btw ")
-            || lower.starts_with("/btw\n")
-            || lower.starts_with("/groupchat");
-        if is_control_command {
+        // Any slash command must reach its dedicated handler below, never be
+        // swallowed as a clarification answer — otherwise a pending `ask_user`
+        // breaks the documented "always stoppable" escape hatch and eats
+        // `/help`, `/model`, `/sessions`, and every command the old fixed
+        // whitelist (`/stop /new /voice …`) forgot to list. A message is a
+        // command when its first whitespace-delimited token is `/<name>` with
+        // no embedded slash, so `/model claude` and `/stop` bypass while a
+        // path-like free-text answer (`/etc/hosts`, `/usr/local/bin`) is still
+        // taken as the answer. Mirrors hermes / openclaw, which treat
+        // slash-prefixed input as commands; the no-inner-slash rule is what
+        // keeps a genuine path answer from being misread as a command.
+        let is_slash_command = raw
+            .split_whitespace()
+            .next()
+            .and_then(|first| first.strip_prefix('/'))
+            .is_some_and(|name| !name.is_empty() && !name.contains('/'));
+        if is_slash_command {
             return false;
         }
 
         // Clarification reply: any message while an `ask_user` is pending for
-        // this session is taken as the answer.
+        // this session is taken as the answer. Resolve against `raw` — the same
+        // normalized text (`.trim()` + `/cmd@bot` collapsed) the sibling
+        // `clarify:` button and `/approve` branches above already use — so all
+        // three HITL paths interpret one text source and never drift.
         if let Some(ref mgr) = self.clarification_manager {
-            if mgr.has_pending(&session_key).await
-                && mgr.resolve(&session_key, &ctx.message.text).await
-            {
+            if mgr.has_pending(&session_key).await && mgr.resolve(&session_key, &raw).await {
                 info!("[Router] Routed reply to pending clarification for {session_key}");
                 return true;
             }
@@ -1350,6 +1354,78 @@ mod tests {
         assert!(
             router.try_intercept_hitl(&ctx).await,
             "a clarify callback is always consumed, even when nothing is pending"
+        );
+    }
+
+    /// F3 — a slash command typed while an `ask_user` is pending must reach its
+    /// handler, not be swallowed as the answer. The old fixed whitelist only
+    /// covered `/stop /new /voice …`; `/help`, `/model`, `/sessions` fell
+    /// through and became free-text replies. A path-like answer (`/etc/hosts`)
+    /// must still resolve the clarification.
+    #[tokio::test]
+    async fn slash_command_is_not_swallowed_by_pending_clarification() {
+        use crate::clarification::{ClarificationManager, ClarificationRequest};
+        use crate::exec::manager::ExecApprovalManager;
+        use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
+        use crate::routing::session_key::SessionKey;
+        use std::time::Duration;
+
+        let session_key = SessionKey::ephemeral("slash-vs-clarify");
+        let clarification = Arc::new(ClarificationManager::new());
+        let _rx = clarification
+            .register(
+                session_key.to_string(),
+                ClarificationRequest::text("ask-slash", "Which file?", None),
+                Duration::from_secs(60),
+            )
+            .await;
+
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_hitl(Arc::new(ExecApprovalManager::new()), clarification.clone());
+
+        let make_ctx = |text: &str| {
+            let msg = InboundMessage {
+                id: MessageId::new("m-slash"),
+                channel_id: ChannelId::new("telegram"),
+                conversation_id: ConversationId::new("u1"),
+                sender_id: UserId::new("u1"),
+                sender_name: None,
+                text: text.to_string(),
+                attachments: vec![],
+                timestamp: chrono::Utc::now(),
+                reply_to: None,
+                is_group: false,
+                raw: None,
+                metadata: vec![],
+            };
+            let reply_route =
+                ReplyRoute::new(ChannelId::new("telegram"), ConversationId::new("u1"));
+            InboundContext::new(msg, reply_route, session_key.clone())
+        };
+
+        // `/help` bypasses HITL (not consumed here) and the clarification stays
+        // pending for a genuine answer.
+        assert!(
+            !router.try_intercept_hitl(&make_ctx("/help")).await,
+            "a slash command must not be consumed as a clarification answer"
+        );
+        assert!(
+            clarification.has_pending(&session_key.to_string()).await,
+            "the clarification must remain pending after a bypassed slash command"
+        );
+
+        // A path-like free-text answer (inner slash → not a command) resolves it.
+        assert!(
+            router.try_intercept_hitl(&make_ctx("/etc/hosts")).await,
+            "a path-like answer must be taken as the clarification reply"
+        );
+        assert!(
+            !clarification.has_pending(&session_key.to_string()).await,
+            "the clarification must be resolved by the path answer"
         );
     }
 
