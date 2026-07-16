@@ -221,6 +221,19 @@ impl GoalStore {
             return Ok(ContinuationDecision::AwaitingGate(Box::new(claimed)));
         }
 
+        // Lazy self-clear of an ELAPSED deadline barrier (hermes parity): the
+        // barrier is satisfied, so drop the stale wait fields on this claim's
+        // write path instead of carrying them into renders forever. An
+        // unsatisfied barrier is handled below, after the in-flight gate.
+        let current = if current
+            .waiting_until_ms
+            .is_some_and(|until| now_ms != 0 && until <= now_ms)
+        {
+            current.without_wait(now_ms)
+        } else {
+            current
+        };
+
         // Lazy token-baseline capture on the first claim that sees a budget
         // (codex `tokenStartFresh`): just captured → 0 spent, never a false
         // over-budget. Only meaningful for an Active pursuit — the budget is
@@ -246,6 +259,9 @@ impl GoalStore {
         // A continuation already in flight blocks another claim — the fan-out
         // gate. Past the stale grace its task is presumed dead and the claim
         // proceeds (that task's own `confirm_fire` will then mismatch and skip).
+        // A claimed wait-barrier TIMER also parks here: its wake is in the
+        // future, so `now < wake + grace` holds for the whole park and no
+        // second claim can race it.
         if let Some(wake) = goal.pending_continuation_ms {
             if now_ms < wake.saturating_add(PENDING_STALE_GRACE_MS) {
                 if baseline_seeded {
@@ -253,6 +269,61 @@ impl GoalStore {
                 }
                 return Ok(ContinuationDecision::Idle);
             }
+        }
+
+        // Wait barrier: a parked pursuit claims its WAKE instead of its next
+        // step (R7 — the model chose to park; this is pure clock/event
+        // mechanics). A deadline barrier arms an exact timer through the very
+        // same Fire machinery a normal continuation uses (confirm_fire CAS,
+        // busy re-arm, stale-grace self-heal all apply unchanged); the wake
+        // run spends one iteration like every autonomous run, so parking can
+        // never smuggle extra runway past the R5 cap. A task barrier stays
+        // Idle — the `GoalWakeService` clears it on the task's settle event
+        // (boot recheck covers restarts). Wakes with no runway left stay Idle
+        // too: exhaustion is arbitrated when the barrier clears, so a parked
+        // goal is never Blocked while legitimately waiting.
+        if let Some(park) = pursuit::wait_parked(&goal, now_ms) {
+            if let pursuit::WaitPark::Timer { wake_ms } = park {
+                if pursuit::should_continue(&goal, tokens_now, now_ms) {
+                    let prompt = pursuit::wait_resume_prompt(&goal, "the wait elapsed");
+                    Self::put_locked(
+                        &conn,
+                        &goal
+                            .spent_continuation(now_ms)
+                            .with_pending_continuation(Some(wake_ms)),
+                    )?;
+                    return Ok(ContinuationDecision::Fire {
+                        delay_ms: wake_ms.saturating_sub(now_ms),
+                        wake_ms,
+                        prompt,
+                    });
+                }
+                // Timer parked with no runway left (iteration/deadline/token
+                // cap already spent): arming the timer would only wake into an
+                // immediate Block, so arbitrate exhaustion NOW instead of
+                // parking silently forever. Same transition as the unparked
+                // exhausted path below; clears the barrier + pending marker.
+                if pursuit::exhausted_while_active(&goal, tokens_now, now_ms) {
+                    let note = pursuit::stop_reason_note(&goal, tokens_now, now_ms);
+                    Self::put_locked(
+                        &conn,
+                        &goal
+                            .without_wait(now_ms)
+                            .with_status(GoalStatus::Blocked, now_ms)
+                            .with_note(Some(note.clone()), now_ms)
+                            .with_pending_continuation(None),
+                    )?;
+                    return Ok(ContinuationDecision::Exhausted { note });
+                }
+            }
+            // Task barrier (woken externally by GoalWakeService), or a timer
+            // barrier that is neither runnable nor exhausted (e.g. status not
+            // Active): stay parked. Exhaustion for a task barrier is arbitrated
+            // when the barrier clears.
+            if baseline_seeded {
+                Self::put_locked(&conn, &goal)?;
+            }
+            return Ok(ContinuationDecision::Idle);
         }
 
         if pursuit::should_continue(&goal, tokens_now, now_ms) {
@@ -369,6 +440,121 @@ impl GoalStore {
         }
     }
 
+    /// Like [`Self::block_if_active`], but scoped to goals whose recovery
+    /// actually hung on a crashed autonomous run — used by
+    /// `ResumeCoordinator::abandon`. Blocks ONLY an Active-pursuit goal that is
+    /// NOT parked on a task barrier: a passive/interactive goal never depends
+    /// on the continuation chain (its "recovery" is the user talking again),
+    /// and a task-barrier-parked goal is woken by `GoalWakeService`, not by the
+    /// abandoned run — blocking either would wrongly kill a healthy pursuit.
+    /// `false` = nothing eligible to block.
+    pub fn block_if_abandonable(&self, session_id: &str, note: &str, now_ms: u64) -> Result<bool> {
+        let conn = self.lock();
+        match Self::get_locked(&conn, session_id)? {
+            Some(live)
+                if live.is_active()
+                    && matches!(live.pursuit, crate::goal::PursuitMode::Active { .. })
+                    && live.waiting_on_task.is_none() =>
+            {
+                Self::put_locked(
+                    &conn,
+                    &live
+                        .with_status(GoalStatus::Blocked, now_ms)
+                        .with_note(Some(note.to_string()), now_ms)
+                        .with_pending_continuation(None),
+                )?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Enroll a delegation session in the goal's shared token budget (tree
+    /// budget v1), in one guard. First writer wins per member (the join-time
+    /// baseline must not be re-stamped by a later delegation to the same
+    /// session — that would erase spend already accrued); capped at
+    /// [`crate::goal::types::MAX_BUDGET_MEMBERS`]. `false` = not enrolled
+    /// (no goal / not active / no budget / self / cap reached) — the
+    /// delegation itself proceeds regardless, only the accounting is skipped.
+    pub fn register_budget_member(
+        &self,
+        owner_session: &str,
+        member_session: &str,
+        member_tokens_now: u64,
+        now_ms: u64,
+    ) -> Result<bool> {
+        use crate::goal::types::{BudgetMember, MAX_BUDGET_MEMBERS};
+        if owner_session == member_session {
+            return Ok(false); // own session is already the tree's base term.
+        }
+        let conn = self.lock();
+        match Self::get_locked(&conn, owner_session)? {
+            Some(mut g) if g.is_active() && g.token_budget.is_some() => {
+                if g.budget_members
+                    .iter()
+                    .any(|m| m.session_id == member_session)
+                {
+                    return Ok(true); // already enrolled — keep its original baseline.
+                }
+                if g.budget_members.len() >= MAX_BUDGET_MEMBERS {
+                    tracing::warn!(
+                        session = %owner_session,
+                        cap = MAX_BUDGET_MEMBERS,
+                        "goal tree budget: member cap reached; further delegations unaccounted"
+                    );
+                    return Ok(false);
+                }
+                g.budget_members.push(BudgetMember {
+                    session_id: member_session.to_string(),
+                    tokens_at_join: member_tokens_now,
+                });
+                g.updated_at_ms = now_ms;
+                Self::put_locked(&conn, &g)?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Supersede a claimed WAIT TIMER whose armed continuation is now stale
+    /// (the user explicitly un-parked via `status='active'`, or re-parked with
+    /// a fresh `wait_minutes`). Clears `pending_continuation_ms` ONLY when it
+    /// still equals `armed_wake` — so the detached sleeping timer task's
+    /// `confirm_fire` mismatches and skips, and the un-parking run's own
+    /// `post_run` can claim a fresh continuation immediately instead of being
+    /// stalled behind the old in-flight marker until the original wake. The
+    /// equality guard is what keeps it from ever touching a NORMAL in-flight
+    /// continuation (whose `wake_ms` is `now`, not the future barrier
+    /// instant). `false` = no stale timer to supersede (never claimed, or
+    /// already moved on). Idempotent and lock-atomic.
+    pub fn supersede_wait_timer(&self, session_id: &str, armed_wake: u64) -> Result<bool> {
+        let conn = self.lock();
+        match Self::get_locked(&conn, session_id)? {
+            Some(g) if g.pending_continuation_ms == Some(armed_wake) => {
+                Self::put_locked(&conn, &g.with_pending_continuation(None))?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Clear an unsatisfied wait barrier (both kinds) on a still-Active goal,
+    /// in one guard. Used by the goal-wake service when the awaited task
+    /// settles (or the boot recheck finds it already settled / vanished —
+    /// fail-open) before it claims the wake continuation. `false` = nothing
+    /// to clear (goal gone, terminal, or barrier already dropped) — the wake
+    /// is then a no-op, never a resurrection.
+    pub fn clear_wait_barrier(&self, session_id: &str, now_ms: u64) -> Result<bool> {
+        let conn = self.lock();
+        match Self::get_locked(&conn, session_id)? {
+            Some(g) if g.is_active() && g.has_wait_barrier() => {
+                Self::put_locked(&conn, &g.without_wait(now_ms))?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
     /// Fire-time gate for a claimed continuation: proceed only if the goal is
     /// still `Active` and THIS continuation is still the one on the books
     /// (`wake_ms` matches the pending marker), clearing the marker in the same
@@ -445,6 +631,11 @@ impl GoalStore {
                 merged.continuations_used = live.continuations_used;
                 merged.tokens_at_start = live.tokens_at_start;
                 merged.baseline_captured = live.baseline_captured;
+                // Enrollment is owned by the delegation seam
+                // (`register_budget_member`), not the tool — a member
+                // registered between the tool's read and this write must
+                // survive it.
+                merged.budget_members = live.budget_members;
                 Self::put_locked(&conn, &merged)?;
                 Ok(true)
             }
@@ -483,6 +674,233 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = GoalStore::open(&dir.path().join("goals.db")).unwrap();
         (store, dir)
+    }
+
+    #[test]
+    fn timer_barrier_claims_an_exact_wake_and_spends_the_iteration() {
+        use crate::goal::PursuitMode;
+        let (store, _d) = temp_store();
+        let g = Goal::new("sess-wait", "obj", 0, 1_000)
+            .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+            .with_wait_until(61_000, Some("cooldown".into()), 1_000);
+        store.put(&g).unwrap();
+
+        let ContinuationDecision::Fire {
+            delay_ms,
+            wake_ms,
+            prompt,
+        } = store
+            .try_claim_continuation("sess-wait", None, 1_000, false)
+            .unwrap()
+        else {
+            panic!("a parked timer barrier must claim its wake");
+        };
+        assert_eq!(wake_ms, 61_000);
+        assert_eq!(delay_ms, 60_000);
+        assert!(prompt.contains("wait elapsed"), "got: {prompt}");
+
+        let live = store.get("sess-wait").unwrap().unwrap();
+        assert_eq!(
+            live.continuations_used, 1,
+            "the wake run costs an iteration"
+        );
+        assert_eq!(live.pending_continuation_ms, Some(61_000));
+
+        // While the timer sleeps, further claims stay Idle (fresh pending
+        // marker in the future).
+        assert!(matches!(
+            store
+                .try_claim_continuation("sess-wait", None, 30_000, false)
+                .unwrap(),
+            ContinuationDecision::Idle
+        ));
+
+        // Fire-time confirm matches the stored marker; the barrier itself is
+        // lazily cleared on the NEXT claim after the wake elapsed.
+        assert!(store.confirm_fire("sess-wait", 61_000).unwrap());
+        let ContinuationDecision::Fire { delay_ms, .. } = store
+            .try_claim_continuation("sess-wait", None, 62_000, false)
+            .unwrap()
+        else {
+            panic!("post-wake claim proceeds normally");
+        };
+        assert_eq!(delay_ms, 0, "normal continuation after the barrier elapsed");
+        let live = store.get("sess-wait").unwrap().unwrap();
+        assert!(!live.has_wait_barrier(), "elapsed barrier lazily cleared");
+    }
+
+    #[test]
+    fn supersede_wait_timer_unparks_an_armed_claim() {
+        use crate::goal::PursuitMode;
+        let (store, _d) = temp_store();
+        let g = Goal::new("sess-unpark", "obj", 0, 1_000)
+            .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+            .with_wait_until(61_000, None, 1_000);
+        store.put(&g).unwrap();
+        // Parking run's post_run claims the timer (pending marker = wake).
+        let ContinuationDecision::Fire { wake_ms, .. } = store
+            .try_claim_continuation("sess-unpark", None, 1_000, false)
+            .unwrap()
+        else {
+            panic!("timer claim");
+        };
+        assert_eq!(wake_ms, 61_000);
+        assert_eq!(
+            store
+                .get("sess-unpark")
+                .unwrap()
+                .unwrap()
+                .pending_continuation_ms,
+            Some(61_000)
+        );
+
+        // User un-parks: clears the barrier (tool) then supersedes the armed
+        // marker. Without the supersede the next claim would gate on the future
+        // pending marker and stay Idle until the ORIGINAL wake.
+        assert!(store.clear_wait_barrier("sess-unpark", 2_000).unwrap());
+        assert!(store.supersede_wait_timer("sess-unpark", 61_000).unwrap());
+        assert_eq!(
+            store
+                .get("sess-unpark")
+                .unwrap()
+                .unwrap()
+                .pending_continuation_ms,
+            None,
+            "the stale timer marker was cleared"
+        );
+        // Now the un-parking run's post_run claims a fresh IMMEDIATE continuation.
+        let ContinuationDecision::Fire { delay_ms, .. } = store
+            .try_claim_continuation("sess-unpark", None, 2_000, false)
+            .unwrap()
+        else {
+            panic!("un-parked pursuit must resume immediately, not wait out the old wake");
+        };
+        assert_eq!(delay_ms, 0);
+
+        // supersede is a precise CAS: a non-matching wake value is a no-op.
+        assert!(!store.supersede_wait_timer("sess-unpark", 999_999).unwrap());
+    }
+
+    #[test]
+    fn timer_barrier_with_no_runway_blocks_instead_of_parking_forever() {
+        use crate::goal::PursuitMode;
+        let (store, _d) = temp_store();
+        // Iteration cap already spent, then a timer park is requested.
+        let mut g = Goal::new("sess-noroom", "obj", 0, 1_000)
+            .with_pursuit(PursuitMode::Active { max_iterations: 2 })
+            .with_wait_until(61_000, Some("cooldown".into()), 1_000);
+        g.continuations_used = 2; // exhausted
+        store.put(&g).unwrap();
+        // A parked timer with no runway must Block now, not arm a timer that
+        // would only wake into an immediate Block.
+        let ContinuationDecision::Exhausted { note } = store
+            .try_claim_continuation("sess-noroom", None, 1_000, false)
+            .unwrap()
+        else {
+            panic!("exhausted timer park must block, not park forever");
+        };
+        assert!(note.contains("iteration cap"), "got: {note}");
+        let live = store.get("sess-noroom").unwrap().unwrap();
+        assert_eq!(live.status, GoalStatus::Blocked);
+        assert!(!live.has_wait_barrier(), "barrier cleared on the block");
+    }
+
+    #[test]
+    fn task_barrier_parks_idle_until_cleared() {
+        use crate::goal::PursuitMode;
+        let (store, _d) = temp_store();
+        let g = Goal::new("sess-task", "obj", 0, 1_000)
+            .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+            .with_wait_on_task("task-42".into(), None, 1_000);
+        store.put(&g).unwrap();
+
+        assert!(matches!(
+            store
+                .try_claim_continuation("sess-task", None, 999_999, false)
+                .unwrap(),
+            ContinuationDecision::Idle
+        ));
+        let live = store.get("sess-task").unwrap().unwrap();
+        assert_eq!(live.continuations_used, 0, "parking spends nothing");
+
+        // The wake service clears the barrier, then the claim proceeds.
+        assert!(store.clear_wait_barrier("sess-task", 2_000).unwrap());
+        assert!(matches!(
+            store
+                .try_claim_continuation("sess-task", None, 2_000, false)
+                .unwrap(),
+            ContinuationDecision::Fire { .. }
+        ));
+        // Second clear is a no-op (CAS honesty).
+        assert!(!store.clear_wait_barrier("sess-task", 3_000).unwrap());
+    }
+
+    #[test]
+    fn budget_member_enrollment_is_first_writer_wins_and_gated() {
+        use crate::goal::PursuitMode;
+        let (store, _d) = temp_store();
+        // No goal → not enrolled.
+        assert!(!store
+            .register_budget_member("sess-tree", "agent:child:main", 100, 1)
+            .unwrap());
+        // Budgeted active goal → enrolled once, baseline kept on re-register.
+        let g = Goal::new("sess-tree", "obj", 0, 1)
+            .with_pursuit(PursuitMode::Active { max_iterations: 5 })
+            .with_budget(Some(10_000));
+        store.put(&g).unwrap();
+        assert!(store
+            .register_budget_member("sess-tree", "agent:child:main", 100, 2)
+            .unwrap());
+        assert!(store
+            .register_budget_member("sess-tree", "agent:child:main", 999, 3)
+            .unwrap());
+        let live = store.get("sess-tree").unwrap().unwrap();
+        assert_eq!(live.budget_members.len(), 1);
+        assert_eq!(
+            live.budget_members[0].tokens_at_join, 100,
+            "re-registration must not re-stamp the join baseline"
+        );
+        // Self-enrollment is refused (own session is the tree's base term).
+        assert!(!store
+            .register_budget_member("sess-tree", "sess-tree", 0, 4)
+            .unwrap());
+        // Unbudgeted goal → not enrolled.
+        store.put(&Goal::new("sess-plain", "obj", 0, 1)).unwrap();
+        assert!(!store
+            .register_budget_member("sess-plain", "agent:child:main", 0, 5)
+            .unwrap());
+    }
+
+    #[test]
+    fn commit_field_update_preserves_live_budget_members() {
+        let (store, _d) = temp_store();
+        let g = Goal::new("sess-merge", "obj", 0, 1).with_budget(Some(10_000));
+        store.put(&g).unwrap();
+        // Tool snapshots the goal, then a delegation enrolls a member.
+        let tool_snapshot = store.get("sess-merge").unwrap().unwrap();
+        assert!(store
+            .register_budget_member("sess-merge", "agent:child:main", 42, 2)
+            .unwrap());
+        // Tool commits its (member-less) snapshot — the live member survives.
+        let next = tool_snapshot.with_note(Some("tool note".into()), 3);
+        assert!(store.commit_field_update(&next).unwrap());
+        let live = store.get("sess-merge").unwrap().unwrap();
+        assert_eq!(live.budget_members.len(), 1, "enrollment owned by the seam");
+        assert_eq!(live.note.as_deref(), Some("tool note"));
+    }
+
+    #[test]
+    fn clear_wait_barrier_never_touches_terminal_goals() {
+        let (store, _d) = temp_store();
+        let g = Goal::new("sess-done", "obj", 0, 0)
+            .with_wait_on_task("t".into(), None, 1)
+            .with_status(GoalStatus::Complete, 2);
+        store.put(&g).unwrap();
+        assert!(!store.clear_wait_barrier("sess-done", 3).unwrap());
+        assert_eq!(
+            store.get("sess-done").unwrap().unwrap().status,
+            GoalStatus::Complete
+        );
     }
 
     #[test]

@@ -77,9 +77,11 @@ pub enum WorkflowArgs {
         #[serde(default)]
         run_id: Option<String>,
     },
-    /// Suspend the not-yet-started steps of a workflow run: every pending /
-    /// blocked task is parked Paused so the dispatcher stops advancing the
-    /// DAG. A step already executing finishes on its own (its result is
+    /// Suspend the unfinished steps of a workflow run: every pending /
+    /// blocked / `waiting_review` task is parked Paused so the dispatcher
+    /// stops advancing the DAG (a review-parked step remembers its origin
+    /// and resumes back into `waiting_review`; verdicts still land while
+    /// paused). A step already executing finishes on its own (its result is
     /// kept); steps already settled are untouched. Undo with
     /// `action='resume'`.
     Pause {
@@ -91,9 +93,10 @@ pub enum WorkflowArgs {
         #[serde(default)]
         run_id: Option<String>,
     },
-    /// Resume a paused workflow run: paused steps return to pending and the
-    /// dispatcher picks the DAG back up. A clarify step parked awaiting the
-    /// user's answer stays parked — it resumes when they reply.
+    /// Resume a paused workflow run: paused steps return to their pause
+    /// origin (`waiting_review` for review-parked steps, pending otherwise)
+    /// and the dispatcher picks the DAG back up. A clarify step parked
+    /// awaiting the user's answer stays parked — it resumes when they reply.
     Resume {
         /// Name of the workflow template the run was started from.
         name: String,
@@ -901,25 +904,56 @@ impl AlephTool for WorkflowTool {
                     // be clobbered to Paused — resume would then RE-EXECUTE
                     // finished work, and a paused terminal step blocks the
                     // run's settle accounting forever.
-                    let live_status = self
+                    let live = self
                         .coord_store
                         .get_task(&task.id)
                         .await
                         .ok()
                         .flatten()
-                        .map_or(task.status, |t| t.status);
-                    match live_status {
+                        .unwrap_or_else(|| task.clone());
+                    match live.status {
                         // Not yet started — park it. (Unsatisfiable, though
                         // also stored as pending, is structurally dead and is
                         // deliberately NOT parked: pausing it would flip a
                         // settled corpse back to unsettled and block the
-                        // run's terminal accounting.)
+                        // run's terminal accounting.) Pending/Blocked need no
+                        // origin stamp: Blocked is re-derived from stored
+                        // pending at read time, so the Pending restore is
+                        // lossless.
                         CoordTaskStatus::Pending | CoordTaskStatus::Blocked => {
                             self.coord_store
                                 .update_task(
                                     &task.id,
                                     CoordTaskUpdate {
                                         status: Some(CoordTaskStatus::Paused),
+                                        ..Default::default()
+                                    },
+                                )
+                                .await?;
+                            paused.push(task.id.clone());
+                        }
+                        // Already ran, awaiting the lead's verdict — park it
+                        // WITH an origin stamp so resume restores
+                        // WaitingReview instead of flattening to Pending
+                        // (which would re-execute the finished run). Atomic
+                        // park+stamp in one update. Verdicts still land while
+                        // paused (review is not execution); resume then skips
+                        // the no-longer-Paused task and the stale stamp is
+                        // inert.
+                        CoordTaskStatus::WaitingReview => {
+                            let stamped = crate::agents::swarm::tasks::merge_metadata_patch(
+                                &live.metadata,
+                                serde_json::json!({
+                                    crate::agents::swarm::tasks::PAUSED_FROM_KEY:
+                                        "waiting_review",
+                                }),
+                            );
+                            self.coord_store
+                                .update_task(
+                                    &task.id,
+                                    CoordTaskUpdate {
+                                        status: Some(CoordTaskStatus::Paused),
+                                        metadata: Some(stamped),
                                         ..Default::default()
                                     },
                                 )
@@ -957,27 +991,53 @@ impl AlephTool for WorkflowTool {
                 let mut resumed: Vec<String> = Vec::new();
                 let mut awaiting_reply = 0usize;
                 for task in &tasks {
-                    if task.status != CoordTaskStatus::Paused {
+                    // Live re-fetch (same discipline as the pause/cancel
+                    // arms): a verdict landing between the snapshot and this
+                    // write moves the task out of Paused — clobbering it back
+                    // to Pending would re-execute the just-reviewed step.
+                    let live = self
+                        .coord_store
+                        .get_task(&task.id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| task.clone());
+                    if live.status != CoordTaskStatus::Paused {
                         continue;
                     }
                     // A clarify step the dispatcher parked is Paused because it
                     // AWAITS the user's reply (delivered marker) or is mid-
                     // delivery (pending marker, the janitor's business) — its
                     // Paused state is not ours to undo.
-                    if crate::workflow::clarify::clarify_delivered(&task.metadata) {
+                    if crate::workflow::clarify::clarify_delivered(&live.metadata) {
                         awaiting_reply += 1;
                         continue;
                     }
-                    if crate::workflow::clarify::clarify_delivery_pending_at(&task.metadata)
+                    if crate::workflow::clarify::clarify_delivery_pending_at(&live.metadata)
                         .is_some()
                     {
                         continue;
                     }
+                    // Restore the pause-origin status (WaitingReview for
+                    // review-parked steps; Pending otherwise — Blocked is
+                    // re-derived from stored pending) and clear the stamp in
+                    // the same atomic write.
+                    let restore = match crate::agents::swarm::tasks::paused_from(&live.metadata) {
+                        Some("waiting_review") => CoordTaskStatus::WaitingReview,
+                        _ => CoordTaskStatus::Pending,
+                    };
+                    let cleared = crate::agents::swarm::tasks::merge_metadata_patch(
+                        &live.metadata,
+                        serde_json::json!({
+                            crate::agents::swarm::tasks::PAUSED_FROM_KEY: serde_json::Value::Null,
+                        }),
+                    );
                     self.coord_store
                         .update_task(
                             &task.id,
                             CoordTaskUpdate {
-                                status: Some(CoordTaskStatus::Pending),
+                                status: Some(restore),
+                                metadata: Some(cleared),
                                 ..Default::default()
                             },
                         )
@@ -1582,6 +1642,66 @@ mod tests {
             again.message.contains("cancelled 0 step(s)"),
             "{}",
             again.message
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_parks_waiting_review_and_resume_restores_it() {
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let (run_id, ids) = materialize_run(&t, &linear_def(), "team-9").await;
+
+        // Root ran and awaits the lead's verdict; dependent still pending.
+        t.coord_store
+            .update_task(
+                &ids[0],
+                crate::agents::swarm::tasks::CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::WaitingReview),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let out = t
+            .call(WorkflowArgs::Pause {
+                name: "pipeline".into(),
+                team_id: "team-9".into(),
+                run_id: Some(run_id.clone()),
+            })
+            .await
+            .expect("pause");
+        let paused = out.task_ids.as_ref().expect("paused ids");
+        assert!(
+            paused.contains(&ids[0]),
+            "review-parked step must be paused too: {paused:?}"
+        );
+        let root = t.coord_store.get_task(&ids[0]).await.unwrap().unwrap();
+        assert_eq!(root.status, CoordTaskStatus::Paused);
+        assert_eq!(
+            crate::agents::swarm::tasks::paused_from(&root.metadata),
+            Some("waiting_review")
+        );
+
+        let out = t
+            .call(WorkflowArgs::Resume {
+                name: "pipeline".into(),
+                team_id: "team-9".into(),
+                run_id: Some(run_id),
+            })
+            .await
+            .expect("resume");
+        assert!(out.task_ids.as_ref().unwrap().contains(&ids[0]));
+        let root = t.coord_store.get_task(&ids[0]).await.unwrap().unwrap();
+        assert_eq!(
+            root.status,
+            CoordTaskStatus::WaitingReview,
+            "resume must restore the review gate, not flatten to Pending"
+        );
+        assert_eq!(
+            crate::agents::swarm::tasks::paused_from(&root.metadata),
+            None,
+            "stamp cleared on restore"
         );
     }
 

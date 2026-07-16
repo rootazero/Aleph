@@ -92,7 +92,18 @@ fn outcome_json(o: &InstallOutcome) -> Value {
     match o {
         InstallOutcome::Mcp { id } => serde_json::json!({ "kind": "mcp", "id": id }),
         InstallOutcome::Plugin { path } => serde_json::json!({ "kind": "plugin", "path": path }),
-        InstallOutcome::Skill { path } => serde_json::json!({ "kind": "skill", "path": path }),
+        InstallOutcome::Skill { path } => {
+            let mut out = serde_json::json!({ "kind": "skill", "path": path });
+            // Declared automation (never auto-scheduled): the model reads
+            // this notice, asks the user, and creates the cron job via
+            // cron_manage on consent.
+            if let Some(notice) =
+                crate::skill::automation_notice(std::path::Path::new(path.as_str()))
+            {
+                out["automation"] = Value::String(notice);
+            }
+            out
+        }
     }
 }
 

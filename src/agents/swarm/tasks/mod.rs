@@ -85,9 +85,8 @@ pub enum CoordTaskStatus {
     Blocked,
     InProgress,
     /// The run finished but a reviewer must approve before downstream
-    /// dependents unblock. Set by the dispatcher when `lead_review_required`
-    /// is true on the task metadata or by an explicit
-    /// `teams.workflow.set_pending_review` call.
+    /// dependents unblock. Set by the dispatcher on member-run completion
+    /// when `lead_review_required` is true on the task metadata.
     WaitingReview,
     Completed,
     Failed,
@@ -97,6 +96,8 @@ pub enum CoordTaskStatus {
     Skipped,
     /// Manually paused. Dispatcher does not claim until resumed.
     /// Does NOT satisfy downstream dependency — dependents stay blocked.
+    /// A task paused from `WaitingReview` carries a [`PAUSED_FROM_KEY`]
+    /// stamp so resume restores the review gate instead of re-executing.
     Paused,
     /// **Derived** (like `Blocked`, never stored): a pending task that has at
     /// least one dependency in a terminal non-satisfying state (`Failed` or
@@ -287,6 +288,26 @@ pub fn merge_metadata_patch(
     serde_json::Value::Object(merged)
 }
 
+/// Metadata key stamped when a pause parks a task from a status that a plain
+/// `Resume → Pending` reset would corrupt. `Blocked`/`Unsatisfiable` are
+/// derived at read time from stored `pending` (see `derive_status`), so
+/// Pending restores them losslessly and they carry NO stamp. `WaitingReview`
+/// is the exception: it is a real stored status on a task that already RAN —
+/// flattening it to Pending makes the dispatcher re-execute finished work.
+/// Pause surfaces stamp the origin status here for WaitingReview only; resume
+/// restores it and clears the stamp in the same write. Read ONLY while the
+/// task is `Paused` (a verdict landing mid-pause moves the task on and leaves
+/// a stale-but-inert stamp behind).
+pub const PAUSED_FROM_KEY: &str = "paused_from";
+
+/// Read the pause-origin stamp, if present. Tolerant: missing / non-string
+/// reads as `None` (legacy rows paused before the stamp existed restore to
+/// the Pending default).
+#[must_use]
+pub fn paused_from(metadata: &serde_json::Value) -> Option<&str> {
+    metadata.get(PAUSED_FROM_KEY).and_then(|v| v.as_str())
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CoordTaskFilter {
     pub team_id: Option<String>,
@@ -312,6 +333,11 @@ pub enum TaskRunStatus {
     Failed,
     /// Run exceeded its timeout and was aborted.
     Timeout,
+    /// Run never finished and its worker is gone (daemon restart or lost
+    /// worker) — closed after the fact by the run-row janitor. Deliberately
+    /// excluded from the retry budget (crash orphans are not the task's
+    /// fault; see `fail_or_retry`).
+    Abandoned,
 }
 
 impl TaskRunStatus {
@@ -322,6 +348,7 @@ impl TaskRunStatus {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Timeout => "timeout",
+            Self::Abandoned => "abandoned",
         }
     }
 
@@ -332,6 +359,7 @@ impl TaskRunStatus {
             "completed" => Some(Self::Completed),
             "failed" => Some(Self::Failed),
             "timeout" => Some(Self::Timeout),
+            "abandoned" => Some(Self::Abandoned),
             _ => None,
         }
     }
@@ -548,6 +576,25 @@ pub trait CoordTaskStore: Send + Sync {
     /// List all runs for a task, oldest first.
     async fn list_task_runs(&self, _task_id: &str) -> crate::error::Result<Vec<CoordTaskRun>> {
         Ok(Vec::new())
+    }
+
+    /// Close `running` run rows whose task is NOT in `live_task_ids` as
+    /// [`TaskRunStatus::Abandoned`]. Keyed on the runs table (not task
+    /// status) so cancel-then-crash orphans — terminal tasks with a stuck
+    /// `running` row that no status-keyed janitor can see — also close.
+    ///
+    /// Correctness contract: the dispatcher is the sole producer of run
+    /// rows, and every live row's task id is in the dispatcher's in-process
+    /// running set for the row's whole lifetime (insert before spawn,
+    /// removal after finish). A future producer outside the dispatcher must
+    /// register its live task ids here or its rows will be swept.
+    ///
+    /// Returns the number of rows closed. Default impl is a no-op.
+    async fn abandon_orphaned_runs(
+        &self,
+        _live_task_ids: &[String],
+    ) -> crate::error::Result<usize> {
+        Ok(0)
     }
 
     /// Record a step-level review verdict against the most recent

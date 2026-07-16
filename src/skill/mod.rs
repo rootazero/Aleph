@@ -35,7 +35,7 @@ pub use installer::{
     build_install_command, filter_install_specs_for_current_os, select_best_install,
     InstallExecutor, InstallResult,
 };
-pub use manifest::{parse_skill_content, parse_skill_file, SkillParseError};
+pub use manifest::{automation_notice, parse_skill_content, parse_skill_file, SkillParseError};
 pub use preprocess::{preprocess_skill_content, SkillPreprocessContext};
 pub use prompt::{build_skills_prompt_xml, SkillPromptBudget};
 pub use registry::SkillRegistry;

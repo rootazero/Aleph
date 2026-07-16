@@ -68,6 +68,11 @@ impl TeamDispatcher {
         //     (runs before step 3, so re-delivery can happen this very tick).
         self.redeliver_stalled_clarify().await;
 
+        // 2f. Close `running` run rows whose worker is gone (keyed on the
+        //     runs table, not task status — the only pass that can see
+        //     cancel-then-crash orphans on already-terminal tasks).
+        self.abandon_orphaned_runs().await;
+
         // 3. List schedulable pending tasks. `derive_status` already excludes
         //    tasks with unsatisfied dependencies (those report as Blocked).
         let available = self.semaphore.available_permits();

@@ -1602,6 +1602,95 @@ mod tests {
         );
     }
 
+    /// Ghost gate: a *specific* route binding naming an agent absent from the
+    /// runtime registry must fall through to Tier 2 / Tier 3 instead of
+    /// bricking the channel with per-message `AgentNotFound`.
+    #[tokio::test]
+    async fn ghost_specific_route_binding_falls_back() {
+        use crate::routing::config::MatchRule;
+        let binding = RouteBinding {
+            agent_id: "ghost".to_string(),
+            match_rule: MatchRule {
+                channel: Some("discord".to_string()),
+                ..Default::default()
+            },
+        };
+        let mut router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_route_bindings(vec![binding], SessionConfig::default(), "main");
+        // Empty registry → every bound agent is a ghost.
+        router.agent_registry = Some(Arc::new(
+            crate::gateway::agent_instance::AgentRegistry::new(),
+        ));
+
+        let (agent, route) = router
+            .resolve_agent_id_async(&dm_on("discord"))
+            .await
+            .unwrap();
+        assert_eq!(
+            agent, "main",
+            "ghost route binding must fall back to the default agent"
+        );
+        assert!(route.is_none(), "fallback must rebuild the session key");
+    }
+
+    /// Polarity pin for the ghost gate: with the bound agent PRESENT in the
+    /// registry, the specific route binding is honoured unchanged.
+    #[tokio::test]
+    async fn live_specific_route_binding_is_honoured() {
+        use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
+        use crate::routing::config::MatchRule;
+        let binding = RouteBinding {
+            agent_id: "work".to_string(),
+            match_rule: MatchRule {
+                channel: Some("discord".to_string()),
+                ..Default::default()
+            },
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let sm = Arc::new(
+            crate::gateway::session_manager::SessionManager::new(
+                crate::gateway::session_manager::SessionManagerConfig {
+                    db_path: temp.path().join("sessions.db"),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        );
+        let registry = Arc::new(AgentRegistry::new());
+        registry
+            .register(
+                AgentInstance::new(
+                    AgentInstanceConfig {
+                        agent_id: "work".to_string(),
+                        workspace: temp.path().join("ws"),
+                        agent_dir: temp.path().join("agents"),
+                        ..Default::default()
+                    },
+                    sm,
+                )
+                .unwrap(),
+            )
+            .await;
+        let mut router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_route_bindings(vec![binding], SessionConfig::default(), "main");
+        router.agent_registry = Some(registry);
+
+        let (agent, route) = router
+            .resolve_agent_id_async(&dm_on("discord"))
+            .await
+            .unwrap();
+        assert_eq!(agent, "work", "live route binding must be honoured");
+        assert!(route.is_some(), "specific match carries its resolved route");
+    }
+
     fn bot_authored_msg(id: &str) -> InboundMessage {
         use crate::gateway::channel::MessageMeta;
         InboundMessage {

@@ -76,6 +76,7 @@ pub mod channel_registry;
 pub mod coalescer;
 pub mod continuation_lifecycle;
 pub mod delivery_queue;
+pub mod goal_budget;
 pub mod hot_reload;
 pub mod http_server;
 pub mod inbound_context;

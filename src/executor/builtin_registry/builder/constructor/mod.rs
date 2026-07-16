@@ -873,12 +873,6 @@ impl BuiltinToolRegistry {
             memory_reflect_tool,
         ) = Self::build_collab_session_tools(&config, &mut tools, &current_agent_id);
 
-        // Initialize tool policy handle (use provided or create a default one)
-        let tool_policy_handle = config
-            .tool_policy
-            .clone()
-            .or_else(|| Some(crate::builtin_tools::agent_manage::new_tool_policy_handle()));
-
         Ok(Self {
             search_tool,
             web_fetch_tool,
@@ -1029,7 +1023,6 @@ impl BuiltinToolRegistry {
             agent_switch_tool,
             agent_info_tool,
             session_context_handle,
-            tool_policy_handle,
             tool_context_handle: config.tool_context.clone(),
             event_bus: config.event_bus.clone(),
             extension_manager: config.extension_manager.clone(),

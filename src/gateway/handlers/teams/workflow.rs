@@ -383,12 +383,38 @@ pub async fn handle_workflow_retry_step(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    // Pre-fetch once: metadata basis for the budget re-arm stamp + the
+    // leftover lock holder for the release below.
+    let snapshot = coord_store.get_task(&params.task_id).await.ok().flatten();
+    // Re-arm the retry budget for this fresh intervention (see
+    // team_task_control Retry): baseline = failed attempts so far, stamped in
+    // the same write as the status reset.
+    let metadata = match &snapshot {
+        Some(t) => {
+            let failed_so_far = coord_store
+                .list_task_runs(&params.task_id)
+                .await
+                .map(|runs| crate::agents::swarm::tasks::retry::count_failed_attempts(&runs))
+                .unwrap_or(0);
+            Some(crate::agents::swarm::tasks::merge_metadata_patch(
+                &t.metadata,
+                json!({
+                    crate::agents::swarm::tasks::retry::RETRY_ATTEMPTS_BASE_METADATA_KEY:
+                        failed_so_far,
+                    // Clear a stale pause-origin stamp (see team_task_control Retry).
+                    crate::agents::swarm::tasks::PAUSED_FROM_KEY: serde_json::Value::Null,
+                }),
+            ))
+        }
+        None => None,
+    };
     if let Err(e) = coord_store
         .update_task(
             &params.task_id,
             CoordTaskUpdate {
                 status: Some(CoordTaskStatus::Pending),
                 result: Some(String::new()),
+                metadata,
                 ..Default::default()
             },
         )
@@ -404,11 +430,9 @@ pub async fn handle_workflow_retry_step(
     // never clears a genuinely held lock (the store checks holder equality),
     // which would leave the retried task Pending-but-unschedulable until
     // release_stale_locks fires. Best-effort: failure is non-fatal.
-    if let Ok(Some(t)) = coord_store.get_task(&params.task_id).await {
-        if let Some(holder) = t.locked_by.as_deref() {
-            if let Err(e) = coord_store.release_lock(&params.task_id, holder).await {
-                tracing::warn!(task_id = %params.task_id, holder = %holder, error = %e, "workflow step retry: could not release leftover lock");
-            }
+    if let Some(holder) = snapshot.as_ref().and_then(|t| t.locked_by.as_deref()) {
+        if let Err(e) = coord_store.release_lock(&params.task_id, holder).await {
+            tracing::warn!(task_id = %params.task_id, holder = %holder, error = %e, "workflow step retry: could not release leftover lock");
         }
     }
     JsonRpcResponse::success(request.id, json!({ "status": "pending" }))
@@ -482,11 +506,24 @@ pub async fn handle_task_pause(
             )
         }
     }
+    // Stamp WaitingReview origin; every OTHER origin writes an explicit null
+    // so a stale stamp from an earlier pause→retry cycle can never mis-restore
+    // this pause to WaitingReview (mirror of `team_task_control`).
+    let stamp_value = if current.status == CoordTaskStatus::WaitingReview {
+        json!("waiting_review")
+    } else {
+        serde_json::Value::Null
+    };
+    let metadata = Some(crate::agents::swarm::tasks::merge_metadata_patch(
+        &current.metadata,
+        json!({ crate::agents::swarm::tasks::PAUSED_FROM_KEY: stamp_value }),
+    ));
     if let Err(e) = coord_store
         .update_task(
             &params.task_id,
             CoordTaskUpdate {
                 status: Some(CoordTaskStatus::Paused),
+                metadata,
                 ..Default::default()
             },
         )
@@ -539,11 +576,23 @@ pub async fn handle_task_resume(
             ),
         );
     }
+    // Restore the pause-origin status (WaitingReview for review-parked
+    // tasks; Pending otherwise) and clear the stamp in the same write —
+    // mirror of `team_task_control` resume.
+    let restore = match crate::agents::swarm::tasks::paused_from(&current.metadata) {
+        Some("waiting_review") => CoordTaskStatus::WaitingReview,
+        _ => CoordTaskStatus::Pending,
+    };
+    let cleared = crate::agents::swarm::tasks::merge_metadata_patch(
+        &current.metadata,
+        json!({ crate::agents::swarm::tasks::PAUSED_FROM_KEY: serde_json::Value::Null }),
+    );
     if let Err(e) = coord_store
         .update_task(
             &params.task_id,
             CoordTaskUpdate {
-                status: Some(CoordTaskStatus::Pending),
+                status: Some(restore),
+                metadata: Some(cleared),
                 ..Default::default()
             },
         )
@@ -555,7 +604,7 @@ pub async fn handle_task_resume(
             format!("Failed to resume task: {e}"),
         );
     }
-    JsonRpcResponse::success(request.id, json!({ "status": "pending" }))
+    JsonRpcResponse::success(request.id, json!({ "status": restore.to_string() }))
 }
 
 /// teams.task.retry — hard-retry a terminal task. Unlike
@@ -596,12 +645,29 @@ pub async fn handle_task_retry(
             "Cannot retry an in-progress task — cancel it first".to_string(),
         );
     }
+    // Re-arm the retry budget for this fresh intervention (see
+    // team_task_control Retry): baseline = failed attempts so far, stamped in
+    // the same write as the status reset.
+    let failed_so_far = coord_store
+        .list_task_runs(&params.task_id)
+        .await
+        .map(|runs| crate::agents::swarm::tasks::retry::count_failed_attempts(&runs))
+        .unwrap_or(0);
+    let metadata = crate::agents::swarm::tasks::merge_metadata_patch(
+        &current.metadata,
+        json!({
+            crate::agents::swarm::tasks::retry::RETRY_ATTEMPTS_BASE_METADATA_KEY: failed_so_far,
+            // Clear a stale pause-origin stamp (see team_task_control Retry).
+            crate::agents::swarm::tasks::PAUSED_FROM_KEY: serde_json::Value::Null,
+        }),
+    );
     if let Err(e) = coord_store
         .update_task(
             &params.task_id,
             CoordTaskUpdate {
                 status: Some(CoordTaskStatus::Pending),
                 result: Some(String::new()),
+                metadata: Some(metadata),
                 ..Default::default()
             },
         )
@@ -615,11 +681,9 @@ pub async fn handle_task_retry(
     }
     // Same actual-holder release as the reviewer retry above — "" can never
     // clear a genuinely held lock.
-    if let Ok(Some(t)) = coord_store.get_task(&params.task_id).await {
-        if let Some(holder) = t.locked_by.as_deref() {
-            if let Err(e) = coord_store.release_lock(&params.task_id, holder).await {
-                tracing::warn!(task_id = %params.task_id, holder = %holder, error = %e, "task retry: could not release leftover lock");
-            }
+    if let Some(holder) = current.locked_by.as_deref() {
+        if let Err(e) = coord_store.release_lock(&params.task_id, holder).await {
+            tracing::warn!(task_id = %params.task_id, holder = %holder, error = %e, "task retry: could not release leftover lock");
         }
     }
     JsonRpcResponse::success(request.id, json!({ "status": "pending" }))

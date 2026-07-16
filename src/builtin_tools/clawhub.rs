@@ -462,8 +462,22 @@ impl AlephTool for ClawHubTool {
                 let installed_version =
                     Self::install_from_zip(&zip_path, &slug, &version, self.client.base_url())?;
 
+                let mut message =
+                    format!("Skill '{slug}' v{installed_version} installed successfully");
+                // Surface a declared automation (never auto-scheduled): the
+                // model reads this, asks the user, and creates the cron job
+                // via cron_manage on consent.
+                if let Ok(name) = sanitize_skill_name(&slug) {
+                    if let Some(notice) =
+                        crate::skill::automation_notice(&Self::skills_dir().join(name))
+                    {
+                        message.push_str("\n\n");
+                        message.push_str(&notice);
+                    }
+                }
+
                 Ok(ClawHubOutput {
-                    message: format!("Skill '{slug}' v{installed_version} installed successfully"),
+                    message,
                     skills: None,
                     cursor: None,
                     has_more: None,

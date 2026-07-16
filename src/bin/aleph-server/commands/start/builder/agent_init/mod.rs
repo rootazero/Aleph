@@ -450,7 +450,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             agent_registry: Some(agent_registry.clone()),
             workspace_manager: workspace_manager.clone(),
             event_bus: Some(event_bus.clone()),
-            tool_policy: Some(alephcore::builtin_tools::agent_manage::new_tool_policy_handle()),
             agent_manager: Some(agent_manager.clone()),
             extension_manager: extension_manager.clone(),
             acp_manager: acp_manager.clone(),
@@ -1353,14 +1352,37 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // 立即终止（行为与本特性引入前一致）。
         let goal_gate =
             alephcore::verification::stop_hooks::build_from_config(&app_config.stop_hooks);
-        let _ = continuation_cell.set(alephcore::gateway::execution_engine::ContinuationDeps {
+        let goal_deps = alephcore::gateway::execution_engine::ContinuationDeps {
             registry: agent_registry.clone(),
             adapter: engine_arc.clone(),
             gate: goal_gate,
             // Broadcast autonomous continuations live + fan the final reply to
             // the session's origin channel (G1). Same bus the Panel/channels read.
             event_bus: Some(event_bus.clone()),
-        });
+        };
+        let _ = continuation_cell.set(goal_deps.clone());
+
+        // Goal wait-barrier wakes: task-settle event subscription (parked-on-
+        // task goals) + boot sweep (re-arm timers / recheck tasks that settled
+        // while the daemon was down). The bus holds the subscription for the
+        // process lifetime.
+        {
+            let goal_wake = std::sync::Arc::new(
+                alephcore::gateway::execution_engine::goal_wait::GoalWakeService::new(
+                    goal_deps,
+                    coord_store.clone(),
+                ),
+            );
+            goal_wake.subscribe();
+            // Periodic task-barrier recheck backstops the event subscription
+            // (settle-before-park race, deleted task, derived-Unsatisfiable
+            // which emits no event). 60s bounded latency.
+            goal_wake.spawn_periodic_recheck(60);
+            let goal_wake_boot = goal_wake.clone();
+            tokio::spawn(async move {
+                goal_wake_boot.rearm_parked_goals().await;
+            });
+        }
 
         // Create run_manager with real execution dependencies.
         // Inject the live config so Panel runs honor the global output_mode
@@ -1482,12 +1504,14 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     dispatcher = dispatcher.with_clarify_delivery(cell);
                 }
                 let dispatcher = Arc::new(dispatcher);
-                dispatcher.spawn_loop();
                 // Event-driven wake: any coord-task transition on the
                 // GlobalBus (review verdicts, admin controls, panel edits,
                 // clarify answers) pokes the loop immediately instead of
-                // waiting for the fallback tick.
+                // waiting for the fallback tick. Subscribe BEFORE the loop
+                // starts so no early transition slips between the two
+                // (spawn_loop consumes the Arc).
                 dispatcher.subscribe_task_events();
+                dispatcher.spawn_loop();
                 if !daemon {
                     println!("  Team dispatcher started");
                 }

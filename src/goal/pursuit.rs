@@ -81,9 +81,20 @@ fn render_quota(goal: &Goal, tokens_now: u64, now_ms: u64) -> String {
     if let Some(budget) = goal.token_budget {
         if goal.baseline_captured && tokens_now > 0 {
             quota.push_str(&format!(
-                " ~{} of {budget} token budget left.",
+                " ~{} of {budget} token budget left",
                 budget.saturating_sub(goal.tokens_used(tokens_now))
             ));
+            if goal.budget_members.is_empty() {
+                quota.push('.');
+            } else {
+                // Tree budget: every member of the tree sees the SHARED
+                // remainder (codex per-thread reminder parity, via the
+                // prompt-clause channel).
+                quota.push_str(&format!(
+                    " (shared with {} delegated session(s)).",
+                    goal.budget_members.len()
+                ));
+            }
         }
     }
     quota
@@ -222,6 +233,60 @@ pub fn stop_reason_note(goal: &Goal, tokens_now: u64, now_ms: u64) -> String {
     } else {
         cap_reached_note(goal)
     }
+}
+
+/// An unsatisfied wait barrier and how a parked pursuit will be woken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WaitPark {
+    /// Deadline barrier still in the future — wake with an exact timer.
+    Timer { wake_ms: u64 },
+    /// Task barrier — wake is event-driven (`GoalWakeService`).
+    Task { task_id: String },
+}
+
+/// Pure barrier check: `Some` when an Active autonomous goal is parked on an
+/// unsatisfied wait barrier at `now_ms`. An ELAPSED deadline barrier reads as
+/// `None` (satisfied — hermes' lazy self-clear; the claim path drops the
+/// stale fields on its next write). Passive/terminal goals never park: the
+/// continuation path is the barrier's only consumer.
+#[must_use]
+pub fn wait_parked(goal: &Goal, now_ms: u64) -> Option<WaitPark> {
+    if !matches!(goal.pursuit, PursuitMode::Active { .. }) || goal.status != GoalStatus::Active {
+        return None;
+    }
+    if let Some(task_id) = &goal.waiting_on_task {
+        return Some(WaitPark::Task {
+            task_id: task_id.clone(),
+        });
+    }
+    match goal.waiting_until_ms {
+        Some(until) if now_ms != 0 && until > now_ms => Some(WaitPark::Timer { wake_ms: until }),
+        _ => None,
+    }
+}
+
+/// Continuation prompt for a pursuit resuming from a wait barrier — states
+/// WHY it parked and that the wake condition arrived, so the model reassesses
+/// instead of blindly continuing (R9). `cause` names the wake ("the wait
+/// elapsed" / "task '<id>' settled (completed)").
+#[must_use]
+pub fn wait_resume_prompt(goal: &Goal, cause: &str) -> String {
+    let lessons = render_lessons(goal);
+    let reason = goal
+        .waiting_reason
+        .as_deref()
+        .filter(|r| !r.is_empty())
+        .map(|r| format!(" (you parked it because: {r})"))
+        .unwrap_or_default();
+    format!(
+        "[Resuming your standing goal — {cause}]\nGoal: {}{lessons}\n\nYou had parked \
+         this pursuit to wait{reason}. Reassess and take the next concrete step. If \
+         what you were waiting for still is not ready, you may park again with \
+         goal(action='update', wait_minutes=…) or wait_for_task. If the goal is \
+         achieved, call goal(action='update', status='complete'); if you are blocked \
+         and need the user, call goal(action='update', status='blocked').",
+        goal.objective,
+    )
 }
 
 /// 模型在 `Active` 续跑下自报 `Complete`，但客观闸门尚未确认。
@@ -615,6 +680,73 @@ mod tests {
         let mut capped = active_goal(3);
         capped.continuations_used = 3;
         assert!(stop_reason_note(&capped, 0, 0).contains("iteration cap"));
+    }
+
+    #[test]
+    fn quota_clause_names_the_shared_tree_budget() {
+        use crate::goal::types::BudgetMember;
+        let mut g = active_goal(5)
+            .with_budget(Some(1_000))
+            .with_baseline(10_000, 1);
+        g.budget_members.push(BudgetMember {
+            session_id: "agent:child:main".into(),
+            tokens_at_join: 0,
+        });
+        // tokens_now here is the TREE total the hook feeds in.
+        let p = continuation_prompt(&g, 10_400, 0);
+        assert!(
+            p.contains("~600 of 1000 token budget left (shared with 1 delegated session(s))"),
+            "got: {p}"
+        );
+    }
+
+    #[test]
+    fn wait_parked_timer_only_while_unelapsed_and_active() {
+        let g = active_goal(5).with_wait_until(10_000, Some("cooldown".into()), 1);
+        assert_eq!(
+            wait_parked(&g, 5_000),
+            Some(WaitPark::Timer { wake_ms: 10_000 })
+        );
+        // Elapsed → satisfied (lazy clear happens at the claim).
+        assert_eq!(wait_parked(&g, 10_000), None);
+        // No clock → cannot compare; treat as satisfied (never wedge).
+        assert_eq!(wait_parked(&g, 0), None);
+        // Terminal / passive goals never park.
+        let blocked = g.clone().with_status(GoalStatus::Blocked, 2);
+        assert_eq!(wait_parked(&blocked, 5_000), None);
+        let passive = Goal::new("s", "o", 0, 0).with_wait_until(10_000, None, 1);
+        assert_eq!(wait_parked(&passive, 5_000), None);
+    }
+
+    #[test]
+    fn wait_parked_task_barrier_has_no_clock() {
+        let g = active_goal(5).with_wait_on_task("task-9".into(), None, 1);
+        assert_eq!(
+            wait_parked(&g, 999_999_999),
+            Some(WaitPark::Task {
+                task_id: "task-9".into()
+            })
+        );
+    }
+
+    #[test]
+    fn wait_barriers_are_mutually_exclusive() {
+        let g = active_goal(5)
+            .with_wait_until(10_000, None, 1)
+            .with_wait_on_task("t".into(), None, 2);
+        assert!(g.waiting_until_ms.is_none(), "task barrier clears timer");
+        let g2 = g.with_wait_until(20_000, None, 3);
+        assert!(g2.waiting_on_task.is_none(), "timer barrier clears task");
+    }
+
+    #[test]
+    fn wait_resume_prompt_names_cause_and_reason() {
+        let g = active_goal(5).with_wait_until(10_000, Some("provider cooldown".into()), 1);
+        let p = wait_resume_prompt(&g, "the wait elapsed");
+        assert!(p.contains("the wait elapsed"), "got: {p}");
+        assert!(p.contains("provider cooldown"), "got: {p}");
+        assert!(p.contains(&g.objective));
+        assert!(p.contains("status='complete'"));
     }
 
     #[test]

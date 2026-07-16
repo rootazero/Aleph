@@ -196,8 +196,6 @@ pub struct BuiltinToolRegistry {
     /// Session context handle for agent management tools
     pub(crate) session_context_handle:
         Option<crate::builtin_tools::agent_manage::SessionContextHandle>,
-    /// Tool policy handle for per-agent tool access control
-    pub(crate) tool_policy_handle: Option<crate::builtin_tools::agent_manage::ToolPolicyHandle>,
     /// Tool context handle for workspace-scoped output paths
     pub(crate) tool_context_handle: Option<crate::tools::ToolContextHandle>,
     /// Event bus for lifecycle event emission (held for future use; tools get their own clones)

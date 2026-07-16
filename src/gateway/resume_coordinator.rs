@@ -243,7 +243,11 @@ impl ResumeCoordinator {
                 age_ms,
                 "resume: candidate too old; abandoning"
             );
-            self.abandon(session_id).await;
+            self.abandon(
+                session_id,
+                "the interrupted run was too old to resume safely",
+            )
+            .await;
             report.abandoned += 1;
             return;
         }
@@ -256,7 +260,8 @@ impl ResumeCoordinator {
                 max_attempts = self.config.max_attempts,
                 "resume: crash-loop cap reached; abandoning"
             );
-            self.abandon(session_id).await;
+            self.abandon(session_id, "it kept crashing on every resume attempt")
+                .await;
             report.abandoned += 1;
             return;
         }
@@ -301,30 +306,77 @@ impl ResumeCoordinator {
         }
     }
 
-    /// Emit `RunFinished { Abandoned }` so a terminal run is not re-scanned
-    /// on the next boot. Best-effort.
-    async fn abandon(&self, session_id: &SessionId) {
+    /// Terminate an abandoned candidate honestly: emit `RunFinished {
+    /// Abandoned }` so the run is not re-scanned on the next boot, block any
+    /// active goal in the session (its crash recovery hangs ENTIRELY on this
+    /// coordinator's retrigger→post_run chain — abandoning severs it, so an
+    /// Active goal would otherwise lie in `goal(list)` forever), and drop a
+    /// one-line notice on the origin channel. Every step is best-effort and
+    /// independent — a failed marker append must not silence the user notice.
+    ///
+    /// Deliberately does NOT touch loop state: loops are process-memory and
+    /// the registry is empty at boot; "stopping" one here could only misfire
+    /// against a loop the user started while the scan was still running.
+    async fn abandon(&self, session_id: &SessionId, reason: &str) {
         let ev = SessionEvent::RunFinished {
             run_id: format!("abandoned-{}", uuid::Uuid::new_v4()),
             outcome: RunOutcome::Abandoned,
             at: now_ms(),
         };
-        let seq = match self.next_seq(session_id).await {
-            Ok(seq) => seq,
+        match self.next_seq(session_id).await {
+            Ok(seq) => {
+                if let Err(e) = self
+                    .event_store
+                    .append(session_id, seq, &ev, now_ms())
+                    .await
+                {
+                    tracing::warn!(session = ?session_id, error = %e, "resume: abandon marker append failed");
+                }
+            }
             Err(e) => {
                 // Don't fabricate seq 1 on a read error — that would append the
                 // abandon marker at the head and overwrite the genuine first
-                // event. Skip the best-effort marker instead.
+                // event. Skip the best-effort marker; the next boot re-abandons.
                 tracing::warn!(session = ?session_id, error = %e, "resume: abandon seq allocation failed; skipping marker");
-                return;
             }
-        };
-        if let Err(e) = self
-            .event_store
-            .append(session_id, seq, &ev, now_ms())
-            .await
-        {
-            tracing::warn!(session = ?session_id, error = %e, "resume: abandon marker append failed");
+        }
+
+        // Scope the block to goals whose recovery actually hung on THIS
+        // crashed run: Active-pursuit, not parked on a task barrier (those are
+        // woken by GoalWakeService, and a passive goal never depended on the
+        // continuation chain). A healthy parked or interactive goal must not
+        // be collateral-blocked by an unrelated abandoned run.
+        let goal_blocked = crate::gateway::continuation_lifecycle::block_abandonable_session_goal(
+            &session_id.to_key_string(),
+            &format!(
+                "Autonomous pursuit halted: its interrupted run was abandoned at daemon \
+                 restart ({reason}). Re-set the goal to continue."
+            ),
+        );
+
+        // One-line origin notice, mirroring `retrigger`'s fanout resolution.
+        // Panel-only sessions (`gui:chat`) have no origin route and rely on
+        // the stored blocked note; a missing agent cannot be routed for at
+        // all (same documented limitation as the engine's agent-miss branch).
+        if let Some(reg) = crate::gateway::event_emitter::origin_fanout::channel_registry() {
+            if let Some(agent) = self.agent_registry.get(session_id.agent_id()).await {
+                if let Some((channel, conversation)) = agent.origin_route(session_id).await {
+                    let mut text = format!(
+                        "⚠️ An interrupted run in this conversation could not be resumed \
+                         after a restart ({reason}) and was abandoned."
+                    );
+                    if goal_blocked {
+                        text.push_str(" Its standing goal was paused — re-set it to continue.");
+                    }
+                    let msg = crate::gateway::channel::OutboundMessage::text(conversation, text);
+                    if let Err(e) = reg
+                        .send(&crate::gateway::channel::ChannelId::new(channel), msg)
+                        .await
+                    {
+                        tracing::warn!(session = ?session_id, error = %e, "resume: abandon notice delivery failed");
+                    }
+                }
+            }
         }
     }
 

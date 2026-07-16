@@ -103,6 +103,24 @@ fn store() -> Arc<dyn SessionEventStore> {
     Arc::new(SqliteEventStore::new(conn))
 }
 
+/// Process-global goal store shared by every test in this binary —
+/// `goal::init_global` is a first-set-wins `OnceCell`, so tests must share
+/// one store and distinguish themselves by unique session keys.
+fn shared_goal_store() -> Arc<alephcore::goal::GoalStore> {
+    static STORE: std::sync::OnceLock<Arc<alephcore::goal::GoalStore>> = std::sync::OnceLock::new();
+    STORE
+        .get_or_init(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let store =
+                Arc::new(alephcore::goal::GoalStore::open(&dir.path().join("goals.db")).unwrap());
+            // The db file must outlive every test in the binary.
+            std::mem::forget(dir);
+            alephcore::goal::init_global(store.clone());
+            store
+        })
+        .clone()
+}
+
 /// Seed a complete interrupted run: user message, a turn, a dangling tool
 /// call, then a trailing `RunStarted` with no `RunFinished`.
 async fn seed_interrupted_run(store: &Arc<dyn SessionEventStore>, sid: &SessionKey) {
@@ -227,7 +245,9 @@ async fn disabled_config_never_triggers_execute() {
 #[tokio::test]
 async fn crash_loop_cap_abandons_instead_of_retriggering() {
     let store = store();
-    let sid = SessionKey::main("main");
+    // Unique agent/session key: the goal store is process-global in this
+    // test binary, so each abandon-path test owns its own session.
+    let sid = SessionKey::main("cap-agent");
     let at = now_ms();
     // 3 consecutive RunStarted with no RunFinished == default max_attempts.
     for (i, ev) in [
@@ -255,6 +275,20 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
             .await
             .unwrap();
     }
+
+    // Active goal in the session — its crash recovery hangs entirely on the
+    // coordinator's retrigger→post_run chain, so abandoning must block it
+    // honestly instead of leaving it lying "Active" in goal(list) forever.
+    // Active-pursuit goal: its crash recovery hangs on the coordinator's
+    // retrigger→post_run chain. A passive goal (seeded below) must NOT be
+    // collateral-blocked.
+    let goals = shared_goal_store();
+    goals
+        .put(
+            &alephcore::goal::Goal::new(&sid.to_key_string(), "keep shipping", 0, now_ms() as u64)
+                .with_pursuit(alephcore::goal::PursuitMode::Active { max_iterations: 5 }),
+        )
+        .unwrap();
 
     let adapter = Arc::new(RecordingAdapter::new());
     let calls = adapter.calls.clone();
@@ -288,6 +322,135 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
         )
     });
     assert!(abandoned, "expected a RunFinished{{Abandoned}} marker");
+
+    // The Active-pursuit goal was honestly terminated with a note naming the cause.
+    let goal = goals
+        .get(&sid.to_key_string())
+        .unwrap()
+        .expect("goal row survives");
+    assert_eq!(goal.status, alephcore::goal::GoalStatus::Blocked);
+    assert!(
+        goal.note.as_deref().unwrap_or("").contains("abandoned"),
+        "blocked note must name the abandon: {:?}",
+        goal.note
+    );
+
+    // A PASSIVE goal in a different session must NOT be collateral-blocked by
+    // an unrelated abandon (its recovery never depended on the coordinator).
+    let passive_sid = SessionKey::main("cap-passive");
+    goals
+        .put(&alephcore::goal::Goal::new(
+            &passive_sid.to_key_string(),
+            "interactive only",
+            0,
+            now_ms() as u64,
+        ))
+        .unwrap();
+    let passive_store: Arc<dyn SessionEventStore> = {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        Arc::new(SqliteEventStore::new(conn))
+    };
+    passive_store
+        .append(
+            &passive_sid,
+            1,
+            &SessionEvent::RunStarted {
+                run_id: "r-p1".into(),
+                at,
+                project_root: None,
+            },
+            at,
+        )
+        .await
+        .unwrap();
+    for (i, run) in ["r-p2", "r-p3"].iter().enumerate() {
+        passive_store
+            .append(
+                &passive_sid,
+                (i as u64) + 2,
+                &SessionEvent::RunStarted {
+                    run_id: (*run).into(),
+                    at: at + 1 + i as i64,
+                    project_root: None,
+                },
+                at,
+            )
+            .await
+            .unwrap();
+    }
+    let coordinator2 = ResumeCoordinator::new(
+        passive_store.clone(),
+        ResumeConfig::default(),
+        Arc::new(RecordingAdapter::new()) as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(passive_sid.agent_id()).await,
+    );
+    coordinator2.resume_interrupted_runs().await;
+    assert_eq!(
+        goals
+            .get(&passive_sid.to_key_string())
+            .unwrap()
+            .unwrap()
+            .status,
+        alephcore::goal::GoalStatus::Active,
+        "a passive goal must survive an unrelated abandon untouched"
+    );
+}
+
+/// Recency-filter abandon (candidate older than `max_age_secs`) takes the
+/// same honest-termination path: marker + goal block, no re-trigger.
+#[tokio::test]
+async fn too_old_candidate_abandons_and_blocks_the_goal() {
+    let store = store();
+    let sid = SessionKey::main("old-agent");
+    let old_at = now_ms() - 2 * 86_400 * 1000; // 2 days > default max_age 1 day
+    store
+        .append(
+            &sid,
+            1,
+            &SessionEvent::RunStarted {
+                run_id: "r-old".into(),
+                at: old_at,
+                project_root: None,
+            },
+            old_at,
+        )
+        .await
+        .unwrap();
+
+    let goals = shared_goal_store();
+    goals
+        .put(
+            &alephcore::goal::Goal::new(&sid.to_key_string(), "stale pursuit", 0, now_ms() as u64)
+                .with_pursuit(alephcore::goal::PursuitMode::Active { max_iterations: 5 }),
+        )
+        .unwrap();
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+    let coordinator = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+    );
+    let report = coordinator.resume_interrupted_runs().await;
+
+    assert_eq!(report.abandoned, 1);
+    assert_eq!(report.resumed, 0);
+    assert!(calls.lock().await.is_empty(), "too-old must not re-trigger");
+
+    let goal = goals
+        .get(&sid.to_key_string())
+        .unwrap()
+        .expect("goal row survives");
+    assert_eq!(goal.status, alephcore::goal::GoalStatus::Blocked);
+    assert!(
+        goal.note.as_deref().unwrap_or("").contains("too old"),
+        "blocked note must carry the reason: {:?}",
+        goal.note
+    );
 }
 
 /// A Chat-tier channel's policy is a pair of RESTRICTIVE inputs, and both fail

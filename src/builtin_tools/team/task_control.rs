@@ -72,6 +72,16 @@ impl TeamTaskControlTool {
     async fn fetch_status(&self, task_id: &str) -> Result<CoordTaskStatus> {
         Ok(self.fetch_task(task_id).await?.status)
     }
+
+    /// Budget-consuming attempts recorded so far (clean Failed/Timeout only),
+    /// read best-effort — the baseline stamp is an enhancement, not a gate.
+    async fn failed_attempts_so_far(&self, task_id: &str) -> u32 {
+        self.coord_store
+            .list_task_runs(task_id)
+            .await
+            .map(|runs| crate::agents::swarm::tasks::retry::count_failed_attempts(&runs))
+            .unwrap_or(0)
+    }
 }
 
 #[async_trait]
@@ -102,8 +112,8 @@ impl AlephTool for TeamTaskControlTool {
         match args {
             TeamTaskControlArgs::Pause { task_id } => {
                 debug!(task_id = %task_id, "team_task_control: pause");
-                let current = self.fetch_status(&task_id).await?;
-                match current {
+                let task = self.fetch_task(&task_id).await?;
+                match task.status {
                     CoordTaskStatus::Pending
                     | CoordTaskStatus::Blocked
                     | CoordTaskStatus::Unsatisfiable
@@ -117,15 +127,35 @@ impl AlephTool for TeamTaskControlTool {
                     }
                     _ => {
                         return Err(AlephError::invalid_input(format!(
-                            "cannot pause task in status '{current}' — only pending/blocked/waiting_review may be paused"
+                            "cannot pause task in status '{}' — only pending/blocked/waiting_review may be paused",
+                            task.status
                         )));
                     }
                 }
+                // WaitingReview is the one pause origin a Pending restore
+                // corrupts (the task already RAN; re-dispatch re-executes it)
+                // — stamp it so resume can put it back. Pending/Blocked/
+                // Unsatisfiable are re-derived from stored pending and need
+                // no stamp.
+                // Stamp WaitingReview origin; for every OTHER origin write an
+                // explicit null so a stale stamp left by an earlier
+                // pause→retry cycle can never mis-restore this pause to
+                // WaitingReview.
+                let stamp_value = if task.status == CoordTaskStatus::WaitingReview {
+                    serde_json::json!("waiting_review")
+                } else {
+                    serde_json::Value::Null
+                };
+                let metadata = Some(crate::agents::swarm::tasks::merge_metadata_patch(
+                    &task.metadata,
+                    serde_json::json!({ crate::agents::swarm::tasks::PAUSED_FROM_KEY: stamp_value }),
+                ));
                 self.coord_store
                     .update_task(
                         &task_id,
                         CoordTaskUpdate {
                             status: Some(CoordTaskStatus::Paused),
+                            metadata,
                             ..Default::default()
                         },
                     )
@@ -138,24 +168,38 @@ impl AlephTool for TeamTaskControlTool {
             }
             TeamTaskControlArgs::Resume { task_id } => {
                 debug!(task_id = %task_id, "team_task_control: resume");
-                let current = self.fetch_status(&task_id).await?;
-                if current != CoordTaskStatus::Paused {
+                let task = self.fetch_task(&task_id).await?;
+                if task.status != CoordTaskStatus::Paused {
                     return Err(AlephError::invalid_input(format!(
-                        "cannot resume task in status '{current}' — only paused tasks may be resumed"
+                        "cannot resume task in status '{}' — only paused tasks may be resumed",
+                        task.status
                     )));
                 }
+                // Restore the pause-origin status (see the pause arm) and
+                // clear the stamp in the same atomic write.
+                let restore = match crate::agents::swarm::tasks::paused_from(&task.metadata) {
+                    Some("waiting_review") => CoordTaskStatus::WaitingReview,
+                    _ => CoordTaskStatus::Pending,
+                };
+                let cleared = crate::agents::swarm::tasks::merge_metadata_patch(
+                    &task.metadata,
+                    serde_json::json!({
+                        crate::agents::swarm::tasks::PAUSED_FROM_KEY: serde_json::Value::Null,
+                    }),
+                );
                 self.coord_store
                     .update_task(
                         &task_id,
                         CoordTaskUpdate {
-                            status: Some(CoordTaskStatus::Pending),
+                            status: Some(restore),
+                            metadata: Some(cleared),
                             ..Default::default()
                         },
                     )
                     .await?;
                 Ok(TeamTaskControlOutput {
                     task_id,
-                    status: "pending".into(),
+                    status: restore.to_string(),
                     action: "resume".into(),
                 })
             }
@@ -167,12 +211,33 @@ impl AlephTool for TeamTaskControlTool {
                         "cannot retry an in-progress task — cancel it first".to_string(),
                     ));
                 }
+                // Re-arm the retry budget for this fresh intervention: stamp
+                // the failed-attempt count at retry time as the baseline so
+                // fail_or_retry counts only NEW failures against max_retries
+                // (run history is preserved by design, so without the stamp a
+                // budget-exhausted task's fresh attempt would give up on its
+                // first failure). Same write as the status reset — no extra
+                // race window.
+                let metadata = crate::agents::swarm::tasks::merge_metadata_patch(
+                    &task.metadata,
+                    serde_json::json!({
+                        crate::agents::swarm::tasks::retry::RETRY_ATTEMPTS_BASE_METADATA_KEY:
+                            self.failed_attempts_so_far(&task_id).await,
+                        // Retry leaves the task Pending. Clear any pause-origin
+                        // stamp so a LATER pause/resume of the re-queued task
+                        // does not mis-restore it to WaitingReview (retried work
+                        // must re-execute, not jump the review gate). Retry
+                        // accepts a Paused task (only InProgress is rejected).
+                        crate::agents::swarm::tasks::PAUSED_FROM_KEY: serde_json::Value::Null,
+                    }),
+                );
                 self.coord_store
                     .update_task(
                         &task_id,
                         CoordTaskUpdate {
                             status: Some(CoordTaskStatus::Pending),
                             result: Some(String::new()),
+                            metadata: Some(metadata),
                             ..Default::default()
                         },
                     )
@@ -338,6 +403,98 @@ mod tests {
         assert_eq!(
             store.get_task(&task_id).await.unwrap().unwrap().status,
             CoordTaskStatus::Pending
+        );
+    }
+
+    #[tokio::test]
+    async fn waiting_review_pause_resume_restores_review_gate() {
+        let (store, tool) = setup().await;
+        let task_id = make_task(&store, "T1").await;
+        store
+            .update_task(
+                &task_id,
+                CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::WaitingReview),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        tool.call(TeamTaskControlArgs::Pause {
+            task_id: task_id.clone(),
+        })
+        .await
+        .unwrap();
+        let t = store.get_task(&task_id).await.unwrap().unwrap();
+        assert_eq!(t.status, CoordTaskStatus::Paused);
+        assert_eq!(
+            crate::agents::swarm::tasks::paused_from(&t.metadata),
+            Some("waiting_review"),
+            "pause from WaitingReview must stamp its origin"
+        );
+
+        let out = tool
+            .call(TeamTaskControlArgs::Resume {
+                task_id: task_id.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.status, "waiting_review");
+        let t = store.get_task(&task_id).await.unwrap().unwrap();
+        assert_eq!(
+            t.status,
+            CoordTaskStatus::WaitingReview,
+            "resume must restore the review gate, not flatten to Pending (re-execution)"
+        );
+        assert_eq!(
+            crate::agents::swarm::tasks::paused_from(&t.metadata),
+            None,
+            "resume must clear the stamp"
+        );
+    }
+
+    #[tokio::test]
+    async fn approve_while_paused_leaves_resume_a_noop() {
+        let (store, tool) = setup().await;
+        let task_id = make_task(&store, "T1").await;
+        store
+            .update_task(
+                &task_id,
+                CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::WaitingReview),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        tool.call(TeamTaskControlArgs::Pause {
+            task_id: task_id.clone(),
+        })
+        .await
+        .unwrap();
+        // A verdict lands while paused (review is not execution).
+        store
+            .update_task(
+                &task_id,
+                CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Completed),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        // Resume now rejects (not Paused) and the stale stamp is inert.
+        let err = tool
+            .call(TeamTaskControlArgs::Resume {
+                task_id: task_id.clone(),
+            })
+            .await
+            .unwrap_err();
+        assert!(format!("{err}").contains("only paused"));
+        assert_eq!(
+            store.get_task(&task_id).await.unwrap().unwrap().status,
+            CoordTaskStatus::Completed
         );
     }
 

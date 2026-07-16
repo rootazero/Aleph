@@ -4,9 +4,10 @@
 use std::time::Duration;
 
 use crate::agents::swarm::tasks::retry::{
-    jittered_backoff_secs, read_max_retries, retry_decision, with_retry_not_before, RetryDecision,
+    count_failed_attempts, jittered_backoff_secs, read_max_retries, read_retry_attempts_base,
+    retry_decision, with_retry_not_before, RetryDecision,
 };
-use crate::agents::swarm::tasks::{CoordTask, CoordTaskStatus, CoordTaskUpdate, TaskRunStatus};
+use crate::agents::swarm::tasks::{CoordTask, CoordTaskStatus, CoordTaskUpdate};
 use crate::sync_primitives::Arc;
 
 use super::TeamDispatcher;
@@ -29,8 +30,11 @@ impl TeamDispatcher {
     /// - **At/over the ceiling** → [`fail_task`](Self::fail_task) → terminal
     ///   `Failed`.
     ///
-    /// Orphan reclaims leave a `Running` row that never finished, so they do not
-    /// consume the retry budget — only clean `Failed`/`Timeout` attempts do.
+    /// Orphan reclaims leave a `Running` row that never finished (later closed
+    /// as `Abandoned` by the run-row janitor), so they do not consume the retry
+    /// budget — only clean `Failed`/`Timeout` attempts do. An operator hard
+    /// retry additionally re-arms the budget by stamping
+    /// `retry_attempts_base`; the count here is rebased against that baseline.
     /// Zombies bypass this entirely and go straight to `fail_task` (they have
     /// already exhausted their runtime budget; retrying would just re-zombify).
     ///
@@ -58,16 +62,17 @@ impl TeamDispatcher {
 
         let max_retries =
             read_max_retries(&base_metadata).unwrap_or(self.config.default_max_retries);
-        let failed_attempts = self
+        let lifetime_failed = self
             .coord_store
             .list_task_runs(&task.id)
             .await
-            .map(|runs| {
-                runs.iter()
-                    .filter(|r| matches!(r.status, TaskRunStatus::Failed | TaskRunStatus::Timeout))
-                    .count() as u32
-            })
+            .map(|runs| count_failed_attempts(&runs))
             .unwrap_or(0);
+        // Rebase against the operator hard-retry baseline (if any): each hard
+        // retry re-arms the full per-step budget for that fresh intervention.
+        // Absent key → base 0 → lifetime count, the legacy behaviour.
+        let failed_attempts =
+            lifetime_failed.saturating_sub(read_retry_attempts_base(&base_metadata).unwrap_or(0));
 
         match retry_decision(failed_attempts, max_retries) {
             RetryDecision::Retry => {

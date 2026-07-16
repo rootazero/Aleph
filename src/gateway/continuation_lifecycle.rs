@@ -16,6 +16,65 @@
 
 use tracing::{info, warn};
 
+/// Honestly terminate a session's active goal: block it with `note` and
+/// delete its welded strategy so a stale plan can neither steer later turns
+/// nor block a fresh start. Best-effort; returns whether an ACTIVE goal was
+/// actually blocked (terminal goals are never clobbered —
+/// `block_if_active`'s contract). Consumers: the epoch-retirement seam below
+/// and the `ResumeCoordinator` abandon paths.
+pub fn block_session_goal(session: &str, note: &str) -> bool {
+    let Some(store) = crate::goal::global() else {
+        return false;
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    match store.block_if_active(session, note, now_ms) {
+        Ok(true) => {
+            if let Some(strat) = crate::strategy::global() {
+                let _ = strat.delete(&crate::strategy::goal_key(session));
+            }
+            info!(session = %session, "active goal blocked: {note}");
+            true
+        }
+        Ok(false) => false,
+        Err(e) => {
+            warn!(session = %session, error = %e, "failed to block active goal");
+            false
+        }
+    }
+}
+
+/// Block a session goal ONLY when its recovery genuinely hung on a crashed
+/// autonomous run — used by `ResumeCoordinator::abandon`. Delegates to
+/// [`crate::goal::GoalStore::block_if_abandonable`] (Active-pursuit, not
+/// task-barrier-parked) so a passive goal, or one parked on a task barrier
+/// (woken by `GoalWakeService`), is left untouched. Deletes the welded
+/// strategy on a real block, like [`block_session_goal`]. Returns whether a
+/// goal was blocked.
+pub fn block_abandonable_session_goal(session: &str, note: &str) -> bool {
+    let Some(store) = crate::goal::global() else {
+        return false;
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    match store.block_if_abandonable(session, note, now_ms) {
+        Ok(true) => {
+            if let Some(strat) = crate::strategy::global() {
+                let _ = strat.delete(&crate::strategy::goal_key(session));
+            }
+            info!(session = %session, "abandonable goal blocked: {note}");
+            true
+        }
+        Ok(false) => false,
+        Err(e) => {
+            warn!(session = %session, error = %e, "failed to block abandonable goal");
+            false
+        }
+    }
+}
+
 /// Stop the retired session's active loop and block its active goal (both
 /// best-effort), clearing their welded strategies so a stale plan can neither
 /// steer later turns nor block a fresh start in the new epoch. `cause` names
@@ -35,25 +94,11 @@ pub fn terminate_session_continuations(old_session: &str, cause: &str) {
             info!(session = %old_session, cause, "session retired: active loop stopped");
         }
     }
-    if let Some(store) = crate::goal::global() {
-        let note = format!(
+    block_session_goal(
+        old_session,
+        &format!(
             "Session was closed via {cause} — re-set the goal in the new session to \
              continue pursuit."
-        );
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as u64);
-        match store.block_if_active(old_session, &note, now_ms) {
-            Ok(true) => {
-                if let Some(strat) = crate::strategy::global() {
-                    let _ = strat.delete(&crate::strategy::goal_key(old_session));
-                }
-                info!(session = %old_session, cause, "session retired: active goal blocked");
-            }
-            Ok(false) => {}
-            Err(e) => {
-                warn!(session = %old_session, cause, error = %e, "session retired: failed to block active goal");
-            }
-        }
-    }
+        ),
+    );
 }
