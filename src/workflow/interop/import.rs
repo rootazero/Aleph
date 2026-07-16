@@ -209,7 +209,7 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                     id: format!("step_{}", i + 1),
                     // A clarify step is owned by the sentinel, not a team member,
                     // so its `agent` is intentionally empty (matches `from_def`).
-                    agent: String::new(),
+                    agent: String::new(), // rust-doctor-disable-line unnecessary-allocation
                     prompt: call.prompt,
                     depends_on,
                     label: None,

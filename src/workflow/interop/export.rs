@@ -115,7 +115,7 @@ fn effective_phases(
             if seen.insert(ph.to_string()) {
                 out.push(WorkflowPhase {
                     title: ph.to_string(),
-                    detail: String::new(),
+                    detail: String::new(), // rust-doctor-disable-line unnecessary-allocation
                     model: None,
                 });
             }
