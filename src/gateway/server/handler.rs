@@ -298,15 +298,28 @@ async fn forward_bus_to_client(mut rx: broadcast::Receiver<String>, buffer: PerC
     }
 }
 
+/// Wire `topic` under which the shared-token rotation event is published (see
+/// [`crate::gateway::events::GatewayEventFrame::TokenRotated`]). A drift-guard
+/// test keeps this equal to `GatewayEventFrame::TokenRotated.topic_name()`.
+const TOKEN_ROTATED_TOPIC: &str = "gateway.token.rotated";
+
 /// Whether the given serialized event frame is a `token_rotated` notification.
-/// Parses the JSON once and checks `type == "token_rotated"`. Pure, host-testable.
+///
+/// `GatewayEvents::publish_frame` wraps every non-stream event as the TopicEvent
+/// wire form `{"topic": "<name>", "data": <frame>}`, so the discriminant is the
+/// **top-level `topic`**, not a top-level `type`. (The inner `data` still carries
+/// the serde tag `{"type":"token_rotated"}`, but the forward loop only ever sees
+/// the wrapped form.) Reading `type` here silently never matched, which left the
+/// rotation kick — the documented "revoke all remotes" hammer — inert: open
+/// remote Panels kept operator authority until idle timeout. Parses the JSON once
+/// and matches `topic == TOKEN_ROTATED_TOPIC`. Pure, host-testable.
 fn is_token_rotated_frame(event_json: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(event_json)
         .ok()
         .and_then(|v| {
-            v.get("type")
+            v.get("topic")
                 .and_then(|t| t.as_str())
-                .map(|s| s == "token_rotated")
+                .map(|s| s == TOKEN_ROTATED_TOPIC)
         })
         .unwrap_or(false)
 }
@@ -850,17 +863,28 @@ async fn handle_connection(
                                                             },
                                                         );
                                                         if authorized {
-                                                            crate::gateway::handlers::connect::ConnectAuthOutcome::Authorized
+                                                            crate::gateway::handlers::connect::ConnectAuthOutcome::Authorized { device_id: None }
                                                         } else {
                                                             crate::gateway::handlers::connect::ConnectAuthOutcome::Unauthorized
                                                         }
                                                     };
 
-                                                    let (authorized, panel_role, issued_device_token) = match &auth_outcome {
-                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::Authorized => (true, "operator", None),
-                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::BootstrapExchanged { device_token, .. } => (true, "operator", Some(device_token.clone())),
-                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::Unauthorized => (false, "guest", None),
+                                                    let (authorized, panel_role, issued_device_token, authed_device_id) = match &auth_outcome {
+                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::Authorized { device_id } => (true, "operator", None, device_id.clone()),
+                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::BootstrapExchanged { device_token, device_id } => (true, "operator", Some(device_token.clone()), Some(device_id.clone())),
+                                                        crate::gateway::handlers::connect::ConnectAuthOutcome::Unauthorized => (false, "guest", None, None),
                                                     };
+                                                    // A device-token reconnect (or fresh pairing) refreshes the
+                                                    // paired device's `last_seen_at`, so the Paired-devices roster
+                                                    // reflects real activity, not the pairing date. Token
+                                                    // validation alone only touches the token row's `last_used_at`.
+                                                    if let (Some(store), Some(did)) =
+                                                        (ctx.security_store.as_ref(), authed_device_id.as_deref())
+                                                    {
+                                                        if let Err(e) = store.touch_device(did) {
+                                                            tracing::debug!("touch_device on connect failed: {e}");
+                                                        }
+                                                    }
                                                     // Forensic trail: a remote connection that
                                                     // failed the Gateway-token login wall. Bounded
                                                     // to <=10/60s/IP by the `Auth`-scope limiter,
@@ -1040,13 +1064,16 @@ async fn handle_connection(
                                                     response =
                                                         serde_json::to_string(&resp).unwrap_or(response);
 
-                                                    // Track presence for no-auth connect
+                                                    // Track presence for this connect. A device-token or
+                                                    // bootstrap session carries the paired device_id for honest
+                                                    // roster attribution; loopback and legacy shared-token stay
+                                                    // None (not bound to a specific paired device).
                                                     {
                                                         let conns = ctx.connections.read().await;
                                                         if let Some(state) = conns.get(&conn_id) {
                                                             let presence_entry = PresenceEntry {
                                                                 conn_id: conn_id.clone(),
-                                                                device_id: None,
+                                                                device_id: authed_device_id.clone(),
                                                                 device_name: state.metadata.get("client_name").cloned().unwrap_or_else(|| "Unknown".to_string()),
                                                                 platform: state.metadata.get("platform").cloned().unwrap_or_else(|| "unknown".to_string()),
                                                                 role: crate::gateway::presence::ConnectionRole::User,
@@ -1439,28 +1466,64 @@ fn node_connect_claim(params: Option<&serde_json::Value>) -> Option<NodeConnectC
 
 #[cfg(test)]
 mod token_rotation_tests {
-    use super::rotated_should_close_remote;
+    use super::{is_token_rotated_frame, rotated_should_close_remote, TOKEN_ROTATED_TOPIC};
+    use crate::gateway::events::GatewayEventFrame;
 
-    const ROTATED: &str = r#"{"type":"token_rotated"}"#;
+    /// The exact wire string `GatewayEvents::publish_frame` emits for the
+    /// rotation event: the TopicEvent wrapper `{"topic": ..., "data": <frame>}`.
+    /// Built from the real `topic_name()` + serde serialization so the test
+    /// catches drift in either the topic name or the frame wrapping — the
+    /// original tests fed the bare inner frame and so masked the wire-format bug.
+    fn rotated_wire_frame() -> String {
+        let frame = GatewayEventFrame::TokenRotated;
+        serde_json::json!({
+            "topic": frame.topic_name(),
+            "data": serde_json::to_value(&frame).unwrap(),
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn topic_constant_matches_frame_topic_name() {
+        // Drift guard: the interceptor's literal must equal the frame's topic,
+        // or the kick silently breaks again the next time the topic is renamed.
+        assert_eq!(
+            GatewayEventFrame::TokenRotated.topic_name(),
+            TOKEN_ROTATED_TOPIC
+        );
+    }
+
+    #[test]
+    fn detects_real_publish_frame_wire_form() {
+        // Regression for the wire-format bug: the wrapped TopicEvent form the
+        // forward loop actually receives must be recognized.
+        assert!(is_token_rotated_frame(&rotated_wire_frame()));
+    }
 
     #[test]
     fn remote_session_closes_on_token_rotated() {
-        assert!(rotated_should_close_remote(ROTATED, false));
+        assert!(rotated_should_close_remote(&rotated_wire_frame(), false));
     }
 
     #[test]
     fn loopback_session_ignores_token_rotated() {
-        assert!(!rotated_should_close_remote(ROTATED, true));
+        assert!(!rotated_should_close_remote(&rotated_wire_frame(), true));
     }
 
     #[test]
     fn other_events_never_trigger_close() {
         assert!(!rotated_should_close_remote(
-            r#"{"type":"acp_sessions_changed"}"#,
+            r#"{"topic":"acp.sessions.changed"}"#,
             false
         ));
         assert!(!rotated_should_close_remote(
             r#"{"topic":"alerts.system"}"#,
+            false
+        ));
+        // The bare inner serde-tagged frame is NOT the wire form and must not
+        // match — only the wrapped TopicEvent form reaches the interceptor.
+        assert!(!rotated_should_close_remote(
+            r#"{"type":"token_rotated"}"#,
             false
         ));
     }
