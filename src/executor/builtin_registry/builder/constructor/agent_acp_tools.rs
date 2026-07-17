@@ -102,7 +102,8 @@ impl BuiltinToolRegistry {
                     Arc::clone(ar),
                     Arc::clone(wm),
                     Arc::clone(sm),
-                );
+                )
+                .with_event_bus(config.event_bus.clone());
                 if let Some(ref am) = config.agent_manager {
                     tool.with_agent_manager(Arc::clone(am))
                 } else {
@@ -110,12 +111,22 @@ impl BuiltinToolRegistry {
                 }
             };
             let list = agent_manage::AgentListTool::new(Arc::clone(ar), Arc::clone(wm));
-            let delete = agent_manage::AgentDeleteTool::new(
-                Arc::clone(ar),
-                Arc::clone(wm),
-                config.event_bus.clone(),
-                Arc::clone(&agent_catalog),
-            );
+            let delete = {
+                let tool = agent_manage::AgentDeleteTool::new(
+                    Arc::clone(ar),
+                    Arc::clone(wm),
+                    config.event_bus.clone(),
+                    Arc::clone(&agent_catalog),
+                );
+                // TOML persistence parity with create: without it, deletion
+                // only touches the runtime registry and the agent silently
+                // resurrects at the next daemon boot.
+                if let Some(ref am) = config.agent_manager {
+                    tool.with_agent_manager(Arc::clone(am))
+                } else {
+                    tool
+                }
+            };
             let switch = agent_manage::AgentSwitchTool::new(
                 Arc::clone(ar),
                 Arc::clone(wm),

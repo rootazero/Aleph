@@ -174,6 +174,9 @@ pub struct AgentCreateTool {
     agent_manager: Option<Arc<AgentManager>>,
     session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
     raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
+    /// Bus for the `Registered` lifecycle event (parity with boot-time
+    /// registration and the `agents.create` RPC).
+    event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
 }
 
 impl AgentCreateTool {
@@ -188,6 +191,7 @@ impl AgentCreateTool {
             agent_manager: None,
             session_store,
             raw_memory_writer: None,
+            event_bus: None,
         }
     }
 
@@ -202,6 +206,15 @@ impl AgentCreateTool {
         writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
     ) -> Self {
         self.raw_memory_writer = Some(writer);
+        self
+    }
+
+    #[must_use]
+    pub fn with_event_bus(
+        mut self,
+        bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
+    ) -> Self {
+        self.event_bus = bus;
         self
     }
 }
@@ -401,8 +414,18 @@ impl AlephTool for AgentCreateTool {
             inst
         };
 
-        // 8. Register in AgentRegistry (runtime)
+        // 8. Register in AgentRegistry (runtime) + lifecycle event so the
+        //    Panel and other consumers see the new agent immediately (same
+        //    contract as boot-time registration and the agents.create RPC).
         self.registry.register(instance).await;
+        if let Some(ref bus) = self.event_bus {
+            crate::gateway::agent_lifecycle::AgentLifecycleEvent::Registered {
+                agent_id: args.id.clone(),
+                workspace: workspace_path.clone(),
+                model: model.to_string(),
+            }
+            .publish(bus);
+        }
 
         // 8b. Persist to AgentManager (TOML config) so agents.list RPC returns it
         if let Some(ref manager) = self.agent_manager {

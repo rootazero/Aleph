@@ -5,11 +5,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use crate::config::agent_manager::AgentManager;
 use crate::error::Result;
 use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::agent_lifecycle::AgentLifecycleEvent;
-use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
+use crate::gateway::event_bus::GatewayEventBus;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -59,6 +60,11 @@ pub struct AgentDeleteOutput {
 /// pointing at the deleted agent (`clear_bindings_for_agent`), and those
 /// channels then resolve to the router's default agent ("main" unless
 /// reconfigured) on the next inbound message.
+///
+/// When an [`AgentManager`] is wired, the TOML `[[agents.list]]` definition is
+/// deleted too (with the manager's own default-agent / only-agent guards) —
+/// otherwise the agent silently resurrects at the next daemon boot, because
+/// boot re-registers every TOML definition.
 #[derive(Clone)]
 pub struct AgentDeleteTool {
     registry: Arc<AgentRegistry>,
@@ -66,6 +72,9 @@ pub struct AgentDeleteTool {
     event_bus: Option<Arc<GatewayEventBus>>,
     /// Catalog registry — used to detect built-in agents at delete time.
     agent_catalog: Arc<crate::agents::AgentRegistry>,
+    /// TOML persistence — deletes the `[[agents.list]]` entry so the agent
+    /// stays deleted across restarts. `None` on minimal servers.
+    agent_manager: Option<Arc<AgentManager>>,
 }
 
 impl AgentDeleteTool {
@@ -81,7 +90,14 @@ impl AgentDeleteTool {
             workspace_mgr,
             event_bus,
             agent_catalog,
+            agent_manager: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_agent_manager(mut self, manager: Arc<AgentManager>) -> Self {
+        self.agent_manager = Some(manager);
+        self
     }
 }
 
@@ -114,83 +130,104 @@ impl AlephTool for AgentDeleteTool {
             )));
         }
 
-        // 2. Verify agent exists
-        if self.registry.get(&args.agent_id).await.is_none() {
+        // 2. Verify agent exists (existence check only — no need to
+        //    instantiate a lazy entry just to delete it).
+        if !self.registry.contains(&args.agent_id).await {
             return Err(crate::error::AlephError::other(format!(
                 "Agent '{}' not found",
                 args.agent_id
             )));
         }
 
-        // 3. Unbind agent from ALL channels bound to it. The binding model is
+        // 3. Delete the persisted TOML definition FIRST, while its guards can
+        //    still abort the whole operation (cannot delete the default agent
+        //    or the only agent). The manager also moves the workspace + state
+        //    dirs to trash. Skipped for runtime-only agents that never got a
+        //    TOML entry — those fall through to the legacy archival below.
+        let mut dirs_archived_by_manager = false;
+        if let Some(ref manager) = self.agent_manager {
+            if manager.get(&args.agent_id).is_ok() {
+                manager.delete(&args.agent_id).map_err(|e| {
+                    crate::error::AlephError::other(format!(
+                        "Cannot delete agent '{}': {e}",
+                        args.agent_id
+                    ))
+                })?;
+                dirs_archived_by_manager = true;
+            }
+        }
+
+        // 4. Unbind agent from ALL channels bound to it. The binding model is
         //    many-to-one (N channels → 1 agent), so clearing only the first
         //    bound channel (the prior single-channel reverse-lookup path) left
         //    the other channels pointing at the now-deleted agent — the inbound
         //    router would then resolve them to a ghost agent.
         let _ = self.workspace_mgr.clear_bindings_for_agent(&args.agent_id);
 
-        // 4. Remove from registry
+        // 5. Remove from registry. Both variants (Instance / Lazy) mean the
+        //    agent is gone; the previous API collapsed Lazy into None, which
+        //    misreported "could not be removed" and skipped archival + the
+        //    lifecycle event for never-instantiated agents.
         let removed = self.registry.remove(&args.agent_id).await;
 
-        // 5. Archive workspace (rename to .archived)
-        if let Some(ref instance) = removed {
-            let workspace = instance.workspace();
-            let archived = workspace.with_extension("archived");
-            if workspace.exists() {
-                if let Err(e) = tokio::fs::rename(workspace, &archived).await {
-                    warn!(
-                        agent_id = %args.agent_id,
-                        error = %e,
-                        "Failed to archive workspace, it will remain on disk"
-                    );
-                } else {
-                    info!(
-                        agent_id = %args.agent_id,
-                        archived_path = %archived.display(),
-                        "Workspace archived"
-                    );
+        // 6. Archive workspace + state dir (rename to .archived) — legacy path
+        //    for agents without a TOML entry; the manager already trashed the
+        //    dirs otherwise.
+        if !dirs_archived_by_manager {
+            if let Some(ref removed) = removed {
+                let workspace = removed.workspace();
+                let archived = workspace.with_extension("archived");
+                if workspace.exists() {
+                    if let Err(e) = tokio::fs::rename(workspace, &archived).await {
+                        warn!(
+                            agent_id = %args.agent_id,
+                            error = %e,
+                            "Failed to archive workspace, it will remain on disk"
+                        );
+                    } else {
+                        info!(
+                            agent_id = %args.agent_id,
+                            archived_path = %archived.display(),
+                            "Workspace archived"
+                        );
+                    }
                 }
-            }
 
-            // Also archive agent state directory (~/.aleph/agents/{id}/)
-            let agent_state_dir = dirs::home_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-                .join(".aleph")
-                .join("agents")
-                .join(&args.agent_id);
-            if agent_state_dir.exists() {
-                let archived_state = agent_state_dir.with_extension("archived");
-                if let Err(e) = tokio::fs::rename(&agent_state_dir, &archived_state).await {
-                    warn!(
-                        agent_id = %args.agent_id,
-                        error = %e,
-                        "Failed to archive agent state directory"
-                    );
-                } else {
-                    info!(
-                        agent_id = %args.agent_id,
-                        archived_path = %archived_state.display(),
-                        "Agent state directory archived"
-                    );
+                // Also archive agent state directory (~/.aleph/agents/{id}/)
+                let agent_state_dir = dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                    .join(".aleph")
+                    .join("agents")
+                    .join(&args.agent_id);
+                if agent_state_dir.exists() {
+                    let archived_state = agent_state_dir.with_extension("archived");
+                    if let Err(e) = tokio::fs::rename(&agent_state_dir, &archived_state).await {
+                        warn!(
+                            agent_id = %args.agent_id,
+                            error = %e,
+                            "Failed to archive agent state directory"
+                        );
+                    } else {
+                        info!(
+                            agent_id = %args.agent_id,
+                            archived_path = %archived_state.display(),
+                            "Agent state directory archived"
+                        );
+                    }
                 }
             }
         }
 
         let deleted = removed.is_some();
 
-        // Emit lifecycle event. Wrap in TopicEvent so the WS forwarder's topic
-        // filter delivers it — a bare publish_json is topic-less and dropped by
-        // concrete subscriptions (see switch.rs for the same fix).
+        // Emit lifecycle event (TopicEvent-wrapped inside `publish`).
         if deleted {
             if let Some(ref bus) = self.event_bus {
-                let ev = AgentLifecycleEvent::Deleted {
+                AgentLifecycleEvent::Deleted {
                     agent_id: args.agent_id.clone(),
                     workspace_archived: true,
-                };
-                let _ = bus.publish_json(&TopicEvent::new(
-                    ev.topic(),
-                    serde_json::to_value(&ev).unwrap_or_default(),
-                ));
+                }
+                .publish(bus);
             }
         }
 
@@ -229,6 +266,16 @@ mod tests {
             archive_after_days: 0,
         };
         Arc::new(AgentEnvStore::new(config).unwrap())
+    }
+
+    fn test_session_store() -> Arc<dyn crate::gateway::session_store::SessionStore> {
+        use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+        let temp = tempdir().unwrap();
+        let cfg = SessionManagerConfig {
+            db_path: temp.keep().join("sessions.db"),
+            ..Default::default()
+        };
+        Arc::new(SessionManager::new(cfg).expect("session manager"))
     }
 
     #[test]
@@ -271,5 +318,60 @@ mod tests {
         // A user-created agent not in the catalog must NOT be protected
         assert!(!is_protected(&catalog, "nonexistent-user-agent"));
         assert!(!is_protected(&catalog, "my-custom-trader"));
+    }
+
+    #[tokio::test]
+    async fn delete_lazy_agent_reports_deleted_and_clears_bindings() {
+        use crate::gateway::agent_instance::AgentInstanceConfig;
+
+        // A lazily-registered (never instantiated) agent must still report
+        // deleted=true and drop its channel bindings — the old
+        // `Option<Arc<AgentInstance>>` remove() collapsed this case to None.
+        let registry = Arc::new(AgentRegistry::new());
+        let root = tempdir().unwrap().keep();
+        registry
+            .register_config(
+                AgentInstanceConfig {
+                    agent_id: "trader".to_string(),
+                    workspace: root.join("workspace"),
+                    agent_dir: root.join("state"),
+                    ..Default::default()
+                },
+                test_session_store(),
+            )
+            .await;
+
+        let wm = test_workspace_mgr();
+        wm.set_active_agent("telegram", "trader").unwrap();
+        wm.set_active_agent("discord", "trader").unwrap();
+
+        let catalog = Arc::new(CatalogRegistry::with_builtins());
+        let tool = AgentDeleteTool::new(Arc::clone(&registry), Arc::clone(&wm), None, catalog);
+
+        let out = tool
+            .call(AgentDeleteArgs {
+                agent_id: "trader".to_string(),
+            })
+            .await
+            .expect("delete should succeed");
+
+        assert!(out.deleted, "lazy agent deletion must report deleted=true");
+        assert!(!registry.contains("trader").await);
+        assert!(wm.get_active_agent("telegram").unwrap().is_none());
+        assert!(wm.get_active_agent("discord").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_unknown_agent_errors() {
+        let registry = Arc::new(AgentRegistry::new());
+        let catalog = Arc::new(CatalogRegistry::with_builtins());
+        let tool = AgentDeleteTool::new(registry, test_workspace_mgr(), None, catalog);
+        let err = tool
+            .call(AgentDeleteArgs {
+                agent_id: "ghost".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not found"));
     }
 }

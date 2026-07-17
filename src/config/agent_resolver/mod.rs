@@ -231,7 +231,11 @@ impl AgentDefinitionResolver {
     }
 
     /// Resolve a single agent definition into a `ResolvedAgent`.
-    fn resolve_one(
+    ///
+    /// Public for hot registration: the `agents.create` RPC resolves the new
+    /// definition through the exact same path boot's [`Self::resolve_all`]
+    /// uses, so a created agent is immediately routable without a restart.
+    pub fn resolve_one(
         &mut self,
         agent: &AgentDefinition,
         defaults: &AgentDefaults,

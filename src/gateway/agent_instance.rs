@@ -667,6 +667,29 @@ enum AgentEntry {
     Instance(Arc<AgentInstance>),
 }
 
+/// What [`AgentRegistry::remove`] actually evicted.
+///
+/// Both variants mean "the agent is gone from the registry"; they differ in
+/// what teardown material the caller gets back.
+pub enum RemovedAgent {
+    /// The agent was instantiated; the live instance is returned for teardown.
+    Instance(Arc<AgentInstance>),
+    /// The agent was still a lazy config entry; its config is returned so the
+    /// caller can archive the workspace it would have used.
+    Lazy(AgentInstanceConfig),
+}
+
+impl RemovedAgent {
+    /// Workspace path of the removed agent, regardless of instantiation state.
+    #[must_use]
+    pub fn workspace(&self) -> &std::path::Path {
+        match self {
+            Self::Instance(inst) => inst.workspace(),
+            Self::Lazy(config) => &config.workspace,
+        }
+    }
+}
+
 /// Registry of agent instances
 pub struct AgentRegistry {
     agents: Arc<RwLock<HashMap<String, AgentEntry>>>,
@@ -797,41 +820,13 @@ impl AgentRegistry {
         agents.keys().cloned().collect()
     }
 
-    /// Find an agent by display name (case-insensitive substring match).
+    /// Whether an agent ID is registered (lazy or instantiated).
     ///
-    /// Returns the agent ID if a unique match is found.
-    /// Extracts `display_name` from either variant without instantiating.
-    pub async fn find_by_name(&self, name: &str) -> Option<String> {
-        let agents = self.agents.read().await;
-        let name_lower = name.to_lowercase();
-        let mut matched_id: Option<String> = None;
-
-        for (id, entry) in agents.iter() {
-            let display = match entry {
-                AgentEntry::Instance(inst) => inst.display_name().to_lowercase(),
-                AgentEntry::Config { config, .. } => config
-                    .display_name
-                    .as_deref()
-                    .unwrap_or(&config.agent_id)
-                    .to_lowercase(),
-            };
-            if display == name_lower
-                || display.contains(&name_lower)
-                || name_lower.contains(&display)
-            {
-                if matched_id.is_some() {
-                    // Ambiguous: multiple agents match — prefer exact match
-                    if display == name_lower {
-                        matched_id = Some(id.clone());
-                    }
-                    // Otherwise keep first match
-                } else {
-                    matched_id = Some(id.clone());
-                }
-            }
-        }
-
-        matched_id
+    /// Unlike [`Self::get`], this never instantiates a lazy entry — use it for
+    /// existence validation (e.g. binding a channel to an agent) where forcing
+    /// a full `AgentInstance` build would be wasted work.
+    pub async fn contains(&self, agent_id: &str) -> bool {
+        self.agents.read().await.contains_key(agent_id)
     }
 
     /// Get the `allowed_links` for an agent (None = all allowed).
@@ -844,12 +839,19 @@ impl AgentRegistry {
         })
     }
 
-    /// Remove an agent (works for both lazy and instantiated entries)
-    pub async fn remove(&self, agent_id: &str) -> Option<Arc<AgentInstance>> {
+    /// Remove an agent (works for both lazy and instantiated entries).
+    ///
+    /// Returns what was actually evicted. The previous signature
+    /// (`Option<Arc<AgentInstance>>`) collapsed the lazy case into `None`,
+    /// which callers read as "nothing was removed" — deleting a
+    /// never-instantiated agent then misreported failure and skipped both
+    /// workspace archival and the `Deleted` lifecycle event even though the
+    /// registry entry was gone.
+    pub async fn remove(&self, agent_id: &str) -> Option<RemovedAgent> {
         let mut agents = self.agents.write().await;
         match agents.remove(agent_id) {
-            Some(AgentEntry::Instance(inst)) => Some(inst),
-            Some(AgentEntry::Config { .. }) => None,
+            Some(AgentEntry::Instance(inst)) => Some(RemovedAgent::Instance(inst)),
+            Some(AgentEntry::Config { config, .. }) => Some(RemovedAgent::Lazy(config)),
             None => None,
         }
     }
@@ -863,79 +865,6 @@ impl AgentRegistry {
     #[must_use]
     pub fn default_agent_id(&self) -> &str {
         &self.default_agent
-    }
-
-    /// Dynamically create and register a new agent at runtime.
-    ///
-    /// Creates `~/.aleph/agents/{id}/SOUL.md` and registers an `AgentInstance`.
-    pub async fn create_dynamic(
-        &self,
-        id: &str,
-        soul_content: &str,
-        session_store: Arc<dyn SessionStore>,
-    ) -> Result<Arc<AgentInstance>, AgentInstanceError> {
-        // Check existence (works for both Config and Instance entries)
-        {
-            let agents = self.agents.read().await;
-            if agents.contains_key(id) {
-                return Err(AgentInstanceError::InitFailed(format!(
-                    "Agent '{id}' already exists"
-                )));
-            }
-        }
-
-        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
-        let workspace_path = home.join(".aleph/workspaces").join(id);
-        let agent_dir = home.join(".aleph/agents").join(id);
-
-        // Create workspace directory (runtime output, project files)
-        tokio::fs::create_dir_all(&workspace_path)
-            .await
-            .map_err(|e| {
-                AgentInstanceError::InitFailed(format!(
-                    "Failed to create workspace for '{id}': {e}"
-                ))
-            })?;
-
-        // Initialize all identity files (SOUL.md, AGENTS.md, IDENTITY.md, etc.)
-        crate::config::agent_resolver::initialize_agent_identity(
-            &agent_dir,
-            id,
-            crate::thinker::soul_archetypes::SoulArchetype::default(),
-        )
-        .map_err(|e| {
-            AgentInstanceError::InitFailed(format!(
-                "Failed to initialize identity files for '{id}': {e}"
-            ))
-        })?;
-
-        // Overwrite SOUL.md with custom content if provided
-        if !soul_content.is_empty() {
-            let soul_path = agent_dir.join("SOUL.md");
-            tokio::fs::write(&soul_path, soul_content)
-                .await
-                .map_err(|e| {
-                    AgentInstanceError::InitFailed(format!(
-                        "Failed to write SOUL.md for '{id}': {e}"
-                    ))
-                })?;
-        }
-
-        let config = AgentInstanceConfig {
-            agent_id: id.to_string(),
-            workspace: workspace_path,
-            agent_dir,
-            ..Default::default()
-        };
-
-        let instance = AgentInstance::new(config, session_store)?;
-        let arc = Arc::new(instance);
-        {
-            let mut agents = self.agents.write().await;
-            agents.insert(id.to_string(), AgentEntry::Instance(Arc::clone(&arc)));
-        }
-        info!("Dynamically created agent: {}", id);
-        Ok(arc)
     }
 }
 
@@ -1172,42 +1101,70 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_dynamic_agent() {
+    async fn contains_sees_lazy_entry_without_instantiating() {
         let temp = tempdir().unwrap();
         let sm = test_session_store(&temp);
         let registry = AgentRegistry::new();
+        let config = AgentInstanceConfig {
+            agent_id: "lazy".to_string(),
+            workspace: temp.path().join("workspaces/lazy"),
+            agent_dir: temp.path().join("agents/lazy"),
+            ..Default::default()
+        };
+        registry.register_config(config, sm).await;
 
-        // Manually create an agent to simulate create_dynamic without polluting ~/.aleph
+        assert!(registry.contains("lazy").await);
+        assert!(!registry.contains("ghost").await);
+        // contains() must not have forced instantiation: removing afterwards
+        // still yields the Lazy variant.
+        assert!(matches!(
+            registry.remove("lazy").await,
+            Some(RemovedAgent::Lazy(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn remove_lazy_entry_reports_removed_with_workspace() {
+        let temp = tempdir().unwrap();
+        let sm = test_session_store(&temp);
+        let registry = AgentRegistry::new();
+        let ws = temp.path().join("workspaces/trading");
+        let config = AgentInstanceConfig {
+            agent_id: "trading".to_string(),
+            workspace: ws.clone(),
+            agent_dir: temp.path().join("agents/trading"),
+            ..Default::default()
+        };
+        registry.register_config(config, sm).await;
+
+        let removed = registry
+            .remove("trading")
+            .await
+            .expect("lazy entry removal must report Some, not None");
+        assert_eq!(removed.workspace(), ws.as_path());
+        assert!(!registry.contains("trading").await);
+    }
+
+    #[tokio::test]
+    async fn remove_instantiated_entry_returns_instance() {
+        let temp = tempdir().unwrap();
+        let sm = test_session_store(&temp);
+        let registry = AgentRegistry::new();
         let config = AgentInstanceConfig {
             agent_id: "trading".to_string(),
             workspace: temp.path().join("workspaces/trading"),
             agent_dir: temp.path().join("agents/trading"),
             ..Default::default()
         };
-        let instance = AgentInstance::new(config, sm).unwrap();
-        registry.register(instance).await;
-
-        let agent = registry.get("trading").await;
-        assert!(agent.is_some());
-        assert_eq!(agent.unwrap().id(), "trading");
-    }
-
-    #[tokio::test]
-    async fn test_create_dynamic_already_exists() {
-        let temp = tempdir().unwrap();
-        let sm = test_session_store(&temp);
-        let registry = AgentRegistry::new();
-        let config = AgentInstanceConfig {
-            agent_id: "main".to_string(),
-            workspace: temp.path().join("main"),
-            agent_dir: temp.path().join("agents/main"),
-            ..Default::default()
-        };
         registry
-            .register(AgentInstance::new(config, Arc::clone(&sm)).unwrap())
+            .register(AgentInstance::new(config, sm).unwrap())
             .await;
-        let result = registry.create_dynamic("main", "soul", sm).await;
-        assert!(result.is_err());
+
+        match registry.remove("trading").await {
+            Some(RemovedAgent::Instance(inst)) => assert_eq!(inst.id(), "trading"),
+            other => panic!("expected Instance variant, got {:?}", other.is_some()),
+        }
+        assert!(registry.remove("trading").await.is_none());
     }
 
     #[test]

@@ -11,13 +11,13 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::error::Result;
+use crate::gateway::agent_binding::bind_channel_agent;
 use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_instance::AgentRegistry;
-use crate::gateway::agent_lifecycle::AgentLifecycleEvent;
-use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
+use crate::gateway::event_bus::GatewayEventBus;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -100,95 +100,39 @@ impl AlephTool for AgentSwitchTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         info!(agent_id = %args.agent_id, channel = %args.__channel, "Agent switch requested");
 
-        // 1. A channel is required to bind against. Empty means the tool was
-        //    invoked outside a routed conversation (no session context).
-        let channel = args.__channel.trim();
-        if channel.is_empty() {
-            return Err(crate::error::AlephError::other(
-                "Cannot switch agent: no active channel context for this conversation.",
-            ));
-        }
+        // Validation, no-op detection, persistence, and the Bound lifecycle
+        // event all live in the shared binding seam (`gateway::agent_binding`)
+        // so this tool and the Panel `channels.set_agent` RPC cannot drift.
+        let channel = args.__channel.trim().to_string();
+        let outcome = bind_channel_agent(
+            Some(&self.registry),
+            &self.workspace_mgr,
+            self.event_bus.as_deref(),
+            &channel,
+            &args.agent_id,
+        )
+        .await
+        .map_err(|e| crate::error::AlephError::other(e.to_string()))?;
 
-        // 2. Validate the target exists — never bind a channel to a ghost agent
-        //    (the inbound router would resolve to a missing instance downstream).
-        if self.registry.get(&args.agent_id).await.is_none() {
-            let mut available = self.registry.list().await;
-            available.sort();
-            return Err(crate::error::AlephError::other(format!(
-                "Agent '{}' not found. Available agents: {}",
-                args.agent_id,
-                available.join(", ")
-            )));
-        }
-
-        // 3. Capture the previous binding for reporting + the lifecycle event.
-        let previous_agent = self
-            .workspace_mgr
-            .get_active_agent(channel)
-            .unwrap_or_default();
-
-        // No-op switch: already bound to the requested agent.
-        if previous_agent.as_deref() == Some(args.agent_id.as_str()) {
-            return Ok(AgentSwitchOutput {
-                agent_id: args.agent_id.clone(),
-                channel: channel.to_string(),
-                previous_agent: previous_agent.clone(),
-                message: format!(
-                    "Channel '{channel}' is already using agent '{}'.",
+        let message = if outcome.no_op {
+            format!(
+                "Channel '{channel}' is already using agent '{}'.",
+                args.agent_id
+            )
+        } else {
+            match outcome.previous_agent.as_deref() {
+                Some(prev) => format!(
+                    "Switched channel '{channel}' from agent '{prev}' to '{}'.",
                     args.agent_id
                 ),
-            });
-        }
-
-        // 4. Persist the binding. The inbound router reads it on the next turn.
-        self.workspace_mgr
-            .set_active_agent(channel, &args.agent_id)
-            .map_err(|e| {
-                crate::error::AlephError::other(format!(
-                    "Failed to bind agent '{}' to channel '{channel}': {e}",
-                    args.agent_id
-                ))
-            })?;
-
-        // 5. Emit a lifecycle event so the Panel and other consumers can react.
-        //    Wrap in TopicEvent: a bare publish_json serializes to a topic-less
-        //    {"type":"bound",...} that the WS forwarder reads as topic "" and
-        //    every concrete subscription (e.g. "agent.lifecycle.*") then drops.
-        //    TopicEvent carries the routing topic so the filter delivers it.
-        if let Some(ref bus) = self.event_bus {
-            let ev = AgentLifecycleEvent::Bound {
-                agent_id: args.agent_id.clone(),
-                channel: channel.to_string(),
-                previous_agent: previous_agent.clone(),
-            };
-            let _ = bus.publish_json(&TopicEvent::new(
-                ev.topic(),
-                serde_json::to_value(&ev).unwrap_or_default(),
-            ));
-        }
-
-        let message = match previous_agent.as_deref() {
-            Some(prev) => format!(
-                "Switched channel '{channel}' from agent '{prev}' to '{}'.",
-                args.agent_id
-            ),
-            None => format!("Bound channel '{channel}' to agent '{}'.", args.agent_id),
+                None => format!("Bound channel '{channel}' to agent '{}'.", args.agent_id),
+            }
         };
-
-        info!(
-            agent_id = %args.agent_id,
-            channel = %channel,
-            previous = ?previous_agent,
-            "Agent switch complete"
-        );
-        if previous_agent.is_none() {
-            warn!(channel = %channel, "channel had no prior agent binding (was using default)");
-        }
 
         Ok(AgentSwitchOutput {
             agent_id: args.agent_id,
-            channel: channel.to_string(),
-            previous_agent,
+            channel,
+            previous_agent: outcome.previous_agent,
             message,
         })
     }

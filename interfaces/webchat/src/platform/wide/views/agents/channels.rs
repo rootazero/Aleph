@@ -11,7 +11,8 @@ pub fn ChannelsTab(agent_id: String) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
     let agent_id = StoredValue::new(agent_id);
-    let bound_channel = RwSignal::new(Option::<String>::None);
+    // Many-to-one model: an agent may be bound to several channels — show all.
+    let bound_channels = RwSignal::new(Vec::<String>::new());
     let is_loading = RwSignal::new(true);
 
     let dash = state;
@@ -21,14 +22,9 @@ pub fn ChannelsTab(agent_id: String) -> impl IntoView {
         }
         let id = agent_id.get_value();
         spawn_local(async move {
-            if let Ok(result) = dash
-                .rpc_call("agents.bindings", serde_json::Value::Null)
-                .await
-            {
-                if let Some(bindings) = result.get("bindings") {
-                    if let Some(ch) = bindings.get(&id).and_then(|v| v.as_str()) {
-                        bound_channel.set(Some(ch.to_string()));
-                    }
+            if let Ok(map) = crate::api::WorkspaceApi::agent_bindings(&dash).await {
+                if let Some(chs) = map.get(&id) {
+                    bound_channels.set(chs.clone());
                 }
             }
             is_loading.set(false);
@@ -48,19 +44,23 @@ pub fn ChannelsTab(agent_id: String) -> impl IntoView {
                     <div class="bg-surface-raised border border-border rounded-xl p-6">
                         <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, agents.channels.title)}</h2>
                         {move || {
-                            match bound_channel.get() {
-                                Some(ch) => view! {
-                                    <div class="flex items-center gap-2">
-                                        <span class="px-3 py-1 rounded-full text-xs font-medium bg-success/20 text-success">{t!(i18n, agents.channels.bound)}</span>
-                                        <span class="text-sm text-text-primary">{ch}</span>
-                                    </div>
-                                }.into_any(),
-                                None => view! {
+                            let chs = bound_channels.get();
+                            if chs.is_empty() {
+                                view! {
                                     <div class="flex items-center gap-2">
                                         <span class="px-3 py-1 rounded-full text-xs font-medium bg-surface-sunken text-text-tertiary">{t!(i18n, agents.channels.not_bound)}</span>
                                         <span class="text-sm text-text-secondary">{t!(i18n, agents.channels.not_bound_hint)}</span>
                                     </div>
-                                }.into_any(),
+                                }.into_any()
+                            } else {
+                                view! {
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <span class="px-3 py-1 rounded-full text-xs font-medium bg-success/20 text-success">{t!(i18n, agents.channels.bound)}</span>
+                                        {chs.into_iter().map(|ch| view! {
+                                            <span class="text-sm text-text-primary">{ch}</span>
+                                        }).collect_view()}
+                                    </div>
+                                }.into_any()
                             }
                         }}
                     </div>

@@ -1578,6 +1578,91 @@ mod tests {
         );
     }
 
+    // ── stale-binding self-heal (fail-soft on the hot path) ───────────────
+
+    async fn runtime_registry_with(ids: &[&str]) -> Arc<crate::gateway::AgentRegistry> {
+        use crate::gateway::agent_instance::AgentInstanceConfig;
+        use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+        let registry = Arc::new(crate::gateway::AgentRegistry::new());
+        for id in ids {
+            let root = tempfile::tempdir().unwrap().keep();
+            let sm: Arc<dyn crate::gateway::session_store::SessionStore> = Arc::new(
+                SessionManager::new(SessionManagerConfig {
+                    db_path: root.join("sessions.db"),
+                    ..Default::default()
+                })
+                .unwrap(),
+            );
+            registry
+                .register_config(
+                    AgentInstanceConfig {
+                        agent_id: (*id).to_string(),
+                        workspace: root.join("workspace"),
+                        agent_dir: root.join("state"),
+                        ..Default::default()
+                    },
+                    sm,
+                )
+                .await;
+        }
+        registry
+    }
+
+    /// A binding pointing at an agent missing from the runtime registry (its
+    /// TOML definition removed before a restart, or a crash between delete
+    /// steps) must fall back to default routing instead of bricking the
+    /// channel — a ghost resolution fails every message with AgentNotFound
+    /// and the user loses the very LLM they'd need to run `agent_switch`.
+    #[tokio::test]
+    async fn stale_binding_falls_back_to_default() {
+        let mut router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_workspace_manager(env_store_with_binding(&[("telegram", "deleted-agent")]));
+        router.agent_registry = Some(runtime_registry_with(&["main"]).await);
+
+        let (agent, _route) = router
+            .resolve_agent_id_async(&dm_on("telegram"))
+            .await
+            .unwrap();
+        assert_eq!(
+            agent, "main",
+            "ghost binding must fail soft to the default agent"
+        );
+        // The binding row is kept: re-registering the agent revives the
+        // user's explicit switch instead of silently destroying it.
+        assert_eq!(
+            router
+                .workspace_manager
+                .as_ref()
+                .unwrap()
+                .get_active_agent("telegram")
+                .unwrap()
+                .as_deref(),
+            Some("deleted-agent")
+        );
+    }
+
+    /// The registry validation must not break healthy bindings.
+    #[tokio::test]
+    async fn valid_binding_passes_registry_validation() {
+        let mut router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_workspace_manager(env_store_with_binding(&[("telegram", "trader")]));
+        router.agent_registry = Some(runtime_registry_with(&["main", "trader"]).await);
+
+        let (agent, _route) = router
+            .resolve_agent_id_async(&dm_on("telegram"))
+            .await
+            .unwrap();
+        assert_eq!(agent, "trader");
+    }
+
     fn bot_authored_msg(id: &str) -> InboundMessage {
         use crate::gateway::channel::MessageMeta;
         InboundMessage {
