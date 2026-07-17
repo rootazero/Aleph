@@ -1543,7 +1543,19 @@ impl super::DesktopTool {
                         // that can hand it back.
                         match press_action {
                             aleph_desktop::PressAction::Press => {
-                                super::held_inputs::record_button_press(&session_id, button, x, y);
+                                // Record which rail the press rode so the ledger
+                                // releases it the same way (targeted → targeted).
+                                let held_pid = match rail {
+                                    Rail::Targeted(pid) => Some(pid),
+                                    Rail::Global => None,
+                                };
+                                super::held_inputs::record_button_press(
+                                    &session_id,
+                                    button,
+                                    x,
+                                    y,
+                                    held_pid,
+                                );
                             }
                             aleph_desktop::PressAction::Release => {
                                 super::held_inputs::clear_button_release(&session_id, button);
@@ -1752,6 +1764,19 @@ impl super::DesktopTool {
             },
             "paste" => {
                 let text = args.text.as_deref().unwrap_or("");
+
+                // Pre-flight the focus, exactly as `type_text` does. paste is an
+                // input action that injects `text` via Cmd/Ctrl+V into whatever
+                // holds focus, so it must not bypass the gate type_text enforces:
+                // refuse when nothing holds focus / focus is the wrong app, and
+                // hard-refuse a secure (password) field even under `force:true`.
+                // Without this, "paste is better for multiline than type_text"
+                // (per the DESCRIPTION) was a hole straight past focus_gate.
+                if let Some(refusal) =
+                    focus_preflight(platform, rail, args.force == Some(true)).await
+                {
+                    return Ok(Some(refusal));
+                }
 
                 // Snapshot the clipboard *by flavor*, not as a bare string: an
                 // image / file / PDF reads back as no text at all, and writing

@@ -68,15 +68,29 @@ pub(crate) fn store_gateway_token(token: &str) -> Result<(), String> {
     if let Some(parent) = marker.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create .aleph dir: {e}"))?;
     }
-    std::fs::write(&marker, token).map_err(|e| format!("write gateway token: {e}"))?;
     // The shared Gateway token grants full operator authority, so keep it
-    // owner-only. `std::fs::write` would otherwise leave it at the umask default
-    // (typically 0644 — readable by every local user); mirror the repo-wide
-    // 0o600 secret-store convention (vault, mcp auth, cli endpoint, ...).
+    // owner-only. A `write` + later `set_permissions` would create the file at
+    // the umask default (typically 0644 — readable by every local user) and
+    // leave a TOCTOU window before the chmod lands; create it 0600 atomically
+    // instead, mirroring the repo-wide secret-store convention (gateway TLS key,
+    // vault, mcp auth, cli endpoint).
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o600));
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&marker)
+            .map_err(|e| format!("create gateway token: {e}"))?;
+        f.write_all(token.as_bytes())
+            .map_err(|e| format!("write gateway token: {e}"))?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&marker, token).map_err(|e| format!("write gateway token: {e}"))?;
     }
     Ok(())
 }

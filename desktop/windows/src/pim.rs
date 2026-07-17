@@ -148,9 +148,14 @@ impl PimCapability for WindowsPim {
                 $count = 0
                 foreach ($item in $items) {{
                     if ($count -ge {limit}) {{ break }}
-                    $subject = $item.Subject
-                    $sender = $item.SenderName
-                    $body = $item.Body
+                    # Coalesce nulls: some item types (meeting requests, receipts)
+                    # have a null Body, and calling .Substring on it below would
+                    # throw into the outer catch and abort the ENTIRE search on the
+                    # first such match. Subject/SenderName can be null too and would
+                    # break deserialization on the Rust side.
+                    $subject = if ($null -eq $item.Subject) {{ "" }} else {{ $item.Subject }}
+                    $sender = if ($null -eq $item.SenderName) {{ "" }} else {{ $item.SenderName }}
+                    $body = if ($null -eq $item.Body) {{ "" }} else {{ $item.Body }}
                     if ($subject -like "*{escaped_query}*" -or $sender -like "*{escaped_query}*" -or $body -like "*{escaped_query}*") {{
                         $date = $item.ReceivedTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
                         $messages += [PSCustomObject]@{{

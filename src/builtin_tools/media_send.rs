@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::gateway::media::MediaItem;
+use crate::gateway::media::{is_remote_fetch_url, MediaItem};
 use crate::security::ssrf::{validate_url, SsrfPolicy};
 use crate::tools::AlephTool;
 
@@ -23,7 +23,7 @@ pub struct MediaSendArgs {
 /// A single media item to send.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct MediaSendItem {
-    /// URL of the media file
+    /// Remote URL (http/https), local file path, or `data:` URL of the media.
     pub url: String,
     /// Type: "image", "video", "audio", or "file"
     pub media_type: String,
@@ -71,14 +71,21 @@ impl AlephTool for MediaSendTool {
     type Output = MediaSendOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // SSRF protection: validate all URLs before processing
+        // SSRF protection applies only to URLs the pipeline actually fetches
+        // over the network. Local file paths (what `camera_clip`/`record_audio`
+        // return) and `data:` URLs are delivered by reading/decoding locally —
+        // running the SSRF host check on them rejected every one (`Url::parse`
+        // fails on a bare path; `file:`/`data:` have no host), so a captured
+        // clip could never be sent. Guard exactly the remote-fetch branch.
         let ssrf_policy = SsrfPolicy::default();
         for item in &args.items {
-            if let Err(e) = validate_url(&item.url, &ssrf_policy) {
-                return Err(crate::error::AlephError::tool(format!(
-                    "SSRF blocked for URL '{}': {}",
-                    item.url, e
-                )));
+            if is_remote_fetch_url(&item.url) {
+                if let Err(e) = validate_url(&item.url, &ssrf_policy) {
+                    return Err(crate::error::AlephError::tool(format!(
+                        "SSRF blocked for URL '{}': {}",
+                        item.url, e
+                    )));
+                }
             }
         }
 
@@ -153,5 +160,49 @@ mod tests {
         assert_eq!(output._media.len(), 1);
         assert!(output._display.contains("1"));
         assert!(!output._display.contains("files"));
+    }
+
+    #[tokio::test]
+    async fn test_media_send_accepts_local_path_and_data_url() {
+        // A camera_clip file path and a data: URL must pass — the SSRF host
+        // check applies only to remotely-fetched http(s) URLs.
+        let tool = MediaSendTool::new();
+        let args = MediaSendArgs {
+            items: vec![
+                MediaSendItem {
+                    url: "/var/folders/tmp/clip.mp4".to_string(),
+                    media_type: "video".to_string(),
+                    mime_type: None,
+                    filename: None,
+                },
+                MediaSendItem {
+                    url: "data:image/png;base64,iVBORw0KGgo=".to_string(),
+                    media_type: "image".to_string(),
+                    mime_type: None,
+                    filename: None,
+                },
+            ],
+        };
+        let output = tool.call(args).await.unwrap();
+        assert_eq!(output._media.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_media_send_still_blocks_ssrf_on_remote_url() {
+        // Loopback/internal hosts over http must still be rejected.
+        let tool = MediaSendTool::new();
+        let args = MediaSendArgs {
+            items: vec![MediaSendItem {
+                url: "http://169.254.169.254/latest/meta-data/".to_string(),
+                media_type: "file".to_string(),
+                mime_type: None,
+                filename: None,
+            }],
+        };
+        let err = tool
+            .call(args)
+            .await
+            .expect_err("SSRF must block metadata IP");
+        assert!(err.to_string().contains("SSRF blocked"), "got: {err}");
     }
 }

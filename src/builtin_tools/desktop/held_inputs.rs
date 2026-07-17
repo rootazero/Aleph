@@ -29,11 +29,18 @@ const NO_TURN_SESSION: &str = "__no_turn__";
 /// A mouse button held down, with the point it was pressed at — a release must
 /// be issued *somewhere*, and the press point is the only position the ledger
 /// can know without querying the cursor.
+///
+/// `pid` records which rail the press rode: `Some(pid)` means it was delivered
+/// to that process via the targeted rail (the user's real cursor never moved),
+/// so its release must ride the same targeted rail — a global release would
+/// leave the targeted process's mouse-down unmatched *and* teleport the user's
+/// physical cursor to the recorded point. `None` means the global HID rail.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct HeldButton {
     button: MouseButton,
     x: f64,
     y: f64,
+    pid: Option<i32>,
 }
 
 /// Everything one session currently holds down.
@@ -99,13 +106,20 @@ pub fn clear_key_release(session_id: &str, keys: &[String]) {
 }
 
 /// Record that `button` is now held down at `(x, y)` (a `PressAction::Press` on
-/// `mouse_button`). A second press of the same button replaces the first — the
-/// physical button can only be down once, at one place.
-pub fn record_button_press(session_id: &str, button: MouseButton, x: f64, y: f64) {
+/// `mouse_button`). `pid` is `Some` when the press rode the targeted rail (so
+/// its release must too). A second press of the same button replaces the first —
+/// the physical button can only be down once, at one place.
+pub fn record_button_press(
+    session_id: &str,
+    button: MouseButton,
+    x: f64,
+    y: f64,
+    pid: Option<i32>,
+) {
     let mut map = HELD_INPUTS.lock().unwrap_or_else(|e| e.into_inner());
     let held = map.entry(session_id.to_string()).or_default();
     held.buttons.retain(|b| b.button != button);
-    held.buttons.push(HeldButton { button, x, y });
+    held.buttons.push(HeldButton { button, x, y, pid });
 }
 
 /// Drop `button` from the ledger — the model released it itself.
@@ -168,13 +182,25 @@ async fn release_held(held: &SessionHeld, screen: &dyn ScreenCapability) -> usiz
         }
     }
     for b in &held.buttons {
-        match screen
-            .mouse_button(b.x, b.y, b.button, PressAction::Release)
-            .await
-        {
+        // Release on the same rail the press rode: targeted presses go back
+        // through the targeted rail (matches the process's mouse-down and does
+        // not move the user's cursor); global presses use the global HID tap.
+        let result = match b.pid {
+            Some(pid) => {
+                screen
+                    .mouse_button_targeted(pid, b.x, b.y, b.button, PressAction::Release)
+                    .await
+            }
+            None => {
+                screen
+                    .mouse_button(b.x, b.y, b.button, PressAction::Release)
+                    .await
+            }
+        };
+        match result {
             Ok(()) => released += 1,
             Err(e) => {
-                warn!(error = %e, button = ?b.button, "held_inputs: failed to release held mouse button")
+                warn!(error = %e, button = ?b.button, pid = ?b.pid, "held_inputs: failed to release held mouse button")
             }
         }
     }
@@ -228,6 +254,8 @@ mod tests {
     struct RecordingScreen {
         key_releases: StdMutex<Vec<Vec<String>>>,
         button_releases: StdMutex<Vec<(MouseButton, f64, f64)>>,
+        /// Targeted releases, tagged with the pid they were routed to.
+        targeted_button_releases: StdMutex<Vec<(i32, MouseButton, f64, f64)>>,
         fail: bool,
     }
 
@@ -288,6 +316,24 @@ mod tests {
                 .push((button, x, y));
             Ok(())
         }
+        async fn mouse_button_targeted(
+            &self,
+            pid: i32,
+            x: f64,
+            y: f64,
+            button: MouseButton,
+            action: PressAction,
+        ) -> DResult<()> {
+            assert_eq!(action, PressAction::Release, "ledger only issues releases");
+            if self.fail {
+                return Err(DesktopError::InputFailed("boom".into()));
+            }
+            self.targeted_button_releases
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((pid, button, x, y));
+            Ok(())
+        }
     }
 
     fn keys(parts: &[&str]) -> Vec<String> {
@@ -299,7 +345,7 @@ mod tests {
         let _g = guard();
         let sid = "held-record-clear";
         record_key_press(sid, &keys(&["cmd"]));
-        record_button_press(sid, MouseButton::Left, 10.0, 20.0);
+        record_button_press(sid, MouseButton::Left, 10.0, 20.0, None);
         assert_eq!(held_count(sid), 2);
 
         clear_key_release(sid, &keys(&["cmd"]));
@@ -313,8 +359,8 @@ mod tests {
         let sid = "held-dedupe";
         record_key_press(sid, &keys(&["ctrl", "shift"]));
         record_key_press(sid, &keys(&["ctrl", "shift"]));
-        record_button_press(sid, MouseButton::Left, 1.0, 1.0);
-        record_button_press(sid, MouseButton::Left, 9.0, 9.0);
+        record_button_press(sid, MouseButton::Left, 1.0, 1.0, None);
+        record_button_press(sid, MouseButton::Left, 9.0, 9.0, None);
         assert_eq!(held_count(sid), 2, "one chord + one button");
 
         // The physical button is down at the latest press point.
@@ -340,7 +386,7 @@ mod tests {
         let _g = guard();
         let sid = "held-release-all";
         record_key_press(sid, &keys(&["cmd"]));
-        record_button_press(sid, MouseButton::Left, 100.0, 200.0);
+        record_button_press(sid, MouseButton::Left, 100.0, 200.0, None);
 
         let screen = RecordingScreen::default();
         assert_eq!(block_on(release_all(sid, &screen)), 2);
@@ -383,6 +429,37 @@ mod tests {
     }
 
     #[test]
+    fn targeted_press_is_released_on_the_targeted_rail() {
+        let _g = guard();
+        let sid = "held-targeted";
+        // A button pressed into pid 4242 via the targeted rail…
+        record_button_press(sid, MouseButton::Left, 12.0, 34.0, Some(4242));
+
+        let screen = RecordingScreen::default();
+        assert_eq!(block_on(release_all(sid, &screen)), 1);
+
+        // …is released via mouse_button_targeted to the SAME pid, not the global
+        // HID tap (which would strand the process's mouse-down and jump the
+        // user's cursor).
+        assert_eq!(
+            screen
+                .targeted_button_releases
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_slice(),
+            &[(4242, MouseButton::Left, 12.0, 34.0)]
+        );
+        assert!(
+            screen
+                .button_releases
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty(),
+            "targeted press must not release on the global rail"
+        );
+    }
+
+    #[test]
     fn failed_release_is_swallowed_and_still_clears() {
         let _g = guard();
         let sid = "held-release-fails";
@@ -403,7 +480,7 @@ mod tests {
     fn release_all_sessions_drains_every_session() {
         let _g = guard();
         record_key_press("held-multi-a", &keys(&["cmd"]));
-        record_button_press("held-multi-b", MouseButton::Right, 5.0, 6.0);
+        record_button_press("held-multi-b", MouseButton::Right, 5.0, 6.0, None);
 
         let screen = RecordingScreen::default();
         assert_eq!(block_on(release_all_sessions(&screen)), 2);

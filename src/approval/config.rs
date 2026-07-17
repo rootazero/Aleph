@@ -299,6 +299,7 @@ impl ConfigApprovalPolicy {
         defaults.insert(ActionType::DesktopLaunchApp, DefaultDecision::Allow);
         defaults.insert(ActionType::DesktopAutomation, DefaultDecision::Allow);
         defaults.insert(ActionType::PimWrite, DefaultDecision::Allow);
+        defaults.insert(ActionType::MediaCapture, DefaultDecision::Allow);
 
         Self::new(PolicyConfig {
             version: 1,
@@ -327,6 +328,7 @@ impl Default for ConfigApprovalPolicy {
         defaults.insert(ActionType::DesktopLaunchApp, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopAutomation, DefaultDecision::Ask);
         defaults.insert(ActionType::PimWrite, DefaultDecision::Ask);
+        defaults.insert(ActionType::MediaCapture, DefaultDecision::Ask);
 
         Self::new(PolicyConfig {
             version: 1,
