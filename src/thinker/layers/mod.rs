@@ -12,7 +12,6 @@ mod custom_instructions;
 mod generation_models;
 mod language;
 mod mcp_instructions;
-mod mcp_resources;
 mod runtime_capabilities;
 mod skill_instructions;
 
@@ -96,7 +95,6 @@ pub use custom_instructions::CustomInstructionsLayer;
 pub use generation_models::GenerationModelsLayer;
 pub use language::LanguageLayer;
 pub use mcp_instructions::McpInstructionsLayer;
-pub use mcp_resources::McpResourceIndexLayer;
 pub use runtime_capabilities::RuntimeCapabilitiesLayer;
 pub use skill_instructions::SkillInstructionsLayer;
 
