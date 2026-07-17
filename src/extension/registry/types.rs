@@ -39,7 +39,8 @@ pub struct HookRegistration {
     pub event: crate::extension::types::HookEvent,
     /// Execution priority (lower = earlier, default 0)
     pub priority: i32,
-    /// Handler function name within the plugin
+    /// Handler function name within the plugin. Used for WASM-runtime
+    /// dispatch when `actions` is empty; display-only otherwise.
     pub handler: String,
     /// Optional human-readable name for the hook
     pub name: Option<String>,
@@ -47,6 +48,33 @@ pub struct HookRegistration {
     pub description: Option<String>,
     /// ID of the plugin that registered this hook
     pub plugin_id: String,
+    /// Execution kind (`interceptor` | `observer`). `None` picks the
+    /// per-event default (blocking-capable events → interceptor). Lets a
+    /// runtime plugin register a hook that can actually block / rewrite —
+    /// previously every registry hook was hard-wired to Observer, so a
+    /// plugin's block/deny output was silently ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<crate::extension::types::HookKind>,
+    /// Optional regex matched against `tool_name` for tool-based events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matcher: Option<String>,
+    /// Concrete actions to execute when the event fires. When non-empty
+    /// these are dispatched directly (shell command / prompt / http…, with
+    /// the consent gate applying to command + http actions). When empty,
+    /// dispatch falls back to invoking the WASM export named by `handler`.
+    /// Plugin-shipped `hooks.json` shell hooks flow through here — they were
+    /// previously mangled into a fake WASM handler string ("cmd1; cmd2")
+    /// that could never execute.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<crate::extension::types::HookAction>,
+    /// Plugin root directory for `${PLUGIN_ROOT}` substitution and the
+    /// default working directory of command actions. `None` for runtime
+    /// (WASM) registrations, which execute no filesystem-relative commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_root: Option<std::path::PathBuf>,
+    /// Per-hook timeout in seconds (applies to command/http actions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
 }
 
 // ============================================================================
@@ -462,9 +490,29 @@ mod tests {
             name: Some("Message Logger".to_string()),
             description: Some("Logs all incoming messages".to_string()),
             plugin_id: "logger-plugin".to_string(),
+            kind: None,
+            matcher: None,
+            actions: Vec::new(),
+            plugin_root: None,
+            timeout_secs: None,
         };
         assert_eq!(hook.priority, 10);
         assert_eq!(hook.name, Some("Message Logger".to_string()));
+
+        // Wire-format lock: the new optional fields default when absent, so
+        // pre-existing runtime (WASM) registration JSON keeps deserializing.
+        let legacy_json = r#"{
+            "event": "message_received",
+            "priority": 0,
+            "handler": "on_message",
+            "name": null,
+            "description": null,
+            "plugin_id": "p"
+        }"#;
+        let legacy: HookRegistration = serde_json::from_str(legacy_json).unwrap();
+        assert!(legacy.kind.is_none());
+        assert!(legacy.actions.is_empty());
+        assert!(legacy.plugin_root.is_none());
     }
 
     #[test]

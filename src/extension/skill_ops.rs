@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::extension::config;
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::types::{
-    ExtensionAgent, ExtensionCommand, ExtensionSkill, HookEvent, McpServerConfig, SkillToolResult,
+    ExtensionAgent, ExtensionCommand, ExtensionSkill, McpServerConfig, SkillToolResult,
     SkillType,
 };
 
@@ -129,24 +129,6 @@ impl ExtensionManager {
     }
 
     // ── Hook Execution ────────────────────────────────────────────────────────
-
-    /// Execute hooks for an event
-    pub async fn execute_hooks(
-        &self,
-        event: HookEvent,
-        context: &super::hooks::HookContext,
-    ) -> ExtensionResult<super::hooks::HookResult> {
-        self.hook_executor
-            .read()
-            .await
-            .execute(event, context)
-            .await
-    }
-
-    /// Get the number of registered hooks
-    pub async fn hook_count(&self) -> usize {
-        self.hook_executor.read().await.hook_count()
-    }
 
     /// Get a stable snapshot of the current hook executor.
     ///

@@ -73,25 +73,77 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
         .find(prefix)
         .ok_or_else(|| format!("No hook matches fingerprint '{prefix}'."))?;
 
+    // HTTP hook entries are namespaced `http:<url>` in the consent registry.
+    // They are reviewed (and approved) here but never shell-executed.
+    let http_url = entry.command.strip_prefix("http:");
+
     println!("Fingerprint: {}", entry.fingerprint);
     println!("Plugin:      {}", entry.plugin_name);
     println!("Event:       {}", entry.event);
     println!("Status:      {}", status_label(entry.status));
-    println!("Command:");
-    println!("  {}", entry.command);
+    if let Some(url) = http_url {
+        println!("HTTP URL (event payload is POSTed here when the hook fires):");
+        println!("  {url}");
+    } else {
+        println!("Command:");
+        println!("  {}", entry.command);
+    }
     println!();
 
-    if !prompt_yes("Run this command now to verify it? [y/N] ")? {
-        println!("Skipped.");
+    if http_url.is_none() {
+        if !prompt_yes("Run this command now to verify it? [y/N] ")? {
+            // Approval requires actually running and inspecting the command
+            // first — declining the test run ends the flow with the hook
+            // left safely pending (no approve-sight-unseen path).
+            println!("Skipped — hook left pending.");
+            return Ok(());
+        }
+        run_command_with_payload(&entry.command, &entry.event)?;
+    }
+
+    if entry.status == ConsentStatus::Approved {
+        println!("Hook is already approved.");
         return Ok(());
     }
 
+    let approve_prompt = if http_url.is_some() {
+        "Approve this URL so the server may POST hook events to it? [y/N] "
+    } else {
+        "Approve this hook so the server may run it? [y/N] "
+    };
+    if prompt_yes(approve_prompt)? {
+        match consent.approve(&entry.fingerprint)? {
+            Some(_) => println!("Approved {}.", entry.fingerprint),
+            None => println!("Could not approve — the hook is no longer in the registry."),
+        }
+    } else {
+        println!("Left pending.");
+    }
+    Ok(())
+}
+
+/// Run a hook command with a synthetic event payload piped to stdin — the
+/// SAME serializer production uses (`event_payload_json`), so a hook that
+/// reads stdin (`jq -r '.tool_name'`) behaves identically here and at
+/// runtime instead of hanging on the CLI's inherited stdin.
+fn run_command_with_payload(command: &str, event: &str) -> CmdResult {
+    let payload = synthetic_payload(event);
+    println!("(stdin payload: {payload})");
+
     let (shell, flag) = shell_invocation();
-    let output = std::process::Command::new(shell)
+    let mut child = std::process::Command::new(shell)
         .arg(flag)
-        .arg(&entry.command)
+        .arg(command)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .no_window()
-        .output()?;
+        .spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        // Best-effort: a hook that never reads stdin may close the pipe early.
+        let _ = stdin.write_all(payload.as_bytes());
+    }
+    let output = child.wait_with_output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -103,21 +155,24 @@ fn test(consent: &ShellHookConsent, prefix: &str) -> CmdResult {
         println!("stderr:\n{}", stderr.trim_end());
     }
     println!("----------------");
-
-    if entry.status == ConsentStatus::Approved {
-        println!("Hook is already approved.");
-        return Ok(());
-    }
-
-    if prompt_yes("Approve this hook so the server may run it? [y/N] ")? {
-        match consent.approve(&entry.fingerprint)? {
-            Some(_) => println!("Approved {}.", entry.fingerprint),
-            None => println!("Could not approve — the hook is no longer in the registry."),
-        }
-    } else {
-        println!("Left pending.");
-    }
     Ok(())
+}
+
+/// Build the synthetic test payload for a consent entry's recorded event.
+/// The event string is stored in `{:?}` (PascalCase) form, which the
+/// `HookEvent` serde aliases parse directly; unknown/legacy strings fall
+/// back to `BeforeToolCall` — the payload shape is representative either way.
+fn synthetic_payload(event: &str) -> String {
+    use alephcore::extension::hooks::{event_payload_json, HookContext};
+    use alephcore::extension::HookEvent;
+
+    let parsed: HookEvent = serde_json::from_str(&format!("\"{event}\""))
+        .unwrap_or(HookEvent::BeforeToolCall);
+    let ctx = HookContext::new("hooks-cli-test")
+        .with_tool_name("ExampleTool")
+        .with_tool_input(r#"{"example":true}"#)
+        .with_env("ALEPH_HOOKS_TEST", "1".to_string());
+    event_payload_json(parsed, &ctx)
 }
 
 fn revoke(consent: &ShellHookConsent, target: &str) -> CmdResult {

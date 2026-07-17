@@ -71,11 +71,17 @@ struct HookMatcher {
     hooks: Vec<HookAction>,
 }
 
-/// Minimal hook action for parsing (we only need the command)
+/// Hook action wire shape inside a plugin's `hooks.json` (Claude-Code
+/// format). Only `command` actions are supported from plugin manifests;
+/// other `type` values parse (command stays `None`) and are skipped.
 #[derive(Debug, Deserialize)]
 struct HookAction {
     #[serde(default)]
     command: Option<String>,
+    /// Per-action timeout. Claude Code spells it `timeout`; Aleph's user
+    /// hooks layer accepts `timeout_secs` — take either.
+    #[serde(default, alias = "timeout")]
+    timeout_secs: Option<u64>,
 }
 
 // ============================================================================
@@ -388,27 +394,41 @@ pub fn parse_hooks_file(
     let mut caps = Vec::new();
     for (event, matchers) in config.hooks {
         for (idx, matcher) in matchers.into_iter().enumerate() {
-            // Build a descriptive handler string from the actions
-            let handler_desc = matcher
-                .hooks
-                .iter()
-                .filter_map(|a| a.command.as_deref())
-                .collect::<Vec<_>>()
-                .join("; ");
-
-            caps.push(CapabilityDeclaration::Hook(
-                crate::extension::registry::HookRegistration {
-                    event,
-                    priority: 0,
-                    handler: handler_desc,
-                    name: matcher
-                        .matcher
-                        .as_ref()
-                        .map(|m| format!("{event:?}:{m}-{idx}")),
-                    description: matcher.matcher.clone(),
-                    plugin_id: plugin_id.to_string(),
-                },
-            ));
+            // Emit ONE registration per command action so the executor can
+            // actually run each when the event fires, with ITS OWN timeout.
+            // (These previously collapsed into a semicolon-joined
+            // pseudo-"handler" string that the sync layer dispatched as a
+            // WASM export invocation — which could never resolve, so every
+            // plugin-shipped shell hook silently no-op'd. A single grouped
+            // registration was also wrong: `HookConfig` carries one
+            // timeout, so the first action's timeout would leak onto its
+            // siblings.) Shell commands from plugin manifests still pass
+            // through the operator consent gate before first execution.
+            for a in &matcher.hooks {
+                let Some(command) = a.command.as_ref().filter(|c| !c.is_empty()) else {
+                    continue;
+                };
+                caps.push(CapabilityDeclaration::Hook(
+                    crate::extension::registry::HookRegistration {
+                        event,
+                        priority: 0,
+                        handler: command.clone(),
+                        name: matcher
+                            .matcher
+                            .as_ref()
+                            .map(|m| format!("{event:?}:{m}-{idx}")),
+                        description: matcher.matcher.clone(),
+                        plugin_id: plugin_id.to_string(),
+                        kind: None,
+                        matcher: matcher.matcher.clone().filter(|m| !m.is_empty()),
+                        actions: vec![crate::extension::types::HookAction::Command {
+                            command: command.clone(),
+                        }],
+                        plugin_root: Some(base.to_path_buf()),
+                        timeout_secs: a.timeout_secs,
+                    },
+                ));
+            }
         }
     }
 
@@ -562,6 +582,69 @@ pub fn parse_v2_tool_prompts(
 
 /// Convert manifest `[[services]]` declarations into Service capabilities.
 ///
+/// Convert `aleph.plugin.toml [[hooks]]` sections into hook registrations.
+///
+/// These were previously parsed into `manifest.hooks_v2` and duplicate-checked
+/// by `validation.rs` but never converted to registrations — a declared hook
+/// never fired. They are handler-based (WASM/runtime export dispatch via
+/// `HookAction::Plugin` at the registry-sync layer), with the manifest's
+/// explicit `kind` (`observer` default) and optional `filter` regex carried
+/// through so a plugin can declare a blocking interceptor declaratively.
+pub fn parse_v2_hooks(
+    hooks: &[crate::extension::manifest::HookSection],
+    plugin_id: &str,
+) -> Vec<CapabilityDeclaration> {
+    use crate::extension::registry::HookRegistration;
+    use crate::extension::types::{HookKind, HookPriority};
+
+    let mut caps = Vec::new();
+    for h in hooks {
+        let Some(handler) = h.handler.clone().filter(|s| !s.is_empty()) else {
+            warn!(
+                "[[hooks]] entry for event '{}' in plugin '{}' has no handler — skipped",
+                h.event, plugin_id
+            );
+            continue;
+        };
+        // Accept both snake_case (`before_tool_call`) and Claude-Code
+        // PascalCase aliases (`PreToolUse`) — same tolerance as the user
+        // hooks.json loader.
+        let event = [h.event.clone(), h.event.to_lowercase().replace('-', "_")]
+            .iter()
+            .find_map(|s| serde_json::from_str::<HookEvent>(&format!("\"{s}\"")).ok());
+        let Some(event) = event else {
+            warn!(
+                "[[hooks]] entry in plugin '{}' names unknown event '{}' — skipped",
+                plugin_id, h.event
+            );
+            continue;
+        };
+        caps.push(CapabilityDeclaration::Hook(HookRegistration {
+            event,
+            priority: HookPriority::from_str_or_default(&h.priority).as_i32(),
+            handler,
+            name: None,
+            description: None,
+            plugin_id: plugin_id.to_string(),
+            // Omitted kind resolves to the per-event default HERE (these are
+            // newly-activated declarative hooks with no legacy behaviour to
+            // preserve — unlike runtime JSON-RPC registrations, whose None
+            // falls back to Observer at the sync layer). Hard-defaulting
+            // Observer would leave a `before_tool_call` / `stop` hook
+            // registered but never dispatched.
+            kind: Some(h.kind.as_deref().map_or_else(
+                || crate::extension::hooks::default_kind_for_event(event),
+                HookKind::from_str_or_default,
+            )),
+            matcher: h.filter.clone().filter(|s| !s.is_empty()),
+            actions: Vec::new(),
+            plugin_root: None,
+            timeout_secs: None,
+        }));
+    }
+    caps
+}
+
 /// Only services that declare BOTH `start_handler` and `stop_handler` are
 /// emitted — without a stop handler a background service could never be torn
 /// down, and guessing handler names would hide manifest mistakes.
@@ -797,9 +880,62 @@ mod tests {
                 assert_eq!(h.event, HookEvent::BeforeToolCall);
                 assert_eq!(h.handler, "check-safety.sh");
                 assert_eq!(h.description, Some("Bash".to_string()));
+                // The registration must carry a REAL command action (this is
+                // what the executor dispatches — the handler string above is
+                // display-only) plus the matcher and the plugin root.
+                assert_eq!(h.actions.len(), 1);
+                match &h.actions[0] {
+                    crate::extension::types::HookAction::Command { command } => {
+                        assert_eq!(command, "check-safety.sh");
+                    }
+                    other => panic!("Expected Command action, got {:?}", other),
+                }
+                assert_eq!(h.matcher.as_deref(), Some("Bash"));
+                assert_eq!(h.plugin_root.as_deref(), Some(dir.path()));
             }
             other => panic!("Expected Hook, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_parse_hooks_file_per_action_timeout_not_shared() {
+        // Two commands in one matcher group with different timeouts must NOT
+        // share the first action's timeout — each becomes its own
+        // registration carrying its own value (the whole-group `find_map`
+        // approach would leak `quick`'s 2s onto `deep`).
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("hooks.json"),
+            r#"{
+                "hooks": {
+                    "before_tool_call": [
+                        {
+                            "matcher": "Edit",
+                            "hooks": [
+                                {"command": "quick.sh", "timeout": 2},
+                                {"command": "deep.sh"}
+                            ]
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let caps = parse_hooks_file(dir.path(), "hooks.json", "p").unwrap();
+        assert_eq!(caps.len(), 2, "one registration per command action");
+        let by_handler = |name: &str| {
+            caps.iter().find_map(|c| match c {
+                CapabilityDeclaration::Hook(h) if h.handler == name => Some(h),
+                _ => None,
+            })
+        };
+        assert_eq!(by_handler("quick.sh").unwrap().timeout_secs, Some(2));
+        assert_eq!(
+            by_handler("deep.sh").unwrap().timeout_secs,
+            None,
+            "sibling action must not inherit quick.sh's timeout"
+        );
     }
 
     #[test]
@@ -807,6 +943,85 @@ mod tests {
         let dir = tempdir().unwrap();
         let caps = parse_hooks_file(dir.path(), "hooks.json", "p").unwrap();
         assert!(caps.is_empty());
+    }
+
+    #[test]
+    fn test_parse_v2_hooks_registers_declared_hooks() {
+        use crate::extension::manifest::HookSection;
+        use crate::extension::types::HookKind;
+
+        let sections = vec![
+            HookSection {
+                event: "before_tool_call".into(),
+                kind: Some("interceptor".into()),
+                handler: Some("onBeforeTool".into()),
+                priority: "high".into(),
+                filter: Some("Bash|Edit".into()),
+            },
+            // PascalCase alias must parse too.
+            HookSection {
+                event: "PostToolUse".into(),
+                kind: Some("observer".into()),
+                handler: Some("onAfterTool".into()),
+                priority: "normal".into(),
+                filter: None,
+            },
+            // Omitted kind on a blocking-capable event → per-event default
+            // (interceptor), NOT a hard Observer that would never dispatch.
+            HookSection {
+                event: "before_tool_call".into(),
+                kind: None,
+                handler: Some("onGuard".into()),
+                priority: "normal".into(),
+                filter: None,
+            },
+            // No handler → skipped with a warning.
+            HookSection {
+                event: "before_tool_call".into(),
+                kind: Some("observer".into()),
+                handler: None,
+                priority: "normal".into(),
+                filter: None,
+            },
+            // Unknown event → skipped with a warning.
+            HookSection {
+                event: "bogus_event".into(),
+                kind: Some("observer".into()),
+                handler: Some("h".into()),
+                priority: "normal".into(),
+                filter: None,
+            },
+        ];
+        let caps = parse_v2_hooks(&sections, "toml-plugin");
+        assert_eq!(caps.len(), 3, "handler-less + unknown-event entries drop");
+        match &caps[0] {
+            CapabilityDeclaration::Hook(h) => {
+                assert_eq!(h.event, HookEvent::BeforeToolCall);
+                assert_eq!(h.kind, Some(HookKind::Interceptor));
+                assert_eq!(h.matcher.as_deref(), Some("Bash|Edit"));
+                assert_eq!(h.handler, "onBeforeTool");
+                assert!(h.priority < 0, "high priority maps below normal");
+            }
+            other => panic!("Expected Hook, got {:?}", other),
+        }
+        match &caps[1] {
+            CapabilityDeclaration::Hook(h) => {
+                assert_eq!(h.event, HookEvent::AfterToolCall);
+                assert_eq!(h.kind, Some(HookKind::Observer));
+            }
+            other => panic!("Expected Hook, got {:?}", other),
+        }
+        match &caps[2] {
+            CapabilityDeclaration::Hook(h) => {
+                assert_eq!(h.handler, "onGuard");
+                assert_eq!(
+                    h.kind,
+                    Some(HookKind::Interceptor),
+                    "omitted kind on before_tool_call must resolve to the per-event default"
+                );
+            }
+            other => panic!("Expected Hook, got {:?}", other),
+        }
     }
 
     #[test]

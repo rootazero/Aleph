@@ -16,10 +16,8 @@
 
 use super::{
     ExtensionAgent, ExtensionCommand, ExtensionConfig, ExtensionError, ExtensionManager,
-    ExtensionResult, ExtensionSkill, HookEvent, LoadSummary, McpServerConfig, PluginInfo,
-    PluginRecord,
+    ExtensionResult, ExtensionSkill, LoadSummary, McpServerConfig, PluginInfo, PluginRecord,
 };
-use crate::extension::hooks::{HookContext, HookResult};
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -186,26 +184,6 @@ impl SyncExtensionManager {
     pub fn get_plugin_record(&self, name: &str) -> Option<PluginRecord> {
         self.runtime
             .block_on(async { self.inner.read().await.get_plugin_record(name).await })
-    }
-
-    // =========================================================================
-    // Hook Operations
-    // =========================================================================
-
-    /// Execute hooks for an event
-    pub fn execute_hooks(
-        &self,
-        event: HookEvent,
-        context: &HookContext,
-    ) -> ExtensionResult<HookResult> {
-        self.runtime
-            .block_on(async { self.inner.read().await.execute_hooks(event, context).await })
-    }
-
-    /// Get the number of registered hooks
-    pub fn hook_count(&self) -> usize {
-        self.runtime
-            .block_on(async { self.inner.read().await.hook_count().await })
     }
 
     // =========================================================================

@@ -95,9 +95,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // — the run did exactly what the hook asked. Surface the hook's
                 // message as the run output instead of failing.
                 Ok((_ctx, hr)) if hr.prevent_continuation => {
-                    let stop_msg = hr.messages.first().cloned().unwrap_or_else(|| {
-                        "Run halted by BeforeAgentStart hook (prevent_continuation).".to_string()
-                    });
+                    // `stop_message` handles the fallback chain (plain stdout
+                    // `messages` → Claude-Code JSON `stopReason` in
+                    // `additional_contexts` → default) shared with the
+                    // UserPromptSubmit seam and the extension stop gate.
+                    let stop_msg = hr.stop_message(
+                        "Run halted by BeforeAgentStart hook (prevent_continuation).",
+                    );
                     warn!(
                         run_id = run_id,
                         "BeforeAgentStart hook requested prevent_continuation; stopping run"
