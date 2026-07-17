@@ -22,9 +22,11 @@
 //!
 //! Identity: a boot/event wake has no completing run to inherit policy
 //! metadata from (the deadline path claimed at `post_run` does, and keeps
-//! it). Mirroring `ResumeCoordinator::stamp_origin_identity`'s fail-closed
-//! stance, wakes here run with a `guest` role clamp when an origin route
-//! exists and as `unattended` when none does — never fail-open operator.
+//! it). It shares `channel_policy::system_continuation_identity` with
+//! `ResumeCoordinator::stamp_origin_identity`: a `guest` role floor PLUS the
+//! origin channel's `tool_permissions` deny layer when an origin route exists,
+//! `unattended` when none does — never fail-open operator, and never bypassing
+//! a per-channel tool deny.
 //!
 //! Lives outside `src/harness/` (R10); holds no judgment — the decision to
 //! park and what to do on wake are the model's, carried by the resume prompt
@@ -361,24 +363,24 @@ async fn origin_of(
         .map(|(ch, conv)| (reg, ch, conv))
 }
 
-/// Fail-closed identity for a wake run with no completing run to inherit
-/// from: `guest` clamp when an origin route exists, `unattended` when none
-/// does — the same stance (and the same reasons) as
-/// `ResumeCoordinator::stamp_origin_identity` with its unwired config map.
+/// Fail-closed identity for a wake run with no completing run to inherit from.
+/// With an origin route: the shared `system_continuation_identity` stamp —
+/// `guest` role floor PLUS the channel's `tool_permissions` DENY layer (so a
+/// wake never bypasses a per-channel tool deny; the deny layer used to be
+/// dropped here entirely). With none: `unattended`. Same stance, and now the
+/// exact same derivation, as `ResumeCoordinator::stamp_origin_identity`.
 async fn wake_identity(
     agent: &Arc<AgentInstance>,
     session_key: &SessionKey,
 ) -> HashMap<String, String> {
-    let mut meta = HashMap::new();
     match agent.origin_route(session_key).await {
         Some((channel, conversation)) => {
-            meta.insert("caller_role".to_string(), "guest".to_string());
-            meta.insert("channel_id".to_string(), channel);
-            meta.insert("conversation_id".to_string(), conversation);
+            crate::gateway::channel_policy::system_continuation_identity(&channel, &conversation)
         }
         None => {
+            let mut meta = HashMap::new();
             meta.insert(UNATTENDED_KEY.to_string(), "true".to_string());
+            meta
         }
     }
-    meta
 }

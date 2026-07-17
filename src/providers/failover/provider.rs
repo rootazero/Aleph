@@ -603,6 +603,10 @@ impl AiProvider for FailoverProvider {
         // Own every borrowed field so the payload can be rebuilt per attempt.
         let messages = payload.messages.to_vec();
         let system_prompt = payload.system_prompt.map(str::to_string);
+        // Preserve the prompt-cache split (`cache: true` prefix) across the
+        // failover rebuild — dropping it here silently negated caching for any
+        // caller behind a Failover wrapper (the Guardian judge, the main loop).
+        let system_blocks = payload.system_blocks.map(<[_]>::to_vec);
         let tools = payload.tools.map(<[_]>::to_vec);
         let think_level = payload.think_level;
         let temperature = payload.temperature;
@@ -723,7 +727,7 @@ impl AiProvider for FailoverProvider {
                         let inner = RequestPayload {
                             messages: &messages,
                             system_prompt: system_prompt.as_deref(),
-                            system_blocks: None,
+                            system_blocks: system_blocks.as_deref(),
                             tools: tools.as_deref(),
                             think_level,
                             temperature,

@@ -21,8 +21,7 @@ use crate::config::types::ResumeConfig;
 use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
 use crate::gateway::event_emitter::CollectingEventEmitter;
 use crate::gateway::execution_adapter::ExecutionAdapter;
-use crate::gateway::execution_engine::{RunRequest, CHANNEL_TOOL_PERMISSIONS_KEY, UNATTENDED_KEY};
-use crate::gateway::inbound_router::ChannelConfig;
+use crate::gateway::execution_engine::{RunRequest, UNATTENDED_KEY};
 use crate::session::events::{now_ms, RunOutcome, SessionEvent, SessionEventRecord};
 use crate::session::service::SessionId;
 use crate::session::store::SessionEventStore;
@@ -131,12 +130,6 @@ pub struct ResumeCoordinator {
     agent_registry: Arc<AgentRegistry>,
     /// Bounds the boot resume burst. `max_concurrent` permits.
     semaphore: Arc<Semaphore>,
-    /// The inbound router's channel policy map, keyed by channel id — the LIVE
-    /// source [`Self::stamp_origin_identity`] re-derives a resumed run's
-    /// restrictive metadata from. Empty until boot wires it, which is the
-    /// fail-closed direction: an unknown channel resolves to the Chat tier
-    /// (`"guest"`), never to operator.
-    channel_configs: HashMap<String, ChannelConfig>,
 }
 
 impl ResumeCoordinator {
@@ -154,17 +147,7 @@ impl ResumeCoordinator {
             execution_adapter,
             agent_registry,
             semaphore: Arc::new(Semaphore::new(permits)),
-            channel_configs: HashMap::new(),
         }
-    }
-
-    /// Wire the same per-channel policy map the inbound router gates live
-    /// messages with, so a resumed channel run re-derives the exact tier and
-    /// tool-permission layer its interactive turns ran under.
-    #[must_use]
-    pub fn with_channel_configs(mut self, channel_configs: HashMap<String, ChannelConfig>) -> Self {
-        self.channel_configs = channel_configs;
-        self
     }
 
     /// Scan for interrupted runs and re-trigger each. Best-effort: any
@@ -502,7 +485,7 @@ impl ResumeCoordinator {
         result
     }
 
-    /// Re-derive the run identity the session's origin channel imposes, LIVE.
+    /// Re-derive the run identity the session's origin channel imposes.
     ///
     /// A resumed run used to be born with `{resume, project_root}` and nothing
     /// else, and both of the missing keys fail OPEN: `role_is_operator(None)`
@@ -513,14 +496,16 @@ impl ResumeCoordinator {
     /// bug class `execute::carry_policy_metadata` exists to prevent for the
     /// continuation path.
     ///
-    /// Deliberately re-derived from the live channel config rather than read
-    /// back from a persisted snapshot of the original run's metadata: a snapshot
-    /// goes stale in the PERMISSIVE direction (the operator demotes a channel to
-    /// Chat tier, the daemon restarts, and the old `"operator"` role resurrects
-    /// anyway). An unconfigured / unknown channel resolves to `guest` via
-    /// `unwrap_or_default()` — the same fail-closed default the inbound router's
-    /// `channel_run_identity` pins, and the reason an unwired `channel_configs`
-    /// map is safe.
+    /// The stamp is the shared `channel_policy::system_continuation_identity`:
+    /// a `guest` role FLOOR (a boot resume is unattended — never silently
+    /// operator, even for a `Config`-tier channel) PLUS the origin channel's
+    /// live `tool_permissions` deny layer, read from the process-global
+    /// channel-config snapshot. Historically this path threaded its own config
+    /// map that was never wired, so it ran at guest with NO deny layer; the
+    /// shared snapshot keeps the guest floor unchanged and adds the missing deny
+    /// layer. An unknown / unconfigured channel (snapshot miss) resolves to
+    /// guest + no deny — the same fail-closed default `channel_run_identity`
+    /// pins for a live message.
     ///
     /// No routable origin (the Panel's `gui:chat`, or a session whose origin
     /// conversation was never captured) ⇒ mark the run `unattended`: nobody is
@@ -540,28 +525,16 @@ impl ResumeCoordinator {
             metadata.insert(UNATTENDED_KEY.to_string(), "true".to_string());
             return;
         };
-
-        let cfg = self
-            .channel_configs
-            .get(&channel)
-            .cloned()
-            .unwrap_or_default();
-        metadata.insert("caller_role".to_string(), cfg.caller_role_str().to_string());
-        if let Some(perms) = cfg.tool_permissions.as_ref() {
-            match serde_json::to_string(perms) {
-                Ok(json) => {
-                    metadata.insert(CHANNEL_TOOL_PERMISSIONS_KEY.to_string(), json);
-                }
-                // The role clamp above still stands; only the deny layer is lost.
-                Err(e) => tracing::error!(
-                    channel = %channel,
-                    error = %e,
-                    "resume: channel tool_permissions failed to serialize — channel deny layer skipped"
-                ),
-            }
-        }
-        metadata.insert("channel_id".to_string(), channel);
-        metadata.insert("conversation_id".to_string(), conversation);
+        // A boot resume is a system-initiated continuation: guest role floor +
+        // the origin channel's tool_permissions deny layer, derived from the
+        // process-global channel-config snapshot (published at the end of
+        // `initialize_inbound_router`). Shared verbatim with the goal wake path
+        // so both fail closed identically. Merges over `metadata` (its keys are
+        // exactly the identity keys, overwriting any pre-stamped value).
+        metadata.extend(crate::gateway::channel_policy::system_continuation_identity(
+            &channel,
+            &conversation,
+        ));
     }
 }
 

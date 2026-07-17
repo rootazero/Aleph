@@ -334,67 +334,22 @@ impl SessionsSendTool {
             args.timeout_seconds == 0,
         );
 
-        // Tree budget v1 (goal × session_send): when the CALLING session
-        // carries an active budgeted goal, (a) refuse NEW delegations once
-        // the shared budget is spent — a compact refusal the model can act
-        // on (F9) — and (b) enroll the target session so its spend counts
-        // against the goal's budget from this moment (join-time baseline).
-        // Best-effort accounting: any read failure lets the delegation
-        // proceed unenrolled rather than blocking real work.
-        if let (Some(goal_store), Some(caller_session)) = (
-            crate::goal::global(),
-            crate::tools::turn_context::current_session_key(),
-        ) {
-            if let Ok(Some(goal)) = goal_store.get(&caller_session) {
-                if goal.is_active() && goal.token_budget.is_some() {
-                    if goal.baseline_captured {
-                        if let Some(caller_key) = SessionKey::from_key_string(&caller_session) {
-                            let tree_total = crate::gateway::goal_budget::tree_tokens(
-                                context.session_store(),
-                                &goal,
-                                &caller_key,
-                            )
-                            .await;
-                            if tree_total.is_some_and(|t| goal.over_budget(t)) {
-                                return SessionsSendOutput::error(
-                                    run_id,
-                                    format!(
-                                        "Delegation refused: the standing goal's shared token \
-                                         budget ({} tokens across this session and {} delegated \
-                                         session(s)) is exhausted. Wrap up with the results you \
-                                         have, or raise the budget via goal(action='update', \
-                                         token_budget=…).",
-                                        goal.token_budget.unwrap_or(0),
-                                        goal.budget_members.len(),
-                                    ),
-                                );
-                            }
-                        }
-                    }
-                    let member_baseline = context
-                        .session_store()
-                        .get_total_tokens(&gateway_session_key)
-                        .await
-                        .ok()
-                        .flatten()
-                        .unwrap_or(0);
-                    let now_ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |d| d.as_millis() as u64);
-                    // Enroll under the GATEWAY key the RunRequest executes and
-                    // accrues tokens under — NOT the routing `target_key_str`,
-                    // which collapses differently for DM/Group targets, so
-                    // tree_tokens would read the member's spend under the wrong
-                    // (empty) row and count zero.
-                    if let Err(e) = goal_store.register_budget_member(
-                        &caller_session,
-                        &gateway_session_key.to_key_string(),
-                        member_baseline,
-                        now_ms,
-                    ) {
-                        warn!(error = %e, "sessions_send: budget member enrollment failed (delegation proceeds unaccounted)");
-                    }
-                }
+        // Tree budget (goal × session_send): when the CALLING session carries an
+        // active budgeted goal, refuse a NEW delegation once the shared budget
+        // is spent (an F9 compact refusal the model can act on), else enroll the
+        // target under the GATEWAY key it accrues tokens under. Shared seam with
+        // team_delegate / the autonomous dispatcher — see `goal_budget`.
+        if let Some(caller_session) = crate::tools::turn_context::current_session_key() {
+            if let crate::gateway::goal_budget::DelegationBudget::Refused(reason) =
+                crate::gateway::goal_budget::check_and_enroll_delegation(
+                    context.session_store(),
+                    &caller_session,
+                    &gateway_session_key,
+                    true,
+                )
+                .await
+            {
+                return SessionsSendOutput::error(run_id, reason);
             }
         }
 

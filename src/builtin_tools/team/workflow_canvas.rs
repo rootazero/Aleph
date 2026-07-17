@@ -235,6 +235,12 @@ impl AlephTool for TeamWorkflowCanvasTool {
                             crate::teams::workflow_canvas::extract_canvas_task_id(&task.metadata)
                                 .map(str::to_string);
                         let subject_for_err = task.subject.clone();
+                        // Stamp the `origin_session` anchor so an autonomously
+                        // dispatched workflow step enrolls into the launching
+                        // session's goal tree budget (no-op outside a turn).
+                        task.metadata = crate::gateway::goal_budget::with_origin_session(
+                            std::mem::take(&mut task.metadata),
+                        );
                         let t = self.coord_store.create_task(task).await.map_err(|e| {
                             AlephError::other(format!(
                                 "create_task '{subject_for_err}' failed: {e}"

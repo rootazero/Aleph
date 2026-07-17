@@ -458,9 +458,14 @@ async fn too_old_candidate_abandons_and_blocks_the_goal() {
 /// `ToolPermissionsConfig` merges no deny layer. The boot coordinator used to
 /// build a resumed run's metadata from an empty `HashMap`, so a killed daemon
 /// resurrected a guest-tier Telegram run as an unwatched **operator** with no
-/// deny layer. Re-derive both from the live channel config.
+/// deny layer. Re-derive both from the process-global channel-config snapshot.
+///
+/// NOTE: `set_channel_config_snapshot` is a set-once process global — this is
+/// the only test in this binary that publishes one, and the unattended sibling
+/// below never reads it (no origin route), so there is no cross-test race.
 #[tokio::test]
 async fn resumed_channel_run_reinherits_the_channels_guest_clamp_and_deny_layer() {
+    use alephcore::gateway::channel_policy::set_channel_config_snapshot;
     use alephcore::gateway::execution_engine::{CHANNEL_TOOL_PERMISSIONS_KEY, UNATTENDED_KEY};
     use alephcore::gateway::inbound_router::{ChannelConfig, ChannelPolicyConfig};
     use alephcore::routing::session_key::DmScope;
@@ -485,7 +490,8 @@ async fn resumed_channel_run_reinherits_the_channels_guest_clamp_and_deny_layer(
         .await;
 
     // The channel's live policy, parsed from the same flat config block boot
-    // reads: Chat tier (the default) plus a deny layer.
+    // reads: Chat tier (the default) plus a deny layer. Published to the global
+    // snapshot exactly as `initialize_inbound_router` does at boot.
     let policy: ChannelPolicyConfig = serde_json::from_value(serde_json::json!({
         "permission_level": "chat",
         "tool_permissions": { "default": "allow", "overrides": { "bash_exec": "deny" } }
@@ -500,14 +506,14 @@ async fn resumed_channel_run_reinherits_the_channels_guest_clamp_and_deny_layer(
             ..Default::default()
         },
     );
+    set_channel_config_snapshot(channel_configs);
 
     let coordinator = ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
-    )
-    .with_channel_configs(channel_configs);
+    );
     let report = coordinator.resume_interrupted_runs().await;
     assert_eq!(report.resumed, 1);
 
