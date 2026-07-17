@@ -42,6 +42,13 @@ pub const DEFERRED_LOADING_GUIDANCE: &str =
     "To use a skill, first call the `skill_read` tool with the skill name \
      to load its full instructions, then follow those instructions. \
      Use `skill_list` to discover available skills if needed.\n\n\
+     When a skill's instructions reference a bundled sub-file (e.g. \
+     `references/guide.md` or a script), load it through `skill_read` by \
+     passing that skill-relative path as `file_name` — do NOT read it with a \
+     shell `cat`/`file_read` on a raw path. `skill_read` resolves the path \
+     inside the skill, expands `${ALEPH_SKILL_DIR}` and inline-shell snippets, \
+     and enforces the size/containment guards a raw read skips; a plain `cat` \
+     returns the un-rendered template instead.\n\n\
      When a user's request matches a skill's <when> trigger, proactively \
      invoke that skill without waiting for an explicit request.\n\n\
      Each skill carries a <version> tag. If a skill's <version> differs from \

@@ -141,7 +141,8 @@ Use `agent_info(agent_id)` to get detailed capabilities before delegating.
 >
 > MCP **resources / prompts** are instead surfaced through **discovery tools**
 > (2026-07-17): `mcp_list_resources` / `mcp_list_prompts`
-> (`src/builtin_tools/mcp_discover.rs`) enumerate each server's resources /
+> (`src/builtin_tools/mcp_resource.rs` / `src/builtin_tools/mcp_prompt.rs`,
+> colocated with their read twins) enumerate each server's resources /
 > prompts as server-qualified identifiers, capability-gated alongside
 > `mcp_read_resource` / `mcp_get_prompt` in `mcp::tool_bridge`. This replaces the
 > prompt-index approach with a model-initiated list→read flow (R7/R10 static
