@@ -329,16 +329,40 @@ fn is_safe_agent_id(agent_id: &str) -> bool {
         && !agent_id.contains('\0')
 }
 
-/// Append each `<plugin>/skills` directory found under `plugins_root` to `dirs`
+/// Append each plugin's `skills` directory found under `plugins_root` to `dirs`
 /// (deduplicated). A plugin ships its skills at `<plugin>/skills/<skill>/SKILL.md`.
+///
+/// Mirrors the discovery scanner's plugin-layout support
+/// ([`crate::discovery`]'s `scan_plugin_parent`): besides the direct
+/// `<entry>/skills`, it descends **one** level for monorepo layouts where a
+/// cloned repo holds several plugins (`<entry>/<plugin>/skills`) — only when
+/// `<entry>` has no direct `skills` dir, matching the scanner's else-branch.
+/// Without the monorepo descent, a monorepo-shipped plugin skill was *indexed*
+/// (the loader walks the registry's real `root_dir`) yet `skill_read` /
+/// `skill_list` returned `NotFound` — re-opening the `cat` fallback for that
+/// install shape (the two enumerations had drifted).
 fn collect_plugin_skills_from_root(plugins_root: &Path, dirs: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(plugins_root) else {
         return;
     };
     for entry in entries.flatten() {
-        let skills = entry.path().join("skills");
-        if skills.is_dir() && !dirs.contains(&skills) {
-            dirs.push(skills);
+        let entry_path = entry.path();
+        let direct = entry_path.join("skills");
+        if direct.is_dir() {
+            // Direct layout: <plugins_root>/<plugin>/skills
+            if !dirs.contains(&direct) {
+                dirs.push(direct);
+            }
+        } else if let Ok(sub_entries) = std::fs::read_dir(&entry_path) {
+            // Monorepo layout: <plugins_root>/<repo>/<plugin>/skills. Only
+            // descended when there is no direct `skills` dir, mirroring
+            // `scan_plugin_parent`'s "no direct manifest → scan subdirs" branch.
+            for sub in sub_entries.flatten() {
+                let skills = sub.path().join("skills");
+                if skills.is_dir() && !dirs.contains(&skills) {
+                    dirs.push(skills);
+                }
+            }
         }
     }
 }
@@ -640,6 +664,53 @@ mod tests {
         assert!(
             !dirs.iter().any(|d| d.starts_with(&beta)),
             "a plugin without a skills subdir must be absent"
+        );
+    }
+
+    #[test]
+    fn test_get_plugin_skills_dirs_finds_monorepo_plugin_skills() {
+        // Monorepo layout: `<plugins>/repo/<plugin>/skills`, where `repo` itself
+        // has NO direct `skills` dir. The index side (`scan_plugin_parent`)
+        // descends one level here; the read side must match or `skill_read`
+        // NotFounds a skill that appears in the index (the enumeration drift).
+        let temp_dir = TempDir::new().unwrap();
+        let project = temp_dir.path().join("project");
+        let nested_skills = project
+            .join(".aleph")
+            .join("plugins")
+            .join("repo")
+            .join("inner-plugin")
+            .join("skills");
+        std::fs::create_dir_all(&nested_skills).unwrap();
+
+        let dirs = get_plugin_skills_dirs(Some(&project));
+        assert!(
+            dirs.iter().any(|d| d == &nested_skills),
+            "a monorepo-nested plugin's skills dir must be discovered (one-level descent)"
+        );
+    }
+
+    #[test]
+    fn test_get_plugin_skills_dirs_direct_wins_no_double_descent() {
+        // A plugin with a DIRECT skills dir must not also trigger the monorepo
+        // descent (which would probe `<plugin>/skills/<x>/skills`). Assert the
+        // direct dir is present and no spurious deeper dir is added.
+        let temp_dir = TempDir::new().unwrap();
+        let project = temp_dir.path().join("project");
+        let direct = project
+            .join(".aleph")
+            .join("plugins")
+            .join("alpha")
+            .join("skills");
+        // A skill under the direct dir — its own (non-existent) `skills` subdir
+        // must not be picked up.
+        std::fs::create_dir_all(direct.join("do-thing")).unwrap();
+
+        let dirs = get_plugin_skills_dirs(Some(&project));
+        assert!(dirs.iter().any(|d| d == &direct));
+        assert!(
+            !dirs.iter().any(|d| d == &direct.join("do-thing").join("skills")),
+            "the direct branch must not descend into the skills dir's children"
         );
     }
 

@@ -146,6 +146,18 @@ Use `agent_info(agent_id)` to get detailed capabilities before delegating.
 > `mcp_read_resource` / `mcp_get_prompt` in `mcp::tool_bridge`. This replaces the
 > prompt-index approach with a model-initiated list→read flow (R7/R10 static
 > partition, no prompt-layer). See FEATURE_LOCATOR §3.9.
+>
+> **Read-path defense (2026-07-17 follow-up)**: a non-blocking cat-guard
+> (`src/tools/scoped/cat_guard.rs`, wired at the single dispatch chokepoint
+> `dispatch.rs::execute_inner`) appends a `<system-reminder>` steering a raw
+> `file_read` / shell `cat` of an installed **skill** (or plugin-shipped skill)
+> file toward `skill_read`. Skill-only by design — MCP resources are server URIs
+> with no on-disk root, so a `cat` of one is not a filesystem path (the MCP
+> surface is covered by the discovery tools above). Identifier note: the
+> `mcp_list_resources` id carries a **doubled** server prefix that is
+> load-bearing (the read path strips two symmetric layers), so it is presented
+> to the model as an opaque pass-verbatim token. See FEATURE_LOCATOR
+> §3.9 / §3.10 / §3.11.
 
 ### Layer Properties
 

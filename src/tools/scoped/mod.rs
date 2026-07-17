@@ -12,6 +12,7 @@
 //! - this module — `ScopedToolService` struct + `ToolService` trait impl
 
 mod builder;
+mod cat_guard;
 mod deferred;
 mod dispatch;
 mod progressive_disclosure;
