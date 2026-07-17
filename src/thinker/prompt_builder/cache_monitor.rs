@@ -110,18 +110,28 @@ impl CacheMonitor {
         }
     }
 
-    /// Notify the monitor that a compaction has occurred.
+    /// Notify the monitor that a compaction has occurred for `agent_id`.
     ///
     /// Compaction legitimately breaks the prompt cache (the message list is
     /// rewritten), so consecutive-miss tracking is reset to avoid false
-    /// positive warnings immediately after compaction. The reset is global
-    /// (all agents): the compactor does not know which agent it serves, and
-    /// the brief cross-agent blind window after a compaction is an accepted
-    /// coarseness — the per-agent grain above handles the steady state.
-    pub fn notify_compaction(&self) {
+    /// positive warnings immediately after compaction. The reset is scoped
+    /// to the compacting agent when its id is known — a global reset would
+    /// wipe every OTHER agent's in-progress miss streak on each compaction
+    /// and mute the watchdog process-wide in a busy swarm. `None` falls back
+    /// to the global reset for call sites without an agent identity.
+    pub fn notify_compaction(&self, agent_id: Option<&str>) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        for agent in state.values_mut() {
-            agent.consecutive_misses = 0;
+        match agent_id {
+            Some(id) => {
+                if let Some(agent) = state.get_mut(id) {
+                    agent.consecutive_misses = 0;
+                }
+            }
+            None => {
+                for agent in state.values_mut() {
+                    agent.consecutive_misses = 0;
+                }
+            }
         }
     }
 }
@@ -212,7 +222,7 @@ mod tests {
         monitor.record_cache_usage("a", None, None); // miss — warn fires
 
         // Compaction resets the counter
-        monitor.notify_compaction();
+        monitor.notify_compaction(Some("a"));
 
         // After reset, a single miss should NOT trigger a warning
         // (consecutive_misses is back to 0, so 1 miss = 1 consecutive)
@@ -222,6 +232,28 @@ mod tests {
             1,
             "miss count should restart from 1 after compaction"
         );
+    }
+
+    #[test]
+    fn scoped_compaction_reset_preserves_other_agents_streaks() {
+        // Agent A compacting must not wipe agent B's in-progress miss streak
+        // — a global reset would mute the watchdog process-wide whenever any
+        // agent in a busy swarm compacts.
+        let monitor = CacheMonitor::new();
+        monitor.record_cache_usage("b", Some(10), None); // arm B
+        monitor.record_cache_usage("b", None, None); // B miss 1
+        monitor.record_cache_usage("b", None, None); // B miss 2
+        monitor.record_cache_usage("a", Some(10), None); // arm A
+        monitor.record_cache_usage("a", None, None); // A miss 1
+
+        monitor.notify_compaction(Some("a")); // A compacts
+
+        assert_eq!(misses(&monitor, "a"), 0, "compacting agent reset");
+        assert_eq!(misses(&monitor, "b"), 2, "other agent's streak survives");
+
+        // Global fallback (no identity) still resets everyone.
+        monitor.notify_compaction(None);
+        assert_eq!(misses(&monitor, "b"), 0);
     }
 
     #[test]

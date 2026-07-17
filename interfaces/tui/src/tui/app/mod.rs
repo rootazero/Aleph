@@ -643,6 +643,10 @@ impl AppState {
         // New session = different context window; drop the stale gauge until
         // the next run's first `ContextGauge` refreshes it.
         self.context_gauge = None;
+        // Same for the cache stat: the old session's hit% is meaningless for
+        // a different prefix, and a cache-less provider would otherwise show
+        // it indefinitely (the stat only updates on real cache activity).
+        self.cache_stat = None;
         self.dialog = None;
         self.palette = None;
         // Any approval prompt belonged to the old session's run; drop it.

@@ -149,6 +149,50 @@ fn turn_n_plus_1_is_a_strict_prefix_extension_of_turn_n() {
 }
 
 #[test]
+fn bedrock_long_retention_injects_markers_without_ttl_or_beta() {
+    // Bedrock/Azure accept plain ephemeral markers but reject the
+    // Anthropic-1P `ttl` key under strict schema validation. `Long` there
+    // must degrade to the default 5m marker (still cached, never a 400) and
+    // must NOT emit the extended-cache-ttl beta header.
+    use crate::config::types::provider::CacheRetention;
+
+    let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+    config.api_key = Some("test-key".to_string());
+    config.base_url = Some("https://bedrock-runtime.us-east-1.amazonaws.com".to_string());
+    config.cache_retention = Some(CacheRetention::Long);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let parts = system_parts("time=2026-07-17T10");
+    let payload = RequestPayload::new(&msgs).with_system_blocks(Some(&parts));
+
+    let http = super::helpers::build_http(&payload, &config);
+    let body: serde_json::Value =
+        serde_json::from_slice(http.body().unwrap().as_bytes().unwrap()).unwrap();
+
+    // Markers ARE injected (Bedrock supports plain ephemeral caching)…
+    assert!(
+        marker_count(&body) >= 1,
+        "cache_control markers must be injected on Bedrock"
+    );
+    // …but never with the 1P-only `ttl` key.
+    let raw = serde_json::to_string(&body).unwrap();
+    assert!(
+        !raw.contains("\"ttl\""),
+        "the 1h ttl key must be downgraded off the official endpoint"
+    );
+    // And the extended-TTL beta token must not ride the headers.
+    let beta = http
+        .headers()
+        .get("anthropic-beta")
+        .map(|v| v.to_str().unwrap_or_default().to_string())
+        .unwrap_or_default();
+    assert!(
+        !beta.contains("extended-cache-ttl"),
+        "extended-cache-ttl beta is Anthropic-1P only, got: {beta}"
+    );
+}
+
+#[test]
 fn tools_serialization_is_byte_stable_across_turns() {
     use crate::tool_metadata::{ToolCategory, ToolDefinition};
 

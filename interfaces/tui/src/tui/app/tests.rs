@@ -199,6 +199,18 @@ fn switch_session_clears_messages() {
 }
 
 #[test]
+fn switch_session_drops_stale_cache_stat() {
+    // The old session's cache hit% is meaningless for a different prefix; a
+    // cache-less provider in the new session would otherwise display it
+    // forever (the stat only updates when a call reports cache activity).
+    let mut state = AppState::new("s1".into(), "m".into());
+    state.cache_stat = Some((870, 1000));
+
+    state.switch_session("s2");
+    assert_eq!(state.cache_stat, None, "stale cache stat must not survive");
+}
+
+#[test]
 fn clear_screen_keeps_session() {
     let mut state = AppState::new("s1".into(), "m".into());
     state.add_user_message("hello".into());
@@ -701,7 +713,11 @@ fn handle_run_error_adds_system_message() {
 #[test]
 fn open_approval_sets_focus_and_state() {
     let mut state = AppState::new("s".into(), "m".into());
-    state.open_approval("ap-1".into(), "rm -rf /tmp/x".into(), Some("destructive".into()));
+    state.open_approval(
+        "ap-1".into(),
+        "rm -rf /tmp/x".into(),
+        Some("destructive".into()),
+    );
     assert_eq!(state.focus, Focus::Approval);
     let approval = state.approval.as_ref().unwrap();
     assert_eq!(approval.id, "ap-1");

@@ -423,7 +423,11 @@ impl HarnessRunner for AgentHarnessRunner {
                 // the provider prompt cache with freshly-worded summary text.
                 // Hash-validated on read, so a history rewritten between runs
                 // (post-turn compression, splits) simply misses.
-                .with_cache_carryover(session_id.to_key_string());
+                .with_cache_carryover(session_id.to_key_string())
+                // Scope watchdog resets to this agent — same id the
+                // MeteringProvider records cache usage under, so reset and
+                // record hit the same CacheMonitor counter.
+                .with_monitor_agent(spec.agent.clone());
                 // Wire the zero-API-cost session-summary reuse path: the
                 // memory backend holding the d0/d1/d2 facts plus the owning
                 // agent id they were written under. The writes resolve the

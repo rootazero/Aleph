@@ -181,9 +181,9 @@ fn build_request_payload<'a>(
     tools_ref: Option<&'a [crate::tool_metadata::ToolDefinition]>,
     session_id: &SessionId,
 ) -> RequestPayload<'a> {
-    // Carry the session id as provider metadata: OpenAI-family adapters use it
-    // as `prompt_cache_key` for cache-routing affinity, and the cost-metering
-    // hooks key on `metadata["session_id"]` for per-session attribution.
+    // Carry the session id as provider metadata: cost metering keys on it for
+    // per-session attribution; OpenAI adapters use it only as the fallback
+    // `prompt_cache_key` (openai_common::prompt_cache content-addresses).
     let mut metadata = std::collections::HashMap::with_capacity(1);
     metadata.insert("session_id".to_string(), session_id.to_string());
     let base = RequestPayload::new(messages)

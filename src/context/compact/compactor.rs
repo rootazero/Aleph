@@ -108,8 +108,10 @@ const CACHE_EXTEND_MIN_TOKENS: usize = 4096;
 const SUMMARIZER_INPUT_TOKEN_BUDGET: usize = 48_000;
 
 /// Bound on cross-run carry-over slots. Sessions beyond the cap evict the
-/// oldest entry (insertion order) — a linear-scan `Vec` is fine at this size
-/// and keeps eviction deterministic.
+/// least-recently-WRITTEN entry (every `carryover_put` moves its key to the
+/// back) — a long-lived interactive session that keeps compacting stays hot
+/// even while daemon/cron fires churn one-shot session keys through the
+/// front. A linear-scan `Vec` is fine at this size.
 const CARRYOVER_MAX_SESSIONS: usize = 16;
 
 /// Cross-run fingerprint-cache carry-over, keyed by session key.
@@ -138,15 +140,16 @@ fn carryover_get(
         .map(|(_, entry)| entry.clone())
 }
 
-/// Store `entry` under `key`, updating in place when the key already exists
-/// and evicting the oldest entry when the slot is full.
+/// Store `entry` under `key`. Re-writing an existing key moves it to the
+/// back (LRU-on-write); when the slot is full the least-recently-written
+/// entry at the front is evicted. FIFO-by-first-insertion would evict the
+/// feature's primary beneficiary first: the long-lived session inserted
+/// earliest and updated most often.
 fn carryover_put(slot: &Mutex<Vec<(String, CompactionCache)>>, key: &str, entry: CompactionCache) {
     let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(existing) = guard.iter_mut().find(|(k, _)| k == key) {
-        existing.1 = entry;
-        return;
-    }
-    if guard.len() >= CARRYOVER_MAX_SESSIONS {
+    if let Some(pos) = guard.iter().position(|(k, _)| k == key) {
+        guard.remove(pos);
+    } else if guard.len() >= CARRYOVER_MAX_SESSIONS {
         guard.remove(0);
     }
     guard.push((key.to_string(), entry));
@@ -188,6 +191,11 @@ pub struct ContextCompactor {
     /// preflight passes pruning differently) is a miss that falls through to
     /// a full recompaction.
     cache: Mutex<Option<CompactionCache>>,
+    /// Agent id for scoping cache-watchdog resets (`CacheMonitor` keys its
+    /// consecutive-miss counters per agent; a compaction here must reset only
+    /// THIS agent's streak, not mute every other agent's watchdog). `None`
+    /// (bare `new()`) falls back to the monitor's global reset.
+    monitor_agent: Option<String>,
     /// Cross-run carry-over key (the session key). The compactor itself is
     /// constructed fresh per run, which used to discard the fingerprint cache
     /// at every run boundary — a long high-pressure conversation then paid a
@@ -210,8 +218,18 @@ impl ContextCompactor {
             summary_reuse: None,
             cheap_provider: None,
             cache: Mutex::new(None),
+            monitor_agent: None,
             carryover_key: None,
         }
+    }
+
+    /// Scope cache-watchdog compaction resets to `agent_id` (see
+    /// [`CacheMonitor::notify_compaction`]).
+    ///
+    /// [`CacheMonitor::notify_compaction`]: crate::thinker::prompt_builder::cache_monitor::CacheMonitor::notify_compaction
+    pub fn with_monitor_agent(mut self, agent_id: impl Into<String>) -> Self {
+        self.monitor_agent = Some(agent_id.into());
+        self
     }
 
     /// Enable cross-run fingerprint-cache carry-over keyed by `session_key`.
@@ -295,7 +313,7 @@ impl ContextCompactor {
             CompactStrategy::Skipped { .. } | CompactStrategy::CacheReuse
         ) {
             crate::thinker::prompt_builder::cache_monitor::global_cache_monitor()
-                .notify_compaction();
+                .notify_compaction(self.monitor_agent.as_deref());
         }
         Ok(result)
     }
@@ -1218,15 +1236,42 @@ mod tests {
         assert!(slot.lock().unwrap().len() <= CARRYOVER_MAX_SESSIONS);
         assert!(
             carryover_get(&slot, "k0").is_none(),
-            "oldest entry evicted at cap"
+            "least-recently-written entry evicted at cap"
         );
         carryover_put(&slot, "k5", entry(999));
-        assert_eq!(
-            carryover_get(&slot, "k5").expect("updated in place").hash,
-            999
-        );
+        assert_eq!(carryover_get(&slot, "k5").expect("updated entry").hash, 999);
         carryover_remove(&slot, "k5");
         assert!(carryover_get(&slot, "k5").is_none());
+    }
+
+    #[test]
+    fn carryover_rewrite_refreshes_recency_against_eviction() {
+        // LRU-on-write: a hot session that keeps compacting must survive a
+        // churn of one-shot daemon/cron session keys — FIFO-by-first-insert
+        // would evict the feature's primary beneficiary first.
+        let slot: Mutex<Vec<(String, CompactionCache)>> = Mutex::new(Vec::new());
+        let entry = |h: u64| CompactionCache {
+            start: 0,
+            end: 2,
+            hash: h,
+            summary: "s".into(),
+        };
+        carryover_put(&slot, "hot-session", entry(1));
+        // Fill the slot with cold one-shots, re-writing the hot key mid-churn.
+        for i in 0..(CARRYOVER_MAX_SESSIONS - 1) {
+            carryover_put(&slot, &format!("cron-{i}"), entry(10 + i as u64));
+        }
+        carryover_put(&slot, "hot-session", entry(2)); // refreshes recency
+        for i in 0..(CARRYOVER_MAX_SESSIONS - 1) {
+            carryover_put(&slot, &format!("cron-late-{i}"), entry(100 + i as u64));
+        }
+        assert_eq!(
+            carryover_get(&slot, "hot-session")
+                .expect("hot key survives")
+                .hash,
+            2,
+            "re-written key must outlive older one-shot entries"
+        );
     }
 
     #[tokio::test]
