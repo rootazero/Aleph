@@ -75,7 +75,7 @@ async fn fires_when_stop_reason_is_some_and_hook_blocks() {
         VerifierVerdict::Veto { reason, .. } => {
             assert_eq!(reason, "tests not passing");
         }
-        other => assert!(false, "expected Veto with hook reason, got {other:?}"),
+        other => panic!("expected Veto with hook reason, got {other:?}"),
     }
 }
 

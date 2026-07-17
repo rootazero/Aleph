@@ -351,12 +351,14 @@ mod tests {
         // stays the guest floor regardless of the channel's tier.
         use crate::config::types::policies::ToolPermissionsConfig;
         use crate::extension::PermissionAction;
-        let mut cfg = ChannelConfig::default();
-        cfg.permission_level = ChannelPermissionLevel::Config; // operator-tier channel…
-        cfg.tool_permissions = Some(ToolPermissionsConfig {
-            default: PermissionAction::Allow,
-            overrides: HashMap::from([("web_fetch".to_string(), PermissionAction::Deny)]),
-        });
+        let cfg = ChannelConfig {
+            permission_level: ChannelPermissionLevel::Config, // operator-tier channel…
+            tool_permissions: Some(ToolPermissionsConfig {
+                default: PermissionAction::Allow,
+                overrides: HashMap::from([("web_fetch".to_string(), PermissionAction::Deny)]),
+            }),
+            ..ChannelConfig::default()
+        };
         let meta = channel_identity_meta(&cfg, "slack", "C123");
         // …yet an unattended continuation still runs at the guest floor.
         assert_eq!(meta.get("caller_role").map(String::as_str), Some("guest"));

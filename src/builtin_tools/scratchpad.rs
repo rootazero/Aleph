@@ -452,7 +452,7 @@ mod tests {
         let dto = PlanSnapshotDto::from(&snap);
         assert_eq!(dto.objective.as_deref(), Some("Ship auth"));
         assert_eq!(dto.items.len(), 3);
-        assert_eq!(dto.complete, false); // not all done
+        assert!(!dto.complete); // not all done
         let json = serde_json::to_value(&dto).unwrap();
         assert_eq!(json["items"][0]["status"], "completed");
         assert_eq!(json["items"][1]["status"], "in_progress");

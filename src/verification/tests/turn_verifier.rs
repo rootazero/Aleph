@@ -74,7 +74,7 @@ async fn first_veto_short_circuits_subsequent_verifiers() {
     let verdict = chain.verify(&ctx(), &cancel).await;
     match verdict {
         VerifierVerdict::Veto { reason, .. } => assert_eq!(reason, "first"),
-        other => assert!(false, "expected first veto, got {other:?}"),
+        other => panic!("expected first veto, got {other:?}"),
     }
 }
 

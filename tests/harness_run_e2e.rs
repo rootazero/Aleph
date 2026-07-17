@@ -44,7 +44,6 @@ fn fresh_session_service() -> Arc<dyn SessionService> {
 /// A no-op sandbox. `HarnessDeps::sandbox` is required but the `NoopTool`
 /// used here returns before ever reaching the sandbox, so `execute` should
 /// never actually be called.
-
 /// A tool that always succeeds with an empty JSON object — exercises the Act
 /// phase without depending on real filesystem / network behavior.
 struct NoopTool;
