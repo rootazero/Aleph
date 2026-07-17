@@ -57,7 +57,7 @@ mod types;
 pub use audit::audit_identity;
 pub use node_requester::run_node_approval;
 pub use operator_requester::OperatorApprovalRequester;
-pub use tool_call::{current_tool_call_id, with_tool_call_id};
+pub use tool_call::{current_call_identity, current_tool_call_id, with_call_identity, CallIdentity};
 
 pub use config::{matches_glob, ConfigApprovalPolicy, PolicyConfig, PolicyRule};
 pub use policy::ApprovalPolicy;

@@ -165,8 +165,36 @@ pub struct PendingApproval {
 /// Purely in-memory: a granted approval lives for one execution
 /// (`AllowOnce`) or for the session (`AllowSession`, remembered by
 /// [`crate::sandbox::exec_approval::session_memory`]). Nothing here persists.
+/// Outcome of a session-addressed (id-less) approval reply — see
+/// [`ExecApprovalManager::resolve_for_session`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionResolveOutcome {
+    /// Applied to the addressed entry. Carries the EFFECTIVE decision (post
+    /// clamp — a legacy `AllowAlways` narrows to `AllowSession`) and the
+    /// resolved action's display line, so the confirmation reply can echo
+    /// WHAT was approved instead of a bare "Approved."
+    Resolved {
+        decision: ApprovalDecisionType,
+        summary: String,
+    },
+    /// Nothing live is pending for this session.
+    NothingPending,
+    /// Several cards are live and the reply named none of them (or named an
+    /// out-of-range index). Oldest-first `(1-based index, display line)`
+    /// listing for an indexed retry — nothing was resolved.
+    Ambiguous(Vec<(usize, String)>),
+}
+
 pub struct ExecApprovalManager {
     pending: Arc<RwLock<HashMap<String, PendingEntry>>>,
+    /// Per-session snapshot of the last [`SessionResolveOutcome::Ambiguous`]
+    /// listing SHOWN — the only thing a positional `/approve <n>` may address.
+    /// Binding indices to the live list instead would race: resolve card 1,
+    /// have a NEW card arrive, and a still-in-range `/approve 2` lands on the
+    /// newcomer the user never read. Refreshed on every listing; an index
+    /// whose snapshot entry is gone (or with no snapshot at all) re-lists
+    /// instead of guessing. Lock order: `pending` first, then this — always.
+    session_listings: RwLock<HashMap<String, Vec<String>>>,
 }
 
 impl ExecApprovalManager {
@@ -175,6 +203,7 @@ impl ExecApprovalManager {
     pub fn new() -> Self {
         Self {
             pending: Arc::new(RwLock::new(HashMap::new())),
+            session_listings: RwLock::new(HashMap::new()),
         }
     }
 
@@ -328,43 +357,108 @@ impl ExecApprovalManager {
         }
     }
 
-    /// Resolve the oldest unresolved approval for `session_key`.
+    /// Resolve an unresolved approval for `session_key` by position.
     ///
-    /// A channel reply (`/approve` / `/deny` or a button callback) carries no
-    /// request id, so the inbound router resolves by session: the oldest LIVE
-    /// pending entry for that session is picked (FIFO). Returns the EFFECTIVE
-    /// decision applied (post clamp — a legacy `AllowAlways` narrows to
-    /// `AllowSession`), or `None` when nothing was pending for the session.
+    /// A channel TEXT reply (`/approve` / `/deny`) carries no request id, so
+    /// the inbound router resolves by session. With exactly one LIVE pending
+    /// entry a bare reply is unambiguous and resolves it. With several —
+    /// possible since approval-gated calls may share a parallel batch — a
+    /// bare reply cannot say which card the user actually read, so nothing is
+    /// resolved and [`SessionResolveOutcome::Ambiguous`] hands back the
+    /// oldest-first list for an indexed retry (`/approve 2`).
     ///
-    /// Liveness ([`PendingEntry::is_live`]) is what keeps the FIFO honest: a
-    /// cancelled run leaves an entry whose waiter is gone but whose `sender` is
-    /// still `Some`, and being the oldest it would otherwise win this pick and
-    /// swallow the approval meant for the card the user is actually looking at.
+    /// `index` is 1-based and addresses **the last listing SHOWN to this
+    /// session** (snapshotted in `session_listings`), never the live list's
+    /// current positions: between the listing and the reply, another card may
+    /// resolve and a NEW one arrive, leaving the index in range but pointing
+    /// at an entry the user never read. An index with no snapshot, past the
+    /// snapshot's end, or addressing an entry that is no longer live,
+    /// re-lists (and re-snapshots) instead of guessing.
+    ///
+    /// Liveness ([`PendingEntry::is_live`]) is what keeps the ordering honest:
+    /// a cancelled run leaves an entry whose waiter is gone but whose `sender`
+    /// is still `Some`, and being the oldest it would otherwise win this pick
+    /// and swallow the approval meant for the card the user is actually
+    /// looking at.
     pub fn resolve_for_session(
         &self,
         session_key: &str,
+        index: Option<usize>,
         decision: ApprovalDecisionType,
         resolved_by: Option<String>,
-    ) -> Option<ApprovalDecisionType> {
+    ) -> SessionResolveOutcome {
         let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
 
-        let target = pending
+        // Oldest-first live entries for this session — the stable order every
+        // `Ambiguous` listing renders (and snapshots).
+        let mut live: Vec<(Instant, String)> = pending
             .iter()
             .filter(|(_, e)| e.is_live() && e.record.session_key == session_key)
-            .min_by(|(id_a, e_a), (id_b, e_b)| {
-                e_a.created_at
-                    .cmp(&e_b.created_at)
-                    .then_with(|| id_a.cmp(id_b))
-            })
-            .map(|(id, _)| id.clone());
+            .map(|(id, e)| (e.created_at, id.clone()))
+            .collect();
+        live.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 
-        let Some(id) = target else {
-            warn!(session_key = %session_key, "No pending approval for session");
-            return None;
+        // Render the listing AND snapshot it as the one thing a subsequent
+        // indexed reply may address. Lock order: `pending` (held) → listings.
+        let list_and_snapshot = |pending: &HashMap<String, PendingEntry>| {
+            let ids: Vec<String> = live.iter().map(|(_, id)| id.clone()).collect();
+            self.session_listings
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(session_key.to_string(), ids);
+            live.iter()
+                .enumerate()
+                .map(|(i, (_, id))| {
+                    let line = pending
+                        .get(id)
+                        .map(|e| Self::display_line(&e.record))
+                        .unwrap_or_default();
+                    (i + 1, line)
+                })
+                .collect()
+        };
+
+        let id = match (index, live.len()) {
+            (_, 0) => {
+                warn!(session_key = %session_key, "No pending approval for session");
+                self.session_listings
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(session_key);
+                return SessionResolveOutcome::NothingPending;
+            }
+            (None, 1) => live[0].1.clone(),
+            // Several cards, bare reply: refusing to guess IS the safety
+            // property — FIFO here would approve a command the user may
+            // never have read.
+            (None, _) => return SessionResolveOutcome::Ambiguous(list_and_snapshot(&pending)),
+            (Some(n), _) => {
+                // Address the SNAPSHOT the user was shown, not live positions.
+                let addressed = self
+                    .session_listings
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(session_key)
+                    .and_then(|ids| ids.get(n.wrapping_sub(1)).cloned());
+                match addressed {
+                    Some(id)
+                        if pending
+                            .get(&id)
+                            .is_some_and(|e| e.is_live() && e.record.session_key == session_key) =>
+                    {
+                        id
+                    }
+                    // No listing was ever shown, the index is past its end, or
+                    // the addressed card already resolved/expired — show a
+                    // fresh listing rather than resolve something unread.
+                    _ => return SessionResolveOutcome::Ambiguous(list_and_snapshot(&pending)),
+                }
+            }
         };
 
         if let Some(entry) = pending.get_mut(&id) {
             let decision = Self::clamp_decision(decision);
+            let summary = Self::display_line(&entry.record);
             entry.record.decision = Some(decision);
             entry.record.resolved_by = resolved_by;
             entry.record.resolved_at_ms = Some(
@@ -377,10 +471,21 @@ impl ExecApprovalManager {
                 let _ = sender.send(Some(decision));
             }
             debug!(id = %id, ?decision, "Resolved approval by session");
-            Some(decision)
+            SessionResolveOutcome::Resolved { decision, summary }
         } else {
-            None
+            SessionResolveOutcome::NothingPending
         }
+    }
+
+    /// One-line, char-safe display form of a record for replies and the
+    /// ambiguous listing — the command the user is being asked to approve.
+    fn display_line(record: &ExecApprovalRecord) -> String {
+        const MAX: usize = 120;
+        let mut line: String = record.command.chars().take(MAX).collect();
+        if record.command.chars().count() > MAX {
+            line.push('…');
+        }
+        line
     }
 
     /// Clamp `requested` to a grant scope the system can actually honor.
@@ -532,7 +637,14 @@ mod tests {
     /// come out in a stable, oldest-first order.
     #[tokio::test]
     async fn concurrent_approvals_carry_distinct_tool_call_ids() {
-        use crate::approval::with_tool_call_id;
+        use crate::approval::{with_call_identity, CallIdentity};
+
+        fn identity(call_id: &str) -> Option<CallIdentity> {
+            Some(CallIdentity {
+                turn_id: crate::session::events::TurnId::nil(),
+                call_id: call_id.to_string(),
+            })
+        }
 
         let manager = ExecApprovalManager::new();
         let mut first = mock_request();
@@ -540,11 +652,11 @@ mod tests {
         let mut second = mock_request();
         second.id = "ap-b".to_string();
 
-        let rec_a = with_tool_call_id(Some("toolu_a".to_string()), async {
+        let rec_a = with_call_identity(identity("toolu_a"), async {
             manager.create(&first, 60_000)
         })
         .await;
-        let rec_b = with_tool_call_id(Some("toolu_b".to_string()), async {
+        let rec_b = with_call_identity(identity("toolu_b"), async {
             manager.create(&second, 60_000)
         })
         .await;
@@ -656,11 +768,15 @@ mod tests {
         let rec2 = manager.create(&live, 60_000);
         let (live_id, rx2, timeout) = manager.register_pending(rec2);
 
-        // The user types `/approve` on the channel.
-        assert_eq!(
-            manager.resolve_for_session(&session_key, ApprovalDecisionType::AllowOnce, None),
-            Some(ApprovalDecisionType::AllowOnce)
-        );
+        // The user types `/approve` on the channel. One LIVE card — the
+        // zombie must not make this ambiguous.
+        assert!(matches!(
+            manager.resolve_for_session(&session_key, None, ApprovalDecisionType::AllowOnce, None),
+            SessionResolveOutcome::Resolved {
+                decision: ApprovalDecisionType::AllowOnce,
+                ..
+            }
+        ));
 
         // It must reach the LIVE card, not the older zombie.
         assert_eq!(
@@ -700,10 +816,143 @@ mod tests {
         let session_key = record.session_key.clone();
         let (_id, _rx, _timeout) = manager.register_pending(record);
 
-        assert_eq!(
-            manager.resolve_for_session(&session_key, ApprovalDecisionType::AllowAlways, None),
-            Some(ApprovalDecisionType::AllowSession)
-        );
+        assert!(matches!(
+            manager.resolve_for_session(
+                &session_key,
+                None,
+                ApprovalDecisionType::AllowAlways,
+                None
+            ),
+            SessionResolveOutcome::Resolved {
+                decision: ApprovalDecisionType::AllowSession,
+                ..
+            }
+        ));
+    }
+
+    /// The multi-pending guard: with two live cards on one session a bare
+    /// `/approve` must resolve NOTHING (FIFO would approve a command the user
+    /// may never have read), and an indexed reply must hit exactly the card
+    /// it names.
+    #[test]
+    fn bare_session_resolve_refuses_when_several_cards_pend() {
+        let manager = ExecApprovalManager::new();
+        let mut first = mock_request();
+        first.id = "card-1".to_string();
+        first.command = "rm -rf ./build".to_string();
+        let rec1 = manager.create(&first, 60_000);
+        let session_key = rec1.session_key.clone();
+        let (id1, rx1, t1) = manager.register_pending(rec1);
+
+        let mut second = mock_request();
+        second.id = "card-2".to_string();
+        second.command = "git push --force".to_string();
+        let rec2 = manager.create(&second, 60_000);
+        let (_id2, _rx2, _t2) = manager.register_pending(rec2);
+
+        // Bare reply → ambiguous listing, oldest first, nothing resolved.
+        match manager.resolve_for_session(&session_key, None, ApprovalDecisionType::AllowOnce, None)
+        {
+            SessionResolveOutcome::Ambiguous(cards) => {
+                assert_eq!(cards.len(), 2);
+                assert_eq!(cards[0], (1, "rm -rf ./build".to_string()));
+                assert_eq!(cards[1], (2, "git push --force".to_string()));
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+        assert_eq!(manager.list_pending().len(), 2, "nothing was resolved");
+
+        // Out-of-range index re-lists rather than guessing.
+        assert!(matches!(
+            manager.resolve_for_session(&session_key, Some(9), ApprovalDecisionType::AllowOnce, None),
+            SessionResolveOutcome::Ambiguous(_)
+        ));
+
+        // `/approve 1` hits exactly the oldest card and echoes it.
+        match manager.resolve_for_session(
+            &session_key,
+            Some(1),
+            ApprovalDecisionType::AllowOnce,
+            None,
+        ) {
+            SessionResolveOutcome::Resolved { decision, summary } => {
+                assert_eq!(decision, ApprovalDecisionType::AllowOnce);
+                assert_eq!(summary, "rm -rf ./build");
+            }
+            other => panic!("expected Resolved, got {other:?}"),
+        }
+        drop((id1, rx1, t1));
+    }
+
+    /// Index-drift regression: a positional reply binds to the listing the
+    /// user was SHOWN. After position 1 resolves out of band and a NEW card
+    /// arrives, `/approve 2` from the old listing must hit the old
+    /// position-2 card — never the newcomer that now occupies live
+    /// position 2 (in range, so a live-positional lookup would resolve a
+    /// command the user never read).
+    #[test]
+    fn indexed_reply_binds_to_the_listing_shown_not_live_positions() {
+        let manager = ExecApprovalManager::new();
+        let mk = |id: &str, cmd: &str| {
+            let mut r = mock_request();
+            r.id = id.to_string();
+            r.command = cmd.to_string();
+            r
+        };
+
+        let rec_a = manager.create(&mk("card-a", "cmd-a"), 60_000);
+        let session_key = rec_a.session_key.clone();
+        let (id_a, _rx_a, _ta) = manager.register_pending(rec_a);
+        let rec_b = manager.create(&mk("card-b", "cmd-b"), 60_000);
+        let (_id_b, _rx_b, _tb) = manager.register_pending(rec_b);
+
+        // The listing the user reads: [1=a, 2=b] (snapshotted).
+        assert!(matches!(
+            manager.resolve_for_session(&session_key, None, ApprovalDecisionType::AllowOnce, None),
+            SessionResolveOutcome::Ambiguous(_)
+        ));
+
+        // Card a resolves out of band (button / Panel resolve by exact id)…
+        assert!(manager.resolve(&id_a, ApprovalDecisionType::AllowOnce, None));
+        // …and a NEW card c arrives, occupying live position 2.
+        let rec_c = manager.create(&mk("card-c", "cmd-c"), 60_000);
+        let (_id_c, _rx_c, _tc) = manager.register_pending(rec_c);
+
+        // `/approve 2` from the OLD listing resolves b — what the user read.
+        match manager.resolve_for_session(
+            &session_key,
+            Some(2),
+            ApprovalDecisionType::AllowOnce,
+            None,
+        ) {
+            SessionResolveOutcome::Resolved { summary, .. } => assert_eq!(summary, "cmd-b"),
+            other => panic!("expected Resolved(cmd-b), got {other:?}"),
+        }
+
+        // `/approve 1` addresses the already-resolved a → fresh listing (c
+        // alone), nothing resolved.
+        match manager.resolve_for_session(
+            &session_key,
+            Some(1),
+            ApprovalDecisionType::AllowOnce,
+            None,
+        ) {
+            SessionResolveOutcome::Ambiguous(cards) => {
+                assert_eq!(cards, vec![(1, "cmd-c".to_string())]);
+            }
+            other => panic!("expected re-list, got {other:?}"),
+        }
+
+        // The fresh listing re-snapshotted — `/approve 1` now hits c.
+        match manager.resolve_for_session(
+            &session_key,
+            Some(1),
+            ApprovalDecisionType::AllowOnce,
+            None,
+        ) {
+            SessionResolveOutcome::Resolved { summary, .. } => assert_eq!(summary, "cmd-c"),
+            other => panic!("expected Resolved(cmd-c), got {other:?}"),
+        }
     }
 
     #[tokio::test]

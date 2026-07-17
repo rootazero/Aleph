@@ -1408,6 +1408,153 @@ async fn act_parallel_overlaps_concurrent_safe_calls_and_preserves_order() {
     assert_eq!(log.len(), 3, "every call must reach execute()");
 }
 
+// -- Completion-order live events ---------------------------------------------
+
+/// Sleeps for `delay_ms` from the call's own arguments, then succeeds. Lets a
+/// single batch mix a slow and a fast call, which a sticky per-service delay
+/// (`ScriptedTools::exec_delay`) cannot express.
+struct DelayByArgTools;
+
+#[async_trait]
+impl ToolService for DelayByArgTools {
+    async fn execute(&self, _name: &str, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+        let ms = input.get("delay_ms").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        if ms > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+        }
+        Ok(ok_output(serde_json::json!({ "slept_ms": ms })))
+    }
+
+    async fn list(&self) -> Vec<ToolDefinition> {
+        Vec::new()
+    }
+
+    async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
+        None
+    }
+
+    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+        std::sync::Arc::from([])
+    }
+
+    async fn call_concurrency_claim(
+        &self,
+        _name: &str,
+        _input: &serde_json::Value,
+    ) -> crate::tools::concurrency::ConcurrencyClaim {
+        crate::tools::concurrency::ConcurrencyClaim::Shared
+    }
+}
+
+/// Records every `on_tool_call_done` in firing order, with its duration.
+#[derive(Default)]
+struct DoneOrderCallback {
+    done: Vec<(String, u64)>,
+}
+
+impl crate::harness::HarnessCallback for DoneOrderCallback {
+    fn on_tool_call_done(
+        &mut self,
+        id: &str,
+        _result: Option<&serde_json::Value>,
+        _error: Option<&str>,
+        duration_ms: u64,
+    ) {
+        self.done.push((id.to_string(), duration_ms));
+    }
+}
+
+/// The live/transcript split: in a parallel batch, the live "done" event for a
+/// FAST call fires as soon as that call resolves — completion order, real
+/// duration — while the persisted `ToolResult` events stay in input order.
+/// Before the completion drive loop, both were head-of-line blocked: the fast
+/// call's live event waited for the slow sibling and reported an inflated
+/// duration (the wait, not the work).
+#[tokio::test]
+async fn act_parallel_fires_live_done_in_completion_order_with_real_durations() {
+    let tool_calls = vec![
+        NativeToolCall {
+            thought_signature: None,
+            id: "p-slow".into(),
+            name: "sleep_tool".into(),
+            arguments: serde_json::json!({"delay_ms": 300}),
+        },
+        NativeToolCall {
+            thought_signature: None,
+            id: "p-fast".into(),
+            name: "sleep_tool".into(),
+            arguments: serde_json::json!({"delay_ms": 25}),
+        },
+    ];
+
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(DelayByArgTools),
+        llm: CapturingProvider::with_tool_calls("calling…", tool_calls.clone()),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        recall_context: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: Some(8),
+    };
+    let harness = AgentHarness::new(deps);
+
+    let mut callback = DoneOrderCallback::default();
+    let state = harness
+        .run_turn(&sample_session_id(), &mut callback)
+        .await
+        .expect("run_turn should succeed");
+    assert_eq!(state, TurnState::Continue);
+
+    // Live events fire in COMPLETION order: the fast call first…
+    let done_ids: Vec<&str> = callback.done.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(
+        done_ids,
+        vec!["p-fast", "p-slow"],
+        "live done events must fire in completion order, not input order",
+    );
+    // …and its duration is its own wall clock, not the slow sibling's wait.
+    let fast_dur = callback.done[0].1;
+    assert!(
+        fast_dur < 250,
+        "the fast call's live duration must not be inflated by head-of-line \
+         waiting (got {fast_dur}ms; the slow sibling sleeps 300ms)",
+    );
+
+    // The transcript stays in INPUT order.
+    let events = session.snapshot().await;
+    let result_ids: Vec<String> = events
+        .iter()
+        .filter_map(|r| match &r.event {
+            SessionEvent::ToolResult { call_id, .. } => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        result_ids,
+        vec!["p-slow".to_string(), "p-fast".to_string()],
+        "ToolResult session events must stay in input order",
+    );
+}
+
 /// When even one call in a batch is concurrent-unsafe, the fast path bows
 /// out and the existing serial loop handles the whole batch. Wall-clock is
 /// the cheapest signal: a 2-call batch with 200ms delay each must take

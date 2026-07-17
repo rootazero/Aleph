@@ -203,10 +203,42 @@ const BUDGETED: [&str; 12] = [
 ///
 /// Net **−8**, taking the loop to **5035**.
 ///
+/// **Batch 6 (2026-07-17): 5035 → 5115 (+80).** The first deliberate raise
+/// since the ratchet was pinned — two deferred tool-concurrency items land in
+/// `act.rs`, both answering R10's three questions in the open:
+///
+///   - **+~30, ambient call identity.** Act scopes an
+///     `approval::CallIdentity { turn_id, call_id }` task-local around each
+///     execute future (serial + parallel), replacing the session-log
+///     name-scan correlation (`newest_tool_call`, deleted outright from
+///     `src/tools/scoped/dispatch.rs`) that had forced every approval-gated
+///     call to claim `Exclusive::Global`. Scaffolding, not cognition —
+///     identity threading carries no judgement; a stronger model still needs
+///     its approval cards correlated; consumers today: every approval card
+///     stamp, every session-log `ToolCallApproved/Denied`, and
+///     sandbox-elevation records raised mid-execution. The serial wrap is
+///     `Box::pin`ed — a bare task-local scope future trips rustc's "`Send` is
+///     not general enough" HRTB limitation once the future crosses a
+///     `tokio::spawn` chain.
+///   - **+~50, completion-order live events.** `buffered` →
+///     `buffer_unordered` plus a completion drive loop: each live "done"
+///     callback fires the moment ITS call resolves (real wall-clock
+///     durations, no head-of-line blocking, per-completion stall-tracker
+///     activity), while the transcript — SessionEvent, trace, Layer-3
+///     budget, timeline — stays strictly input-order in PASS 2 (the old
+///     `emit_*` bodies split into `compose_tool_error_msg` +
+///     `persist_tool_*`). The live/transcript split pi, openclaw and codex
+///     all share. Scaffolding (event plumbing); model-independent (latency
+///     UX); consumer: the Panel live stream (`BroadcastCallback` →
+///     `FlowStreamEvent::ToolCallDone`).
+///
+/// Net **+80**, taking the loop to **5115**. The discipline is unchanged:
+/// down-only without a written reason — this paragraph is that reason.
+///
 /// Measured, not hand-counted: this test is the measurement. The number here is
 /// whatever `the_harness_line_budget_does_not_grow` prints when it fails, and
 /// nothing else — that is the whole point of the file.
-const CEILING: usize = 5035;
+const CEILING: usize = 5115;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

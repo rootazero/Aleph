@@ -1898,19 +1898,24 @@ async fn default_deny_exposes_only_explicit_allow() {
     assert!(matches!(err, ToolError::PermissionDenied { .. }));
 }
 
+/// An `Ask`-gated tool keeps its inner claim and may join a parallel batch:
+/// its approval card correlates via the ambient `CallIdentity` (exact per
+/// call), so batch exclusivity is no longer the correlation crutch it used to
+/// be — the card pends concurrently with its siblings' execution.
 #[tokio::test]
-async fn ask_policy_tool_is_never_parallelized() {
+async fn ask_policy_no_longer_serializes_the_claim() {
     use crate::extension::PermissionAction;
     let svc =
         ScopedToolService::new(make_registry(&["alpha"]), BTreeSet::new()).with_tool_permissions(
             perms(PermissionAction::Allow, &[("alpha", PermissionAction::Ask)]),
         );
     assert!(
-        !matches!(
+        matches!(
             svc.call_concurrency_claim("alpha", &json!({})).await,
             crate::tools::concurrency::ConcurrencyClaim::Shared
         ),
-        "Ask-gated tool must route through the serial path"
+        "an Ask-gated tool surfaces its inner claim — the execute-time gate \
+         still fires, but it no longer forces batch exclusivity"
     );
 }
 
@@ -2201,45 +2206,39 @@ async fn auto_tier_asks_before_a_destructive_file_ops_call() {
     );
 }
 
-/// A confirm-gated call must never share a parallel batch: the approval path
-/// recovers its `tool_call_id` by scanning for the newest `ToolCallRequested`
-/// for the tool NAME, so two batched `file_ops` deletes would both bind to the
-/// same id and the user would approve the command they did not read.
+/// Approval gates no longer bleed into claims: an Auto-tier destructive
+/// `file_ops` call (which WILL stop for a human at execute time) surfaces the
+/// inner tool's declared claim — here the stub's `Shared` — instead of a
+/// forced `Global`. Correlation is the ambient `CallIdentity` the harness
+/// scopes per execute future, and the pending-approval store is a keyed map,
+/// so concurrently-pending cards each stamp their own call id. (The REAL
+/// `file_ops` per-argument path claims — same-path conflicts, disjoint-path
+/// parallelism — are pinned in `registry_adapter`'s claim tests.)
 #[tokio::test]
-async fn auto_tier_destructive_file_ops_never_batches() {
+async fn tier_gated_destructive_file_ops_surface_the_inner_claim() {
     use crate::config::types::policies::ExecTier;
     use crate::tools::concurrency::ConcurrencyClaim;
     use crate::tools::service::ToolService;
 
     let svc = tiered(ExecTier::Auto);
-    for op in ["delete", "move", "batch_move", "organize"] {
+    for op in ["delete", "move", "batch_move", "organize", "list"] {
         assert_eq!(
             svc.call_concurrency_claim("file_ops", &json!({"operation": op, "path": "/tmp/a"}))
                 .await,
-            ConcurrencyClaim::global(),
-            "`file_ops {op}` asks for confirmation under Auto — it must never share a \
-             parallel batch"
+            ConcurrencyClaim::Shared,
+            "`file_ops {op}` must surface the inner declared claim — gated or \
+             not, the gate no longer forces Global"
         );
     }
-    // Non-destructive ops keep their inner claim — the fix must not
-    // over-serialize reads.
-    assert_ne!(
-        svc.call_concurrency_claim("file_ops", &json!({"operation": "list", "path": "/tmp"}))
-            .await,
-        ConcurrencyClaim::global(),
-        "a `list` is not gated and must still parallelize"
-    );
 }
 
-/// The config-tier operator gate is the FOURTH member of the claim-time
-/// exclusivity rule: a non-operator caller's `node_invoke` (whose inner claim
-/// is a bounded, batchable `Nodes` scope in production) routes through the
-/// operator approval gate at execute time, so at claim time it must be
-/// whole-world exclusive — two gated calls in one parallel batch would run
-/// their approval cards concurrently and `newest_tool_call`'s name scan would
-/// stamp both with the same id.
+/// The config-tier operator gate no longer bleeds into claims either: gated
+/// or not, the inner declared claim flows through for every caller role. The
+/// gate still fires at execute time (suspend-for-operator-approval); its
+/// correlation rides the ambient `CallIdentity`, so it needs no batch
+/// exclusivity. `cron_manage` is on `tool_requires_operator`'s list.
 #[tokio::test]
-async fn operator_gated_tool_claims_global_for_non_operator_callers() {
+async fn approval_gates_no_longer_force_global_claims() {
     use crate::tools::concurrency::ConcurrencyClaim;
     use crate::tools::service::ToolService;
 
@@ -2252,53 +2251,44 @@ async fn operator_gated_tool_claims_global_for_non_operator_callers() {
         channel_tool_permissions: None,
     };
 
-    // Chat-tier (non-operator) caller: the gate WILL fire at execute time, so
-    // the claim must force Global even though the stub's inner claim is
-    // Shared. `cron_manage` is on `tool_requires_operator`'s list.
-    let mut r = LoopToolRegistry::new();
-    r.register(Box::new(NamedStub::new("cron_manage")));
-    let svc = ScopedToolService::new(Arc::new(r), BTreeSet::new())
-        .with_turn_context(ctx_with_role(Some("guest")));
-    assert_eq!(
-        svc.call_concurrency_claim("cron_manage", &json!({})).await,
-        ConcurrencyClaim::global(),
-        "an operator-gated tool must never join a parallel batch for a \
-         non-operator caller"
-    );
-
-    // Operator caller (and the local no-auth default, role=None): the gate
-    // never fires, so the inner declared claim flows through.
-    let mut r = LoopToolRegistry::new();
-    r.register(Box::new(NamedStub::new("cron_manage")));
-    let svc = ScopedToolService::new(Arc::new(r), BTreeSet::new())
-        .with_turn_context(ctx_with_role(Some("operator")));
-    assert_eq!(
-        svc.call_concurrency_claim("cron_manage", &json!({})).await,
-        ConcurrencyClaim::Shared,
-        "operator callers keep the inner claim — the gate never fires for them"
-    );
+    for role in [Some("guest"), Some("operator")] {
+        let mut r = LoopToolRegistry::new();
+        r.register(Box::new(NamedStub::new("cron_manage")));
+        let svc = ScopedToolService::new(Arc::new(r), BTreeSet::new())
+            .with_turn_context(ctx_with_role(role));
+        assert_eq!(
+            svc.call_concurrency_claim("cron_manage", &json!({})).await,
+            ConcurrencyClaim::Shared,
+            "the inner declared claim flows through regardless of caller role \
+             ({role:?}) — approval gates correlate ambiently, not by batch \
+             exclusivity"
+        );
+    }
 }
 
-/// Claim-time gates must judge the CANONICAL name, mirroring `execute_inner`:
-/// an alias spelling (`file.ops`) of a tier-gated call must get the same
-/// `Global` claim the canonical spelling gets, or the gated call slips into a
-/// parallel batch under its alias while the execute-time gate still fires.
+/// Claims must judge the CANONICAL name, mirroring `execute_inner`: an alias
+/// spelling (`file.ops`) must resolve to the same inner tool and yield the
+/// same bounded claim the canonical spelling gets — otherwise the alias falls
+/// to the conservative `Global` and over-serializes.
 #[tokio::test]
-async fn claim_gates_judge_the_canonical_name_not_the_alias() {
+async fn claims_judge_the_canonical_name_not_the_alias() {
     use crate::config::types::policies::ExecTier;
     use crate::tools::concurrency::ConcurrencyClaim;
     use crate::tools::service::ToolService;
 
     let svc = tiered(ExecTier::Auto);
+    let input = json!({"operation": "delete", "path": "/tmp/a"});
+    let via_alias = svc.call_concurrency_claim("file.ops", &input).await;
+    let via_canonical = svc.call_concurrency_claim("file_ops", &input).await;
     assert_eq!(
-        svc.call_concurrency_claim(
-            "file.ops",
-            &json!({"operation": "delete", "path": "/tmp/a"})
-        )
-        .await,
+        via_alias, via_canonical,
+        "alias and canonical spellings must yield the same claim"
+    );
+    assert_ne!(
+        via_alias,
         ConcurrencyClaim::global(),
-        "the alias spelling of a tier-gated destructive call must claim \
-         Global exactly like the canonical spelling"
+        "…and that claim is the tool's bounded scope, not the conservative \
+         fallback (which would make the equality vacuous)"
     );
 }
 
