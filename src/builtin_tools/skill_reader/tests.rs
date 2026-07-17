@@ -369,3 +369,92 @@ async fn symlink_twins_across_roots_resolve_to_single_skill() {
     assert!(result.success);
     assert!(result.content.contains("Twin Skill"));
 }
+
+#[tokio::test]
+async fn test_read_skill_usage_hint_present_with_support_files() {
+    let temp_dir = TempDir::new().unwrap();
+    let skills_dir = temp_dir.path().to_path_buf();
+    // create_test_skill ships a REFERENCE.md alongside SKILL.md.
+    create_test_skill(&skills_dir, "test-skill", "Test Skill", "A test skill");
+
+    let tool = ReadSkillTool::new(skills_dir);
+    let result = AlephTool::call(
+        &tool,
+        ReadSkillArgs {
+            skill_id: "test-skill".to_string(),
+            file_name: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // A skill with supporting files gets a hint steering reads to skill_read
+    // (not `cat`) — the anti-cat affordance.
+    assert!(
+        !result.usage_hint.is_empty(),
+        "hint expected when support files exist"
+    );
+    assert!(result.usage_hint.contains("skill_read"));
+    assert!(result.usage_hint.contains("Do not cat"));
+}
+
+#[tokio::test]
+async fn test_read_skill_usage_hint_empty_without_support_files() {
+    let temp_dir = TempDir::new().unwrap();
+    let skills_dir = temp_dir.path().to_path_buf();
+    // A skill shipping ONLY SKILL.md (available_files ends up empty).
+    let skill_dir = skills_dir.join("solo");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: solo\ndescription: only\n---\nbody",
+    )
+    .unwrap();
+
+    let tool = ReadSkillTool::new(skills_dir);
+    let result = AlephTool::call(
+        &tool,
+        ReadSkillArgs {
+            skill_id: "solo".to_string(),
+            file_name: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        result.available_files.is_empty(),
+        "no support files expected"
+    );
+    assert!(
+        result.usage_hint.is_empty(),
+        "hint must be empty without support files"
+    );
+}
+
+#[tokio::test]
+async fn test_list_skills_elides_absolute_location() {
+    let temp_dir = TempDir::new().unwrap();
+    let skills_dir = temp_dir.path().to_path_buf();
+    create_test_skill(&skills_dir, "test-skill", "Test Skill", "A test skill");
+
+    let tool = ListSkillsTool::new(skills_dir);
+    let out = AlephTool::call(&tool, ListSkillsArgs { filter: None })
+        .await
+        .unwrap();
+
+    assert_eq!(out.count, 1);
+    let summary = &out.skills[0];
+    assert_eq!(summary.id, "test-skill");
+    // The listing must not hand the model an absolute path table (a `cat`
+    // enabler); the model reads a skill by its `id`.
+    assert!(
+        summary.location.is_none(),
+        "location must be elided in the listing"
+    );
+    let v = serde_json::to_value(summary).unwrap();
+    assert!(
+        v.get("location").is_none(),
+        "location key must be skipped on serialize"
+    );
+}

@@ -747,6 +747,33 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_single_skill_retains_source_path() {
+        // Regression: `parse_single_skill` dropped the SKILL.md path via
+        // `..Default::default()`, leaving plugin skills with an empty base dir
+        // (so `invoke_skill_tool` could not anchor Level-3 resource files).
+        let dir = tempdir().unwrap();
+        let skill_dir = dir.path().join("skills").join("hello");
+        fs::create_dir_all(&skill_dir).unwrap();
+        let md = skill_dir.join("SKILL.md");
+        fs::write(&md, "---\nname: hello\ndescription: Say hello\n---\nBody").unwrap();
+
+        let caps = parse_skills_dir(dir.path(), "skills", "test-plugin").unwrap();
+        match &caps[0] {
+            CapabilityDeclaration::Skill(s) => {
+                assert_eq!(
+                    s.source_path, md,
+                    "source_path must retain the on-disk SKILL.md path"
+                );
+                assert!(
+                    s.base_dir().ends_with("hello"),
+                    "base_dir derives from source_path"
+                );
+            }
+            other => panic!("Expected Skill, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_parse_skills_dir_with_file_skill() {
         let dir = tempdir().unwrap();
         let skills_dir = dir.path().join("skills");
