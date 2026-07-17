@@ -272,6 +272,11 @@ mod tests {
                 name: None,
                 description: None,
                 plugin_id: "p".to_string(),
+                kind: None,
+                matcher: None,
+                actions: Vec::new(),
+                plugin_root: None,
+                timeout_secs: None,
             }),
             CapabilityDeclaration::Service(ServiceRegistration {
                 id: "s".to_string(),

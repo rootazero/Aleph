@@ -797,29 +797,50 @@ impl ExtensionManager {
         // HookExecutor was already reset (via load_all's clear path or reload).
         // Convert HookRegistration → HookConfig for the executor.
         for hr in hook_regs {
+            // Registrations carrying concrete actions (plugin-shipped
+            // hooks.json shell hooks) dispatch those directly — through the
+            // consent gate for command/http. Registrations without actions
+            // are runtime (WASM) hooks: emit a live Plugin dispatch action so
+            // the executor invokes the plugin's exported `handler` via the
+            // process-global ExtensionManager when the event fires. The
+            // `handler` field is kept for diagnostics display either way.
+            let actions = if hr.actions.is_empty() {
+                vec![HookAction::Plugin {
+                    plugin_id: hr.plugin_id.clone(),
+                    handler: hr.handler.clone(),
+                }]
+            } else {
+                hr.actions.clone()
+            };
+            // Kind: explicit registration wins. Otherwise file-based action
+            // hooks get the same per-event default the user-hooks loader
+            // applies (blocking-capable events → interceptor, so a plugin
+            // PreToolUse command hook can actually block), while runtime
+            // (WASM) handler hooks keep their historical Observer default —
+            // flipping them implicitly would turn a handler error into a
+            // fail-closed tool block existing plugins never signed up for.
+            let kind = hr.kind.unwrap_or_else(|| {
+                if hr.actions.is_empty() {
+                    HookKind::default()
+                } else {
+                    hooks::default_kind_for_event(hr.event)
+                }
+            });
             let hook_config = HookConfig {
                 event: hr.event,
-                kind: HookKind::default(),
+                kind,
                 priority: match hr.priority {
                     i if i <= HookPriority::System.as_i32() => HookPriority::System,
                     i if i <= HookPriority::High.as_i32() => HookPriority::High,
                     i if i >= HookPriority::Low.as_i32() => HookPriority::Low,
                     _ => HookPriority::Normal,
                 },
-                matcher: None,
-                // Emit a live Plugin dispatch action (not an empty list): the
-                // executor invokes the plugin's exported `handler` via the
-                // process-global ExtensionManager when the event fires. The
-                // `handler` field below is kept for diagnostics display only
-                // (see `validation.rs`); dispatch flows through the action.
-                actions: vec![HookAction::Plugin {
-                    plugin_id: hr.plugin_id.clone(),
-                    handler: hr.handler.clone(),
-                }],
+                matcher: hr.matcher.clone(),
+                actions,
                 plugin_name: hr.plugin_id.clone(),
-                plugin_root: PathBuf::new(),
+                plugin_root: hr.plugin_root.clone().unwrap_or_default(),
                 handler: Some(hr.handler.clone()),
-                timeout_secs: None,
+                timeout_secs: hr.timeout_secs,
             };
             executor.add_hook(hook_config);
         }

@@ -196,18 +196,18 @@ pub struct ToolSection {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookSection {
     pub event: String,
-    #[serde(default = "default_hook_kind")]
-    pub kind: String,
+    /// Execution kind (`observer` | `interceptor`). `None` (omitted) defers
+    /// to the per-event default at registration time — hard-defaulting to
+    /// `"observer"` here would silently kill hooks on interceptor-only
+    /// events (`before_tool_call`, `stop`, …) whose authors omitted the key.
+    #[serde(default)]
+    pub kind: Option<String>,
     #[serde(default)]
     pub handler: Option<String>,
     #[serde(default = "default_hook_priority")]
     pub priority: String,
     #[serde(default)]
     pub filter: Option<String>,
-}
-
-fn default_hook_kind() -> String {
-    "observer".to_string()
 }
 
 fn default_hook_priority() -> String {

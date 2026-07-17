@@ -410,6 +410,7 @@ pub async fn handle_hooks_events(request: JsonRpcRequest) -> JsonRpcResponse {
         HookEvent::UserPromptSubmit,
         HookEvent::SubagentStart,
         HookEvent::SubagentStop,
+        HookEvent::Stop,
     ]
     .iter()
     .map(|e| {

@@ -242,13 +242,38 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // SessionStart — the first turn of a brand-new session has no prior
         // history. Firing here (not inside `src/harness/`) keeps the dumb
-        // loop free of lifecycle logic (R10). Observers only.
+        // loop free of lifecycle logic (R10). Observers run fire-and-forget;
+        // interceptor-kind hooks are harvested for context (Claude Code /
+        // codex parity: a SessionStart hook's stdout is injected into the
+        // session context). SessionStart is deliberately non-blocking —
+        // block/deny from a hook here is ignored, matching Claude Code.
+        let mut session_start_blocks: Vec<String> = Vec::new();
         if history.is_empty() {
             if let Some(executor) = hook_executor.as_ref() {
                 let ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
                 executor
                     .execute_observers(HookEvent::SessionStart, &ctx)
                     .await;
+                match executor
+                    .execute_interceptors(HookEvent::SessionStart, ctx)
+                    .await
+                {
+                    Ok((_ctx, hr)) => {
+                        // Claude-Code convention: `context:` lines / JSON
+                        // additionalContext AND plain stdout lines both count
+                        // as injected context on this event. Plain stdout is
+                        // joined + capped: a chatty pre-existing hook (kind
+                        // defaults flipped Observer→Interceptor here) must
+                        // not dump its whole log into the model context.
+                        session_start_blocks.extend(hr.additional_contexts);
+                        if let Some(joined) = join_capped_messages(&hr.messages) {
+                            session_start_blocks.push(joined);
+                        }
+                    }
+                    Err(e) => {
+                        warn!(run_id = run_id, error = %e, "SessionStart hook failed")
+                    }
+                }
             }
         }
 
@@ -267,6 +292,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // first-user-message content — equal to the raw input.
         let effective_user_input: String = request.input.clone();
         let mut transient_blocks: Vec<String> = Vec::new();
+        for c in &session_start_blocks {
+            transient_blocks.push(format!(
+                "<system-reminder>\n{}\n</system-reminder>",
+                c.trim()
+            ));
+        }
         if let Some(executor) = hook_executor.as_ref() {
             let mut ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
             ctx = ctx.with_tool_input(request.input.clone());
@@ -294,22 +325,24 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     // must not run. Stop gracefully and surface the hook's
                     // message/context as the run output (NOT an error).
                     if hr.prevent_continuation {
-                        let stop_msg = hr
-                            .messages
-                            .first()
-                            .cloned()
-                            .or_else(|| hr.additional_contexts.first().cloned())
-                            .unwrap_or_else(|| {
-                                "Run halted by UserPromptSubmit hook (prevent_continuation)."
-                                    .to_string()
-                            });
+                        let stop_msg = hr.stop_message(
+                            "Run halted by UserPromptSubmit hook (prevent_continuation).",
+                        );
                         warn!(
                             run_id = run_id,
                             "UserPromptSubmit hook requested prevent_continuation; stopping run"
                         );
                         return Ok(stop_msg);
                     }
-                    for c in &hr.additional_contexts {
+                    // Claude-Code convention for UserPromptSubmit: PLAIN
+                    // stdout is injected as context, not just `context:`
+                    // lines / JSON additionalContext. Without the `messages`
+                    // hop a CC-ecosystem hook that simply prints
+                    // "Current sprint: 42" silently did nothing here. Plain
+                    // stdout is joined + capped so a chatty hook can't dump
+                    // its whole log into every turn's context.
+                    let joined = join_capped_messages(&hr.messages);
+                    for c in hr.additional_contexts.iter().chain(joined.iter()) {
                         transient_blocks.push(format!(
                             "<system-reminder>\n{}\n</system-reminder>",
                             c.trim()
@@ -1229,6 +1262,37 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
     }
+}
+
+/// Join a hook's plain-stdout `messages` into a single context block,
+/// bounded so a chatty hook can't dump its whole log into the model context.
+///
+/// Returns `None` when there is nothing to inject. The cap is generous
+/// (`HOOK_CONTEXT_INJECT_CAP`) — legitimate context injection (sprint notes,
+/// env reminders) is short; a hook exceeding it is almost certainly leaking
+/// diagnostics, so the tail is dropped with an explicit marker rather than
+/// silently.
+fn join_capped_messages(messages: &[String]) -> Option<String> {
+    /// Max chars of plain-stdout context injected per hook fire.
+    const HOOK_CONTEXT_INJECT_CAP: usize = 4096;
+    let joined = messages
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if joined.is_empty() {
+        return None;
+    }
+    if joined.len() <= HOOK_CONTEXT_INJECT_CAP {
+        return Some(joined);
+    }
+    // Char-boundary-safe truncation.
+    let mut end = HOOK_CONTEXT_INJECT_CAP;
+    while end > 0 && !joined.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(format!("{}\n[hook context truncated]", &joined[..end]))
 }
 
 /// Does the model serving this turn accept inline image blocks?

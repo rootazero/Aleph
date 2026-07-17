@@ -109,9 +109,22 @@ pub enum HookEvent {
     /// can react to delegation results without re-reading the transcript store.
     #[serde(alias = "SubagentStop")]
     SubagentStop,
+    /// When the agent loop is about to stop (the model produced a turn with no
+    /// tool calls). Claude-Code `Stop` hook parity: an interceptor-kind hook
+    /// may veto the stop (`block:` / `{"decision":"block"}` → the loop
+    /// continues with the reason as feedback) or halt permanently
+    /// (`prevent_continuation` / `{"continue":false}`). Evaluated through the
+    /// verifier chain (`ExtensionStopHookVerifier`), NOT inside `src/harness/`
+    /// (R10) — the same seam config-TOML `[[stop_hooks]]` already uses.
+    #[serde(alias = "Stop")]
+    Stop,
 }
 
 /// Hook execution kind - determines how the hook is executed
+///
+/// (A third `Resolver` kind — first-win competition — existed on paper but
+/// never gained a production fire-site; it was removed under YAGNI. Configs
+/// that still say `"kind": "resolver"` parse to the `Observer` default.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum HookKind {
@@ -123,10 +136,6 @@ pub enum HookKind {
     /// Execution: Parallel, errors logged but not propagated
     #[default]
     Observer,
-
-    /// Resolver: First-win competition
-    /// Execution: Sequential by priority, stops when one returns Some
-    Resolver,
 }
 
 impl HookKind {
@@ -144,7 +153,6 @@ impl std::str::FromStr for HookKind {
         match s.to_lowercase().as_str() {
             "observer" => Ok(Self::Observer),
             "interceptor" => Ok(Self::Interceptor),
-            "resolver" => Ok(Self::Resolver),
             _ => Err(format!("Unknown hook kind: {s}")),
         }
     }

@@ -3,8 +3,13 @@
 //! Each entry runs an external shell command before the agent loop is
 //! allowed to terminate. Exit-code semantics:
 //! * 0 — allow stop
-//! * 2 — block stop, stdout becomes the block reason
+//! * 2 — block stop and retry the loop, stdout becomes the block reason
+//! * 3 — halt the loop immediately (claude-code `preventContinuation`),
+//!   stdout becomes the halt reason
 //! * other — hook error (logged, non-blocking)
+//!
+//! `hooks.json` users get the same gate via the extension `Stop` event
+//! (`ExtensionStopHookVerifier`); this TOML surface is evaluated first.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

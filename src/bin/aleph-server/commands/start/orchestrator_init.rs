@@ -148,6 +148,15 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         if let Some(hooks) = build_stop_hooks(stop_hook_configs) {
             builder = builder.with(std::sync::Arc::new(StopHookVerifier::new(hooks)));
         }
+        // Extension `Stop` hooks (hooks.json / plugin hook packs) gate the
+        // stop through the same seam as config-TOML stop hooks. Listed right
+        // after them so explicit operator TOML gates win ties; dormant (one
+        // atomic-ish snapshot check per stop attempt) when no Stop hooks are
+        // registered. Hot-reload safe: the executor snapshot is re-taken per
+        // stop attempt.
+        builder = builder.with(std::sync::Arc::new(
+            alephcore::verification::ExtensionStopHookVerifier::new(),
+        ));
         builder = builder.with(std::sync::Arc::new(ToolLoopVerifier::new()));
         // Goal-loop hook: keeps the loop running while the session's
         // scratchpad has an objective + unchecked plan items. Listed last so
