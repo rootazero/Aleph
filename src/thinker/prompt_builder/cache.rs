@@ -304,4 +304,33 @@ mod tests {
             "cached Full prompt must carry AGENTS.md content"
         );
     }
+
+    #[test]
+    fn cached_full_prompt_carries_subagent_role_and_protocol() {
+        // Regression guard (wiring fix): AgentRoleLayer @55 injects a registered
+        // sub-agent's role header + protocol constraints. The harness-bridge
+        // runner resolves `agent_def` from the registry, threads it via
+        // `with_agent`, then walks the Cached path — so a registered SubAgent
+        // (verify / explore / coder / …) running as the loop agent (agent-switch
+        // or team dispatch) needs this layer on `AssemblyPath::Cached` or its
+        // role + protocol blocks silently vanish. AgentRoleLayer previously
+        // omitted `Cached`; this locks it into the cacheable stable prefix
+        // (same class of fix the Soul / Profile / Role / Citation layers carry).
+        use crate::agents::{AgentDef, AgentMode};
+
+        let def = AgentDef::new("verify", AgentMode::SubAgent)
+            .with_prompt_sections(vec!["verify_protocol".to_string()]);
+        let builder = PromptBuilder::new(PromptConfig::default()).with_agent(def);
+        let parts = builder.build_system_prompt_cached_with_mode(&[], PromptMode::Full);
+
+        // AgentRoleLayer is Stable → it rides part 0 (the cacheable prefix).
+        assert!(
+            parts[0].content.contains("# Sub-Agent Role"),
+            "cached Full prompt must carry the sub-agent role header"
+        );
+        assert!(
+            parts[0].content.contains("adversarial verifier"),
+            "cached Full prompt must carry the sub-agent's verify protocol block"
+        );
+    }
 }

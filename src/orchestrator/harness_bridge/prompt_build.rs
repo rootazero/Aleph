@@ -398,11 +398,12 @@ impl AgentHarnessRunner {
             .filter(|m| !m.is_empty());
         // The harness path delivers tool schemas via native tool_use
         // (`with_tools(tools_ref)` in agent.rs). When `native_tools_enabled` is
-        // false (the default), `ToolsLayer` injects the literal string
-        // "No tools available" and `ResponseFormatLayer` mandates the legacy
-        // `{reasoning, action}` JSON envelope — both of which contradict the
+        // false, `ToolsLayer` injects the literal string "No tools available.
+        // You can only use special actions." — which contradicts the
         // native-tool-use API the harness actually drives. Force the flag on
-        // here so the assembled prompt matches the runtime contract.
+        // here so the assembled prompt matches the runtime contract. (The
+        // legacy `{reasoning, action}` JSON envelope and its ResponseFormatLayer
+        // were removed when the harness moved to native `with_tools`.)
         // Model-aware system-prompt budget (feature 1.2): when a context budget
         // is configured, size the prompt char cap off the same chain-minimum
         // window the history side uses (feature 2.2), so large-window models
@@ -414,6 +415,32 @@ impl AgentHarnessRunner {
             .map_or_else(crate::thinker::prompt_budget::TokenBudget::default, |cfg| {
                 crate::thinker::prompt_budget::TokenBudget::from_context_window(cfg.token_budget)
             });
+        // Tool-scoped skills (`PromptScope::Tool`) are filtered inside
+        // `SkillInstructionsLayer` against the active tool names. The cached
+        // prompt is assembled with an empty `tools` slice (native tool_use
+        // delivers schemas out-of-band), so the layer can't see them and every
+        // Tool-scoped skill was silently dropped. Thread the catalog's active
+        // tool names in — but only when a Tool-scoped skill is actually
+        // eligible, so the common (no Tool-scoped skill) path does zero catalog
+        // reads. Names are session-stable → they do not perturb the cached
+        // stable prefix.
+        let active_tool_names: Vec<String> = if eligible_skills.as_ref().is_some_and(|skills| {
+            skills
+                .iter()
+                .any(|s| matches!(*s.scope(), crate::domain::skill::PromptScope::Tool))
+        }) {
+            match self.tool_catalog.as_ref() {
+                Some(catalog) => catalog
+                    .list_all()
+                    .await
+                    .into_iter()
+                    .map(|t| t.name)
+                    .collect(),
+                None => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
         let mut builder = PromptBuilder::new(PromptConfig {
             native_tools_enabled: true,
             eligible_skills,
@@ -421,6 +448,7 @@ impl AgentHarnessRunner {
             mcp_instructions,
             runtime_capabilities,
             token_budget,
+            active_tool_names,
             ..PromptConfig::default()
         });
         let role_present = agent_def.is_some();
@@ -665,8 +693,7 @@ async fn resolve_prompt_context(
     // layers emit nothing and the prompt is byte-identical.
     if let Some(s) = strategy {
         resolved_context.strategy = Some(crate::strategy::render_strategy_summary(&s));
-        resolved_context.strategy_guardrails =
-            Some(crate::strategy::render_guardrails_only(&s));
+        resolved_context.strategy_guardrails = Some(crate::strategy::render_guardrails_only(&s));
     }
     // Voice mode: read the session-keyed flag the gateway inbound router set
     // for this turn so `VoiceModeLayer` (priority 1710) injects the

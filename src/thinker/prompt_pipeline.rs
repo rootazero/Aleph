@@ -7,15 +7,14 @@ use super::layers::{
     AgentCatalogLayer, AgentRoleLayer, ChainContextLayer, CitationStandardsLayer,
     CuratedMemoryLayer, CustomInstructionsLayer, DoctorRepairHintLayer, EnvironmentLayer,
     ExecutionPlanLayer, ExtraFilesLayer, GenerationModelsLayer, GuidelinesLayer, HeartbeatLayer,
-    IdentityFilesLayer, InboundContextLayer, LanguageLayer, McpInstructionsLayer,
-    MemoryProtocolLayer, MultiStepConductLayer, OperationalGuidelinesLayer, ProfileLayer,
-    ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
-    RuntimeContextLayer, SecurityLayer, SessionBudgetLayer, SessionContextGuideLayer,
-    SessionResumeLayer, SkillInstructionsLayer, SoulLayer, SpecialActionsLayer, StandingGoalLayer,
-    StrategyLayer, StrategyPointerLayer, ThinkingGuidanceLayer, TimerLoopLayer,
-    ToolRuntimeStateLayer, ToolUsageGrammarLayer, ToolsLayer, VoiceModeLayer,
+    IdentityFilesLayer, LanguageLayer, McpInstructionsLayer, MemoryProtocolLayer,
+    MultiStepConductLayer, OperationalGuidelinesLayer, ProfileLayer, ProtocolTokensLayer,
+    ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer, RuntimeContextLayer, SecurityLayer,
+    SessionBudgetLayer, SessionContextGuideLayer, SkillInstructionsLayer, SoulLayer,
+    SpecialActionsLayer, StandingGoalLayer, StrategyLayer, StrategyPointerLayer,
+    ThinkingGuidanceLayer, TimerLoopLayer, ToolRuntimeStateLayer, ToolUsageGrammarLayer, ToolsLayer,
+    VoiceModeLayer,
 };
-use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use super::prompt_mode::PromptMode;
 use crate::context::budget::pressure::{estimate_tokens_aware, DEFAULT_PROSE_RATIO};
@@ -44,14 +43,13 @@ pub struct LayerSize {
 /// include the requested path, appending each layer's output to a
 /// single `String`.
 ///
-/// Cross-build reuse of the stable prefix is provided by the explicit,
-/// input-keyed snapshot path ([`execute_stable_only`](Self::execute_stable_only)
-/// / `PromptBuilder::capture_snapshot`) and the cached two-part split
-/// (`PromptBuilder::build_system_prompt_cached_with_mode`), not by an internal
-/// name-keyed cache — a fresh builder is constructed per prompt build, so an
-/// in-pipeline cache never served a cross-call hit and could only ever return
-/// stale sections if a builder were reused. The pipeline therefore holds no
-/// mutable cache state.
+/// Cross-build reuse of the stable prefix is provided by the cached two-part
+/// split (`PromptBuilder::build_system_prompt_cached_with_mode`), which emits
+/// the Stable layers as one cacheable [`SystemPromptPart`] and the Dynamic
+/// layers as a marker-free tail — not by an internal name-keyed cache. A fresh
+/// builder is constructed per prompt build, so an in-pipeline cache never
+/// served a cross-call hit and could only ever return stale sections if a
+/// builder were reused. The pipeline therefore holds no mutable cache state.
 pub struct PromptPipeline {
     layers: Vec<Box<dyn PromptLayer>>,
 }
@@ -87,96 +85,6 @@ impl PromptPipeline {
         let mut output = String::with_capacity(16384);
         for layer in &self.layers {
             if layer.paths().contains(&path) && layer.supports_mode(mode) {
-                layer.inject(&mut output, input);
-            }
-        }
-        output
-    }
-
-    /// Assemble system prompt with mode filtering and budget enforcement.
-    ///
-    /// Combines path matching, mode filtering, and total-budget enforcement
-    /// into a single call.  Returns a [`PromptResult`] that includes
-    /// truncation statistics when the assembled prompt exceeds the budget.
-    pub fn assemble(
-        &self,
-        path: AssemblyPath,
-        input: &LayerInput,
-        mode: PromptMode,
-        budget: &TokenBudget,
-    ) -> PromptResult {
-        // 1. Collect sections from matching layers
-        let mut sections: Vec<(u32, &str, String)> = Vec::new();
-        for layer in &self.layers {
-            if layer.paths().contains(&path) && layer.supports_mode(mode) {
-                let mut section = String::new();
-                layer.inject(&mut section, input);
-                if !section.is_empty() {
-                    sections.push((layer.priority(), layer.name(), section));
-                }
-            }
-        }
-
-        // 2. Check total size. Budget is in *characters* (`max_total_chars`),
-        //    so measure characters — a 3-byte CJK glyph counts as one unit,
-        //    matching the char-accurate truncation in `prompt_budget`. (ASCII
-        //    is byte==char, so this is identical for English-only prompts.)
-        let total: usize = sections.iter().map(|(_, _, c)| c.chars().count()).sum();
-        if total <= budget.max_total_chars {
-            let prompt = sections
-                .iter()
-                .map(|(_, _, c)| c.as_str())
-                .collect::<Vec<_>>()
-                .join("");
-            return PromptResult {
-                prompt,
-                truncation_stats: vec![],
-                mode,
-            };
-        }
-
-        // 3. Enforce budget — never trim the foundational layers. Each entry
-        //    maps to a real registered layer (see `default_layers`): 50 soul,
-        //    55 agent_role, 60 curated_memory, 75 profile, 100 role, 500 tools,
-        //    600 security. A phantom entry here protects nothing and misleads the
-        //    next reader: `1200` was one (no layer ever had that priority), and
-        //    `501` became one when `HydratedToolsLayer` was deleted.
-        let refs: Vec<(u32, &str, &str)> = sections
-            .iter()
-            .map(|(p, n, c)| (*p, *n, c.as_str()))
-            .collect();
-        let protected = &[50u32, 55, 60, 75, 100, 500, 600];
-        let (prompt, stats) = enforce_budget(&refs, budget.max_total_chars, protected);
-
-        PromptResult {
-            prompt,
-            truncation_stats: stats,
-            mode,
-        }
-    }
-
-    /// Execute only stable layers for the given path and input.
-    ///
-    /// Returns the assembled string from layers whose
-    /// [`stability()`](PromptLayer::stability) is [`LayerStability::Stable`].
-    pub fn execute_stable_only(&self, path: AssemblyPath, input: &LayerInput) -> String {
-        let mut output = String::with_capacity(16384);
-        for layer in &self.layers {
-            if layer.paths().contains(&path) && layer.stability() == LayerStability::Stable {
-                layer.inject(&mut output, input);
-            }
-        }
-        output
-    }
-
-    /// Execute only dynamic layers for the given path and input.
-    ///
-    /// Returns the assembled string from layers whose
-    /// [`stability()`](PromptLayer::stability) is [`LayerStability::Dynamic`].
-    pub fn execute_dynamic_only(&self, path: AssemblyPath, input: &LayerInput) -> String {
-        let mut output = String::with_capacity(4096);
-        for layer in &self.layers {
-            if layer.paths().contains(&path) && layer.stability() == LayerStability::Dynamic {
                 layer.inject(&mut output, input);
             }
         }
@@ -284,7 +192,6 @@ impl PromptPipeline {
             Box::new(AgentRoleLayer),
             Box::new(CuratedMemoryLayer),
             Box::new(StrategyLayer),
-            Box::new(InboundContextLayer),
             Box::new(ChainContextLayer),
             Box::new(McpInstructionsLayer),
             Box::new(VoiceModeLayer),
@@ -328,7 +235,6 @@ impl PromptPipeline {
             Box::new(StandingGoalLayer),
             Box::new(ExecutionPlanLayer),
             Box::new(StrategyPointerLayer),
-            Box::new(SessionResumeLayer),
             Box::new(LanguageLayer),
         ])
     }
@@ -473,7 +379,12 @@ mod tests {
         // callers, and SkillModeLayer's gate was never true outside tests (it
         // also mandated a legacy JSON tool envelope contradicting the native
         // tool_use contract we actually ship).
-        assert_eq!(pipeline.layer_count(), 42);
+        // → 40: InboundContextLayer and SessionResumeLayer deleted — both were
+        // registered but their `LayerInput` fields (inbound / session_snapshot)
+        // were never threaded on any production path, so they injected nothing
+        // every run. (Session resume actually reaches the model via the memory
+        // assembler's recall message, not the system prompt.)
+        assert_eq!(pipeline.layer_count(), 40);
     }
 
     #[test]
@@ -521,7 +432,6 @@ mod mode_tests {
             "runtime_context",
             "environment",
             "runtime_capabilities",
-            "poe_success_criteria",
             "protocol_tokens",
             "heartbeat",
             "operational_guidelines",
@@ -533,12 +443,10 @@ mod mode_tests {
             "mcp_instructions",
             "agent_catalog",
             "chain_context",
-            "session_resume",
             "special_actions",
             "multi_step_conduct",
             "guidelines",
             "thinking_guidance",
-            "skill_mode",
         ];
         for layer in &pipeline.layers {
             if excluded_in_compact.contains(&layer.name()) {
@@ -564,13 +472,7 @@ mod mode_tests {
         // longer registered). `curated_memory` added to align with reality —
         // CuratedMemoryLayer (commit a89af2844) inherits the default
         // `supports_mode = true`, so it implicitly participates in Minimal.
-        let included_in_minimal = [
-            "soul",
-            "curated_memory",
-            "tools",
-            "hydrated_tools",
-            "language",
-        ];
+        let included_in_minimal = ["soul", "curated_memory", "tools", "language"];
         for layer in &pipeline.layers {
             if included_in_minimal.contains(&layer.name()) {
                 assert!(
@@ -619,132 +521,11 @@ mod mode_tests {
 }
 
 #[cfg(test)]
-mod budget_tests {
-    use super::*;
-    use crate::thinker::prompt_budget::TokenBudget;
-    use crate::thinker::prompt_builder::PromptConfig;
-    use crate::thinker::prompt_mode::PromptMode;
-
-    #[test]
-    fn assemble_with_budget_trims_when_over() {
-        let pipeline = PromptPipeline::default_layers();
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let input = LayerInput::basic(&config, &tools);
-
-        // First, get the full prompt size so we know what budget to set
-        let full_result = pipeline.assemble(
-            AssemblyPath::Basic,
-            &input,
-            PromptMode::Full,
-            &TokenBudget {
-                max_total_chars: 500_000,
-                ..Default::default()
-            },
-        );
-        let full_len = full_result.prompt.len();
-
-        // Budget smaller than full output, but large enough to keep protected layers
-        let budget = TokenBudget {
-            max_total_chars: full_len / 2,
-            ..Default::default()
-        };
-
-        let result = pipeline.assemble(AssemblyPath::Basic, &input, PromptMode::Full, &budget);
-        // Some sections should have been removed
-        assert!(
-            !result.truncation_stats.is_empty(),
-            "Should have truncation stats"
-        );
-        // Prompt should be smaller than full
-        assert!(
-            result.prompt.len() < full_len,
-            "Trimmed prompt ({}) should be smaller than full ({})",
-            result.prompt.len(),
-            full_len
-        );
-    }
-
-    #[test]
-    fn assemble_under_budget_no_truncation() {
-        let pipeline = PromptPipeline::default_layers();
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let input = LayerInput::basic(&config, &tools);
-
-        // Large budget — nothing should be trimmed
-        let budget = TokenBudget {
-            max_total_chars: 500_000,
-            ..Default::default()
-        };
-
-        let result = pipeline.assemble(AssemblyPath::Basic, &input, PromptMode::Full, &budget);
-        assert!(
-            result.truncation_stats.is_empty(),
-            "Should have no truncation stats"
-        );
-        assert_eq!(result.mode, PromptMode::Full);
-    }
-
-    #[test]
-    fn full_pipeline_mode_and_budget_integration() {
-        let pipeline = PromptPipeline::default_layers();
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let budget = TokenBudget::default();
-
-        let input_full = LayerInput::basic(&config, &tools).with_mode(PromptMode::Full);
-        let input_compact = LayerInput::basic(&config, &tools).with_mode(PromptMode::Compact);
-        let input_minimal = LayerInput::basic(&config, &tools).with_mode(PromptMode::Minimal);
-
-        let full = pipeline.assemble(AssemblyPath::Basic, &input_full, PromptMode::Full, &budget);
-        let compact = pipeline.assemble(
-            AssemblyPath::Basic,
-            &input_compact,
-            PromptMode::Compact,
-            &budget,
-        );
-        let minimal = pipeline.assemble(
-            AssemblyPath::Basic,
-            &input_minimal,
-            PromptMode::Minimal,
-            &budget,
-        );
-
-        // Full > Compact > Minimal
-        assert!(
-            full.prompt.len() > compact.prompt.len(),
-            "Full ({}) > Compact ({})",
-            full.prompt.len(),
-            compact.prompt.len()
-        );
-        assert!(
-            compact.prompt.len() > minimal.prompt.len(),
-            "Compact ({}) > Minimal ({})",
-            compact.prompt.len(),
-            minimal.prompt.len()
-        );
-
-        // All should have no truncation (default budget is 80K)
-        assert!(full.truncation_stats.is_empty());
-        assert!(compact.truncation_stats.is_empty());
-        assert!(minimal.truncation_stats.is_empty());
-
-        // Modes are correctly recorded
-        assert_eq!(full.mode, PromptMode::Full);
-        assert_eq!(compact.mode, PromptMode::Compact);
-        assert_eq!(minimal.mode, PromptMode::Minimal);
-
-        // Minimal should still have content (response format at minimum)
-        assert!(!minimal.prompt.is_empty());
-    }
-}
-
-#[cfg(test)]
 mod stability_tests {
     use super::*;
     use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::prompt_layer::LayerStability;
+    use crate::thinker::prompt_mode::PromptMode;
 
     #[test]
     fn stable_layers_come_before_dynamic() {
@@ -786,13 +567,11 @@ mod stability_tests {
             .map(|(_, n, _)| n)
             .collect();
 
-        assert!(dynamic_names.contains(&"inbound_context"));
         assert!(dynamic_names.contains(&"voice_mode"));
         assert!(dynamic_names.contains(&"runtime_context"));
         assert!(dynamic_names.contains(&"identity_files"));
         assert!(dynamic_names.contains(&"memory_protocol"));
         assert!(dynamic_names.contains(&"session_context_guide"));
-        assert!(dynamic_names.contains(&"session_resume"));
         assert!(dynamic_names.contains(&"mcp_instructions"));
         assert!(dynamic_names.contains(&"agent_catalog"));
         // Live tool health is per-request state. Classified Stable (by omission)
@@ -826,24 +605,34 @@ mod stability_tests {
         // riding the CACHED prefix meant one MCP probe flip rewrote that prefix
         // mid-session and invalidated the whole conversation's prompt cache. It
         // is per-request state and now sits in the per-request zone.
+        // → 15: InboundContextLayer (1700) and SessionResumeLayer (1760), both
+        // Dynamic, were deleted as dead injection surfaces (their LayerInput
+        // fields were never threaded in production).
         // Every name above is asserted individually; the count pins the set.
         assert_eq!(
             dynamic_names.len(),
-            17,
-            "Exactly 17 dynamic layers expected"
+            15,
+            "Exactly 15 dynamic layers expected"
         );
     }
 
     #[test]
-    fn execute_stable_only_excludes_dynamic() {
+    fn stable_plus_dynamic_reconstructs_full() {
+        // The stable/dynamic split is the prompt-cache breakpoint: the two
+        // halves must concatenate back to the full assembly with no overlap or
+        // gap. Asserted on the LIVE `_with_mode` methods that the cached
+        // production path (`build_system_prompt_cached_with_mode`) actually
+        // uses.
         let pipeline = PromptPipeline::default_layers();
         let config = crate::thinker::prompt_builder::PromptConfig::default();
         let tools = vec![];
         let input = LayerInput::basic(&config, &tools);
 
-        let stable = pipeline.execute_stable_only(AssemblyPath::Basic, &input);
-        let dynamic = pipeline.execute_dynamic_only(AssemblyPath::Basic, &input);
-        let full = pipeline.execute(AssemblyPath::Basic, &input);
+        let stable =
+            pipeline.execute_stable_with_mode(AssemblyPath::Basic, &input, PromptMode::Full);
+        let dynamic =
+            pipeline.execute_dynamic_with_mode(AssemblyPath::Basic, &input, PromptMode::Full);
+        let full = pipeline.execute_with_mode(AssemblyPath::Basic, &input, PromptMode::Full);
 
         // stable + dynamic should reconstruct the full output
         let combined = format!("{}{}", stable, dynamic);
