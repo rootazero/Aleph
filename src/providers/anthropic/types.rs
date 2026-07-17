@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::thinker::cache::CacheControl;
+use crate::providers::message::CacheControl;
 
 /// Request body for Claude Messages API
 #[derive(Debug, Serialize)]
@@ -80,7 +80,7 @@ impl SystemBlock {
         Self {
             block_type: "text".to_string(),
             text: content.into(),
-            cache_control: Some(CacheControl::ephemeral()),
+            cache_control: Some(CacheControl::Ephemeral { ttl: None }),
         }
     }
 }
@@ -350,7 +350,7 @@ mod tests {
         let block = SystemBlock {
             block_type: "text".into(),
             text: "You are a helpful assistant.".into(),
-            cache_control: Some(CacheControl::ephemeral()),
+            cache_control: Some(CacheControl::Ephemeral { ttl: None }),
         };
         let json = serde_json::to_string(&block).unwrap();
         assert!(json.contains("cache_control"));

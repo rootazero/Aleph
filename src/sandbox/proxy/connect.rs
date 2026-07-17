@@ -182,7 +182,7 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
     let mut inbound = rd
         .into_inner()
         .reunite(wr)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{e}")))?;
+        .map_err(|e| std::io::Error::other(format!("{e}")))?;
     let mut upstream = upstream;
     let _ = tokio::io::copy_bidirectional(&mut inbound, &mut upstream).await;
     Ok(())

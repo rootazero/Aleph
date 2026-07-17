@@ -271,7 +271,7 @@ impl HarnessRunner for AgentHarnessRunner {
                     crate::orchestrator::flow_spec::BrainRef::Strict {
                         model: Some(m),
                         provider: p,
-                    // rust-doctor-disable-next-line excessive-clone
+                        // rust-doctor-disable-next-line excessive-clone
                     } => (m.clone(), Some(p.clone())),
                     _ => ("(dynamic)".to_string(), None),
                 },
@@ -402,8 +402,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 // isolated, while the FIRST before_turn — carrying the full
                 // accumulated history, where heuristic drift is largest — no
                 // longer starts uncalibrated.
-                if let Some(seed) =
-                    calibration_seed_for_model(&CALIBRATION_CARRYOVER, &gauge_model)
+                if let Some(seed) = calibration_seed_for_model(&CALIBRATION_CARRYOVER, &gauge_model)
                 {
                     budget_inner.seed_calibration(seed);
                 }
@@ -415,7 +414,20 @@ impl HarnessRunner for AgentHarnessRunner {
                         fresh_tail: cfg.fresh_tail_count,
                         ..CompactorConfig::default()
                     },
-                );
+                )
+                // Cross-run fingerprint-cache carry-over (session-keyed twin
+                // of CALIBRATION_CARRYOVER above): the compactor is per-run,
+                // but its summary fingerprint cache is only worth anything
+                // ACROSS runs — without the carry-over every new user message
+                // re-paid the side-channel summarization call and re-keyed
+                // the provider prompt cache with freshly-worded summary text.
+                // Hash-validated on read, so a history rewritten between runs
+                // (post-turn compression, splits) simply misses.
+                .with_cache_carryover(session_id.to_key_string())
+                // Scope watchdog resets to this agent — same id the
+                // MeteringProvider records cache usage under, so reset and
+                // record hit the same CacheMonitor counter.
+                .with_monitor_agent(spec.agent.clone());
                 // Wire the zero-API-cost session-summary reuse path: the
                 // memory backend holding the d0/d1/d2 facts plus the owning
                 // agent id they were written under. The writes resolve the

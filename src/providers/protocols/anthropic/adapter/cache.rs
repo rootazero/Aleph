@@ -24,15 +24,18 @@ use crate::providers::message::CacheControl;
 pub(super) fn effective_cache_retention(config: &ProviderConfig, endpoint: &str) -> CacheRetention {
     match config.cache_retention {
         Some(CacheRetention::Long) if !endpoint.contains("api.anthropic.com") => {
-            // Keep the existing warning that surfaces long-TTL misuse on
-            // third-party hosts. Physical injection is blocked downstream
-            // by policy.capabilities.supports_cache_control, but the user
-            // signal that they explicitly asked for Long is still useful.
+            // Keep the existing warning that surfaces long-TTL use on
+            // third-party hosts. Marker injection still depends on the
+            // endpoint's policy.capabilities.supports_cache_control (enabled
+            // for Bedrock/Azure family overlays, off for unknown proxies),
+            // and `build_request` downgrades the 1h TTL itself to the default
+            // 5m marker off the official endpoint (third-party hosts reject
+            // the Anthropic-1P `ttl` key under strict schema validation).
             tracing::warn!(
                 endpoint = %endpoint,
                 "cache_retention = long on non-official Anthropic host; \
-                 cache_control will not be injected because the endpoint \
-                 capability is disabled."
+                 the 1h TTL is downgraded to the default 5-minute marker \
+                 there (the extended-TTL beta is Anthropic-1P only)."
             );
             CacheRetention::Long
         }

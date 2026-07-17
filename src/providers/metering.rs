@@ -61,13 +61,18 @@ impl AiProvider for MeteringProvider {
                     thinking_tokens = ?usage.thinking_tokens,
                     "LLM call completed"
                 );
-                // Cache-first observability: feed cache_read_tokens into the
-                // process-wide `CacheMonitor`. Three consecutive misses with
-                // more than three total calls triggers a warn — surfaces
-                // accidental stable-prefix changes that would otherwise only
-                // show up on the monthly bill.
+                // Cache-first observability: feed cache token counts into the
+                // process-wide `CacheMonitor`, keyed by agent id. Three
+                // consecutive misses (counted only once the agent has seen
+                // real cache activity) with more than three total calls
+                // triggers a warn — surfaces accidental stable-prefix changes
+                // that would otherwise only show up on the monthly bill.
                 crate::thinker::prompt_builder::cache_monitor::global_cache_monitor()
-                    .record_cache_usage(usage.cache_read_tokens);
+                    .record_cache_usage(
+                        &agent_id,
+                        usage.cache_read_tokens,
+                        usage.cache_creation_tokens,
+                    );
                 if let Some(sink) = sink {
                     sink.on_trace(&LoopTraceEvent::ProviderUsage {
                         agent_id,

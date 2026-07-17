@@ -44,14 +44,14 @@ pub struct LayerSize {
 /// include the requested path, appending each layer's output to a
 /// single `String`.
 ///
-/// Cross-build reuse of the stable prefix is provided by the explicit,
-/// input-keyed snapshot path ([`execute_stable_only`](Self::execute_stable_only)
-/// / `PromptBuilder::capture_snapshot`) and the cached two-part split
-/// (`PromptBuilder::build_system_prompt_cached_with_mode`), not by an internal
-/// name-keyed cache — a fresh builder is constructed per prompt build, so an
-/// in-pipeline cache never served a cross-call hit and could only ever return
-/// stale sections if a builder were reused. The pipeline therefore holds no
-/// mutable cache state.
+/// Cross-build reuse of the stable prefix is provided by the cached two-part
+/// split (`PromptBuilder::build_system_prompt_cached_with_mode`), not by an
+/// internal name-keyed cache — a fresh builder is constructed per prompt
+/// build, so an in-pipeline cache never served a cross-call hit and could
+/// only ever return stale sections if a builder were reused. The pipeline
+/// therefore holds no mutable cache state. (A `PromptSnapshot` stable-prefix
+/// fork path used to exist alongside it; it never gained a production
+/// consumer and was removed per YAGNI.)
 pub struct PromptPipeline {
     layers: Vec<Box<dyn PromptLayer>>,
 }
@@ -153,34 +153,6 @@ impl PromptPipeline {
             truncation_stats: stats,
             mode,
         }
-    }
-
-    /// Execute only stable layers for the given path and input.
-    ///
-    /// Returns the assembled string from layers whose
-    /// [`stability()`](PromptLayer::stability) is [`LayerStability::Stable`].
-    pub fn execute_stable_only(&self, path: AssemblyPath, input: &LayerInput) -> String {
-        let mut output = String::with_capacity(16384);
-        for layer in &self.layers {
-            if layer.paths().contains(&path) && layer.stability() == LayerStability::Stable {
-                layer.inject(&mut output, input);
-            }
-        }
-        output
-    }
-
-    /// Execute only dynamic layers for the given path and input.
-    ///
-    /// Returns the assembled string from layers whose
-    /// [`stability()`](PromptLayer::stability) is [`LayerStability::Dynamic`].
-    pub fn execute_dynamic_only(&self, path: AssemblyPath, input: &LayerInput) -> String {
-        let mut output = String::with_capacity(4096);
-        for layer in &self.layers {
-            if layer.paths().contains(&path) && layer.stability() == LayerStability::Dynamic {
-                layer.inject(&mut output, input);
-            }
-        }
-        output
     }
 
     /// Execute only stable layers with mode filtering.
@@ -835,14 +807,19 @@ mod stability_tests {
     }
 
     #[test]
-    fn execute_stable_only_excludes_dynamic() {
+    fn stable_plus_dynamic_reconstructs_full_output() {
+        // The production cached path splits assembly into a stable prefix and
+        // a dynamic suffix; together they must reproduce the single-pass
+        // assembly byte-for-byte (Full mode == no layers shed).
         let pipeline = PromptPipeline::default_layers();
         let config = crate::thinker::prompt_builder::PromptConfig::default();
         let tools = vec![];
         let input = LayerInput::basic(&config, &tools);
 
-        let stable = pipeline.execute_stable_only(AssemblyPath::Basic, &input);
-        let dynamic = pipeline.execute_dynamic_only(AssemblyPath::Basic, &input);
+        let stable =
+            pipeline.execute_stable_with_mode(AssemblyPath::Basic, &input, PromptMode::Full);
+        let dynamic =
+            pipeline.execute_dynamic_with_mode(AssemblyPath::Basic, &input, PromptMode::Full);
         let full = pipeline.execute(AssemblyPath::Basic, &input);
 
         // stable + dynamic should reconstruct the full output

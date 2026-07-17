@@ -72,8 +72,11 @@ impl AnthropicProtocol {
                                 blocks.push(ContentBlock::Text {
                                     // rust-doctor-disable-next-line excessive-clone
                                     text: text.clone(),
-                                    cache_control: cache_control
-                                        .map(|_| crate::thinker::cache::CacheControl::ephemeral()),
+                                    // Pass the marker through verbatim — the unified
+                                    // and wire types are the same struct now, so a
+                                    // pre-placed 1h TTL is no longer silently
+                                    // downgraded to the 5m default.
+                                    cache_control: *cache_control,
                                 });
                             }
                             crate::providers::message::ContentBlock::Image { data, mime_type } => {
@@ -149,9 +152,9 @@ impl AnthropicProtocol {
                                     blocks.push(ContentBlock::Text {
                                         // rust-doctor-disable-next-line excessive-clone
                                         text: text.clone(),
-                                        cache_control: cache_control.map(|_| {
-                                            crate::thinker::cache::CacheControl::ephemeral()
-                                        }),
+                                        // Verbatim passthrough — TTL preserved (see the
+                                        // user-branch comment above).
+                                        cache_control: *cache_control,
                                     });
                                 }
                             }

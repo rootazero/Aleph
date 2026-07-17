@@ -26,9 +26,11 @@ pub struct ProviderConfigEntry {
 /// Prompt cache retention policy for streaming protocols that support it.
 ///
 /// - `Off`: never inject `cache_control` breakpoints.
-/// - `Short` (default): 5-minute ephemeral cache.
-/// - `Long`: 1-hour ephemeral cache; Anthropic-only. Triggers the
-///   `anthropic-beta: extended-cache-ttl-2025-04-11` header.
+/// - `Short` (default): provider default retention (Anthropic: 5-minute
+///   ephemeral cache).
+/// - `Long`: extended retention. Anthropic → 1-hour ephemeral cache plus the
+///   `anthropic-beta: extended-cache-ttl-2025-04-11` header; official
+///   `OpenAI` → `prompt_cache_retention: "24h"` on Chat/Responses requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum CacheRetention {

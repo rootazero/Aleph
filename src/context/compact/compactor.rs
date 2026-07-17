@@ -107,6 +107,61 @@ const CACHE_EXTEND_MIN_TOKENS: usize = 4096;
 /// [`ContextCompactor::reapply_cached`].
 const SUMMARIZER_INPUT_TOKEN_BUDGET: usize = 48_000;
 
+/// Bound on cross-run carry-over slots. Sessions beyond the cap evict the
+/// least-recently-WRITTEN entry (every `carryover_put` moves its key to the
+/// back) — a long-lived interactive session that keeps compacting stays hot
+/// even while daemon/cron fires churn one-shot session keys through the
+/// front. A linear-scan `Vec` is fine at this size.
+const CARRYOVER_MAX_SESSIONS: usize = 16;
+
+/// Cross-run fingerprint-cache carry-over, keyed by session key.
+///
+/// The compactor is constructed fresh per run (`runner_impl`), so without
+/// this slot the fingerprint cache dies at every run boundary and a long
+/// high-pressure conversation re-pays the side-channel summarization call —
+/// with freshly-worded summary text that re-keys the provider prompt cache —
+/// at the start of every run. Same shape as the runner's
+/// `CALIBRATION_CARRYOVER`: process-wide because the bridge is a boot-time
+/// singleton; never persisted to disk; safe because every read is
+/// hash-validated against the rebuilt history before reuse (a stale entry
+/// misses and is purged).
+static COMPACTION_CARRYOVER: Mutex<Vec<(String, CompactionCache)>> = Mutex::new(Vec::new());
+
+/// Read the carried-over cache entry for `key`, if present. Slot-parametric
+/// so tests can exercise eviction/purge without touching the process-global.
+fn carryover_get(
+    slot: &Mutex<Vec<(String, CompactionCache)>>,
+    key: &str,
+) -> Option<CompactionCache> {
+    let guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, entry)| entry.clone())
+}
+
+/// Store `entry` under `key`. Re-writing an existing key moves it to the
+/// back (LRU-on-write); when the slot is full the least-recently-written
+/// entry at the front is evicted. FIFO-by-first-insertion would evict the
+/// feature's primary beneficiary first: the long-lived session inserted
+/// earliest and updated most often.
+fn carryover_put(slot: &Mutex<Vec<(String, CompactionCache)>>, key: &str, entry: CompactionCache) {
+    let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(pos) = guard.iter().position(|(k, _)| k == key) {
+        guard.remove(pos);
+    } else if guard.len() >= CARRYOVER_MAX_SESSIONS {
+        guard.remove(0);
+    }
+    guard.push((key.to_string(), entry));
+}
+
+/// Drop the entry for `key` (no-op when absent) — called when a hash
+/// validation fails so the next run does not re-seed a dead entry.
+fn carryover_remove(slot: &Mutex<Vec<(String, CompactionCache)>>, key: &str) {
+    let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+    guard.retain(|(k, _)| k != key);
+}
+
 /// LLM-based context compactor.
 ///
 /// Compresses older conversation history into a concise summary, keeping
@@ -136,6 +191,22 @@ pub struct ContextCompactor {
     /// preflight passes pruning differently) is a miss that falls through to
     /// a full recompaction.
     cache: Mutex<Option<CompactionCache>>,
+    /// Agent id for scoping cache-watchdog resets (`CacheMonitor` keys its
+    /// consecutive-miss counters per agent; a compaction here must reset only
+    /// THIS agent's streak, not mute every other agent's watchdog). `None`
+    /// (bare `new()`) falls back to the monitor's global reset.
+    monitor_agent: Option<String>,
+    /// Cross-run carry-over key (the session key). The compactor itself is
+    /// constructed fresh per run, which used to discard the fingerprint cache
+    /// at every run boundary — a long high-pressure conversation then paid a
+    /// fresh summarization call at the start of every run, and the re-worded
+    /// summary re-keyed the provider's message-prefix cache (the exact thrash
+    /// the cache exists to prevent). When set, the cache seeds from and
+    /// writes through to a process-wide per-session slot (same shape as the
+    /// runner's `CALIBRATION_CARRYOVER`). Safe by construction: the entry is
+    /// hash-validated against the rebuilt history each turn, so a stale
+    /// carry-over simply misses and falls through to a full recompaction.
+    carryover_key: Option<String>,
 }
 
 impl ContextCompactor {
@@ -147,7 +218,34 @@ impl ContextCompactor {
             summary_reuse: None,
             cheap_provider: None,
             cache: Mutex::new(None),
+            monitor_agent: None,
+            carryover_key: None,
         }
+    }
+
+    /// Scope cache-watchdog compaction resets to `agent_id` (see
+    /// [`CacheMonitor::notify_compaction`]).
+    ///
+    /// [`CacheMonitor::notify_compaction`]: crate::thinker::prompt_builder::cache_monitor::CacheMonitor::notify_compaction
+    pub fn with_monitor_agent(mut self, agent_id: impl Into<String>) -> Self {
+        self.monitor_agent = Some(agent_id.into());
+        self
+    }
+
+    /// Enable cross-run fingerprint-cache carry-over keyed by `session_key`.
+    ///
+    /// Seeds the fingerprint cache from the process-wide per-session slot
+    /// (populated by the previous run's compactions) and write-through-updates
+    /// the slot on every `store_cache`. See the `carryover_key` field docs for
+    /// why this is safe (hash-validated) and what it saves (one summarization
+    /// call + one provider prefix re-key per run boundary).
+    pub fn with_cache_carryover(mut self, session_key: impl Into<String>) -> Self {
+        let key = session_key.into();
+        if let Some(entry) = carryover_get(&COMPACTION_CARRYOVER, &key) {
+            *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(entry);
+        }
+        self.carryover_key = Some(key);
+        self
     }
 
     /// Enable the zero-API-cost session-summary reuse path. `backend` holds the
@@ -203,11 +301,19 @@ impl ContextCompactor {
         // A compaction that actually rewrote the message list legitimately
         // breaks the provider prompt cache. Tell the process-wide monitor so
         // its consecutive-miss warning doesn't fire spuriously on the next
-        // few (expectedly cold) calls. Skipped outcomes leave messages
-        // untouched, so the cache expectation stands.
-        if !matches!(result.strategy_used, CompactStrategy::Skipped { .. }) {
+        // few (expectedly cold) calls. Two outcomes leave the provider-visible
+        // prefix byte-identical to the previous turn and must NOT reset the
+        // watchdog: `Skipped` (messages untouched) and `CacheReuse` (the SAME
+        // summary text re-spliced at the same coordinates — the steady state
+        // of a long high-pressure run, where a provider cache miss is exactly
+        // the stable-prefix bug the watchdog exists to catch; resetting on it
+        // would mute the warning for the entire steady state).
+        if !matches!(
+            result.strategy_used,
+            CompactStrategy::Skipped { .. } | CompactStrategy::CacheReuse
+        ) {
             crate::thinker::prompt_builder::cache_monitor::global_cache_monitor()
-                .notify_compaction();
+                .notify_compaction(self.monitor_agent.as_deref());
         }
         Ok(result)
     }
@@ -318,8 +424,12 @@ impl ContextCompactor {
             }
             // Stale fingerprint (prefix changed under a preflight pass, or the
             // window shrank): drop the entry and fall through to a full
-            // recompaction, which refreshes the cache.
+            // recompaction, which refreshes the cache. Purge the carry-over
+            // slot too so the next run does not re-seed the same dead entry.
             *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            if let Some(key) = self.carryover_key.as_deref() {
+                carryover_remove(&COMPACTION_CARRYOVER, key);
+            }
         }
 
         // Fingerprint of the window in rebuilt coordinates, captured before
@@ -492,12 +602,18 @@ impl ContextCompactor {
     /// Store a fresh cache entry covering `[start, end)` of the rebuilt
     /// message list. `summary` is the full `[Context Summary]…` text.
     fn store_cache(&self, start: usize, end: usize, hash: u64, summary: String) {
-        *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(CompactionCache {
+        let entry = CompactionCache {
             start,
             end,
             hash,
             summary,
-        });
+        };
+        // Write through to the cross-run carry-over slot so the next run on
+        // this session seeds from it instead of recompacting from scratch.
+        if let Some(key) = self.carryover_key.as_deref() {
+            carryover_put(&COMPACTION_CARRYOVER, key, entry.clone());
+        }
+        *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(entry);
     }
 
     /// Reapply a validated cache entry to the rebuilt message list, extending
@@ -1038,6 +1154,124 @@ mod tests {
             "the preserved instruction must survive the cache-reuse round too"
         );
         assert!(summary_text(&turn2).contains("S1"));
+    }
+
+    #[tokio::test]
+    async fn carryover_seeds_fresh_compactor_across_runs() {
+        // The compactor is constructed fresh per run; the carry-over slot must
+        // hand the fingerprint cache across that boundary so run 2 reuses the
+        // summary with zero LLM calls (and byte-identical summary text — the
+        // provider prompt cache survives the run boundary).
+        let key = "carryover-test-run-boundary";
+        let provider = Arc::new(CapturingProvider::new(
+            "<summary>\n## Primary Request\nS1\n</summary>",
+        ));
+        let base = make_messages(12);
+
+        // Run 1: full LLM compaction, write-through to the slot.
+        let c1 = ContextCompactor::new(provider.clone(), CompactorConfig::default())
+            .with_cache_carryover(key);
+        let mut turn1 = base.clone();
+        c1.compact(&mut turn1, 6, None).await.unwrap();
+        assert_eq!(provider.call_count(), 1);
+
+        // Run 2: NEW compactor instance (run boundary) — seeds from the slot.
+        let c2 = ContextCompactor::new(provider.clone(), CompactorConfig::default())
+            .with_cache_carryover(key);
+        let mut turn2 = base.clone();
+        turn2.push(UnifiedMessage::assistant("new assistant turn"));
+        turn2.push(UnifiedMessage::user("new user turn"));
+        let r2 = c2.compact(&mut turn2, 6, None).await.unwrap();
+        assert_eq!(r2.strategy_used, CompactStrategy::CacheReuse);
+        assert_eq!(
+            provider.call_count(),
+            1,
+            "run-2 reuse must not pay a second summarization call"
+        );
+        carryover_remove(&COMPACTION_CARRYOVER, key);
+    }
+
+    #[tokio::test]
+    async fn carryover_stale_entry_misses_and_recompacts() {
+        // A history rewritten between runs (post-turn compression, splits)
+        // must hash-miss the carried entry and fall through to a full
+        // recompaction — the carry-over can never replay a summary over
+        // history it does not cover.
+        let key = "carryover-test-stale-purge";
+        let provider = Arc::new(CapturingProvider::new(
+            "<summary>\n## Primary Request\nS1\n</summary>",
+        ));
+        let c1 = ContextCompactor::new(provider.clone(), CompactorConfig::default())
+            .with_cache_carryover(key);
+        let mut turn1 = make_messages(12);
+        c1.compact(&mut turn1, 6, None).await.unwrap();
+        assert!(carryover_get(&COMPACTION_CARRYOVER, key).is_some());
+
+        let c2 = ContextCompactor::new(provider.clone(), CompactorConfig::default())
+            .with_cache_carryover(key);
+        let mut rewritten = make_messages(12);
+        rewritten[2] = UnifiedMessage::assistant("history rewritten between runs");
+        let r2 = c2.compact(&mut rewritten, 6, None).await.unwrap();
+        assert_eq!(r2.strategy_used, CompactStrategy::LlmSummary);
+        assert_eq!(
+            provider.call_count(),
+            2,
+            "stale carry-over must recompact, not replay"
+        );
+        carryover_remove(&COMPACTION_CARRYOVER, key);
+    }
+
+    #[test]
+    fn carryover_slot_bounded_updatable_and_removable() {
+        let slot: Mutex<Vec<(String, CompactionCache)>> = Mutex::new(Vec::new());
+        let entry = |h: u64| CompactionCache {
+            start: 0,
+            end: 2,
+            hash: h,
+            summary: "s".into(),
+        };
+        for i in 0..(CARRYOVER_MAX_SESSIONS + 3) {
+            carryover_put(&slot, &format!("k{i}"), entry(i as u64));
+        }
+        assert!(slot.lock().unwrap().len() <= CARRYOVER_MAX_SESSIONS);
+        assert!(
+            carryover_get(&slot, "k0").is_none(),
+            "least-recently-written entry evicted at cap"
+        );
+        carryover_put(&slot, "k5", entry(999));
+        assert_eq!(carryover_get(&slot, "k5").expect("updated entry").hash, 999);
+        carryover_remove(&slot, "k5");
+        assert!(carryover_get(&slot, "k5").is_none());
+    }
+
+    #[test]
+    fn carryover_rewrite_refreshes_recency_against_eviction() {
+        // LRU-on-write: a hot session that keeps compacting must survive a
+        // churn of one-shot daemon/cron session keys — FIFO-by-first-insert
+        // would evict the feature's primary beneficiary first.
+        let slot: Mutex<Vec<(String, CompactionCache)>> = Mutex::new(Vec::new());
+        let entry = |h: u64| CompactionCache {
+            start: 0,
+            end: 2,
+            hash: h,
+            summary: "s".into(),
+        };
+        carryover_put(&slot, "hot-session", entry(1));
+        // Fill the slot with cold one-shots, re-writing the hot key mid-churn.
+        for i in 0..(CARRYOVER_MAX_SESSIONS - 1) {
+            carryover_put(&slot, &format!("cron-{i}"), entry(10 + i as u64));
+        }
+        carryover_put(&slot, "hot-session", entry(2)); // refreshes recency
+        for i in 0..(CARRYOVER_MAX_SESSIONS - 1) {
+            carryover_put(&slot, &format!("cron-late-{i}"), entry(100 + i as u64));
+        }
+        assert_eq!(
+            carryover_get(&slot, "hot-session")
+                .expect("hot key survives")
+                .hash,
+            2,
+            "re-written key must outlive older one-shot entries"
+        );
     }
 
     #[tokio::test]
@@ -1616,8 +1850,8 @@ mod tests {
             max_window: 8,
             ..CompactorConfig::default()
         };
-        let compactor = ContextCompactor::new(provider.clone(), config)
-            .with_summary_reuse(backend, "agent-x");
+        let compactor =
+            ContextCompactor::new(provider.clone(), config).with_summary_reuse(backend, "agent-x");
 
         let base = make_messages(16);
         let mut turn1 = base.clone();

@@ -49,12 +49,23 @@ fn mask_json_strings(masker: &SecretMasker, value: &mut serde_json::Value) -> bo
                 true
             }
         }
-        serde_json::Value::Array(items) => items
-            .iter_mut()
-            .fold(false, |acc, item| mask_json_strings(masker, item) || acc),
-        serde_json::Value::Object(map) => map
-            .values_mut()
-            .fold(false, |acc, item| mask_json_strings(masker, item) || acc),
+        // Plain loops on purpose: `.any(..)` (clippy's suggestion for the
+        // former fold) short-circuits on the first masked item and would
+        // leave every later secret unmasked. Masking must visit ALL items.
+        serde_json::Value::Array(items) => {
+            let mut changed = false;
+            for item in items.iter_mut() {
+                changed |= mask_json_strings(masker, item);
+            }
+            changed
+        }
+        serde_json::Value::Object(map) => {
+            let mut changed = false;
+            for item in map.values_mut() {
+                changed |= mask_json_strings(masker, item);
+            }
+            changed
+        }
         _ => false,
     }
 }

@@ -8,53 +8,28 @@ The context budget system manages token usage across agent turns using a three-t
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    TIER 3: Emergency                        │
-│            LLM summarization (AutocompactStage)            │
+│                    TIER 3: LLM Compactor                    │
+│      ContextCompactor (LLM summary + fingerprint cache)     │
 ├─────────────────────────────────────────────────────────────┤
-│                    TIER 2: Pre-flight                       │
-│    Microcompact → ContextCollapse → Autocompact pipeline    │
+│                 TIER 2: Pre-flight cheap passes             │
+│  file_op_supersede → tool_result_pruning → image_stripping  │
+│        → structured/ (content-type-aware reduction)         │
 ├─────────────────────────────────────────────────────────────┤
-│                    TIER 1: Inline                          │
-│           Per-tool result truncation (head+tail)            │
+│                    TIER 1: Inline                           │
+│   Per-tool result size limit + ToolResultStore overflow     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Tier 1: Inline Truncation
+## Tier 1: Inline Result Limiting
 
-Applied immediately after each tool execution.
-
-### ToolExecutionContext
-
-```rust
-pub struct ToolExecutionContext {
-    pub max_tool_result_tokens: usize,
-    pub truncate_to_tokens: usize,
-    pub truncation_policy: TruncationPolicy,
-}
-```
-
-### TruncationPolicy
-
-```rust
-pub enum TruncationPolicy {
-    HeadAndTail { keep_head_tokens: usize, keep_tail_tokens: usize },
-    HeadOnly { keep_tokens: usize },
-    TailOnly { keep_tokens: usize },
-}
-```
-
-### CascadePolicy
-
-Controls sibling tool behavior when one tool fails:
-
-```rust
-pub enum CascadePolicy {
-    /// Abort all sibling tools when one fails
-    AbortSiblings,
-    /// Run all tools regardless of failures
-    Isolated,
-}
-```
+Applied at tool-execution time, before anything reaches the history.
+Each tool declares an optional per-result size limit
+(`ToolDefinition.max_result_tokens`, falling back to the global default);
+oversized results are persisted whole to the `ToolResultStore` (on-disk +
+FTS-indexed via `ContentIndex`) and replaced in context by a
+`[Full output persisted]` marker that `ctx_search` can drill back into.
+See [AGENT_LOOP_TOOL_EXECUTION.md](./AGENT_LOOP_TOOL_EXECUTION.md) for the
+execution pipeline (grouping/cascade semantics live there, not here).
 
 ## Tier 2: Pre-flight Pipeline
 
@@ -62,13 +37,17 @@ Runs at the start of every Think turn — BEFORE the budget pressure check
 and BEFORE the LLM compactor — to proactively shrink context with cheap,
 LLM-free transforms.
 
-### Wiring (2026-05-20)
+### Wiring
 
 `src/harness/agent/think.rs::run_turn` step 2a invokes
 `HarnessDeps.preflight_pipeline.run(&mut messages, &pressure, fresh_tail)`
 on every turn when `[context_budget]` is configured. The pipeline is
-assembled in `src/orchestrator/harness_bridge.rs` and is `Some` whenever
-`context_compactor` is `Some` — same opt-in as the compactor itself.
+assembled in `src/orchestrator/harness_bridge/runner_impl.rs` and is `Some`
+whenever `context_compactor` is `Some` — same opt-in as the compactor
+itself. All stages share a single config-derived pressure gate
+(`PreflightPipeline::with_min_pressure_ratio(cfg.preventive_floor())`), act
+only outside the fresh tail, and a final token guard ensures no stage can
+ever *grow* the context.
 
 ### PreflightStage Trait
 
@@ -87,66 +66,72 @@ pub trait PreflightStage: Send + Sync {
 }
 ```
 
-### PreflightPipeline
-
-Runs stages in registration order, summing tokens freed:
-
-```rust
-pub struct PreflightPipeline {
-    stages: Vec<Box<dyn PreflightStage>>,
-}
-
-impl PreflightPipeline {
-    pub async fn run(
-        &self,
-        messages: &mut Vec<UnifiedMessage>,
-        pressure: &ContextPressure,
-        fresh_tail_count: usize,
-    ) -> usize;
-}
-```
-
 ### Cheap-Pass Stages (live)
 
 Located in `src/context/budget/cheap_passes/`:
 
-#### ToolResultPruningStage
-
-Replaces stale `ToolResult` content larger than 200 tokens with a one-line
-placeholder: `"[pruned tool_result: <tool_name>, ~N tokens]"`. Protects
-`fresh_tail_count` messages. Skips when the placeholder wouldn't save
-tokens. (Hermes-borrowed heuristic.)
-
-#### HistoricalImageStrippingStage
-
-Drops `ContentBlock::Image` blocks from every message preceding the newest
-image-bearing turn (and outside the fresh tail), replacing each with
-`"[image stripped from history]"`. ~1500 tokens saved per image.
-(Matches Anthropic pricing + hermes constant.)
+- **FileOpSupersedeStage** (`file_op_supersede.rs`) — a later *successful*
+  write to a path supersedes earlier reads of the same path (pairing by
+  `tool_call_id`, `is_error == false` required); the stale read is replaced
+  by a stub naming the superseding tool.
+- **ToolResultPruningStage** (`tool_result_pruning.rs`) — replaces stale
+  oversized `ToolResult` text with a one-line placeholder, **preserving
+  `ContentBlock::Image` blocks** (screenshots must not silently vanish;
+  image lifecycle belongs to the stripping stage below). Skips when the
+  placeholder wouldn't save tokens.
+- **HistoricalImageStrippingStage** (`image_stripping.rs`) — drops
+  `ContentBlock::Image` blocks from every message preceding the newest
+  image-bearing turn (outside the fresh tail), ~1500 tokens per image.
+- **structured/** — content-type-aware tool-result reduction (JSON `Value`
+  factorization etc.); routes by detected content shape, falls back to
+  first-line truncation when the structured form isn't smaller. See
+  FEATURE_LOCATOR §2.7.
 
 ## Tier 3: LLM Compactor
 
 `src/context/compact/compactor.rs::ContextCompactor::compact()` is invoked
-by `harness/agent/think.rs` step 2c when the budget directive is
-`CompactAndContinue`. Falls back to deterministic truncation on provider
-failure. The 5-section summary template (Primary Request / Key Decisions /
+by `harness/agent/think.rs` when the budget directive requires it (directive
+dispatch lives in `src/context/compact/directive.rs`; the harness only
+consumes the outcome). Falls back to deterministic truncation on provider
+failure — and when the compaction window carries a prior running summary,
+both fallback paths carry the summary **body** forward verbatim and
+first-line-truncate only the raw gap behind it (gutting the summary to its
+marker line would persist silent history loss through the fingerprint
+cache). The 5-section summary template (Primary Request / Key Decisions /
 Files & Code / Current State / Pending) is hermes-compatible.
 
-### Fingerprint cache (per-run)
+### Fingerprint cache (cross-run carry-over)
 
 The harness rebuilds the message list from the session log every turn, so an
 in-place compaction is discarded by the next rebuild. The compactor therefore
-keeps a per-run fingerprint cache (`CompactionCache { start, end, hash,
-summary }`, openteams compression-cache parity): when the previously covered
-range still hashes identically in the rebuilt list, the cached summary is
-reapplied with **zero API cost** (`CompactStrategy::CacheReuse`). Once the
-un-summarized gap behind the summary grows past 8 messages / ~4 K estimated
-tokens, one LLM merge over `[old summary + gap]` absorbs it (openclaw "merge
-prior summaries") and the cache cover widens monotonically. Any change inside
-the covered prefix (e.g. a preflight pass pruning differently) misses the hash
-and falls back to a full recompaction. Without the cache, a high-pressure run
-paid a fresh side-channel summarization call on every Think turn and the
-changing summary text thrashed the provider prompt cache.
+keeps a fingerprint cache (`CompactionCache { start, end, hash, summary }`,
+openteams compression-cache parity): when the previously covered range still
+hashes identically in the rebuilt list, the cached summary is reapplied with
+**zero API cost** (`CompactStrategy::CacheReuse`). Once the un-summarized gap
+behind the summary grows past 8 messages / ~4 K estimated tokens, one LLM
+merge folds the gap into the prior summary (fed explicitly as prior state —
+no re-summarizing, no paraphrase decay) and the cache cover widens
+monotonically. Any change inside the covered prefix (e.g. a preflight pass
+pruning differently) misses the hash and falls back to a full recompaction.
+
+Contract details (locked by tests, see FEATURE_LOCATOR §2.14/§2.15):
+
+- **Coordinates**: `store_cache` records `[window_start, window_end)` — the
+  exact hashed range. (Recording `cut_end` was a bug: any 48 K-budget window
+  clamp made every turn miss.)
+- **Cross-run carry-over** (`COMPACTION_CARRYOVER`, 2026-07-17): the
+  compactor instance is per-run, but the cache is seeded from / written
+  through to a process-wide per-session slot (bounded, insertion-order
+  eviction, purged on hash miss) — the session-keyed twin of
+  `CALIBRATION_CARRYOVER`. Without it every run boundary re-paid the
+  side-channel summarization call and the re-worded summary re-keyed the
+  provider's message-prefix cache. Hash validation makes stale carry-over
+  fail-safe: rewritten history between runs simply misses.
+- **Watchdog interplay**: `compact()` notifies the process-wide
+  `CacheMonitor` (so post-compaction provider-cache misses aren't flagged)
+  for every strategy EXCEPT `Skipped` and `CacheReuse` — a byte-identical
+  reapply leaves the provider-visible prefix unchanged, and a miss there is
+  precisely the stable-prefix bug the watchdog exists to catch.
 
 ## Token-Estimate Calibration (server-observed feedback)
 
@@ -168,9 +153,16 @@ impl ContextBudget {
 ```
 
 - `before_turn()` / `note_compaction_effect()` scale their `ContextPressure`
-  snapshot by `self.calibration` (via `ContextPressure::calibrated`). Until the
-  first observation `calibration` is `None` → factor `1.0` → **byte-identical**
-  to the pre-calibration path.
+  snapshot by `self.calibration` (via `ContextPressure::calibrated`). Within a
+  run, until the first observation `calibration` is `None` → factor `1.0`.
+- **Cross-run carry-over** (`CALIBRATION_CARRYOVER`,
+  `src/orchestrator/harness_bridge/runner_impl.rs`): the EWMA factor a run
+  converged to is stored keyed by model id and seeded into the next run on
+  the *same* model (`ContextBudget::seed_calibration`) — the first
+  `before_turn` of a follow-up run (the one carrying the full accumulated
+  history, where drift is largest) no longer starts uncalibrated. Breaker /
+  diminishing-returns / split counters remain strictly per-run; a model
+  switch misses the slot and starts uncalibrated as before.
 - After each LLM turn, `harness/agent/think.rs` calls
   `observe_actual_usage(usage.prompt_tokens_total())`. The saved `last_pressure`
   is the calibrated estimate of *that exact prompt*, so `observed / estimated`
@@ -181,6 +173,10 @@ impl ContextBudget {
   cached + cache-creation portions back in using the same Anthropic-vs-OpenAI
   convention detection as `cache_hit_ratio`, so a warm cache hit (tiny
   `input_tokens`) doesn't look like the prompt shrank.
+- `compact_to_fit` (`src/context/compact/fit.rs`) divides its floor target by
+  `budget.calibration()` to convert back into raw-estimate space — the
+  eviction loop measures raw, so a calibrated-space target would stall the
+  floor when the factor exceeds 1.
 
 ### Effect
 
@@ -192,6 +188,26 @@ decision category and makes no LLM call (R7/R10-safe). Compared to codex's
 one-shot `ServerObserved` prefill snapshot, the EWMA multiplier is continuous:
 it also corrects the estimate of the *growing tail* the provider hasn't yet
 counted.
+
+## Provider Prompt Cache Interplay
+
+The context layer's output is the prefix the provider caches; the two are
+co-designed (FEATURE_LOCATOR §2.15):
+
+- **Anthropic**: `cache_control` breakpoints (system stable tail + last-3
+  sliding messages, ≤4 total) are injected at request-build time in
+  `src/providers/protocols/anthropic/adapter/cache.rs`; persisted history
+  never carries markers. TTL tiers via `cache_retention = off|short|long`.
+- **OpenAI**: content-addressed `prompt_cache_key`
+  (`openai_common/prompt_cache.rs::derive_prompt_cache_key`, static-prefix
+  hash with session-id fallback) + `prompt_cache_retention: "24h"` on
+  official endpoints when retention is `long`.
+- **Watchdog**: `CacheMonitor` (per-agent, armed only after observed cache
+  activity) warns on ≥3 consecutive misses — the live alarm for a broken
+  stable prefix.
+- **Contract test**: `providers/protocols/anthropic/adapter_tests/prefix_stability.rs`
+  pins "turn N+1 is a strict prefix extension of turn N" on raw request
+  bodies.
 
 ## Budget Structure
 

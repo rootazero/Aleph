@@ -4,10 +4,8 @@
 //! - Prompt building (system prompts via layered pipeline)
 //! - Identity resolution (soul, workspace files)
 //! - Provider registry (model routing at the registry level)
-//! - Cache strategies for prompt caching
 //! - Security context and interaction paradigms
 
-pub mod cache;
 pub mod context;
 pub mod identity_files;
 pub mod inbound_context;
@@ -34,7 +32,6 @@ pub(crate) mod xml_util;
 
 use crate::sync_primitives::Arc;
 
-pub use cache::CacheControl;
 pub use context::ContextAggregator;
 pub use interaction::{
     Capability, InteractionConstraints, InteractionManifest, InteractionParadigm,

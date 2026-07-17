@@ -256,6 +256,13 @@ pub struct AppState {
     /// `Option` keeps the half-known state unrepresentable; the denominator is
     /// server-authoritative per model.
     pub context_gauge: Option<(u32, u32)>,
+    /// Last-call prompt-cache efficiency `(cache_read, denominator)` from the
+    /// latest `ProviderUsage` trace event that reported cache activity, where
+    /// `denominator = input + cache_creation + cache_read`. `None` until a
+    /// call reports cache tokens — providers without prompt caching never
+    /// surface a misleading 0%. Last-call (not cumulative) on purpose: a
+    /// sudden drop is what tells you a prefix bust just happened.
+    pub cache_stat: Option<(u64, u64)>,
     pub is_connected: bool,
 
     // -- Run tracking --
@@ -308,6 +315,7 @@ impl AppState {
             model_name,
             total_tokens: 0,
             context_gauge: None,
+            cache_stat: None,
             is_connected: true,
 
             current_run: None,
@@ -641,6 +649,10 @@ impl AppState {
         // New session = different context window; drop the stale gauge until
         // the next run's first `ContextGauge` refreshes it.
         self.context_gauge = None;
+        // Same for the cache stat: the old session's hit% is meaningless for
+        // a different prefix, and a cache-less provider would otherwise show
+        // it indefinitely (the stat only updates on real cache activity).
+        self.cache_stat = None;
         self.dialog = None;
         self.palette = None;
         // Any approval prompt belonged to the old session's run; drop it.

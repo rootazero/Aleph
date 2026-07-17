@@ -425,7 +425,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         // Build system block(s). Two shapes are supported:
         //
         // 1. Cache-first split (preferred): caller supplied `system_blocks`
-        //    via `PromptBuilder::build_system_prompt_cached()`. We collapse
+        //    via `PromptBuilder::build_system_prompt_cached_with_mode()`. We collapse
         //    the contiguous `cache:true` parts into a SINGLE stable block
         //    carrying the cache breakpoint, and the remaining `cache:false`
         //    parts into a SINGLE dynamic tail block with no marker. Per
@@ -561,7 +561,15 @@ impl ProtocolAdapter for AnthropicProtocol {
         // the host-level gate here from effective_cache_retention.
         let extended_cache_ttl = if policy.capabilities.supports_cache_control {
             let retention = effective_cache_retention(config, &endpoint);
-            let ext = matches!(retention, CacheRetention::Long);
+            // The 1h TTL is an Anthropic-1P beta: third-party Anthropic-protocol
+            // hosts (Bedrock/Azure) accept plain ephemeral markers but reject
+            // the `ttl` key under strict schema validation — gate the TTL (and
+            // via `ext`, its beta header) on the official endpoint, mirroring
+            // the OpenAI adapter's EndpointClass::OpenAiPublic gate on
+            // prompt_cache_retention. `Long` elsewhere degrades to the default
+            // 5m marker: still cached, never a 400.
+            let ext =
+                matches!(retention, CacheRetention::Long) && endpoint.contains("api.anthropic.com");
             if retention != CacheRetention::Off {
                 let cc = CacheControl::Ephemeral {
                     ttl: if ext {

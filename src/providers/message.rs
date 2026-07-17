@@ -472,7 +472,7 @@ fn ensure_tool_results_present(messages: &mut Vec<UnifiedMessage>) {
             }));
         }
         out.push(msg);
-        out.extend(synthetic.drain(..));
+        out.append(&mut synthetic);
     }
     *messages = out;
 }
