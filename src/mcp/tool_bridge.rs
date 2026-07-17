@@ -17,8 +17,8 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 
 use crate::builtin_tools::mcp_login::McpLoginTool;
-use crate::builtin_tools::mcp_prompt::McpGetPromptTool;
-use crate::builtin_tools::mcp_resource::McpReadResourceTool;
+use crate::builtin_tools::mcp_prompt::{McpGetPromptTool, McpListPromptsTool};
+use crate::builtin_tools::mcp_resource::{McpListResourcesTool, McpReadResourceTool};
 use crate::mcp::manager::{McpManagerEvent, McpManagerHandle, McpTransportType};
 use crate::tool_metadata::ToolCatalog;
 use crate::tools::handlers::builtin::BuiltinHandler;
@@ -29,8 +29,16 @@ use crate::tools::AlephToolDyn;
 
 /// Registry name of the capability-gated resource-reading builtin.
 const RESOURCE_TOOL: &str = "mcp_read_resource";
+/// Registry name of the capability-gated resource-discovery builtin. Gated by
+/// the same condition as [`RESOURCE_TOOL`]: without it the model can read a
+/// resource but has no way to learn which resources exist (the gap that pushed
+/// it to a raw `cat`).
+const RESOURCE_LIST_TOOL: &str = "mcp_list_resources";
 /// Registry name of the capability-gated prompt-fetching builtin.
 const PROMPT_TOOL: &str = "mcp_get_prompt";
+/// Registry name of the capability-gated prompt-discovery builtin. Gated by the
+/// same condition as [`PROMPT_TOOL`].
+const PROMPT_LIST_TOOL: &str = "mcp_list_prompts";
 /// Registry name of the OAuth login builtin (present only with remote servers).
 const LOGIN_TOOL: &str = "mcp_login";
 
@@ -217,14 +225,23 @@ async fn reconcile_capability_tools(
         .any(|s| !matches!(s.transport, McpTransportType::Stdio));
 
     if want_resource != *resource_live {
+        // The read + discovery tools share the resource capability gate: offering
+        // one without the other either strands the model (read with no way to
+        // discover) or dangles a discovery tool over nothing.
         // rust-doctor-disable-next-line excessive-clone
-        let tool: Arc<dyn AlephToolDyn> = Arc::new(McpReadResourceTool::new(handle.clone()));
-        *resource_live = set_builtin(registry, RESOURCE_TOOL, want_resource, tool);
+        let read: Arc<dyn AlephToolDyn> = Arc::new(McpReadResourceTool::new(handle.clone()));
+        // rust-doctor-disable-next-line excessive-clone
+        let list: Arc<dyn AlephToolDyn> = Arc::new(McpListResourcesTool::new(handle.clone()));
+        set_builtin(registry, RESOURCE_LIST_TOOL, want_resource, list);
+        *resource_live = set_builtin(registry, RESOURCE_TOOL, want_resource, read);
     }
     if want_prompt != *prompt_live {
         // rust-doctor-disable-next-line excessive-clone
-        let tool: Arc<dyn AlephToolDyn> = Arc::new(McpGetPromptTool::new(handle.clone()));
-        *prompt_live = set_builtin(registry, PROMPT_TOOL, want_prompt, tool);
+        let get: Arc<dyn AlephToolDyn> = Arc::new(McpGetPromptTool::new(handle.clone()));
+        // rust-doctor-disable-next-line excessive-clone
+        let list: Arc<dyn AlephToolDyn> = Arc::new(McpListPromptsTool::new(handle.clone()));
+        set_builtin(registry, PROMPT_LIST_TOOL, want_prompt, list);
+        *prompt_live = set_builtin(registry, PROMPT_TOOL, want_prompt, get);
     }
     if want_login != *login_live {
         // rust-doctor-disable-next-line excessive-clone
