@@ -294,11 +294,11 @@ pub(crate) const CONTEXT_PRESSURE_REMINDER_LEAD: f64 = 0.85;
 /// (`AgentHarnessRunner::context_pressure_reminder`) computes the token figures
 /// and only calls this once the reminder threshold is crossed.
 pub(crate) fn render_context_pressure(used_tokens: u64, window_tokens: u64) -> String {
-    let pct = if window_tokens == 0 {
-        0
-    } else {
-        (used_tokens.saturating_mul(100) / window_tokens).min(100)
-    };
+    let pct = used_tokens
+        .saturating_mul(100)
+        .checked_div(window_tokens)
+        .unwrap_or(0)
+        .min(100);
     format!(
         "context window: ~{used_tokens} of ~{window_tokens} tokens in use (~{pct}%). \
          Approaching this model's context limit — older turns will be summarized \

@@ -268,7 +268,7 @@ impl ArenaManifest {
         // invariant: `agent_ids` is non-empty (checked above), so index 0 exists.
         let coord = coordinator.unwrap_or_else(|| {
             agent_ids
-                .get(0)
+                .first()
                 .cloned()
                 .expect("invariant: at least one agent ID")
         });

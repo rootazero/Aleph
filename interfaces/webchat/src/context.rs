@@ -348,6 +348,12 @@ pub struct DashboardState {
 /// Plain `http:` is only allowed for a loopback host (zero-config desktop);
 /// a remote `http:` page is refused (`Err`) so the Panel never opens a
 /// plaintext socket to a remote gateway.
+///
+/// The sole non-test caller (`derive_gateway_url`) is `wasm32`-gated (it reads
+/// `web_sys::window()`), so a host-target build with tests excluded sees this
+/// as dead — hence the cfg-scoped allow. On `wasm32` (the panel's real build)
+/// it is live.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn ws_url_for(protocol: &str, host: &str) -> Result<String, ()> {
     if protocol == "https:" {
         return Ok(format!("wss://{host}/ws"));

@@ -67,9 +67,7 @@ pub fn PhoneEmbeddings() -> impl IntoView {
     let active_saving = RwSignal::new(false);
 
     let reload = {
-        let state = state.clone();
         move || {
-            let state = state.clone();
             spawn_local(async move {
                 match EmbeddingProvidersApi::list(&state).await {
                     Ok(list) => {
@@ -158,9 +156,9 @@ pub fn PhoneEmbeddings() -> impl IntoView {
                             let state_for_active = state;
                             let state_for_enable = state;
                             let state_for_key = state;
-                            let reload_for_active = StoredValue::new(reload.clone());
-                            let reload_for_enable = StoredValue::new(reload.clone());
-                            let reload_for_key = StoredValue::new(reload.clone());
+                            let reload_for_active = StoredValue::new(reload);
+                            let reload_for_enable = StoredValue::new(reload);
+                            let reload_for_key = StoredValue::new(reload);
                             let id_for_active = StoredValue::new(id_for_active);
                             let id_for_enable = StoredValue::new(id_for_enable);
                             let id_for_key_save = StoredValue::new(id_for_key_save);

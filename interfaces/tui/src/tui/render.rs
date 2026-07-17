@@ -29,7 +29,7 @@ pub fn render(frame: &mut Frame, state: &AppState, textarea: &TextArea) {
     ])
     .split(frame.area());
 
-    let chat_area = chunks.get(0).copied().unwrap_or_default();
+    let chat_area = chunks.first().copied().unwrap_or_default();
     let input_area = chunks.get(1).copied().unwrap_or_default();
     let status_area = chunks.get(2).copied().unwrap_or_default();
 

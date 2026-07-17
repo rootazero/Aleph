@@ -440,7 +440,7 @@ pub fn parse_box_center(raw: &str) -> Option<(f64, f64)> {
         let nums = parse_floats(inner);
         if nums.len() >= 2 {
             return Some((
-                *nums.get(0).expect("invariant: length checked above"),
+                *nums.first().expect("invariant: length checked above"),
                 *nums.get(1).expect("invariant: length checked above"),
             ));
         }
@@ -454,7 +454,7 @@ pub fn parse_box_center(raw: &str) -> Option<(f64, f64)> {
         let nums = parse_floats(inner);
         if nums.len() >= 4 {
             return Some((
-                (*nums.get(0).expect("invariant: length checked above")
+                (*nums.first().expect("invariant: length checked above")
                     + *nums.get(2).expect("invariant: length checked above"))
                     / 2.0,
                 (*nums.get(1).expect("invariant: length checked above")
@@ -470,11 +470,11 @@ pub fn parse_box_center(raw: &str) -> Option<(f64, f64)> {
     let nums = parse_floats(trimmed);
     match nums.len() {
         2 => Some((
-            *nums.get(0).expect("invariant: length matched above"),
+            *nums.first().expect("invariant: length matched above"),
             *nums.get(1).expect("invariant: length matched above"),
         )),
         4 => Some((
-            (*nums.get(0).expect("invariant: length matched above")
+            (*nums.first().expect("invariant: length matched above")
                 + *nums.get(2).expect("invariant: length matched above"))
                 / 2.0,
             (*nums.get(1).expect("invariant: length matched above")
