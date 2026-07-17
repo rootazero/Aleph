@@ -70,7 +70,7 @@
 //!   placeholders; the actual implementation in this module will use
 //!   `RawMemoryStore` / `raw_memories` / `RawMemory` naming throughout.
 //!
-//! - Spec A's `register_session_end_mcp` pattern at `src/thinker/memory_context_provider.rs:663`.
+//! - Spec A's `register_session_end_mcp` pattern in `src/thinker/memory_context_provider/helpers.rs`.
 //!   Uses `tokio::sync::OnceCell<Arc<MemoryContextProvider>>` for single registration (idempotent, subsequent calls are no-op).
 //!   Functions: `register_session_end_mcp(mcp: Arc<MemoryContextProvider>)` and `session_end_mcp() -> Option<Arc<MemoryContextProvider>>`.
 //!

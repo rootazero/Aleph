@@ -35,24 +35,20 @@ impl SessionManager {
 ///
 /// Spawns a tokio task so `close_session` latency is unaffected.
 /// Skips silently when `tail` is empty (nothing to digest).
+///
+/// Capture filters (Spec 4 Task 6): the `MemoryExtensionRegistry` is resolved
+/// from the startup-registered `SESSION_END_MCP` cell rather than threaded as
+/// a parameter — none of the three `close_session` call sites ever supplied
+/// one, so session-close `SessionEnd` rows silently bypassed the `on_capture`
+/// pipeline the `session_complete` tool path honours. Resolving it here closes
+/// that gap with zero caller churn; no registered MCP (tests / early boot)
+/// degrades to a direct insert, exactly the old behaviour.
 pub(crate) fn emit_session_end_raw(
     writer: std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
     agent_id: String,
     session_id: String,
     tail: String,
     reason: crate::memory::store::raw_memory::SessionEndReason,
-) {
-    emit_session_end_raw_with_registry(writer, agent_id, session_id, tail, reason, None);
-}
-
-/// Inner implementation that optionally threads a capture-filter registry (Spec 4 Task 6).
-pub(crate) fn emit_session_end_raw_with_registry(
-    writer: std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
-    agent_id: String,
-    session_id: String,
-    tail: String,
-    reason: crate::memory::store::raw_memory::SessionEndReason,
-    registry: Option<std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
 ) {
     if tail.is_empty() {
         return;
@@ -65,7 +61,9 @@ pub(crate) fn emit_session_end_raw_with_registry(
     .with_session(session_id.clone());
 
     if let Ok(rt) = tokio::runtime::Handle::try_current() {
-        if let Some(mcp) = crate::thinker::memory_context_provider::session_end_mcp() {
+        let mcp = crate::thinker::memory_context_provider::session_end_mcp();
+        let registry = mcp.as_ref().map(|m| m.extensions());
+        if let Some(mcp) = mcp {
             let session_key = session_id.clone();
             rt.spawn(async move {
                 mcp.invalidate_curated(&session_key).await;
@@ -85,7 +83,16 @@ pub(crate) fn emit_session_end_raw_with_registry(
                         error = %e,
                         "session-end summarization failed (non-fatal)"
                     );
+                    return;
                 }
+                // Session-resume producer: materialize the /end-summary the
+                // call above just guaranteed into `resume.json`, so the read
+                // chain (`SnapshotReader` → `HybridAssembler::fetch_snapshot`
+                // → memory envelope injected by the assembler) is no longer
+                // starved. Reuses the summarizer's stored output — zero extra
+                // LLM calls. Same fire-and-forget warn-on-error posture as
+                // the sibling hooks.
+                write_resume_snapshot(&summarizer, &b_agent_id, &b_session_id).await;
             });
         }
 
@@ -155,5 +162,52 @@ pub(crate) fn emit_session_end_raw_with_registry(
         });
     } else {
         tracing::warn!("no tokio runtime for session_end emit; skipping");
+    }
+}
+
+/// Producer half of the session-resume chain: read back the `/end-summary`
+/// row `SessionEndSummarizer::produce` just wrote and persist it as this
+/// session's `resume.json` snapshot. Best-effort — every failure path is a
+/// warn, never an error (P7: memory is degradable).
+async fn write_resume_snapshot(
+    summarizer: &crate::memory::session_search_summary::SessionEndSummarizer,
+    agent_id: &str,
+    session_id: &str,
+) {
+    let summary = match crate::memory::session_search_summary::retrieve_summary_fact(
+        &summarizer.store,
+        agent_id,
+        session_id,
+    )
+    .await
+    {
+        Ok(Some(fact)) => fact.content,
+        // `produce` can legitimately write nothing (e.g. empty transcript) —
+        // then there is nothing to snapshot either.
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!(
+                target: "session_resume.end_hook",
+                agent_id,
+                session_id,
+                error = %e,
+                "resume snapshot: /end-summary readback failed (non-fatal)"
+            );
+            return;
+        }
+    };
+    let Some(writer) = crate::memory::session_resume::SnapshotWriter::default_path() else {
+        return;
+    };
+    // `agent_id` is the fallback owner for session ids that don't parse as
+    // gateway keys; the writer prefers the id embedded in the key itself.
+    if let Err(e) = writer.write_from_summary(session_id, &summary, agent_id) {
+        tracing::warn!(
+            target: "session_resume.end_hook",
+            agent_id,
+            session_id,
+            error = %e,
+            "resume snapshot write failed (non-fatal)"
+        );
     }
 }

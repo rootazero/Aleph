@@ -85,9 +85,6 @@ mod memory_protocol;
 // --- Session context guide layer ---
 mod session_context_guide;
 
-// --- Session resume layer ---
-mod session_resume;
-
 // --- Re-exports ---
 pub use citation_standards::CitationStandardsLayer;
 pub use guidelines::GuidelinesLayer;
@@ -128,5 +125,4 @@ pub use runtime_context::RuntimeContextLayer;
 pub use security::SecurityLayer;
 pub use session_budget::SessionBudgetLayer;
 pub use session_context_guide::SessionContextGuideLayer;
-pub use session_resume::SessionResumeLayer;
 pub use voice_mode::VoiceModeLayer;

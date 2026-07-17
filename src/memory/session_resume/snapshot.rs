@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSnapshot {
     pub session_id: String,
+    /// Owning agent. Snapshots from all agents share one on-disk directory,
+    /// so the reader filters on this to keep agents' contexts isolated.
+    /// `#[serde(default)]` keeps legacy agent-less files deserializable —
+    /// their empty id never matches a real agent, so they are skipped.
+    #[serde(default)]
+    pub agent_id: String,
     pub created_at: DateTime<Utc>,
     pub summary: String,
     pub key_decisions: Vec<String>,
@@ -15,41 +21,7 @@ pub struct SessionSnapshot {
     pub pending_tasks: Vec<String>,
 }
 
-/// Decision marker keywords used by [`SessionSnapshot::extract_decisions`].
-const DECISION_MARKERS: &[&str] = &[
-    "decided",
-    "chose",
-    "will use",
-    "switched to",
-    "selected",
-    "picked",
-    "agreed on",
-    "confirmed",
-];
-
-/// Maximum number of decisions extracted from a summary.
-const MAX_DECISIONS: usize = 10;
-
 impl SessionSnapshot {
-    /// Extract key decision sentences from a summary string.
-    ///
-    /// Splits on `. ` (dot-space), filters for sentences containing decision marker
-    /// keywords, and caps the result at [`MAX_DECISIONS`].
-    #[must_use]
-    pub fn extract_decisions(summary: &str) -> Vec<String> {
-        summary
-            .split(". ")
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .filter(|sentence| {
-                let lower = sentence.to_lowercase();
-                DECISION_MARKERS.iter().any(|m| lower.contains(m))
-            })
-            .take(MAX_DECISIONS)
-            .map(|s| s.to_string())
-            .collect()
-    }
-
     /// Render this snapshot as prompt text for LLM consumption.
     ///
     /// Empty sections are omitted to avoid noise.
@@ -97,38 +69,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extract_decisions_finds_markers() {
-        let summary = "We decided to use Rust. The team chose SQLite for storage. \
-                        Nothing special here. They confirmed the API design.";
-        let decisions = SessionSnapshot::extract_decisions(summary);
-        assert_eq!(decisions.len(), 3);
-        assert!(decisions[0].contains("decided"));
-        assert!(decisions[1].contains("chose"));
-        assert!(decisions[2].contains("confirmed"));
-    }
-
-    #[test]
-    fn extract_decisions_empty_for_no_markers() {
-        let summary = "The weather is nice today. We had lunch at noon.";
-        let decisions = SessionSnapshot::extract_decisions(summary);
-        assert!(decisions.is_empty());
-    }
-
-    #[test]
-    fn extract_decisions_caps_at_max() {
-        // Build a summary with 12 decision sentences
-        let sentences: Vec<String> = (0..12)
-            .map(|i| format!("We decided on option {i}"))
-            .collect();
-        let summary = sentences.join(". ") + ".";
-        let decisions = SessionSnapshot::extract_decisions(&summary);
-        assert_eq!(decisions.len(), MAX_DECISIONS);
-    }
-
-    #[test]
     fn to_prompt_text_renders_all_sections() {
         let snapshot = SessionSnapshot {
             session_id: "s1".into(),
+            agent_id: "main".into(),
             created_at: Utc::now(),
             summary: "Implemented feature X.".into(),
             key_decisions: vec!["Use trait objects".into()],
@@ -151,6 +95,7 @@ mod tests {
     fn to_prompt_text_skips_empty_sections() {
         let snapshot = SessionSnapshot {
             session_id: "s2".into(),
+            agent_id: "main".into(),
             created_at: Utc::now(),
             summary: "Quick fix.".into(),
             key_decisions: vec![],
@@ -169,6 +114,7 @@ mod tests {
     fn serialization_roundtrip() {
         let snapshot = SessionSnapshot {
             session_id: "s-rt".into(),
+            agent_id: "main".into(),
             created_at: Utc::now(),
             summary: "Roundtrip test.".into(),
             key_decisions: vec!["chose JSON".into()],
@@ -179,10 +125,29 @@ mod tests {
         let json = serde_json::to_string(&snapshot).unwrap();
         let restored: SessionSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.session_id, snapshot.session_id);
+        assert_eq!(restored.agent_id, snapshot.agent_id);
         assert_eq!(restored.summary, snapshot.summary);
         assert_eq!(restored.key_decisions, snapshot.key_decisions);
         assert_eq!(restored.active_files, snapshot.active_files);
         assert_eq!(restored.tool_state, snapshot.tool_state);
         assert_eq!(restored.pending_tasks, snapshot.pending_tasks);
+    }
+
+    #[test]
+    fn legacy_snapshot_without_agent_id_deserializes_to_empty() {
+        // Files written before the agent dimension existed have no agent_id
+        // key; they must keep loading (empty id = never matches an agent).
+        let legacy = r#"{
+            "session_id": "old",
+            "created_at": "2026-01-01T00:00:00Z",
+            "summary": "Legacy snapshot.",
+            "key_decisions": [],
+            "active_files": [],
+            "tool_state": null,
+            "pending_tasks": []
+        }"#;
+        let restored: SessionSnapshot = serde_json::from_str(legacy).unwrap();
+        assert_eq!(restored.agent_id, "");
+        assert_eq!(restored.summary, "Legacy snapshot.");
     }
 }

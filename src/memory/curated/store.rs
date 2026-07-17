@@ -40,6 +40,25 @@ pub struct WriteOutcome {
     pub legacy: bool,
 }
 
+/// One operation inside an atomic batch — mirrors the single-op API surface.
+/// Plain data type (no serde): the tool layer owns the wire schema.
+#[derive(Debug, Clone)]
+pub enum BatchOp {
+    Add { content: String },
+    Replace { old_text: String, content: String },
+    Remove { old_text: String },
+}
+
+impl BatchOp {
+    fn action(&self) -> &'static str {
+        match self {
+            Self::Add { .. } => "add",
+            Self::Replace { .. } => "replace",
+            Self::Remove { .. } => "remove",
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CuratedError {
     #[error("entry already exists (no duplicate added)")]
@@ -54,6 +73,25 @@ pub enum CuratedError {
     Ambiguous(String),
     #[error("entry content is empty")]
     Empty,
+    #[error(
+        "operation {index} ({action}) failed: {reason} — no operations were applied \
+         (batch is all-or-nothing)"
+    )]
+    BatchAborted {
+        index: usize,
+        action: &'static str,
+        reason: String,
+    },
+    #[error(
+        "after applying all {count} operations memory would be {used}/{limit} chars — \
+         over budget; remove or shorten more entries in the same batch, then retry \
+         (no operations were applied)"
+    )]
+    BatchOverBudget {
+        count: usize,
+        used: usize,
+        limit: usize,
+    },
     #[error("io: {0}")]
     Io(String),
 }
@@ -144,24 +182,7 @@ impl CuratedMemoryStore {
             return Err(CuratedError::Empty);
         }
         self.with_lock(|st| {
-            let matches: Vec<usize> = st
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| e.contains(old_substr))
-                .map(|(i, _)| i)
-                .collect();
-            if matches.is_empty() {
-                return Err(CuratedError::NoMatch(old_substr.to_string()));
-            }
-            if matches.len() > 1 {
-                let unique: std::collections::HashSet<_> =
-                    matches.iter().map(|&i| &st.entries[i]).collect();
-                if unique.len() > 1 {
-                    return Err(CuratedError::Ambiguous(old_substr.to_string()));
-                }
-            }
-            let idx = matches[0];
+            let idx = match_unique(&st.entries, old_substr)?;
             let mut new_entries = st.entries.clone();
             new_entries[idx] = new_content.clone();
             let used = super::budget::used_chars(&new_entries);
@@ -192,24 +213,8 @@ impl CuratedMemoryStore {
             return Err(CuratedError::Empty);
         }
         self.with_lock(|st| {
-            let matches: Vec<usize> = st
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| e.contains(old_substr))
-                .map(|(i, _)| i)
-                .collect();
-            if matches.is_empty() {
-                return Err(CuratedError::NoMatch(old_substr.to_string()));
-            }
-            if matches.len() > 1 {
-                let unique: std::collections::HashSet<_> =
-                    matches.iter().map(|&i| &st.entries[i]).collect();
-                if unique.len() > 1 {
-                    return Err(CuratedError::Ambiguous(old_substr.to_string()));
-                }
-            }
-            st.entries.remove(matches[0]);
+            let idx = match_unique(&st.entries, old_substr)?;
+            st.entries.remove(idx);
             if st.entries.is_empty() {
                 st.legacy = false;
             }
@@ -217,6 +222,64 @@ impl CuratedMemoryStore {
         })
         .await?;
         Ok(self.outcome("Entry removed."))
+    }
+
+    /// Apply a sequence of add/replace/remove ops atomically (all-or-nothing).
+    ///
+    /// Hermes `memory_tool.py::apply_batch` parity: every op is applied in
+    /// order against the evolving working copy, the char budget is validated
+    /// on the FINAL state only (intermediate overflow is irrelevant), and a
+    /// single atomic write persists the result. This lets the model free
+    /// space and add new entries in ONE call instead of the multi-turn
+    /// remove→add dance. Any op failing validation rejects the whole batch
+    /// (nothing written) with the 1-based op index and reason. Duplicate
+    /// `add`s are idempotent: skipped, not failed.
+    pub async fn apply_batch(&self, ops: &[BatchOp]) -> Result<WriteOutcome, CuratedError> {
+        if ops.is_empty() {
+            return Err(CuratedError::Empty);
+        }
+        let count = ops.len();
+        self.with_lock(|st| {
+            for (i, op) in ops.iter().enumerate() {
+                apply_one(st, op).map_err(|e| CuratedError::BatchAborted {
+                    index: i + 1,
+                    action: op.action(),
+                    reason: e.to_string(),
+                })?;
+            }
+            // Budget is validated on the FINAL state only — a remove that
+            // frees space for a later add within the same batch is legal.
+            let used = super::budget::used_chars(&st.entries);
+            if used > self.char_limit {
+                return Err(CuratedError::BatchOverBudget {
+                    count,
+                    used,
+                    limit: self.char_limit,
+                });
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(self.outcome(&format!("Applied {count} operation(s).")))
+    }
+
+    /// D4 receipt data plane: where writes land, as a human-readable string —
+    /// resolved file path (home abbreviated to `~`) plus the tier label, so
+    /// the model can tell the user exactly where the memory lives.
+    pub fn destination(&self) -> String {
+        let path = crate::utils::paths::get_home_dir()
+            .ok()
+            .and_then(|home| {
+                self.file_path
+                    .strip_prefix(&home)
+                    .ok()
+                    .map(|rel| format!("~/{}", rel.display()))
+            })
+            .unwrap_or_else(|| self.file_path.display().to_string());
+        format!(
+            "{path} (curated hot zone — always in your system prompt; \
+             visible from next session or compression)"
+        )
     }
 
     fn outcome(&self, message: &str) -> WriteOutcome {
@@ -311,6 +374,77 @@ impl CuratedMemoryStore {
         let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
         *st = working;
         Ok(())
+    }
+}
+
+/// Find the single entry containing `old_substr`. Errors on no match, or when
+/// the substring matches multiple distinct entries.
+fn match_unique(entries: &[String], old_substr: &str) -> Result<usize, CuratedError> {
+    let matches: Vec<usize> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.contains(old_substr))
+        .map(|(i, _)| i)
+        .collect();
+    if matches.is_empty() {
+        return Err(CuratedError::NoMatch(old_substr.to_string()));
+    }
+    if matches.len() > 1 {
+        let unique: std::collections::HashSet<_> = matches.iter().map(|&i| &entries[i]).collect();
+        if unique.len() > 1 {
+            return Err(CuratedError::Ambiguous(old_substr.to_string()));
+        }
+    }
+    Ok(matches[0])
+}
+
+/// Apply one batch op against the evolving working state. No budget check
+/// here — `apply_batch` validates the final state only.
+fn apply_one(st: &mut StoreState, op: &BatchOp) -> Result<(), CuratedError> {
+    match op {
+        BatchOp::Add { content } => {
+            let content = content.trim();
+            if content.is_empty() {
+                return Err(CuratedError::Empty);
+            }
+            if st.legacy {
+                return Err(CuratedError::LegacyBlocked);
+            }
+            // Idempotent: a duplicate add is skipped, not a batch failure.
+            if !st.entries.iter().any(|e| e == content) {
+                st.entries.push(content.to_string());
+            }
+            Ok(())
+        }
+        BatchOp::Replace { old_text, content } => {
+            let old_text = old_text.trim();
+            let content = content.trim();
+            if old_text.is_empty() || content.is_empty() {
+                return Err(CuratedError::Empty);
+            }
+            let idx = match_unique(&st.entries, old_text)?;
+            st.entries[idx] = content.to_string();
+            // Replacing legacy entry de-legacys the file if the user shrinks/curates.
+            if st.legacy
+                && st.entries.len() == 1
+                && !st.entries[0].contains(super::format::ENTRY_DELIMITER)
+            {
+                st.legacy = false;
+            }
+            Ok(())
+        }
+        BatchOp::Remove { old_text } => {
+            let old_text = old_text.trim();
+            if old_text.is_empty() {
+                return Err(CuratedError::Empty);
+            }
+            let idx = match_unique(&st.entries, old_text)?;
+            st.entries.remove(idx);
+            if st.entries.is_empty() {
+                st.legacy = false;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -409,6 +543,131 @@ mod tests {
         let _ = s.remove("legacy").await.unwrap();
         assert!(!s.is_legacy());
         assert!(s.current_entries().is_empty());
+    }
+
+    #[tokio::test]
+    async fn batch_budget_checked_on_final_state_only() {
+        let d = tempdir().unwrap();
+        let s = fresh(d.path(), 60).await;
+        let old = "x".repeat(40);
+        s.add(&old).await.unwrap();
+        let new = "y".repeat(45);
+        // A plain add cannot fit alongside the old entry…
+        let err = s.add(&new).await.unwrap_err();
+        assert!(matches!(err, CuratedError::OverBudget { .. }));
+        // …but one batch frees the space and adds in a single atomic write.
+        let r = s
+            .apply_batch(&[
+                BatchOp::Remove {
+                    old_text: old.clone(),
+                },
+                BatchOp::Add {
+                    content: new.clone(),
+                },
+            ])
+            .await
+            .unwrap();
+        assert_eq!(r.entries, vec![new]);
+        assert!(r.message.contains("Applied 2 operation(s)"));
+    }
+
+    #[tokio::test]
+    async fn batch_is_all_or_nothing() {
+        let d = tempdir().unwrap();
+        let path = d.path().join("MEMORY.md");
+        let s = CuratedMemoryStore::load(path.clone(), 200, "agent")
+            .await
+            .unwrap();
+        s.add("keep me").await.unwrap();
+        let err = s
+            .apply_batch(&[
+                BatchOp::Add {
+                    content: "should not land".into(),
+                },
+                BatchOp::Remove {
+                    old_text: "ghost".into(),
+                },
+            ])
+            .await
+            .unwrap_err();
+        match err {
+            CuratedError::BatchAborted { index, action, .. } => {
+                assert_eq!(index, 2, "1-based failing op index");
+                assert_eq!(action, "remove");
+            }
+            other => panic!("expected BatchAborted, got {other}"),
+        }
+        // Nothing from the batch was applied — including the valid first op.
+        assert_eq!(s.current_entries(), vec!["keep me"]);
+        // Disk untouched too.
+        let s2 = CuratedMemoryStore::load(path, 200, "agent").await.unwrap();
+        assert_eq!(s2.current_entries(), vec!["keep me"]);
+    }
+
+    #[tokio::test]
+    async fn batch_over_budget_rejects_whole_batch() {
+        let d = tempdir().unwrap();
+        let s = fresh(d.path(), 20).await;
+        let err = s
+            .apply_batch(&[BatchOp::Add {
+                content: "this content is way too long for the tiny budget".into(),
+            }])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CuratedError::BatchOverBudget { .. }));
+        assert!(s.current_entries().is_empty());
+    }
+
+    #[tokio::test]
+    async fn batch_duplicate_add_is_idempotent_skip() {
+        let d = tempdir().unwrap();
+        let s = fresh(d.path(), 200).await;
+        s.add("already here").await.unwrap();
+        let r = s
+            .apply_batch(&[
+                BatchOp::Add {
+                    content: "already here".into(),
+                },
+                BatchOp::Add {
+                    content: "brand new".into(),
+                },
+            ])
+            .await
+            .expect("duplicate add inside a batch is skipped, not failed");
+        assert_eq!(r.entries, vec!["already here", "brand new"]);
+    }
+
+    #[tokio::test]
+    async fn batch_can_curate_legacy_file_in_one_call() {
+        let d = tempdir().unwrap();
+        let path = d.path().join("MEMORY.md");
+        std::fs::write(&path, "# legacy\n## free markdown\n- a\n- b\n").unwrap();
+        let s = CuratedMemoryStore::load(path, 200, "agent").await.unwrap();
+        assert!(s.is_legacy());
+        // Ops apply in order against the evolving state: removing the legacy
+        // blob clears the legacy flag, so the following add is allowed.
+        let r = s
+            .apply_batch(&[
+                BatchOp::Remove {
+                    old_text: "legacy".into(),
+                },
+                BatchOp::Add {
+                    content: "curated fact".into(),
+                },
+            ])
+            .await
+            .unwrap();
+        assert_eq!(r.entries, vec!["curated fact"]);
+        assert!(!r.legacy);
+    }
+
+    #[tokio::test]
+    async fn destination_names_file_and_tier() {
+        let d = tempdir().unwrap();
+        let s = fresh(d.path(), 100).await;
+        let dest = s.destination();
+        assert!(dest.contains("MEMORY.md"), "dest was {dest}");
+        assert!(dest.contains("curated hot zone"));
     }
 
     #[tokio::test]

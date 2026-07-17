@@ -30,13 +30,14 @@ pub fn render_orientation_envelope(s: &OrientationSnapshot) -> String {
 
 /// Process-wide handle used by the `SessionEnd` evict path.
 ///
-/// `emit_session_end_raw_with_registry` lives in `gateway::session_manager::ops`
+/// `emit_session_end_raw` lives in `gateway::session_manager::ops`
 /// and has 3 callsites + 2 test fixtures. Threading an optional
 /// `Arc<MemoryContextProvider>` argument through every caller would be a
 /// 5-file blast radius for what is essentially a single fire-and-forget
 /// invalidation. Using an opt-in `OnceCell` keeps the change surgical:
 /// `agent_init` registers the MCP once at startup, the session-end path
-/// reads the cell and spawns the eviction.
+/// reads the cell and spawns the eviction (and reads the MCP's extension
+/// registry for the session-close capture-filter pass).
 static SESSION_END_MCP: tokio::sync::OnceCell<Arc<super::MemoryContextProvider>> =
     tokio::sync::OnceCell::const_new();
 
@@ -48,7 +49,7 @@ pub fn register_session_end_mcp(mcp: Arc<super::MemoryContextProvider>) {
 }
 
 /// Read the registered MCP, if any. Used by
-/// `emit_session_end_raw_with_registry` to evict per-session snapshots.
+/// `emit_session_end_raw` to evict per-session snapshots.
 pub fn session_end_mcp() -> Option<Arc<super::MemoryContextProvider>> {
     SESSION_END_MCP.get().cloned()
 }
@@ -57,7 +58,7 @@ pub fn session_end_mcp() -> Option<Arc<super::MemoryContextProvider>> {
 ///
 /// Mirrors the `SESSION_END_MCP` pattern: registered once at startup by
 /// `agent_init`, consumed fire-and-forget at session-end in
-/// `emit_session_end_raw_with_registry`. The two cells are kept separate so
+/// `emit_session_end_raw`. The two cells are kept separate so
 /// Spec A (cache invalidation) and Spec B (summary production) remain
 /// independently removable.
 static SESSION_END_SUMMARIZER: tokio::sync::OnceCell<
@@ -82,7 +83,7 @@ pub fn session_end_summarizer(
 ///
 /// Mirrors the two cells above: registered once at startup by `agent_init`
 /// (only when `[memory.reflection] enabled = true`), consumed fire-and-forget
-/// at session-end in `emit_session_end_raw_with_registry`. Kept separate so the
+/// at session-end in `emit_session_end_raw`. Kept separate so the
 /// reflection feature stays independently removable from Spec A/Spec B.
 static SESSION_REFLECTOR: tokio::sync::OnceCell<
     Arc<crate::memory::session_reflection::SessionReflector>,
@@ -104,7 +105,7 @@ pub fn session_reflector() -> Option<Arc<crate::memory::session_reflection::Sess
 /// Process-wide handle for the real-time session-end flush (Real-time Memory
 /// Pillar 2). Registered once at startup by `agent_init` (only when a
 /// `CompressionService` is configured), consumed fire-and-forget at session-end
-/// in `emit_session_end_raw_with_registry` to drain pending raws into linked
+/// in `emit_session_end_raw` to drain pending raws into linked
 /// notes immediately. Kept separate from the cells above so the flush feature
 /// stays independently removable.
 static SESSION_END_COMPRESSION: tokio::sync::OnceCell<
@@ -120,7 +121,7 @@ pub fn register_session_end_compression(
 }
 
 /// Read the registered `CompressionService`, if any. Used by
-/// `emit_session_end_raw_with_registry` to spawn the session-end flush.
+/// `emit_session_end_raw` to spawn the session-end flush.
 pub fn session_end_compression() -> Option<Arc<crate::memory::compression::CompressionService>> {
     SESSION_END_COMPRESSION.get().cloned()
 }

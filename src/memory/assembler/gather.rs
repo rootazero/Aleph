@@ -43,7 +43,7 @@ impl Gatherer {
     pub async fn gather(&self, input: &GatherInputs) -> Vec<Candidate> {
         let (notes, snapshot, raws, profile, feedback_floor, daily_insight) = tokio::join!(
             self.fetch_notes(&input.query, &input.agent_id, input.pool_limit),
-            self.fetch_snapshot(input.session_id.as_deref()),
+            self.fetch_snapshot(&input.agent_id, input.session_id.as_deref()),
             self.fetch_raws(&input.agent_id, input.session_id.as_deref(), &input.filter),
             self.profile.load(&input.agent_id),
             self.feedback_floor.load(&input.agent_id),
@@ -155,13 +155,16 @@ impl Gatherer {
         }
     }
 
-    async fn fetch_snapshot(&self, session_id: Option<&str>) -> Vec<Candidate> {
-        // `SnapshotReader::load_latest` returns the most recent snapshot
-        // EXCLUDING the named session. For our purposes — giving the LLM
-        // context from the previous session — we pass the current session id
-        // as the exclude so the reader hands us the prior session's snapshot.
+    async fn fetch_snapshot(&self, agent_id: &str, session_id: Option<&str>) -> Vec<Candidate> {
+        // `SnapshotReader::load_latest` returns the requesting agent's most
+        // recent snapshot EXCLUDING the named session. Snapshots from all
+        // agents share one directory, so the agent filter keeps agent B's
+        // prompt assembly from injecting agent A's session summary. For our
+        // purposes — giving the LLM context from the previous session — we
+        // pass the current session id as the exclude so the reader hands us
+        // the prior session's snapshot.
         let exclude = session_id.unwrap_or("");
-        let Some(snap) = self.snapshots.load_latest(exclude) else {
+        let Some(snap) = self.snapshots.load_latest(agent_id, exclude) else {
             return Vec::new();
         };
         let body = format!(
@@ -423,8 +426,7 @@ mod tests {
     fn current_session_raw_maps_to_working_tier() {
         use crate::memory::assembler::render::cognitive_layer;
         use crate::memory::context::CognitiveLayer;
-        let raw =
-            RawMemory::new("live".into(), RawMemorySource::Transcript).with_session("sess-3");
+        let raw = RawMemory::new("live".into(), RawMemorySource::Transcript).with_session("sess-3");
         let c = raw_to_candidate(raw, SlotKind::SessionRecent);
         assert_eq!(c.slot_hint, SlotKind::SessionRecent);
         // Regression: the live working set must render as `Working`, not the

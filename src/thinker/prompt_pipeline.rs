@@ -11,9 +11,9 @@ use super::layers::{
     MemoryProtocolLayer, MultiStepConductLayer, OperationalGuidelinesLayer, ProfileLayer,
     ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
     RuntimeContextLayer, SecurityLayer, SessionBudgetLayer, SessionContextGuideLayer,
-    SessionResumeLayer, SkillInstructionsLayer, SoulLayer, SpecialActionsLayer, StandingGoalLayer,
-    StrategyLayer, StrategyPointerLayer, ThinkingGuidanceLayer, TimerLoopLayer,
-    ToolRuntimeStateLayer, ToolUsageGrammarLayer, ToolsLayer, VoiceModeLayer,
+    SkillInstructionsLayer, SoulLayer, SpecialActionsLayer, StandingGoalLayer, StrategyLayer,
+    StrategyPointerLayer, ThinkingGuidanceLayer, TimerLoopLayer, ToolRuntimeStateLayer,
+    ToolUsageGrammarLayer, ToolsLayer, VoiceModeLayer,
 };
 use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
@@ -330,7 +330,11 @@ impl PromptPipeline {
             Box::new(StandingGoalLayer),
             Box::new(ExecutionPlanLayer),
             Box::new(StrategyPointerLayer),
-            Box::new(SessionResumeLayer),
+            // SessionResumeLayer (@1760, Dynamic) was removed 2026-07-17: its
+            // only input (`LayerInput::session_snapshot`) was never set outside
+            // the layer's own unit test — the prior-session snapshot actually
+            // reaches the model through the assembler's memory envelope
+            // (`SnapshotReader` → `HybridAssembler::fetch_snapshot`).
             Box::new(LanguageLayer),
         ])
     }
@@ -475,7 +479,11 @@ mod tests {
         // callers, and SkillModeLayer's gate was never true outside tests (it
         // also mandated a legacy JSON tool envelope contradicting the native
         // tool_use contract we actually ship).
-        assert_eq!(pipeline.layer_count(), 42);
+        // → 41: SessionResumeLayer deleted (2026-07-17) — its only input,
+        // `LayerInput::session_snapshot`, was never set outside the layer's
+        // own unit test; the snapshot reaches the model via the assembler's
+        // memory envelope instead.
+        assert_eq!(pipeline.layer_count(), 41);
     }
 
     #[test]
@@ -535,7 +543,6 @@ mod mode_tests {
             "mcp_instructions",
             "agent_catalog",
             "chain_context",
-            "session_resume",
             "special_actions",
             "multi_step_conduct",
             "guidelines",
@@ -794,7 +801,6 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"identity_files"));
         assert!(dynamic_names.contains(&"memory_protocol"));
         assert!(dynamic_names.contains(&"session_context_guide"));
-        assert!(dynamic_names.contains(&"session_resume"));
         assert!(dynamic_names.contains(&"mcp_instructions"));
         assert!(dynamic_names.contains(&"agent_catalog"));
         // Live tool health is per-request state. Classified Stable (by omission)
@@ -828,11 +834,14 @@ mod stability_tests {
         // riding the CACHED prefix meant one MCP probe flip rewrote that prefix
         // mid-session and invalidated the whole conversation's prompt cache. It
         // is per-request state and now sits in the per-request zone.
+        // → 16: SessionResumeLayer (Dynamic @1760) deleted 2026-07-17 — dead
+        // layer; the prior-session snapshot travels via the assembler's memory
+        // envelope, not the system prompt.
         // Every name above is asserted individually; the count pins the set.
         assert_eq!(
             dynamic_names.len(),
-            17,
-            "Exactly 17 dynamic layers expected"
+            16,
+            "Exactly 16 dynamic layers expected"
         );
     }
 

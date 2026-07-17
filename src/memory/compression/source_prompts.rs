@@ -110,4 +110,30 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn prompts_carry_distillation_quality_rules() {
+        // All four source-specialised prompts share the distillation quality
+        // bar: verbatim greppable handles, absolute dates, the
+        // empty-output-preferred gate, and the anti-rot denylist (store the
+        // remedy, not the failure narrative).
+        for prompt in [PROMPT_RESCUE, PROMPT_LESSON, PROMPT_DIGEST, PROMPT_RETRO] {
+            assert!(
+                prompt.contains("never paraphrase identifiers"),
+                "must preserve greppable handles"
+            );
+            assert!(
+                prompt.contains("absolute dates"),
+                "must convert relative time to absolute dates"
+            );
+            assert!(
+                prompt.contains("emit an empty plan"),
+                "empty output must be an allowed outcome"
+            );
+            assert!(
+                prompt.contains("remedy, not the failure narrative"),
+                "anti-rot denylist must be present"
+            );
+        }
+    }
 }

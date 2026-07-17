@@ -9,7 +9,6 @@
 use super::scheduler::{CompressionScheduler, CompressionTrigger, SchedulerConfig};
 use crate::error::AlephError;
 use crate::memory::context::CompressionResult;
-use crate::memory::events::handler::MemoryCommandHandler;
 use crate::memory::store::{CompressionStore, MemoryBackend};
 use crate::memory::EmbeddingProvider;
 use crate::providers::AiProvider;
@@ -70,7 +69,6 @@ pub struct CompressionService {
     database: MemoryBackend,
     scheduler: Arc<CompressionScheduler>,
     config: CompressionConfig,
-    command_handler: Option<Arc<MemoryCommandHandler>>,
     compound_ingestor: Option<Arc<dyn crate::memory::notes::ingest::CompoundIngestor>>,
     compound_enabled: bool,
     profile_synthesizer: Option<Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>>,
@@ -131,7 +129,6 @@ impl CompressionService {
             database,
             scheduler,
             config,
-            command_handler: None,
             compound_ingestor: None,
             compound_enabled: false,
             profile_synthesizer: None,
@@ -150,15 +147,6 @@ impl CompressionService {
     /// implements the hook is built.
     pub async fn add_post_hook(&self, hook: Arc<dyn PostCompressionHook>) {
         self.post_hooks.write().await.push(hook);
-    }
-
-    /// Attach an event-sourcing command handler.
-    ///
-    /// When present, fact creation during compression goes through the
-    /// event sourcing pipeline instead of direct `insert_fact`.
-    pub fn with_command_handler(mut self, handler: Arc<MemoryCommandHandler>) -> Self {
-        self.command_handler = Some(handler);
-        self
     }
 
     /// Attach a `CompoundIngestor` and enable the compound ingest path.
@@ -221,7 +209,6 @@ impl CompressionService {
         // The trigger has already fired by the time we get here, so the budget is
         // spent whether or not this run completes.
         self.scheduler.reset_turns();
-        self.scheduler.record_activity();
 
         let mut total = CompressionResult::empty();
         for agent_id in &agent_ids {
@@ -302,171 +289,222 @@ impl CompressionService {
         );
 
         // 4. Extract note updates via LLM — one call per source group (Spec 1).
-        //    When compound_enabled, delegate each source batch to CompoundIngestor
+        //    When compound_enabled, delegate each source group to CompoundIngestor
         //    and skip the legacy accumulation path.
         if self.compound_enabled {
-            // Rows to leave unprocessed for a later retry. Empty unless the
-            // stop-the-bleed grace window (below) defers ingestable rows.
-            let mut deferred_ids: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
-            if let Some(ing) = self.compound_ingestor.clone() {
-                // ToolInvocation rows are per-call telemetry, consumed by the
-                // insights aggregator and dream signal metrics (which read them
-                // by source, independent of `is_processed`). They are NOT
-                // knowledge — keep them out of the note-extraction LLM batch so
-                // they neither waste a planning call nor pollute L1 with
-                // "tool X ok in Yms" pseudo-notes. They are still marked
-                // processed below (`consumed_ids` covers every fetched row) so
-                // the unprocessed queue stays bounded.
-                let ingest_rows: Vec<_> = raw_memories
-                    .iter()
-                    .filter(|r| {
-                        !matches!(
-                            r.source,
-                            crate::memory::store::raw_memory::RawMemorySource::ToolInvocation { .. }
-                        )
-                    })
-                    .cloned()
-                    .collect();
-                // X1 C3: let extensions contribute context before ingest.
-                let extra_context: Option<String> = if let Some(reg) = &self.extension_registry {
-                    let ctx = crate::memory::extensions::types::PreCompressCtx {
-                        agent_id: workspace_id.to_string(),
-                        namespace: crate::memory::namespace::NamespaceScope::Owner,
-                        session_id: None,
-                        messages_count: ingest_rows.len() as u32,
-                        oldest_at: None,
-                        newest_at: None,
-                    };
-                    let text = reg.dispatch_on_pre_compress(&ctx).await;
-                    if text.trim().is_empty() {
-                        None
-                    } else {
-                        Some(text)
-                    }
-                } else {
-                    None
-                };
-                let ingest_outcome = ing
-                    .ingest_batch(workspace_id, ingest_rows, extra_context.as_deref())
-                    .await;
+            use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
 
-                // ProfileSynthesizer fires INDEPENDENTLY of compound ingest
-                // result: a malformed LLM plan must not block USER.md updates.
-                // Fire-and-forget, never block the compression flow.
-                if let Some(ps) = self.profile_synthesizer.clone() {
-                    use crate::memory::store::raw_memory::RawMemorySource;
-                    let session_end_raws: Vec<_> = raw_memories
-                        .iter()
-                        .filter(|r| matches!(&r.source, RawMemorySource::SessionEnd { .. }))
-                        .collect();
-                    if !session_end_raws.is_empty() {
-                        let agent = workspace_id.to_string();
-                        let digest: String = session_end_raws
-                            .iter()
-                            .map(|r| r.content.clone())
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        let reason = match &session_end_raws[0].source {
-                            RawMemorySource::SessionEnd { reason } => format!("{reason:?}"),
-                            _ => "unknown".to_string(),
-                        };
-                        tracing::info!(
-                            agent_id = %agent,
-                            session_end_count = session_end_raws.len(),
-                            "ProfileSynthesizer: firing on SessionEnd raws"
-                        );
-                        tokio::spawn(async move {
-                            let signal = crate::memory::notes::profile::SessionSignal {
-                                reason,
-                                digest_text: digest,
-                                recent_user_turns: vec![],
-                                session_id: String::new(),
-                            };
-                            if let Err(e) = ps.update(&agent, signal).await {
-                                tracing::warn!("profile update after session end failed: {e}");
-                            } else {
-                                tracing::info!(
-                                    agent_id = %agent,
-                                    "ProfileSynthesizer: USER.md update completed"
-                                );
-                            }
-                        });
-                    }
-                }
-
-                match ingest_outcome {
-                    Ok(report) => {
-                        // Stop-the-bleed: when the plan produced no notes, don't
-                        // burn the knowledge. Defer marking the *ingestable* rows
-                        // processed while they are still within the grace window,
-                        // so a transiently-failed extraction (flaky planner LLM /
-                        // embedding outage) gets retried on a later tick instead
-                        // of being discarded forever. Telemetry rows are excluded
-                        // from ingest and can never yield a note, so they are
-                        // never deferred (they must stay bounded). Past the
-                        // window even ingestable rows are marked, to bound the
-                        // queue.
-                        if report.is_empty() {
-                            const RETRY_GRACE_SECS: i64 = 6 * 3600;
-                            let now = chrono::Utc::now().timestamp();
-                            for r in &raw_memories {
-                                let is_telemetry = matches!(
-                                    r.source,
-                                    crate::memory::store::raw_memory::RawMemorySource::ToolInvocation { .. }
-                                );
-                                if !is_telemetry && now - r.created_at < RETRY_GRACE_SECS {
-                                    deferred_ids.insert(r.id.clone());
-                                }
-                            }
-                            if !deferred_ids.is_empty() {
-                                tracing::info!(
-                                    deferred = deferred_ids.len(),
-                                    "compound ingest produced no notes; deferring \
-                                     ingestable rows for retry (within grace window)"
-                                );
-                            }
-                        }
-                        // Fall through to mark_raw_as_processed below.
-                    }
-                    Err(e) => {
-                        tracing::warn!("compound ingest failed: {e}");
-                        // SessionEnd batches are still marked processed even
-                        // when the compound plan failed — ProfileSynthesizer
-                        // (above) already consumed them. Other batches retry
-                        // next tick because the raws stay unprocessed.
-                        use crate::memory::store::raw_memory::RawMemorySource;
-                        let only_session_end = raw_memories
-                            .iter()
-                            .all(|r| matches!(&r.source, RawMemorySource::SessionEnd { .. }));
-                        if only_session_end {
-                            tracing::info!(
-                                "compound ingest failed on SessionEnd-only batch; \
-                                 marking processed (ProfileSynthesizer already fired)"
-                            );
-                            // fall through to mark_processed below
-                        } else {
-                            return Ok(CompressionResult::empty());
-                        }
-                    }
-                }
-            } else {
+            let Some(ing) = self.compound_ingestor.clone() else {
                 tracing::warn!(
                     "compound ingest enabled but no ingestor configured; skipping batch"
                 );
                 return Ok(CompressionResult::empty());
+            };
+
+            // ToolInvocation rows are per-call telemetry, consumed by the
+            // insights aggregator and dream signal metrics (which read them
+            // by source, independent of `is_processed`). They are NOT
+            // knowledge — keep them out of the note-extraction LLM batch so
+            // they neither waste a planning call nor pollute L1 with
+            // "tool X ok in Yms" pseudo-notes. They are marked processed
+            // immediately below (they can never yield a note, so nothing may
+            // ever defer them) so the unprocessed queue stays bounded.
+            let (telemetry, ingestable): (Vec<RawMemory>, Vec<RawMemory>) = raw_memories
+                .iter()
+                .cloned()
+                .partition(|r| matches!(r.source, RawMemorySource::ToolInvocation { .. }));
+
+            // X1 C3: let extensions contribute context before ingest. Computed
+            // once for the whole drained batch and shared by every per-source
+            // ingest call below — extensions fire once per drain, not per group.
+            let extra_context: Option<String> = if let Some(reg) = &self.extension_registry {
+                let ctx = crate::memory::extensions::types::PreCompressCtx {
+                    agent_id: workspace_id.to_string(),
+                    namespace: crate::memory::namespace::NamespaceScope::Owner,
+                    session_id: None,
+                    messages_count: ingestable.len() as u32,
+                    oldest_at: None,
+                    newest_at: None,
+                };
+                let text = reg.dispatch_on_pre_compress(&ctx).await;
+                if text.trim().is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
+            } else {
+                None
+            };
+
+            // ProfileSynthesizer fires INDEPENDENTLY of compound ingest
+            // result: a malformed LLM plan must not block USER.md updates.
+            // Fire-and-forget, never block the compression flow.
+            if let Some(ps) = self.profile_synthesizer.clone() {
+                let session_end_raws: Vec<_> = raw_memories
+                    .iter()
+                    .filter(|r| matches!(&r.source, RawMemorySource::SessionEnd { .. }))
+                    .collect();
+                if !session_end_raws.is_empty() {
+                    let agent = workspace_id.to_string();
+                    let digest: String = session_end_raws
+                        .iter()
+                        .map(|r| r.content.clone())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let reason = match &session_end_raws[0].source {
+                        RawMemorySource::SessionEnd { reason } => format!("{reason:?}"),
+                        _ => "unknown".to_string(),
+                    };
+                    tracing::info!(
+                        agent_id = %agent,
+                        session_end_count = session_end_raws.len(),
+                        "ProfileSynthesizer: firing on SessionEnd raws"
+                    );
+                    tokio::spawn(async move {
+                        let signal = crate::memory::notes::profile::SessionSignal {
+                            reason,
+                            digest_text: digest,
+                            recent_user_turns: vec![],
+                            session_id: String::new(),
+                        };
+                        if let Err(e) = ps.update(&agent, signal).await {
+                            tracing::warn!("profile update after session end failed: {e}");
+                        } else {
+                            tracing::info!(
+                                agent_id = %agent,
+                                "ProfileSynthesizer: USER.md update completed"
+                            );
+                        }
+                    });
+                }
             }
 
-            // Mark raw memories as processed (compound path), excluding any rows
-            // deferred for retry by the stop-the-bleed grace window above.
-            let consumed_ids: Vec<String> = raw_memories
-                .iter()
-                .filter(|r| !deferred_ids.contains(&r.id))
-                .map(|r| r.id.clone())
-                .collect();
-            match self.database.mark_raw_as_processed(&consumed_ids).await {
-                Ok(n) => tracing::info!(marked = n, "Marked raw memories as processed (compound)"),
-                Err(e) => tracing::warn!(error = %e, "Failed to mark raw memories as processed"),
+            let mut memories_processed: u32 = 0;
+            let mut facts_extracted: u32 = 0;
+            let mut facts_invalidated: u32 = 0;
+
+            // Telemetry rows never enter an ingest group; mark them right away.
+            if !telemetry.is_empty() {
+                let ids: Vec<String> = telemetry.iter().map(|r| r.id.clone()).collect();
+                match self.database.mark_raw_as_processed(&ids).await {
+                    Ok(n) => {
+                        memories_processed += n as u32;
+                        tracing::info!(marked = n, "Marked telemetry raws as processed");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to mark telemetry raws as processed");
+                    }
+                }
+            }
+
+            // Group the ingestable rows by prompt-affecting source identity,
+            // preserving fetch order within each group and first-seen group
+            // order. The ingestor derives its per-source prompt from
+            // `raws[0].source`, so a mixed drain MUST be split or
+            // Reflection/SessionEnd/Delegation rows silently degrade to
+            // whichever source happened to be fetched first.
+            let mut groups: Vec<(String, Vec<RawMemory>)> = Vec::new();
+            for r in ingestable {
+                let key = ingest_group_key(&r.source);
+                match groups.iter_mut().find(|(k, _)| *k == key) {
+                    Some((_, rows)) => rows.push(r),
+                    None => groups.push((key, vec![r])),
+                }
+            }
+
+            // Marking policy (deliberate): each group's rows are marked
+            // processed right after that group's ingest settles — per group,
+            // not batch-at-end. On partial failure this keeps succeeded groups
+            // from being re-ingested on the next tick (duplicate note pages,
+            // doubled LLM spend); the failed group's rows stay unprocessed and
+            // retry. The per-agent ingest lock is held across ALL groups, so
+            // the read → ingest → mark window stays closed to concurrent
+            // drains for the whole run.
+            for (group_key, group) in groups {
+                let ingest_outcome = ing
+                    .ingest_batch(workspace_id, group.clone(), extra_context.as_deref())
+                    .await;
+
+                match ingest_outcome {
+                    Ok(report) => {
+                        facts_extracted += report.created + report.appended + report.updated;
+                        facts_invalidated += report.contradicted + report.superseded;
+
+                        // Stop-the-bleed: when this group's plan produced no
+                        // notes, don't burn the knowledge. Defer marking rows
+                        // still within the grace window so a transiently-failed
+                        // extraction (flaky planner LLM / embedding outage)
+                        // gets retried on a later tick instead of being
+                        // discarded forever. Past the window even ingestable
+                        // rows are marked, to bound the queue.
+                        let mut consumed: Vec<String> = Vec::with_capacity(group.len());
+                        if report.is_empty() {
+                            const RETRY_GRACE_SECS: i64 = 6 * 3600;
+                            let now = chrono::Utc::now().timestamp();
+                            let mut deferred = 0usize;
+                            for r in &group {
+                                if now - r.created_at < RETRY_GRACE_SECS {
+                                    deferred += 1;
+                                } else {
+                                    consumed.push(r.id.clone());
+                                }
+                            }
+                            if deferred > 0 {
+                                tracing::info!(
+                                    group = %group_key,
+                                    deferred,
+                                    "compound ingest produced no notes; deferring \
+                                     ingestable rows for retry (within grace window)"
+                                );
+                            }
+                        } else {
+                            consumed.extend(group.iter().map(|r| r.id.clone()));
+                        }
+
+                        if !consumed.is_empty() {
+                            match self.database.mark_raw_as_processed(&consumed).await {
+                                Ok(n) => {
+                                    memories_processed += n as u32;
+                                    tracing::info!(
+                                        group = %group_key,
+                                        marked = n,
+                                        "Marked raw memories as processed (compound)"
+                                    );
+                                }
+                                Err(e) => tracing::warn!(
+                                    error = %e,
+                                    group = %group_key,
+                                    "Failed to mark raw memories as processed"
+                                ),
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(group = %group_key, "compound ingest failed: {e}");
+                        // SessionEnd groups are still marked processed even
+                        // when the compound plan failed — ProfileSynthesizer
+                        // (above) already consumed them. Other groups stay
+                        // unprocessed and retry next tick; groups are
+                        // independent, so keep draining the rest.
+                        let is_session_end = group.first().is_some_and(|r| {
+                            matches!(&r.source, RawMemorySource::SessionEnd { .. })
+                        });
+                        if is_session_end {
+                            tracing::info!(
+                                "compound ingest failed on SessionEnd group; \
+                                 marking processed (ProfileSynthesizer already fired)"
+                            );
+                            let ids: Vec<String> = group.iter().map(|r| r.id.clone()).collect();
+                            match self.database.mark_raw_as_processed(&ids).await {
+                                Ok(n) => memories_processed += n as u32,
+                                Err(e) => tracing::warn!(
+                                    error = %e,
+                                    "Failed to mark SessionEnd raws as processed"
+                                ),
+                            }
+                        }
+                    }
+                }
             }
 
             // Update compression timestamp.
@@ -476,10 +514,18 @@ impl CompressionService {
                 .await?;
 
             let duration_ms = start.elapsed().as_millis() as u64;
-            tracing::info!(duration_ms, "Compound ingest compression complete");
-            return Ok(CompressionResult {
+            tracing::info!(
                 duration_ms,
-                ..CompressionResult::default()
+                memories_processed,
+                facts_extracted,
+                facts_invalidated,
+                "Compound ingest compression complete"
+            );
+            return Ok(CompressionResult {
+                memories_processed,
+                facts_extracted,
+                facts_invalidated,
+                duration_ms,
             });
         }
 
@@ -488,7 +534,13 @@ impl CompressionService {
         Ok(CompressionResult::empty())
     }
 
-    /// Check if compression should be triggered and execute if needed
+    /// Check if compression should be triggered and execute if needed.
+    ///
+    /// Called from the task spawned by [`Self::record_turn_and_maybe_compress`].
+    /// The re-check is not decorative: between the threshold crossing and the
+    /// spawned task actually running, a concurrent `compress()` (background
+    /// tick / RPC / flush) may have consumed the turn budget via
+    /// `reset_turns()`, in which case this skips a redundant run.
     pub async fn check_and_compress(&self) -> Result<Option<CompressionResult>, AlephError> {
         let trigger = self.scheduler.should_trigger_compression();
 
@@ -597,6 +649,22 @@ impl CompressionService {
     /// Get current configuration
     pub const fn get_config(&self) -> &CompressionConfig {
         &self.config
+    }
+}
+
+/// Grouping key for one `compress_to_notes` drain: rows whose sources map to
+/// the same source-specific ingest prompt (see
+/// [`crate::memory::compression::source_prompts::prompt_for`]) share a group.
+/// Field payloads that do not affect prompt selection (e.g.
+/// `Delegation::child_agent_id`, `Correction::severity`) are deliberately
+/// ignored so a drain does not shatter into per-payload micro-batches;
+/// `SessionEnd` splits by reason because Disconnect (DIGEST) and TaskDone
+/// (RETRO) select different prompts.
+fn ingest_group_key(source: &crate::memory::store::raw_memory::RawMemorySource) -> String {
+    use crate::memory::store::raw_memory::RawMemorySource;
+    match source {
+        RawMemorySource::SessionEnd { reason } => format!("session_end/{reason:?}"),
+        other => other.to_persisted().0.to_string(),
     }
 }
 
@@ -907,6 +975,136 @@ mod tests {
             database.count_unprocessed("default").await.unwrap(),
             1,
             "young ingestable rows must be deferred for retry, not burned"
+        );
+    }
+
+    /// Regression (mixed-source drain): the ingestor derives its per-source
+    /// prompt from `raws[0].source`, so `compress_to_notes` must call
+    /// `ingest_batch` once per source group — never hand it a mixed batch
+    /// where Reflection/SessionEnd rows silently degrade to the first row's
+    /// prompt.
+    #[tokio::test]
+    async fn compress_to_notes_splits_mixed_sources_into_per_source_batches() {
+        use crate::memory::notes::ingest::{ApplyReport, CompoundIngestor};
+        use crate::memory::store::raw_memory::SessionEndReason;
+        use crate::sync_primitives::Mutex;
+
+        // Records every ingest_batch call as its own vector of rows.
+        struct BatchRecordingIngestor {
+            calls: Mutex<Vec<Vec<RawMemory>>>,
+        }
+        #[async_trait::async_trait]
+        impl CompoundIngestor for BatchRecordingIngestor {
+            async fn ingest_batch(
+                &self,
+                _agent_id: &str,
+                raws: Vec<RawMemory>,
+                _extra_context: Option<&str>,
+            ) -> Result<ApplyReport, AlephError> {
+                self.calls
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(raws);
+                Ok(ApplyReport::default())
+            }
+        }
+
+        let (service, database, _tmp) = create_test_service_with_tempdir().await;
+        let spy = Arc::new(BatchRecordingIngestor {
+            calls: Mutex::new(vec![]),
+        });
+        let service = service.with_compound_ingestor(spy.clone());
+
+        // Aged rows (past the grace window) with interleaved sources; distinct
+        // created_at values pin the fetch order (created_at ASC).
+        let base = chrono::Utc::now().timestamp() - 7 * 3600;
+        let mut rows = vec![
+            RawMemory::new("t1".to_string(), RawMemorySource::Transcript),
+            RawMemory::new("r1".to_string(), RawMemorySource::Reflection),
+            RawMemory::new("t2".to_string(), RawMemorySource::Transcript),
+            RawMemory::new(
+                "s1".to_string(),
+                RawMemorySource::SessionEnd {
+                    reason: SessionEndReason::TaskDone,
+                },
+            ),
+        ];
+        for (i, r) in rows.iter_mut().enumerate() {
+            r.created_at = base + i as i64;
+            database.insert_raw_memory(r).await.unwrap();
+        }
+
+        let result = service.compress_to_notes("default").await.unwrap();
+
+        let calls = spy.calls.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert_eq!(calls.len(), 3, "one ingest call per source group");
+        // Every call is homogeneous in prompt-affecting source identity.
+        for call in &calls {
+            let first = ingest_group_key(&call[0].source);
+            assert!(
+                call.iter().all(|r| ingest_group_key(&r.source) == first),
+                "each ingest batch must be single-source (got {:?})",
+                call.iter().map(|r| r.source.clone()).collect::<Vec<_>>()
+            );
+        }
+        // First-seen group order and within-group fetch order both preserved.
+        let contents: Vec<Vec<&str>> = calls
+            .iter()
+            .map(|c| c.iter().map(|r| r.content.as_str()).collect())
+            .collect();
+        assert_eq!(contents, vec![vec!["t1", "t2"], vec!["r1"], vec!["s1"]]);
+        // Aged rows with an empty plan are all marked processed (per group).
+        assert_eq!(result.memories_processed, 4);
+        assert_eq!(database.count_unprocessed("default").await.unwrap(), 0);
+    }
+
+    /// `ApplyReport` counts must surface in `CompressionResult` so the
+    /// `memory.compress` RPC and the background-task log stop reporting zeros.
+    #[tokio::test]
+    async fn compress_to_notes_backfills_apply_report_counts() {
+        use crate::memory::notes::ingest::{ApplyReport, CompoundIngestor};
+
+        struct CountingIngestor;
+        #[async_trait::async_trait]
+        impl CompoundIngestor for CountingIngestor {
+            async fn ingest_batch(
+                &self,
+                _agent_id: &str,
+                _raws: Vec<RawMemory>,
+                _extra_context: Option<&str>,
+            ) -> Result<ApplyReport, AlephError> {
+                Ok(ApplyReport {
+                    created: 2,
+                    appended: 1,
+                    updated: 1,
+                    contradicted: 1,
+                    superseded: 1,
+                    linked: 3,
+                    touched_paths: vec!["learning/tokio".to_string()],
+                    ..Default::default()
+                })
+            }
+        }
+
+        let (service, database, _tmp) = create_test_service_with_tempdir().await;
+        let service = service.with_compound_ingestor(Arc::new(CountingIngestor));
+
+        let raw = RawMemory::new(
+            "user prefers tokio".to_string(),
+            RawMemorySource::Transcript,
+        );
+        database.insert_raw_memory(&raw).await.unwrap();
+
+        let result = service.compress_to_notes("default").await.unwrap();
+
+        assert_eq!(result.memories_processed, 1, "consumed raw rows counted");
+        assert_eq!(
+            result.facts_extracted, 4,
+            "created + appended + updated notes counted"
+        );
+        assert_eq!(
+            result.facts_invalidated, 2,
+            "contradicted + superseded notes counted"
         );
     }
 

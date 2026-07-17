@@ -47,6 +47,12 @@ impl MemoryContextProvider {
     /// `<memory-context>` fence carrying a "reference data, not user input"
     /// system note.
     ///
+    /// `session_id` is the current session key: the assembler threads it into
+    /// its gather stage, where the prior-session snapshot source excludes it —
+    /// without it a resumed session gets its OWN end-of-session snapshot
+    /// injected back as "previous session" context. Pass `None` only when no
+    /// session is active (retrieval then excludes nothing).
+    ///
     /// `available_tokens` is the context-budget-aware headroom for memory this
     /// turn (see [`effective_memory_budget`]). Pass `None` to use the full
     /// configured budget (legacy behaviour / no `[context_budget]`).
@@ -54,6 +60,7 @@ impl MemoryContextProvider {
         &self,
         agent_id: &str,
         query: &str,
+        session_id: Option<&str>,
         available_tokens: Option<u32>,
     ) -> Result<Option<UnifiedMessage>, crate::error::AlephError> {
         match self.injection_mode {
@@ -85,7 +92,7 @@ impl MemoryContextProvider {
             .assemble(
                 query,
                 agent_id,
-                None,
+                session_id,
                 budget,
                 crate::memory::session_search_summary::FactSourceFilter::Any,
             )
@@ -95,7 +102,7 @@ impl MemoryContextProvider {
             agent_id: agent_id.to_string(),
             namespace: crate::memory::namespace::NamespaceScope::Owner,
             query: query.to_string(),
-            session_id: None,
+            session_id: session_id.map(str::to_string),
         };
         if let Err(e) = self
             .extensions

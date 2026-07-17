@@ -1,7 +1,7 @@
-//! Scratchpad Tool — Project working memory management
+//! Scratchpad Tool — Agent working memory management
 //!
-//! Allows the AI to manage project scratchpad files stored at
-//! `~/.aleph/projects/<project_id>/scratchpad.md`.
+//! Allows the AI to manage agent scratchpad files stored at
+//! `~/.aleph/workspaces/<agent_id>/scratchpad.md`.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

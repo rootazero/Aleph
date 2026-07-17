@@ -196,6 +196,35 @@ impl AgentHarnessRunner {
                     }
                 };
 
+            // Codex-style session-start memory-index injection: the wiki
+            // orientation envelope (schema + note index + recent-log tail)
+            // rides the same pre-rendered stable envelope as curated memory
+            // (`CuratedMemoryLayer` injects the merged string verbatim, and
+            // its own tests already exercise a multi-XML-block envelope).
+            // The builder gates itself on `MemoryInjectionMode::Tools` and on
+            // a missing wiki handle, so deployments without notes stay
+            // byte-identical. Same warn-and-degrade posture as curated above.
+            // Read through the frozen per-(agent, session) path: orientation
+            // lands in the Stable curated zone, so a per-build disk re-read
+            // would churn the provider prompt-cache prefix whenever the wiki
+            // mutated mid-session. Invalidation shares the curated snapshot's
+            // eviction points (session end / post-compression).
+            let orientation_text: Option<String> = match mcp
+                .build_orientation_message_cached(agent_id, &session_key_str, mcp.injection_mode())
+                .await
+            {
+                Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
+                Err(e) => {
+                    tracing::warn!(
+                        agent_id,
+                        error = %e,
+                        "build_orientation_message_cached failed; degrading orientation envelope to None"
+                    );
+                    None
+                }
+            };
+            let curated_text = merge_stable_memory_envelopes(curated_text, orientation_text);
+
             let memory_text: Option<String> = if user_query.is_empty() {
                 None
             } else {
@@ -204,9 +233,16 @@ impl AgentHarnessRunner {
                 // compactor to over-trim recent history (memory lands in the
                 // system prompt = un-compactable overhead). `None` when no
                 // `[context_budget]` is configured → full configured budget.
+                // The session key excludes this session's own end-of-session
+                // resume snapshot from the "previous session" recall source.
                 let headroom = self.memory_injection_headroom(session_id).await;
                 match mcp
-                    .build_memory_user_message(agent_id, user_query, headroom)
+                    .build_memory_user_message(
+                        agent_id,
+                        user_query,
+                        Some(&session_key_str),
+                        headroom,
+                    )
                     .await
                 {
                     Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
@@ -622,6 +658,21 @@ pub(crate) fn resolve_max_iterations(
         .unwrap_or(FALLBACK_MAX_ITERATIONS)
 }
 
+/// Merge the curated-memory and wiki-orientation envelopes into the single
+/// pre-rendered stable string `CuratedMemoryLayer` injects verbatim. Both are
+/// already self-contained XML blocks, so a newline join suffices; either side
+/// missing passes the other through unchanged, and both missing stays `None`
+/// so the layer emits nothing.
+fn merge_stable_memory_envelopes(
+    curated: Option<String>,
+    orientation: Option<String>,
+) -> Option<String> {
+    match (curated, orientation) {
+        (Some(c), Some(o)) => Some(format!("{c}\n{o}")),
+        (c, o) => c.or(o),
+    }
+}
+
 /// Truncate `s` to at most `max_chars` characters, appending a marker when
 /// content was dropped. Cuts on a `char_indices` boundary so multi-byte
 /// UTF-8 content never panics the slice.
@@ -667,4 +718,127 @@ pub(crate) fn agent_identity_dir_exists(agent_id: &str) -> bool {
     crate::discovery::aleph_agents_dir()
         .map(|dir| dir.join(agent_id).is_dir())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod orientation_wiring_tests {
+    use super::merge_stable_memory_envelopes;
+    use crate::config::types::memory::MemoryInjectionMode;
+    use crate::error::AlephError;
+    use crate::memory::notes::orientation::types::{
+        IndexStats, LogEntry, OrientationSnapshot, TokenBudget,
+    };
+    use crate::memory::notes::orientation::NoteOrientation;
+    use crate::sync_primitives::Arc;
+    use crate::thinker::MemoryContextProvider;
+    use async_trait::async_trait;
+
+    struct FixedOrient;
+
+    #[async_trait]
+    impl NoteOrientation for FixedOrient {
+        async fn bootstrap(&self, _: &str) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn read_snapshot(
+            &self,
+            _: &str,
+            _: TokenBudget,
+        ) -> Result<OrientationSnapshot, AlephError> {
+            Ok(OrientationSnapshot {
+                schema_text: "# Memory Schema".into(),
+                index_text: "- [[learning/rust]] — orientation-index-marker".into(),
+                recent_log_tail: "## [2026-07-17] ingest | touched=1".into(),
+            })
+        }
+        async fn record_ingest(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn record_query(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn record_lint(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn record_session_end(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn rebuild_index(&self, _: &str) -> Result<IndexStats, AlephError> {
+            Ok(IndexStats::default())
+        }
+        async fn rotate_log_if_needed(&self, _: &str) -> Result<bool, AlephError> {
+            Ok(false)
+        }
+        fn invalidate(&self, _: &str, _: &str) {}
+    }
+
+    #[test]
+    fn merge_passes_through_single_sides_and_joins_both() {
+        assert_eq!(merge_stable_memory_envelopes(None, None), None);
+        assert_eq!(
+            merge_stable_memory_envelopes(Some("c".into()), None).as_deref(),
+            Some("c")
+        );
+        assert_eq!(
+            merge_stable_memory_envelopes(None, Some("o".into())).as_deref(),
+            Some("o")
+        );
+        assert_eq!(
+            merge_stable_memory_envelopes(Some("c".into()), Some("o".into())).as_deref(),
+            Some("c\no")
+        );
+    }
+
+    /// End-to-end over the exact wiring `build_system_prompt` performs:
+    /// provider-owned mode gates the orientation builder (read through the
+    /// frozen per-(agent, session) path), the envelope merges with curated,
+    /// and `PromptBuilder::with_curated_envelope` lands it in the assembled
+    /// prompt.
+    #[tokio::test]
+    async fn orientation_envelope_lands_in_assembled_prompt() {
+        use crate::providers::message::UnifiedMessage;
+        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
+
+        let mcp = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
+            .with_orientation(Arc::new(FixedOrient));
+
+        let orientation_text = mcp
+            .build_orientation_message_cached("agent-1", "agent:agent-1:main", mcp.injection_mode())
+            .await
+            .unwrap()
+            .as_ref()
+            .map(UnifiedMessage::text_content);
+        let envelope = merge_stable_memory_envelopes(None, orientation_text);
+        assert!(envelope.is_some(), "context mode must produce an envelope");
+
+        let prompt = PromptBuilder::new(PromptConfig {
+            native_tools_enabled: true,
+            ..PromptConfig::default()
+        })
+        .with_curated_envelope(envelope)
+        .build_system_prompt(&[]);
+
+        assert!(
+            prompt.contains("<NoteOrientation>"),
+            "orientation envelope must land in the assembled prompt:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("orientation-index-marker"),
+            "index snapshot content must survive assembly:\n{prompt}"
+        );
+    }
+
+    /// Tools mode: the provider's own mode must gate the builder to `None`,
+    /// keeping the assembled prompt free of the orientation envelope.
+    #[tokio::test]
+    async fn orientation_skipped_when_provider_mode_is_tools() {
+        let mcp = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools)
+            .with_orientation(Arc::new(FixedOrient));
+
+        let msg = mcp
+            .build_orientation_message_cached("agent-1", "agent:agent-1:main", mcp.injection_mode())
+            .await
+            .unwrap();
+        assert!(msg.is_none(), "Tools mode must not auto-inject orientation");
+    }
 }

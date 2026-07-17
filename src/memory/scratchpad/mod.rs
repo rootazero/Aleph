@@ -3,22 +3,21 @@
 //! Session Scratchpad Module
 //!
 //! Provides working memory for active tasks, stored as Markdown files
-//! under `~/.aleph/projects/<project_name>/` that are immune to compression.
+//! under `~/.aleph/workspaces/<agent_id>/` that are immune to compression.
 //!
-//! Aleph is conversation-driven — projects are generated artifacts managed
-//! by Aleph, not user-created directories entered via CLI. All project
+//! Runtime working memory is bound to the agent, not to a project folder —
+//! per-run project overrides do not relocate the scratchpad. All agent
 //! working memory lives in the unified `~/.aleph/` workspace.
 //!
 //! ## Architecture
 //!
 //! - **scratchpad.md**: Current active task state
-//! - **`session_history.log`**: Archive of completed tasks
 //!
 //! ## Usage
 //!
 //! ```rust,ignore
-//! // Production: uses ~/.aleph/projects/<name>/
-//! let manager = ScratchpadManager::new("my-blog", "session-id");
+//! // Production: uses ~/.aleph/workspaces/<agent_id>/
+//! let manager = ScratchpadManager::new("my-agent", "session-id");
 //!
 //! // Testing: uses an explicit directory
 //! let manager = ScratchpadManager::with_dir(temp_dir, "session-id");
@@ -28,11 +27,9 @@
 //! manager.complete_item(0).await?;
 //! ```
 
-mod history;
 mod manager;
 pub mod template;
 
-pub use history::{HistoryEntry, SessionHistory};
 pub use manager::{
     PlanItem, PlanItemStatus, ScratchpadConfig, ScratchpadManager, ScratchpadSnapshot,
     COMPLETION_BANNER,

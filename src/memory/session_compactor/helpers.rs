@@ -132,22 +132,30 @@ impl SessionCompactor {
     }
 
     /// Store raw conversation chunk for post-compression semantic recovery.
+    ///
+    /// `agent_id` must be the same resolved id under which `post_turn_compress`
+    /// writes the d0/d1/d2 summaries (see [`Self::count_valid_facts_at_depth`]).
+    /// This used to hardcode `"default"`, which dropped every raw chunk into the
+    /// default agent's scope — `compress_to_notes` then drained them under the
+    /// WRONG agent and sedimented another agent's conversation into the default
+    /// agent's note wiki.
     pub async fn store_raw_chunk(
         &self,
         session_id: &str,
+        agent_id: &str,
         seq: usize,
         content: &str,
     ) -> Result<(), AlephError> {
         let path = format!("aleph://session/{session_id}/raw/{seq}");
         let raw = RawMemory::new(content.to_string(), RawMemorySource::SessionCompressed)
-            .with_agent("default")
+            .with_agent(agent_id)
             .with_session(session_id)
             .with_path(path);
         if let Some(ref registry) = self.capture_registry {
             let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> =
                 self.database.clone();
             let ctx = CaptureCtx {
-                agent_id: "default".into(),
+                agent_id: agent_id.to_string(),
                 namespace: crate::memory::namespace::NamespaceScope::Owner,
                 session_id: Some(session_id.to_string()),
                 source_hint: "session_compressed".into(),
@@ -266,5 +274,51 @@ impl SessionCompactor {
         );
 
         Ok(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::memory::session_compactor::{SessionCompactor, SessionCompactorConfig};
+    use crate::memory::store::MemoryBackend;
+    use crate::sync_primitives::Arc;
+
+    /// Regression: `store_raw_chunk` used to hardcode agent `"default"` while
+    /// the d0/d1/d2 writers use the resolved agent id — raw chunks from any
+    /// non-default agent landed in the default agent's scope and were later
+    /// compressed into the wrong agent's note wiki.
+    #[tokio::test]
+    async fn store_raw_chunk_writes_under_the_given_agent() {
+        use crate::memory::store::raw_memory::RawMemoryStore;
+
+        let temp = tempfile::tempdir().unwrap();
+        let database: MemoryBackend =
+            Arc::new(crate::memory::store::sqlite::SqliteMemoryBackend::new(temp.path()).unwrap());
+        let compactor = SessionCompactor::new(database.clone(), SessionCompactorConfig::default());
+
+        compactor
+            .store_raw_chunk("sess-1", "alice", 0, "[user]: hello")
+            .await
+            .unwrap();
+
+        let under_alice = database
+            .get_raw_by_path_prefix("aleph://session/sess-1/raw/", "alice", 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            under_alice.len(),
+            1,
+            "chunk lands in the resolved agent scope"
+        );
+        assert_eq!(under_alice[0].content, "[user]: hello");
+
+        let under_default = database
+            .get_raw_by_path_prefix("aleph://session/sess-1/raw/", "default", 10)
+            .await
+            .unwrap();
+        assert!(
+            under_default.is_empty(),
+            "no chunk may leak into the hardcoded default scope"
+        );
     }
 }

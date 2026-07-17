@@ -12,7 +12,7 @@ pub mod store;
 mod tests;
 
 pub use snapshot::CuratedSnapshot;
-pub use store::{CuratedMemoryStore, WriteOutcome};
+pub use store::{BatchOp, CuratedMemoryStore, WriteOutcome};
 
 /// Configuration for the curated hot memory zone.
 ///

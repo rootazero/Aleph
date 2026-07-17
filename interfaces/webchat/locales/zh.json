@@ -746,7 +746,6 @@
       "fallback_count": "回退数量",
       "compression": "记忆压缩",
       "compression_hint": "后台记忆压缩的调度参数（policies.memory.compression）。",
-      "idle_timeout_seconds": "空闲超时（秒）",
       "turn_threshold": "轮次阈值",
       "compression_interval_seconds": "压缩间隔（秒）",
       "retrieval_pipeline": "检索管道",
