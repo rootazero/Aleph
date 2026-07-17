@@ -277,6 +277,11 @@ fn parse_single_skill(
         allowed_tools: fm.allowed_tools.unwrap_or_default(),
         category: fm.category,
         plugin_id: plugin_id.to_string(),
+        // Retain the on-disk SKILL.md path so the ExtensionManager's
+        // `invoke_skill_tool` path can anchor `base_dir` for Level-3 resource
+        // files. Dropping it (the old `..Default::default()`) left plugin skills
+        // with an empty base dir, forcing the model to guess paths / `cat`.
+        source_path: md_path.to_path_buf(),
         ..Default::default()
     }))
 }

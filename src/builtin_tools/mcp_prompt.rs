@@ -66,7 +66,9 @@ impl AlephToolDyn for McpGetPromptTool {
         let parameters: Value = serde_json::to_value(&schema).unwrap_or_default();
         ToolDefinition::new(
             "mcp_get_prompt",
-            "Get a prompt template from a connected MCP server. Use mcp.listPrompts to discover available prompts first.",
+            "Get a prompt template from a connected MCP server by its server-qualified `name` \
+             (e.g. `github:create_issue`). Call `mcp_list_prompts` first to discover the \
+             available prompt names and their arguments.",
             parameters,
             ToolCategory::Mcp,
         )

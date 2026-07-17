@@ -45,13 +45,21 @@ pub struct ReadSkillOutput {
     /// Size of the file in bytes
     pub size: u64,
 
-    /// Absolute path to the skill directory
-    /// This allows the agent to locate scripts and resources within the skill
+    /// Absolute path to the skill directory. Provided so the agent can run
+    /// bundled scripts referenced by the instructions (the same dir the body's
+    /// `${ALEPH_SKILL_DIR}` token expands to). To *read* a supporting file, use
+    /// `skill_read` with `file_name` — see `usage_hint` — not `cat` on this path.
     pub location: String,
 
     /// List of other files available in this skill directory
     /// Useful for discovering Level 3 resources
     pub available_files: Vec<String>,
+
+    /// How to read the files listed in `available_files`: call
+    /// `skill_read(skill_id, file_name=…)` rather than `cat`-ing them off
+    /// `location`. Empty when the skill ships no supporting files.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub usage_hint: String,
 }
 
 /// Skill reading tool
@@ -317,6 +325,21 @@ impl ReadSkillTool {
         // List available files
         let available_files = list_skill_files(&skill_dir);
 
+        // Steer the model to read supporting files through the skill mechanism
+        // rather than `cat`-ing them off the absolute `location` path. Only
+        // meaningful when the skill ships supporting files (`available_files`
+        // already excludes the primary SKILL.md).
+        let usage_hint = if available_files.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "To read a supporting file in this skill, call \
+                 skill_read(skill_id=\"{}\", file_name=\"<one of available_files>\"). \
+                 Do not cat files from `location`.",
+                args.skill_id
+            )
+        };
+
         let result_msg = format!(
             "Read {} bytes from {}/{}",
             metadata.len(),
@@ -354,6 +377,7 @@ impl ReadSkillTool {
             size: metadata.len(),
             location: skill_dir.to_string_lossy().to_string(),
             available_files,
+            usage_hint,
         })
     }
 }

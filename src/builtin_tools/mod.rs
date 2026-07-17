@@ -55,6 +55,7 @@ pub mod heartbeat_manage;
 pub mod hub;
 pub mod list_models;
 pub mod loop_manage;
+pub mod mcp_discover;
 pub mod mcp_login;
 pub mod mcp_prompt;
 pub mod mcp_resource;
@@ -175,6 +176,9 @@ pub use heartbeat_manage::{
 };
 pub use list_models::{ListModelsArgs, ListModelsOutput, ListModelsTool};
 pub use loop_manage::{LoopAction, LoopArgs, LoopOutput, LoopTool};
+pub use mcp_discover::{
+    ListedPrompt, ListedPromptArg, ListedResource, McpListPromptsTool, McpListResourcesTool,
+};
 pub use mcp_login::{McpLoginArgs, McpLoginOutput, McpLoginTool};
 pub use mcp_prompt::{McpGetPromptArgs, McpGetPromptOutput, McpGetPromptTool, PromptOutputMessage};
 pub use mcp_resource::{McpReadResourceArgs, McpReadResourceOutput, McpReadResourceTool};

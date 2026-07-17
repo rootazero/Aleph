@@ -14,7 +14,7 @@
 //! - Windows: Uses $USERPROFILE or $HOMEDRIVE+$HOMEPATH
 
 use crate::error::{AlephError, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Process-global environment guard for tests that mutate `ALEPH_HOME`.
 /// Acquiring this mutex serialises tests so they don't observe each other's
@@ -329,6 +329,49 @@ fn is_safe_agent_id(agent_id: &str) -> bool {
         && !agent_id.contains('\0')
 }
 
+/// Append each `<plugin>/skills` directory found under `plugins_root` to `dirs`
+/// (deduplicated). A plugin ships its skills at `<plugin>/skills/<skill>/SKILL.md`.
+fn collect_plugin_skills_from_root(plugins_root: &Path, dirs: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(plugins_root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let skills = entry.path().join("skills");
+        if skills.is_dir() && !dirs.contains(&skills) {
+            dirs.push(skills);
+        }
+    }
+}
+
+/// Return each installed / project plugin's `skills` subdirectory.
+///
+/// Plugin skills live at `<plugins_root>/<plugin>/skills`. Surfacing these to the
+/// `skill_read` / `skill_list` tools (which resolve skills by directory name)
+/// lets the model read a plugin-shipped skill through the skill mechanism instead
+/// of falling back to a raw `cat` on the plugin's files. Ordered global-then-project
+/// so callers can treat them as the lowest-precedence tier (a user/project skill of
+/// the same id shadows the plugin one — mirroring `guess_source` labelling plugin
+/// skills as the lowest-priority `Bundled` source).
+#[must_use]
+pub fn get_plugin_skills_dirs(project_dir: Option<&std::path::Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    // Global: ~/.aleph/plugins/<plugin>/skills
+    if let Ok(home) = get_home_dir() {
+        collect_plugin_skills_from_root(&home.join(".aleph").join("plugins"), &mut dirs);
+    }
+
+    // Project: <project|cwd>/.aleph/plugins/<plugin>/skills
+    let start = project_dir
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok());
+    if let Some(start) = start {
+        collect_plugin_skills_from_root(&start.join(".aleph").join("plugins"), &mut dirs);
+    }
+
+    dirs
+}
+
 pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<PathBuf>> {
     use tracing::info;
 
@@ -398,6 +441,18 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
                 is_dir = global_claude.is_dir(),
                 "~/.claude/skills not found or not a directory"
             );
+        }
+    }
+
+    // 3. Plugin-shipped skills (lowest precedence): ~/.aleph/plugins/<p>/skills and
+    //    project .aleph/plugins/<p>/skills. Appended last so a same-id user/project
+    //    skill (scanned earlier) shadows a plugin's — `skill_read`/`skill_list` win by
+    //    first occurrence. Without this, `skill_read(<plugin skill>)` returned NotFound
+    //    and the model fell back to `cat` on the raw plugin files.
+    for d in get_plugin_skills_dirs(project_dir) {
+        if !dirs.contains(&d) {
+            info!(path = %d.display(), "Found plugin skills dir");
+            dirs.push(d);
         }
     }
 

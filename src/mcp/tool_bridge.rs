@@ -6,16 +6,20 @@
 //! live agent loop (`tool_registry_phase2` → `CoreDispatch` → harness `think`)
 //! sees external MCP tools without the manager knowing the tool system exists.
 //!
-//! It also gates the two builtin MCP utility tools (`mcp_read_resource`,
-//! `mcp_get_prompt`): each is present in the registry only while at least one
-//! connected server advertises that capability, so the agent is never offered
-//! a tool that every call would reject.
+//! It also gates the builtin MCP utility tools — the readers
+//! (`mcp_read_resource`, `mcp_get_prompt`) and their discovery twins
+//! (`mcp_list_resources`, `mcp_list_prompts`): each pair is present in the
+//! registry only while at least one connected server advertises that
+//! capability, so the agent is never offered a tool that every call would
+//! reject, and the discovery twin is always alongside the reader so the model
+//! can enumerate URIs/names instead of guessing them (or falling back to `cat`).
 
 use crate::sync_primitives::Arc;
 
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 
+use crate::builtin_tools::mcp_discover::{McpListPromptsTool, McpListResourcesTool};
 use crate::builtin_tools::mcp_login::McpLoginTool;
 use crate::builtin_tools::mcp_prompt::McpGetPromptTool;
 use crate::builtin_tools::mcp_resource::McpReadResourceTool;
@@ -29,8 +33,14 @@ use crate::tools::AlephToolDyn;
 
 /// Registry name of the capability-gated resource-reading builtin.
 const RESOURCE_TOOL: &str = "mcp_read_resource";
+/// Registry name of the capability-gated resource-discovery builtin (the
+/// `mcp_read_resource` twin — enumerates the URIs it consumes).
+const LIST_RESOURCES_TOOL: &str = "mcp_list_resources";
 /// Registry name of the capability-gated prompt-fetching builtin.
 const PROMPT_TOOL: &str = "mcp_get_prompt";
+/// Registry name of the capability-gated prompt-discovery builtin (the
+/// `mcp_get_prompt` twin — enumerates the names it consumes).
+const LIST_PROMPTS_TOOL: &str = "mcp_list_prompts";
 /// Registry name of the OAuth login builtin (present only with remote servers).
 const LOGIN_TOOL: &str = "mcp_login";
 
@@ -217,14 +227,24 @@ async fn reconcile_capability_tools(
         .any(|s| !matches!(s.transport, McpTransportType::Stdio));
 
     if want_resource != *resource_live {
+        // The read tool and its discovery twin share one capability gate:
+        // `mcp_list_resources` enumerates the server-qualified URIs that
+        // `mcp_read_resource` consumes. Registering the read tool without the
+        // list tool is what left the model unable to discover resource URIs.
         // rust-doctor-disable-next-line excessive-clone
-        let tool: Arc<dyn AlephToolDyn> = Arc::new(McpReadResourceTool::new(handle.clone()));
-        *resource_live = set_builtin(registry, RESOURCE_TOOL, want_resource, tool);
+        let read: Arc<dyn AlephToolDyn> = Arc::new(McpReadResourceTool::new(handle.clone()));
+        // rust-doctor-disable-next-line excessive-clone
+        let list: Arc<dyn AlephToolDyn> = Arc::new(McpListResourcesTool::new(handle.clone()));
+        set_builtin(registry, LIST_RESOURCES_TOOL, want_resource, list);
+        *resource_live = set_builtin(registry, RESOURCE_TOOL, want_resource, read);
     }
     if want_prompt != *prompt_live {
         // rust-doctor-disable-next-line excessive-clone
-        let tool: Arc<dyn AlephToolDyn> = Arc::new(McpGetPromptTool::new(handle.clone()));
-        *prompt_live = set_builtin(registry, PROMPT_TOOL, want_prompt, tool);
+        let get: Arc<dyn AlephToolDyn> = Arc::new(McpGetPromptTool::new(handle.clone()));
+        // rust-doctor-disable-next-line excessive-clone
+        let list: Arc<dyn AlephToolDyn> = Arc::new(McpListPromptsTool::new(handle.clone()));
+        set_builtin(registry, LIST_PROMPTS_TOOL, want_prompt, list);
+        *prompt_live = set_builtin(registry, PROMPT_TOOL, want_prompt, get);
     }
     if want_login != *login_live {
         // rust-doctor-disable-next-line excessive-clone
