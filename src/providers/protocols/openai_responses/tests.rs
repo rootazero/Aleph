@@ -305,6 +305,71 @@ fn test_prompt_cache_key_from_session_metadata_capability_gated() {
 }
 
 #[test]
+fn test_prompt_cache_key_content_addressed_and_retention_gated() {
+    use crate::config::types::provider::CacheRetention;
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("hi")];
+
+    // With a static prefix the key is content-addressed (`pck_…`) and stable
+    // across sessions — the daemon/cron cache-cold fix.
+    let official = ProviderConfig::test_config("gpt-4o");
+    let key_for_session = |session: &str| {
+        let mut meta = std::collections::HashMap::new();
+        meta.insert("session_id".to_string(), session.to_string());
+        let payload = RequestPayload::new(&msgs)
+            .with_system(Some("You are Aleph."))
+            .with_metadata(Some(meta));
+        OpenAiResponsesProtocol::build_responses_request(
+            &payload,
+            "gpt-4o",
+            &ResponsesVariant::default(),
+            &official,
+        )
+        .prompt_cache_key
+        .expect("key set on official endpoint")
+    };
+    let a = key_for_session("cron_1_170001");
+    let b = key_for_session("cron_1_170099");
+    assert!(a.starts_with("pck_"), "content-addressed key, got {a}");
+    assert_eq!(a, b, "same static prefix must share one routing bucket");
+
+    // `cache_retention = long` on the official endpoint → 24h retention.
+    let mut long_cfg = ProviderConfig::test_config("gpt-4o");
+    long_cfg.cache_retention = Some(CacheRetention::Long);
+    let payload = RequestPayload::new(&msgs).with_system(Some("sys"));
+    let req = OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "gpt-4o",
+        &ResponsesVariant::default(),
+        &long_cfg,
+    );
+    assert_eq!(req.prompt_cache_retention.as_deref(), Some("24h"));
+
+    // Long on a custom endpoint → omitted (no capability, non-official).
+    let mut custom_long = ProviderConfig::test_config("gpt-4o");
+    custom_long.base_url = Some("https://openrouter.ai/api/v1".to_string());
+    custom_long.cache_retention = Some(CacheRetention::Long);
+    let payload = RequestPayload::new(&msgs).with_system(Some("sys"));
+    let req = OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "gpt-4o",
+        &ResponsesVariant::default(),
+        &custom_long,
+    );
+    assert!(req.prompt_cache_retention.is_none());
+
+    // Short (default) on official → omitted.
+    let payload = RequestPayload::new(&msgs).with_system(Some("sys"));
+    let req = OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "gpt-4o",
+        &ResponsesVariant::default(),
+        &official,
+    );
+    assert!(req.prompt_cache_retention.is_none());
+}
+
+#[test]
 fn test_build_reasoning_emits_minimal_and_xhigh_faithfully() {
     use crate::agents::thinking::ThinkLevel;
     use crate::providers::message::UnifiedMessage;

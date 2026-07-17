@@ -425,7 +425,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         // Build system block(s). Two shapes are supported:
         //
         // 1. Cache-first split (preferred): caller supplied `system_blocks`
-        //    via `PromptBuilder::build_system_prompt_cached()`. We collapse
+        //    via `PromptBuilder::build_system_prompt_cached_with_mode()`. We collapse
         //    the contiguous `cache:true` parts into a SINGLE stable block
         //    carrying the cache breakpoint, and the remaining `cache:false`
         //    parts into a SINGLE dynamic tail block with no marker. Per

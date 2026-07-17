@@ -114,7 +114,10 @@ impl ThinkerContext {
     /// Build cached prompt and store result
     pub fn build_cached_prompt(&mut self) {
         if let Some(builder) = &self.builder {
-            self.cached_parts = Some(builder.build_system_prompt_cached(&self.tools));
+            self.cached_parts = Some(builder.build_system_prompt_cached_with_mode(
+                &self.tools,
+                alephcore::thinker::prompt_mode::PromptMode::Full,
+            ));
         }
     }
 

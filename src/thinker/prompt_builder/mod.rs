@@ -12,26 +12,11 @@ mod tests;
 
 use crate::tools::info::ToolInfo;
 
-use crate::agents::AgentDef;
-
 use super::identity_files::IdentityFiles;
 use super::prompt_budget::TokenBudget;
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability};
 use super::prompt_mode::PromptMode;
 use super::prompt_pipeline::PromptPipeline;
-
-/// Parent agent's stable prompt snapshot for fork path reuse.
-///
-/// Contains the output of all `LayerStability::Stable` layers for a given
-/// assembly path. Subagents using the fork path prepend this prefix and
-/// only rebuild dynamic layers (agent role, session context, memory, etc.).
-#[derive(Debug, Clone)]
-pub struct PromptSnapshot {
-    /// Stable layers assembly output.
-    pub stable_prefix: String,
-    /// Source assembly path.
-    pub path: AssemblyPath,
-}
 
 /// System prompt part with optional cache flag
 ///
@@ -357,60 +342,6 @@ impl PromptBuilder {
             .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref());
         let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline.execute(AssemblyPath::Basic, &input)
-    }
-
-    /// Capture the current stable layers output as a reusable snapshot.
-    pub fn capture_snapshot(&self, tools: &[ToolInfo]) -> PromptSnapshot {
-        let path = AssemblyPath::Basic;
-        let input = LayerInput::basic(&self.config, tools)
-            .with_identity_files_opt(self.identity_files.as_ref())
-            .with_extra_files_opt(self.extra_files.as_deref());
-        let input = match &self.config.mcp_instructions {
-            Some(instructions) => input.with_mcp_instructions(instructions),
-            None => input,
-        };
-        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
-        let input = input.with_chain_context_opt(self.chain_context.as_ref());
-        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
-        let input = input
-            .with_behavior_name_opt(self.behavior_name.as_deref())
-            .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref());
-        let input = input.with_iteration_cap_opt(self.iteration_cap);
-        let stable_prefix = self.pipeline.execute_stable_only(path, &input);
-        PromptSnapshot {
-            stable_prefix,
-            path,
-        }
-    }
-
-    /// Build a sub-agent prompt by reusing the snapshot's stable prefix.
-    pub fn build_from_snapshot(
-        &self,
-        snapshot: &PromptSnapshot,
-        agent_def: &AgentDef,
-        tools: &[ToolInfo],
-    ) -> String {
-        let input = LayerInput::basic(&self.config, tools)
-            .with_agent_def(agent_def)
-            .with_identity_files_opt(self.identity_files.as_ref())
-            .with_extra_files_opt(self.extra_files.as_deref());
-        let input = match &self.config.mcp_instructions {
-            Some(instructions) => input.with_mcp_instructions(instructions),
-            None => input,
-        };
-        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
-        let input = input.with_chain_context_opt(self.chain_context.as_ref());
-        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
-        let input = input
-            .with_behavior_name_opt(self.behavior_name.as_deref())
-            .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref());
-        let input = input.with_iteration_cap_opt(self.iteration_cap);
-
-        let dynamic_suffix = self.pipeline.execute_dynamic_only(snapshot.path, &input);
-        let mut result = String::with_capacity(snapshot.stable_prefix.len() + dynamic_suffix.len());
-        result.push_str(&snapshot.stable_prefix);
-        result.push_str(&dynamic_suffix);
-        result
     }
 
     /// Access the underlying config (for reading).

@@ -225,20 +225,31 @@ impl OpenAiResponsesProtocol {
                 // rust-doctor-disable-next-line excessive-clone
                 .clone()
                 .filter(|_| policy.capabilities.supports_service_tier),
-            // Route by session id for prompt-cache affinity on endpoints that
-            // honor it; omitted elsewhere (and stripped defensively by policy).
-            prompt_cache_key: payload
-                .metadata
-                .as_ref()
-                .and_then(|m| m.get("session_id"))
-                .filter(|s| !s.is_empty())
-                .filter(|_| policy.capabilities.supports_prompt_cache)
-                .map(|s| {
-                    crate::providers::protocols::openai_common::prompt_cache::clamp_prompt_cache_key(
-                        s,
-                    )
-                    .into_owned()
-                }),
+            // Content-addressed routing affinity (static prefix hash, session
+            // id fallback) on endpoints that honor it; omitted elsewhere (and
+            // stripped defensively by policy).
+            prompt_cache_key: if policy.capabilities.supports_prompt_cache {
+                crate::providers::protocols::openai_common::prompt_cache::derive_prompt_cache_key(
+                    payload,
+                )
+            } else {
+                None
+            },
+            // Extended cache retention (24h) — official OpenAI only; the
+            // user's `cache_retention = long` knob maps to it (the Anthropic
+            // side maps the same knob to the 1h ephemeral TTL).
+            prompt_cache_retention: if policy.capabilities.supports_prompt_cache
+                && matches!(
+                    config.cache_retention,
+                    Some(crate::config::types::provider::CacheRetention::Long)
+                )
+                && policy.endpoint_class
+                    == crate::providers::protocols::openai_common::provider_policy::EndpointClass::OpenAiPublic
+            {
+                Some("24h".to_string())
+            } else {
+                None
+            },
         }
     }
 }

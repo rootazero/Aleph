@@ -7,6 +7,7 @@
 //! - `schema`        — tool `input_schema` sanitization & dedup.
 //! - `oauth`         — OAuth-token detection & authorization-header wiring.
 //! - `adaptive`      — Claude 4.6/4.7 adaptive-thinking + xhigh downgrade.
+//! - `prefix_stability` — strict-prefix-extension cache contract on raw bodies.
 
 mod helpers;
 
@@ -15,4 +16,5 @@ mod basic;
 mod build_request;
 mod convert;
 mod oauth;
+mod prefix_stability;
 mod schema;

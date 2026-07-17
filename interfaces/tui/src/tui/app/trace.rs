@@ -149,6 +149,9 @@ impl AppState {
             }
             // Tool-call lifecycle is rendered by ToolStart/ToolEnd gateway events;
             // observability passthrough variants have no TUI rendering.
+            // (ProviderUsage feeds the status-bar cache stat in the state
+            // match below — it has no presentation, so it never reaches this
+            // debug-entry dispatch anyway.)
             AgentTraceEvent::ToolCallStarted { .. }
             | AgentTraceEvent::ToolCallCompleted { .. }
             | AgentTraceEvent::WorktreeCreated { .. }
@@ -224,6 +227,25 @@ impl AppState {
                 self.current_run_uses_agent_trace = false;
                 self.mark_current_assistant_complete();
                 Action::ScrollToBottomIfAutoScroll
+            }
+            // Live per-call cache telemetry → status-bar cache stat. Only
+            // calls that actually report cache activity update it, so
+            // providers without prompt caching never surface a misleading 0%.
+            // Denominator follows the Anthropic accounting (input excludes
+            // cached reads): input + cache_creation + cache_read.
+            AgentTraceEvent::ProviderUsage {
+                input_tokens,
+                cache_read_tokens,
+                cache_creation_tokens,
+                ..
+            } => {
+                let read = u64::from(cache_read_tokens.unwrap_or(0));
+                let creation = u64::from(cache_creation_tokens.unwrap_or(0));
+                if read > 0 || creation > 0 {
+                    let denom = u64::from(*input_tokens) + creation + read;
+                    self.cache_stat = Some((read, denom));
+                }
+                Action::None
             }
             _ => Action::None,
         }

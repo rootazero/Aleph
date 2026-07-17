@@ -236,14 +236,22 @@ pub fn resolve_anthropic_capabilities(
                 caps.supports_interleaved_thinking = false;
             }
 
-            // Azure AI Foundry: needs context-1m for 1M context.
+            // Azure AI Foundry: needs context-1m for 1M context. Hosts real
+            // Claude models with Anthropic prompt caching — enable
+            // cache_control so those deployments stop paying full input price
+            // every turn (the conservative Custom default assumed rejection).
             if is_azure_anthropic_endpoint(&host) {
                 caps.supports_context_1m = true;
+                caps.supports_cache_control = true;
             }
 
-            // AWS Bedrock: needs context-1m for 1M context.
+            // AWS Bedrock: needs context-1m for 1M context. The Anthropic
+            // Messages passthrough on Bedrock accepts `cache_control`
+            // ephemeral markers (AWS-documented prompt caching) — enable it,
+            // same reasoning as Azure above.
             if is_bedrock_anthropic_endpoint(&host) {
                 caps.supports_context_1m = true;
+                caps.supports_cache_control = true;
             }
 
             caps

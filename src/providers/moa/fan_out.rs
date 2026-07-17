@@ -42,8 +42,7 @@ pub(crate) async fn run_fan_out(
             Ok(Ok(resp)) => {
                 let text = resp
                     .text
-                    .as_ref()
-                    .map(|t| t.as_str())
+                    .as_deref()
                     .filter(|t| !t.trim().is_empty())
                     .map(|t| t.to_string())
                     .unwrap_or_else(|| "(empty response)".to_string());

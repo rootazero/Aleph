@@ -114,18 +114,26 @@ impl ProtocolAdapter for OpenAiProtocol {
 
         let policy = build_payload_policy(config.base_url.as_deref(), "openai-chat", None);
 
-        // prompt_cache_key: route by session id for prompt-cache affinity when
-        // the endpoint honors it. `policy.apply` strips it on unsupported
-        // endpoints, but gate here too so it is never set needlessly.
+        // prompt_cache_key: content-addressed routing affinity (static prefix
+        // hash, session-id fallback) when the endpoint honors it. `policy.apply`
+        // strips it on unsupported endpoints, but gate here too so it is never
+        // set needlessly.
         if policy.capabilities.supports_prompt_cache {
-            if let Some(key) = payload
-                .metadata
-                .as_ref()
-                .and_then(|m| m.get("session_id"))
-                .filter(|s| !s.is_empty())
+            if let Some(key) =
+                super::super::openai_common::prompt_cache::derive_prompt_cache_key(payload)
             {
-                let key = super::super::openai_common::prompt_cache::clamp_prompt_cache_key(key);
-                body["prompt_cache_key"] = json!(key.as_ref());
+                body["prompt_cache_key"] = json!(key);
+            }
+            // Extended cache retention (24h) — official OpenAI only; the
+            // user's `cache_retention = long` knob maps to it (the Anthropic
+            // side maps the same knob to the 1h ephemeral TTL).
+            if matches!(
+                config.cache_retention,
+                Some(crate::config::types::provider::CacheRetention::Long)
+            ) && policy.endpoint_class
+                == super::super::openai_common::provider_policy::EndpointClass::OpenAiPublic
+            {
+                body["prompt_cache_retention"] = json!("24h");
             }
         }
 

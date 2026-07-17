@@ -436,7 +436,7 @@ fn macos_window_list() -> Result<Vec<WindowInfo>> {
             let rect: CFDictionary<CFString, core_foundation::base::CFType> =
                 unsafe { CFDictionary::wrap_under_get_rule(untyped.as_concrete_TypeRef()) };
             let num = |k: &str| -> Option<f64> {
-                rect.find(&CFString::new(k))
+                rect.find(CFString::new(k))
                     .and_then(|v| v.downcast::<CFNumber>())
                     .and_then(|n| n.to_f64())
             };

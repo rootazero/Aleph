@@ -21,24 +21,14 @@ impl PromptBuilder {
     /// [`stability()`](crate::thinker::prompt_layer::PromptLayer::stability)
     /// declaration, so adding new layers automatically classifies them.
     ///
-    /// Equivalent to [`build_system_prompt_cached_with_mode`] with
-    /// [`PromptMode::Full`] — kept as the back-compatible default entry point.
-    ///
-    /// [`build_system_prompt_cached_with_mode`]: Self::build_system_prompt_cached_with_mode
-    pub fn build_system_prompt_cached(&self, tools: &[ToolInfo]) -> Vec<SystemPromptPart> {
-        self.build_system_prompt_cached_with_mode(tools, PromptMode::Full)
-    }
-
-    /// Mode-aware variant of [`build_system_prompt_cached`].
-    ///
     /// Threads `mode` through the layer pipeline so token-constrained
     /// deployments can opt into a leaner system prompt — `Compact` / `Minimal`
     /// shed the heavy guidance layers that declare `supports_mode(mode) ==
     /// false`, while `Full` reproduces the legacy assembly byte-for-byte. The
     /// stable/dynamic split (and thus the prompt-cache breakpoint) is
-    /// preserved across all modes.
-    ///
-    /// [`build_system_prompt_cached`]: Self::build_system_prompt_cached
+    /// preserved across all modes. (A no-mode `build_system_prompt_cached`
+    /// wrapper used to alias `Full`; every caller migrated to this entry and
+    /// the wrapper was removed per YAGNI.)
     pub fn build_system_prompt_cached_with_mode(
         &self,
         tools: &[ToolInfo],
@@ -117,19 +107,6 @@ mod tests {
 
     fn total_len(parts: &[SystemPromptPart]) -> usize {
         parts.iter().map(|p| p.content.len()).sum()
-    }
-
-    #[test]
-    fn full_is_the_back_compat_default() {
-        let builder = PromptBuilder::new(PromptConfig::default());
-        let legacy = builder.build_system_prompt_cached(&[]);
-        let full = builder.build_system_prompt_cached_with_mode(&[], PromptMode::Full);
-        // The no-mode entry point must reproduce Full byte-for-byte.
-        assert_eq!(legacy.len(), full.len());
-        for (a, b) in legacy.iter().zip(full.iter()) {
-            assert_eq!(a.content, b.content);
-            assert_eq!(a.cache, b.cache);
-        }
     }
 
     #[test]
