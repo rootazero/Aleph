@@ -23,16 +23,16 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
     // ─── OpenAI family ────────────────────────────────────────────────────────
     (
         "openai",
-        ProviderPreset::new("https://api.openai.com/v1", "openai", "#10a37f", "gpt-5.4")
+        ProviderPreset::new("https://api.openai.com/v1", "openai", "#10a37f", "gpt-5.6")
             .with_display("OpenAI")
             .with_homepage("https://platform.openai.com")
             .with_signup("https://platform.openai.com/api-keys")
             .with_aux_model("gpt-5.4-mini")
-            .with_fallback_models(&["gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "o4-mini"]),
+            .with_fallback_models(&["gpt-5.6", "gpt-5.5", "gpt-5.4-mini", "o4-mini"]),
     ),
     (
         "chatgpt",
-        ProviderPreset::new("https://chatgpt.com", "codex", "#10a37f", "gpt-5.4")
+        ProviderPreset::new("https://chatgpt.com", "codex", "#10a37f", "gpt-5.6")
             .with_display("ChatGPT (Codex Login)")
             .with_homepage("https://chatgpt.com")
             .with_signup("https://chatgpt.com")
@@ -60,10 +60,10 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.anthropic.com",
             "anthropic",
             "#d97757",
-            // Date-less aliases are the vendor-recommended form; the old
-            // dated ids here mixed generations ("claude-sonnet-4-5-20250514"
-            // never existed — that stamp belongs to sonnet-4-0) and 404'd.
-            "claude-sonnet-4-6",
+            // Date-less aliases are the vendor-recommended form. Sonnet 5 is
+            // the current balanced flagship (Claude 5 family); the older
+            // dated ids mixed generations and 404'd.
+            "claude-sonnet-5",
         )
         .with_display("Anthropic Claude")
         .with_homepage("https://docs.anthropic.com")
@@ -71,7 +71,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_aux_model("claude-haiku-4-5")
         .with_models_url("https://api.anthropic.com/v1/models")
         .with_fallback_models(&[
-            "claude-sonnet-4-6",
+            "claude-sonnet-5",
             "claude-opus-4-8",
             "claude-haiku-4-5",
         ]),
@@ -82,9 +82,9 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://bedrock-runtime.us-east-1.amazonaws.com",
             "anthropic",
             "#ff9900",
-            // Sonnet 3.7 was retired 2026-02-19; Bedrock serves the bare
-            // dot-tagged 4.6 id (hermes bedrock pricing table).
-            "anthropic.claude-sonnet-4-6",
+            // Bedrock serves the bare dot-tagged Anthropic id (hermes bedrock
+            // pricing table); Sonnet 5 is the current Claude 5 gen.
+            "anthropic.claude-sonnet-5",
         )
         .with_aliases(&["bedrock"])
         .with_display("Amazon Bedrock")
@@ -99,9 +99,9 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://us-east5-aiplatform.googleapis.com/v1",
             "anthropic",
             "#4285f4",
-            // Sonnet 4.0 retires 2026-06-15; Vertex serves the date-less id
-            // (openclaw ANTHROPIC_VERTEX_DEFAULT_MODEL_ID).
-            "claude-sonnet-4-6",
+            // Vertex serves the date-less id (openclaw
+            // ANTHROPIC_VERTEX_DEFAULT_MODEL_ID); Sonnet 5 is the current gen.
+            "claude-sonnet-5",
         )
         .with_display("Vertex AI — Anthropic")
         .with_homepage(
@@ -118,16 +118,16 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://generativelanguage.googleapis.com",
             "gemini",
             "#4285f4",
-            "gemini-2.5-flash",
+            "gemini-3.1-pro-preview",
         )
         .with_display("Google Gemini")
         .with_homepage("https://ai.google.dev")
         .with_signup("https://aistudio.google.com/app/apikey")
-        .with_aux_model("gemini-2.5-flash-lite")
+        .with_aux_model("gemini-3-flash-preview")
         .with_fallback_models(&[
-            "gemini-2.5-pro",
+            "gemini-3.1-pro-preview",
+            "gemini-3-flash-preview",
             "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
         ]),
     ),
     // ─── DeepSeek / Moonshot ──────────────────────────────────────────────────
@@ -137,13 +137,17 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.deepseek.com",
             "openai",
             "#0066cc",
-            "deepseek-chat",
+            // `deepseek-chat` / `deepseek-reasoner` are legacy aliases the
+            // vendor retires 2026-07-24 (both resolve to v4-flash modes).
+            // Default to the mainstream V4 tier `deepseek-chat` mapped to;
+            // v4-pro is the pricier flagship (fallback).
+            "deepseek-v4-flash",
         )
         .with_display("DeepSeek")
         .with_homepage("https://platform.deepseek.com")
         .with_signup("https://platform.deepseek.com/api_keys")
-        .with_aux_model("deepseek-chat")
-        .with_fallback_models(&["deepseek-chat", "deepseek-reasoner"]),
+        .with_aux_model("deepseek-v4-flash")
+        .with_fallback_models(&["deepseek-v4-flash", "deepseek-v4-pro"]),
     ),
     (
         "moonshot",
@@ -151,18 +155,19 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.moonshot.cn/anthropic",
             "anthropic",
             "#6366f1",
-            "kimi-k2-0905-preview",
+            "kimi-k2.6",
         )
         .with_aliases(&["kimi"])
         .with_display("Moonshot / Kimi")
         .with_homepage("https://platform.moonshot.ai")
         .with_signup("https://platform.moonshot.ai/console/api-keys")
         .with_description("Anthropic-compatible endpoint (recommended)")
+        .with_aux_model("kimi-k2.5")
         // Kimi server-manages temperature — sending one returns a fixed-value error.
         .with_temperature_policy(super::TemperaturePolicy::Omit)
         .with_fallback_models(&[
-            "kimi-k2-0905-preview",
-            "kimi-k2-turbo-preview",
+            "kimi-k2.6",
+            "kimi-k2.5",
             "kimi-latest",
             "moonshot-v1-128k",
             "moonshot-v1-32k",
@@ -175,16 +180,17 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.moonshot.ai/v1",
             "openai",
             "#6366f1",
-            "kimi-k2-0905-preview",
+            "kimi-k2.6",
         )
         .with_aliases(&["kimi-openai"])
         .with_display("Moonshot / Kimi (OpenAI endpoint)")
         .with_homepage("https://platform.moonshot.ai")
         .with_signup("https://platform.moonshot.ai/console/api-keys")
         .with_description("OpenAI-compatible Kimi K2 / Moonshot chat models")
+        .with_aux_model("kimi-k2.5")
         .with_fallback_models(&[
-            "kimi-k2-0905-preview",
-            "kimi-k2-turbo-preview",
+            "kimi-k2.6",
+            "kimi-k2.5",
             "kimi-latest",
             "moonshot-v1-128k",
             "moonshot-v1-32k",
@@ -198,16 +204,17 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.moonshot.cn/v1",
             "openai",
             "#6366f1",
-            "kimi-k2-0905-preview",
+            "kimi-k2.6",
         )
         .with_aliases(&["kimi-cn"])
         .with_display("Moonshot / Kimi (CN)")
         .with_homepage("https://platform.moonshot.cn")
         .with_signup("https://platform.moonshot.cn/console/api-keys")
         .with_description("China-region (api.moonshot.cn) Kimi K2 / Moonshot models")
+        .with_aux_model("kimi-k2.5")
         .with_fallback_models(&[
-            "kimi-k2-0905-preview",
-            "kimi-k2-turbo-preview",
+            "kimi-k2.6",
+            "kimi-k2.5",
             "kimi-latest",
             "moonshot-v1-128k",
             "moonshot-v1-32k",
@@ -238,12 +245,15 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://ark.cn-beijing.volces.com/api/v3",
             "openai",
             "#ff6b35",
-            "doubao-1.5-pro-256k",
+            // Doubao-Seed 1.8 (256K, multimodal) — current Ark flagship,
+            // two generations past the retired doubao-1.5 line.
+            "doubao-seed-1-8-251228",
         )
         .with_aliases(&["volcengine", "ark"])
         .with_display("Volcengine Doubao")
         .with_homepage("https://www.volcengine.com/product/ark")
-        .with_signup("https://console.volcengine.com/ark"),
+        .with_signup("https://console.volcengine.com/ark")
+        .with_fallback_models(&["doubao-seed-1-8-251228", "doubao-1.5-pro-256k"]),
     ),
     (
         "siliconflow",
@@ -263,12 +273,16 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://open.bigmodel.cn/api/paas/v4",
             "openai",
             "#3b5998",
-            "GLM-5",
+            // GLM-5.2 — current flagship (1M lossless context), served on
+            // both bigmodel.cn and z.ai.
+            "GLM-5.2",
         )
         .with_aliases(&["glm"])
         .with_display("Zhipu GLM")
         .with_homepage("https://open.bigmodel.cn")
-        .with_signup("https://bigmodel.cn/usercenter/apikeys"),
+        .with_signup("https://bigmodel.cn/usercenter/apikeys")
+        .with_aux_model("glm-4.7")
+        .with_fallback_models(&["GLM-5.2", "glm-5.1", "glm-4.7"]),
     ),
     (
         "minimax",
@@ -276,12 +290,14 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.minimaxi.com/anthropic",
             "anthropic",
             "#e84393",
-            "MiniMax-M2.5",
+            "MiniMax-M3",
         )
         .with_display("MiniMax")
         .with_description("Anthropic-compatible endpoint (recommended)")
         .with_homepage("https://www.minimax.io")
-        .with_signup("https://www.minimax.io"),
+        .with_signup("https://www.minimax.io")
+        .with_aux_model("MiniMax-M2.7")
+        .with_fallback_models(&["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"]),
     ),
     (
         "minimax-openai",
@@ -289,12 +305,14 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.minimax.io/v1",
             "openai",
             "#e84393",
-            "MiniMax-M2.5",
+            "MiniMax-M3",
         )
         .with_display("MiniMax (OpenAI endpoint)")
         .with_description("OpenAI-compatible endpoint")
         .with_homepage("https://www.minimax.io")
-        .with_signup("https://www.minimax.io"),
+        .with_signup("https://www.minimax.io")
+        .with_aux_model("MiniMax-M2.7")
+        .with_fallback_models(&["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"]),
     ),
     (
         "qwen",
@@ -302,14 +320,15 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "openai",
             "#615ced",
-            "qwen-max-2025-01-25",
+            "qwen3-max-2026-01-23",
         )
         .with_aliases(&["dashscope"])
         .with_display("Qwen / 通义")
         .with_homepage("https://help.aliyun.com/zh/dashscope")
         .with_signup("https://bailian.console.aliyun.com")
         .with_description("Alibaba DashScope OpenAI-compatible endpoint")
-        .with_fallback_models(&["qwen-max-2025-01-25", "qwen-plus", "qwen-turbo"]),
+        .with_aux_model("qwen3.6-flash")
+        .with_fallback_models(&["qwen3-max-2026-01-23", "qwen3.6-plus", "qwen-plus"]),
     ),
     (
         "baichuan",
@@ -543,12 +562,13 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
     // ─── xAI ──────────────────────────────────────────────────────────────────
     (
         "xai",
-        ProviderPreset::new("https://api.x.ai/v1", "openai", "#000000", "grok-4-0709")
+        ProviderPreset::new("https://api.x.ai/v1", "openai", "#000000", "grok-4.3")
             .with_aliases(&["grok"])
             .with_display("xAI Grok")
             .with_homepage("https://docs.x.ai")
             .with_signup("https://console.x.ai")
-            .with_fallback_models(&["grok-4-0709", "grok-3-mini"]),
+            .with_aux_model("grok-3-mini")
+            .with_fallback_models(&["grok-4.3", "grok-4-fast", "grok-3-mini"]),
     ),
     // ─── Cloud / gateway / local ──────────────────────────────────────────────
     (
@@ -726,12 +746,14 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.z.ai/api/paas/v4",
             "openai",
             "#3b82f6",
-            "glm-4.6",
+            "glm-5.2",
         )
         .with_display("Z.ai (Zhipu international)")
         .with_homepage("https://z.ai")
         .with_signup("https://z.ai")
-        .with_description("International gateway for Zhipu / GLM models"),
+        .with_description("International gateway for Zhipu / GLM models")
+        .with_aux_model("glm-4.7")
+        .with_fallback_models(&["glm-5.2", "glm-5", "glm-4.6"]),
     ),
     (
         "ollama-cloud",
