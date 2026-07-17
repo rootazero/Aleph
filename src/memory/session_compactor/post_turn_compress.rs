@@ -199,7 +199,7 @@ impl SessionCompactor {
                     .map(|(role, text)| format!("[{role}]: {text}"))
                     .collect::<Vec<_>>()
                     .join("\n\n");
-                self.store_raw_chunk(&session_id, next_seq as usize, &raw_content)
+                self.store_raw_chunk(&session_id, &agent_id, next_seq as usize, &raw_content)
                     .await?;
 
                 if let Some(ref indexer) = self.indexer {

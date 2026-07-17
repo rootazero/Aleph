@@ -67,8 +67,9 @@ impl PromptLayer for MemoryProtocolLayer {
              facts (with evidence quotes). Use for \"last time\", \"that bug we fixed\", \
              or any past-conversation reference.\n\
              - `remember` — append/replace/remove the curated MEMORY.md hot zone. Use \
-             proactively for a stable preference, environment fact, or correction to \
-             honor next session; not for task progress, work logs, or transient TODOs. \
+             proactively for a stable preference, environment fact, or standing \
+             instruction to honor next session; not for task progress, work logs, or \
+             transient TODOs. \
              Phrase each entry as a declarative fact about the user or environment \
              (\"User prefers X\"), not an imperative to yourself (\"Always do X\") — \
              imperatives get re-read next session as standing orders and can override \
@@ -80,23 +81,30 @@ impl PromptLayer for MemoryProtocolLayer {
              (duplicate, over-budget, no-match) returns `message: \"rejected: …\"`; \
              recover by rephrasing or switching action, not by aborting the turn.\n\
              \n\
-             Where a NEW memory goes — two write tiers, pick by how often it's needed:\n\
-             - HOT (always in-prompt, tiny) → `remember` → MEMORY.md. A few identity-level \
-             facts re-read every session: who the user is, stable preferences, environment \
-             quirks, standing corrections.\n\
-             - DURABLE (searchable, recalled on relevance) → `note_manage` → notes DB. \
-             Everything else worth keeping: project facts, learnings, references, lessons. \
-             Larger, organized by category, surfaced only when a query matches.\n\
-             Rule of thumb: want this in front of you EVERY session regardless of topic? → \
-             `remember`. Only when the topic comes up? → `note_manage`. When the hot zone is \
-             full, demote the least-hot entry to a note, then `remove` it from MEMORY.md — \
-             preserve the knowledge, free the hot space.\n\
+             Where a NEW memory goes — ONE destination ladder, first matching rung wins:\n\
+             1. Durable user preference / identity fact / standing instruction → `remember` \
+             (HOT tier: MEMORY.md, always in-prompt, tiny). A few identity-level facts \
+             re-read every session: who the user is, stable preferences, environment quirks.\n\
+             2. You made a mistake and the user corrected you → `flag_user_correction` \
+             (severity-tagged; flushed immediately, distilled into a `feedback/` note by \
+             the nightly dream cycle). Do NOT hand-write `feedback/` notes for corrections — \
+             the distillation gate deduplicates and strengthens them. Self-discovered \
+             lessons with no user correction go to `note_manage` as a `lesson` note.\n\
+             3. Reusable domain knowledge / how-to / project facts worth retrieving later → \
+             `note_manage` (DURABLE tier: searchable notes DB, recalled on relevance, \
+             organized by category).\n\
+             4. Transient task state / plan → scratchpad, never a memory tool.\n\
+             Prefer UPDATE over CREATE: when an existing entry or note already covers the \
+             topic, `replace`/`append`/`update` it instead of adding a near-duplicate. When \
+             the hot zone is full, demote the least-hot entry to a note, then `remove` it \
+             from MEMORY.md — preserve the knowledge, free the hot space.\n\
              \n\
-             When you recognize a mistake — your own or one the user corrected — \
-             record the lesson immediately with `note_manage` (create a \
-             `feedback/lessons` note): state the cause (why it happened) and how to \
-             avoid it next time. Don't wait for the session to end; a durable lesson \
-             written now is recalled (and linked) for the next session.\n",
+             Acknowledgment contract: after a successful memory write (`remember`, \
+             `flag_user_correction`, `note_manage`), tell the user in ONE short sentence, \
+             in their language, what was recorded and to which tier — use the destination \
+             info from the tool result. Never quote the stored content back verbatim, and \
+             treat the tool's success response as terminal: do not repeat the write or \
+             re-echo the entry into another memory tool call.\n",
         );
     }
 }
@@ -192,33 +200,67 @@ mod tests {
     }
 
     #[test]
-    fn injects_write_routing_two_tiers() {
-        // The user's core question — when recording a long-term memory, how does
-        // the agent distinguish the hot identity file (remember/MEMORY.md) from
-        // the durable searchable DB (note_manage)? The guidance must spell out
-        // both tiers and the overflow-valve (demote-to-note) recovery.
+    fn injects_destination_ladder() {
+        // D1 — ONE authoritative destination ladder replaces the old two-tier
+        // split (and the three-way competing guidance across remember's
+        // description, special_actions and this layer). The guidance must
+        // spell out all four rungs, update-over-create, and the
+        // overflow-valve (demote-to-note) recovery.
         let layer = MemoryProtocolLayer;
         let config = PromptConfig::default();
         let mut out = String::new();
         layer.inject(&mut out, &LayerInput::basic(&config, &[]));
-        assert!(out.contains("two write tiers"), "must name the two tiers");
+        assert!(
+            out.contains("ONE destination ladder"),
+            "must declare the single authoritative ladder"
+        );
         assert!(out.contains("HOT") && out.contains("DURABLE"));
         assert!(out.contains("MEMORY.md") && out.contains("notes DB"));
+        assert!(
+            out.contains("flag_user_correction") && out.contains("scratchpad"),
+            "all four rungs must be present"
+        );
+        assert!(
+            out.contains("Prefer UPDATE over CREATE"),
+            "must prefer update over near-duplicate adds"
+        );
         // Overflow valve: full hot zone demotes to a note rather than dropping it.
         assert!(out.contains("demote"));
     }
 
     #[test]
-    fn injects_lesson_capture_nudge() {
+    fn corrections_route_through_the_distillation_gate() {
+        // D3 — the old nudge steered user-corrected mistakes to direct
+        // `note_manage` feedback/ writes, bypassing the FeedbackDistill
+        // dedupe/strengthen gate. Corrections must route through
+        // `flag_user_correction`; only self-discovered lessons go to
+        // `note_manage` (as `lesson` notes, not `feedback/`).
         let layer = MemoryProtocolLayer;
         let config = PromptConfig::default();
         let input = LayerInput::basic(&config, &[]);
         let mut out = String::new();
         layer.inject(&mut out, &input);
         assert!(
-            out.contains("feedback/lessons"),
-            "must teach immediate lesson capture on error"
+            !out.contains("feedback/lessons"),
+            "direct feedback/ hand-write nudge must be gone"
         );
+        assert!(out.contains("Do NOT hand-write `feedback/` notes"));
         assert!(out.contains("note_manage"));
+    }
+
+    #[test]
+    fn injects_acknowledgment_contract() {
+        // D4 — after a successful memory write the model owes the user one
+        // short sentence naming what was recorded and to which tier, and must
+        // treat the tool's success response as terminal (anti-thrash: models
+        // re-echoing entries have caused duplicate write storms).
+        let layer = MemoryProtocolLayer;
+        let config = PromptConfig::default();
+        let mut out = String::new();
+        layer.inject(&mut out, &LayerInput::basic(&config, &[]));
+        assert!(out.contains("Acknowledgment contract"));
+        assert!(out.contains("ONE short sentence") && out.contains("their language"));
+        assert!(out.contains("terminal"), "success response must be terminal");
+        assert!(out.contains("Never quote the stored content back verbatim"));
     }
 }

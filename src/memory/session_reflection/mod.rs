@@ -8,11 +8,15 @@
 //! into `feedback/lessons` notes (via the lesson-tuned source prompt).
 //!
 //! Gating (driven by [`ReflectionConfig`], an opt-in feature, default off):
-//!   - `enabled`          — master switch.
+//!   - `enabled`          — master switch (the only default-off flag: the
+//!     open-loop sub-flags default on, so flipping `enabled` alone lights the
+//!     whole lessons + open-loops pipeline).
 //!   - `min_turns`        — skip trivial sessions (too few messages).
 //!   - `min_user_chars`   — skip sessions the user barely engaged with.
 //!   - `cooldown_minutes` — per-agent throttle so back-to-back session ends
-//!     don't fire a reflection (and an LLM call) every time.
+//!     don't fire a reflection (and an LLM call) every time. Persisted to
+//!     `compression_metadata` (the dream-watermark table) when a backend is
+//!     wired, so a daemon restart cannot reset the window.
 //!
 //! The reflector is independent of the Spec B `SessionEndSummarizer` (which
 //! produces the `/end-summary` digest for `session_search`): the two run from
@@ -39,6 +43,10 @@ const REFLECT_INPUT_MAX_CHARS: usize = 32_000;
 /// Sentinel the LLM returns when a session carries no durable lesson.
 const NO_LESSON_SENTINEL: &str = "NONE";
 
+/// `compression_metadata` consumer name for the persisted cooldown watermark
+/// (same table + key shape `feedback_distill` uses for its cursor).
+const COOLDOWN_CONSUMER: &str = "session_reflection";
+
 /// Distils session-end lessons into ingestable [`RawMemorySource::Reflection`]
 /// rows.
 pub struct SessionReflector {
@@ -46,10 +54,14 @@ pub struct SessionReflector {
     session_store: Arc<dyn SessionStore>,
     llm: Arc<dyn SummaryLlm>,
     config: ReflectionConfig,
-    /// `agent_id` -> unix-seconds of last reflection attempt. In-memory only: a
-    /// soft anti-spam throttle, so losing it on restart (at most one extra
-    /// reflection per agent) is acceptable.
+    /// `agent_id` -> unix-seconds of last reflection attempt. Fast path in
+    /// front of the persisted watermark below; on its own (no
+    /// `cooldown_store`) it degrades to the old restart-resettable throttle.
     last_reflect: Mutex<HashMap<String, i64>>,
+    /// Optional persistence for the cooldown watermark. Without it a daemon
+    /// restart reset the throttle, so a crash-loop (or frequent restarts)
+    /// could fire one LLM call per agent per restart.
+    cooldown_store: Option<crate::memory::store::MemoryBackend>,
 }
 
 impl SessionReflector {
@@ -65,7 +77,16 @@ impl SessionReflector {
             llm,
             config,
             last_reflect: Mutex::new(HashMap::new()),
+            cooldown_store: None,
         }
+    }
+
+    /// Persist the per-agent cooldown watermark to `compression_metadata`
+    /// (builder-style). The in-memory map stays as the fast path.
+    #[must_use]
+    pub fn with_cooldown_store(mut self, backend: crate::memory::store::MemoryBackend) -> Self {
+        self.cooldown_store = Some(backend);
+        self
     }
 
     /// Reflect on a just-ended session. Idempotent at the throttle level and
@@ -171,14 +192,55 @@ impl SessionReflector {
         }
         let window = i64::from(self.config.cooldown_minutes) * 60;
         let now = chrono::Utc::now().timestamp();
-        let guard = self.last_reflect.lock().unwrap_or_else(|e| e.into_inner());
-        matches!(guard.get(agent_id), Some(&last) if now - last < window)
+        matches!(self.last_reflect_at(agent_id), Some(last) if now - last < window)
+    }
+
+    /// Unix-seconds of the last reflection attempt for `agent_id`: in-memory
+    /// map first (fast path), falling back to the persisted watermark so a
+    /// daemon restart cannot reset the throttle. A persisted hit warms the
+    /// map; a read failure degrades to "no prior attempt" (P7 — the throttle
+    /// is protective, never gating correctness).
+    fn last_reflect_at(&self, agent_id: &str) -> Option<i64> {
+        {
+            let guard = self.last_reflect.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(&last) = guard.get(agent_id) {
+                return Some(last);
+            }
+        }
+        let store = self.cooldown_store.as_ref()?;
+        match store.get_dream_watermark(COOLDOWN_CONSUMER, agent_id) {
+            Ok(Some(last)) => {
+                let mut guard = self.last_reflect.lock().unwrap_or_else(|e| e.into_inner());
+                guard.insert(agent_id.to_string(), last);
+                Some(last)
+            }
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "reflect: cooldown watermark read failed; treating as no prior attempt"
+                );
+                None
+            }
+        }
     }
 
     fn mark_attempt(&self, agent_id: &str) {
         let now = chrono::Utc::now().timestamp();
-        let mut guard = self.last_reflect.lock().unwrap_or_else(|e| e.into_inner());
-        guard.insert(agent_id.to_string(), now);
+        {
+            let mut guard = self.last_reflect.lock().unwrap_or_else(|e| e.into_inner());
+            guard.insert(agent_id.to_string(), now);
+        }
+        // Write-through to the persisted watermark. Best-effort: a failure
+        // just leaves the throttle process-local, the old behaviour.
+        if let Some(store) = &self.cooldown_store {
+            if let Err(e) = store.set_dream_watermark(COOLDOWN_CONSUMER, agent_id, now) {
+                tracing::warn!(
+                    error = %e,
+                    "reflect: cooldown watermark persist failed (non-fatal)"
+                );
+            }
+        }
     }
 }
 
@@ -191,21 +253,34 @@ impl SessionReflector {
 /// not a heuristic — decides what is still open (R7/R9: one call, zero extra
 /// middleware).
 fn build_reflection_prompt(messages: &[(String, String)], track_open_loops: bool) -> String {
+    let today = chrono::Utc::now().format("%Y-%m-%d");
     let mut prompt = String::new();
-    prompt.push_str(
+    prompt.push_str(&format!(
         "You are reflecting on a conversation that just ended, to record durable \
-         LESSONS for your future self. This is NOT a summary of what was discussed — \
-         it is what you LEARNED about how to work better.\n\n\
+         LESSONS for your future self. Today is {today}. This is NOT a summary of \
+         what was discussed — it is what you LEARNED about how to work better.\n\n\
          Extract only genuinely reusable lessons, such as:\n\
          - User preferences and corrections (what the user values, how they want things done)\n\
          - Mistakes or detours you made, and how to avoid them next time\n\
-         - Tools or approaches that worked or failed in a specific situation\n\n\
-         Write each lesson as one concise first-person bullet (\"I should…\", \
-         \"The user prefers…\", \"Tool X is unreliable for…\"). Omit anything trivial, \
-         one-off, or already obvious.\n",
-    );
+         - Approaches that worked in a specific situation, and the remedy that fixed a failure\n\n\
+         Write each lesson as one concise first-person bullet phrased as \
+         evidence → implication: name the concrete situation, quote the user \
+         verbatim when they said it, then state the future default. Shape: \
+         When <situation>, the user said \"<quote>\" → next time <default>.\n\n\
+         Rules for durable lessons:\n\
+         - Keep identifiers verbatim and greppable — file paths, commands, error \
+         strings, config keys, names. Never paraphrase them.\n\
+         - Use absolute dates (e.g. {today}), never relative ones (\"today\", \
+         \"last week\").\n\
+         - Do not record environment-dependent transient failures (network blips, \
+         rate limits, a service being briefly down) as permanent truths.\n\
+         - Do not record negative assertions like \"tool X is broken\"; record the \
+         remedy or workaround that succeeded instead.\n\
+         - Gate every bullet: will a future agent plausibly act better for having \
+         it? Drop anything trivial, one-off, or already obvious.\n"
+    ));
     prompt.push_str(&format!(
-        "If the conversation contains no durable lesson, output exactly: {NO_LESSON_SENTINEL}\n"
+        "If no bullet survives the gate, output exactly: {NO_LESSON_SENTINEL}\n"
     ));
 
     if track_open_loops {
@@ -453,6 +528,42 @@ mod tests {
         assert_eq!(reflection_count(&store, "agent-1").await, 1);
     }
 
+    #[tokio::test]
+    async fn cooldown_survives_restart_via_persisted_watermark() {
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+
+        let backend = Arc::new(SqliteMemoryBackend::in_memory().expect("in-memory backend"));
+        let store = make_store();
+        let llm = MockSummaryLlm::with_response("- a real lesson");
+
+        let reflector = SessionReflector::new(
+            store.clone(),
+            substantive(),
+            llm.clone(),
+            cfg(true, 1, 0, 30),
+        )
+        .with_cooldown_store(backend.clone());
+        reflector.reflect("agent-1", "sess-1").await.unwrap();
+        assert_eq!(llm.call_count(), 1);
+
+        // "Restart": a brand-new reflector (fresh in-memory map) sharing the
+        // same backend must still be throttled by the persisted watermark.
+        let restarted = SessionReflector::new(
+            store.clone(),
+            substantive(),
+            llm.clone(),
+            cfg(true, 1, 0, 30),
+        )
+        .with_cooldown_store(backend);
+        restarted.reflect("agent-1", "sess-1").await.unwrap();
+        assert_eq!(
+            llm.call_count(),
+            1,
+            "persisted cooldown must survive a restart"
+        );
+        assert_eq!(reflection_count(&store, "agent-1").await, 1);
+    }
+
     #[test]
     fn prompt_includes_conversation_and_none_sentinel() {
         let msgs = vec![
@@ -471,6 +582,39 @@ mod tests {
         );
         // Off mode must NOT ask for the two-section open-loops format.
         assert!(!p.contains(OPEN_LOOPS_HEADER));
+    }
+
+    #[test]
+    fn prompt_carries_durability_rules() {
+        let msgs = vec![("user".to_string(), "please stop paraphrasing".to_string())];
+        let p = build_reflection_prompt(&msgs, false);
+        assert!(
+            p.contains("evidence → implication"),
+            "must ask for evidence → implication phrasing"
+        );
+        assert!(
+            p.contains("verbatim and greppable"),
+            "must demand verbatim greppable identifiers"
+        );
+        assert!(
+            p.contains("absolute dates"),
+            "must demand absolute, not relative, dates"
+        );
+        assert!(
+            p.contains("transient failures"),
+            "anti-rot: transient failures must not fossilize"
+        );
+        assert!(
+            p.contains("remedy or workaround"),
+            "anti-rot: store the remedy, not the failure narrative"
+        );
+        assert!(
+            p.contains("act better for having"),
+            "must carry the future-usefulness gate"
+        );
+        // Today's date is embedded so the model can absolutize relatives.
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        assert!(p.contains(&today), "prompt must state today's date");
     }
 
     #[test]

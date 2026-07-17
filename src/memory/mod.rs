@@ -106,7 +106,6 @@ pub use retrieval::MemoryRetrieval;
 pub use ripple::{RippleConfig, RippleResult, RippleTask};
 pub use scratchpad::{
     PlanItem, PlanItemStatus, ScratchpadConfig, ScratchpadManager, ScratchpadSnapshot,
-    SessionHistory,
 };
 pub use streaming_scrubber::{StreamingContextScrubber, DEFAULT_CLOSE_TAG, DEFAULT_OPEN_TAG};
 pub use transcript_indexer::{

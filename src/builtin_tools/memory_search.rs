@@ -148,6 +148,10 @@ pub struct MemorySearchTool {
     /// runs of different agents each write their own entry instead of racing
     /// on one process-global value.
     smart_recall_config: Arc<RwLock<std::collections::HashMap<String, SmartRecallConfig>>>,
+    /// Mirror of `MemoryConfig.project_scoped` — session raw chunks are written
+    /// under the resolved (optionally project-scoped) agent id, so the
+    /// `current_session` scope must derive the same id when reading.
+    project_scoped: bool,
 }
 
 impl MemorySearchTool {
@@ -232,7 +236,17 @@ impl MemorySearchTool {
             default_workspace: Arc::new(RwLock::new(DEFAULT_AGENT.to_string())),
             default_session_key: Arc::new(RwLock::new(String::new())),
             smart_recall_config: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            project_scoped: false,
         }
+    }
+
+    /// Enable per-project scoping for the `current_session` raw-chunk reads,
+    /// mirroring `MemoryConfig.project_scoped` (same convention as
+    /// `note_manage`'s `with_project_scoping`).
+    #[must_use]
+    pub const fn with_project_scoping(mut self, enabled: bool) -> Self {
+        self.project_scoped = enabled;
+        self
     }
 
     /// Get a shared handle to the default workspace setting.
@@ -334,13 +348,23 @@ impl MemorySearchTool {
             if session_key.is_empty() {
                 Vec::new()
             } else {
-                // Session-local raw chunks are always written under the fixed
-                // agent_id "default" (see session_compactor::store_raw_chunk and
-                // recall_context). The workspace handle is never populated at
-                // runtime (only the session_key handle is), so deriving agent_id
-                // from workspace_filter here would query "main" and miss every
-                // row stored under "default" — silently returning nothing.
-                let agent_id = "default";
+                // Session-local raw chunks are written under the session's
+                // *resolved* agent id (session_compactor::store_raw_chunk —
+                // the id post_turn_compress resolves via project_scope). The
+                // session key encodes the owning agent, so parse it rather
+                // than trusting the workspace handle (never populated at
+                // runtime) or the process-global agent handle (racy across
+                // concurrent runs).
+                let base_agent = crate::routing::session_key::SessionKey::from_key_string(
+                    &session_key,
+                )
+                .map_or_else(|| "default".to_string(), |k| k.agent_id().to_string());
+                let agent_id = crate::memory::project_scope::scoped_or_base(
+                    &base_agent,
+                    self.project_scoped,
+                    crate::projects::current_project_root().as_deref(),
+                );
+                let agent_id = agent_id.as_str();
                 let path_prefix = format!("aleph://session/{session_key}/");
                 // Saturate: max_results is LLM-supplied and unclamped, so a
                 // huge value must not overflow-panic in debug builds.
@@ -592,6 +616,7 @@ impl Clone for MemorySearchTool {
             default_workspace: self.default_workspace.clone(),
             default_session_key: self.default_session_key.clone(),
             smart_recall_config: self.smart_recall_config.clone(),
+            project_scoped: self.project_scoped,
         }
     }
 }

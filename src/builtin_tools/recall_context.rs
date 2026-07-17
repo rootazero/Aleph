@@ -53,6 +53,10 @@ pub struct RecallContextResult {
 pub struct RecallContextTool {
     database: MemoryBackend,
     session_id: String,
+    /// Resolved (optionally project-scoped) agent id the compaction pipeline
+    /// writes raw chunks under — must match `session_compactor::store_raw_chunk`,
+    /// which stopped hardcoding `"default"` when the writer gained the real id.
+    agent_id: String,
 }
 
 impl RecallContextTool {
@@ -65,10 +69,20 @@ impl RecallContextTool {
          specific code, error messages, or decision details from earlier in the conversation.";
 
     /// Create a new `RecallContextTool` for the given session.
-    pub fn new(database: MemoryBackend, session_id: impl Into<String>) -> Self {
+    ///
+    /// `agent_id` must be the same resolved id under which the compaction
+    /// pipeline stores the session's raw chunks (see
+    /// `session_compactor::store_raw_chunk`); reading under a different id
+    /// silently returns nothing.
+    pub fn new(
+        database: MemoryBackend,
+        session_id: impl Into<String>,
+        agent_id: impl Into<String>,
+    ) -> Self {
         Self {
             database,
             session_id: session_id.into(),
+            agent_id: agent_id.into(),
         }
     }
 
@@ -82,7 +96,7 @@ impl RecallContextTool {
 
         let raws = self
             .database
-            .get_raw_by_path_prefix(&path_prefix, "default", args.max_results)
+            .get_raw_by_path_prefix(&path_prefix, &self.agent_id, args.max_results)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to retrieve raw context chunks: {e}"))?;
 
@@ -125,5 +139,51 @@ mod tests {
         let json = r#"{"query": "test"}"#;
         let args: RecallContextArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.max_results, 3);
+    }
+
+    /// Regression: the reader used to hardcode agent `"default"` while the
+    /// compaction writer (`session_compactor::store_raw_chunk`) stores chunks
+    /// under the resolved agent id — recall for any non-default agent silently
+    /// returned nothing.
+    #[tokio::test]
+    async fn recall_reads_under_the_writers_agent_scope() {
+        use crate::memory::store::raw_memory::RawMemoryStore;
+        use crate::memory::store::{RawMemory, RawMemorySource};
+        use crate::sync_primitives::Arc;
+
+        let temp = tempfile::tempdir().unwrap();
+        let database: MemoryBackend =
+            Arc::new(crate::memory::store::sqlite::SqliteMemoryBackend::new(temp.path()).unwrap());
+        let raw = RawMemory::new(
+            "[user]: the API key lives in .env.local".to_string(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_agent("alice")
+        .with_session("sess-1")
+        .with_path("aleph://session/sess-1/raw/0");
+        database.insert_raw_memory(&raw).await.unwrap();
+
+        let tool = RecallContextTool::new(database.clone(), "sess-1", "alice");
+        let out = tool
+            .call_impl(RecallContextArgs {
+                query: "API key".into(),
+                max_results: 3,
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.fragments.len(), 1, "chunk visible under the writer id");
+
+        let wrong_scope = RecallContextTool::new(database, "sess-1", "default");
+        let out = wrong_scope
+            .call_impl(RecallContextArgs {
+                query: "API key".into(),
+                max_results: 3,
+            })
+            .await
+            .unwrap();
+        assert!(
+            out.fragments.is_empty(),
+            "reading under a different agent id must not see the chunk"
+        );
     }
 }

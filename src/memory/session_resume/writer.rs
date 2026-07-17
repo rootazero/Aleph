@@ -25,6 +25,27 @@ impl SnapshotWriter {
         dirs::home_dir().map(|h| Self::new(h.join(".aleph/data/sessions")))
     }
 
+    /// Build a snapshot from a session-end summary and persist it.
+    ///
+    /// Producer-side convenience for the session-end hook: derives
+    /// `key_decisions` from the summary via
+    /// [`SessionSnapshot::extract_decisions`] and stamps `created_at` now.
+    /// The remaining fields have no session-end source today and stay empty
+    /// ([`SessionSnapshot::to_prompt_text`] / the assembler's snapshot
+    /// candidate both omit empty sections).
+    pub fn write_from_summary(&self, session_id: &str, summary: &str) -> std::io::Result<PathBuf> {
+        let snapshot = SessionSnapshot {
+            session_id: session_id.to_string(),
+            created_at: chrono::Utc::now(),
+            summary: summary.to_string(),
+            key_decisions: SessionSnapshot::extract_decisions(summary),
+            active_files: Vec::new(),
+            tool_state: None,
+            pending_tasks: Vec::new(),
+        };
+        self.write(&snapshot)
+    }
+
     /// Write a snapshot to `{base}/{session_id}/resume.json`.
     ///
     /// Returns the path of the written file on success.
@@ -109,6 +130,30 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         let restored: SessionSnapshot = serde_json::from_str(&content).unwrap();
         assert_eq!(restored.session_id, "session-abc");
+    }
+
+    #[test]
+    fn write_from_summary_roundtrips_through_reader() {
+        use crate::memory::session_resume::SnapshotReader;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let writer = SnapshotWriter::new(tmp.path());
+        let reader = SnapshotReader::new(tmp.path());
+
+        let summary = "We decided to use SQLite. Everything else was routine.";
+        writer.write_from_summary("sess-prev", summary).unwrap();
+
+        // The next session (a different id) must see the previous snapshot.
+        let restored = reader.load_latest("sess-next").unwrap();
+        assert_eq!(restored.session_id, "sess-prev");
+        assert_eq!(restored.summary, summary);
+        assert_eq!(
+            restored.key_decisions,
+            vec!["We decided to use SQLite".to_string()],
+            "decisions must be derived from the summary"
+        );
+        assert!(restored.active_files.is_empty());
+        assert!(restored.pending_tasks.is_empty());
     }
 
     #[test]

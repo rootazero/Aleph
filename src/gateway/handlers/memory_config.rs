@@ -324,7 +324,6 @@ fn json_merge(base: &mut serde_json::Value, overlay: &serde_json::Value) {
 /// reads under the `compression` key (see [`handle_get`]).
 fn project_compression(c: &crate::config::CompressionPolicy) -> serde_json::Value {
     json!({
-        "idle_timeout_seconds": c.idle_timeout_seconds,
         "turn_threshold": c.turn_threshold,
         "background_interval_seconds": c.background_interval_seconds,
     })
@@ -337,9 +336,6 @@ fn apply_compression_update(
     policy: &mut crate::config::CompressionPolicy,
     comp: &serde_json::Value,
 ) {
-    if let Some(v) = comp.get("idle_timeout_seconds").and_then(|x| x.as_u64()) {
-        policy.idle_timeout_seconds = v as u32;
-    }
     if let Some(v) = comp.get("turn_threshold").and_then(|x| x.as_u64()) {
         policy.turn_threshold = v as u32;
     }
@@ -383,12 +379,10 @@ mod tests {
     #[test]
     fn project_compression_emits_panel_shape() {
         let policy = CompressionPolicy {
-            idle_timeout_seconds: 111,
             turn_threshold: 7,
             background_interval_seconds: 999,
         };
         let v = project_compression(&policy);
-        assert_eq!(v["idle_timeout_seconds"], 111);
         assert_eq!(v["turn_threshold"], 7);
         assert_eq!(v["background_interval_seconds"], 999);
     }
@@ -397,12 +391,10 @@ mod tests {
     fn apply_compression_update_routes_all_fields() {
         let mut policy = CompressionPolicy::default();
         let comp = json!({
-            "idle_timeout_seconds": 222,
             "turn_threshold": 9,
             "background_interval_seconds": 4242,
         });
         apply_compression_update(&mut policy, &comp);
-        assert_eq!(policy.idle_timeout_seconds, 222);
         assert_eq!(policy.turn_threshold, 9);
         assert_eq!(policy.background_interval_seconds, 4242);
     }
@@ -410,18 +402,16 @@ mod tests {
     #[test]
     fn apply_compression_update_is_partial_tolerant() {
         let mut policy = CompressionPolicy {
-            idle_timeout_seconds: 10,
             turn_threshold: 20,
             background_interval_seconds: 30,
         };
         // Only one field present; the others must be preserved.
         apply_compression_update(&mut policy, &json!({ "turn_threshold": 99 }));
-        assert_eq!(policy.idle_timeout_seconds, 10);
         assert_eq!(policy.turn_threshold, 99);
         assert_eq!(policy.background_interval_seconds, 30);
 
         // Malformed (non-numeric) value is ignored, not panicked on.
-        apply_compression_update(&mut policy, &json!({ "idle_timeout_seconds": "oops" }));
-        assert_eq!(policy.idle_timeout_seconds, 10);
+        apply_compression_update(&mut policy, &json!({ "turn_threshold": "oops" }));
+        assert_eq!(policy.turn_threshold, 99);
     }
 }

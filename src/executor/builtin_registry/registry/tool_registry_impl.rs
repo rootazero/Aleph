@@ -1238,6 +1238,18 @@ impl ToolRegistry for BuiltinToolRegistry {
                     .as_ref()
                     .and_then(|h| h.try_read().ok())
                     .map(|ctx| ctx.session_key_str.clone());
+                // Resolve the same (optionally project-scoped) agent id the
+                // compaction pipeline writes raw chunks under. Per-task turn
+                // context first (race-free), then the process-global session
+                // context mirror; both task-locals are live here because tool
+                // dispatch runs inside the scoped tool-execution task.
+                let base_agent = crate::tools::turn_context::current_agent_id()
+                    .unwrap_or_else(|| self.caller_agent_id("default"));
+                let agent_id = crate::memory::project_scope::scoped_or_base(
+                    &base_agent,
+                    self.memory_project_scoped,
+                    crate::projects::current_project_root().as_deref(),
+                );
                 Box::pin(async move {
                     let db = self.recall_context_db.as_ref().ok_or_else(|| {
                         AlephError::tool(
@@ -1251,7 +1263,11 @@ impl ToolRegistry for BuiltinToolRegistry {
                         serde_json::from_value(arguments).map_err(|e| {
                             AlephError::tool(format!("recall_context: bad args: {e}"))
                         })?;
-                    let tool = crate::builtin_tools::RecallContextTool::new(db.clone(), session_id);
+                    let tool = crate::builtin_tools::RecallContextTool::new(
+                        db.clone(),
+                        session_id,
+                        agent_id,
+                    );
                     let out = tool
                         .call_impl(args)
                         .await

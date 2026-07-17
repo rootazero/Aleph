@@ -879,7 +879,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     emb.clone(),
                     &app_config.policies.memory.compression,
                     daemon,
-                    command_handler.clone(),
                     compound_ingestor,
                     profile_synth.clone(),
                     Some(memory_ext_registry.clone()),
@@ -1028,18 +1027,23 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 // Batch 2 — session-end reflection ("经验教训"). Opt-in: only
                 // registered when [memory.reflection] enabled = true, so the
                 // disabled default adds zero session-end overhead. Reuses the
-                // same SummaryLlm wrapper as the Spec B summarizer.
+                // same SummaryLlm wrapper as the Spec B summarizer. The
+                // cooldown watermark persists to compression_metadata so a
+                // daemon restart cannot reset the per-agent throttle.
                 if app_config.memory.reflection.enabled {
                     use alephcore::memory::session_reflection::SessionReflector;
-                    let reflector = std::sync::Arc::new(SessionReflector::new(
-                        memory_db.clone()
-                            as std::sync::Arc<
-                                dyn alephcore::memory::store::raw_memory::RawMemoryStore,
-                            >,
-                        session_store.clone(),
-                        summary_llm.clone(),
-                        app_config.memory.reflection.clone(),
-                    ));
+                    let reflector = std::sync::Arc::new(
+                        SessionReflector::new(
+                            memory_db.clone()
+                                as std::sync::Arc<
+                                    dyn alephcore::memory::store::raw_memory::RawMemoryStore,
+                                >,
+                            session_store.clone(),
+                            summary_llm.clone(),
+                            app_config.memory.reflection.clone(),
+                        )
+                        .with_cooldown_store(memory_db.clone()),
+                    );
                     alephcore::thinker::memory_context_provider::register_session_reflector(
                         reflector,
                     );

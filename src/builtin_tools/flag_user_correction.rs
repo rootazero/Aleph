@@ -45,6 +45,9 @@ pub struct FlagUserCorrectionOutput {
     pub message: String,
     /// ID of the persisted `RawMemory` row for traceability.
     pub raw_memory_id: String,
+    /// Human-readable destination of the record — source material for the
+    /// one-sentence acknowledgment the model owes the user after the write.
+    pub destination: String,
 }
 
 /// Records user-correction signals into `raw_memory` under
@@ -87,8 +90,10 @@ impl AlephTool for FlagUserCorrectionTool {
     const DESCRIPTION: &'static str = "Record a user correction or strong-preference signal so the system can learn from it. \
          Call when the user corrects you, pushes back on your approach, or expresses a clear preference \
          that should change your future behavior. Use conservatively — do NOT flag praise, \
-         neutral acknowledgement, or your own internal reasoning. Continue the conversation normally \
-         after calling; do not announce that you logged the correction.";
+         neutral acknowledgement, or your own internal reasoning, and never log the same correction \
+         twice. Continue the conversation normally after calling, then close your reply with ONE \
+         short sentence, in the user's language, acknowledging where the correction was recorded — \
+         use the `destination` field from the result. Never quote the stored content back verbatim.";
 
     type Args = FlagUserCorrectionArgs;
     type Output = FlagUserCorrectionOutput;
@@ -120,6 +125,11 @@ impl AlephTool for FlagUserCorrectionTool {
         Ok(FlagUserCorrectionOutput {
             success: true,
             message: "Correction logged.".into(),
+            destination: format!(
+                "aleph://correction/{raw_memory_id} — flushed immediately; distilled into a \
+                 feedback/ note by the nightly dream cycle (high/critical severities bypass \
+                 the batch quorum)"
+            ),
             raw_memory_id,
         })
     }
@@ -190,6 +200,20 @@ mod tests {
             .unwrap();
         assert!(out.success);
         assert!(!out.raw_memory_id.is_empty());
+        // D4 acknowledgment contract: the result names its destination so the
+        // model can tell the user where the lesson landed in one sentence.
+        assert!(
+            out.destination.contains(&out.raw_memory_id),
+            "destination must reference the persisted row"
+        );
+        assert!(
+            out.destination.starts_with("aleph://correction/"),
+            "destination must name the correction path"
+        );
+        assert!(
+            out.destination.contains("feedback/") && out.destination.contains("dream"),
+            "destination must explain the distillation rail"
+        );
 
         // Read back via the same prefix FeedbackDistill will use (Phase 3 D2).
         let entries = backend

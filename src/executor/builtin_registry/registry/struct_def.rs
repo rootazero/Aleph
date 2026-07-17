@@ -335,6 +335,10 @@ pub struct BuiltinToolRegistry {
     /// Media pipeline for `media_understand` / `audio_transcribe` /
     /// `document_extract`. Built per-call; `None` → tools report "not configured".
     pub(crate) media_pipeline: Option<Arc<crate::media::MediaPipeline>>,
+    /// Mirror of `MemoryConfig.project_scoped` — needed at dispatch to derive
+    /// the same (optionally project-scoped) agent id the compaction pipeline
+    /// writes session raw chunks under.
+    pub(crate) memory_project_scoped: bool,
     /// Memory backend for the `recall_context` tool (pre-compression recovery).
     /// Built per-call with the active session id from `session_context_handle`.
     pub(crate) recall_context_db: Option<crate::memory::store::MemoryBackend>,

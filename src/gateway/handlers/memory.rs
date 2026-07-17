@@ -452,6 +452,26 @@ pub async fn handle_list_corrections(
     let limit = params.limit.filter(|n| *n > 0).unwrap_or(50);
     let include_distilled = params.include_distilled.unwrap_or(true);
 
+    // Distillation status comes from the FeedbackDistill watermark, NOT from
+    // `is_processed`: that flag belongs to CompressionService's drain, and
+    // `flag_user_correction`'s sedimentation kick sets it within seconds of
+    // the correction landing — every row would show "distilled" long before
+    // the dream stage actually consumed it. FeedbackDistill advances a
+    // per-agent `created_at` watermark after each successfully distilled
+    // batch (consumer key "feedback_distill" — keep in sync with
+    // `memory::dreaming::stages::feedback_distill::WATERMARK_CONSUMER`), so a
+    // correction is distilled exactly when `created_at <= watermark`.
+    let watermark = db
+        .get_dream_watermark("feedback_distill", agent_id)
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                error = %e,
+                "memory.list_corrections: failed to read feedback_distill watermark; treating as 0"
+            );
+            None
+        })
+        .unwrap_or(0);
+
     match db
         .get_raw_by_path_prefix("aleph://correction/", agent_id, limit)
         .await
@@ -459,7 +479,7 @@ pub async fn handle_list_corrections(
         Ok(rows) => {
             let corrections: Vec<_> = rows
                 .into_iter()
-                .filter(|r| include_distilled || !r.is_processed)
+                .filter(|r| include_distilled || r.created_at > watermark)
                 .map(|r| {
                     let (severity, suggested_rule) = match &r.source {
                         RawMemorySource::Correction {
@@ -468,12 +488,13 @@ pub async fn handle_list_corrections(
                         } => (severity.clone(), suggested_rule.clone()),
                         _ => ("low".to_string(), None),
                     };
+                    let distilled = r.created_at <= watermark;
                     json!({
                         "id": r.id,
                         "content": r.content,
                         "severity": severity,
                         "suggested_rule": suggested_rule,
-                        "status": if r.is_processed { "distilled" } else { "pending" },
+                        "status": if distilled { "distilled" } else { "pending" },
                         "created_at": r.created_at,
                     })
                 })
@@ -727,7 +748,13 @@ mod list_corrections_tests {
     use crate::sync_primitives::Arc;
     use serde_json::json;
 
-    async fn seed(db: &SqliteMemoryBackend, id_suffix: &str, processed: bool, sev: &str) {
+    async fn seed(
+        db: &SqliteMemoryBackend,
+        id_suffix: &str,
+        created_at: i64,
+        processed: bool,
+        sev: &str,
+    ) {
         let mut raw = RawMemory::new(
             format!("correction {id_suffix}"),
             RawMemorySource::Correction {
@@ -737,15 +764,22 @@ mod list_corrections_tests {
         )
         .with_agent("main")
         .with_path(format!("aleph://correction/{id_suffix}"));
+        raw.created_at = created_at;
         raw.is_processed = processed;
         db.insert_raw_memory(&raw).await.unwrap();
     }
 
     #[tokio::test]
-    async fn maps_status_severity_and_rule() {
+    async fn maps_status_from_feedback_distill_watermark() {
         let backend = SqliteMemoryBackend::in_memory().unwrap();
-        seed(&backend, "c1", false, "high").await;
-        seed(&backend, "c2", true, "low").await;
+        // c1 sits at/below the watermark → distilled; c2 sits above → pending
+        // even though CompressionService already flipped its `is_processed`
+        // flag (the flag that used to be misread as "distilled").
+        seed(&backend, "c1", 1000, true, "high").await;
+        seed(&backend, "c2", 2000, true, "low").await;
+        backend
+            .set_dream_watermark("feedback_distill", "main", 1500)
+            .unwrap();
         let db: crate::memory::store::MemoryBackend = Arc::new(backend);
 
         let req = JsonRpcRequest::with_id(
@@ -760,23 +794,53 @@ mod list_corrections_tests {
             .unwrap()
             .clone();
         assert_eq!(items.len(), 2);
-        // Each entry carries status mapped from is_processed.
-        let statuses: Vec<&str> = items
+        let c1 = items
             .iter()
-            .map(|i| i["status"].as_str().unwrap())
-            .collect();
-        assert!(statuses.contains(&"pending"));
-        assert!(statuses.contains(&"distilled"));
-        let c1 = items.iter().find(|i| i["status"] == "pending").unwrap();
+            .find(|i| i["suggested_rule"] == "rule c1")
+            .unwrap();
+        assert_eq!(c1["status"], "distilled");
         assert_eq!(c1["severity"], "high");
-        assert_eq!(c1["suggested_rule"], "rule c1");
+        let c2 = items
+            .iter()
+            .find(|i| i["suggested_rule"] == "rule c2")
+            .unwrap();
+        assert_eq!(
+            c2["status"], "pending",
+            "above-watermark rows stay pending regardless of is_processed"
+        );
     }
 
     #[tokio::test]
-    async fn include_distilled_false_filters_processed() {
+    async fn no_watermark_means_nothing_distilled() {
         let backend = SqliteMemoryBackend::in_memory().unwrap();
-        seed(&backend, "c1", false, "high").await;
-        seed(&backend, "c2", true, "low").await;
+        // is_processed=true used to render this row "distilled" instantly
+        // (sedimentation kicks within seconds); with no FeedbackDistill
+        // watermark committed yet it must report pending.
+        seed(&backend, "c1", 1000, true, "high").await;
+        let db: crate::memory::store::MemoryBackend = Arc::new(backend);
+
+        let req = JsonRpcRequest::with_id(
+            "memory.list_corrections",
+            Some(json!({ "agent_id": "main" })),
+            json!(1),
+        );
+        let resp = handle_list_corrections(req, db).await;
+        let items = resp.result.unwrap()["corrections"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["status"], "pending");
+    }
+
+    #[tokio::test]
+    async fn include_distilled_false_filters_below_watermark() {
+        let backend = SqliteMemoryBackend::in_memory().unwrap();
+        seed(&backend, "c1", 1000, true, "high").await;
+        seed(&backend, "c2", 2000, false, "low").await;
+        backend
+            .set_dream_watermark("feedback_distill", "main", 1500)
+            .unwrap();
         let db: crate::memory::store::MemoryBackend = Arc::new(backend);
 
         let req = JsonRpcRequest::with_id(
@@ -791,6 +855,7 @@ mod list_corrections_tests {
             .clone();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["status"], "pending");
+        assert_eq!(items[0]["suggested_rule"], "rule c2");
     }
 }
 

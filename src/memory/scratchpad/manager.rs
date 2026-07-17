@@ -26,8 +26,6 @@ use super::template::{generate_scratchpad, DEFAULT_TEMPLATE};
 pub struct ScratchpadConfig {
     /// Scratchpad filename (default: "scratchpad.md")
     pub filename: String,
-    /// History log filename (default: "`session_history.log`")
-    pub history_filename: String,
     /// Create backup before overwrite
     pub backup_on_write: bool,
 }
@@ -36,7 +34,6 @@ impl Default for ScratchpadConfig {
     fn default() -> Self {
         Self {
             filename: "scratchpad.md".to_string(),
-            history_filename: "session_history.log".to_string(),
             backup_on_write: true,
         }
     }
@@ -248,12 +245,6 @@ impl ScratchpadManager {
     #[must_use]
     pub fn scratchpad_path(&self) -> PathBuf {
         self.project_dir.join(&self.config.filename)
-    }
-
-    /// Get the history log path
-    #[must_use]
-    pub fn history_path(&self) -> PathBuf {
-        self.project_dir.join(&self.config.history_filename)
     }
 
     /// Ensure the project directory exists
