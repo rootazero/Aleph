@@ -646,6 +646,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 Some(emb),
                 Some(prov.clone()),
                 app_config.memory.assembler_config(),
+                app_config.memory.injection_mode,
             );
             let reflector_assembler = reflector_mcp.assembler();
 
@@ -965,6 +966,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 embedder_out.clone(),
                 default_prov.clone(),
                 app_config.memory.assembler_config(),
+                // `memory.injection_mode` — Tools deployments must not have
+                // orientation/profile/memory auto-injected into prompts.
+                app_config.memory.injection_mode,
                 Some(memory_ext_registry.clone()),
                 orientation.clone(),
                 profile_synth.clone(),

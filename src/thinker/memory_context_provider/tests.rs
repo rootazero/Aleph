@@ -128,7 +128,7 @@ impl ProfileSynthesizer for FixedProfile {
 async fn tools_mode_returns_none_regardless_of_envelope() {
     let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools);
     let msg = provider
-        .build_memory_user_message("agent-1", "any query", None)
+        .build_memory_user_message("agent-1", "any query", None, None)
         .await
         .unwrap();
     assert!(msg.is_none(), "Tools mode must not auto-inject");
@@ -138,7 +138,7 @@ async fn tools_mode_returns_none_regardless_of_envelope() {
 async fn context_mode_with_empty_envelope_returns_none() {
     let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context);
     let msg = provider
-        .build_memory_user_message("agent-1", "any query", None)
+        .build_memory_user_message("agent-1", "any query", None, None)
         .await
         .unwrap();
     assert!(
@@ -151,7 +151,7 @@ async fn context_mode_with_empty_envelope_returns_none() {
 async fn hybrid_mode_with_empty_envelope_returns_none() {
     let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Hybrid);
     let msg = provider
-        .build_memory_user_message("agent-1", "any query", None)
+        .build_memory_user_message("agent-1", "any query", None, None)
         .await
         .unwrap();
     assert!(msg.is_none());
@@ -188,7 +188,7 @@ async fn build_memory_user_message_invokes_on_retrieve_extension() {
 
     // Empty envelope → still invokes on_retrieve before the emptiness check.
     let _ = provider
-        .build_memory_user_message("a1", "q", None)
+        .build_memory_user_message("a1", "q", None, None)
         .await
         .unwrap();
     assert_eq!(
@@ -228,7 +228,7 @@ async fn tools_mode_skips_on_retrieve_dispatch() {
     let provider = provider.with_extensions(Arc::new(reg));
 
     let out = provider
-        .build_memory_user_message("a1", "q", None)
+        .build_memory_user_message("a1", "q", None, None)
         .await
         .unwrap();
     assert!(out.is_none());
@@ -236,6 +236,70 @@ async fn tools_mode_skips_on_retrieve_dispatch() {
         *rec.0.lock().unwrap_or_else(|e| e.into_inner()),
         0,
         "Tools mode must not call on_retrieve"
+    );
+}
+
+#[tokio::test]
+async fn build_memory_user_message_threads_session_id_into_assembler() {
+    use crate::memory::assembler::envelope::{EnvelopeMeta, MemoryEnvelope};
+    use crate::memory::assembler::WorkingMemoryAssembler;
+    use crate::sync_primitives::{Arc, Mutex};
+    use async_trait::async_trait;
+
+    // Captures the session_id the provider hands to `assemble` — the gather
+    // stage uses it to exclude the session's OWN resume snapshot, so `None`
+    // here would echo the just-ended session back at a resumed one.
+    struct CapturingAssembler(Mutex<Option<Option<String>>>);
+
+    #[async_trait]
+    impl WorkingMemoryAssembler for CapturingAssembler {
+        async fn assemble(
+            &self,
+            query: &str,
+            agent_id: &str,
+            session_id: Option<&str>,
+            _budget: crate::memory::assembler::AssemblyBudget,
+            _filter: crate::memory::session_search_summary::FactSourceFilter,
+        ) -> Result<MemoryEnvelope, AlephError> {
+            *self.0.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(session_id.map(str::to_string));
+            Ok(MemoryEnvelope {
+                schema_version: "1.0".into(),
+                generated_at: 0,
+                query: query.to_string(),
+                agent_id: agent_id.to_string(),
+                session_id: session_id.map(str::to_string),
+                slots: vec![],
+                meta: EnvelopeMeta {
+                    strategy: "test_capture".into(),
+                    candidates_considered: 0,
+                    used_fallback: false,
+                    fallback_reason: None,
+                    llm_rerank_latency_ms: None,
+                    total_latency_ms: 0,
+                },
+            })
+        }
+    }
+
+    let assembler = Arc::new(CapturingAssembler(Mutex::new(None)));
+    let provider = MemoryContextProvider::with_assembler(
+        assembler.clone(),
+        super::MemoryContextConfig::default(),
+    );
+
+    let _ = provider
+        .build_memory_user_message("a1", "q", Some("agent:main:main"), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        assembler
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
+        Some(Some("agent:main:main".to_string())),
+        "the current session key must reach the assembler's exclude path"
     );
 }
 
@@ -266,6 +330,154 @@ async fn orientation_skipped_in_tools_mode() {
         .await
         .unwrap();
     assert!(msg.is_none());
+}
+
+/// Orientation mock whose snapshot is entirely empty/whitespace and which
+/// counts `read_snapshot` calls (shared with the freeze tests below).
+struct CountingOrient {
+    reads: std::sync::atomic::AtomicU32,
+    snapshot: fn(u32) -> OrientationSnapshot,
+}
+
+impl CountingOrient {
+    fn new(snapshot: fn(u32) -> OrientationSnapshot) -> Self {
+        Self {
+            reads: std::sync::atomic::AtomicU32::new(0),
+            snapshot,
+        }
+    }
+
+    fn read_count(&self) -> u32 {
+        self.reads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl NoteOrientation for CountingOrient {
+    async fn bootstrap(&self, _: &str) -> Result<(), AlephError> {
+        Ok(())
+    }
+    async fn read_snapshot(
+        &self,
+        _: &str,
+        _: TokenBudget,
+    ) -> Result<OrientationSnapshot, AlephError> {
+        let n = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        Ok((self.snapshot)(n))
+    }
+    async fn record_ingest(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+        Ok(())
+    }
+    async fn record_query(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+        Ok(())
+    }
+    async fn record_lint(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+        Ok(())
+    }
+    async fn record_session_end(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+        Ok(())
+    }
+    async fn rebuild_index(&self, _: &str) -> Result<IndexStats, AlephError> {
+        Ok(IndexStats::default())
+    }
+    async fn rotate_log_if_needed(&self, _: &str) -> Result<bool, AlephError> {
+        Ok(false)
+    }
+    fn invalidate(&self, _: &str, _: &str) {}
+}
+
+fn empty_snapshot(_read: u32) -> OrientationSnapshot {
+    OrientationSnapshot {
+        schema_text: "  \n".into(),
+        index_text: String::new(),
+        recent_log_tail: "\t".into(),
+    }
+}
+
+fn per_read_snapshot(read: u32) -> OrientationSnapshot {
+    OrientationSnapshot {
+        schema_text: format!("# Schema read-{read}"),
+        index_text: format!("- [[note-{read}]]"),
+        recent_log_tail: String::new(),
+    }
+}
+
+#[tokio::test]
+async fn orientation_skipped_when_snapshot_empty() {
+    // A notes-less agent must not receive a contentless <NoteOrientation>
+    // skeleton every prompt.
+    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
+        .with_orientation(Arc::new(CountingOrient::new(empty_snapshot)));
+
+    let msg = provider
+        .build_orientation_user_message("default", MemoryInjectionMode::Context)
+        .await
+        .unwrap();
+    assert!(msg.is_none(), "all-empty snapshot must inject nothing");
+}
+
+#[tokio::test]
+async fn orientation_cached_is_frozen_per_session_until_invalidated() {
+    let orient = Arc::new(CountingOrient::new(per_read_snapshot));
+    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
+        .with_orientation(orient.clone());
+
+    // First build captures the frozen envelope.
+    let m1 = provider
+        .build_orientation_message_cached("agent-x", "ses-1", MemoryInjectionMode::Context)
+        .await
+        .unwrap()
+        .expect("first build must inject");
+    assert_eq!(orient.read_count(), 1);
+    assert!(format!("{m1:?}").contains("read-1"));
+
+    // Same (agent, session): frozen — no disk re-read, byte-identical text.
+    let m2 = provider
+        .build_orientation_message_cached("agent-x", "ses-1", MemoryInjectionMode::Context)
+        .await
+        .unwrap()
+        .expect("cached build must inject");
+    assert_eq!(orient.read_count(), 1, "second build must hit the cache");
+    assert!(
+        format!("{m2:?}").contains("read-1"),
+        "cached envelope must stay byte-stable (prompt-cache prefix)"
+    );
+
+    // Session end (invalidate_curated) evicts; next build re-reads.
+    provider.invalidate_curated("ses-1").await;
+    let m3 = provider
+        .build_orientation_message_cached("agent-x", "ses-1", MemoryInjectionMode::Context)
+        .await
+        .unwrap()
+        .expect("post-invalidation build must inject");
+    assert_eq!(orient.read_count(), 2, "invalidation must force a re-read");
+    assert!(format!("{m3:?}").contains("read-2"));
+
+    // Post-compression (invalidate_curated_for_agent) evicts too.
+    provider.invalidate_curated_for_agent("agent-x").await;
+    let _ = provider
+        .build_orientation_message_cached("agent-x", "ses-1", MemoryInjectionMode::Context)
+        .await
+        .unwrap();
+    assert_eq!(orient.read_count(), 3, "agent-wide eviction must re-read");
+}
+
+#[tokio::test]
+async fn orientation_cached_freezes_empty_outcome_too() {
+    // The `None` outcome is cached as well: a notes-less agent resolves to
+    // "no envelope" once per session instead of re-reading disk every build.
+    let orient = Arc::new(CountingOrient::new(empty_snapshot));
+    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
+        .with_orientation(orient.clone());
+
+    for _ in 0..3 {
+        let msg = provider
+            .build_orientation_message_cached("agent-x", "ses-1", MemoryInjectionMode::Context)
+            .await
+            .unwrap();
+        assert!(msg.is_none());
+    }
+    assert_eq!(orient.read_count(), 1, "empty outcome must be frozen too");
 }
 
 #[tokio::test]
@@ -389,8 +601,12 @@ async fn invalidate_curated_for_agent_drops_all_sessions_only_for_target() {
     let b_dir = dir.path().join("agent-B");
     tokio::fs::create_dir_all(&a_dir).await.unwrap();
     tokio::fs::create_dir_all(&b_dir).await.unwrap();
-    tokio::fs::write(a_dir.join("MEMORY.md"), "a-old\n§\n").await.unwrap();
-    tokio::fs::write(b_dir.join("MEMORY.md"), "b-old\n§\n").await.unwrap();
+    tokio::fs::write(a_dir.join("MEMORY.md"), "a-old\n§\n")
+        .await
+        .unwrap();
+    tokio::fs::write(b_dir.join("MEMORY.md"), "b-old\n§\n")
+        .await
+        .unwrap();
 
     // Prime caches: 2 sessions for agent-A, 1 for agent-B.
     provider

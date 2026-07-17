@@ -1229,19 +1229,27 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
 
             // Pre-compression context recovery — needs a memory backend plus the
-            // active session id (resolved from session context, matching the
-            // session_key the compaction pipeline writes raw chunks under).
-            // RecallContextTool predates AlephTool, so dispatch via call_impl.
+            // active session id (resolved from the per-task turn context,
+            // matching the session_key the compaction pipeline writes raw
+            // chunks under). RecallContextTool predates AlephTool, so dispatch
+            // via call_impl.
             "recall_context" => {
-                let session_id = self
-                    .session_context_handle
-                    .as_ref()
-                    .and_then(|h| h.try_read().ok())
-                    .map(|ctx| ctx.session_key_str.clone());
+                // Per-task turn context first (race-free), then the
+                // process-global session context mirror: the handle is
+                // rewritten at every run start, so a concurrent run of
+                // another agent can swap the session mid-turn and split it
+                // from the agent id resolved below. Taking both from the same
+                // TurnContext keeps the (agent, session) pair coherent — the
+                // same rule memory_search scope=current_session follows.
+                let session_id = crate::tools::turn_context::current_session_key().or_else(|| {
+                    self.session_context_handle
+                        .as_ref()
+                        .and_then(|h| h.try_read().ok())
+                        .map(|ctx| ctx.session_key_str.clone())
+                });
                 // Resolve the same (optionally project-scoped) agent id the
-                // compaction pipeline writes raw chunks under. Per-task turn
-                // context first (race-free), then the process-global session
-                // context mirror; both task-locals are live here because tool
+                // compaction pipeline writes raw chunks under. Both task-locals
+                // (turn context + project root) are live here because tool
                 // dispatch runs inside the scoped tool-execution task.
                 let base_agent = crate::tools::turn_context::current_agent_id()
                     .unwrap_or_else(|| self.caller_agent_id("default"));
@@ -1355,5 +1363,115 @@ impl ToolRegistry for BuiltinToolRegistry {
                 Box::pin(async move { Err(AlephError::tool(format!("Unknown tool: {tool}"))) })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod recall_context_identity_tests {
+    use super::*;
+    use crate::builtin_tools::agent_manage::SessionContext;
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::routing::session_key::SessionKey;
+    use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+    fn turn_ctx(agent: &str) -> TurnContext {
+        TurnContext {
+            session_key: SessionKey::main(agent),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+        }
+    }
+
+    /// Regression (agent/session identity split): the recall_context arm used
+    /// to take the session from the process-global `session_context_handle`
+    /// while the agent came from the per-task turn context — a concurrent run
+    /// rewriting the handle mid-turn could split the (agent, session) pair
+    /// across two runs. Both must resolve from the same TurnContext, so with a
+    /// live turn scope the tool must read THIS turn's session even when the
+    /// global mirror points at another run's session.
+    #[tokio::test]
+    async fn recall_context_reads_the_turn_session_not_the_global_mirror() {
+        let mut registry = BuiltinToolRegistry::new().await.unwrap();
+
+        // Seed a raw chunk under this turn's (agent, session) pair.
+        let turn_session = SessionKey::main("alice").to_key_string();
+        let db: crate::memory::store::MemoryBackend =
+            Arc::new(crate::memory::store::sqlite::SqliteMemoryBackend::in_memory().unwrap());
+        let raw = RawMemory::new(
+            "the alice chunk".to_string(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_agent("alice")
+        .with_session(turn_session.clone())
+        .with_path(format!("aleph://session/{turn_session}/raw/0"));
+        db.insert_raw_memory(&raw).await.unwrap();
+        registry.recall_context_db = Some(db);
+
+        // The process-global mirror points at ANOTHER run's session — exactly
+        // what a concurrent run rewriting the handle mid-turn produces.
+        registry.session_context_handle = Some(Arc::new(RwLock::new(SessionContext {
+            session_key_str: SessionKey::main("bob").to_key_string(),
+            ..Default::default()
+        })));
+
+        let out = TURN_CONTEXT
+            .scope(turn_ctx("alice"), async {
+                registry
+                    .execute_tool("recall_context", serde_json::json!({ "query": "anything" }))
+                    .await
+            })
+            .await
+            .unwrap();
+
+        let fragments = out["fragments"]
+            .as_array()
+            .expect("recall_context output carries a fragments array");
+        assert_eq!(
+            fragments.len(),
+            1,
+            "must recall under the turn-context session, not the global mirror's"
+        );
+        assert_eq!(fragments[0]["content"], "the alice chunk");
+    }
+
+    /// Outside a turn scope (direct calls, non-gateway paths) the global
+    /// mirror is the only session source and must still be honored.
+    #[tokio::test]
+    async fn recall_context_falls_back_to_the_global_mirror_without_a_turn() {
+        let mut registry = BuiltinToolRegistry::new().await.unwrap();
+
+        let mirror_session = SessionKey::main("bob").to_key_string();
+        let db: crate::memory::store::MemoryBackend =
+            Arc::new(crate::memory::store::sqlite::SqliteMemoryBackend::in_memory().unwrap());
+        let raw = RawMemory::new(
+            "the bob chunk".to_string(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_agent("bob")
+        .with_session(mirror_session.clone())
+        .with_path(format!("aleph://session/{mirror_session}/raw/0"));
+        db.insert_raw_memory(&raw).await.unwrap();
+        registry.recall_context_db = Some(db);
+        // The mirror's key encodes agent "bob"; without a turn scope both the
+        // session AND the agent (via caller_agent_id parsing the same key)
+        // resolve from this one handle — the pair stays coherent.
+        registry.session_context_handle = Some(Arc::new(RwLock::new(SessionContext {
+            session_key_str: mirror_session,
+            ..Default::default()
+        })));
+
+        let out = registry
+            .execute_tool("recall_context", serde_json::json!({ "query": "anything" }))
+            .await
+            .unwrap();
+
+        let fragments = out["fragments"]
+            .as_array()
+            .expect("recall_context output carries a fragments array");
+        assert_eq!(fragments.len(), 1, "global mirror must remain the fallback");
+        assert_eq!(fragments[0]["content"], "the bob chunk");
     }
 }

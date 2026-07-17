@@ -102,11 +102,6 @@ pub struct LayerInput<'a> {
     /// When set, `McpInstructionsLayer` injects per-server instruction
     /// blocks into the system prompt.
     pub mcp_instructions: Option<&'a [McpServerInstruction]>,
-    /// Previous session snapshot for cross-session context restoration.
-    ///
-    /// When set, `SessionResumeLayer` injects the snapshot summary,
-    /// key decisions, active files, and pending tasks into the prompt.
-    pub session_snapshot: Option<&'a crate::memory::session_resume::SessionSnapshot>,
     /// Pre-rendered curated memory envelope (`<CuratedMemory>` + `<UserProfile>`).
     ///
     /// Populated once per session by `MemoryContextProvider::build_curated_message`
@@ -158,7 +153,6 @@ impl<'a> LayerInput<'a> {
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
-            session_snapshot: None,
             curated_memory_envelope: None,
             chain_context: None,
             behavior_name: None,
@@ -182,7 +176,6 @@ impl<'a> LayerInput<'a> {
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
-            session_snapshot: None,
             curated_memory_envelope: None,
             chain_context: None,
             behavior_name: None,
@@ -269,16 +262,6 @@ impl<'a> LayerInput<'a> {
     #[must_use]
     pub const fn with_mcp_instructions(mut self, instructions: &'a [McpServerInstruction]) -> Self {
         self.mcp_instructions = Some(instructions);
-        self
-    }
-
-    /// Attach a previous session snapshot for cross-session resume.
-    #[must_use]
-    pub const fn with_session_snapshot(
-        mut self,
-        snapshot: &'a crate::memory::session_resume::SessionSnapshot,
-    ) -> Self {
-        self.session_snapshot = Some(snapshot);
         self
     }
 

@@ -74,6 +74,7 @@ impl MemoryContextProvider {
             orientation_budget: crate::memory::notes::orientation::types::TokenBudget::default(),
             profile: None,
             curated_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
+            orientation_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
             curated_stores: Arc::new(DashMap::new()),
             curated_config: CuratedConfig::default(),
             #[cfg(test)]
@@ -166,6 +167,7 @@ impl MemoryContextProvider {
             orientation_budget: crate::memory::notes::orientation::types::TokenBudget::default(),
             profile: None,
             curated_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
+            orientation_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
             curated_stores: Arc::new(DashMap::new()),
             curated_config: CuratedConfig::default(),
             #[cfg(test)]
@@ -266,6 +268,7 @@ impl MemoryContextProvider {
             orientation_budget: crate::memory::notes::orientation::types::TokenBudget::default(),
             profile: None,
             curated_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
+            orientation_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
             curated_stores: Arc::new(DashMap::new()),
             curated_config: CuratedConfig::default(),
             #[cfg(test)]

@@ -6,14 +6,25 @@ use crate::memory::extensions::insert_with_capture_filter;
 use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::sync_primitives::{Arc, Ordering};
+use std::path::Path;
 use tracing::{info, warn};
 
 impl SessionCompactor {
     /// Run compression after an agent loop turn completes.
+    ///
+    /// `project_root` is this turn's project root, captured by the caller
+    /// while still synchronous in the run-loop task — this method runs inside
+    /// a `tokio::spawn` fired after the run-loop's `projects::run_context`
+    /// scope has closed, and task-locals never cross a spawn boundary, so
+    /// reading `current_project_root()` here would always observe `None` and
+    /// silently write under the base agent id while the in-turn readers
+    /// (`prepare_history`, `memory_search`, `recall_context`) resolve the
+    /// project-scoped id.
     pub async fn post_turn_compress(
         &self,
         agent: &AgentInstance,
         session_key: &SessionKey,
+        project_root: Option<&Path>,
     ) -> Result<CompressResult, AlephError> {
         if !self.config.enabled {
             return Ok(CompressResult::default());
@@ -22,15 +33,15 @@ impl SessionCompactor {
         let session_id = session_key.to_key_string();
         tracing::info!(target: "session_compactor", session = %session_id, "compress_start");
         // Single chokepoint: resolve the (optionally project-scoped) storage
-        // agent id here, while still synchronous in the run-loop task where the
-        // `current_project_root()` task-local is live. Every downstream session
-        // write (pre-compress, d0/d1/d2 summaries, transcript index) — including
-        // the spawned pre-compress task — inherits this resolved id, so the
-        // task-local is never read across a `tokio::spawn` boundary.
+        // agent id once, from the project root the caller captured before the
+        // spawn. Every downstream session write (pre-compress, d0/d1/d2
+        // summaries, transcript index) — including the spawned pre-compress
+        // task — inherits this resolved id, so no task-local is ever read
+        // across a `tokio::spawn` boundary.
         let agent_id = crate::memory::project_scope::scoped_or_base(
             agent.id(),
             self.project_scoped,
-            crate::projects::current_project_root().as_deref(),
+            project_root,
         );
         let ratio = self.config.token_estimate_ratio;
 

@@ -88,9 +88,10 @@ pub(crate) fn emit_session_end_raw(
                 // Session-resume producer: materialize the /end-summary the
                 // call above just guaranteed into `resume.json`, so the read
                 // chain (`SnapshotReader` → `HybridAssembler::fetch_snapshot`
-                // → `SessionResumeLayer`) is no longer starved. Reuses the
-                // summarizer's stored output — zero extra LLM calls. Same
-                // fire-and-forget warn-on-error posture as the sibling hooks.
+                // → memory envelope injected by the assembler) is no longer
+                // starved. Reuses the summarizer's stored output — zero extra
+                // LLM calls. Same fire-and-forget warn-on-error posture as
+                // the sibling hooks.
                 write_resume_snapshot(&summarizer, &b_agent_id, &b_session_id).await;
             });
         }
@@ -198,7 +199,9 @@ async fn write_resume_snapshot(
     let Some(writer) = crate::memory::session_resume::SnapshotWriter::default_path() else {
         return;
     };
-    if let Err(e) = writer.write_from_summary(session_id, &summary) {
+    // `agent_id` is the fallback owner for session ids that don't parse as
+    // gateway keys; the writer prefers the id embedded in the key itself.
+    if let Err(e) = writer.write_from_summary(session_id, &summary, agent_id) {
         tracing::warn!(
             target: "session_resume.end_hook",
             agent_id,

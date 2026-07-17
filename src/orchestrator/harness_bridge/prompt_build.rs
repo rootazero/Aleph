@@ -204,8 +204,13 @@ impl AgentHarnessRunner {
             // The builder gates itself on `MemoryInjectionMode::Tools` and on
             // a missing wiki handle, so deployments without notes stay
             // byte-identical. Same warn-and-degrade posture as curated above.
+            // Read through the frozen per-(agent, session) path: orientation
+            // lands in the Stable curated zone, so a per-build disk re-read
+            // would churn the provider prompt-cache prefix whenever the wiki
+            // mutated mid-session. Invalidation shares the curated snapshot's
+            // eviction points (session end / post-compression).
             let orientation_text: Option<String> = match mcp
-                .build_orientation_user_message(agent_id, mcp.injection_mode())
+                .build_orientation_message_cached(agent_id, &session_key_str, mcp.injection_mode())
                 .await
             {
                 Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
@@ -213,7 +218,7 @@ impl AgentHarnessRunner {
                     tracing::warn!(
                         agent_id,
                         error = %e,
-                        "build_orientation_user_message failed; degrading orientation envelope to None"
+                        "build_orientation_message_cached failed; degrading orientation envelope to None"
                     );
                     None
                 }
@@ -228,9 +233,16 @@ impl AgentHarnessRunner {
                 // compactor to over-trim recent history (memory lands in the
                 // system prompt = un-compactable overhead). `None` when no
                 // `[context_budget]` is configured → full configured budget.
+                // The session key excludes this session's own end-of-session
+                // resume snapshot from the "previous session" recall source.
                 let headroom = self.memory_injection_headroom(session_id).await;
                 match mcp
-                    .build_memory_user_message(agent_id, user_query, headroom)
+                    .build_memory_user_message(
+                        agent_id,
+                        user_query,
+                        Some(&session_key_str),
+                        headroom,
+                    )
                     .await
                 {
                     Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
@@ -778,9 +790,10 @@ mod orientation_wiring_tests {
     }
 
     /// End-to-end over the exact wiring `build_system_prompt` performs:
-    /// provider-owned mode gates the orientation builder, the envelope merges
-    /// with curated, and `PromptBuilder::with_curated_envelope` lands it in
-    /// the assembled prompt.
+    /// provider-owned mode gates the orientation builder (read through the
+    /// frozen per-(agent, session) path), the envelope merges with curated,
+    /// and `PromptBuilder::with_curated_envelope` lands it in the assembled
+    /// prompt.
     #[tokio::test]
     async fn orientation_envelope_lands_in_assembled_prompt() {
         use crate::providers::message::UnifiedMessage;
@@ -790,7 +803,7 @@ mod orientation_wiring_tests {
             .with_orientation(Arc::new(FixedOrient));
 
         let orientation_text = mcp
-            .build_orientation_user_message("agent-1", mcp.injection_mode())
+            .build_orientation_message_cached("agent-1", "agent:agent-1:main", mcp.injection_mode())
             .await
             .unwrap()
             .as_ref()
@@ -823,7 +836,7 @@ mod orientation_wiring_tests {
             .with_orientation(Arc::new(FixedOrient));
 
         let msg = mcp
-            .build_orientation_user_message("agent-1", mcp.injection_mode())
+            .build_orientation_message_cached("agent-1", "agent:agent-1:main", mcp.injection_mode())
             .await
             .unwrap();
         assert!(msg.is_none(), "Tools mode must not auto-inject orientation");

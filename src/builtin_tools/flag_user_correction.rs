@@ -1,7 +1,7 @@
 //! `flag_user_correction` — record a user-correction signal for later distillation.
 //!
 //! Phase 3 self-evolution path α: when the main LLM detects that the user has
-//! corrected, pushed back, or expressed a strong preference, it calls this
+//! corrected a mistake it made or pushed back on its approach, it calls this
 //! tool. The signal is persisted as a typed `RawMemorySource::Correction`
 //! row in `raw_memory` under the path prefix `aleph://correction/...`, where
 //! the `FeedbackDistill` Dream stage will later read and distill it into a
@@ -87,9 +87,9 @@ impl Clone for FlagUserCorrectionTool {
 #[async_trait]
 impl AlephTool for FlagUserCorrectionTool {
     const NAME: &'static str = "flag_user_correction";
-    const DESCRIPTION: &'static str = "Record a user correction or strong-preference signal so the system can learn from it. \
-         Call when the user corrects you, pushes back on your approach, or expresses a clear preference \
-         that should change your future behavior. Use conservatively — do NOT flag praise, \
+    const DESCRIPTION: &'static str = "Record a user-correction signal so the system can learn from it. \
+         Call when the user corrects a mistake you made or pushes back on your approach. \
+         Durable preferences go to `remember` instead. Use conservatively — do NOT flag praise, \
          neutral acknowledgement, or your own internal reasoning, and never log the same correction \
          twice. Continue the conversation normally after calling, then close your reply with ONE \
          short sentence, in the user's language, acknowledging where the correction was recorded — \
@@ -314,5 +314,30 @@ mod tests {
         let bad = r#"{"content":"x","severity":"WRONG"}"#;
         let r: std::result::Result<FlagUserCorrectionArgs, _> = serde_json::from_str(bad);
         assert!(r.is_err(), "invalid severity must fail at deserialize");
+    }
+
+    #[test]
+    fn description_matches_ladder_rung_two() {
+        // Destination-ladder alignment: rung 2 is mistake-correction /
+        // pushback ONLY. Preference capture belongs to rung 1 (`remember`) —
+        // the description must not compete for it.
+        let d = <FlagUserCorrectionTool as AlephTool>::DESCRIPTION;
+        assert!(
+            d.contains("corrects a mistake you made or pushes back on your approach"),
+            "trigger wording must match the memory-protocol ladder's rung 2"
+        );
+        assert!(
+            !d.contains("clear preference") && !d.contains("strong-preference"),
+            "preference-capture phrasing must not resurface here"
+        );
+        assert!(
+            d.contains("Durable preferences go to `remember`"),
+            "must redirect durable preferences to rung 1"
+        );
+        // The destination/acknowledgment contract stays intact.
+        assert!(
+            d.contains("`destination` field"),
+            "ack contract must keep pointing at the destination field"
+        );
     }
 }

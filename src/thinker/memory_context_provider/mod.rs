@@ -51,6 +51,13 @@ impl LlmReranker for NoopReranker {
 /// invalidation; see [`MemoryContextProvider::build_curated_message`].
 type CuratedSnapshotCache = Arc<TokioRwLock<HashMap<(String, String), Arc<CuratedSnapshot>>>>;
 
+/// Per-(agent_id, `session_key`) frozen orientation envelope. `None` values
+/// are cached too: a notes-less agent resolves to "no envelope" once per
+/// session instead of re-reading disk every prompt build. Same invalidation
+/// points as [`CuratedSnapshotCache`]; see
+/// [`MemoryContextProvider::build_orientation_message_cached`].
+type OrientationSnapshotCache = Arc<TokioRwLock<HashMap<(String, String), Option<String>>>>;
+
 /// Provides pre-fetched memory context for prompt injection.
 pub struct MemoryContextProvider {
     pub(crate) assembler: Arc<dyn WorkingMemoryAssembler>,
@@ -70,6 +77,12 @@ pub struct MemoryContextProvider {
     /// Per-(agent_id, `session_key`) frozen snapshot. Built on first prompt
     /// build for the session; reused until evicted by compression / `SessionEnd`.
     pub(crate) curated_snapshots: CuratedSnapshotCache,
+    /// Per-(agent_id, `session_key`) frozen orientation envelope. Orientation
+    /// lands in the Stable curated zone of the system prompt, so re-reading it
+    /// from disk each build would churn the provider prompt-cache prefix
+    /// whenever the wiki mutated mid-session. Frozen on first build; evicted at
+    /// the same points as `curated_snapshots` (session end / post-compression).
+    pub(crate) orientation_snapshots: OrientationSnapshotCache,
     /// Per-agent `CuratedMemoryStore`. Loaded lazily on first capture.
     pub(crate) curated_stores: Arc<DashMap<String, Arc<CuratedMemoryStore>>>,
     /// Char-budget config for both MEMORY.md and USER.md rendering.

@@ -260,7 +260,10 @@ mod tests {
         layer.inject(&mut out, &LayerInput::basic(&config, &[]));
         assert!(out.contains("Acknowledgment contract"));
         assert!(out.contains("ONE short sentence") && out.contains("their language"));
-        assert!(out.contains("terminal"), "success response must be terminal");
+        assert!(
+            out.contains("terminal"),
+            "success response must be terminal"
+        );
         assert!(out.contains("Never quote the stored content back verbatim"));
     }
 }

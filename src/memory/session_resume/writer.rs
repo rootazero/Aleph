@@ -27,18 +27,33 @@ impl SnapshotWriter {
 
     /// Build a snapshot from a session-end summary and persist it.
     ///
-    /// Producer-side convenience for the session-end hook: derives
-    /// `key_decisions` from the summary via
-    /// [`SessionSnapshot::extract_decisions`] and stamps `created_at` now.
+    /// Producer-side convenience for the session-end hook. The owning agent
+    /// is derived from the session key itself (`agent:main:main` → `main`),
+    /// falling back to `fallback_agent_id` for ids that don't parse as
+    /// gateway keys — the reader filters on this so agents never see each
+    /// other's snapshots. `key_decisions` stays empty: the summary text is
+    /// LLM-written and already carries decisions verbatim; deterministic
+    /// keyword-scraping of that natural language is exactly what R7/P8 ban.
     /// The remaining fields have no session-end source today and stay empty
     /// ([`SessionSnapshot::to_prompt_text`] / the assembler's snapshot
     /// candidate both omit empty sections).
-    pub fn write_from_summary(&self, session_id: &str, summary: &str) -> std::io::Result<PathBuf> {
+    pub fn write_from_summary(
+        &self,
+        session_id: &str,
+        summary: &str,
+        fallback_agent_id: &str,
+    ) -> std::io::Result<PathBuf> {
+        let agent_id = crate::routing::session_key::SessionKey::from_key_string(session_id)
+            .map_or_else(
+                || fallback_agent_id.to_string(),
+                |k| k.agent_id().to_string(),
+            );
         let snapshot = SessionSnapshot {
             session_id: session_id.to_string(),
+            agent_id,
             created_at: chrono::Utc::now(),
             summary: summary.to_string(),
-            key_decisions: SessionSnapshot::extract_decisions(summary),
+            key_decisions: Vec::new(),
             active_files: Vec::new(),
             tool_state: None,
             pending_tasks: Vec::new(),
@@ -46,16 +61,14 @@ impl SnapshotWriter {
         self.write(&snapshot)
     }
 
-    /// Write a snapshot to `{base}/{session_id}/resume.json`.
+    /// Write a snapshot to `{base}/{sanitized session_id}/resume.json`.
     ///
     /// Returns the path of the written file on success.
     pub fn write(&self, snapshot: &SessionSnapshot) -> std::io::Result<PathBuf> {
-        // Sanitize the session id so it cannot escape `base_dir` via path
-        // separators or parent references.
-        let safe_id = snapshot
-            .session_id
-            .replace(['/', '\\', '\0'], "_")
-            .replace("..", "__");
+        // Sanitize the session id so it cannot escape `base_dir` and so the
+        // directory name is legal on Windows (gateway keys contain `:`) —
+        // see `sanitize_session_id`.
+        let safe_id = super::sanitize_session_id(&snapshot.session_id);
         let dir = self.base_dir.join(&safe_id);
         std::fs::create_dir_all(&dir)?;
 
@@ -106,6 +119,7 @@ mod tests {
     fn make_snapshot(id: &str) -> SessionSnapshot {
         SessionSnapshot {
             session_id: id.to_string(),
+            agent_id: "main".to_string(),
             created_at: Utc::now(),
             summary: format!("Summary for {id}"),
             key_decisions: vec![],
@@ -133,6 +147,28 @@ mod tests {
     }
 
     #[test]
+    fn write_sanitizes_gateway_key_session_ids() {
+        // Gateway keys like `agent:main:main` contain `:`, which is illegal
+        // in Windows file names — the directory name must not carry it.
+        let tmp = tempfile::tempdir().unwrap();
+        let writer = SnapshotWriter::new(tmp.path());
+        let snap = make_snapshot("agent:main:main");
+        let path = writer.write(&snap).unwrap();
+
+        assert!(path.exists());
+        let dir_name = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap();
+        assert_eq!(dir_name, "agent_main_main");
+        // The snapshot itself keeps the original id.
+        let content = std::fs::read_to_string(&path).unwrap();
+        let restored: SessionSnapshot = serde_json::from_str(&content).unwrap();
+        assert_eq!(restored.session_id, "agent:main:main");
+    }
+
+    #[test]
     fn write_from_summary_roundtrips_through_reader() {
         use crate::memory::session_resume::SnapshotReader;
 
@@ -141,19 +177,37 @@ mod tests {
         let reader = SnapshotReader::new(tmp.path());
 
         let summary = "We decided to use SQLite. Everything else was routine.";
-        writer.write_from_summary("sess-prev", summary).unwrap();
+        writer
+            .write_from_summary("agent:main:prev", summary, "main")
+            .unwrap();
 
-        // The next session (a different id) must see the previous snapshot.
-        let restored = reader.load_latest("sess-next").unwrap();
-        assert_eq!(restored.session_id, "sess-prev");
+        // The next session (a different id, same agent) must see the previous
+        // snapshot.
+        let restored = reader.load_latest("main", "agent:main:next").unwrap();
+        assert_eq!(restored.session_id, "agent:main:prev");
+        assert_eq!(restored.agent_id, "main", "agent derived from session key");
         assert_eq!(restored.summary, summary);
-        assert_eq!(
-            restored.key_decisions,
-            vec!["We decided to use SQLite".to_string()],
-            "decisions must be derived from the summary"
+        assert!(
+            restored.key_decisions.is_empty(),
+            "no deterministic decision scraping — the summary carries decisions verbatim"
         );
         assert!(restored.active_files.is_empty());
         assert!(restored.pending_tasks.is_empty());
+    }
+
+    #[test]
+    fn write_from_summary_falls_back_when_session_id_is_not_a_key() {
+        use crate::memory::session_resume::SnapshotReader;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let writer = SnapshotWriter::new(tmp.path());
+        let reader = SnapshotReader::new(tmp.path());
+
+        writer
+            .write_from_summary("adhoc-session", "Some summary.", "fallback-agent")
+            .unwrap();
+        let restored = reader.load_latest("fallback-agent", "other").unwrap();
+        assert_eq!(restored.agent_id, "fallback-agent");
     }
 
     #[test]

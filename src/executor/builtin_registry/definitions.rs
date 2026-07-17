@@ -330,7 +330,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "flag_user_correction",
-        description: "Record a user correction or strong-preference signal so the system can learn from it",
+        description: "Record a user-correction signal so the system can learn from it",
         requires_config: true,
     },
     BuiltinToolDefinition {
