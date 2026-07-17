@@ -90,6 +90,13 @@ pub enum StreamEvent {
     AskUser {
         run_id: String,
         seq: u64,
+        /// Clarification registry key the answer must be posted back against
+        /// (`clarification.resolve`). Replies route by session, not by run, so a
+        /// client that only kept `run_id` cannot answer — this is the field the
+        /// TUI/CLI need to unblock the parked `ask_user`. Mirrors the core
+        /// `GatewayEventFrame::AskUser` the wire carries.
+        #[serde(default)]
+        session_key: String,
         question: String,
         options: Vec<String>,
     },

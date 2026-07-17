@@ -78,8 +78,9 @@ pub enum Action {
     DialogSelect(usize),
 
     // -- Dialog response --
-    /// Respond to an `AskUser` dialog
-    RespondToDialog { run_id: String, choice: String },
+    /// Answer an `AskUser` dialog. Routed to `clarification.resolve` keyed by
+    /// `session_key` (the reply routes by session, not by run).
+    RespondToDialog { session_key: String, reply: String },
 
     // -- Tool approval (Ask exec tier) --
     /// Resolve the pending tool-approval overlay by option index into
@@ -163,7 +164,10 @@ pub enum ChatMessage {
 /// State for the `AskUser` confirmation dialog.
 #[derive(Debug, Clone)]
 pub struct DialogState {
-    pub run_id: String,
+    /// Clarification registry key — the answer is posted back to
+    /// `clarification.resolve` against this, NOT the run id (replies route by
+    /// session). Carried on the `AskUser` frame.
+    pub session_key: String,
     pub question: String,
     pub options: Vec<String>,
     pub selected: usize,
@@ -181,7 +185,8 @@ pub const APPROVAL_DECISIONS: [(&str, &str); 3] = [
 /// State for the tool-execution approval overlay (Ask exec tier). A parked
 /// server run is waiting on `exec.approval.resolve` for this `id`. Kept
 /// deliberately separate from [`DialogState`] (AskUser) so a security decision
-/// can never be routed to `agent.respondToInput` by mistake.
+/// can never be routed to `clarification.resolve` (the AskUser answer path) by
+/// mistake — approvals resolve through `exec.approval.resolve` alone.
 #[derive(Debug, Clone)]
 pub struct ApprovalState {
     /// Approval id — the resolve key. Never shown to the user.
@@ -580,10 +585,11 @@ impl AppState {
         picker.entries.get(idx).map(|e| e.key.clone())
     }
 
-    /// Show an `AskUser` dialog.
-    pub fn show_dialog(&mut self, run_id: String, question: String, options: Vec<String>) {
+    /// Show an `AskUser` dialog. `session_key` is the clarification key the
+    /// answer resolves against (`clarification.resolve`).
+    pub fn show_dialog(&mut self, session_key: String, question: String, options: Vec<String>) {
         self.dialog = Some(DialogState {
-            run_id,
+            session_key,
             question,
             options,
             selected: 0,

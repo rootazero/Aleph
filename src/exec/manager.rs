@@ -25,8 +25,6 @@ pub struct ExecApprovalRecord {
     pub command: String,
     /// Working directory
     pub cwd: Option<String>,
-    /// Host identifier
-    pub host: Option<String>,
     /// Agent ID
     pub agent_id: String,
     /// Session key
@@ -94,7 +92,6 @@ impl ExecApprovalRecord {
             id: request.id.clone(),
             command: request.command.clone(),
             cwd: request.cwd.clone(),
-            host: None,
             agent_id: request.agent_id.clone(),
             session_key: request.session_key.clone(),
             executable,
@@ -340,8 +337,17 @@ impl ExecApprovalManager {
         let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
 
         if let Some(entry) = pending.get_mut(id) {
-            if entry.sender.is_none() {
-                warn!(id = %id, "Approval already resolved");
+            // Liveness is the honest signal, exactly as the clarification twin
+            // enforces it ([`crate::clarification::session::ClarificationManager::resolve`]):
+            // a dead entry is one already resolved (`sender` taken), past its
+            // deadline, OR abandoned (receiver dropped by a cancelled run). Any
+            // of these makes the decision reach nobody — reporting `true` here
+            // is what lets a Telegram button callback / `exec.approval.resolve`
+            // reply "✅ Allowed" for an approval that was never delivered. The
+            // FIFO `resolve_for_session` path already filters on `is_live`; the
+            // by-id path must too, or the two disagree on the same registry.
+            if !entry.is_live() {
+                warn!(id = %id, "Approval already resolved, expired, or abandoned");
                 return false;
             }
 
@@ -358,6 +364,8 @@ impl ExecApprovalManager {
                     .as_millis() as u64,
             );
 
+            // `is_live()` above proved the receiver is still open under this
+            // same lock, so the send delivers — no silent drop to a zombie.
             if let Some(sender) = entry.sender.take() {
                 let _ = sender.send(Some(decision));
             }
@@ -630,6 +638,41 @@ mod tests {
         );
         let resolved = manager.await_registered(id, rx, timeout).await;
         assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
+    }
+
+    #[tokio::test]
+    async fn resolve_by_id_reports_false_for_an_abandoned_waiter() {
+        // Twin parity with the clarification manager: a run cancelled while its
+        // approval was parked drops the receiver. A late button tap / RPC that
+        // resolves this zombie by id must report `false` — the callback sink
+        // and `exec.approval.resolve` speak "✅ Allowed" only on a `true`, and
+        // the decision would reach nobody. Before the fix `resolve` checked only
+        // `sender.is_none()` and returned `true` for the dead entry.
+        let manager = ExecApprovalManager::new();
+        let record = manager.create(&mock_request(), 60_000);
+        let (id, rx, _timeout) = manager.register_pending(record);
+        drop(rx); // the awaiting `ask_user`/tool future is gone (aborted run)
+
+        assert!(
+            !manager.resolve(&id, ApprovalDecisionType::AllowOnce, None),
+            "resolving an abandoned (receiver-closed) approval must report false"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_by_id_reports_false_for_an_expired_entry() {
+        // An expired card is not a decision surface: resolving it by id must be
+        // a no-op false, matching `resolve_for_session`'s liveness filter and
+        // the clarification twin's `resolve_after_expiry`.
+        let manager = ExecApprovalManager::new();
+        let record = manager.create(&mock_request(), 1); // 1ms window
+        let (id, _rx, _timeout) = manager.register_pending(record);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        assert!(
+            !manager.resolve(&id, ApprovalDecisionType::AllowOnce, None),
+            "resolving an expired approval by id must report false"
+        );
     }
 
     #[tokio::test]
