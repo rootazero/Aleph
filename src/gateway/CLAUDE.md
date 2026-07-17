@@ -14,9 +14,16 @@
   权限与本地**完全一致**（单层）；未通过 = 登录墙（WS 派发仅放行 `connect`）。**长效凭据不进
   URL/QR**——QR 只编码一次性配对票，修复 `?token=` 泄露向量。
 - **撤销**：① `gateway.token.rotate` = 核弹级（重生共享 token **并** `revoke_all_panel_devices`，
-  cluster 节点不受影响）。② `gateway.devices.revoke {device_id}` = 单设备（下次重连即拒）；
-  清单 `gateway.devices.list`（仅 `device_type='panel'`）。两者纯 I/O，scope 守卫不碰 cluster 节点。
-  设备令牌/配对票逻辑在 `security/device_token_manager.rs`。
+  cluster 节点不受影响）+ **强踢活跃 socket**（`start/mod.rs` 发 `TokenRotated` 事件 → `handler.rs`
+  的 `is_token_rotated_frame` 关闭远程 session）。⚠️ **地雷**：该谓词读 `publish_frame` 的 **wire
+  `topic`**（非流事件包成 `{topic,data}`），**不是顶层 `type`**——读错字段谓词恒 false，`rotate`
+  变哑弹（曾静默失效，2026-07-17 修）；改它测试必须喂 `publish_frame` 真实输出。② `gateway.devices.revoke
+  {device_id}` = 单设备（下次重连即拒，不强踢活跃 socket）；清单 `gateway.devices.list`（仅
+  `device_type='panel'`）。两者纯 I/O，scope 守卫不碰 cluster 节点。设备令牌/配对票逻辑在
+  `security/device_token_manager.rs`。⚠️ **重配对必清 `revoked_at`**：`store::upsert_device` 的
+  ON CONFLICT 补了 `revoked_at = NULL`，否则已 revoke 的 `device_id` 扫码重配会复活成
+  **不可列/不可撤销、扛过轮换**的 operator token（device 行藏在 `list_devices` 的
+  `WHERE revoked_at IS NULL` 之外，而新 token 行 revoke 戳为 NULL 照常校验通过）。
 
 ## 两道护栏
 

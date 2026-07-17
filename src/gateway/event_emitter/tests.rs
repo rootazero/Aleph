@@ -160,7 +160,6 @@ fn test_agent_trace_serialization() {
                 requested_tool_calls: 1,
                 executed_tool_calls: 1,
                 productive: true,
-                consecutive_errors: 0,
                 total_tokens: 42,
             },
         },

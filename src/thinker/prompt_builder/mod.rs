@@ -81,6 +81,16 @@ pub struct PromptConfig {
     /// MCP server instructions for prompt injection.
     /// Collected from connected MCP servers via `McpClient::collect_instructions()`.
     pub mcp_instructions: Option<Vec<crate::thinker::prompt_layer::McpServerInstruction>>,
+    /// Active tool names, used by `SkillInstructionsLayer` to filter
+    /// `PromptScope::Tool` skills on the production **cached** path.
+    ///
+    /// On that path `LayerInput::tools` is empty (native `tool_use` delivers
+    /// schemas out-of-band, so the prompt never lists them), which meant every
+    /// Tool-scoped skill was silently dropped. The harness bridge populates
+    /// this from the tool catalog — but only when a Tool-scoped skill is
+    /// actually eligible, so the common path pays nothing. The set is
+    /// session-stable, so it does not perturb the cacheable stable prefix.
+    pub active_tool_names: Vec<String>,
 }
 
 impl Default for PromptConfig {
@@ -101,6 +111,7 @@ impl Default for PromptConfig {
             skill_prompt_budget: None,
             available_agents: None,
             mcp_instructions: None,
+            active_tool_names: Vec::new(),
         }
     }
 }
@@ -316,32 +327,6 @@ impl PromptBuilder {
             prompt.push_str("\n</strategy>\n\n");
         }
         prompt
-    }
-
-    /// Build system prompt for a sub-agent (basic path, no soul).
-    ///
-    /// Lighter variant for sub-agents that don't have a `SoulManifest`.
-    pub fn build_for_agent_basic(
-        &self,
-        agent_def: &crate::agents::AgentDef,
-        tools: &[ToolInfo],
-    ) -> String {
-        let input = LayerInput::basic(&self.config, tools)
-            .with_agent_def(agent_def)
-            .with_identity_files_opt(self.identity_files.as_ref())
-            .with_extra_files_opt(self.extra_files.as_deref());
-        let input = match &self.config.mcp_instructions {
-            Some(instructions) => input.with_mcp_instructions(instructions),
-            None => input,
-        };
-        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
-        let input = input.with_chain_context_opt(self.chain_context.as_ref());
-        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
-        let input = input
-            .with_behavior_name_opt(self.behavior_name.as_deref())
-            .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref());
-        let input = input.with_iteration_cap_opt(self.iteration_cap);
-        self.pipeline.execute(AssemblyPath::Basic, &input)
     }
 
     /// Access the underlying config (for reading).

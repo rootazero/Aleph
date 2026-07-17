@@ -233,7 +233,6 @@ impl From<LoopTraceTurnMetrics> for aleph_protocol::AgentTraceTurnMetrics {
             requested_tool_calls: metrics.requested_tool_calls,
             executed_tool_calls: metrics.executed_tool_calls,
             productive: metrics.productive,
-            consecutive_errors: metrics.consecutive_errors,
             total_tokens: metrics.total_tokens,
         }
     }
@@ -363,7 +362,6 @@ mod tests {
             requested_tool_calls: 3,
             executed_tool_calls: 2,
             productive: true,
-            consecutive_errors: 1,
             total_tokens: 42,
         };
 
@@ -372,7 +370,6 @@ mod tests {
         assert_eq!(wire.requested_tool_calls, 3);
         assert_eq!(wire.executed_tool_calls, 2);
         assert!(wire.productive);
-        assert_eq!(wire.consecutive_errors, 1);
         assert_eq!(wire.total_tokens, 42);
     }
 }

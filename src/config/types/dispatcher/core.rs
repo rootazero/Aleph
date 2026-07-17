@@ -215,6 +215,53 @@ pub struct TeamBroadcastConfigToml {
     pub transcript_token_budget: Option<usize>,
 }
 
+// =============================================================================
+// TeamMessagesConfigToml — `[team_messages]`
+// =============================================================================
+
+/// Operator tunables for the team **message-router thread escalation** guard
+/// (§4.5) — the third and last deterministic storm/escalation guard of the
+/// teams subsystem, alongside [`TeamDispatcherConfigToml`] (§4.4) and
+/// [`TeamBroadcastConfigToml`] (§4.5 broadcast). Each field is `Option`: an
+/// absent key falls back to the live `teams::messages::EscalationRule::default()`
+/// at the boot site, so an unconfigured deployment is byte-identical to prior
+/// behaviour and the authoritative defaults never drift (they are read from the
+/// runtime struct, not duplicated here).
+///
+/// The escalation guard is advisory-only: when a reply thread exceeds
+/// `thread_message_threshold` messages the router sends the team leader ONE
+/// `SystemNotification` suggesting a collaborative session — the LLM leader
+/// decides what to do (no reasoning in the guard, 守 R7). Before this section
+/// the threshold and on/off switch were pinned to `EscalationRule::default()`
+/// (threshold 5, enabled) at the sole boot site, so an operator could neither
+/// silence a noisy escalation nor tune the threshold without a rebuild — the
+/// same config-ification asymmetry the broadcast storm guards already closed.
+///
+/// A `thread_message_threshold` of `0` would escalate on the very first reply
+/// (born-noisy); the boot mapping treats `0` as "use the default" (P7 boundary
+/// clamp), mirroring `[team_broadcast]`'s guard clamp. `escalation_enabled` is
+/// honoured verbatim (including `false`) so operators can disable escalation.
+///
+/// # Example TOML
+///
+/// ```toml
+/// [team_messages]
+/// thread_message_threshold = 10   # nudge the leader only on longer threads
+/// escalation_enabled = false      # or turn thread escalation off entirely
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct TeamMessagesConfigToml {
+    /// Messages in a reply thread before the router nudges the leader to start
+    /// a collaborative session. `0` ⇒ use the default (5) — a literal 0 would
+    /// escalate on the first reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_message_threshold: Option<u32>,
+    /// Master switch for thread escalation. `false` disables the leader nudge
+    /// entirely; absent ⇒ default (enabled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escalation_enabled: Option<bool>,
+}
+
 impl DispatcherConfigToml {
     /// Validate the configuration values
     ///

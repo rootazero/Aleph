@@ -18,6 +18,7 @@ use crate::guardrails::decision::{GuardrailDecision, Replacement};
 use crate::guardrails::registry::GuardrailRegistry;
 use crate::guardrails::traits::{InputGuardrail, OutputGuardrail, ToolCallGuardrail};
 use crate::harness::callback::HarnessCallback;
+use crate::harness::tests::harness_ext::AgentHarnessTestExt;
 use crate::harness::{AgentHarness, HarnessDeps, HarnessError, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::NativeToolCall;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};

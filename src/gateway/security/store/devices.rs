@@ -3,7 +3,16 @@ use super::{current_timestamp_ms, SecurityStore};
 use rusqlite::{params, Result as SqliteResult};
 
 impl SecurityStore {
-    /// Insert or update a device
+    /// Insert or update a device.
+    ///
+    /// Re-pairing clears `revoked_at`: a fresh pairing arrives only after a valid
+    /// one-time bootstrap ticket (itself operator-gated), so re-adopting a
+    /// previously-revoked `device_id` is by definition a live device again.
+    /// Without clearing it, the ON CONFLICT path left the row `revoked_at`-stamped
+    /// while `issue_device_token` minted a working token — the device then vanished
+    /// from [`Self::list_devices`] (`WHERE revoked_at IS NULL`) and from
+    /// `revoke_all_panel_devices`, leaving an un-listable, un-revocable operator
+    /// token that even survived a shared-token rotation.
     pub fn upsert_device(&self, data: &DeviceUpsertData<'_>) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
@@ -18,7 +27,8 @@ impl SecurityStore {
                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
                ON CONFLICT(device_id) DO UPDATE SET
                  device_name = excluded.device_name,
-                 last_seen_at = ?8"#,
+                 last_seen_at = ?8,
+                 revoked_at = NULL"#,
             params![data.device_id, data.device_name, data.device_type, data.public_key, data.fingerprint, data.role, scopes_json, now],
         )?;
         Ok(())

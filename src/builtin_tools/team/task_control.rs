@@ -25,8 +25,10 @@ use crate::tools::AlephTool;
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case", tag = "action")]
 pub enum TeamTaskControlArgs {
-    /// Suspend dispatch of a pending / blocked / `waiting_review` task.
-    /// Rejects `in_progress` and terminal-state tasks.
+    /// Suspend dispatch of a pending / blocked / `unsatisfiable` task.
+    /// Rejects `in_progress`, `waiting_review`, and terminal-state tasks
+    /// (`waiting_review` is review-gated — resume would re-run it and discard
+    /// its completed work + pending verdict).
     Pause { task_id: String },
     /// Undo a previous pause — task returns to pending.
     Resume { task_id: String },
@@ -102,10 +104,14 @@ impl AlephTool for TeamTaskControlTool {
                 debug!(task_id = %task_id, "team_task_control: pause");
                 let current = self.fetch_status(&task_id).await?;
                 match current {
+                    // WaitingReview is deliberately NOT pausable: resume returns
+                    // a task to Pending, re-running a review-gated task from
+                    // scratch and discarding both its completed work and the
+                    // pending lead verdict. Its lifecycle verbs are review, not
+                    // pause. Mirrors the teams.task.pause RPC guard.
                     CoordTaskStatus::Pending
                     | CoordTaskStatus::Blocked
-                    | CoordTaskStatus::Unsatisfiable
-                    | CoordTaskStatus::WaitingReview => {}
+                    | CoordTaskStatus::Unsatisfiable => {}
                     CoordTaskStatus::Paused => {
                         return Ok(TeamTaskControlOutput {
                             task_id,
@@ -115,7 +121,7 @@ impl AlephTool for TeamTaskControlTool {
                     }
                     _ => {
                         return Err(AlephError::invalid_input(format!(
-                            "cannot pause task in status '{current}' — only pending/blocked/waiting_review may be paused"
+                            "cannot pause task in status '{current}' — only pending/blocked/unsatisfiable may be paused"
                         )));
                     }
                 }
@@ -316,6 +322,29 @@ mod tests {
             store.get_task(&task_id).await.unwrap().unwrap().status,
             CoordTaskStatus::Pending
         );
+    }
+
+    #[tokio::test]
+    async fn pause_rejects_waiting_review() {
+        // A review-gated task must NOT be pausable: resume would return it to
+        // Pending and re-run it, discarding the completed work + pending verdict.
+        let (store, tool) = setup().await;
+        let task_id = make_task(&store, "T1").await;
+        store
+            .update_task(
+                &task_id,
+                CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::WaitingReview),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let err = tool
+            .call(TeamTaskControlArgs::Pause { task_id })
+            .await
+            .unwrap_err();
+        assert!(format!("{err}").contains("only pending/blocked/unsatisfiable"));
     }
 
     #[tokio::test]

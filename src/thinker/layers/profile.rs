@@ -1,8 +1,8 @@
 //! `ProfileLayer` — workspace persona overlay (priority 75)
 //!
-//! Injects the active workspace profile's `system_prompt` into the prompt
-//! pipeline, between Soul (50) and Role (100).  This allows workspaces
-//! to add role-specific context without overriding the base identity.
+//! Injects the workspace `AGENTS.md` as a `## Project Context` block into the
+//! prompt pipeline, between Soul (50) and Role (100). This lets a workspace add
+//! project-specific context without overriding the base identity.
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
@@ -32,160 +32,69 @@ impl PromptLayer for ProfileLayer {
         ]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
-        // Priority 1: workspace AGENTS.md
+        // Workspace AGENTS.md → "## Project Context" overlay.
         if let Some(agents_content) = input.identity_file("AGENTS.md") {
             output.push_str("## Project Context\n\n");
             output.push_str(agents_content);
             output.push_str("\n\n");
-            return;
         }
-
-        // Priority 2: ProfileConfig.system_prompt (legacy fallback)
-        let profile = match input.profile {
-            Some(p) => p,
-            None => return,
-        };
-
-        let prompt = match profile.system_prompt.as_deref() {
-            Some(s) if !s.is_empty() => s,
-            _ => return,
-        };
-
-        output.push_str("## Current Role Context\n\n");
-        output.push_str(prompt);
-        output.push_str("\n\n");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ProfileConfig;
     use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
     use crate::thinker::prompt_builder::PromptConfig;
     use std::path::PathBuf;
 
-    #[test]
-    fn test_injects_when_prompt_exists() {
-        let layer = ProfileLayer;
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let profile = ProfileConfig {
-            system_prompt: Some("You are a senior Rust engineer.".to_string()),
-            ..Default::default()
-        };
-        let input = LayerInput::basic(&config, &tools).with_profile(Some(&profile));
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-
-        assert!(out.contains("## Current Role Context"));
-        assert!(out.contains("You are a senior Rust engineer."));
-    }
-
-    #[test]
-    fn test_skips_when_no_prompt() {
-        let layer = ProfileLayer;
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let profile = ProfileConfig {
-            system_prompt: None,
-            ..Default::default()
-        };
-        let input = LayerInput::basic(&config, &tools).with_profile(Some(&profile));
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn test_skips_when_no_profile() {
-        let layer = ProfileLayer;
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let input = LayerInput::basic(&config, &tools);
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn test_skips_when_prompt_is_empty() {
-        let layer = ProfileLayer;
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let profile = ProfileConfig {
-            system_prompt: Some("".to_string()),
-            ..Default::default()
-        };
-        let input = LayerInput::basic(&config, &tools).with_profile(Some(&profile));
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn prefers_workspace_agents_over_profile_prompt() {
-        let layer = ProfileLayer;
-        let config = PromptConfig::default();
-        let tools = vec![];
-        let profile = ProfileConfig {
-            system_prompt: Some("You are a senior Rust engineer.".to_string()),
-            ..Default::default()
-        };
-        let ws = IdentityFiles {
+    fn workspace_with(name: &'static str, content: &str) -> IdentityFiles {
+        IdentityFiles {
             identity_dir: PathBuf::from("/tmp/test"),
             files: vec![IdentityFile {
-                name: "AGENTS.md",
-                content: Some("Custom agent instructions".to_string()),
+                name,
+                content: Some(content.to_string()),
                 truncated: false,
-                original_size: 24,
+                original_size: content.len(),
             }],
-        };
-        let input = LayerInput::basic(&config, &tools)
-            .with_profile(Some(&profile))
-            .with_identity_files(&ws);
+        }
+    }
+
+    #[test]
+    fn injects_agents_md_as_project_context() {
+        let layer = ProfileLayer;
+        let config = PromptConfig::default();
+        let ws = workspace_with("AGENTS.md", "Custom agent instructions");
+        let input = LayerInput::basic(&config, &[]).with_identity_files(&ws);
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
-        // Should use AGENTS.md, not ProfileConfig
         assert!(out.contains("## Project Context"));
         assert!(out.contains("Custom agent instructions"));
-        assert!(!out.contains("## Current Role Context"));
-        assert!(!out.contains("senior Rust engineer"));
     }
 
     #[test]
-    fn falls_back_to_profile_when_no_workspace_agents() {
+    fn skips_when_no_agents_md() {
         let layer = ProfileLayer;
         let config = PromptConfig::default();
-        let tools = vec![];
-        let profile = ProfileConfig {
-            system_prompt: Some("You are a senior Rust engineer.".to_string()),
-            ..Default::default()
-        };
-        // Workspace exists but has no AGENTS.md
-        let ws = IdentityFiles {
-            identity_dir: PathBuf::from("/tmp/test"),
-            files: vec![IdentityFile {
-                name: "IDENTITY.md",
-                content: Some("identity content".to_string()),
-                truncated: false,
-                original_size: 16,
-            }],
-        };
-        let input = LayerInput::basic(&config, &tools)
-            .with_profile(Some(&profile))
-            .with_identity_files(&ws);
+        // Workspace exists but carries no AGENTS.md → nothing to inject.
+        let ws = workspace_with("IDENTITY.md", "identity content");
+        let input = LayerInput::basic(&config, &[]).with_identity_files(&ws);
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
-        // Should fall back to ProfileConfig.system_prompt
-        assert!(out.contains("## Current Role Context"));
-        assert!(out.contains("You are a senior Rust engineer."));
-        assert!(!out.contains("## Project Context"));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn skips_when_no_identity_files() {
+        let layer = ProfileLayer;
+        let config = PromptConfig::default();
+        let input = LayerInput::basic(&config, &[]);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        assert!(out.is_empty());
     }
 
     #[test]
@@ -194,8 +103,8 @@ mod tests {
         assert!(paths.contains(&AssemblyPath::Soul));
         assert!(paths.contains(&AssemblyPath::Context));
         assert!(!paths.contains(&AssemblyPath::Basic));
-        // Must ride the live main-loop path so AGENTS.md / profile system_prompt
-        // actually reach the production prompt.
+        // Must ride the live main-loop path so AGENTS.md actually reaches the
+        // production prompt.
         assert!(paths.contains(&AssemblyPath::Cached));
     }
 

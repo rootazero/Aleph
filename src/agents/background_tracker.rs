@@ -1,12 +1,13 @@
 //! `BackgroundAgentTracker` — tracks sub-agents running in background tokio tasks.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::agents::progress::{ProgressKind, SubagentProgress};
 use crate::sync_primitives::RwLock;
 use aleph_protocol::subagent_tree::{NodeLifecycle, SubagentNode};
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -98,6 +99,14 @@ pub(crate) fn lifecycle_from_outcome(outcome: &CompletedOutcome) -> NodeLifecycl
 pub struct BackgroundAgentTracker {
     running: RwLock<HashMap<String, RunningAgent>>,
     completed: RwLock<HashMap<String, CompletedAgent>>,
+    /// Fires once on every transition into `completed` (see `mark_completed`)
+    /// so [`wait`](Self::wait) can park until *something* finishes instead of
+    /// forcing the parent model to spend an LLM turn per `check_status` poll.
+    /// Coarse-grained on purpose — every waiter wakes and re-checks its own
+    /// `request_id` (the running set is small) — mirroring the proven
+    /// `builtin_tools::process_registry` completion notifier so a single shared
+    /// signal is cheaper than one channel per background agent.
+    completion: Notify,
 }
 
 struct RunningAgent {
@@ -143,6 +152,13 @@ struct CompletedAgent {
     /// exploration reached the parent as a bare error string with no evidence of
     /// what was attempted. Negative results are kept deliberately.
     progress_tail: Vec<SubagentProgress>,
+    /// Whether the parent already saw this result on-demand (via a `wait` or a
+    /// `check_status` that returned the completed outcome). Set by
+    /// [`mark_consumed`](BackgroundAgentTracker::mark_consumed) and read by
+    /// `subagent_announce` so the proactive R5 announce does not re-deliver a
+    /// result the model has already folded into its reasoning. Lives and dies
+    /// with the completed entry, so it needs no separate pruning.
+    consumed: bool,
 }
 
 /// Terminal outcome of a background subagent run.
@@ -193,12 +209,44 @@ pub struct RunningMeta {
     pub task: String,
 }
 
+/// Outcome of a [`wait`](BackgroundAgentTracker::wait) on a single background
+/// subagent. `Completed` carries the same non-destructive snapshot a poll
+/// would return; `TimedOut` means the bounded wait window closed with the
+/// agent still running (the caller may `wait` again); `NotFound` means the
+/// `request_id` is unknown (never registered, or TTL-pruned).
+#[derive(Debug, Clone)]
+pub enum WaitOutcome {
+    Completed(CompletedSnapshot),
+    TimedOut { elapsed_secs: u64 },
+    NotFound,
+}
+
+/// Outcome of a [`wait_any`](BackgroundAgentTracker::wait_any) over a SET of
+/// background subagents — the fan-out "wait for whichever finishes first"
+/// primitive (codex `wait_agent` parity). `Completed` names the first id in the
+/// set to finish; draining the rest is the caller's job (drop it and
+/// `wait_any` again). `TimedOut` lists the ids still running when the window
+/// closed. `NotFound` means none of the ids is known (all unregistered /
+/// TTL-pruned).
+#[derive(Debug, Clone)]
+pub enum WaitAnyOutcome {
+    Completed {
+        request_id: String,
+        snapshot: CompletedSnapshot,
+    },
+    TimedOut {
+        still_running: Vec<String>,
+    },
+    NotFound,
+}
+
 impl BackgroundAgentTracker {
     #[must_use]
     pub fn new() -> Self {
         Self {
             running: RwLock::new(HashMap::new()),
             completed: RwLock::new(HashMap::new()),
+            completion: Notify::new(),
         }
     }
 
@@ -266,15 +314,14 @@ impl BackgroundAgentTracker {
     /// `request_id` more than once without the result vanishing.
     pub fn mark_completed(&self, request_id: &str, outcome: CompletedOutcome) {
         let now = Instant::now();
-        let prior = {
-            let mut running = self.running.write().unwrap_or_else(|e| {
-                warn!("BackgroundAgentTracker lock poisoned, recovering");
-                e.into_inner()
-            });
-            running.remove(request_id)
-        };
-        // Carry over every tree field from the running entry so a completed
-        // node still rebuilds into the tree with its parent/depth/tools intact.
+        // Snapshot the running entry's carry-over fields via a *read* borrow —
+        // without removing it yet. The completed entry is inserted BEFORE the
+        // running entry is removed (below), so the `request_id` is present in
+        // `completed` for the entire transition and a concurrent `wait` /
+        // `check_status` can never observe it absent from *both* maps — the
+        // window that would otherwise read as a spurious NotFound. The brief
+        // double-presence is harmless: every completed-first reader returns the
+        // finished result and `flat_nodes` de-dupes by id.
         let (
             duration_secs,
             task_description,
@@ -284,73 +331,93 @@ impl BackgroundAgentTracker {
             last_tool,
             last_activity,
             progress_tail,
-        ) = match prior {
-            Some(agent) => {
-                // B18 — keep the last `PROGRESS_TAIL_LEN` events; the rest of the
-                // FIFO is dropped with the running entry as before.
-                let skip = agent.progress.len().saturating_sub(PROGRESS_TAIL_LEN);
-                let tail: Vec<SubagentProgress> =
-                    agent.progress.iter().skip(skip).cloned().collect();
-                (
-                    now.duration_since(agent.started_at).as_secs(),
-                    agent.task_description,
-                    agent.meta,
-                    agent.started_at_ms,
-                    agent.tool_count,
-                    agent.last_tool,
-                    agent.last_activity,
-                    tail,
-                )
+        ) = {
+            let running = self.running.read().unwrap_or_else(|e| {
+                warn!("BackgroundAgentTracker lock poisoned, recovering");
+                e.into_inner()
+            });
+            match running.get(request_id) {
+                Some(agent) => {
+                    // B18 — keep the last `PROGRESS_TAIL_LEN` events; the rest of
+                    // the FIFO is dropped with the running entry as before.
+                    let skip = agent.progress.len().saturating_sub(PROGRESS_TAIL_LEN);
+                    let tail: Vec<SubagentProgress> =
+                        agent.progress.iter().skip(skip).cloned().collect();
+                    (
+                        now.duration_since(agent.started_at).as_secs(),
+                        agent.task_description.clone(),
+                        agent.meta.clone(),
+                        agent.started_at_ms,
+                        agent.tool_count,
+                        agent.last_tool.clone(),
+                        agent.last_activity.clone(),
+                        tail,
+                    )
+                }
+                None => (
+                    0,
+                    String::new(),
+                    SpawnMeta::default(),
+                    now_unix_ms(),
+                    0,
+                    None,
+                    None,
+                    Vec::new(),
+                ),
             }
-            None => (
-                0,
-                String::new(),
-                SpawnMeta::default(),
-                now_unix_ms(),
-                0,
-                None,
-                None,
-                Vec::new(),
-            ),
         };
         let lifecycle = lifecycle_from_outcome(&outcome);
-        let mut completed = self.completed.write().unwrap_or_else(|e| {
-            warn!("BackgroundAgentTracker lock poisoned, recovering");
-            e.into_inner()
-        });
-        completed.insert(
-            request_id.to_string(),
-            CompletedAgent {
-                outcome,
-                completed_at: now,
-                duration_secs,
-                task_description,
-                meta,
-                lifecycle,
-                started_at_ms,
-                tool_count,
-                last_tool,
-                last_activity,
-                progress_tail,
-            },
-        );
-        // C1 follow-up — bound the map by count. `mark_completed` is the only
-        // site that grows `completed` and it has no TTL-prune trigger of its
-        // own, so without this a long-lived process that spawns many background
-        // subagents and then idles would retain results indefinitely. Evict the
-        // oldest-by-completion entries beyond the cap while we still hold the
-        // write lock (cheap: only sorts when actually over the cap).
-        if completed.len() > MAX_COMPLETED_RESULTS {
-            let overflow = completed.len() - MAX_COMPLETED_RESULTS;
-            let mut by_age: Vec<(String, Instant)> = completed
-                .iter()
-                .map(|(id, agent)| (id.clone(), agent.completed_at))
-                .collect();
-            by_age.sort_by_key(|(_, at)| *at);
-            for (id, _) in by_age.into_iter().take(overflow) {
-                completed.remove(&id);
+        {
+            let mut completed = self.completed.write().unwrap_or_else(|e| {
+                warn!("BackgroundAgentTracker lock poisoned, recovering");
+                e.into_inner()
+            });
+            completed.insert(
+                request_id.to_string(),
+                CompletedAgent {
+                    outcome,
+                    completed_at: now,
+                    duration_secs,
+                    task_description,
+                    meta,
+                    lifecycle,
+                    started_at_ms,
+                    tool_count,
+                    last_tool,
+                    last_activity,
+                    progress_tail,
+                    consumed: false,
+                },
+            );
+            // C1 follow-up — bound the map by count. `mark_completed` is the only
+            // site that grows `completed` and it has no TTL-prune trigger of its
+            // own, so without this a long-lived process that spawns many background
+            // subagents and then idles would retain results indefinitely. Evict the
+            // oldest-by-completion entries beyond the cap while we still hold the
+            // write lock (cheap: only sorts when actually over the cap).
+            if completed.len() > MAX_COMPLETED_RESULTS {
+                let overflow = completed.len() - MAX_COMPLETED_RESULTS;
+                let mut by_age: Vec<(String, Instant)> = completed
+                    .iter()
+                    .map(|(id, agent)| (id.clone(), agent.completed_at))
+                    .collect();
+                by_age.sort_by_key(|(_, at)| *at);
+                for (id, _) in by_age.into_iter().take(overflow) {
+                    completed.remove(&id);
+                }
             }
         }
+        // The result is now queryable in `completed`; drop the running entry
+        // (the id was never absent from both maps) and wake any `wait`ers so
+        // they re-check and return the completed snapshot immediately.
+        self.running
+            .write()
+            .unwrap_or_else(|e| {
+                warn!("BackgroundAgentTracker lock poisoned, recovering");
+                e.into_inner()
+            })
+            .remove(request_id);
+        self.completion.notify_waiters();
     }
 
     /// Cancel a running background agent. Returns `true` if the `request_id`
@@ -386,6 +453,127 @@ impl BackgroundAgentTracker {
             outcome: c.outcome.clone(),
             progress_tail: c.progress_tail.clone(),
         })
+    }
+
+    /// Park until background subagent `request_id` finishes, or until `timeout`
+    /// elapses — whichever comes first. Unlike a `check_status` poll (which
+    /// costs the parent a full LLM turn per check) this sleeps on the
+    /// [`completion`](Self::completion) notifier and only re-checks when *some*
+    /// agent finishes, so it burns no CPU while waiting and returns the result
+    /// the instant it lands. Mirrors `builtin_tools::process_registry::wait`.
+    ///
+    /// Returns [`WaitOutcome::Completed`] with the same non-destructive snapshot
+    /// a poll gives (and marks the result consumed so the proactive announce
+    /// does not re-deliver it), [`WaitOutcome::TimedOut`] when the window closes
+    /// with the agent still running, or [`WaitOutcome::NotFound`] for an unknown
+    /// / TTL-pruned id. Thin wrapper over [`wait_any`](Self::wait_any).
+    pub async fn wait(&self, request_id: &str, timeout: Duration) -> WaitOutcome {
+        let ids = [request_id.to_string()];
+        match self.wait_any(&ids, timeout).await {
+            WaitAnyOutcome::Completed { snapshot, .. } => WaitOutcome::Completed(snapshot),
+            WaitAnyOutcome::TimedOut { .. } => WaitOutcome::TimedOut {
+                elapsed_secs: self
+                    .running_meta(request_id)
+                    .map(|m| m.elapsed_secs)
+                    .unwrap_or(0),
+            },
+            WaitAnyOutcome::NotFound => WaitOutcome::NotFound,
+        }
+    }
+
+    /// Park until *any* subagent in `request_ids` finishes, or until `timeout`
+    /// elapses — the fan-out first-completion primitive (codex `wait_agent`
+    /// parity). Sleeps on the shared [`completion`](Self::completion) notifier
+    /// (which wakes on every completion) and re-checks the whole set, so it
+    /// costs no CPU while waiting and returns the instant the first result
+    /// lands. The first-finished result is marked consumed so the announce does
+    /// not re-deliver it; the caller drains the rest by dropping that id and
+    /// calling `wait_any` again.
+    pub async fn wait_any(&self, request_ids: &[String], timeout: Duration) -> WaitAnyOutcome {
+        let deadline = Instant::now() + timeout;
+        loop {
+            // Arm the notifier BEFORE inspecting state: `Notified::enable`
+            // registers this waiter so a `mark_completed` racing between our
+            // state read and our await still wakes us (no lost wakeup).
+            let notified = self.completion.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            // First completed in the set wins. `mark_completed` inserts into
+            // `completed` before removing from `running`, so a finished agent is
+            // always visible here and never mistaken for absent.
+            let mut any_running = false;
+            for id in request_ids {
+                if let Some(snapshot) = self.result_snapshot(id) {
+                    self.mark_consumed(id);
+                    return WaitAnyOutcome::Completed {
+                        request_id: id.clone(),
+                        snapshot,
+                    };
+                }
+                if self.running_meta(id).is_some() {
+                    any_running = true;
+                }
+            }
+            // None completed and none running ⇒ every id is unknown.
+            if !any_running {
+                return WaitAnyOutcome::NotFound;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return WaitAnyOutcome::TimedOut {
+                    still_running: self.still_running_ids(request_ids),
+                };
+            }
+            let remaining = deadline - now;
+            tokio::select! {
+                () = &mut notified => { /* something finished — re-check the set */ }
+                () = tokio::time::sleep(remaining) => {
+                    return WaitAnyOutcome::TimedOut {
+                        still_running: self.still_running_ids(request_ids),
+                    };
+                }
+            }
+        }
+    }
+
+    /// The subset of `request_ids` still in the running set — the `wait_any`
+    /// timeout arm reports these so the caller knows which to keep waiting on.
+    fn still_running_ids(&self, request_ids: &[String]) -> Vec<String> {
+        request_ids
+            .iter()
+            .filter(|id| self.running_meta(id).is_some())
+            .cloned()
+            .collect()
+    }
+
+    /// Mark a completed result as already delivered to the parent on-demand
+    /// (via `wait`, or a `check_status` that returned the outcome) so the
+    /// proactive `subagent_announce` does not spend a fresh parent turn
+    /// re-announcing a result the model has already seen. No-op for an unknown
+    /// or still-running id.
+    pub fn mark_consumed(&self, request_id: &str) {
+        let mut completed = self.completed.write().unwrap_or_else(|e| {
+            warn!("BackgroundAgentTracker lock poisoned, recovering");
+            e.into_inner()
+        });
+        if let Some(agent) = completed.get_mut(request_id) {
+            agent.consumed = true;
+        }
+    }
+
+    /// Whether a completed result was already consumed on-demand. `false` for
+    /// unknown / still-running ids (nothing to suppress).
+    #[must_use]
+    pub fn is_consumed(&self, request_id: &str) -> bool {
+        self.completed
+            .read()
+            .unwrap_or_else(|e| {
+                warn!("BackgroundAgentTracker lock poisoned, recovering");
+                e.into_inner()
+            })
+            .get(request_id)
+            .is_some_and(|c| c.consumed)
     }
 
     /// List running agents as (`request_id`, `task_description`, `elapsed_secs`).
@@ -472,33 +660,12 @@ impl BackgroundAgentTracker {
     #[must_use]
     pub fn flat_nodes(&self, root_session: Option<&str>) -> Vec<SubagentNode> {
         let mut out = Vec::new();
-        {
-            let running = self.running.read().unwrap_or_else(|e| {
-                warn!("BackgroundAgentTracker lock poisoned, recovering");
-                e.into_inner()
-            });
-            for (id, agent) in running.iter() {
-                if root_session.is_some_and(|f| agent.meta.root_session != f) {
-                    continue;
-                }
-                out.push(SubagentNode {
-                    node_id: id.clone(),
-                    parent_id: agent.meta.parent_id.clone(),
-                    depth: agent.meta.depth,
-                    root_session: agent.meta.root_session.clone(),
-                    task: agent.task_description.clone(),
-                    model: agent.meta.model.clone(),
-                    lifecycle: NodeLifecycle::Running,
-                    started_at_ms: agent.started_at_ms,
-                    elapsed_ms: u64::try_from(agent.started_at.elapsed().as_millis())
-                        .unwrap_or(u64::MAX),
-                    tool_count: agent.tool_count,
-                    last_tool: agent.last_tool.clone(),
-                    last_activity: agent.last_activity.clone(),
-                });
-            }
-        }
-        {
+        // Completed first, recording every completed id: `mark_completed` briefly
+        // holds a node in BOTH maps (it inserts into `completed` before removing
+        // from `running`), so a running entry whose id is already completed must
+        // be skipped below to avoid emitting a duplicate `node_id` into
+        // `build_tree`.
+        let completed_ids: HashSet<String> = {
             let completed = self.completed.read().unwrap_or_else(|e| {
                 warn!("BackgroundAgentTracker lock poisoned, recovering");
                 e.into_inner()
@@ -517,6 +684,38 @@ impl BackgroundAgentTracker {
                     lifecycle: agent.lifecycle,
                     started_at_ms: agent.started_at_ms,
                     elapsed_ms: agent.duration_secs.saturating_mul(1000),
+                    tool_count: agent.tool_count,
+                    last_tool: agent.last_tool.clone(),
+                    last_activity: agent.last_activity.clone(),
+                });
+            }
+            completed.keys().cloned().collect()
+        };
+        {
+            let running = self.running.read().unwrap_or_else(|e| {
+                warn!("BackgroundAgentTracker lock poisoned, recovering");
+                e.into_inner()
+            });
+            for (id, agent) in running.iter() {
+                // Skip an id that is already emitted as completed (transition
+                // double-presence) or filtered out by `root_session`.
+                if completed_ids.contains(id) {
+                    continue;
+                }
+                if root_session.is_some_and(|f| agent.meta.root_session != f) {
+                    continue;
+                }
+                out.push(SubagentNode {
+                    node_id: id.clone(),
+                    parent_id: agent.meta.parent_id.clone(),
+                    depth: agent.meta.depth,
+                    root_session: agent.meta.root_session.clone(),
+                    task: agent.task_description.clone(),
+                    model: agent.meta.model.clone(),
+                    lifecycle: NodeLifecycle::Running,
+                    started_at_ms: agent.started_at_ms,
+                    elapsed_ms: u64::try_from(agent.started_at.elapsed().as_millis())
+                        .unwrap_or(u64::MAX),
                     tool_count: agent.tool_count,
                     last_tool: agent.last_tool.clone(),
                     last_activity: agent.last_activity.clone(),
@@ -932,5 +1131,145 @@ mod tests {
         assert_eq!(nodes[0].lifecycle, NodeLifecycle::Completed);
         assert_eq!(nodes[0].tool_count, 1);
         assert_eq!(nodes[0].last_activity.as_deref(), Some("tool_called"));
+    }
+
+    #[tokio::test]
+    async fn wait_returns_completed_when_child_finishes() {
+        let tracker = Arc::new(BackgroundAgentTracker::new());
+        tracker.register("rid".into(), CancellationToken::new(), "work".into());
+        let t2 = tracker.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            t2.mark_completed("rid", CompletedOutcome::ok_text("done"));
+        });
+        match tracker.wait("rid", Duration::from_secs(5)).await {
+            WaitOutcome::Completed(snap) => match snap.outcome {
+                CompletedOutcome::Ok { final_text, .. } => assert_eq!(final_text, "done"),
+                CompletedOutcome::Err(e) => panic!("expected Ok, got Err({e})"),
+            },
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        // wait() marks the result consumed so the announce won't re-deliver it.
+        assert!(tracker.is_consumed("rid"));
+    }
+
+    #[tokio::test]
+    async fn wait_times_out_while_child_still_running() {
+        let tracker = BackgroundAgentTracker::new();
+        tracker.register("rid".into(), CancellationToken::new(), "slow".into());
+        match tracker.wait("rid", Duration::from_millis(30)).await {
+            WaitOutcome::TimedOut { .. } => {}
+            other => panic!("expected TimedOut, got {other:?}"),
+        }
+        // A timed-out wait must NOT mark the (still-running) agent consumed.
+        assert!(!tracker.is_consumed("rid"));
+    }
+
+    #[tokio::test]
+    async fn wait_returns_not_found_for_unknown_id() {
+        let tracker = BackgroundAgentTracker::new();
+        assert!(matches!(
+            tracker.wait("ghost", Duration::from_millis(10)).await,
+            WaitOutcome::NotFound
+        ));
+    }
+
+    #[tokio::test]
+    async fn wait_sees_result_completed_before_the_wait() {
+        // A result that landed before the parent ever calls wait() is returned
+        // immediately (completed-first check), not mistaken for NotFound.
+        let tracker = BackgroundAgentTracker::new();
+        tracker.register("rid".into(), CancellationToken::new(), "fast".into());
+        tracker.mark_completed("rid", CompletedOutcome::ok_text("early"));
+        match tracker.wait("rid", Duration::from_millis(10)).await {
+            WaitOutcome::Completed(snap) => assert_eq!(snap.task, "fast"),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mark_completed_wakes_a_parked_waiter_no_lost_wakeup() {
+        // The waiter parks, then a completion fires; notify_waiters must wake it
+        // so it returns without waiting out the full (long) deadline.
+        let tracker = Arc::new(BackgroundAgentTracker::new());
+        tracker.register("rid".into(), CancellationToken::new(), "race".into());
+        let t2 = tracker.clone();
+        let waiter = tokio::spawn(async move { t2.wait("rid", Duration::from_secs(30)).await });
+        // Give the waiter a moment to park on the notifier, then complete.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        tracker.mark_completed("rid", CompletedOutcome::ok_text("woke"));
+        let outcome = tokio::time::timeout(Duration::from_secs(2), waiter)
+            .await
+            .expect("waiter must wake well before the 30s deadline")
+            .expect("waiter task panicked");
+        assert!(matches!(outcome, WaitOutcome::Completed(_)));
+    }
+
+    #[test]
+    fn mark_consumed_is_noop_for_unknown_and_running() {
+        let tracker = BackgroundAgentTracker::new();
+        tracker.mark_consumed("ghost"); // no panic, no-op
+        assert!(!tracker.is_consumed("ghost"));
+        tracker.register("rid".into(), CancellationToken::new(), "t".into());
+        tracker.mark_consumed("rid"); // still running → nothing to mark yet
+        assert!(!tracker.is_consumed("rid"));
+        tracker.mark_completed("rid", CompletedOutcome::ok_text("x"));
+        assert!(!tracker.is_consumed("rid"));
+        tracker.mark_consumed("rid");
+        assert!(tracker.is_consumed("rid"));
+    }
+
+    #[tokio::test]
+    async fn wait_any_returns_first_to_finish() {
+        let tracker = Arc::new(BackgroundAgentTracker::new());
+        tracker.register("a".into(), CancellationToken::new(), "slow".into());
+        tracker.register("b".into(), CancellationToken::new(), "fast".into());
+        let t2 = tracker.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            t2.mark_completed("b", CompletedOutcome::ok_text("b-done"));
+        });
+        let ids = vec!["a".to_string(), "b".to_string()];
+        match tracker.wait_any(&ids, Duration::from_secs(5)).await {
+            WaitAnyOutcome::Completed {
+                request_id,
+                snapshot,
+            } => {
+                assert_eq!(request_id, "b");
+                match snapshot.outcome {
+                    CompletedOutcome::Ok { final_text, .. } => assert_eq!(final_text, "b-done"),
+                    CompletedOutcome::Err(e) => panic!("expected Ok, got Err({e})"),
+                }
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        // Only the finished id is consumed; the still-running sibling is not.
+        assert!(tracker.is_consumed("b"));
+        assert!(!tracker.is_consumed("a"));
+    }
+
+    #[tokio::test]
+    async fn wait_any_times_out_lists_still_running() {
+        let tracker = BackgroundAgentTracker::new();
+        tracker.register("a".into(), CancellationToken::new(), "slow".into());
+        tracker.register("b".into(), CancellationToken::new(), "slow".into());
+        let ids = vec!["a".to_string(), "b".to_string()];
+        match tracker.wait_any(&ids, Duration::from_millis(30)).await {
+            WaitAnyOutcome::TimedOut { mut still_running } => {
+                still_running.sort();
+                assert_eq!(still_running, vec!["a".to_string(), "b".to_string()]);
+            }
+            other => panic!("expected TimedOut, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn wait_any_not_found_when_all_unknown() {
+        let tracker = BackgroundAgentTracker::new();
+        let ids = vec!["ghost1".to_string(), "ghost2".to_string()];
+        assert!(matches!(
+            tracker.wait_any(&ids, Duration::from_millis(10)).await,
+            WaitAnyOutcome::NotFound
+        ));
     }
 }

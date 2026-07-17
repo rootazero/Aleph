@@ -231,6 +231,26 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let (artifact_store, event_store, message_store, team_session_store) =
         init_teams_evolution_stores(daemon).await;
 
+    // Map the optional [team_messages] TOML onto EscalationRule (the third
+    // teams storm/escalation guard, alongside [team_dispatcher] / [team_broadcast]).
+    // Each field falls back to the live EscalationRule::default() (no default
+    // duplication / drift). A threshold of 0 would escalate on the first reply,
+    // so 0 ⇒ default (P7 boundary clamp); escalation_enabled is honoured
+    // verbatim (including false) so operators can disable escalation.
+    let team_escalation_rules = {
+        use alephcore::teams::messages::EscalationRule;
+        let d = EscalationRule::default();
+        match &app_config.team_messages {
+            None => d,
+            Some(t) => EscalationRule {
+                thread_message_threshold: t
+                    .thread_message_threshold
+                    .filter(|&v| v > 0)
+                    .unwrap_or(d.thread_message_threshold),
+                enabled: t.escalation_enabled.unwrap_or(d.enabled),
+            },
+        }
+    };
     // Higher-level team components derived from the four stores above.
     let (message_router, inbox, session_coordinator) = build_team_components(
         &message_store,
@@ -238,6 +258,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         &team_session_store,
         &artifact_store,
         &team_store,
+        team_escalation_rules,
     );
 
     // Generation provider registry (TTS / image / video) — independent of

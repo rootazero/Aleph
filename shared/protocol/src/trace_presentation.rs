@@ -850,7 +850,6 @@ mod tests {
                 requested_tool_calls: 3,
                 executed_tool_calls: 2,
                 productive: true,
-                consecutive_errors: 0,
                 total_tokens: 1200,
             },
         };

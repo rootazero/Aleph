@@ -150,7 +150,7 @@ impl SecurityStore {
 
         let mut stmt = conn.prepare(
             "SELECT token_id, device_id, token_hash, role, scopes, issued_at, expires_at,
-                    last_used_at, rotated_at, revoked_at
+                    last_used_at, revoked_at
              FROM tokens WHERE token_hash = ?1",
         )?;
 

@@ -1573,14 +1573,13 @@ mod carry_policy_metadata_tests {
             Some(r#"{"default":"deny"}"#)
         );
         assert_eq!(cont.get(UNATTENDED_KEY).map(String::as_str), Some("true"));
-        // The busy-input marker rides every continuation too (`Queue`, so a
-        // collision with a live run returns AgentBusy → rearm instead of
-        // steering the user's turn). Exactly these four keys — `platform`
-        // and anything else from the source map must NOT leak through.
+        // `continuation_metadata` also writes the load-bearing Queue busy-input
+        // marker (LOOP4-STEER-1), so the map carries 4 keys: the two inherited
+        // policy keys + the two continuation markers.
         assert_eq!(
-            cont.get(super::super::BUSY_INPUT_MODE_KEY)
+            cont.get(crate::gateway::execution_engine::BUSY_INPUT_MODE_KEY)
                 .map(String::as_str),
-            Some("queue")
+            Some("queue"),
         );
         assert_eq!(cont.len(), 4);
     }

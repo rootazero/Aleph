@@ -6,7 +6,9 @@
 
 use serde_json::Value;
 
-use super::types::{BatchTask, RunArgs, SubagentAction};
+use super::types::{
+    BatchTask, RunArgs, SubagentAction, DEFAULT_WAIT_TIMEOUT_SECS, MAX_WAIT_TIMEOUT_SECS,
+};
 
 /// Parse the input JSON into a [`SubagentAction`].
 pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
@@ -55,6 +57,47 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
                 .ok_or_else(|| "check_status requires 'request_id' field".to_string())?;
             return Ok(SubagentAction::CheckStatus(rid.to_string()));
         }
+        "wait" => {
+            // Accept a single `request_id` (string) or `request_ids` (array).
+            // Many ids → wait for whichever finishes first.
+            let mut request_ids: Vec<String> = input
+                .get("request_ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if request_ids.is_empty() {
+                if let Some(s) = input.get("request_id").and_then(|v| v.as_str()) {
+                    let s = s.trim();
+                    if !s.is_empty() {
+                        request_ids.push(s.to_string());
+                    }
+                }
+            }
+            if request_ids.is_empty() {
+                return Err(
+                    "wait requires 'request_id' (string) or a non-empty 'request_ids' array"
+                        .to_string(),
+                );
+            }
+            // Bounded window: default when omitted, clamped to [1, MAX] so a
+            // single wait can never hang the turn past the tool budget.
+            let timeout_secs = input
+                .get("timeout_secs")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(DEFAULT_WAIT_TIMEOUT_SECS)
+                .clamp(1, MAX_WAIT_TIMEOUT_SECS);
+            return Ok(SubagentAction::Wait {
+                request_ids,
+                timeout_secs,
+            });
+        }
         "cancel" => {
             let rid = input
                 .get("request_id")
@@ -68,7 +111,7 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         // "run" or "" (default) — fall through to legacy run/check_status logic
         "run" | "" => {}
         other => {
-            return Err(format!("unknown action '{other}'. Expected one of: run, check_status, cancel, list, send_message, read_inbox"));
+            return Err(format!("unknown action '{other}'. Expected one of: run, check_status, wait, cancel, list, send_message, read_inbox"));
         }
     }
 

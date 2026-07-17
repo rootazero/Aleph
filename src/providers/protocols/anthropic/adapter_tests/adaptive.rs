@@ -176,7 +176,9 @@ fn build_request_keeps_legacy_thinking_on_pre_4_6_models() {
     use crate::providers::message::UnifiedMessage;
     let msgs = [UnifiedMessage::user("Hi")];
     let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::Medium));
-    let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+    // 3.7 is the earliest Claude with extended thinking and is pre-4.6, so it
+    // takes the legacy `budget_tokens` path (3.5 has no thinking mode at all).
+    let mut config = ProviderConfig::test_config("claude-3-7-sonnet");
     config.api_key = Some("sk-ant-api-test".to_string());
 
     let body = build_body(&payload, &config);
@@ -185,6 +187,61 @@ fn build_request_keeps_legacy_thinking_on_pre_4_6_models() {
     assert_eq!(body["thinking"]["budget_tokens"], 10000);
     // No output_config without config-level effort
     assert!(body.get("output_config").is_none());
+}
+
+#[test]
+fn build_request_omits_thinking_on_non_reasoning_model() {
+    use crate::agents::thinking::ThinkLevel;
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("Hi")];
+    // Claude 3.5 has no thinking mode — an `{type:"enabled", budget_tokens}`
+    // block 400s. A cheap non-reasoning model carrying a configured think level
+    // must drop the block, not fail the whole request. Regression: the old code
+    // emitted it for ANY non-adaptive model whenever a think level was set.
+    let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::High));
+    let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+    config.api_key = Some("sk-ant-api-test".to_string());
+    config.temperature = Some(0.7);
+
+    let body = build_body(&payload, &config);
+    assert!(
+        body.get("thinking").is_none(),
+        "non-reasoning model + High → thinking must be omitted, got {:?}",
+        body.get("thinking")
+    );
+    // No thinking block → nothing conflicts with sampling, so temperature stays.
+    assert!(
+        body.get("temperature").is_some(),
+        "non-reasoning model keeps its sampling params"
+    );
+}
+
+#[test]
+fn supports_extended_thinking_gates_pre_3_7_models() {
+    // 3.7+ (legacy budget_tokens or adaptive) think; 3.5 / 3.0 have no mode.
+    assert!(AnthropicProtocol::supports_extended_thinking(
+        "claude-3-7-sonnet"
+    ));
+    assert!(AnthropicProtocol::supports_extended_thinking(
+        "claude-opus-4-5"
+    ));
+    assert!(AnthropicProtocol::supports_extended_thinking(
+        "claude-opus-4-8"
+    ));
+    assert!(!AnthropicProtocol::supports_extended_thinking(
+        "claude-3-5-sonnet"
+    ));
+    assert!(!AnthropicProtocol::supports_extended_thinking(
+        "claude-3-5-haiku"
+    ));
+    assert!(!AnthropicProtocol::supports_extended_thinking(
+        "claude-3-opus"
+    ));
+    // Unknown / non-Claude proxied model → fail-open (treated as capable); the
+    // OpenAI-compat `supports_reasoning_effort` strip governs those wires.
+    assert!(AnthropicProtocol::supports_extended_thinking(
+        "kimi-k2-0905"
+    ));
 }
 
 #[test]
@@ -392,7 +449,7 @@ fn build_request_raises_max_tokens_for_high_legacy_thinking() {
     let msgs = [UnifiedMessage::user("Hi")];
     // High → budget 20000 on a pre-4.6 (legacy) model with the default 16k cap.
     let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::High));
-    let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+    let mut config = ProviderConfig::test_config("claude-3-7-sonnet");
     config.api_key = Some("sk-ant-api-test".to_string());
 
     let body = build_body(&payload, &config);
@@ -412,7 +469,7 @@ fn build_request_legacy_thinking_under_cap_keeps_max_tokens() {
     let payload = RequestPayload::new(&msgs)
         .with_think_level(Some(ThinkLevel::Medium))
         .with_max_tokens(Some(16_384));
-    let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+    let mut config = ProviderConfig::test_config("claude-3-7-sonnet");
     config.api_key = Some("sk-ant-api-test".to_string());
 
     let body = build_body(&payload, &config);

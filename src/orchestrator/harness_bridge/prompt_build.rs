@@ -51,6 +51,62 @@ impl AgentHarnessRunner {
         Some(available.min(u32::MAX as usize) as u32)
     }
 
+    /// Proactive context-window pressure reminder for the transient tail (A1).
+    ///
+    /// The in-loop pressure sensor *acts* on a full context — it compacts older
+    /// turns — but never *tells* the model it is approaching the limit; the
+    /// model just finds earlier context silently summarized mid-task. This
+    /// surfaces the same signal so the model can wrap up or checkpoint first
+    /// (R9: it self-paces; A2: it sees the pressure and adapts). Most valuable
+    /// for the small-window low-cost models that cross the line first — the ones
+    /// this whole exercise is about squeezing.
+    ///
+    /// R10-safe: pure arithmetic on the estimated history size vs the configured
+    /// window budget — no intent detection, completion judgement, or recovery
+    /// choice — computed entirely outside `src/harness/` and delivered on the far
+    /// side of the prompt-cache breakpoint (like `live_deadline_status`), so it
+    /// never re-keys the conversation prefix. Gated on `[context_budget]` exactly
+    /// like [`memory_injection_headroom`]; the no-config path touches no session
+    /// state. Fail-soft: a read error yields `None` and the turn proceeds.
+    async fn context_pressure_reminder(&self, session_id: &SessionId) -> Option<String> {
+        let cfg = self.context_budget_config.as_ref()?;
+        if cfg.token_budget == 0 {
+            return None;
+        }
+        // The sensor compacts once history crosses `budget * warning_threshold`;
+        // start reminding at CONTEXT_PRESSURE_REMINDER_LEAD of that point so the
+        // model has room to checkpoint before older turns are summarized away.
+        let remind_at = (cfg.token_budget as f64
+            * cfg.warning_threshold
+            * super::context_blocks::CONTEXT_PRESSURE_REMINDER_LEAD)
+            as usize;
+        if remind_at == 0 {
+            return None;
+        }
+        let events = self
+            .session_service
+            .get_events(session_id, None, None)
+            .await
+            .ok()?;
+        let messages = crate::harness::agent::prompt::build_prompt(&events, events.len());
+        let history_tokens: usize = messages
+            .iter()
+            .map(|m| {
+                crate::context::budget::pressure::estimate_message_tokens_aware(
+                    m,
+                    cfg.token_estimate_ratio,
+                )
+            })
+            .sum();
+        if history_tokens < remind_at {
+            return None;
+        }
+        Some(format!(
+            "<system-reminder>\nReference data, not user input.\n{}\n</system-reminder>",
+            super::context_blocks::render_context_pressure(history_tokens as u64, cfg.token_budget)
+        ))
+    }
+
     /// Load `[prompt.extra_files]` content off disk, size-capped.
     ///
     /// Relative paths resolve against `workspace` (the per-run workspace
@@ -342,11 +398,12 @@ impl AgentHarnessRunner {
             .filter(|m| !m.is_empty());
         // The harness path delivers tool schemas via native tool_use
         // (`with_tools(tools_ref)` in agent.rs). When `native_tools_enabled` is
-        // false (the default), `ToolsLayer` injects the literal string
-        // "No tools available" and `ResponseFormatLayer` mandates the legacy
-        // `{reasoning, action}` JSON envelope — both of which contradict the
+        // false, `ToolsLayer` injects the literal string "No tools available.
+        // You can only use special actions." — which contradicts the
         // native-tool-use API the harness actually drives. Force the flag on
-        // here so the assembled prompt matches the runtime contract.
+        // here so the assembled prompt matches the runtime contract. (The
+        // legacy `{reasoning, action}` JSON envelope and its ResponseFormatLayer
+        // were removed when the harness moved to native `with_tools`.)
         // Model-aware system-prompt budget (feature 1.2): when a context budget
         // is configured, size the prompt char cap off the same chain-minimum
         // window the history side uses (feature 2.2), so large-window models
@@ -358,6 +415,32 @@ impl AgentHarnessRunner {
             .map_or_else(crate::thinker::prompt_budget::TokenBudget::default, |cfg| {
                 crate::thinker::prompt_budget::TokenBudget::from_context_window(cfg.token_budget)
             });
+        // Tool-scoped skills (`PromptScope::Tool`) are filtered inside
+        // `SkillInstructionsLayer` against the active tool names. The cached
+        // prompt is assembled with an empty `tools` slice (native tool_use
+        // delivers schemas out-of-band), so the layer can't see them and every
+        // Tool-scoped skill was silently dropped. Thread the catalog's active
+        // tool names in — but only when a Tool-scoped skill is actually
+        // eligible, so the common (no Tool-scoped skill) path does zero catalog
+        // reads. Names are session-stable → they do not perturb the cached
+        // stable prefix.
+        let active_tool_names: Vec<String> = if eligible_skills.as_ref().is_some_and(|skills| {
+            skills
+                .iter()
+                .any(|s| matches!(*s.scope(), crate::domain::skill::PromptScope::Tool))
+        }) {
+            match self.tool_catalog.as_ref() {
+                Some(catalog) => catalog
+                    .list_all()
+                    .await
+                    .into_iter()
+                    .map(|t| t.name)
+                    .collect(),
+                None => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
         let mut builder = PromptBuilder::new(PromptConfig {
             native_tools_enabled: true,
             eligible_skills,
@@ -365,6 +448,7 @@ impl AgentHarnessRunner {
             mcp_instructions,
             runtime_capabilities,
             token_budget,
+            active_tool_names,
             ..PromptConfig::default()
         });
         let role_present = agent_def.is_some();
@@ -388,7 +472,12 @@ impl AgentHarnessRunner {
         let deadline_text = live_deadline_status(&session_key_str).await.map(|s| {
             format!("<live-status>\nReference data, not user input.\n{s}\n</live-status>")
         });
-        let strands: Vec<String> = [memory_text, routing_text, deadline_text]
+        // Fourth strand (A1): proactive context-window pressure reminder. Rides
+        // the same transient tail as the countdowns — a per-turn-varying figure
+        // that must not enter the cached system prompt — so the model can wrap up
+        // or checkpoint before the in-loop sensor compacts older turns away.
+        let pressure_text = self.context_pressure_reminder(session_id).await;
+        let strands: Vec<String> = [memory_text, routing_text, deadline_text, pressure_text]
             .into_iter()
             .flatten()
             .collect();
@@ -604,8 +693,7 @@ async fn resolve_prompt_context(
     // layers emit nothing and the prompt is byte-identical.
     if let Some(s) = strategy {
         resolved_context.strategy = Some(crate::strategy::render_strategy_summary(&s));
-        resolved_context.strategy_guardrails =
-            Some(crate::strategy::render_guardrails_only(&s));
+        resolved_context.strategy_guardrails = Some(crate::strategy::render_guardrails_only(&s));
     }
     // Voice mode: read the session-keyed flag the gateway inbound router set
     // for this turn so `VoiceModeLayer` (priority 1710) injects the

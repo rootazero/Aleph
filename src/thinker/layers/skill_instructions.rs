@@ -47,10 +47,27 @@ impl PromptLayer for SkillInstructionsLayer {
             _ => return,
         };
 
-        let active_tool_names: Vec<&str> = input
+        // Tool-scope filtering needs the active tool names. On the Basic path
+        // they arrive in `input.tools`; on the production **cached** path that
+        // slice is empty (native tool_use delivers schemas out-of-band), so
+        // fall back to `config.active_tool_names`, which the harness bridge
+        // populates from the tool catalog when a Tool-scoped skill is eligible.
+        // Without this fallback every Tool-scoped skill was silently dropped in
+        // production.
+        let from_input: Vec<&str> = input
             .tools
             .map(|tools| tools.iter().map(|t| t.name.as_str()).collect())
             .unwrap_or_default();
+        let active_tool_names: Vec<&str> = if from_input.is_empty() {
+            input
+                .config
+                .active_tool_names
+                .iter()
+                .map(String::as_str)
+                .collect()
+        } else {
+            from_input
+        };
 
         let filtered: Vec<&SkillManifest> = skills
             .iter()
@@ -173,6 +190,30 @@ mod tests {
             ..Default::default()
         };
         let tools = vec![make_tool("docker_cli")];
+        let input = LayerInput::basic(&config, &tools);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        assert!(out.contains("DockerHelper"));
+    }
+
+    #[test]
+    fn tool_scope_included_via_config_names_when_input_tools_empty() {
+        // Production cached-path regression: `input.tools` is empty (native
+        // tool_use), so the layer must fall back to
+        // `config.active_tool_names`. Before this fallback the Tool-scoped
+        // skill was silently dropped in every production prompt.
+        let layer = SkillInstructionsLayer;
+        let mut skill = make_skill("DockerHelper", PromptScope::Tool);
+        skill.set_bound_tool("docker_cli".to_string());
+
+        let config = PromptConfig {
+            eligible_skills: Some(vec![skill]),
+            active_tool_names: vec!["docker_cli".to_string()],
+            ..Default::default()
+        };
+        // Empty tools slice — exactly what `build_cached_input` supplies.
+        let tools: Vec<ToolInfo> = vec![];
         let input = LayerInput::basic(&config, &tools);
         let mut out = String::new();
         layer.inject(&mut out, &input);

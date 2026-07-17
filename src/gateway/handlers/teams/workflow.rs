@@ -443,9 +443,11 @@ pub async fn handle_workflow_retry_step(
 // list_task_comments / list_task_events). We reuse it.
 
 /// teams.task.pause — manually suspend a task so the dispatcher will not
-/// claim it. Valid from Pending or `WaitingReview`. `InProgress` is rejected
-/// because the in-flight run is unsafe to silently abandon — use
-/// `teams.task.skip` or wait for the run to finish.
+/// claim it. Valid from Pending / Blocked / Unsatisfiable. `InProgress` is
+/// rejected because the in-flight run is unsafe to silently abandon (use
+/// `teams.task.skip` or wait for the run to finish); `WaitingReview` is
+/// rejected because resume returns a task to Pending, which would re-run a
+/// review-gated task and discard its completed work + pending verdict.
 pub async fn handle_task_pause(
     request: JsonRpcRequest,
     coord_store: Arc<dyn CoordTaskStore>,
@@ -473,10 +475,14 @@ pub async fn handle_task_pause(
         }
     };
     match current.status {
+        // WaitingReview is deliberately NOT pausable: resume always returns a
+        // task to Pending, which would re-schedule a review-gated task for a
+        // FRESH run — discarding both the already-completed work product and the
+        // pending lead verdict. A review-gated task is already idle (awaiting
+        // approve/reject); its lifecycle verbs are review, not pause.
         CoordTaskStatus::Pending
         | CoordTaskStatus::Blocked
-        | CoordTaskStatus::Unsatisfiable
-        | CoordTaskStatus::WaitingReview => {}
+        | CoordTaskStatus::Unsatisfiable => {}
         CoordTaskStatus::Paused => {
             return JsonRpcResponse::success(request.id, json!({ "status": "paused" }));
         }
@@ -485,7 +491,7 @@ pub async fn handle_task_pause(
                 request.id,
                 INVALID_PARAMS,
                 format!(
-                    "Cannot pause task in status '{}' — only pending/blocked/waiting_review may be paused",
+                    "Cannot pause task in status '{}' — only pending/blocked/unsatisfiable may be paused",
                     current.status
                 ),
             )

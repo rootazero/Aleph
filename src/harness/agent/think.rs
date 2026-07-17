@@ -953,7 +953,6 @@ impl AgentHarness {
             requested_tool_calls: response.tool_calls.len(),
             executed_tool_calls: 0,
             productive: false,
-            consecutive_errors: 0,
             total_tokens: turn_tokens as usize,
         };
         let outcome_for_trace;
@@ -1100,7 +1099,6 @@ impl AgentHarness {
                 requested_tool_calls: requested,
                 executed_tool_calls: executed,
                 productive: executed > 0,
-                consecutive_errors: 0,
                 total_tokens: turn_tokens as usize,
             };
             result = Ok(TurnStep::cont(executed));
