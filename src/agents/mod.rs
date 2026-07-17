@@ -63,8 +63,5 @@ pub use rig::{
 // Re-export sub_agents module types for convenience
 pub use sub_agents::{SubAgentRequest, SubAgentResult};
 
-// Re-export swarm module types for convenience
-pub use swarm::{AgentEvent, AgentMessageBus, CriticalEvent, EventTier, ImportantEvent, InfoEvent};
-
 // Re-export thinking module types for convenience
 pub use thinking::{normalize_think_level, ThinkLevel, THINK_LEVEL_SESSION_KEY};

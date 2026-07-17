@@ -79,13 +79,6 @@ pub trait MessageStore: Send + Sync {
         msg_type: Option<&MessageType>,
     ) -> crate::error::Result<Vec<TeamMessage>>;
 
-    /// Read all unread messages for an agent in a team.
-    async fn read_inbox_unread(
-        &self,
-        agent_id: &str,
-        team_id: &str,
-    ) -> crate::error::Result<Vec<TeamMessage>>;
-
     /// Mark a message as read by an agent.
     async fn mark_read(&self, message_id: &str, agent_id: &str) -> crate::error::Result<()>;
 
@@ -565,14 +558,6 @@ impl MessageStore for SqliteMessageStore {
         }
 
         Ok(messages)
-    }
-
-    async fn read_inbox_unread(
-        &self,
-        agent_id: &str,
-        team_id: &str,
-    ) -> crate::error::Result<Vec<TeamMessage>> {
-        self.read_inbox(agent_id, team_id, None).await
     }
 
     async fn mark_read(&self, message_id: &str, agent_id: &str) -> crate::error::Result<()> {

@@ -15,4 +15,5 @@ mod save_incremental;
 mod schema_integration;
 mod serialization;
 mod team_broadcast;
+mod team_messages;
 mod tools;

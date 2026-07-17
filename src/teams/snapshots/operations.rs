@@ -243,6 +243,25 @@ pub async fn restore_snapshot(
                 leader_id: payload.team.leader_id.clone(),
             })
             .await?;
+        // `NewTeam` carries no protocol field and `create_team` always sets it
+        // to None, so the leader-authored operating protocol — captured in
+        // `payload.team.protocol` and injected verbatim into every member's
+        // launch context by the handoff builder — would be silently dropped on
+        // a restore-after-delete (a partial-fidelity resurrection). Re-apply it
+        // best-effort; a failed protocol write must not abort a restore that has
+        // already recreated the team (mirrors the remove_member warn-&-continue).
+        if payload.team.protocol.is_some() {
+            if let Err(e) = team_store
+                .set_protocol(&recreated.id, payload.team.protocol.clone())
+                .await
+            {
+                tracing::warn!(
+                    team_id = %recreated.id,
+                    error = %e,
+                    "snapshot restore: failed to re-apply captured team protocol"
+                );
+            }
+        }
         recreated.id
     } else {
         team_id.clone()

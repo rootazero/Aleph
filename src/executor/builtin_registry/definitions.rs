@@ -1022,7 +1022,7 @@ pub fn create_tool_boxed(
         | "lifecycle_idle"
         | "lifecycle_request_shutdown"
         | "lifecycle_resolve_shutdown" => None,
-        // Task coordination tools require CoordTaskStore + AgentMessageBus at runtime,
+        // Task coordination tools require CoordTaskStore at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "task_create" | "task_update" | "task_list" | "task_wait" | "task_comment" => None,
         // Task artifact tools require ArtifactStore + current_agent_id at runtime,
