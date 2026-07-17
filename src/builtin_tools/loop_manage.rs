@@ -1149,6 +1149,7 @@ mod tests {
             conversation_id: String::new(),
             caller_role: None,
             channel_tool_permissions: None,
+            unattended: false,
         };
         let bound = TURN_CONTEXT.scope(turn, tool.session()).await;
         assert_eq!(bound, run_key.to_key_string());

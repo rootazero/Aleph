@@ -348,7 +348,7 @@ impl FailoverProvider {
                     "__route_escalate_cloud",
                     reason,
                 );
-                gate.request_approval(&action).await.is_approved()
+                gate.request_approval(&action).await.outcome.is_approved()
             }
             None => {
                 tracing::warn!(

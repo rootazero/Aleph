@@ -19,7 +19,7 @@ use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
 use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::GatewayEventFrame;
-use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
+use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester, ApprovalResponse};
 use crate::sandbox::exec_approval::ApprovalAction;
 use crate::sync_primitives::Arc;
 
@@ -50,7 +50,7 @@ impl OperatorApprovalRequester {
 
 #[async_trait]
 impl ApprovalRequester for OperatorApprovalRequester {
-    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalOutcome {
+    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse {
         let tool_name = action.tool_name.as_str();
         let reason = action.reason.as_str();
         let turn = crate::tools::turn_context::current_turn_context();
@@ -129,10 +129,11 @@ impl ApprovalRequester for OperatorApprovalRequester {
             }
         }
 
-        let decision = self
+        let resolved = self
             .manager
             .await_registered(approval_id.clone(), rx, timeout)
             .await;
+        let decision = resolved.decision;
 
         let frame = match decision {
             Some(d) => GatewayEventFrame::ApprovalResolved {
@@ -150,7 +151,10 @@ impl ApprovalRequester for OperatorApprovalRequester {
             tracing::warn!(error = %e, "failed to publish final approval event for config approval");
         }
 
-        decision_to_outcome(decision)
+        ApprovalResponse {
+            outcome: decision_to_outcome(decision),
+            deny_reason: resolved.deny_reason,
+        }
     }
 }
 
@@ -169,6 +173,7 @@ mod tests {
             conversation_id: String::new(),
             caller_role: Some("guest".to_string()),
             channel_tool_permissions: None,
+            unattended: false,
         }
     }
 
@@ -238,7 +243,7 @@ mod tests {
             "expected a run-scoped waiting-for-approval ResponseChunk"
         );
         let outcome = handle.await.unwrap();
-        assert_eq!(outcome, ApprovalOutcome::Approved);
+        assert_eq!(outcome.outcome, ApprovalOutcome::Approved);
     }
 
     #[tokio::test]
@@ -285,7 +290,7 @@ mod tests {
 
         assert!(!saw_chunk, "no notice must be emitted when run_id is empty");
         let outcome = handle.await.unwrap();
-        assert_eq!(outcome, ApprovalOutcome::Approved);
+        assert_eq!(outcome.outcome, ApprovalOutcome::Approved);
     }
 
     #[test]

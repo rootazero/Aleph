@@ -2147,9 +2147,9 @@ impl crate::sandbox::exec_approval::gate::ApprovalRequester for SlowOperator {
     async fn request_approval(
         &self,
         _action: &crate::sandbox::exec_approval::ApprovalAction,
-    ) -> crate::sandbox::exec_approval::gate::ApprovalOutcome {
+    ) -> crate::sandbox::exec_approval::gate::ApprovalResponse {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        crate::sandbox::exec_approval::gate::ApprovalOutcome::Approved
+        crate::sandbox::exec_approval::gate::ApprovalOutcome::Approved.into()
     }
 }
 

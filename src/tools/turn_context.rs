@@ -43,6 +43,14 @@ pub struct TurnContext {
     /// turn ran under — without it, a guest channel could bypass its own
     /// `deny` override by delegating (see `sessions/send_tool.rs`).
     pub channel_tool_permissions: Option<String>,
+    /// True when this run is UNATTENDED — no human on any surface (a goal /
+    /// loop continuation, heartbeat, A2A delegation, cron with no origin
+    /// channel). Mirrors the `UNATTENDED_KEY` run-metadata marker the
+    /// execution engine already feeds `ScopedToolService::with_unattended`.
+    /// Carried here so delegation tools (`session_send`) can propagate it to
+    /// wait-mode children too: without it a headless parent's child run hangs
+    /// on the 120 s approval timeout instead of failing closed instantly.
+    pub unattended: bool,
 }
 
 /// Canonical operator-role predicate for a raw `caller_role` string. `None`
@@ -124,6 +132,7 @@ mod caller_tier_tests {
             conversation_id: String::new(),
             caller_role: role.map(String::from),
             channel_tool_permissions: None,
+            unattended: false,
         }
     }
 

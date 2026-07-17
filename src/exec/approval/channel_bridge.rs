@@ -54,10 +54,10 @@ impl ChannelApprovalBridge {
         conversation_id: &ConversationId,
         session_key: &str,
         timeout_ms: u64,
-    ) -> ApprovalOutcome {
+    ) -> crate::sandbox::exec_approval::ApprovalResponse {
         #[cfg(test)]
         if let Some(outcome) = self.test_outcome_override {
-            return outcome;
+            return outcome.into();
         }
 
         let tool_name = action.tool_name.as_str();
@@ -113,7 +113,7 @@ impl ChannelApprovalBridge {
                 // Retire the just-registered entry so a later session-FIFO
                 // "/approve" cannot consume it.
                 approval_manager.resolve(&record_id, ApprovalDecisionType::Deny, None);
-                return ApprovalOutcome::Denied;
+                return ApprovalOutcome::Denied.into();
             }
             None => {
                 tracing::warn!(
@@ -122,14 +122,14 @@ impl ChannelApprovalBridge {
                     "No channel capability for approval delivery — denying"
                 );
                 approval_manager.resolve(&record_id, ApprovalDecisionType::Deny, None);
-                return ApprovalOutcome::Denied;
+                return ApprovalOutcome::Denied.into();
             }
         }
 
-        match approval_manager
+        let resolved = approval_manager
             .await_registered(record_id, rx, wait_timeout)
-            .await
-        {
+            .await;
+        let outcome = match resolved.decision {
             // "Allow once" approves this single invocation. Both "allow session"
             // and "allow always" carry the session-scoped grant so the dispatch
             // gate remembers it and stops re-prompting the same tool this
@@ -146,6 +146,12 @@ impl ChannelApprovalBridge {
                 self.send_timeout_notice(channel_id, conversation_id).await;
                 ApprovalOutcome::Timeout
             }
+        };
+        // A `/deny <reason>` text reply rides the record; relay it so the
+        // dispatch gate can put the human's own words in front of the model.
+        crate::sandbox::exec_approval::ApprovalResponse {
+            outcome,
+            deny_reason: resolved.deny_reason,
         }
     }
 
@@ -195,7 +201,7 @@ impl ChannelApprovalBridge {
             let text = format!(
                 "⚠️ 工具 `{tool_name}` 需要你的授权。\n```\n{}\n```\n{reason}\n\n\
                  回复 /approve 批准本次、/approve session 本会话内不再询问、\
-                 /deny 拒绝。",
+                 /deny 拒绝（可附原因：/deny 原因…，会转告给 agent）。",
                 action.summary
             );
             let ch = channel.read().await;

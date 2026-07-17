@@ -38,7 +38,7 @@ use crate::approval::session_route::channel_route;
 use crate::exec::approval::channel_bridge::ChannelApprovalBridge;
 use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
 use crate::gateway::channel::{ChannelId, ConversationId};
-use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
+use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester, ApprovalResponse};
 use crate::sandbox::exec_approval::ApprovalAction;
 
 /// Adapts `ChannelApprovalBridge` + `ExecApprovalManager` to the
@@ -148,7 +148,7 @@ impl FallbackApprovalRequester {
 
 #[async_trait]
 impl ApprovalRequester for FallbackApprovalRequester {
-    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalOutcome {
+    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse {
         if self.channel.can_reach_user().await {
             return self.channel.request_approval(action).await;
         }
@@ -158,14 +158,14 @@ impl ApprovalRequester for FallbackApprovalRequester {
 
 #[async_trait]
 impl ApprovalRequester for ChannelApprovalBridgeAdapter {
-    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalOutcome {
+    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse {
         let Some((channel_id, conversation_id, session_key)) = Self::resolve_channel_route() else {
             warn!(
                 tool = %action.tool_name,
                 "ChannelApprovalBridgeAdapter: no channel route from TURN_CONTEXT \
                  or SESSION_ID — cannot route approval prompt, denying"
             );
-            return ApprovalOutcome::Denied;
+            return ApprovalOutcome::Denied.into();
         };
 
         self.bridge
@@ -215,6 +215,7 @@ mod tests {
             conversation_id: "user-1".to_string(),
             caller_role: None,
             channel_tool_permissions: None,
+            unattended: false,
         }
     }
 
@@ -228,7 +229,7 @@ mod tests {
                 adapter.request_approval(&code_action("ls")).await
             })
             .await;
-        assert_eq!(out, ApprovalOutcome::Approved);
+        assert_eq!(out.outcome, ApprovalOutcome::Approved);
     }
 
     #[tokio::test]
@@ -240,7 +241,7 @@ mod tests {
                 adapter.request_approval(&code_action("rm -rf")).await
             })
             .await;
-        assert_eq!(out, ApprovalOutcome::Denied);
+        assert_eq!(out.outcome, ApprovalOutcome::Denied);
     }
 
     /// Legacy path: SESSION_ID + channel_route fallback works when
@@ -254,7 +255,7 @@ mod tests {
             adapter.request_approval(&code_action("ls")).await
         })
         .await;
-        assert_eq!(out, ApprovalOutcome::Approved);
+        assert_eq!(out.outcome, ApprovalOutcome::Approved);
     }
 
     /// Negative path: no TURN_CONTEXT and no SESSION_ID → Denied.
@@ -268,7 +269,7 @@ mod tests {
 
         // Neither task-local scoped.
         let out = adapter.request_approval(&code_action("ls")).await;
-        assert_eq!(out, ApprovalOutcome::Denied);
+        assert_eq!(out.outcome, ApprovalOutcome::Denied);
     }
 
     /// Negative path: TURN_CONTEXT set but turn has no originating channel
@@ -284,6 +285,7 @@ mod tests {
             conversation_id: String::new(),
             caller_role: None,
             channel_tool_permissions: None,
+            unattended: false,
         };
         let out = TURN_CONTEXT
             .scope(non_channel_turn, async {
@@ -293,7 +295,7 @@ mod tests {
         // Even with an always-approved bridge, an unroutable turn falls
         // through to SESSION_ID fallback; with no SESSION_ID scoped either,
         // we deny.
-        assert_eq!(out, ApprovalOutcome::Denied);
+        assert_eq!(out.outcome, ApprovalOutcome::Denied);
     }
 
     /// A Panel turn: `gui:chat` resolves as a route but is never a registered
@@ -306,6 +308,7 @@ mod tests {
             conversation_id: "sess-1".to_string(),
             caller_role: None,
             channel_tool_permissions: None,
+            unattended: false,
         }
     }
 
@@ -360,7 +363,7 @@ mod tests {
                 _ => continue,
             }
         }
-        assert_eq!(handle.await.unwrap(), ApprovalOutcome::Approved);
+        assert_eq!(handle.await.unwrap().outcome, ApprovalOutcome::Approved);
     }
 
     /// Fail-closed: an unreachable channel never becomes an implicit approval.
@@ -404,6 +407,6 @@ mod tests {
                 _ => continue,
             }
         }
-        assert_eq!(handle.await.unwrap(), ApprovalOutcome::Denied);
+        assert_eq!(handle.await.unwrap().outcome, ApprovalOutcome::Denied);
     }
 }

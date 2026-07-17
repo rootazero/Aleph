@@ -1372,7 +1372,10 @@ fn validate_category(category: &str) -> Result<()> {
 /// designed for; without it the entire Strict scope (and its persistence
 /// patterns) was unreachable in production.
 pub(crate) fn scan_note_for_threats(text: &str) -> Result<()> {
-    scan_note_at_scope(text, crate::security::injection_patterns::ThreatScope::Strict)
+    scan_note_at_scope(
+        text,
+        crate::security::injection_patterns::ThreatScope::Strict,
+    )
 }
 
 /// Exfiltration-only note scan (`ThreatScope::All`): flags classic
@@ -1503,6 +1506,7 @@ mod tests {
             conversation_id: String::new(),
             caller_role: None,
             channel_tool_permissions: None,
+            unattended: false,
         }
     }
 
@@ -1513,7 +1517,9 @@ mod tests {
         // invisible in the session agent's graph (the multi-agent split defect).
         let (_dir, tool) = mk_tool();
         let resolved = crate::tools::turn_context::TURN_CONTEXT
-            .sync_scope(turn_ctx("research"), || tool.resolve_agent_id(&blank_args()))
+            .sync_scope(turn_ctx("research"), || {
+                tool.resolve_agent_id(&blank_args())
+            })
             .unwrap();
         assert_eq!(resolved, "research");
     }
@@ -1634,9 +1640,12 @@ mod tests {
     #[tokio::test]
     async fn query_without_embedder_falls_back_to_fts() {
         let (_d, tool) = mk_tool();
-        tool.call(create_args("fts-target", "- tokioruntime scheduling deep dive"))
-            .await
-            .unwrap();
+        tool.call(create_args(
+            "fts-target",
+            "- tokioruntime scheduling deep dive",
+        ))
+        .await
+        .unwrap();
         let r = tool
             .call(NoteManageArgs {
                 action: NoteManageAction::Query,

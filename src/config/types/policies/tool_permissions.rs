@@ -109,6 +109,15 @@ impl ToolPermissionsConfig {
     /// The effective default is `min(global.default, agent.default)`.
     /// Overrides are merged: if both layers specify a tool, the most
     /// restrictive level is used.
+    ///
+    /// Every key named by either layer is kept in the merged overrides, even
+    /// when its merged value equals the merged default. Dropping those entries
+    /// (a former "compression") erased two things resolution depends on:
+    /// an exact-name carve-out inside a same-layer glob family (the entry
+    /// vanished, so the glob re-captured the tool), and the *explicitness* of
+    /// an `allow` — [`resolve_explicit`](Self::resolve_explicit) could no
+    /// longer tell "the operator decided Allow" from silence, so the exec tier
+    /// tightened tools the operator had deliberately named.
     pub fn merge(global: &Self, agent: &Self) -> Self {
         let default = restrictive_min(global.default, agent.default);
 
@@ -125,10 +134,7 @@ impl ToolPermissionsConfig {
             let global_perm = global.resolve(key);
             let agent_perm = agent.resolve(key);
             let effective = restrictive_min(global_perm, agent_perm);
-            // Only store as override if it differs from the merged default
-            if effective != default {
-                overrides.insert(key.clone(), effective);
-            }
+            overrides.insert(key.clone(), effective);
         }
 
         Self { default, overrides }
@@ -309,6 +315,57 @@ mod tests {
             PermissionAction::Deny
         );
         assert_eq!(merged.resolve("read_file"), PermissionAction::Allow);
+    }
+
+    #[test]
+    fn test_merge_preserves_same_layer_exact_carveout() {
+        // The documented carve-out shape — a broad glob `ask` with one exact
+        // `allow` inside it — configured at ONE layer, merged with an
+        // all-default other layer (which is what every turn does). The old
+        // merge dropped the exact `allow` for equalling the merged default,
+        // and the glob silently re-captured the tool.
+        let global = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [
+                ("github__*".to_string(), PermissionAction::Ask),
+                ("github__list_issues".to_string(), PermissionAction::Allow),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let merged = ToolPermissionsConfig::merge(&global, &ToolPermissionsConfig::default());
+        assert_eq!(
+            merged.resolve("github__list_issues"),
+            PermissionAction::Allow,
+            "exact carve-out must survive the merge"
+        );
+        assert_eq!(
+            merged.resolve("github__create_issue"),
+            PermissionAction::Ask,
+            "the glob must still govern the rest of the family"
+        );
+    }
+
+    #[test]
+    fn test_merge_preserves_explicitness_of_allow() {
+        // An explicit `bash = "allow"` equal to the default is still a
+        // DECISION: `resolve_explicit` must keep returning `Some` after merge,
+        // or the exec tier (which only speaks when nobody decided) would
+        // tighten a tool the operator deliberately named.
+        let global = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [("bash".to_string(), PermissionAction::Allow)]
+                .into_iter()
+                .collect(),
+        };
+        let merged = ToolPermissionsConfig::merge(&global, &ToolPermissionsConfig::default());
+        assert_eq!(
+            merged.resolve_explicit("bash"),
+            Some(PermissionAction::Allow),
+            "merge must not erase the explicitness bit"
+        );
+        // Silence stays silence: an unnamed tool still has no explicit entry.
+        assert_eq!(merged.resolve_explicit("file_write"), None);
     }
 
     #[test]

@@ -472,6 +472,7 @@ async fn approval_request_carries_agent_id_from_turn_context() {
         conversation_id: "user-1".to_string(),
         caller_role: None,
         channel_tool_permissions: None,
+        unattended: false,
     };
 
     let mut args = make_args("click");

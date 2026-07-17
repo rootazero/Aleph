@@ -1239,10 +1239,10 @@ impl crate::sandbox::exec_approval::gate::ApprovalRequester for FakeRequester {
     async fn request_approval(
         &self,
         action: &crate::sandbox::exec_approval::ApprovalAction,
-    ) -> crate::sandbox::exec_approval::gate::ApprovalOutcome {
+    ) -> crate::sandbox::exec_approval::gate::ApprovalResponse {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.seen.lock().unwrap().push(action.clone());
-        self.outcome
+        self.outcome.into()
     }
 }
 
@@ -1348,6 +1348,7 @@ fn turn_ctx(agent: &str) -> crate::tools::turn_context::TurnContext {
         conversation_id: "conv".to_string(),
         caller_role: None,
         channel_tool_permissions: None,
+        unattended: false,
     }
 }
 
@@ -1606,6 +1607,7 @@ async fn execute_scopes_session_id_from_turn_context() {
         conversation_id: String::new(),
         caller_role: None,
         channel_tool_permissions: None,
+        unattended: false,
     };
     let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(turn);
 
@@ -1667,6 +1669,7 @@ async fn chat_tier_blocked_from_config_tool() {
             conversation_id: String::new(),
             caller_role: Some("guest".to_string()),
             channel_tool_permissions: None,
+            unattended: false,
         },
     );
     let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
@@ -1688,6 +1691,7 @@ async fn operator_tier_allowed_config_tool() {
             conversation_id: String::new(),
             caller_role: Some("operator".to_string()),
             channel_tool_permissions: None,
+            unattended: false,
         },
     );
     assert!(svc.execute("cron_manage", json!({})).await.is_ok());
@@ -1720,8 +1724,8 @@ impl crate::sandbox::exec_approval::gate::ApprovalRequester for StubApprover {
     async fn request_approval(
         &self,
         _action: &crate::sandbox::exec_approval::ApprovalAction,
-    ) -> crate::sandbox::exec_approval::gate::ApprovalOutcome {
-        self.0
+    ) -> crate::sandbox::exec_approval::gate::ApprovalResponse {
+        self.0.into()
     }
 }
 
@@ -1745,6 +1749,7 @@ async fn chat_tier_config_tool_approved_executes() {
             conversation_id: String::new(),
             caller_role: Some("guest".to_string()),
             channel_tool_permissions: None,
+            unattended: false,
         })
         .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Approved)));
     assert!(
@@ -1769,12 +1774,153 @@ async fn chat_tier_config_tool_denied_rejected() {
             conversation_id: String::new(),
             caller_role: Some("guest".to_string()),
             channel_tool_permissions: None,
+            unattended: false,
         })
         .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Denied)));
     let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
     assert!(
         matches!(err, ToolError::PermissionDenied { .. }),
         "operator-denied config tool must be PermissionDenied, got {err:?}"
+    );
+}
+
+/// A requester that denies WITH the human's stated reason attached, as the
+/// channel bridge does for `/deny <reason>`.
+struct ReasonedDenier(&'static str);
+
+#[async_trait::async_trait]
+impl crate::sandbox::exec_approval::gate::ApprovalRequester for ReasonedDenier {
+    async fn request_approval(
+        &self,
+        _action: &crate::sandbox::exec_approval::ApprovalAction,
+    ) -> crate::sandbox::exec_approval::gate::ApprovalResponse {
+        crate::sandbox::exec_approval::gate::ApprovalResponse {
+            outcome: crate::sandbox::exec_approval::gate::ApprovalOutcome::Denied,
+            deny_reason: Some(self.0.to_string()),
+        }
+    }
+}
+
+/// `/deny <reason>` must reach the model verbatim: the human's own words are
+/// the difference between a re-plan and a blind retry (hermes parity).
+#[tokio::test]
+async fn deny_reason_reaches_the_model_facing_error() {
+    let requester = StdArc::new(ReasonedDenier("use the staging DB instead"));
+    let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_confirmation(StdArc::clone(&requester) as _);
+
+    let err = svc
+        .execute("danger", json!({}))
+        .await
+        .expect_err("denied → error");
+    let text = err.to_string();
+    assert!(
+        text.contains("use the staging DB instead"),
+        "the user's stated reason must be relayed verbatim, got: {text}"
+    );
+}
+
+/// A tool that is BOTH operator-gated and confirm-gated, like the real
+/// `vault_store` / `agent_delete` (in `OPERATOR_TOOLS` ∩
+/// `CONFIRMATION_REQUIRED_TOOLS`).
+struct OperatorConfirmTool;
+
+#[async_trait::async_trait]
+impl LoopTool for OperatorConfirmTool {
+    fn name(&self) -> &str {
+        "vault_store"
+    }
+    fn description(&self) -> &str {
+        "operator + confirm gated stub"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        LoopToolResult::Success {
+            output: json!({ "ran": true }),
+        }
+    }
+    fn requires_confirmation(&self) -> bool {
+        true
+    }
+}
+
+/// One decision per call: when the operator gate has just approved this exact
+/// call (`AllowOnce`, which writes nothing into session memory), the
+/// confirmation gate must NOT re-prompt it. `vault_store` sits in both gate
+/// sets, so without the skip the requester's own channel would be asked to
+/// confirm the action the operator already read and authorized.
+#[tokio::test]
+async fn operator_approval_is_not_double_prompted_by_the_confirm_gate() {
+    use crate::routing::session_key::SessionKey;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+    let mut reg = LoopToolRegistry::new();
+    reg.register(Box::new(OperatorConfirmTool));
+
+    let operator = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    // If the confirm gate were consulted it would DENY — so a successful run
+    // proves it was skipped, and the call counter proves it was never asked.
+    let own_channel = StdArc::new(FakeRequester::new(ApprovalOutcome::Denied));
+
+    let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
+        .with_turn_context(crate::tools::turn_context::TurnContext {
+            session_key: SessionKey::main("cfg-no-double-prompt"),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: Some("guest".to_string()),
+            channel_tool_permissions: None,
+            unattended: false,
+        })
+        .with_config_approval(StdArc::clone(&operator) as _)
+        .with_confirmation(StdArc::clone(&own_channel) as _);
+
+    svc.execute("vault_store", json!({"key": "k", "value": "v"}))
+        .await
+        .expect("operator-approved call must run without a second prompt");
+    assert_eq!(
+        operator.calls.load(Ordering::SeqCst),
+        1,
+        "the operator gate must prompt exactly once"
+    );
+    assert_eq!(
+        own_channel.calls.load(Ordering::SeqCst),
+        0,
+        "the confirm gate must not re-prompt a call the operator just approved"
+    );
+}
+
+/// The skip is scoped to the operator-approved call path only: an
+/// operator-tier caller passes the config gate WITHOUT an approval, so the
+/// confirmation gate must still fire for it.
+#[tokio::test]
+async fn operator_tier_caller_still_hits_the_confirm_gate() {
+    use crate::routing::session_key::SessionKey;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+    let mut reg = LoopToolRegistry::new();
+    reg.register(Box::new(OperatorConfirmTool));
+
+    let own_channel = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
+        .with_turn_context(crate::tools::turn_context::TurnContext {
+            session_key: SessionKey::main("cfg-operator-still-confirms"),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: Some("operator".to_string()),
+            channel_tool_permissions: None,
+            unattended: false,
+        })
+        .with_confirmation(StdArc::clone(&own_channel) as _);
+
+    svc.execute("vault_store", json!({"key": "k", "value": "v"}))
+        .await
+        .expect("approved confirm-gated call runs");
+    assert_eq!(
+        own_channel.calls.load(Ordering::SeqCst),
+        1,
+        "an operator-tier caller skipped the config gate, so the confirm gate must still ask"
     );
 }
 

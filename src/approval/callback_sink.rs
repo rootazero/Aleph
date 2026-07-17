@@ -105,7 +105,7 @@ mod tests {
             .expect("is an approval callback");
         assert!(out.resolved);
 
-        let decision = waiter.await.unwrap();
-        assert_eq!(decision, Some(ApprovalDecisionType::AllowOnce));
+        let resolved = waiter.await.unwrap();
+        assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
     }
 }

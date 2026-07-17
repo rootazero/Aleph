@@ -260,7 +260,11 @@ impl Sandbox for WorkspaceSandbox {
                     cmd.cwd.as_deref(),
                     &reason,
                 );
-                let outcome = self.approval_gate.request_approval_for_action(&action).await;
+                let response = self
+                    .approval_gate
+                    .request_approval_for_action(&action)
+                    .await;
+                let outcome = response.outcome;
                 match outcome {
                     // Either grant flavour elevates; this path already caches the
                     // grant per-session in `granted_elevations`, so a one-shot
@@ -312,9 +316,16 @@ impl Sandbox for WorkspaceSandbox {
                                 );
                             }
                         }
+                        // Relay the human's stated reason (if any) so the model
+                        // re-plans on it instead of a bare "denied".
+                        let user_reason = response
+                            .deny_reason
+                            .as_deref()
+                            .map(|r| format!(" The user said: \"{r}\"."))
+                            .unwrap_or_default();
                         return Err(SandboxError::CapabilityDenied {
                             reason: format!(
-                                "user denied elevated capability request. {}",
+                                "user denied elevated capability request.{user_reason} {}",
                                 reason_kind.agent_hint()
                             ),
                         });
@@ -698,9 +709,9 @@ mod tests {
         async fn request_approval(
             &self,
             _action: &crate::sandbox::exec_approval::ApprovalAction,
-        ) -> ApprovalOutcome {
+        ) -> crate::sandbox::exec_approval::ApprovalResponse {
             *self.calls.write().await += 1;
-            self.outcome
+            self.outcome.into()
         }
     }
 
@@ -1064,8 +1075,7 @@ mod tests {
             &format_capability_summary("totally-new-program", &elevated.normalized()),
         );
         assert_eq!(
-            denial_ledger::global()
-                .is_blocked(&denial_ledger::ledger_key(&session), &fresh),
+            denial_ledger::global().is_blocked(&denial_ledger::ledger_key(&session), &fresh),
             Some(denial_ledger::DenialReason::ThresholdExceeded),
             "3 distinct elevation denials must pause the session — the breaker is \
              reachable at the elevation gate, so the trip-edge purge can fire here"
@@ -1706,4 +1716,3 @@ mod scrub_integration_tests {
         assert_eq!(cleaned.chars().count(), JUSTIFICATION_MAX_CHARS);
     }
 }
-

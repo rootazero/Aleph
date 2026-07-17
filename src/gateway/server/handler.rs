@@ -42,7 +42,9 @@ use crate::gateway::security::SecurityStore;
 /// Parse configured trusted-proxy IP strings into `IpAddr`, silently dropping
 /// unparseable entries (fail-safe: a garbage entry just isn't trusted).
 pub(super) fn parse_trusted_ips(raw: &[String]) -> Vec<IpAddr> {
-    raw.iter().filter_map(|s| s.parse::<IpAddr>().ok()).collect()
+    raw.iter()
+        .filter_map(|s| s.parse::<IpAddr>().ok())
+        .collect()
 }
 
 /// Whether to refuse this upgrade for insecure transport. A non-loopback client
@@ -459,19 +461,28 @@ async fn handle_connection(
                                             .unwrap_or_default()
                                             .to_string();
                                         tokio::spawn(async move {
-                                            let outcome = crate::approval::run_node_approval(
-                                                &manager,
-                                                &event_bus,
-                                                &node_id,
-                                                &node_name,
-                                                &tool,
-                                                &action,
-                                                &reason,
-                                            )
-                                            .await;
+                                            let (outcome, deny_reason) =
+                                                crate::approval::run_node_approval(
+                                                    &manager,
+                                                    &event_bus,
+                                                    &node_id,
+                                                    &node_name,
+                                                    &tool,
+                                                    &action,
+                                                    &reason,
+                                                )
+                                                .await;
+                                            // Optional field: older nodes ignore it,
+                                            // newer ones relay the operator's own
+                                            // words to their model.
+                                            let mut body =
+                                                serde_json::json!({ "outcome": outcome });
+                                            if let Some(r) = deny_reason {
+                                                body["deny_reason"] =
+                                                    serde_json::Value::String(r);
+                                            }
                                             let resp = JsonRpcResponse::success(
-                                                req_id,
-                                                serde_json::json!({ "outcome": outcome }),
+                                                req_id, body,
                                             );
                                             if let Ok(s) = serde_json::to_string(&resp) {
                                                 let _ = out.send(s).await;

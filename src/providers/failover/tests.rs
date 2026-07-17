@@ -1007,12 +1007,12 @@ impl ApprovalRequester for MockApprover {
     async fn request_approval(
         &self,
         _action: &crate::sandbox::exec_approval::ApprovalAction,
-    ) -> ApprovalOutcome {
+    ) -> crate::sandbox::exec_approval::ApprovalResponse {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.approve {
-            ApprovalOutcome::Approved
+            ApprovalOutcome::Approved.into()
         } else {
-            ApprovalOutcome::Denied
+            ApprovalOutcome::Denied.into()
         }
     }
 }

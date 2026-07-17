@@ -26,6 +26,10 @@ pub struct ApprovalResolveParams {
     pub decision: ApprovalDecisionType,
     /// Display name of resolver
     pub resolved_by: Option<String>,
+    /// Free-text reason for a `deny` decision, relayed verbatim to the model
+    /// so it re-plans on the human's actual objection. Ignored on approvals.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// Response for list pending
@@ -94,7 +98,12 @@ async fn handle_approval_resolve(
         Err(e) => return e,
     };
 
-    let resolved = manager.resolve(&params.id, params.decision, params.resolved_by);
+    let resolved = manager.resolve_with_reason(
+        &params.id,
+        params.decision,
+        params.resolved_by,
+        params.reason,
+    );
 
     if resolved {
         JsonRpcResponse::success(request.id, json!({ "ok": true }))

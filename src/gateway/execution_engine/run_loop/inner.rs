@@ -448,6 +448,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             },
         )));
 
+        // Whether this run is unattended (autonomous continuation / headless
+        // producer). One read, three consumers: the turn context below (so
+        // delegation tools can propagate it), `ScopedToolService`'s fail-closed
+        // confirm gate, and the redacting trace sink.
+        let unattended = request
+            .metadata
+            .get(crate::gateway::execution_engine::UNATTENDED_KEY)
+            .map(String::as_str)
+            == Some("true");
+
         // Routing context for HITL tools (sandbox escalation,
         // `requires_confirmation`, `ask_user`). Constant across retries.
         // Channel id / conversation id come from the inbound router's metadata;
@@ -470,6 +480,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 .metadata
                 .get(crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY)
                 .cloned(),
+            unattended,
         };
 
         loop {
@@ -545,12 +556,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             let mut allowed_names: std::collections::BTreeSet<String> =
                 allowed_tools.iter().map(|t| t.name.clone()).collect();
-
-            let unattended = request
-                .metadata
-                .get(crate::gateway::execution_engine::UNATTENDED_KEY)
-                .map(String::as_str)
-                == Some("true");
 
             // Collector for MCP tool names joined this request — used below to
             // build the deferred exposure tier when `defer_mcp_tools` is on.

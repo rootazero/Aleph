@@ -169,6 +169,7 @@ mod tests {
             conversation_id: String::new(),
             caller_role: None,
             channel_tool_permissions: None,
+            unattended: false,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -236,7 +237,7 @@ mod tests {
 
     #[tokio::test]
     async fn moa_prefix_activates_preset_and_clears_model_pick() {
-        use crate::providers::{session_model_handle, session_moa_handle};
+        use crate::providers::{session_moa_handle, session_model_handle};
         let _guard = moa_config_test_lock();
         let sk = SessionKey::Ephemeral {
             agent_id: "main".to_string(),
@@ -254,6 +255,7 @@ mod tests {
             conversation_id: String::new(),
             caller_role: None,
             channel_tool_permissions: None,
+            unattended: false,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -279,7 +281,7 @@ mod tests {
 
     #[tokio::test]
     async fn normal_pick_clears_moa_sticky() {
-        use crate::providers::{session_model_handle, session_moa_handle};
+        use crate::providers::{session_moa_handle, session_model_handle};
         let sk = SessionKey::Ephemeral {
             agent_id: "main".to_string(),
             ephemeral_id: "select-clears-moa".to_string(),
@@ -293,6 +295,7 @@ mod tests {
             conversation_id: String::new(),
             caller_role: None,
             channel_tool_permissions: None,
+            unattended: false,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -312,7 +315,7 @@ mod tests {
 
     #[tokio::test]
     async fn bare_moa_activates_default_preset_and_clears_model_pick() {
-        use crate::providers::{session_model_handle, session_moa_handle};
+        use crate::providers::{session_moa_handle, session_model_handle};
         let _guard = moa_config_test_lock();
         let sk = SessionKey::Ephemeral {
             agent_id: "main".to_string(),
@@ -330,6 +333,7 @@ mod tests {
             conversation_id: String::new(),
             caller_role: None,
             channel_tool_permissions: None,
+            unattended: false,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -372,6 +376,7 @@ mod tests {
             conversation_id: String::new(),
             caller_role: None,
             channel_tool_permissions: None,
+            unattended: false,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
