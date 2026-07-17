@@ -22,7 +22,7 @@ use super::alias::canonicalize_model_id;
 
 /// Capability metadata for one model family.
 ///
-/// Figures are best-effort reference data (vendor docs as of 2026-06),
+/// Figures are best-effort reference data (vendor docs as of 2026-07),
 /// mirroring `pricing`'s "operators upgrade Aleph to refresh" stance — no
 /// runtime config knob, no network lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -107,6 +107,19 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_reasoning: true,
         },
     ),
+    // Sonnet 5 (Claude 5 family) is the current balanced flagship: 1M window,
+    // 128K output. Must precede the sonnet-4.x prefixes (distinct id, but keep
+    // generations grouped newest-first).
+    (
+        "claude-sonnet-5",
+        ModelCapabilities {
+            context_window: 1_000_000,
+            max_output_tokens: 128_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
     // Sonnet 4.6 carries the 1M window; older sonnet-4.x stay on 200K via
     // the broad fallback below.
     (
@@ -160,8 +173,19 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         },
     ),
     // ── OpenAI ───────────────────────────────────────────────────────────
-    // GPT-5 family (openclaw catalog, 2026-03 snapshot). Specific dotted
-    // prefixes precede the broad `gpt-5` fallback.
+    // GPT-5 family (openclaw catalog). Specific dotted prefixes precede the
+    // broad `gpt-5` fallback. 5.6 is the current default (openclaw
+    // OPENAI_DEFAULT_MODEL): ~1.05M window, 128K output.
+    (
+        "gpt-5.6",
+        ModelCapabilities {
+            context_window: 1_050_000,
+            max_output_tokens: 128_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
     (
         "gpt-5.5",
         ModelCapabilities {
@@ -346,13 +370,21 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         },
     ),
     // ── DeepSeek ─────────────────────────────────────────────────────────
-    // V4 family (1M window). Max-output figures differ across references
-    // (16K vs 384K) — keep the conservative one.
+    // V4 family: 1M context (official pricing/models pages + openclaw). The
+    // legacy `deepseek-chat` / `deepseek-reasoner` names retire 2026-07-24 and
+    // now resolve to v4-flash non-thinking / thinking modes — both 1M window.
+    //
+    // NOTE on max_output: the vendor spec caps output at 384K, but this figure
+    // doubles as the compaction *reserve* (`derive_token_budget`:
+    // usable = window − max_output). Reserving 384K would shrink usable context
+    // by ~38% every turn for output volumes agents almost never emit. We use a
+    // realistic 64K reserve (peer-consistent with gemini-3 / gpt-5-mini);
+    // callers needing the full 384K set `[providers.*] max_tokens` explicitly.
     (
         "deepseek-v4",
         ModelCapabilities {
             context_window: 1_000_000,
-            max_output_tokens: 16_384,
+            max_output_tokens: 65_536,
             supports_vision: false,
             supports_tools: true,
             supports_reasoning: true,
@@ -361,8 +393,8 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
     (
         "deepseek-reasoner",
         ModelCapabilities {
-            context_window: 128_000,
-            max_output_tokens: 8_192,
+            context_window: 1_000_000,
+            max_output_tokens: 65_536,
             supports_vision: false,
             supports_tools: true,
             supports_reasoning: true,
@@ -371,8 +403,8 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
     (
         "deepseek",
         ModelCapabilities {
-            context_window: 128_000,
-            max_output_tokens: 8_192,
+            context_window: 1_000_000,
+            max_output_tokens: 65_536,
             supports_vision: false,
             supports_tools: true,
             supports_reasoning: false,
@@ -434,18 +466,20 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         },
     ),
     // ── MiniMax ──────────────────────────────────────────────────────────
-    // Aleph ships a `minimax` preset (default MiniMax-M2.5) but carried no
-    // per-model metadata, so panel picker / list_models / context budgeting
-    // saw a blank entry. M2.x is a 204K-window reasoning model; image
-    // understanding is routed to the separate MiniMax-VL line (openclaw keeps
-    // M2.x chat vision off), so the chat family is text-only here. M3 widens
-    // the window. Figures are conservative vendor-doc references (2026-06).
+    // Aleph ships a `minimax` preset (default MiniMax-M3) with per-model
+    // metadata so panel picker / list_models / context budgeting size it
+    // correctly. M2.x is a 204K-window text-only reasoning model; M3 widens the
+    // window to 1M AND is natively multimodal (image/video). Figures are
+    // vendor-doc references (2026-07).
     (
+        // M3 is natively multimodal — its Anthropic-compatible endpoint
+        // accepts image_url / video_url content blocks (vendor doc + openclaw
+        // input=[text,image]). The older M2.x chat family is text-only (below).
         "minimax-m3",
         ModelCapabilities {
             context_window: 1_000_000,
             max_output_tokens: 32_768,
-            supports_vision: false,
+            supports_vision: true,
             supports_tools: true,
             supports_reasoning: true,
         },
@@ -473,7 +507,20 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         },
     ),
     // ── Moonshot / Kimi ──────────────────────────────────────────────────
-    // K2 family (k2.5 / k2.6 / k2-* previews): 256K window, multimodal.
+    // Kimi-for-coding endpoint model (256K/32K, multimodal). Distinct prefix
+    // that would otherwise fall to the broad `kimi` 200K/8K row and under-size
+    // its window — must precede it.
+    (
+        "kimi-for-coding",
+        ModelCapabilities {
+            context_window: 262_144,
+            max_output_tokens: 32_768,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // K2 family (k2.5 / k2.6 / k2.7 / k2-* previews): 256K window, multimodal.
     (
         "kimi-k2",
         ModelCapabilities {
@@ -505,7 +552,19 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         },
     ),
     // ── Zhipu / GLM ──────────────────────────────────────────────────────
-    // GLM-5 generation (covers glm-5 / glm-5.1 / glm-5-turbo).
+    // GLM-5.2 is the current flagship: 1M lossless context, 128K output. Its
+    // `glm-5.2` prefix MUST precede `glm-5` (which it starts with). GLM-5 /
+    // GLM-5.1 keep the 200K window per the official bigmodel.cn / z.ai docs.
+    (
+        "glm-5.2",
+        ModelCapabilities {
+            context_window: 1_000_000,
+            max_output_tokens: 128_000,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
     (
         "glm-5",
         ModelCapabilities {
@@ -527,11 +586,50 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         },
     ),
     // ── Alibaba / Qwen ───────────────────────────────────────────────────
+    // qwen3-max (current flagship default): 262K window, 64K output. The dated
+    // id qwen3-max-2026-01-23 canonicalises (date-stripped) to `qwen3-max`, so
+    // this prefix must precede the broad `qwen` 128K row.
+    (
+        "qwen3-max",
+        ModelCapabilities {
+            context_window: 262_144,
+            max_output_tokens: 65_536,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
     (
         "qwen",
         ModelCapabilities {
             context_window: 131_072,
             max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    // ── Volcengine Doubao (Ark) ────────────────────────────────────────────
+    // Previously ABSENT — every doubao id fell to the conservative 128K default
+    // though the real Seed window is 256K, so the occupancy gauge and the
+    // compaction budget under-sized every Doubao run. `doubao-seed` (the Seed
+    // 1.x/2.x flagship line, multimodal) precedes the broad `doubao` fallback
+    // for legacy non-Seed ids (e.g. the prior default doubao-1.5-pro-256k).
+    (
+        "doubao-seed",
+        ModelCapabilities {
+            context_window: 256_000,
+            max_output_tokens: 32_768,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        "doubao",
+        ModelCapabilities {
+            context_window: 256_000,
+            max_output_tokens: 16_384,
             supports_vision: false,
             supports_tools: true,
             supports_reasoning: false,
@@ -980,5 +1078,48 @@ mod tests {
     fn kimi_k2_7_resolves_to_256k_window() {
         assert_eq!(resolve_context_window("Kimi-K2.7"), 262_144);
         assert_eq!(resolve_context_window("kimi-k2.7"), 262_144);
+    }
+
+    #[test]
+    fn refreshed_2026_defaults_resolve_windows() {
+        // Registry defaults advanced this round must size their windows via the
+        // catalog (not the 128K conservative fallback) so the gauge + compaction
+        // budget are honest without per-provider config.
+        assert_eq!(resolve_context_window("claude-sonnet-5"), 1_000_000);
+        assert_eq!(resolve_context_window("gpt-5.6"), 1_050_000);
+        assert_eq!(resolve_context_window("GLM-5.2"), 1_000_000);
+        assert_eq!(resolve_context_window("MiniMax-M3"), 1_000_000);
+        assert_eq!(resolve_context_window("qwen3-max-2026-01-23"), 262_144);
+        // DeepSeek V4 window corrected 128K -> 1M (chat/reasoner aliases too).
+        assert_eq!(resolve_context_window("deepseek-v4-flash"), 1_000_000);
+        assert_eq!(resolve_context_window("deepseek-chat"), 1_000_000);
+        assert_eq!(resolve_context_window("deepseek-reasoner"), 1_000_000);
+    }
+
+    #[test]
+    fn doubao_family_resolves_after_wiring() {
+        // Doubao had ZERO capability rows -> every id fell to the 128K default.
+        // The new default and the Seed line now resolve to the real 256K window.
+        assert_eq!(resolve_context_window("doubao-seed-1-8-251228"), 256_000);
+        assert_eq!(resolve_context_window("doubao-1.5-pro-256k"), 256_000);
+        let seed = capabilities_for("doubao-seed-1-8-251228").unwrap();
+        assert!(seed.supports_vision, "Doubao Seed is multimodal");
+        assert!(seed.supports_tools);
+    }
+
+    #[test]
+    fn minimax_m3_is_multimodal() {
+        // Vision flag corrected false -> true: M3's Anthropic-compat endpoint
+        // accepts image/video. The text-only M2.x family stays vision=false.
+        assert!(capabilities_for("MiniMax-M3").unwrap().supports_vision);
+        assert!(!capabilities_for("MiniMax-M2.7").unwrap().supports_vision);
+    }
+
+    #[test]
+    fn glm_5_2_precedes_glm_5_prefix() {
+        // glm-5.2 (1M) must win over the glm-5 (200K) prefix it starts with;
+        // glm-5.1 still resolves to the 200K glm-5 row.
+        assert_eq!(capabilities_for("glm-5.2").unwrap().context_window, 1_000_000);
+        assert_eq!(capabilities_for("glm-5.1").unwrap().context_window, 200_000);
     }
 }

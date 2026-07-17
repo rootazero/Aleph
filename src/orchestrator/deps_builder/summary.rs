@@ -13,7 +13,7 @@ use crate::providers::{create_provider, AiProvider};
 /// 2. **Auto** — when `summary_model` is unset/blank, fall back to the *primary*
 ///    provider preset's declared cheap aux model (`default_aux_model`:
 ///    openai→`gpt-5.4-mini`, anthropic→`claude-haiku-4-5`,
-///    gemini→`gemini-2.5-flash-lite`, deepseek→`deepseek-chat`). This makes the
+///    gemini→`gemini-3-flash-preview`, deepseek→`deepseek-v4-flash`). This makes the
 ///    preset's long-dormant `default_aux_model` field a live routing consumer:
 ///    a vendor with a declared cheap tier gets cost-efficient summarization with
 ///    zero config. Only an **explicitly declared** aux model triggers this — a

@@ -522,7 +522,7 @@ fn test_codex_preset() {
 
     let p = preset.unwrap();
     assert_eq!(p.protocol, "codex");
-    assert_eq!(p.default_model, "gpt-5.4");
+    assert_eq!(p.default_model, "gpt-5.6");
 }
 
 // ─── convert_messages tests (migrated from codex.rs) ─────────────────

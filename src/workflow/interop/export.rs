@@ -192,6 +192,9 @@ fn render_agent_call(step: &WorkflowManifestStep) -> String {
     if let Some(m) = &step.model {
         opts.push(format!("model: {}", js_str(m)));
     }
+    if let Some(ef) = &step.effort {
+        opts.push(format!("effort: {}", js_str(ef)));
+    }
     if let Some(sc) = &step.schema {
         let schema_json = serde_json::to_string(sc).unwrap_or_else(|_| "{}".to_string());
         opts.push(format!("schema: {schema_json}"));
@@ -326,6 +329,7 @@ mod tests {
             schema: None,
             isolation: None,
             agent_type: None,
+            effort: None,
             kind: WorkflowStepKind::Agent,
             choices: vec![],
             review: false,
@@ -351,6 +355,7 @@ mod tests {
             schema: None,
             isolation: None,
             agent_type: None,
+            effort: None,
             kind: WorkflowStepKind::Clarify,
             choices: choices.iter().map(|s| s.to_string()).collect(),
             review: false,
@@ -426,6 +431,28 @@ mod tests {
         assert!(
             js.contains("agentType: \"code-reviewer\""),
             "agentType: {js}"
+        );
+    }
+
+    #[test]
+    fn effort_opt_rendered_and_roundtrips_via_bare_scan() {
+        // `effort` is the reasoning-effort agent-opt from the current dynamic
+        // `.workflow.js` vocabulary — it must render as a bare `effort: "…"` and
+        // survive even the header-stripped bare-scan re-import (the strictest
+        // symmetry check, since the embed header would otherwise mask a gap).
+        use crate::workflow::interop::import::parse_workflow_js;
+        let mut s = step("a", &[]);
+        s.effort = Some("xhigh".into());
+        let js = render_workflow_js(&manifest(vec![s]));
+        assert!(js.contains("effort: \"xhigh\""), "effort rendered: {js}");
+        // Strip the lossless embed header → force the bare scan path.
+        let bare: String = js.lines().skip(1).collect::<Vec<_>>().join("\n");
+        assert!(!bare.contains(EMBED_PREFIX), "header stripped: {bare}");
+        let back = parse_workflow_js(&bare).expect("bare re-import").manifest;
+        assert_eq!(
+            back.steps[0].effort.as_deref(),
+            Some("xhigh"),
+            "effort survives header-stripped round-trip: {bare}"
         );
     }
 
