@@ -8,7 +8,7 @@ use std::path::Path;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, info};
 
-use super::path_utils::check_and_resolve_path;
+use super::path_utils::{check_and_resolve_path, reject_unsafe_glob_pattern};
 use super::types::{FileInfo, FileOpsOutput, StatsSummary};
 use crate::builtin_tools::error::ToolError;
 
@@ -45,6 +45,11 @@ pub async fn execute_stats(
     }
 
     let glob_pattern = pattern.unwrap_or("**/*");
+    // Same guard `search` applies: an absolute or `..`-climbing pattern would
+    // replace/escape the deny-checked base via `join`, walking the whole
+    // filesystem (and every denied credential path under it). Relative,
+    // non-climbing patterns stay under `canonical`.
+    reject_unsafe_glob_pattern(glob_pattern)?;
     let full_pattern = canonical.join(glob_pattern);
     let pattern_str = full_pattern.to_string_lossy();
 
@@ -63,6 +68,14 @@ pub async fn execute_stats(
                 continue;
             }
         };
+
+        // Defense in depth: even a relative pattern can match a symlink whose
+        // target is a denied credential path (or escapes the base). Re-check
+        // each match against the deny list; silently skip denied matches, just
+        // as `search` does.
+        if check_and_resolve_path(&path, denied_paths, output_dir_override).is_err() {
+            continue;
+        }
 
         let metadata = match tokio::fs::metadata(&path).await {
             Ok(m) => m,
@@ -185,6 +198,18 @@ mod tests {
         assert_eq!(summary.total_files, 2);
         assert_eq!(summary.total_lines, 5);
         assert_eq!(summary.skipped_files, 0);
+    }
+
+    #[tokio::test]
+    async fn stats_rejects_escaping_pattern() {
+        let dir = tempdir().unwrap();
+        for bad in ["/etc/*", "../*", "../../**/*"] {
+            let out = execute_stats(dir.path(), Some(bad), &[], None).await;
+            assert!(
+                matches!(out, Err(ToolError::InvalidArgs(_))),
+                "escaping stats pattern {bad:?} must be rejected, got {out:?}"
+            );
+        }
     }
 
     #[tokio::test]
