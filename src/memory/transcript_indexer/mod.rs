@@ -145,12 +145,12 @@ mod tests {
         if chunks.len() > 1 {
             // Check that consecutive chunks have overlap
             for i in 0..chunks.len() - 1 {
-                // Use char-based slicing to avoid panics on multi-byte chars
-                let current_end: String = chunks[i]
-                    .chars()
-                    .rev()
-                    .take(40)
-                    .rev()
+                // Use char-based slicing to avoid panics on multi-byte chars.
+                // (chars().rev().take(n).rev() does not compile — Take<Rev<Chars>>
+                // is not DoubleEnded — so collect once and slice the tail.)
+                let current_chars: Vec<char> = chunks[i].chars().collect();
+                let current_end: String = current_chars[current_chars.len().saturating_sub(40)..]
+                    .iter()
                     .collect();
                 let next_start: String = chunks[i + 1].chars().take(40).collect();
 
