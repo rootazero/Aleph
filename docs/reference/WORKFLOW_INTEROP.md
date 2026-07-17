@@ -34,7 +34,8 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
       "phase": "Gather",
       "schema": { "type": "object" },
       "isolation": "worktree",
-      "agentType": "Explore"
+      "agentType": "Explore",
+      "effort": "high"
     }
   ]
 }
@@ -43,7 +44,10 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
 - 必填:顶层 `name` / `steps`;步骤 `id` / `agent` / `prompt`。
 - 可选:`description` / `whenToUse` / `phases`(条目可选 `model` 相位级模型覆盖);步骤
   `dependsOn`(缺省 `[]`)/ `label` / `model` / `phase` / `schema` / `isolation` /
-  `agentType`(均为原样透传,Aleph 不解释、不执行,仅为忠实导出 `.workflow.js`)。
+  `agentType` / `effort`(均为原样透传,Aleph 不解释、不执行,仅为忠实导出 `.workflow.js`)。
+  `effort`(推理档位 `low`/`medium`/`high`/`xhigh`/`max`,贴合动态 workflow 的 `agent(..,{effort})`)
+  与 `isolation`/`agentType` 同为 interchange-only;升级为可执行的 per-member 覆盖(像
+  per-step `model` 那样进任务元数据)留作后续 PR。
 - **可执行扩展(2026-07-16 起)**:步骤 `review`(lead 审查门)/ `timeoutSecs`(每步运行
   超时秒)/ `maxRetries`(每步重试上限,`0`=首败即终)——三者进 `WorkflowDef` 可执行核心,
   materialize 时盖进任务元数据由 dispatcher 现有消费者执行;`.workflow.js` 侧渲染/解析为
@@ -61,7 +65,7 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
 | `agent([ "l1","l2" ].join("\n"))` 多行 prompt | ↔ 无损 | 工程格式签名惯用法:导出按 `\n` 拆行渲染数组,导入按 `.join` 分隔符还原(转义正确解码),裸路径亦对称 |
 | `parallel([agent, agent])` | ↔ | 同拓扑层、彼此无 `dependsOn` 的兄弟步骤 |
 | `agent()` fan-in | ↔ | 一步 `dependsOn` 多个上游 |
-| `opts.{label,model,phase,schema,isolation,agentType}` | ↔ 无损(经内嵌块) | 存 manifest,不入 `WorkflowDef` |
+| `opts.{label,model,phase,schema,isolation,agentType,effort}` | ↔ 无损(经内嵌块 + bare 路径) | 存 manifest,不入 `WorkflowDef`;`effort` 亦渲染为 bare-scan 可还原的 `effort: "…"` |
 | `opts.{review,timeoutSecs,maxRetries}`(bare literal) | ↔ 无损(bare 路径亦对称) | **可执行核心**:进 `WorkflowDef`,materialize 盖任务元数据 |
 | `pipeline(items, s1, s2)` | → 导入近似 | 运行时 item 列表未知 → 记 `dropped`;导出不生成 |
 | 循环 / 条件 / `budget` / 嵌套 `workflow()` | ✗ 故意不支持 | 导入记 `dropped`(R7/R10) |
@@ -94,15 +98,18 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
 ## 工具用法(R8)
 
 ```
-workflow(action='export', name='research-report')                 # 渲染为 .workflow.js 文本
+workflow(action='export', name='research-report')                 # 渲染为动态 workflow 文本
 workflow(action='export', name='research-report', write_file=true) # 同时写盘
-workflow(action='import', source='<.workflow.js 或 manifest JSON>', save=true)
+workflow(action='import', source='<.mjs / .workflow.js 或 manifest JSON>', save=true)
 ```
 
 - `export` 输出填 `rendered`(渲染文本);`write_file=true` 时写
-  `$ALEPH_HOME/workflows/<name>.workflow.js`。
-- `import` 输出填 `definition`(解析出的 `WorkflowDef`)+ `dropped`(被丢弃的命令式构造);
-  `save=true` 时入库。
+  `$ALEPH_HOME/workflows/<name>.mjs`——`.mjs` 是 Claude Code workflow 菜单 /
+  `~/.claude/workflows` 加载器识别的动态 workflow 扩展名(参考工程文件即 `*.mjs`);
+  渲染正文与内嵌头不变,只是落盘扩展名从 Aleph 旧的 `.workflow.js` 迁到 `.mjs`。
+- `import` 接受 `.mjs` / `.js` / `.workflow.js` / manifest JSON 任意文本(`source` 是裸文本而非路径,
+  无目录 glob 依赖 → 扩展名迁移非破坏);输出填 `definition`(解析出的 `WorkflowDef`)+
+  `dropped`(被丢弃的命令式构造);`save=true` 时入库。
 
 ## 明确不做(YAGNI / 后续 PR)
 
